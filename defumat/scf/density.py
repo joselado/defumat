@@ -420,7 +420,8 @@ def spinor_sum_band(psi, fft_index, grid, weights, cell: Cell, nspin_mag: int,
 
 
 def spinor_becsum(psi, vkb, weights, species_channels,
-                  k_batch: int | None | str = "default") -> tuple:
+                  k_batch: int | None | str = "default",
+                  spiral: bool = False) -> tuple:
     """The spinor projector occupations, per species, before the spin transform.
 
         becsum_nc^a_{i s1, j s2} = sum_kb w_kb <psi_kb|beta_i^a s1>
@@ -436,17 +437,37 @@ def spinor_becsum(psi, vkb, weights, species_channels,
 
     Args:
         psi: ``(nk, nbnd, 2 npwx)``.
-        vkb: ``(nk, npwx, nkb)``.
+        vkb: ``(nk, npwx, nkb)``, or ``(2 nk, npwx, nkb)`` for a spiral.
         weights: ``(nk, nbnd)``.
+        spiral: the two components live on different spheres, so each is
+            projected on **its own** ``vkb`` -- ``vkb(k + q/2)`` for the up
+            component and ``vkb(k - q/2)`` for the down one, which is the same
+            pairing
+            :meth:`defumat.hamiltonian.noncollinear.NoncollinearHamiltonian._project`
+            uses inside ``H``. The rows are laid out as the k-list is, the two
+            halves one after the other, so the pair of a given ``ik`` is
+            ``(ik, ik + nk)``.
+
+            **The cross blocks of what comes back are then between two
+            different k-points**, and that is what makes them carry the spiral
+            wavevector: the augmentation charge they multiply is
+            ``Q_ij(G - q)``, not ``Q_ij(G)``. See
+            :meth:`defumat.scf.driver.Calculation.augmented`.
 
     Returns one complex ``(nat_t, nh_t, 2, nh_t, 2)`` array per species.
     """
     npwx = vkb.shape[-2]
+    if spiral:
+        nk = psi.shape[0]
+        vkb = jnp.stack([vkb[:nk], vkb[nk:]], axis=1)  # (nk, 2, npwx, nkb)
 
     def one_k(arrays):
         projectors, state, occupation = arrays
         components = state.reshape(state.shape[:-1] + (2, npwx))
-        projections = jnp.einsum("gc,bag->bac", projectors.conj(), components)
+        if spiral:
+            projections = jnp.einsum("agc,bag->bac", projectors.conj(), components)
+        else:
+            projections = jnp.einsum("gc,bag->bac", projectors.conj(), components)
         return tuple(
             None if channels is None
             else _spinor_becsum_species(projections, occupation, channels)

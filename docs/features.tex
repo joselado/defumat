@@ -4645,9 +4645,39 @@ spheres,
 \end{pmatrix}
 \end{equation*}
 so in the rotated frame the density is lattice periodic and the SCF, the
-functional and the mixer are untouched. Only two terms carry $\mathbf q$ ---
-$|\mathbf k \mp \mathbf q/2 + \mathbf G|^2$ and $v_{\mathrm{nl}}$ --- and
-$dE/d\mathbf q$ at frozen coefficients is \code{jax.grad} of them.
+functional and the mixer are untouched. On a norm-conserving dataset only two
+terms carry $\mathbf q$ --- $|\mathbf k \mp \mathbf q/2 + \mathbf G|^2$ and
+$v_{\mathrm{nl}}$ --- and $dE/d\mathbf q$ at frozen coefficients is
+\code{jax.grad} of them.
+
+\textbf{An ultrasoft or PAW dataset adds a third, and it is the one that used to
+refuse the combination.} The transverse block of the density is
+$\langle\psi^{\uparrow}|\ldots|\psi^{\downarrow}\rangle$, so it pairs projectors
+at $\mathbf k + \mathbf q/2$ with projectors at $\mathbf k - \mathbf q/2$, and
+the augmentation charge reaching it is the lattice sum
+$\sum_{\mathbf R} e^{-i\mathbf q\cdot\mathbf R}\,
+Q_{ij}(\mathbf r - \boldsymbol\tau_a - \mathbf R)$
+rather than the periodic one. That sum is $e^{-i\mathbf q\cdot\mathbf r}$ times
+a lattice-periodic function --- the same factor the smooth transverse density
+carries, which is what makes the rotated frame work at all --- and the periodic
+factor is the transform of
+\begin{equation*}
+Q_{ij}(\mathbf G - \mathbf q)\, e^{-i(\mathbf G - \mathbf q)\cdot\boldsymbol\tau_a},
+\end{equation*}
+the resident table displaced by $-\mathbf q$. The charge and $m_z$ blocks pair
+projectors at the \emph{same} $\mathbf k$ and keep the resident table. Nothing
+else changes: the displaced table is built by the same assembly, and at
+$\mathbf q \to 0$ it is the resident one term for term.
+
+Two consequences are worth knowing rather than discovering. The transverse pair
+is augmented as one \emph{complex} field, because $Q_{ij}(\mathbf r)$ is real
+and so the resident table satisfies
+$Q_{ij}(-\mathbf G) = Q_{ij}(\mathbf G)^{*}$ while the displaced one does not;
+and the identity against a supercell closes to $1.7\times10^{-9}$~Ry on an
+ultrasoft dataset and $3.3\times10^{-7}$ on a PAW one --- the gap between those
+two being PAW's own one-centre path, which shows an inconsistency of the same
+size between this code's collinear and noncollinear routes on a cell with no
+spiral in it at all, rather than anything the displacement does.
 
 \begin{pycode}
 from defumat.workflows.spiral import (run_spiral_scan, relax_spiral_q,
@@ -4708,10 +4738,15 @@ written at any rank.
 \begin{refuses}
 \textbf{Refuses.} A spiral with spin-orbit coupling, permanently --- it breaks
 the theorem, and Elk refuses it too; a spiral with symmetry, until the spin
-space group is written, so a spiral needs \code{nosym}; a spiral with
-ultrasoft/PAW; and spiral relaxation under a magnetic field, whose energy is
-outside the reported total, so the state is stationary for a different
-functional than the one being differentiated.
+space group is written, so a spiral needs \code{nosym}; $dE/d\mathbf q$, and so
+\code{relax\_spiral\_q} and the integrated route through \code{gradients=True},
+on an \textbf{ultrasoft or PAW} dataset --- the \emph{ground state} of such a
+spiral runs, but the displaced table above is itself a function of $\mathbf q$
+and a gradient taken at a frozen table would be wrong by the whole
+$dQ_{ij}(\mathbf G - \mathbf q)/d\mathbf q$ term, which is refused by name
+rather than differentiated anyway; and spiral relaxation under a magnetic field,
+whose energy is outside the reported total, so the state is stationary for a
+different functional than the one being differentiated.
 \end{refuses}
 
 % =====================================================================

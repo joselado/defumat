@@ -225,12 +225,17 @@ def test_the_scan_workflow_reproduces_single_runs(pseudo_dir):
 
 
 def test_what_a_spiral_refuses(pseudo_dir, qe_testsuite):
-    """The three combinations that are refused, and why each one is.
+    """The two combinations that are refused, and why each one is.
 
     Spin-orbit coupling: permanently, because it breaks the generalized Bloch
-    theorem. Symmetry: until the spin space group is written. Ultrasoft and PAW:
-    until the augmentation charge between the two components -- ``q_ij(q)``, not
-    ``qq`` -- is threaded through.
+    theorem. Symmetry: until the spin space group is written.
+
+    **Ultrasoft and PAW used to be the third and are not any more**: the
+    augmentation charge between the two components is the resident table
+    displaced by ``-q``, and the ground state runs. What is still refused for
+    such a spiral is ``dE/dq``, because the displaced table is itself a
+    function of ``q``; that refusal is asserted below and the ground state is
+    validated in ``test_spin_spirals_augmented.py``.
     """
     text = _spiral_input(0.25)
 
@@ -245,8 +250,9 @@ def test_what_a_spiral_refuses(pseudo_dir, qe_testsuite):
     with pytest.raises(ValueError, match="noncolin"):
         build_system(parse_pw_input(text.replace("    noncolin = .true.", "")))
 
-    # ... and an ultrasoft dataset is refused when the calculation is built,
-    # which is where the augmentation charge first exists.
+    # ... and an ultrasoft dataset now *builds*, carrying the displaced table
+    # beside the resident one, while its ``dE/dq`` is refused by name.
+    from defumat.forces.spiral import compute_spiral_gradient
     from defumat.scf.driver import Calculation
 
     ultrasoft = read_pw_input(qe_testsuite / "pw_noncolin" / "noncolin.in")
@@ -254,5 +260,14 @@ def test_what_a_spiral_refuses(pseudo_dir, qe_testsuite):
     marker["nosym"] = ".true."
     marker["spiral_q"] = {(3,): 0.5}
     system = build_system(ultrasoft)
-    with pytest.raises(NotImplementedError, match="q_ij"):
-        Calculation(system, _pseudos(system, pseudo_dir))
+    calculation = Calculation(system, _pseudos(system, pseudo_dir))
+    assert calculation.cross_augmentation is not None
+    assert calculation.cross_augmentation.shift is not None
+
+    with pytest.raises(NotImplementedError, match="dQ_ij"):
+        compute_spiral_gradient(calculation, None, None)
+
+    # The traced path is refused at its own level too, so no other caller can
+    # reach a table frozen at the old ``q``.
+    with pytest.raises(NotImplementedError, match="not rebuilt on this path"):
+        calculation.at_spiral_q((0.0, 0.0, 0.4), rebuild_basis=False)

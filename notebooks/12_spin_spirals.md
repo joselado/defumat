@@ -199,10 +199,25 @@ rotated frame is a choice, and only frame-independent quantities are physical.
 
 **Spin-orbit coupling, permanently** -- it ties the spin to the lattice and breaks the
 theorem outright, and Elk refuses the combination for the same reason. **Symmetry**, until
-the spin space group is written, so a spiral runs `nosym` on the full k-grid. And
-**ultrasoft or PAW datasets**, until the augmentation charge *between the two components* is
-threaded through -- that is $q_{ij}(\mathbf q)$ and not the ordinary $q_{ij}$, a different
-object that the two-sphere structure is exactly what makes necessary.
+the spin space group is written, so a spiral runs `nosym` on the full k-grid.
+
+**Ultrasoft and PAW datasets run**, and they are worth a paragraph, because the two-sphere
+structure reaches further than it first looks. The transverse part of the magnetization is
+built by pairing the up component against the down one, so it pairs two states whose Bloch
+factors differ by $\mathbf q$ -- and the charge an ultrasoft dataset puts back around each
+nucleus, to make up for the softened wavefunction, has to be carried at that same
+wavevector, $Q_{ij}(\mathbf G - \mathbf q)$ in place of $Q_{ij}(\mathbf G)$. The charge
+and the component of the moment along the spiral axis pair like with like and keep the
+ordinary one. Using the ordinary one for the transverse part as well costs
+$1.1$ mRy per atom on the oxygen chain below, and nothing about the density it produces
+looks wrong: it is smooth, it is normalised, and the moment comes out the right size.
+
+The test of that is a spiral turning by a quarter turn per cell against the four-cell
+supercell holding the same four moments explicitly, which shares none of the machinery: the
+two agree to $2\times10^{-9}$ Ry on an ultrasoft dataset and $3\times10^{-7}$ on a PAW one.
+What is still refused on these datasets is the *pitch relaxation* of notebook 14, because
+the slope $dE/d\mathbf q$ then carries a term from that displaced charge which is not
+taken yet.
 
 ---
 Notebook 14 relaxes $\mathbf q$ itself downhill, which costs a fraction of the runs this scan

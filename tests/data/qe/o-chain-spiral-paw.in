@@ -1,0 +1,50 @@
+! An oxygen chain with a spin spiral along it, on a PAW dataset -- the
+! system the augmented spiral is validated on.
+!
+! It is the hydrogen chain of h-chain-spiral.in with the one change that matters:
+! the dataset carries an augmentation charge, so the transverse block of the
+! density is built from the *displaced* table Q_ij(G - q) rather than from
+! Q_ij(G). One oxygen per cell, 5.2 bohr apart along z and 12 bohr from its
+! images in x and y, with the moment turned into the plane (angle1 = 90) so the
+! whole moment sits in the transverse channel the displacement governs -- a
+! moment along z would leave that channel empty and the test would pass on a
+! quantity that is zero.
+!
+! Three choices are deliberate and the identities depend on all three:
+!
+!   * celldm(3) = 0.43333... puts the chain spacing at 5.2 bohr, which is the
+!     one nearby value whose FFT grids *double and quadruple exactly*: dense
+!     24 -> 48 -> 96 and smooth 18 -> 36 -> 72. At 5.0 bohr the doubled cell
+!     takes 45 dense points rather than 48, and the two cells then discretise
+!     the same functional differently -- worth 4.9e-06 Ry, which is larger than
+!     the identity being tested.
+!   * degauss = 0.1, for the reason h-chain-spiral.in gives: a soft magnetic
+!     surface at a small smearing lands the spiral and its supercell in
+!     different minima.
+!   * the 1x1x4 k-grid is even, so it is invariant under a shift by half a
+!     reciprocal lattice vector.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 6, celldm(1) = 12.0, celldm(3) = 0.43333333333333,
+    nat = 1, ntyp = 1,
+    ecutwfc = 25.0, ecutrho = 200.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.10
+    noncolin = .true.
+    nosym = .true.
+    starting_magnetization(1) = 0.6
+    angle1(1) = 90.0
+    spiral_q(1) = 0.0, spiral_q(2) = 0.0, spiral_q(3) = 0.25
+    nbnd = 10
+ /
+ &electrons
+    mixing_beta = 0.3
+    conv_thr = 1.0d-11
+ /
+ATOMIC_SPECIES
+ O  16.0  O.pz-kjpaw.UPF
+ATOMIC_POSITIONS (crystal)
+ O 0.0 0.0 0.0
+K_POINTS {automatic}
+ 1 1 4 0 0 0

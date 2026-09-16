@@ -174,20 +174,49 @@ validated reaches it.
 augmented dataset, which is every heavy element. The collinear ultrasoft and PAW
 responses are unaffected and are validated. **Size:** a phase.
 
-### 1e. A spin spiral with an ultrasoft or PAW dataset
+### 1e. A spin spiral with an ultrasoft or PAW dataset. ✅ DONE for the ground state.
 
-`scf/driver.py:1545`. Both, and it takes `forces/spiral.py:387` with it.
+**Closed 2026-09-16.** `PLAN.md` P89 has the numbers. What is left of this entry is
+`dE/dq`, which is item 1e' below.
 
-**What is missing.** The augmentation charge between the two spinor components is
-`q_ij(q)` rather than `qq`, since they sit on spheres centred at `k + q/2` and `k - q/2`.
-PAW needs one thing beyond that: Elk's per-atom phase `e^{-i q.tau/2}` (`zqss`,
-`init0.f90`) on the transverse one-centre term.
+**What the entry said was missing, and what it actually was.** It said the augmentation
+charge between the two components is `q_ij(q)` rather than `qq` -- which is the right
+idea at the wrong rank. `augmentation_at_q` evaluates the charge at a *single*
+wavevector, which is what an overlap between two k-points needs; a *density* needs it
+over the whole dense G set, as `Q_ij(G - q) e^{-i (G - q).tau_a}`. So the object was one
+parameter away from `build_augmentation` rather than a call into the topology module,
+and the lift was `shift=` on the builder that already existed.
 
-**What it needs first.** `topology.augmentation.augmentation_at_q` again, which is the
-third item on this list to want it. `dE/dq` for a spiral (`forces/spiral.py:387`) is
-unreachable until this lands and is a line of work of its own afterwards. **Size:** a
-phase, and the one with the most surface: the spiral path also refuses symmetry, so
-everything runs on the full grid.
+**And the PAW half of the entry was wrong.** It said PAW needs Elk's per-atom phase
+`e^{-i q.tau/2}` (`zqss`) on the transverse one-centre term. It does not need one:
+`becsum` between the two components already carries `e^{i q.tau}` through its two
+structure factors, and the one-centre energy depends on `|m|`, which a position-dependent
+spin rotation leaves alone pointwise. **This was measured rather than argued** -- a
+one-atom cell is translation invariant, so moving the atom by a third of the cell (onto
+an exact grid point, or the egg-box error swamps it at 4.4e-06 Ry) must not move the
+energy, and it moves it by **2.9e-12 Ry** for ultrasoft and **1.4e-11** for PAW. That is
+the fifth entry in this file's own tally of sizings that were wrong for the same reason:
+written from the refusal's message instead of from the code and the physics around it.
+
+### 1e'. `dE/dq` for an ultrasoft or PAW spiral
+
+`forces/spiral.py`, `_require_a_differentiable_spiral`, and
+`scf/driver.py`'s `at_spiral_q(rebuild_basis = False)` refuses it a second time so no
+other caller reaches a frozen table.
+
+**What is missing.** The displaced table `Q_ij(G - q)` is a function of `q` exactly as
+`|k + G|^2` and `vkb` are, and the traced path the gradient is taken along rebuilds
+neither it nor its radial transforms. A gradient taken anyway is the derivative at a
+frozen augmentation charge: right to look at and wrong by the whole
+`dQ_ij(G - q)/dq` term, which is this repository's P68 shape of error.
+
+**What it needs first.** Nothing that does not exist -- the table is built by
+`build_augmentation(shift=...)`, whose arithmetic is `jnp` end to end, so rebuilding it
+inside `at_spiral_q(rebuild_basis = False)` with a traced `q` is the whole change. The
+work is not the term, it is the **measurement**: a finite difference of the energy in
+`q`, which now exists to be differenced and did not before. **Size:** part of a phase,
+and the cost to watch is that a radial transform then runs inside every gradient
+evaluation rather than once per wavevector.
 
 ### 1f. A source-free exchange-correlation field with a PAW dataset
 

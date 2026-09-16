@@ -16976,3 +16976,171 @@ floor of 4.4 to 6.3 per cent, the AlAs comparison becomes discriminating and is 
 running; if they do not, the refusal stays with the two pieces pinned and the assembly
 written down as unchecked. Until then the three stay refused, and the reason on the record
 is "this comparison could not have told the difference" rather than "the two disagree".
+
+### P95 -- A spin spiral on an ultrasoft or PAW dataset: the augmentation charge displaced by `q`. ✅ DONE for the ground state; `dE/dq` refused by name.
+
+`defumat/pseudo/augmentation.py` (`build_augmentation(shift=...)`,
+`AugmentationCharge.shift`, `cross_integrals`), `defumat/scf/driver.py`
+(`_addusdens_spiral`, `_noncollinear_coefficients`, `_newd_noncollinear`'s `cross`),
+`defumat/scf/density.py` (`spinor_becsum(spiral=True)`),
+`tests/regression/test_spin_spirals_augmented.py`, `tests/data/qe/o-chain-*`.
+
+**The refusal this lifts, and why its stated reason was the right idea at the wrong
+rank.** `AUGMENTATION-NEXT.md` §1e said the missing object is `q_ij(q)` rather than `qq`
+and pointed at `topology/augmentation.py:augmentation_at_q`, the primitive P93 had
+already validated. That primitive evaluates the augmentation charge at a **single**
+wavevector, which is what an overlap between two k-points needs. A **density** needs it
+over the whole dense G set. The object is therefore
+
+    Q_ij(G - q) e^{-i (G - q).tau_a}
+
+on every G, which is `build_augmentation` with one displaced argument rather than a call
+into the topology module -- the same assembly, the same radial conventions, the same
+`_assemble_qgm`. The lift was a `shift=` parameter on the builder that already existed.
+
+**The physics, in one line.** The transverse block of a spiral's density pairs
+projectors at `k + q/2` with projectors at `k - q/2`, so the augmentation charge reaching
+it is the lattice sum `sum_R e^{-i q.R} Q_ij(r - tau_a - R)`. That sum is
+`e^{-i q.r}` times a lattice-periodic function -- the *same* factor the smooth transverse
+density carries, which is the whole of why the rotated frame works -- and the periodic
+factor is the transform of the displaced table. Charge and `m_z` pair projectors at the
+same k-point and keep the resident table.
+
+**Two structural points that are not bookkeeping.**
+
+* **The transverse pair is augmented as one complex field.** `Q_ij(r)` is real, so the
+  resident table obeys `Q_ij(-G) = conj(Q_ij(G))` and `m_x` and `m_y` each come back real
+  on their own; the displaced table obeys no such relation, because `-G - q` is not
+  `-(G - q)`. So the two are recombined into `m_x + i m_y` before the contraction and
+  taken apart after the transform.
+* **Nothing is lost by keeping `becsum` real.** `Q_ij` is symmetric in its channel pair,
+  so only the symmetric part of the cross block reaches the contraction, and the two
+  stored real components are exactly its real and imaginary halves --
+  `X_sym = (becsum_x + i becsum_y)/2`. Mixing, symmetrisation and the PAW one-centre
+  terms go on consuming the `nspin_mag` real form untouched, which is what kept the
+  change inside two call sites.
+
+**The numbers.** Oxygen chain, 5.2 bohr spacing, LDA, `ecutwfc = 25`, `ecutrho = 200`,
+moment **in the transverse plane** (`angle1 = 90`) so the whole 1.93 mu_B sits in the
+channel the displacement governs -- with the moment along `z` every identity below passes
+without the displaced table existing.
+
+| identity | ultrasoft | PAW |
+|---|---|---|
+| `q = 0` against the ordinary noncollinear run | **3.2e-14 Ry** | same path |
+| `q = b3/4` against the 90-degree **noncollinear** four-cell supercell | **1.65e-09 Ry** | **3.26e-07 Ry** |
+| `q = b3/2` against the **collinear** LSDA antiferromagnet | **3.61e-07 Ry** | 4.34e-05 Ry |
+| moving the one atom by `tau_z = 1/3` | **2.9e-12 Ry** | **1.4e-11 Ry** |
+
+**and the identity it is measured against fails by 1.15e-03 Ry with the displacement
+taken out** -- the resident table used for the transverse block, which is what the code
+did before and what it would silently return to if `shift` were dropped anywhere on the
+way through. That is a factor of 3200, and it is the only reason the small numbers above
+mean anything; `tests/regression/test_spin_spirals_augmented.py::test_the_resident_table_is_not_enough`
+is that measurement kept as a test, because a tolerance nothing fails is not a test.
+
+**`q = b3/2` is blind to the sign of the displacement and `q = b3/4` is not.** At
+`q = b3/2` the wavevector is its own negative modulo `b3`, so `Q_ij(G - q)` and
+`Q_ij(G + q)` differ by a relabelling of the G set. The quarter turn is the sharp one and
+is the only test here that pins the sign.
+
+**The residue on the collinear-referenced identity is not the spiral's, and the
+explanation that said it was fitted the numbers perfectly.** This is worth the space,
+because the wrong version got as far as being written into this entry.
+
+The identity against the collinear antiferromagnet leaves a residue that falls with
+`ecutrho`, and it is insensitive to everything else -- `nbnd` 10 to 24 and `conv_thr`
+1e-10 to 1e-12 move it in the fourth digit only (-3.610e-07 throughout), which is what
+ruled convergence out. The story that fitted was a **truncation**: a spiral keeps
+`|G| < G_max` in the rotated frame, which is `|G' + q| < G_max` in the supercell's
+labelling where the supercell keeps `|G'| < G_max`, so the two differ by a shell of
+thickness `|q|` at the cutoff surface, and the augmentation charge is exactly what is not
+small there. It explains a residue that is ultrasoft-only, that a norm-conserving spiral
+does not have at any cutoff, and that falls with `ecutrho`. It is wrong.
+
+**What refuted it is an A/B rather than an argument**: the same doubled cell run twice
+with **no spiral in it at all**, once as `nspin = 2` and once as `noncolin` with the two
+moments antiparallel in the plane -- identical physics, and the only difference is which
+of this code's two SCF paths computes it.
+
+| `ecutrho` | 200 | 300 | 400 |
+|---|---|---|---|
+| collinear against noncollinear, **no spiral**, ultrasoft | 7.03e-07 | 1.32e-07 | **6.11e-13** |
+| collinear against noncollinear, **no spiral**, PAW | 8.51e-05 | 4.94e-06 | **2.65e-06** |
+| spiral against collinear, per cell, ultrasoft | -3.61e-07 | -5.86e-08 | +6.08e-09 |
+| spiral against collinear, per cell, PAW | -4.34e-05 | -2.69e-06 | -1.43e-06 |
+
+The spiral rows are **half** the control rows, which is what they should be if the spiral
+contributes nothing: the reference is a doubled cell and its energy is divided by two.
+Measured ratios of the spiral residue to half the control: **1.027, 0.889** for ultrasoft
+at 200 and 300, and **1.020, 1.089, 1.081** for PAW at all three. Five of six rows inside
+9 per cent. The collinear-referenced identity was measuring the gap between this code's
+collinear and noncollinear paths, and the spiral was along for the ride.
+
+**The one row that is not the control is the informative one.** At `ecutrho = 400`
+ultrasoft's control has gone to 6.1e-13 -- the two paths agree -- and 6.08e-09 Ry is
+left, which is the spiral's own error and is the same order as the quarter turn's
+1.65e-09 measured against a supercell that shares the noncollinear machinery. So the
+augmented spiral's error is round-off-sized, and the truncation shell, if it is there at
+all, is below that.
+
+**The habit this is an instance of** is `CLAUDE.md`'s "an explanation that *fits* a number
+and is accepted because it fits", and the reason the wrong one survived scrutiny is that
+it had a mechanism, a sign, a magnitude and a reason for being ultrasoft-only. What it did
+not have is a run in which the proposed cause is absent. **An identity that closes is not
+evidence; an A/B is** -- and here the A/B took two cells that already existed and twenty
+minutes.
+
+**The trap that had to be cleared first, and it cost two wrong readings.** The first
+version of this cell had a 5.0 bohr spacing, where the doubled cell takes **45** dense
+points along `z` against the primitive's 24 rather than 48 -- the two cells then
+discretise the same functional differently and the identity read 4.9e-06 Ry, which is
+larger than what is being tested. A hand-pinned FFT grid is refused at input here, so the
+fix is the cell: 5.2 bohr is the nearby spacing whose grids double **and quadruple**
+exactly, 24 to 48 to 96 dense and 18 to 36 to 72 smooth. The same shape caught the
+off-origin test: at `tau_z = 0.3`, which is not an integer number of grid points, moving
+the atom reads **4.4e-06 Ry** of pure egg-box error and looks exactly like a missing
+phase; at `tau_z = 1/3`, which is 8 dense and 6 smooth points, it reads 2.9e-12.
+
+**What the off-origin test is actually for, and a refusal it withdrew.** Every other
+cell here has its atom at the origin, where `e^{-i (G - q).tau}` and `e^{-i G.tau}` are
+both 1 -- so nothing else distinguishes the displaced structure factor from the resident
+one. `AUGMENTATION-NEXT.md` §1e additionally claimed PAW needs Elk's per-atom phase
+`e^{-i q.tau/2}` (`zqss`, `init0.f90`) on the transverse one-centre term. **It does
+not.** `becsum` between the two components already carries `e^{i q.tau}` through its two
+structure factors, so it is the cell-0 lab-frame block; the one-centre energy depends on
+`|m|`, which a position-dependent spin rotation leaves alone pointwise; and
+`sum_R |beta^R> e^{i q.R} D^0 <beta^R|` is exactly `vkb(k+q/2) D^0 vkb(k-q/2)^dagger`, so
+there is no phase to add. The 1.4e-11 Ry is what turns that from a derivation into a
+measurement, and it is the fifth sizing in that file to have been written from a
+refusal's message rather than from the code around it.
+
+**PAW sits two orders above ultrasoft on the quarter turn -- 3.26e-07 against 1.65e-09 --
+and the control says where to look.** PAW's collinear and noncollinear paths do not
+converge onto each other the way ultrasoft's do: the control above **flattens at
+2.65e-06 Ry** where ultrasoft's reaches 6.1e-13. That is a gap in the existing code, on
+physics with no spiral anywhere in it, and this phase only surfaced it -- `OPEN.md` has
+it as an item of its own. The quarter turn is noncollinear on both sides so that gap does
+not enter it directly, and 3.26e-07 is not attributed here to any cause: what is excluded
+is a missing phase (the off-origin number, 1.4e-11) and convergence, and what is *not*
+excluded is PAW's one-centre path, which is the one piece of machinery showing an
+inconsistency of the same order on the same cell. Naming a cause for it would be the
+mistake the entry above is about.
+
+**What is refused, and why it is refused rather than differentiated.** `dE/dq`, and with
+it `relax_spiral_q` and the `gradients=True` route through a scan. The displaced table is
+a function of `q` exactly as `|k+G|^2` and `vkb` are, and
+`at_spiral_q(rebuild_basis = False)` -- the traced path the gradient is taken along --
+rebuilds neither it nor its radial transforms. A gradient taken anyway would be the
+derivative at a frozen augmentation charge: right to look at and wrong by the whole
+`dQ_ij(G - q)/dq` term, which is P68's shape of error exactly. The refusal is in
+`forces/spiral.py:_require_a_differentiable_spiral` and again in `at_spiral_q` itself, so
+no other caller can reach the frozen table by another route. The rebuilding branch of
+`at_spiral_q` *does* move the table to the new `q`, so an `E(q)` scan -- which walks that
+branch -- is correct. `at_strain` refuses a spiral already, so the stress was never
+exposed, and `reject_spinor_spiral` refuses the atomic force for every spiral.
+
+**Memory.** The displaced table is a second `(nh, nh, ngm)` per ultrasoft species beside
+the resident one, so an augmented spiral holds **twice** what `AUG_MAX_BYTES` sizes --
+the gate measures one of them. On the tabulated branch it is free: that branch keeps the
+radial table rather than the G-space array, and a second radial table is kilobytes.

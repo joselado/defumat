@@ -67,10 +67,13 @@ to carry it:
 
 A chain of three refusals decides this, and none of it is a preference:
 
-* a spiral **refuses ultrasoft and PAW** (the augmentation charge *between* the
-  two spinor components is not threaded through), so the dataset must be
-  norm-conserving — which rules out every Ni and I file in QE's own library, all
-  of which are US or PAW;
+* a spiral **refused ultrasoft and PAW** when this was written, so the dataset had
+  to be norm-conserving — which ruled out every Ni and I file in QE's own library,
+  all of which are US or PAW. **That refusal is gone** (`PLAN.md` P95: the
+  augmentation charge between the two components is the resident table displaced
+  to `Q_ij(G - q)`), so the choice below is no longer forced and a rerun on a PAW
+  Ni dataset is open. What is still refused is `dE/dq` on such a dataset, which
+  this calculation does not use;
 * a **fully-relativistic** dataset without `lspinorb` is refused too (QE's
   `average_pp` is not implemented, and consuming `j`-resolved projectors as
   though they were `l`-resolved is worth ~20 Ry), which rules out the

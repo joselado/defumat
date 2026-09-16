@@ -26,7 +26,8 @@ periodic parts -- the plane-wave sphere carries the ``e^{i(k +- q/2).r}``
 factor -- so holding the coefficients fixed while ``q`` moves holds ``U`` fixed
 and lets the spiral turn, which is precisely the variational parameter the SCF
 minimised over. The orthonormality constraint ``<U|U> = 1`` has no ``q`` in it
-(``S`` is the identity: ultrasoft and PAW spirals are refused), so unlike the
+(``S`` is the identity: ultrasoft and PAW spirals are refused *here*, though
+their ground state runs), so unlike the
 ultrasoft force there is no Pulay term to carry, and the total derivative is the
 partial one at frozen state.
 
@@ -39,9 +40,10 @@ places the shifted spheres appear: ``|k +- q/2 + G|^2`` and
 ``vkb(k +- q/2)``. The energy below is nonetheless written out in full, for two
 reasons: evaluated at the converged geometry it must reproduce the SCF total
 energy to round-off, which is the only check there is on the rest of it; and
-when the augmentation charge between the two components is eventually threaded
-through, the density *will* depend on ``q`` and the term will appear in the
-gradient by itself rather than needing to be remembered.
+the augmentation charge between the two components is now threaded through, so
+on an augmented dataset the density *does* depend on ``q`` -- which is why that
+combination is refused here rather than quietly differentiated at a frozen
+table.
 
 **The plane-wave sphere is held fixed while differentiating, and that loses
 nothing.** Which plane waves satisfy ``|k +- q/2 + G|^2 <= ecutwfc`` is a
@@ -385,14 +387,27 @@ def _require_a_differentiable_spiral(calculation) -> None:
             "being differentiated with respect to"
         )
     if calculation.is_ultrasoft:
-        # Unreachable through ``Calculation``, which refuses the combination
-        # outright, and stated here because this is the term that would be
-        # missing: the augmentation charge *between* the two components carries
-        # its own ``q`` dependence.
+        # **The ground state of such a spiral now runs**; what is missing is one
+        # term of this derivative, and it is named rather than approximated.
+        # The transverse augmentation charge is the displaced table
+        # ``Q_ij(G - q) e^{-i (G - q).tau_a}``
+        # (:meth:`defumat.scf.driver.Calculation.augmented`), so it is a
+        # function of ``q`` like the kinetic energy and ``vkb`` are -- but
+        # ``at_spiral_q(rebuild_basis = False)``, the traced path this gradient
+        # is taken along, deliberately freezes everything that is not a
+        # function of the sphere, and the table is rebuilt in neither branch.
+        # A gradient taken anyway would be the energy's derivative at a frozen
+        # augmentation charge, which is right to look at and wrong by the whole
+        # ``dQ_ij(G - q)/dq`` term. That is this repository's P68 shape of
+        # error -- the energy right and the derivative wrong -- so it is
+        # refused until the term is written and measured against a finite
+        # difference of the energy, which now exists to be differenced.
         raise NotImplementedError(
-            "dE/dq for an ultrasoft or PAW spiral is not implemented, for the "
-            "same reason the spiral itself is not: q_ij between the two "
-            "components is not threaded through"
+            "dE/dq for an ultrasoft or PAW spiral is not implemented: the "
+            "ground state is (the transverse augmentation charge is the "
+            "displaced table Q_ij(G - q)), but that table is a function of q "
+            "and its derivative is not threaded through at_spiral_q, so the "
+            "gradient would silently be missing dQ_ij(G - q)/dq"
         )
     if calculation.magnetic_field is not None:
         raise NotImplementedError(

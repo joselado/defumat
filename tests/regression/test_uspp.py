@@ -347,6 +347,83 @@ def test_the_storage_scheme_is_chosen_by_size(pseudo_dir):
     assert isinstance(tight, TabulatedAugmentation)
 
 
+def test_a_displaced_table_agrees_between_the_two_schemes(pseudo_dir):
+    """``Q_ij(G + b)`` through the stored array and through the radial table.
+
+    The displaced table a spin spiral's transverse block needs (``PLAN.md``
+    P95) is built by the same assembly with one argument moved, so it goes
+    down both storage branches exactly as the resident one does -- and the
+    tabulated branch had to be told about the displacement twice, once for the
+    padded G set it scans and once for ``qmax``, which has to reach
+    ``max|G| + |b|`` or the interpolation runs off the end of the table into a
+    NaN rather than a clamp. Neither is visible on the resident table, so this
+    is the check that they were both done.
+
+    The two agree at interpolation level, as the resident pair does: 3.8e-13 on
+    a charge of 8.0e-03 and 4.8e-10 on integrals of 2.0e+01.
+    """
+    from defumat.basis.builder import build_basis
+    from defumat.pseudo.augmentation import (
+        AugmentationCharge, TabulatedAugmentation, build_augmentation,
+    )
+
+    system = build_system(read_pw_input(CASES / "si2-us.in"))
+    pseudos = tuple(
+        read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species
+    )
+    dense = build_basis(system).dense
+    shift = np.array([0.0, 0.0, -0.31])
+    stored = build_augmentation(pseudos, system.structure, system.cell, dense,
+                                max_bytes=1 << 40, shift=shift)
+    tabulated = build_augmentation(pseudos, system.structure, system.cell, dense,
+                                   max_bytes=0, shift=shift)
+    assert type(stored) is AugmentationCharge
+    assert isinstance(tabulated, TabulatedAugmentation)
+    assert stored.shift is not None and tabulated.shift is not None
+
+    rng = np.random.default_rng(0)
+    becsum = tuple(
+        jnp.asarray(rng.normal(size=(len(atoms), q.shape[0], q.shape[0])))
+        for q, atoms in zip(stored.qgm, stored.species_atoms)
+    )
+    charge = np.asarray(stored.charge(becsum))
+    assert charge == pytest.approx(np.asarray(tabulated.charge(becsum)), abs=1e-11)
+
+    # A *complex* potential, which is what the transverse block integrates and
+    # what ``integrals`` would throw the imaginary half of away.
+    potential = jnp.asarray(rng.normal(size=dense.ngm)
+                            + 1j * rng.normal(size=dense.ngm))
+    for mine, theirs in zip(stored.cross_integrals(potential),
+                            tabulated.cross_integrals(potential)):
+        if mine.size == 0:
+            continue
+        assert np.asarray(mine) == pytest.approx(np.asarray(theirs), abs=1e-8)
+
+
+def test_a_zero_displacement_is_the_resident_table(pseudo_dir):
+    """``b -> 0`` recovers ``Q_ij(G)`` and its structure factors exactly.
+
+    Not approximately: the displaced build is the resident build with ``G + b``
+    in place of ``G``, so at ``b = 0`` it is the same arithmetic on the same
+    numbers and the two arrays agree bit for bit. Anything else means the
+    displacement has leaked into a branch it should not have reached.
+    """
+    from defumat.basis.builder import build_basis
+    from defumat.pseudo.augmentation import build_augmentation
+
+    system = build_system(read_pw_input(CASES / "si2-us.in"))
+    pseudos = tuple(
+        read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species
+    )
+    dense = build_basis(system).dense
+    resident = build_augmentation(pseudos, system.structure, system.cell, dense)
+    at_zero = build_augmentation(pseudos, system.structure, system.cell, dense,
+                                 shift=np.zeros(3))
+    for a, b in zip(resident.qgm, at_zero.qgm):
+        assert np.array_equal(np.asarray(a), np.asarray(b))
+    assert np.array_equal(np.asarray(resident.phases), np.asarray(at_zero.phases))
+
+
 @pytest.mark.slow
 def test_an_scf_through_the_table_reaches_the_same_total_energy(pseudo_dir, monkeypatch):
     """The whole loop, not just the two contractions.

@@ -154,7 +154,7 @@ from defumat.solvers.davidson import (
 from defumat.solvers.subspace import rayleigh_ritz
 from defumat.system.builder import System
 from defumat.system.kpoints import KPoints
-from defumat.system.spiral import spiral_kcart, spiral_kpoints
+from defumat.system.spiral import spiral_cartesian, spiral_kcart, spiral_kpoints
 from defumat.system.symmetry import (
     apply_symmetry_maps,
     atom_mapping,
@@ -525,6 +525,63 @@ def _addusdens(rho_r, fft_index, grid, augmentation, becsum_):
     return rho_r + jnp.real(g_to_r(charge, fft_index, grid))
 
 
+def _addusdens_spiral(rho_r, fft_index, grid, augmentation, cross, becsum_):
+    """``addusdens`` for a spin spiral, in the rotated frame.
+
+    The charge and ``m_z`` pair projectors at the *same* k-point in both
+    components, so they take the resident ``Q_ij(G)`` exactly as an ordinary
+    noncollinear run does. The transverse pair does not: it pairs ``k + q/2``
+    with ``k - q/2``, and its augmentation charge is the displaced table
+    ``Q_ij(G - q) e^{-i (G - q).tau_a}`` that ``cross`` carries.
+
+    **The transverse pair has to be augmented as one complex field rather than
+    as two real ones.** ``Q_ij(r)`` is real, so the resident table obeys
+    ``Q_ij(-G) = conj(Q_ij(G))`` and each of ``m_x`` and ``m_y`` comes back
+    real on its own; the displaced table obeys no such relation -- ``-G - q``
+    is not ``-(G - q)`` -- and the real-space function it represents is
+    genuinely complex. So the two components are recombined into
+    ``m_x + i m_y`` before the contraction and taken apart again after the
+    transform, which is the same object the smooth density already builds as
+    ``2 conj(U_up) U_dn``.
+
+    Nothing is lost in that recombination even though ``becsum`` is stored as
+    ``nspin_mag`` **real** components: ``Q_ij`` is symmetric in its channel
+    pair, so only the symmetric part of the cross block ever reaches the
+    contraction, and the two stored components are exactly its real and
+    imaginary halves. Mixing, symmetrisation and the PAW one-centre terms
+    therefore go on consuming the real form untouched.
+
+    At ``q = 0`` the displaced table *is* the resident one and this reduces to
+    :func:`_addusdens` term by term, which is what
+    ``test_a_zero_spiral_is_an_ordinary_noncollinear_run`` measures.
+    """
+    def component(spin):
+        return augmentation.charge(
+            tuple(None if b is None else b[spin] for b in becsum_)
+        )
+
+    if rho_r.shape[0] == 1:
+        # A spiral with no magnetization: there is no transverse block to
+        # displace, and nothing here differs from the ordinary path.
+        return rho_r + jnp.real(
+            g_to_r(component(0)[None], fft_index, grid)
+        )
+
+    transverse = cross.charge(
+        tuple(None if b is None else b[1] + 1j * b[2] for b in becsum_)
+    )
+    fields = g_to_r(
+        jnp.stack([component(0), transverse, component(3)]), fft_index, grid
+    )
+    charge, cross_r, magnetization = fields[0], fields[1], fields[2]
+    return rho_r + jnp.stack([
+        jnp.real(charge),
+        jnp.real(cross_r),
+        jnp.imag(cross_r),
+        jnp.real(magnetization),
+    ])
+
+
 @partial(jax.jit, static_argnames=("nbnd", "k_batch"))
 def _rotate_all(hamiltonian, vectors, nbnd: int, k_batch):
     """Rayleigh-Ritz at ``k_batch`` k-points at a time.
@@ -547,7 +604,8 @@ def _spinor_density_of_bands(psi, fft_index, grid, weights, cell, nspin_mag, k_b
 
 
 @partial(jax.jit, static_argnums=(3,))
-def _newd_noncollinear(deeq_components, dvan_so, fcoef, soc_scale: float = 1.0):
+def _newd_noncollinear(deeq_components, dvan_so, fcoef, soc_scale: float = 1.0,
+                       cross=None):
     """``newd_so``/``newd_nc``: the scalar integrals as a 2x2 spin matrix.
 
     ``deeq_components`` is ``(nspin_mag, nkb, nkb)`` -- one integral of the
@@ -568,9 +626,17 @@ def _newd_noncollinear(deeq_components, dvan_so, fcoef, soc_scale: float = 1.0):
         blocks = jnp.stack([jnp.stack([charge, zero]), jnp.stack([zero, charge])])
     else:
         mx, my, mz = deeq_components[1], deeq_components[2], deeq_components[3]
+        # ``cross`` is the ``up, down`` block ready-made, which a spin spiral
+        # needs because its two projectors sit at different k-points and the
+        # block is then not ``D_x - i D_y`` of any pair of real components.
+        # Its partner is the conjugate **transpose**, which is what Hermiticity
+        # of ``D`` asks for and what ``mx + 1j my`` already was: both matrices
+        # are symmetric in the channel pair, so the two spellings agree, and
+        # only one of them stays right once the block is complex.
+        updown = (mx - 1j * my) if cross is None else cross
         blocks = jnp.stack([
-            jnp.stack([charge + mz, mx - 1j * my]),
-            jnp.stack([mx + 1j * my, charge - mz]),
+            jnp.stack([charge + mz, updown]),
+            jnp.stack([jnp.conj(jnp.swapaxes(updown, -1, -2)), charge - mz]),
         ])
     blocks = blocks.astype(fcoef.dtype)
     dressed = jnp.einsum("asij,stjk,tbkl->abil", fcoef, blocks, fcoef, optimize=True)
@@ -1456,6 +1522,15 @@ class Calculation:
         # which is what rule R7's padding, the vmap over k and the stick layout
         # all rest on.
         self.spiral = bool(system.spiral)
+        #: The spiral wavevector in **1/bohr**, which is the unit the G set and
+        #: every radial table are in -- ``spiral_cartesian`` returns units of
+        #: ``2 pi / alat``, as Elk's ``vqlss`` is written, and ``tpiba`` is the
+        #: factor between them. Zero when there is no spiral.
+        self.spiral_qcart = (
+            np.asarray(spiral_cartesian(system.spiral_q, system.cell))
+            * float(system.cell.tpiba)
+            if self.spiral else np.zeros(3)
+        )
         self.basis_kpoints = (
             spiral_kpoints(system.kpoints, system.spiral_q, system.cell)
             if self.spiral else system.kpoints
@@ -1531,22 +1606,28 @@ class Calculation:
             )
             self.species_channels = self._species_channels()
 
+        # A spin spiral's transverse augmentation charge, displaced by ``-q``.
+        #
+        # The cross-spin block of ``becsum`` pairs projectors at two *different*
+        # k-points -- ``vkb(k + q/2)`` against ``vkb(k - q/2)`` -- so the atom's
+        # augmentation charge reaches it as the lattice sum
+        # ``sum_R e^{-i q.R} Q_ij(r - tau_a - R)`` rather than the ordinary
+        # periodic one. That sum is ``e^{-i q.r}`` times a lattice-periodic
+        # function, which is the generalized Bloch theorem again: the same
+        # ``e^{-i q.r}`` the smooth transverse density carries, so in the
+        # rotated frame the two add, and the periodic factor is the transform
+        # of ``Q_ij(G - q) e^{-i (G - q).tau_a}``.
+        #
+        # Using the resident ``Q_ij(G)`` instead leaves a density that is
+        # plausible, normalised and wrong, which is why this was refused rather
+        # than approximated until the displaced table existed. There is no
+        # separate phase to apply on top: the ``e^{-i q.tau_a}`` Elk carries as
+        # ``zqss`` is already inside this table's own structure factor.
+        self.cross_augmentation = None
         if self.spiral and self.augmentation is not None:
-            # The cross-spin block of ``becsum`` pairs projectors at two
-            # *different* k-points, so the augmentation charge it needs is
-            # ``q_ij(q)`` -- the arbitrary-wavevector form
-            # :mod:`defumat.topology.augmentation` already builds for P16 --
-            # and PAW's transverse one-centre term additionally needs Elk's
-            # per-atom phase ``e^{-i q.tau/2}`` (``zqss``, ``init0.f90``).
-            # Using the plain ``qq`` instead leaves the overlap plausible and
-            # the answer wrong, which is the failure this repository has met
-            # twice already, so the combination is refused rather than
-            # approximated.
-            raise NotImplementedError(
-                "a spin spiral with an ultrasoft or PAW dataset is not "
-                "implemented: the augmentation charge between the two "
-                "components is q_ij(q), not qq; use a norm-conserving "
-                "pseudopotential"
+            self.cross_augmentation = build_augmentation(
+                self.pseudos, system.structure, system.cell, dense,
+                shift=-self.spiral_qcart,
             )
 
         # PAW adds the one-centre corrections on top of everything ultrasoft
@@ -2332,6 +2413,15 @@ class Calculation:
             moved.augmentation = self.augmentation.at_positions(
                 positions, dense.cartesian(cell)
             )
+        if self.cross_augmentation is not None:
+            # The displaced table moves with the atoms exactly as the resident
+            # one does: ``Q_ij(G - q)`` is a property of the species and only
+            # the structure factor ``e^{-i (G - q).tau_a}`` follows the move.
+            # It is handed the *unshifted* G set, like every other caller, and
+            # reapplies its own displacement.
+            moved.cross_augmentation = self.cross_augmentation.at_positions(
+                positions, dense.cartesian(cell)
+            )
 
         vloc_g = combine_species(self.vloc_species, structure, cell, dense)
         moved.vltot = jnp.real(g_to_r(vloc_g, dense.fft_index, dense.grid))
@@ -2800,6 +2890,23 @@ class Calculation:
             # every host-side consumer of it (array lengths, the ``spiral``
             # flag) and wrong for anything that reports it. The caller here is
             # the differentiated energy, which never reads it back.
+            if self.cross_augmentation is not None:
+                # The transverse augmentation charge is the displaced table
+                # ``Q_ij(G - q)``, so it is a function of ``q`` exactly as
+                # ``|k+G|^2`` and ``vkb`` are -- and unlike them it is not
+                # rebuilt below. Returning a calculation whose table belongs to
+                # the *old* ``q`` would give a traced energy that is wrong by
+                # one term and silent about it, which is what
+                # :func:`defumat.forces.spiral._require_a_differentiable_spiral`
+                # refuses one level up. Refused here as well, so no other
+                # caller can reach the frozen table by another route.
+                raise NotImplementedError(
+                    "at_spiral_q(rebuild_basis = False) on an ultrasoft or PAW "
+                    "spiral is not implemented: the transverse augmentation "
+                    "charge Q_ij(G - q) is a function of q and is not rebuilt "
+                    "on this path, so the energy it returns would be frozen at "
+                    "the old q in that one term"
+                )
             planewaves = self.basis.planewaves
             kcart = spiral_kcart(self.system.kpoints, q_crystal, cell)
             moved.kinetic = planewaves.kinetic(smooth, self.basis_kpoints, cell, kcart)
@@ -2819,6 +2926,17 @@ class Calculation:
             self.system, spiral_q=tuple(float(v) for v in q_crystal)
         )
         moved.system = system
+        moved.spiral_qcart = (
+            np.asarray(spiral_cartesian(system.spiral_q, cell)) * float(cell.tpiba)
+        )
+        if self.cross_augmentation is not None:
+            # A new ``q`` is a new displaced table. This branch rebuilds the
+            # spheres, so it is host-side and can afford the radial transforms;
+            # it is what an ``E(q)`` scan walks.
+            moved.cross_augmentation = build_augmentation(
+                self.pseudos, system.structure, cell, self.basis.dense,
+                shift=-moved.spiral_qcart,
+            )
         moved.basis_kpoints = spiral_kpoints(system.kpoints, system.spiral_q, cell)
         planewaves = build_plane_wave_basis(
             smooth, moved.basis_kpoints, cell, system.ecutwfc
@@ -2947,7 +3065,7 @@ class Calculation:
         """
         spinors = spinor_becsum(
             wavefunctions[0], self.projectors.vkb, weights[0], self.species_channels,
-            self.k_batch,
+            self.k_batch, spiral=self.spiral,
         )
         values = []
         for t, block in enumerate(spinors):
@@ -3010,23 +3128,64 @@ class Calculation:
         if not self.is_ultrasoft:
             return self.dvan_so
         dense = self.basis.dense
+        spiral_cross = self.cross_augmentation is not None and potential.shape[0] == 4
         components = jnp.stack([
-            self.augmentation.block_matrix(
-                self.augmentation.integrals(r_to_g(channel, dense.fft_index))
+            jnp.zeros((self.augmentation.nkb, self.augmentation.nkb))
+            if spiral_cross and channel in (1, 2)
+            else self.augmentation.block_matrix(
+                self.augmentation.integrals(
+                    r_to_g(potential[channel], dense.fft_index)
+                )
             )
-            for channel in potential
+            for channel in range(potential.shape[0])
         ])
         if ddd_paw is not None:
             components = components + ddd_paw
+        cross = None
+        if spiral_cross:
+            # ``D^{up,down}``, the one block whose two projectors sit at
+            # different k-points. It is the adjoint of what
+            # :func:`_addusdens_spiral` builds, and it has to be, because the
+            # augmentation energy is a single bilinear
+            # ``sum_c int V_c n_c^aug`` that both of them are halves of: with
+            # ``W = V_x + i V_y`` on the displaced table,
+            # ``D^{up,down}_ij = conj(Omega sum_G conj(q~_ij(G)) W(G))``.
+            #
+            # PAW's one-centre transverse term is **not** displaced and is not
+            # part of this. It is the ordinary ``D_x - i D_y`` of the two real
+            # components, which is why ``ddd_paw`` is added above, in the
+            # channels this branch zeroed, and folded in below rather than
+            # rebuilt here. The one-centre terms live inside a sphere around
+            # one atom, where the spiral's ``e^{-i q.r}`` is the atom's own
+            # constant phase and the radial energy depends on ``|m|``, so they
+            # carry no wavevector at all.
+            potential_g = (r_to_g(potential[1], dense.fft_index)
+                           + 1j * r_to_g(potential[2], dense.fft_index))
+            cross = jnp.conj(
+                self.cross_augmentation.block_matrix(
+                    self.cross_augmentation.cross_integrals(potential_g)
+                )
+            )
+            cross = cross + (components[1] - 1j * components[2])
         return _newd_noncollinear(
-            components, self.dvan_so, self.fcoef_matrix, self.system.soc_scale
+            components, self.dvan_so, self.fcoef_matrix, self.system.soc_scale,
+            cross,
         )
 
     def augmented(self, rho_r: jnp.ndarray, becsum_) -> jnp.ndarray:
-        """``addusdens``: the augmentation charge added to a real-space density."""
+        """``addusdens``: the augmentation charge added to a real-space density.
+
+        On a **spiral** the transverse pair goes through the displaced table
+        instead; see :func:`_addusdens_spiral`.
+        """
         if not self.is_ultrasoft:
             return rho_r
         dense = self.basis.dense
+        if self.cross_augmentation is not None:
+            return _addusdens_spiral(
+                rho_r, dense.fft_index, dense.grid,
+                self.augmentation, self.cross_augmentation, becsum_,
+            )
         return _addusdens(rho_r, dense.fft_index, dense.grid, self.augmentation, becsum_)
 
     @property

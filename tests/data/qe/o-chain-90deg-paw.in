@@ -1,0 +1,46 @@
+! The same oxygen chain in a cell quadrupled along z, with each atom's moment
+! turned 90 degrees from the one before: the supercell the spiral at
+! spiral_q = (0, 0, 1/4) must reproduce. Noncollinear, four species so that each
+! atom can be given its own angle2, and no symmetry.
+!
+! **The k-grid is shifted, and that is not a detail** -- see the header of
+! h-chain-90deg.in, which explains it for the norm-conserving case; the reason
+! is the same here and has nothing to do with the augmentation charge.
+!
+! This is the sharpest of the augmented identities: both sides are noncollinear
+! ultrasoft (or PAW), so the only thing that differs is whether the transverse
+! augmentation charge is carried by the displaced table or by a supercell, and
+! q = b3/4 is not its own negative -- which is what makes it, unlike q = b3/2,
+! sensitive to the *sign* of the displacement.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 6, celldm(1) = 12.0, celldm(3) = 1.73333333333333,
+    nat = 4, ntyp = 4,
+    ecutwfc = 25.0, ecutrho = 200.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.10
+    noncolin = .true.
+    nosym = .true.
+    starting_magnetization(1) = 0.6, angle1(1) = 90.0, angle2(1) =   0.0
+    starting_magnetization(2) = 0.6, angle1(2) = 90.0, angle2(2) =  90.0
+    starting_magnetization(3) = 0.6, angle1(3) = 90.0, angle2(3) = 180.0
+    starting_magnetization(4) = 0.6, angle1(4) = 90.0, angle2(4) = 270.0
+    nbnd = 40
+ /
+ &electrons
+    mixing_beta = 0.3
+    conv_thr = 1.0d-11
+ /
+ATOMIC_SPECIES
+ O1  16.0  O.pz-kjpaw.UPF
+ O2  16.0  O.pz-kjpaw.UPF
+ O3  16.0  O.pz-kjpaw.UPF
+ O4  16.0  O.pz-kjpaw.UPF
+ATOMIC_POSITIONS (crystal)
+ O1 0.0 0.0 0.00
+ O2 0.0 0.0 0.25
+ O3 0.0 0.0 0.50
+ O4 0.0 0.0 0.75
+K_POINTS {automatic}
+ 1 1 1 0 0 1

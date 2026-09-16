@@ -73,6 +73,30 @@ class AugmentationCharge(eqx.Module):
     augmentation charge is sharp, and representing it is the entire reason the
     dense grid exists. ``phases`` is ``(nat, ngm)``, the structure factor
     ``e^{-i G . tau_a}`` of each atom.
+
+    **A shifted table.** With ``shift = b`` the whole object is evaluated at
+    ``G + b`` instead of at ``G`` -- ``qgm`` is ``Q_ij(G + b)`` and ``phases``
+    is ``e^{-i (G + b) . tau_a}`` -- which is the Fourier transform of the
+    lattice sum ``sum_R e^{i b . R} Q_ij(r - tau_a - R)`` rather than of the
+    ordinary one. That sum is what appears wherever a density pairs two states
+    whose Bloch factors differ by ``b``: the transverse block of a spin
+    spiral's density (``b = -q``), and an ultracell's cross density between
+    two folded wavevectors. It is the same assembly as the ordinary table with
+    one displaced argument, which is why it is a parameter here rather than a
+    second builder.
+
+    Three things about a shifted table that the unshifted one hides, because
+    ``Q_ij(r)`` is real and ``Q_ij(-G) = conj(Q_ij(G))`` only holds at
+    ``b = 0``:
+
+    - the real-space function it represents is **complex**, so a caller takes
+      its real and imaginary parts apart rather than dropping one;
+    - :meth:`integrals` is therefore not real, and the complex form is
+      :meth:`cross_integrals`; ``integrals`` itself is left alone so no
+      existing call site changes behaviour;
+    - ``qq`` is ``Omega * Q_ij(b)``, **complex**, which is the same number
+      :func:`defumat.topology.augmentation.augmentation_at_q` builds at a
+      single wavevector. It is not an overlap and must not be given to ``S``.
     """
 
     qgm: tuple  # per species, (nh, nh, ngm) complex
@@ -82,6 +106,10 @@ class AugmentationCharge(eqx.Module):
     species_atoms: tuple = eqx.field(static=True)  # atom indices, per species
     channel_offsets: tuple = eqx.field(static=True)  # first channel of each atom
     nkb: int = eqx.field(static=True)
+    #: ``(3,)`` cartesian wavevector the table is displaced by, or ``None`` for
+    #: the ordinary ``Q_ij(G)``. Traced, not static: a spiral's ``dE/dq``
+    #: differentiates the energy with respect to it.
+    shift: jnp.ndarray | None = None
 
     @property
     def ntyp(self) -> int:
@@ -148,9 +176,45 @@ class AugmentationCharge(eqx.Module):
 
         ``Q_ij(G)`` is a property of the species; only the structure factor
         moves, so a new geometry costs one complex exponential per atom.
+
+        ``gcart`` is the **unshifted** G set, as every caller has it; the
+        displacement is reapplied here so a shifted table survives a move of
+        the atoms with its own argument intact.
         """
-        phases = _atom_phases(gcart, positions).astype(self.phases.dtype)
+        phases = _atom_phases(self._shifted(gcart), positions).astype(self.phases.dtype)
         return eqx.tree_at(lambda a: a.phases, self, phases)
+
+    def _shifted(self, gcart: jnp.ndarray) -> jnp.ndarray:
+        """``G + b``, or ``G`` when there is no displacement."""
+        if self.shift is None:
+            return gcart
+        return gcart + jnp.asarray(self.shift, dtype=gcart.dtype)
+
+    def cross_integrals(self, potential_g: jnp.ndarray) -> tuple:
+        """:meth:`integrals` without the real part, for a complex potential.
+
+        ``Omega sum_G conj(Q_ij(G + b) e^{-i (G + b) . tau_a}) V(G)`` per atom,
+        which is ``int conj(q~_ij^a(r)) V(r) dr`` with ``q~`` the (complex)
+        real-space function the shifted table represents. The ordinary
+        :meth:`integrals` is the real part of exactly this, and takes it
+        because at ``b = 0`` with a real ``V`` the imaginary part is zero by
+        symmetry rather than by rounding -- which stops being true the moment
+        either the table is displaced or the potential is complex.
+        """
+        result = []
+        for q, atoms in zip(self.qgm, self.species_atoms):
+            if q.shape[0] == 0 or not atoms:
+                result.append(
+                    jnp.zeros((len(atoms), q.shape[0], q.shape[0]),
+                              dtype=self.phases.dtype)
+                )
+                continue
+            result.append(
+                _species_cross_integrals(
+                    q, potential_g, self.phases[jnp.asarray(atoms)], self.volume
+                )
+            )
+        return tuple(result)
 
     def block_matrix(self, blocks: tuple) -> jnp.ndarray:
         """Per-atom ``(nh, nh)`` blocks -> the ``(nkb, nkb)`` matrix ``H`` uses.
@@ -184,6 +248,13 @@ def _species_integrals(qgm, potential_g, phases, volume):
     """``Omega * Re sum_G conj(Q_ij(G)) V(G) e^{+i G tau_a}``."""
     shifted = potential_g[None, :] * jnp.conj(phases)  # (nat, ngm)
     return volume * jnp.real(jnp.einsum("ijg,ag->aij", jnp.conj(qgm), shifted))
+
+
+@jax.jit
+def _species_cross_integrals(qgm, potential_g, phases, volume):
+    """:func:`_species_integrals` with the real part left off."""
+    shifted = potential_g[None, :] * jnp.conj(phases)  # (nat, ngm)
+    return volume * jnp.einsum("ijg,ag->aij", jnp.conj(qgm), shifted)
 
 
 def augmentation_dipole(pseudo: Pseudopotential) -> np.ndarray:
@@ -474,15 +545,19 @@ class TabulatedAugmentation(AugmentationCharge):
     contraction rather than left to vanish on its own.
     """
 
-    tables: tuple  # per species, (nbeta, nbeta, nl, nqx) -- QE's tab_qrad
-    coefficients: tuple  # per species, (nlm, nh, nh) -- ap, restricted
-    beta_of: tuple  # per species, (nh,) -- which radial projector a channel is
-    gcart: jnp.ndarray  # (npad, 3) cartesian G, padded; carries the cell
-    mask: jnp.ndarray  # (npad,) 1.0 on a real G, 0.0 on the padding
-    ngm: int = eqx.field(static=True)
-    chunk: int = eqx.field(static=True)
-    lmax2: int = eqx.field(static=True)  # the ylm order, 2 lmax
-    nl_species: tuple = eqx.field(static=True)
+    # Every field here carries a default only because the base class's
+    # ``shift`` has one and a dataclass forbids a required field after it.
+    # :func:`_build_tabulated_augmentation` passes all of them by keyword, so
+    # the defaults are never the values that are used.
+    tables: tuple = ()  # per species, (nbeta, nbeta, nl, nqx) -- QE's tab_qrad
+    coefficients: tuple = ()  # per species, (nlm, nh, nh) -- ap, restricted
+    beta_of: tuple = ()  # per species, (nh,) -- which radial projector a channel is
+    gcart: jnp.ndarray = None  # (npad, 3) cartesian G, padded; carries the cell
+    mask: jnp.ndarray = None  # (npad,) 1.0 on a real G, 0.0 on the padding
+    ngm: int = eqx.field(static=True, default=0)
+    chunk: int = eqx.field(static=True, default=1)
+    lmax2: int = eqx.field(static=True, default=0)  # the ylm order, 2 lmax
+    nl_species: tuple = eqx.field(static=True, default=())
 
     @property
     def ntyp(self) -> int:
@@ -533,9 +608,35 @@ class TabulatedAugmentation(AugmentationCharge):
             )
         return tuple(result)
 
+    def cross_integrals(self, potential_g: jnp.ndarray) -> tuple:
+        """As the base class: :meth:`integrals` without the real part."""
+        padded = jnp.pad(potential_g, (0, self.mask.shape[0] - self.ngm))
+        result = []
+        for t, atoms in enumerate(self.species_atoms):
+            nh = 0 if self.tables[t] is None else self.beta_of[t].shape[0]
+            if self.tables[t] is None or not atoms:
+                result.append(
+                    jnp.zeros((len(atoms), nh, nh), dtype=self.phases.dtype)
+                )
+                continue
+            result.append(
+                _tabulated_integrals(
+                    self._builder(t), self.gcart, self.mask, padded,
+                    self.phases[jnp.asarray(atoms)], self.volume, self.chunk, nh,
+                    real=False,
+                )
+            )
+        return tuple(result)
+
     def at_positions(self, positions: jnp.ndarray, gcart: jnp.ndarray):
-        """As the base class, except the G set is padded with the phases."""
-        padded = jnp.pad(gcart, ((0, self.mask.shape[0] - self.ngm), (0, 0)))
+        """As the base class, except the G set is padded with the phases.
+
+        The displacement goes on **before** the padding, so the pad lands at
+        ``b`` rather than at the origin -- where ``mask`` kills it either way,
+        and where the radial interpolation is asked for a modulus it has.
+        """
+        shifted = self._shifted(gcart)
+        padded = jnp.pad(shifted, ((0, self.mask.shape[0] - self.ngm), (0, 0)))
         phases = _atom_phases(padded, positions).astype(self.phases.dtype)
         return eqx.tree_at(lambda a: (a.phases, a.gcart), self, (phases, padded))
 
@@ -589,8 +690,13 @@ def _tabulated_charge(build, gcart, mask, phases, becsum, chunk, ngm):
     return blocks.reshape(-1)[:ngm]
 
 
-def _tabulated_integrals(build, gcart, mask, potential_g, phases, volume, chunk, nh):
+def _tabulated_integrals(build, gcart, mask, potential_g, phases, volume, chunk, nh,
+                         real: bool = True):
     """``int V(r) Q_ij^a(r) dr`` for one species, scanning over blocks of G.
+
+    ``real = False`` keeps the imaginary part, which is what a displaced table
+    or a complex potential needs -- see
+    :meth:`AugmentationCharge.cross_integrals`.
 
     A reduction over G rather than a map along it, so the accumulator is the
     scan's *carry*: ``(nat, nh, nh)`` whatever the chunk is.
@@ -613,7 +719,7 @@ def _tabulated_integrals(build, gcart, mask, potential_g, phases, volume, chunk,
         potential_chunk = jax.lax.dynamic_slice(potential_g, (start,), (chunk,))
         shifted = potential_chunk[None, :] * jnp.conj(phase_chunk) * mask_chunk
         block = jnp.einsum("ijc,ac->aij", jnp.conj(build(gcart_chunk)), shifted)
-        return carry + jnp.real(block), None
+        return carry + (jnp.real(block) if real else block), None
 
     # The carry's dtype comes from the data and not from ``jnp``'s default.
     # ``lax.scan`` requires the carry to match what the body returns exactly,
@@ -621,7 +727,10 @@ def _tabulated_integrals(build, gcart, mask, potential_g, phases, volume, chunk,
     # up in the sixth decimal -- under a float32 precision policy it does not
     # run at all.
     total, _ = jax.lax.scan(
-        body, jnp.zeros((nat, nh, nh), dtype=phases.real.dtype), jnp.arange(nchunks)
+        body,
+        jnp.zeros((nat, nh, nh),
+                  dtype=phases.real.dtype if real else phases.dtype),
+        jnp.arange(nchunks),
     )
     return volume * total
 
@@ -676,7 +785,8 @@ def _nl_of(pseudo: Pseudopotential, nl: int) -> int:
 
 
 def _build_tabulated_augmentation(
-    pseudos, structure, cell, gvectors, ap, lmax, nl, nh_max, cell_factor
+    pseudos, structure, cell, gvectors, ap, lmax, nl, nh_max, cell_factor,
+    shift=None,
 ):
     """:class:`TabulatedAugmentation` -- the branch for a cell too large to store.
 
@@ -684,13 +794,22 @@ def _build_tabulated_augmentation(
     ``cell_factor`` times ``sqrt(ecutrho)`` because a strained cell moves its G
     vectors while the G *set* stays as it was, and an evaluation past the end
     of the table is NaN rather than a clamp.
+
+    **A displaced table needs a longer one**, by ``|b|``: the largest modulus
+    asked for is ``max|G + b|``, which the triangle inequality bounds by
+    ``max|G| + |b|`` and nothing smaller. Running past the end is a NaN rather
+    than a clamp, so the margin is taken rather than hoped for.
     """
     volume = cell.volume
     qmax = float(np.sqrt(gvectors.ecut)) * cell_factor
+    if shift is not None:
+        qmax += float(np.linalg.norm(np.asarray(shift, dtype=float)))
     chunk = _aug_chunk(nh_max, gvectors.ngm)
     npad = -(-gvectors.ngm // chunk) * chunk
 
     gcart = gvectors.cartesian(cell)
+    if shift is not None:
+        gcart = gcart + jnp.asarray(shift, dtype=gcart.dtype)
     gcart = jnp.pad(gcart, ((0, npad - gvectors.ngm), (0, 0)))
     mask = jnp.concatenate([
         jnp.ones(gvectors.ngm, dtype=cell.precision.real),
@@ -734,7 +853,10 @@ def _build_tabulated_augmentation(
             _interpolate_qrad(table, modulus(gcart[:1])),
             betas, nl_t,
         )
-        qq.append(volume * jnp.real(at_origin[:, :, 0]))
+        qq.append(
+            volume * (at_origin[:, :, 0] if shift is not None
+                      else jnp.real(at_origin[:, :, 0]))
+        )
 
     phases = _atom_phases(gcart, structure.positions).astype(cell.precision.complex)
     types = np.asarray(structure.types)
@@ -760,6 +882,7 @@ def _build_tabulated_augmentation(
         chunk=int(chunk),
         lmax2=int(2 * lmax),
         nl_species=tuple(nl_species),
+        shift=None if shift is None else jnp.asarray(shift),
     )
 
 
@@ -770,10 +893,19 @@ def build_augmentation(
     gvectors: GVectors,
     max_bytes: int | None = None,
     cell_factor: float = AUG_CELL_FACTOR,
+    shift=None,
 ) -> AugmentationCharge | None:
     """Assemble ``Q_ij(G)`` for every ultrasoft species. ``None`` if there are none.
 
     ``gvectors`` must be the **dense** set.
+
+    ``shift`` is an optional ``(3,)`` cartesian wavevector ``b``: the table is
+    then ``Q_ij(G + b) e^{-i (G + b) . tau_a}``, the transform of the lattice
+    sum ``sum_R e^{i b . R} Q_ij(r - tau_a - R)``. See
+    :class:`AugmentationCharge` for what changes and what a caller must not do
+    with it. The assembly is otherwise character for character the same one,
+    which is the point: the displaced table inherits every radial convention
+    the resident one was validated with, and ``b -> 0`` recovers it exactly.
 
     **Two storage schemes, and the size of the cell picks one.** Below
     ``max_bytes`` (:data:`AUG_MAX_BYTES`, or ``DEFUMAT_AUG_MAX_BYTES``) the
@@ -822,10 +954,13 @@ def build_augmentation(
         nh_max = max(nh_max, len(channels))
     if stored_bytes > (_aug_max_bytes() if max_bytes is None else max_bytes):
         return _build_tabulated_augmentation(
-            pseudos, structure, cell, gvectors, ap, lmax, nl, nh_max, cell_factor
+            pseudos, structure, cell, gvectors, ap, lmax, nl, nh_max, cell_factor,
+            shift=shift,
         )
 
     gcart = gvectors.cartesian(cell)
+    if shift is not None:
+        gcart = gcart + jnp.asarray(shift, dtype=gcart.dtype)
     gmod = modulus(gcart)  # guarded at G = 0; see gvectors.modulus
     ylm = real_spherical_harmonics(gcart, 2 * lmax)  # (ngm, (2lmax+1)^2)
     volume = cell.volume
@@ -862,7 +997,10 @@ def build_augmentation(
         values = _assemble_qgm(
             coefficients, ylm, radial, jnp.asarray(beta_of), nl_species
         )
-        entry = (values.astype(cell.precision.complex), volume * jnp.real(values[:, :, 0]))
+        # ``qq`` is ``Omega Q_ij(G = 0)`` for the resident table and
+        # ``Omega Q_ij(b)`` -- complex -- for a displaced one.
+        at_origin = values[:, :, 0] if shift is not None else jnp.real(values[:, :, 0])
+        entry = (values.astype(cell.precision.complex), volume * at_origin)
         built[key] = entry
         qgm.append(entry[0])
         qq.append(entry[1])
@@ -884,6 +1022,7 @@ def build_augmentation(
         species_atoms=species_atoms,
         channel_offsets=offsets,
         nkb=int(sum(sizes)),
+        shift=None if shift is None else jnp.asarray(shift),
     )
 
 
