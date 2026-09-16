@@ -1959,8 +1959,9 @@ derivative again:
 0.6 s of compilation for 0.57 s of arithmetic, ten times over: **6 s of 32**. A fixed-cell
 `relax` does not pay it, because `at_positions` keeps its compiled force and one
 compilation serves the whole trajectory. Making the cell an *argument* of the traced
-function rather than a constant folded into it would do the same here. **Backlog item 4**,
-and it is worth about 20%, not the 50% the contaminated measurement claimed.
+function rather than a constant folded into it would do the same here. **The backlog
+item is "stop closing over the cell in the stress gradient"**, and it is worth about
+20%, not the 50% the contaminated measurement claimed.
 
 **What the ionic step count says, and it is the good news.** Both codes take **10** steps
 on `vc-relax4`, `vc-relax5` and `vc-relax6` and **11** on `vc-relax3`: the transcribed
@@ -2008,7 +2009,7 @@ projected CG solve. The consequence is that a Raman tensor costs roughly *twice*
 a dynamical matrix rather than more -- the displacement response is shared with
 it, and the field response is P24's.
 
-Backlog item 5 (scheduling the response solver's threshold against the
+The backlog's "schedule the response solver's threshold" (against the
 self-consistency of the response, `dfpt_kernels.f90`'s
 `thresh = min(0.1 sqrt(dr2), 1e-2)`) applies here at full strength: 78% of this
 phase is in the two loops it would speed up.
@@ -2552,8 +2553,9 @@ What is a memory problem is the *reverse* stress through the radial transforms:
 **10.49 GB on eight-atom ultrasoft silicon, +9.53 over its own SCF** — an
 independent reproduction, by a different driver, of the 11.1 GB the P11 section
 records — which is **ten times the largest response tape here** and is what a
-card has to hold. It has a fix in the backlog (item 8, a `custom_jvp` on each
-radial transform, ~100x on the dominant term) rather than a guess.
+card has to hold. It has a fix in the backlog ("the stress's reverse-mode tape
+through the radial transforms": a `custom_jvp` on each radial transform, ~100x on
+the dominant term) rather than a guess.
 
 **The batching dial does not bound the response's k-dependent state**, and that
 is structural rather than measured: `SternheimerResult.dpsi` is
@@ -2577,8 +2579,8 @@ other side.
 `vs SCF iteration` ratio `phase5.py` prints divides by an SCF that carries its
 own compilation, so it is a lower bound; and a response solve is 35-220 SCF
 iterations here, which is P24's and P25's own measurement (the Sternheimer stage
-is 96% of a phonon) and is what backlog item 5 — scheduling the response
-threshold, `av.it. 27.7` against `ph.x`'s 9.3 — is for. That item is
+is 96% of a phonon) and is what the backlog's "schedule the response solver's
+threshold" — `av.it. 27.7` against `ph.x`'s 9.3 — is for. That item is
 platform-independent and pays before any hardware does.
 
 **The GPU half is written and unrun**: `tools/gpu/phase5-gpu.sbatch` and its CPU
@@ -3322,6 +3324,100 @@ memory objection stands and shapes the fix rather than blocking it: a
 which is the duplication `davidson_eigensolver_all`'s docstring sizes at 5.8 GiB
 on a 157-atom slab, so the ladder there wants **two rungs, not four**.
 
+## Item 3 implemented, and the 2.40x that justified it was a forced-run artefact (2026-09-16)
+
+**`H` is now applied to the `notcnv` live rows of a correction block rather than
+to all `nbnd`, and it is worth 1.03x to 1.04x on the SCF -- not the 1.4x the
+previous section projected.** The mechanism is right, the gain is small, and the
+number that made it look large was measured in a regime that cannot occur.
+
+**What was wrong with the 2.40x.** It counted the subspace products of a call
+**forced to three steps at `ethr = -1.0`**, where nothing ever settles, so
+`notcnv` is pinned at `nbnd` and `nbase` grows 32, 64, 96, 128. In a real SCF
+`nbase = nbase + notcnv` already, so the *width* ladder shipped earlier already
+tracks `notcnv` and most of that 1.87x was never on the table. What remains is
+the 1.28x output width, and only on the steps inside the loop.
+
+**The corrected arithmetic, which predicts what was then measured.** An
+eigensolver call applies `H` once to the `nbnd` starting vectors -- not
+narrowable -- and once per step, which is. On `si16-1k-ecut30` that is 10 calls
+and 11 steps, so 21 applications of which 10 are full width:
+
+| | band-applications of `H` | |
+|---|---|---|
+| every block at `nbnd` | 672 | |
+| at the exact `notcnv` | 572 | 0.85 |
+| at the four-rung ladder | 584 | **0.87** |
+
+so 1.15x on `h_psi`, which is about 57 per cent of an eigensolver call that is
+83 per cent of the SCF, predicting **1.07x** overall. Measured 1.03x. The
+earlier 1.4x projection weighted every step equally instead of by cost and
+forgot the unnarrowable initial application.
+
+**Measured.** Separate process per arm, one core, under a 10 GB cap, medians of
+eight and six samples:
+
+| | ladder off | four rungs | |
+|---|---|---|---|
+| `si16-1k-ecut30` | 5.64 s | **5.50 s** | 1.03x |
+| `si8-1k-ecut30` | 1.033 s | **0.995 s** | 1.04x |
+| peak RSS | 0.62 / 0.52 GB | 0.63 / 0.54 GB | |
+
+Energies and eigenvalues are bit-identical on both cells, and **six of six
+alternating pairs favour the ladder**, which is the part worth trusting: the
+si16 spread is 5.34 to 5.91 s, so a 2.5 per cent median difference is at the
+edge of this machine's resolution and the sign test is the stronger evidence.
+
+**Four rungs, not the two the previous section said this wanted, because the
+reason for two does not hold.** Each rung is a copy of `h_psi`'s HLO and the
+worry was the runtime buffers. XLA shares them:
+
+| rungs | HLO lines | temporaries | argument | output |
+|---|---|---|---|---|
+| 1 | 3,250 | 43.9 MB | 3.0 MB | 3.0 MB |
+| 2 | 3,596 | 43.9 MB | 3.0 MB | 3.0 MB |
+| 4 | 3,997 | 43.9 MB | 3.0 MB | 3.0 MB |
+
+Only the program text grows, which is compile time paid once into the on-disk
+cache. Two rungs is worth 1.3 per cent on the eight-atom cell and nothing
+resolvable on the sixteen, because it rounds a live width of 24 or 20 back up to
+32. `DEFUMAT_BAND_RUNGS` is the dial and **1 turns it off**, which is what a cell
+large enough for XLA's rematerialisation pass to bind should use -- the one cost
+of the extra rungs that could not be measured on a 16-atom cell.
+
+**Rejected, and it is the idea that should have worked.** A `lax.fori_loop`'s
+*trip count* may be traced where its body's shapes may not, so walking `notcnv`
+rows narrows **exactly** and puts one copy of `h_psi` in the executable instead
+of one per rung. It is **8 to 10 per cent slower than doing nothing at all**:
+1.129 s against 1.047 on the eight-atom cell and 6.204 against 5.638 on the
+sixteen. It writes the 3 MB block once per band rather than once per step, and
+the band walk inside `h_psi` was already the only loop worth having.
+
+## What a real SCF spends its time on, by operation (2026-09-16)
+
+**The op-level profile that should have been taken first.** Everything above is
+an eigensolver call; this is `run_scf` itself on `si16-1k-ecut30`, nine
+iterations, from XLA's own trace with the containers (`while`, `cond`,
+`ThunkExecutor`) dropped so nothing is double counted. Leaf total 7340 ms.
+
+| | ms | share |
+|---|---|---|
+| `dot_general` and `eigh` | 2088.6 | 28.5% |
+| `fft` (the local term of `h_psi`) | 1986.0 | 27.1% |
+| other, of which `np.asarray` is 617 and executable launch 266 | 1439.7 | 19.6% |
+| elementwise fusions | 939.4 | 12.8% |
+| copies, slices, scatters | 886.7 | 12.1% |
+
+**Read against the isolated Davidson call, where the same two groups are 44 and
+36 per cent, this says the SCF's remaining factor is not in the eigensolver's
+algebra at all.** Some 45 per cent of a real run is copies, elementwise fusions,
+host transfers and kernel launches -- the cost of a functional array library and
+a Python driver, which `pw.x` does not pay. **617 ms of `np.asarray` is 8 per
+cent of the run in host transfers alone**, and that is the driver pulling the
+Fermi level, the convergence test and the history back each iteration. Nothing
+here has tried to reduce it, and it is a larger number than either ladder
+returned.
+
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than
@@ -3344,23 +3440,29 @@ then it is a place to look, not a claim.
    unbatched path only. **1.74x on the algebra of a forced three-step solve and
    1.12-1.13x on the whole SCF**, bit-identical energies and eigenvalues. See
    "Where the CPU gap against `pw.x` actually is".
-3. **Expand by `notcnv` rather than by `nbnd`**, and take the two Ritz rotations
-   and the projection rows at that width too. **Now priced: the mean live width
-   over a whole SCF is 0.71-0.72 of `nbnd` on the two silicon cells against
-   `pw.x`'s 0.79, and it is the entire remaining algebra gap** -- 2.40x of
-   subspace GEMM work, factorising as 1.87x on the widths and 1.28x on the
-   output width, both of them `notcnv`. `h_psi` is exactly linear in the block's
-   width on a CPU, so it gains the same 1.4x. Worth **nothing** on a cold
-   band-structure solve, where no root settles. Same `vmap` restriction as the
-   item above, and **two rungs rather than four**, because each rung is a copy of
-   `h_psi` in the executable. See "Where the CPU gap against `pw.x` actually is".
-4. **Fold `dr2` into the iteration's other reductions.** It costs a transform and
+3. *(done, 2026-09-16)* **Apply `H` to the `notcnv` live rows of a correction
+   block rather than to all `nbnd`**, on a four-rung ladder over `nbnd`.
+   **1.03x-1.04x on the SCF**, bit-identical, peak RSS unchanged; the 2.40x that
+   had been quoted for it was a forced-run artefact. Worth **nothing** on a cold
+   band-structure solve, where no root settles. See "Item 3 implemented".
+4. **The driver's host transfers, which are 8 per cent of an SCF and have never
+   been counted.** The op-level profile of a nine-iteration `si16-1k-ecut30` run
+   puts **617 ms of `np.asarray` in a 7340 ms leaf total**, against 266 ms of
+   executable launches: that is the loop pulling the Fermi level, the
+   convergence test and the history back to the host each iteration. It is a
+   larger number than either Davidson ladder returned, `pw.x` pays none of it,
+   and nothing has tried to reduce it. The lever is the one the loop already
+   uses for `eband`/`deband`/`dr2` -- compute what the host needs in one
+   reduction and synchronise once -- and the first step is to count the
+   transfers per iteration rather than to guess which ones they are. See "What a
+   real SCF spends its time on".
+5. **Fold `dr2` into the iteration's other reductions.** It costs a transform and
    a dispatch of its own (~3% of an iteration) for a quantity the loop already
    computes a residual for. Mixing in G space would save another transform.
-5. **Shell-based radial evaluation** for quantities depending only on `|G|` (~100
+6. **Shell-based radial evaluation** for quantities depending only on `|G|` (~100
    shells vs 1459 G-vectors for Si). Note this is *not* strain-safe: shells split
    under strain, so it must stay off the stress path.
-6. **Stop closing over the cell in the stress gradient** (P29). `at_strain`
+7. **Stop closing over the cell in the stress gradient** (P29). `at_strain`
    drops `_energy_gradient` on every call, because the compiled gradient closes
    over the cell it was traced at, so a variable-cell relaxation compiles the
    strain derivative again at every ionic step: **0.6 s of retracing for 0.57 s
@@ -3369,24 +3471,24 @@ then it is a place to look, not a claim.
    costs a signature change in `stress/energy.py`. A fixed-cell `relax` does not
    pay it -- `at_positions` already keeps its compiled force -- which is why this
    surfaced only here.
-7. **Schedule the response solver's threshold** (P25). `dfpt_kernels.f90` uses
+8. **Schedule the response solver's threshold** (P25). `dfpt_kernels.f90` uses
    `thresh = min(0.1 sqrt(dr2), 1e-2)` where `response/phonon.py` holds a fixed
    1e-12, and the cost is `av.it. = 27.7` against `ph.x`'s 9.3 — a factor of
    three, on the stage that is 96% of the run. It is `electrons.f90`'s `ethr`
    schedule in a second place, the rule is already quoted in
    `response/sternheimer.py`'s docstring, and the same fix applies to
    `response/efield.py`. Cheapest item on this list by a wide margin.
-8. *(done, 2026-08-22)* **A mixer in the response loop.** Was: 17 linear-mixing
+9. *(done, 2026-08-22)* **A mixer in the response loop.** Was: 17 linear-mixing
    iterations against `ph.x`'s 5, whose mixer is `LR_Modules/mix_pot.f90`. It
    turned out not to be a speed item at all -- linear mixing of a map whose
    Jacobian has an eigenvalue below -1 **diverges**, which two systems then did
    (see "What a mixer in the response loop was worth"). `defumat/response/mixing.py`
    now wraps `scf/mixing.py`'s Anderson history for all three loops.
-9. **One irreducible representation at a time** (P25), for the *memory* rather
+10. **One irreducible representation at a time** (P25), for the *memory* rather
    than the time: it bounds the working set at 3 modes in flight instead of
    `3 nat`, which is 7 GB on a 16-atom cell. It does not reduce the number of
    solves — `ph.x` perturbs along all `3 nat` modes too.
-10. **The stress's reverse-mode tape through the radial transforms** (P11). 11 GB on
+11. **The stress's reverse-mode tape through the radial transforms** (P11). 11 GB on
    eight-atom ultrasoft silicon against the SCF's 0.9, and the largest single
    allocation anywhere in the code. `jax.checkpoint` on the augmentation kernel
    alone was measured and is worth nothing, so the next thing to try is a
