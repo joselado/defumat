@@ -228,9 +228,16 @@ route has no such floor, because everything except the band energy cancels
 between the two directions before any subtraction happens.
 
 **What the relaxed route buys.** Nothing is handed from one calculation to
-another, so the restrictions that came from that handoff are gone. A PAW dataset
-works, and tetragonal nickel with a fully relativistic PAW potential is a
-calculation the frozen route cannot do at all. So does a Hubbard `U`.
+another, so the restrictions that came from that handoff are gone. A Hubbard `U`
+works here and not there.
+
+A PAW dataset works on both routes, and on the frozen one it asks for one thing
+more than a density. Inside the augmentation spheres the potential is built from
+the projector occupations rather than from the density on the grid, so those
+have to travel beside it, and since they are labelled by the projectors of one
+particular pseudopotential file, both calculations have to use the same file:
+the coupling is switched off for the first and on for the second instead of
+switching files between them.
 
 **What it costs, besides time.** Nothing holds the moment while the density
 relaxes, so a direction that the symmetry of the crystal does not hold in place
@@ -241,10 +248,10 @@ which is what the last line above checks.
 
 ## What it will not do
 
-The frozen route cannot take a PAW dataset, a Hubbard `U` or a meta-GGA, because
-only the density is handed from the first calculation to the second and those
-need more than a density. The relaxed route above takes the first two, since it
-hands nothing over.
+The frozen route cannot take a Hubbard `U` or a meta-GGA, because the density
+and the projector occupations are what is handed from the first calculation to
+the second and those two need more. The relaxed route above takes the first,
+since it hands nothing over.
 
 Neither takes an applied magnetic field, whose energy sits outside the reported
 total, or a spin spiral, which has no spin orbit coupling to switch on.

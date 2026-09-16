@@ -325,26 +325,29 @@ route yet: `<L>` and `<S>` per site on a fully-relativistic augmented dataset ne
 reference, and neither `projwfc.x` nor Elk's `LSJ.OUT` has been located for that
 combination.
 
-### 1j. The force theorem for magnetocrystalline anisotropy with PAW
+### 1j. The force theorem for magnetocrystalline anisotropy with PAW. ✅ DONE.
 
-`workflows/anisotropy.py:265`. PAW only; ultrasoft is allowed.
+**Closed 2026-09-16.** `PLAN.md` P97 has the numbers.
 
-**What is missing.** The handoff from the collinear first leg carries the density and
-nothing else, and a PAW Hamiltonian needs `ddd_paw`, which is built from `becsum` -- a
-property of the states rather than of the density.
+**Both of this entry's sizings asked the wrong question**, and the second one asked it
+more carefully. The first said to widen the handoff and carry `becsum` across the way
+`run_nscf` demands it. The second said that cannot be done, the two legs using different
+pseudopotential files whose projector sets are indexed differently -- which is true, and
+then concluded that the open question was whether a PAW force theorem is well posed at
+all. It is well posed. What the theorem freezes is the potential, and on a PAW dataset the
+potential has **two representations**: the one-centre coefficients are a functional of
+`becsum` exactly as the grid potential is a functional of `rho`, so the frozen object is
+the pair. Once that is said, the route follows without moving anything between files --
+**one** fully-relativistic file run twice, `soc_scale = 0` for the self-consistent leg and
+1 for the one-shot, so both legs share a projector set by construction. `soc_scale` leaves
+`nh` and `fcoef` untouched and blends only `dvan_so` and `qq_so` toward their spin trace,
+which is exactly what `average_pp` cannot do for a PAW dataset.
 
-**What it needs first, and it is not widening the handoff.** This entry first said to
-carry `becsum` across, the way `run_nscf` demands it. That cannot be done: the two legs of
-the force theorem use **different pseudopotential files** -- the collinear leg runs the
-scalar-relativistic average and the spinor leg the fully-relativistic dataset -- so the
-first run's `becsum` has a different number of projectors from the second run's
-Hamiltonian. The density crosses because it is a field on a grid; `becsum` is indexed by a
-projector set that does not survive the change. QE refuses in the same place and for the
-same reason (`potinit.f90:98`), and an ultrasoft dataset works precisely because its
-augmentation charge is already inside the density that crosses.
-
-**Size:** a phase, and the first question is whether a PAW force theorem is well posed at
-all when the two legs cannot share a `becsum`, rather than how to move one.
+**The numbers.** The rotation identity on antiferromagnetic PAW oxygen, five directions
+with the coupling off: **3.142e-10 meV**. The same run with `becsum` carried but not
+rotated with the density: **468.0 meV**, on a cell whose answer is exactly zero. What is
+not yet measured is a magnetocrystalline anisotropy on a fully-relativistic PAW dataset,
+which is the same code on an hours-long cell.
 
 ### 1k. The ultracell with an ultrasoft or PAW dataset
 

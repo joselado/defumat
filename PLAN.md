@@ -259,20 +259,30 @@ because that is what decides whether it is a session or a phase.
   everything that turns one wavevector into a curve: the **small group of `q`** (so a
   wedge rather than the full grid, `symdvscf`), the **star of `q`**, and `q2r`/`matdyn`'s
   Fourier interpolation with the acoustic sum rule. `test-suite/ph_2d` has a committed
-  BN reference for both halves. Beside them, the regimes P71 refuses: ultrasoft and PAW
-  (the multiplier matrix has no two-sphere form), metals, spin, spinors, and a nonlinear
-  core correction (`dynmatcc` is the one frozen term that *is* a function of `q`).
+  BN reference for both halves. Beside them, the regimes P71 refuses: ultrasoft and PAW,
+  metals, spin, spinors, and a nonlinear core correction (`dynmatcc` is the one frozen
+  term that *is* a function of `q`). **The ultrasoft and PAW refusal named one term and
+  the code is missing four** (P97): the response density carries no augmentation at all
+  (`addusddens.f90`'s `Q_ij(q + G)`, the table at the shifted modulus its `setqmod` call
+  builds), the induced potential carries no `int3` (`adddvscf.f90`), the bare term closes
+  over the unperturbed coefficients so `dvanqq.f90`'s `int1`/`int2` are frozen, and the
+  multipliers do not exist at `q != 0` at all. Three of the four are augmentation rather
+  than multipliers, and the object they want is written (`augmentation_factors`).
 - **The relaxed-ion piezoelectric constant** (P50: `Z*`, the `Gamma` force constants and
   the strain response are all here; what is missing is the internal-strain tensor
   `d^2E/du d(eps)`, whose two legs are *both* coordinates of the energy and therefore need
   a two-coordinate frozen functional).
-- **The piezoelectric tensor of an ultrasoft or PAW dataset** (P50: nothing in *this*
-  assembly is norm-conserving, and what is missing is **one term** — `Q_ij(r)` is a
-  function of the cell, so `dbecsum` gains a strain term beside the one the `jvp` gives,
-  which is the same term `response/strain.py` refuses ultrasoft for. **The entry used to
-  say the blocker was a *case*, and that was false when it was written**: the soft
-  zincblende datasets are committed and `tests/data/qe/alas-piezo.in` is now the
-  nonmagnetic cell to measure on.)
+- **The piezoelectric tensor of an ultrasoft or PAW dataset** (P50). It stands on the
+  strain leg, which is the third derivative `require_norm_conserving` guards. **This entry
+  has now been wrong twice, in the same direction both times.** It first said the blocker
+  was a *case*, when the soft zincblende datasets were already committed
+  (`tests/data/qe/alas-piezo.in` is the nonmagnetic cell). It then said the missing term
+  was the strain derivative of `Q_ij(r)`, which `at_strain` has been rebuilding all along
+  -- the strain *response* runs on both datasets and is pinned at 4.6e-4 and 4.7e-4
+  against a central difference of the converged density -- and it said
+  `response/strain.py` refuses ultrasoft, which it does not; that module imported the
+  guard and never called it (P97). What is missing is what P44 measured: the residue is
+  entirely the `b` partial, -1.72 on 112 and the same number on both datasets.
 - ~~**An ultrasoft spin spiral**~~ (P42, attempted and reverted, four findings banked) --
   **closed by P95 for the ground state and by P96 for `dE/dq`**: the transverse block's
   augmentation charge is the resident table displaced to `Q_ij(G - q)`, and that table is a
@@ -17344,3 +17354,134 @@ over -- so the refusal and the memory gate are the same cell, and lifting one wi
 other buys nothing. The reverse-mode `(ngm, kkbeta)` intermediate is the obvious
 `jax.checkpoint` candidate, the same fix P74 applied to the force tape, and it is
 unmeasured here.
+
+### P97 -- The PAW force theorem on one file, and three refusals that named the wrong term. ✅ DONE for the force theorem; the other three are corrections.
+
+Four items of an audit of what a PAW dataset refuses where a norm-conserving one runs.
+Only the first is code; the other three are what reading the guards said about the record,
+and each of them had been written from a refusal's message rather than from the code
+around it -- the failure `AUGMENTATION-NEXT.md` had already recorded five times, now
+seven.
+
+**1. The force theorem with a PAW dataset** (`AUGMENTATION-NEXT.md` 1j, closed).
+
+The question the refusal asked was how to move a `becsum` between two pseudopotential
+files, and it has no answer: a scalar-relativistic dataset carries one projector per
+`(n, l)` channel and its fully-relativistic partner one per `(n, l, j)`, so the two arrays
+are indexed by different things and `pw.x` refuses the path outright (`potinit.f90:98`),
+`average_pp` having no way to average a PAW dataset's `j` channels back. The question to
+ask instead is what the theorem freezes. A PAW Hamiltonian's one-centre coefficients are a
+functional of `becsum` exactly as the grid potential is a functional of `rho`, so the
+frozen object is the **pair**: the potential has two representations on this dataset and
+both are held fixed. Then the route follows -- **one** file run twice, `soc_scale = 0` for
+the self-consistent leg and 1 for the one-shot, so that both legs share a projector set by
+construction and `becsum` crosses by shape. `soc_scale` keeps `nh` and `fcoef` untouched
+and blends only `dvan_so` and `qq_so` toward their spin trace, which is what makes this
+work where `average_pp` cannot.
+
+`becsum` is rotated onto the requested direction with the density, and it is handed the
+**density** to read the old axis off rather than reading its own. That is
+`_SpinTransfer`'s rule stated for a rotation -- the density is the only part big enough to
+say reliably which way the state points -- and it is what an antiferromagnet needs, its
+two sublattices pointing opposite ways while the cell has one frame to turn.
+
+**The number is an identity and the guard was fed a case that must trip it.** Without
+spin-orbit coupling the Hamiltonian commutes with a global spin rotation, so the band
+energy cannot depend on where the moment points. On antiferromagnetic oxygen with
+`O.pz-kjpaw.UPF`, five directions, the spread is **3.142e-10 meV**. The same run with the
+rotation removed -- `becsum` carried but laid along `z` for every direction, which is what
+"carry `becsum` across" means with the rotation left out -- gives **468.0 meV** on a cell
+whose answer is exactly zero. So the clean zero is a pass rather than a silence, which is
+the discipline `CLAUDE.md` asks for after the five nulls of the NiBr2 runs.
+
+The shape check is separate and refuses rather than reshapes: a `becsum` whose trailing
+pair is not `(nh, nh)` for *this* leg's dataset is a swapped file, and the message says so
+and names the one-file route. `Calculator.get_anisotropy` passes `becsum` when it fits and
+hands over nothing when it does not, so the two-file ultrasoft route is untouched.
+
+**What is outstanding.** The identity above is measured on a *scalar* PAW dataset with the
+coupling off, which is what tests the handoff and the rotation. A magnetocrystalline
+anisotropy with a fully-relativistic PAW dataset is the same code on the one cell that has
+one committed (`ni-tetragonal-relaxed-mae-paw.in`, at its own 75/480 Ry cutoffs), and that
+run is hours long on this machine; until it lands, no *number* for a PAW anisotropy is
+claimed here, only that the handoff it needs is in and measured.
+
+**2. The source-free field with a PAW dataset** (`AUGMENTATION-NEXT.md` 1f): refused for
+the projection rather than for a term, and the refusal moved to where its own docstring
+said it was.
+
+The projection is `P = 1 - grad (lap)^-1 div`, and `(lap)^-1` couples every point of the
+cell, so `P` applied to a sum is **not** the sum of `P` applied to each part. A PAW field
+is a sum of three parts in two representations -- the smooth one on the plane-wave grid
+and, inside every sphere, the all-electron and pseudo one-centre fields, each a genuine
+vector field built the way the grid's is (`onecenter.py`'s `local_spin_frame`, magnitude
+from `|m|` and direction from `m`-hat). Running the reciprocal-space line on the first of
+them alone is therefore a projection of nothing, rather than a projection missing a term.
+What it would take is one Poisson equation solved across both representations with the
+sphere solution's multipoles matched to the smooth one outside, which is the
+compensation-charge problem `defumat/paw/hartree.py` already solves for the density. Elk
+gets it in one line because its muffin tins and its interstitial **partition** space,
+where PAW's three terms overlap. **Size:** a phase, and the first deliverable is the
+Poisson solve rather than a field.
+
+The refusal itself lived in `Calculation.__init__` while `sourcefree.py`'s module
+docstring attributed it to `refuse_source_free`, so a caller reaching the guard directly
+got no PAW refusal at all. It now takes `pseudos` and makes it.
+
+**3. A phonon at `q != 0` on an augmented dataset is four absent terms, not one**
+(`AUGMENTATION-NEXT.md` 1c, corrected).
+
+The message named the orthonormality multipliers' `<psi|dS/du|psi>`. Read off the code
+instead:
+
+- `response_density_at_q` returns the pseudo pair density and stops, where
+  `addusddens.f90` adds `sum_ij dbecsum_ij Q_ij(q + G)` on top of it, with the table
+  evaluated at the **shifted** modulus -- its `setqmod(ngm, xq, g, qmod, qpg)` call feeds
+  `qvan2`;
+- `induced_perturbation_at_q` applies `dV_scf` as a local operator through the FFT and
+  nothing else, where an augmented dataset also carries
+  `int3_ij = int dV_scf Q_ij e^{iqr}` on the projectors (`LR_Modules/adddvscf.f90`);
+- `bare_displacements_at_q` takes `dij = tuple(h.coefficients for h in
+  solver.hamiltonians)` and closes over it inside the `jvp`, so `d/du` of `int V_eff Q_ij`
+  is frozen -- `dvanqq.f90`'s `int1` and `int2`;
+- and the multipliers do not exist at `q != 0` at all: there is no `overlap_derivatives`,
+  no `orthogonality_states` and no `multiplier_response` in `phononq.py`, P39's being
+  written with both `becp` at the same k-point.
+
+Three of the four are augmentation rather than multipliers, so the old sizing pointed at
+the smallest of them. The object the first two want is `q^a_ij(q + G)` and it is
+**written**: `tddft/spinchi0.augmentation_factors` over
+`topology/augmentation.augmentation_at_q`, pinned at `b = 0` against `projectors.qq` and
+at `+q` to 1e-14 with the opposite sign differing by more than 1e-6. The sign is the trap
+and this file's own §1k prose has been inconsistent about it, so pin it on the
+zone-boundary identity -- the dynamical matrix at a zone-boundary `q` against the
+validated `Gamma` matrix of the doubled supercell -- rather than on a sentence.
+
+**4. The strain third derivative is not missing `dQ/d(eps)`** (`AUGMENTATION-NEXT.md` 3b,
+corrected).
+
+`Calculation.at_strain` rebuilds `build_augmentation` whole -- the table is sampled on a
+moving `G` set, so it has to be -- and every link of the strain response is a `jvp`
+through that call: the bare perturbation, `dS/deps`, the frozen `drho` and `dbecsum`, and
+`_position_response`'s operators. The one object held at the unstrained cell is
+`projectors.qq`, and that is correct rather than an omission, `int Q_ij(r) dr` carrying no
+cell at all. The strain response itself runs on both datasets and is pinned at 4.6e-4
+(ultrasoft) and 4.7e-4 (PAW) against a central difference of the converged density, which
+is P41. `response/strain.py` **imported** `require_norm_conserving` and never called it,
+which is how the record came to say it refused; the import is gone.
+
+What is missing is what P44 already measured and wrote in `require_norm_conserving`'s own
+docstring: the residue is **entirely the `b` partial**, -1.72 on 112, the same number on
+ultrasoft and on PAW, which is what says it is structural. The one candidate for it is
+excluded by measurement -- writing `_position_response`'s commutator source with the
+multiplier matrix takes the strain coordinate to 1.7e-4 and **breaks** the displacement
+one. So `AUGMENTATION-NEXT.md` 3b and the two `PLAN.md` index entries that repeated it
+were pointing at a table that has been rebuilt all along, and the phase-sized work is a
+term in the position response.
+
+**The habit this phase is about.** Every one of the three corrections above was found the
+same way, by opening the guard and reading the twenty lines around it, and every one of
+the three had been written from the raise's message. Two of them had then been copied
+into `PLAN.md`'s index, where they read as settled. The rule that catches it is the one
+`AUGMENTATION-NEXT.md` states for its own sizings and does not apply to the rest of the
+record: **a refusal's message is a claim about the code and ages like one**.
