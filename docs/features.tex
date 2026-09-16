@@ -2104,9 +2104,18 @@ moment against this 1.574482 --- \textbf{5.3\%}, where the two components across
 it agree to $5\times10^{-4}$. Every threshold QE's \code{dmxc\_nc} has that a
 derivative of the potential does not (a clamped $\zeta$, a zeroing above
 $|\zeta| = 1$, an $|\mathbf m| \le 10^{-10}$ rule) fires at \textbf{zero} of
-that cell's 157464 grid points, so it is not a convention at an edge. It is
-unlocated, and a number that is 5\% out while looking like a working calculation
-is what a refusal is for.
+that cell's 157464 grid points, so it is not a convention at an edge.
+
+What is \emph{not} in question is the bare response underneath. On the same
+cell, with no kernel and no field in the calculation at all, $\chi_0$ under a
+potential probe reproduces a central difference of the density to
+$6.8\times10^{-7}$ for a charge probe and $1.1\times10^{-6}$ for a field along
+the moment, both unchanged over a factor of eight in the step, and this is the
+first fully relativistic dataset the solve has run on, so \code{dvan\_so} is
+live in it. The disagreement therefore sits above $\chi_0$: in the
+exchange--correlation kernel, in the field's own source term, or in \code{ph.x}.
+It is unlocated between those three, and a number that is 5\% out while looking
+like a working calculation is what a refusal is for.
 
 \textbf{A subset of the atoms can be displaced on its own.} The cost of a
 dynamical matrix is that $3\,n_{\mathrm{at}}$ bare perturbations and

@@ -917,10 +917,23 @@ def require_a_measured_spinor_response(calculation) -> None:
     along the moment and in every visible respect a working calculation. There is
     no workaround to route them to: the quantity is the one they asked for.
 
-    The *bare* response is **not** implicated by any of this and is separately
-    validated for ``nspin_mag = 4`` (P81: ``chi_0`` against a central difference
-    of the density on a 90-degree texture, four probes, 1.2e-6 to 7.7e-6), so
-    what is in question is the screened assembly rather than the solve.
+    The *bare* response is **not** implicated by any of this, and it is now
+    cleared **on this cell** rather than only on another one. P81 validated it
+    for ``nspin_mag = 4`` on a 90-degree texture (four probes, 1.2e-6 to
+    7.7e-6), but every cell it used was ``H.pz-vbc`` or ``Si.pz-vbc``, so no
+    Sternheimer solve had touched a fully relativistic dataset until the same
+    check was run here (2026-09-16, ``scratchpad/iodine_chi0.py``): four
+    amplitude patterns, along the moment and across it, four steps each. The two
+    probes that commute with the ground state along its own axis -- a charge
+    probe and a field along the moment -- are flat in the step at **6.81e-7** and
+    **1.06e-6**, which is the CG threshold, and every probe with a transverse
+    component falls as ``h^2`` (1.69e-4, 4.43e-5, 1.36e-5, 7.5e-6), with all four
+    density channels live rather than null.
+
+    So what is in question is above ``chi_0``, and it is three things rather than
+    the kernel alone: the kernel itself, where ``dmxc_nc``'s ``dz = 1e-6``
+    difference is as much a candidate as the ``jvp`` here; the **E-field source
+    term**, which a potential probe never reaches; and ``ph.x``.
     """
     if calculation.nspin_mag == 4:
         raise NotImplementedError(

@@ -107,16 +107,19 @@ def _cycloid():
     return _converged("h-chain-90deg", conv_thr=1e-12, max_iterations=200)
 
 
-def _probe(calculation, amplitudes):
+def _probe(calculation, amplitudes, miller=PROBE_MILLER):
     """``a_s cos(2 pi G.r)`` on the dense grid, one amplitude per component.
 
     The components are ``(n, m_x, m_y, m_z)``, so an amplitude tuple selects
-    which block of ``chi_0`` the probe reaches.
+    which block of ``chi_0`` the probe reaches. ``miller`` is the direction the
+    probe varies along, and it matters once the ground state has an axis of its
+    own: the cycloid below is probed across its texture, and the iodine atom
+    along its moment, which is the component ``ph.x`` disagrees along.
     """
     grid = calculation.basis.dense.grid
     axes = [np.arange(n) / n for n in grid]
     positions = np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1)
-    field = np.cos(2.0 * np.pi * (positions @ np.asarray(PROBE_MILLER)))
+    field = np.cos(2.0 * np.pi * (positions @ np.asarray(miller)))
     return jnp.asarray(np.stack([a * field for a in amplitudes]))
 
 
@@ -471,6 +474,111 @@ def test_a_spinor_response_is_symmetrised_as_an_axial_vector():
     # worse than leaving the wedge sum alone.
     assert errors["scalar"] > 0.1
     assert errors["scalar"] > 100.0 * errors["none"]
+
+
+#: The step for the iodine atom below. The error is measured to fall as ``h^2``
+#: through it (1.69e-4, 4.43e-5, 1.36e-5, 7.5e-6 at 4e-4, 2e-4, 1e-4 and 5e-5
+#: for a probe in every channel), so the two probes asserted here -- which are
+#: flat in the step instead -- are being read at their own floor rather than at
+#: a truncation.
+RELATIVISTIC_STEP = 1.0e-4
+
+#: What the two step-independent probes measure on that cell: 6.81e-7 for the
+#: charge one and 1.06e-6 for the field along the moment, unchanged across a
+#: factor of eight in the step. The bound is a few times that, and it is the
+#: CG threshold rather than the difference's truncation.
+RELATIVISTIC_RELATIVE = 5e-6
+
+#: Buffer bands for the reference, for ``test_response.py``'s measured reason:
+#: Davidson converges its topmost requested root worst, so asking for exactly
+#: the bands the density needs puts the badly converged one into it.
+REFERENCE_BUFFER = 4
+
+
+@lru_cache(maxsize=2)
+def _iodine():
+    """``i-atom-soc``: an iodine atom, ``lspinorb``, a moment of 1 mu_B along z.
+
+    The first **fully relativistic** dataset any Sternheimer solve here has run
+    on. P81's three cells were all ``H.pz-vbc`` or ``Si.pz-vbc``, so
+    ``dvan_so`` -- the ``j``-resolved projectors' bare ``D``, which
+    ``fcoef`` builds -- had never been live inside a response, and a term that
+    entered the ground state and not the response would have shown nowhere.
+
+    An **insulator** with ``occupations = 'fixed'``: 7 electrons in 8 spinor
+    bands with a 0.164 eV gap, so the reference below re-occupies at the
+    ground state's own weights and no Fermi level enters.
+    """
+    return _converged("i-atom-soc", conv_thr=1e-12, max_iterations=200)
+
+
+def _fixed_occupation_difference(system, calculation, result, solver, dv, step):
+    """``(rho(+h) - rho(-h)) / 2h`` for an insulator, at the ground state's weights."""
+    from defumat.basis.interpolate import to_dense
+    from defumat.scf.density import spinor_sum_band
+
+    smooth, dense = calculation.basis.smooth, calculation.basis.dense
+    v_scf = calculation.potential(result.density).v_scf
+    nbnd = np.asarray(result.wavefunctions).shape[-2]
+    weights = solver.weights[0][:, : solver.nocc]
+    # Every kept band is full and carries its k-point's weight. If the slice
+    # were wrong the whole comparison below would still run and be plausible,
+    # which is what the unconditional ``degspin`` trap looks like from here.
+    kept = np.asarray(weights)
+    assert kept.min() > 0.0 and np.ptp(kept) < 1e-12
+
+    def density_at(scale):
+        hamiltonians = calculation.hamiltonian(v_scf + scale * dv, None)
+        _, psi = calculation.diagonalize(
+            hamiltonians, nbnd + REFERENCE_BUFFER, None, 1e-13
+        )
+        rho = spinor_sum_band(
+            psi[0][:, : solver.nocc], calculation.state_fft_index, smooth.grid,
+            weights, system.cell, calculation.nspin_mag, calculation.k_batch,
+        )
+        return np.asarray(to_dense(rho, smooth, dense))
+
+    return (density_at(step) - density_at(-step)) / (2.0 * step)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "label, amplitudes",
+    [("charge only", (1.0, 0.0, 0.0, 0.0)),
+     ("Zeeman along the moment", (0.0, 0.0, 0.0, 1.0))],
+)
+def test_chi0_matches_a_finite_difference_with_spin_orbit_coupling(
+    label, amplitudes
+):
+    """The same check as above with ``dvan_so`` live, and it is a separate claim.
+
+    P83's textured dielectric tensor is 5.3 per cent from ``ph.x`` in the
+    component **along** the moment and is refused by name. This is the bare
+    response underneath it, which carries no kernel and no field at all, so what
+    it says is whether the disagreement is in the solve or above it. It is above
+    it: measured **6.81e-7** for the charge probe and **1.06e-6** for the field
+    along the moment, both unchanged across steps from 5e-5 to 4e-4.
+
+    Both probes are along ``(0, 0, 1)``, which is the moment's own axis and the
+    component ``ph.x`` disagrees along -- P81's cycloid check ran across the
+    texture only, and the transverse components were never the ones in question.
+    """
+    system, _, calculation, result = _iodine()
+    assert calculation.lspinorb and calculation.nspin_mag == 4
+    solver = make_sternheimer(calculation, result, noncollinear=True)
+    assert solver.nocc == 7, "seven spinor bands hold the seven valence electrons"
+
+    dv = _probe(calculation, amplitudes, miller=(0, 0, 1))
+    solution = solver.solve(solver.perturbation(dv))
+    assert solution.converged
+    drho = np.asarray(solver.response_density(solution.dpsi))
+
+    reference = _fixed_occupation_difference(
+        system, calculation, result, solver, dv, RELATIVISTIC_STEP
+    )
+    relative = np.abs(drho - reference).max() / np.abs(drho).max()
+    print(f"\n{label}: chi_0 relative error {relative:.3e}")
+    assert relative < RELATIVISTIC_RELATIVE
 
 
 def test_what_a_spinor_response_still_refuses():

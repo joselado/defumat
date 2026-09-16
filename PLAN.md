@@ -14155,13 +14155,49 @@ quantity is the one they asked for. `require_a_measured_spinor_response` refuses
 **What is outstanding.**
 
 * **Locating the 5.3 per cent**, which is the next phase and is sized in `MAGNETISM-NEXT.md`.
-  The cheapest first step is P81's own check on this cell -- `chi_0` under a *potential*
-  probe against a central difference of the density -- because it tests the solve with
-  `dvan_so` live and **no kernel at all**, and no Sternheimer solve here has ever run on an
-  `lspinorb` dataset: P81's three cells were all `H.pz-vbc` or `Si.pz-vbc`. If that passes,
-  the kernel is the remaining suspect and QE's finite-difference `dmxc_nc` is as much a
-  candidate as this code's `jvp`; an independent sum-over-states route on the same cell is
-  what would break the tie.
+  **The first step is taken and it clears the solve** (2026-09-16,
+  `scratchpad/iodine_chi0.py`). P81's own check on this cell -- `chi_0` under a *potential*
+  probe against a central difference of the density, which carries `dvan_so` and **no kernel
+  at all** -- passes on the fully relativistic dataset no Sternheimer solve here had ever
+  run on: P81's three cells were all `H.pz-vbc` or `Si.pz-vbc`. Four amplitude patterns on
+  the four density channels, each at `G = (0,0,1)` **along** the moment, which is the
+  component `ph.x` disagrees along, and at `(1,0,0)` across it, and each at four steps:
+
+  | probe | (0,0,1), `h` = 5e-5 to 4e-4 | (1,0,0), same |
+  |---|---|---|
+  | all four channels `(1, -0.5, 0.3, 0.7)` | 7.5e-6, 1.36e-5, 4.43e-5, 1.69e-4 | 9.6e-6, 3.14e-5, 1.14e-4, 4.58e-4 |
+  | charge only | **6.81e-7 at every step** | 6.9e-7, 8.6e-7, 4.9e-6, 2.11e-5 |
+  | Zeeman `m_z` | **1.06e-6, 1.07e-6, 1.09e-6, 1.16e-6** | 8.2e-6, 3.07e-5, 1.21e-4, 4.80e-4 |
+  | Zeeman `m_x` | 9.0e-6, 1.74e-5, 5.32e-5, 2.04e-4 | 7.0e-6, 1.75e-5, 6.34e-5, 2.49e-4 |
+
+  **Every entry is either a floor or an `h^2`**, which is what makes this a pass rather than
+  a number under a bound: the two probes that commute with the ground state along its own
+  axis -- charge, and a field along the moment -- do not move with `h` at all and sit at the
+  CG threshold's **6.8e-7** and **1.1e-6**, while every probe with a transverse component
+  falls with ratios approaching 4 (1.69e-4 to 4.43e-5 to 1.36e-5 is 3.82 and 3.26, flattening
+  into the floor at the smallest step). Nothing is stuck at a large value anywhere. All four
+  channels are **live** in the mixed probes rather than nulls read as agreement (charge
+  0.2896, `m_x` 0.2498, `m_y` 0.1499, `m_z` 0.2834), so the cross terms `conj(up) down`
+  carries are exercised; the two places a channel is small are recorded rather than hidden --
+  a charge probe induces `m_x = m_y = 1.00e-4` against a charge response of 2.40e-2 and the
+  two sides agree there to 1.3e-4 relative, and `zeeman_x` along `(0,0,1)` leaves
+  `m_y = 2.6e-5` where the two sides agree to 3.8e-2, which is the difference's own noise at
+  that size.
+
+  **So the disagreement is downstream of `chi_0`**, and the structural reason is that this
+  probe contains no kernel and no field: it perturbs the potential directly. Three suspects
+  are left and the entry named only one of them, which was too narrow -- the **kernel**
+  (QE's finite-difference `dmxc_nc` is as much a candidate as this code's `jvp`), the
+  **E-field source term**, which a potential probe never reaches (`dvpsi_e`, the velocity
+  operator, and a spinor's commutator with it), and **`ph.x`**. An independent
+  sum-over-states route on the same cell is what would break the tie, and the cheaper
+  discriminator before it is the *screened* density response against a re-converged SCF
+  under a static `+- h dv`, which tests `K` with the field still out of it.
+
+  One correction to the record: `MAGNETISM-NEXT.md` said the script for this was already
+  written in P83's scratch. It was not in the tree -- what is there,
+  `scratchpad/oatom_chi0.py`, is the `pypresso`-era probe on a different cell and does not
+  run against the current API.
 * **An ultrasoft or PAW spinor** stays refused and the missing object is exactly one:
   `dD_ij` is a 2x2 matrix in spin space (`set_int3_nc`) where a norm-conserving dataset has
   no `dD` at all.
