@@ -114,9 +114,9 @@ production-like ratio does it read as the 10 per cent it is (``si64`` at
 
 from __future__ import annotations
 
-from functools import partial
-
+import os
 import warnings
+from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -129,7 +129,8 @@ from defumat.solvers.subspace import generalised_eigh
 
 __all__ = ["davidson_eigensolver", "davidson_eigensolver_all", "DAVID_NDIM",
            "MAX_ITERATIONS", "ETHR", "ETHR_MIN", "EMPTY_ETHR_FLOOR",
-           "RESIDUAL_THRESHOLD", "empty_band_threshold", "starting_vectors"]
+           "RESIDUAL_THRESHOLD", "BAND_RUNGS", "empty_band_threshold",
+           "starting_vectors"]
 
 #: QE's ``diago_david_ndim``: the subspace may grow to this many times ``nbnd``
 #: before it is collapsed back onto the current eigenvector estimates.
@@ -289,6 +290,14 @@ def _extend_projection(hc, sc, psi, hpsi, becp, becq, offset, block,
     return hc, sc
 
 
+#: How many widths a correction block may be applied at; see
+#: :func:`_band_ladder`. ``DEFUMAT_BAND_RUNGS`` moves it, and ``1`` applies
+#: every block at ``nbnd``, which is what this code did before the ladder and is
+#: what a cell large enough for XLA's rematerialisation pass to be the binding
+#: constraint should use, since each rung is a copy of ``h_psi``'s HLO.
+BAND_RUNGS = max(1, int(os.environ.get("DEFUMAT_BAND_RUNGS", "4")))
+
+
 def _width_ladder(nvecx: int, nbnd: int) -> tuple[int, ...]:
     """The static widths the live subspace is rounded up to.
 
@@ -305,6 +314,27 @@ def _width_ladder(nvecx: int, nbnd: int) -> tuple[int, ...]:
     all :func:`_at_width` needs to round up correctly.
     """
     return tuple(range(nbnd, nvecx, nbnd)) + (nvecx,)
+
+
+def _band_ladder(nbnd: int, rungs: int = BAND_RUNGS) -> tuple[int, ...]:
+    """The widths a correction block is applied at.
+
+    ``expansion`` sorts the unconverged roots to the front and zeroes the rest,
+    so a block carries ``notcnv`` live rows and ``nbnd - notcnv`` exact zeros,
+    and ``H`` of a zero row is zero. ``cegterg`` applies ``H`` to ``notcnv``
+    vectors for exactly that reason (``cegterg.f90:465``).
+
+    **Two rungs rather than the width ladder's four, and the reason is the
+    executable rather than the arithmetic.** Each rung is a separate copy of the
+    whole ``h_psi`` subtree in the compiled program, which is the duplication
+    :func:`davidson_eigensolver_all`'s docstring sizes at 5.8 GiB on a 157-atom
+    slab for a different reason. Finer rungs track ``notcnv`` better and cost
+    more HLO; :data:`BAND_RUNGS` is the dial and 1 turns the whole thing off.
+    """
+    if rungs <= 1 or nbnd < 2:
+        return (nbnd,)
+    step = -(-nbnd // rungs)
+    return tuple(sorted({min(step * i, nbnd) for i in range(1, rungs + 1)}))
 
 
 def _at_width(live, widths: tuple[int, ...], make, narrow: bool):
@@ -352,6 +382,7 @@ def davidson_eigensolver(
     max_iterations: int = MAX_ITERATIONS,
     robust: bool = False,
     narrow: bool = True,
+    band_rungs: int = BAND_RUNGS,
     return_steps: bool = False,
     return_finite: bool = False,
 ):
@@ -420,6 +451,7 @@ def davidson_eigensolver(
     # cannot rescue; this is the cap itself, and it is static.
     nvecx = min(david * nbnd, hamiltonian.space)
     widths = _width_ladder(nvecx, nbnd)
+    band_widths = _band_ladder(nbnd, band_rungs)
     mask = hamiltonian.state_mask[ik]
     kinetic = hamiltonian.state_kinetic[ik]
     diagonal = hamiltonian.diagonal(ik)
@@ -635,9 +667,30 @@ def davidson_eigensolver(
         # keeps the block out of the ``cond``'s live range -- which is where the
         # FFT boxes of the next ``h_psi`` are. See :func:`expansion`.
         correction = expansion(evc, hevc, sbec, energies, settled)
-        new_becp, new_becq = project(correction)
         psi = jax.lax.dynamic_update_slice(psi, correction, (nbase, 0))
-        hpsi = jax.lax.dynamic_update_slice(hpsi, hamiltonian.apply(correction, ik), (nbase, 0))
+
+        def live_block(m):
+            """``H`` and the projections of the block, over its live rows.
+
+            The rows past ``notcnv`` are exactly zero, so ``H`` of them is zero
+            and the padding below is their value rather than an approximation
+            of it. This is ``cegterg.f90:465``'s ``h_psi_ptr(..., notcnv, ...)``
+            under the one shape a ``lax.while_loop`` body is allowed.
+            """
+            if m >= nbnd:
+                h = hamiltonian.apply(correction, ik)
+                bp, bq = project(correction)
+                return h, bp, bq
+            live = correction[:m]
+            h = hamiltonian.apply(live, ik)
+            bp, bq = project(live)
+            return (jnp.zeros_like(correction).at[:m].set(h),
+                    jnp.zeros((nbnd, bp.shape[1]), bp.dtype).at[:m].set(bp),
+                    jnp.zeros((nbnd, bq.shape[1]), bq.dtype).at[:m].set(bq))
+
+        hcorr, new_becp, new_becq = _at_width(notcnv, band_widths, live_block,
+                                              narrow)
+        hpsi = jax.lax.dynamic_update_slice(hpsi, hcorr, (nbase, 0))
         becp = jax.lax.dynamic_update_slice(becp, new_becp, (nbase, 0))
         becq = jax.lax.dynamic_update_slice(becq, new_becq, (nbase, 0))
         active = jax.lax.dynamic_update_slice(active, jnp.arange(nbnd) < notcnv, (nbase,))

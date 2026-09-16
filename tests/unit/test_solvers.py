@@ -33,7 +33,7 @@ from defumat.solvers import (
     davidson_eigensolver_all,
     get_eigensolver,
 )
-from defumat.solvers.davidson import DAVID_NDIM
+from defumat.solvers.davidson import DAVID_NDIM, _band_ladder
 from defumat.system import build_system
 from tests.exact_reference import exact_eigenpairs_all
 
@@ -187,6 +187,56 @@ def test_the_live_width_ladder_survives_a_basis_refresh(silicon):
     # the span, which is the part a degenerate solver may not rotate
     gram = lambda w: np.abs(w.conj() @ w.T)
     assert np.max(np.abs(gram(live[1]) - gram(full[1]))) < 1e-8
+
+
+def test_the_band_ladder_is_a_no_op_on_the_answer(silicon):
+    """Applying `H` to `notcnv` rows instead of `nbnd` changes nothing.
+
+    `expansion` sorts the unconverged roots to the front and zeroes the rest,
+    so `H` of the rows past `notcnv` is zero and the padding is their value
+    rather than an approximation. `cegterg.f90:465` applies `H` to `notcnv`
+    vectors for the same reason.
+
+    The seed is the converged answer with **one band spoiled**, which is what
+    makes the narrow rungs get taken: every other root settles on the first
+    step, so `notcnv` drops to a handful and the ladder selects its bottom rung.
+    A cold start would sit at `nbnd` throughout and test only the padding.
+    """
+    _, _, hamiltonian = silicon
+    converged, vectors = davidson_eigensolver(
+        hamiltonian, 0, NBND, None, ethr=1e-13, max_iterations=100, band_rungs=1
+    )
+    spoiled = np.asarray(vectors).copy()
+    rng = np.random.default_rng(0)
+    spoiled[-1] += 0.05 * (rng.normal(size=spoiled[-1].shape)
+                           + 1j * rng.normal(size=spoiled[-1].shape))
+    spoiled = jnp.asarray(spoiled)
+
+    runs = {}
+    for rungs in (1, 4):
+        values, _, steps, unsettled = davidson_eigensolver(
+            hamiltonian, 0, NBND, spoiled, ethr=1e-13, max_iterations=100,
+            band_rungs=rungs, return_steps=True,
+        )
+        runs[rungs] = (np.asarray(values), int(np.asarray(steps)),
+                       int(np.asarray(unsettled)))
+
+    assert _band_ladder(NBND, 4)[0] < NBND, "no narrow rung to take"
+    assert runs[4][1] == runs[1][1] and runs[4][2] == runs[1][2] == 0
+    assert np.max(np.abs(runs[4][0] - runs[1][0])) < 1e-12
+    # and both still sit on the answer the unspoiled solve found
+    assert np.max(np.abs(runs[4][0] - np.asarray(converged))) < 1e-10
+
+
+def test_the_band_ladder_covers_nbnd_and_never_exceeds_it():
+    """Every rung is a width a block can actually be sliced to."""
+    for nbnd in (1, 2, 3, 4, 7, 16, 32):
+        for rungs in (1, 2, 4):
+            ladder = _band_ladder(nbnd, rungs)
+            assert ladder == tuple(sorted(set(ladder)))
+            assert ladder[-1] == nbnd
+            assert all(1 <= m <= nbnd for m in ladder)
+            assert len(ladder) <= rungs
 
 
 def test_the_registry_covers_every_solver():
