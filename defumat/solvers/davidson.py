@@ -219,7 +219,7 @@ def empty_band_threshold(ethr):
 
 
 def _extend_projection(hc, sc, psi, hpsi, becp, becq, offset, block,
-                       gamma_only: bool = False):
+                       gamma_only: bool = False, *, width: int | None = None):
     """Add one block of rows and columns to the projected H and overlap.
 
     The projected matrices grow by a block of vectors per Davidson step, so all
@@ -251,6 +251,12 @@ def _extend_projection(hc, sc, psi, hpsi, becp, becq, offset, block,
     into the ``dynamic_update_slice`` that wrote it.
     """
     rows = jax.lax.dynamic_slice(psi, (offset, 0), (block, psi.shape[1]))
+    # ``cegterg`` sizes these products by ``nbase``, the vectors actually in the
+    # subspace; ``width`` is that, rounded up to the caller's ladder of static
+    # shapes. Every buffer is exactly zero past the live subspace, so a narrower
+    # product is the same sum over fewer terms rather than an approximation.
+    live = psi.shape[0] if width is None else width
+    psi_c, hpsi_c, becq_c = psi[:live], hpsi[:live], becq[:live]
     if gamma_only:
         # ``regterg``'s ``MYDGER(..., -1.D0, psi, ..., hr, ...)``: the stored
         # half is doubled and ``G = 0`` -- its own conjugate partner rather than
@@ -259,28 +265,57 @@ def _extend_projection(hc, sc, psi, hpsi, becp, becq, offset, block,
         # that ``generalised_eigh`` turns into an arbitrary phase per
         # eigenvector, hence a complex ``c(0)``, hence a state that is no longer
         # real. `regterg` never sees one because it works in real arithmetic.
-        row_h = 2.0 * (rows.conj() @ hpsi.T).real - (
-            rows[:, :1].conj() * hpsi[:, :1].T
+        row_h = 2.0 * (rows.conj() @ hpsi_c.T).real - (
+            rows[:, :1].conj() * hpsi_c[:, :1].T
         ).real
-        row_s = 2.0 * (rows.conj() @ psi.T).real - (
-            rows[:, :1].conj() * psi[:, :1].T
+        row_s = 2.0 * (rows.conj() @ psi_c.T).real - (
+            rows[:, :1].conj() * psi_c[:, :1].T
         ).real
         row_h = row_h.astype(psi.dtype)
         row_s = row_s.astype(psi.dtype)
     else:
-        row_h = rows.conj() @ hpsi.T
-        row_s = rows.conj() @ psi.T
+        row_h = rows.conj() @ hpsi_c.T
+        row_s = rows.conj() @ psi_c.T
     row_b = jax.lax.dynamic_slice(becp, (offset, 0), (block, becp.shape[1]))
     # ``becp^H becq`` is a sum over *projector* channels, not over plane waves,
     # so it carries no gamma factor -- the factor is already inside ``becp``,
     # which ``calbec_gamma`` returned.
-    row_s = row_s + row_b.conj() @ becq.T
+    row_s = row_s + row_b.conj() @ becq_c.T
 
     hc = jax.lax.dynamic_update_slice(hc, row_h, (offset, 0))
     sc = jax.lax.dynamic_update_slice(sc, row_s, (offset, 0))
     hc = jax.lax.dynamic_update_slice(hc, row_h.conj().T, (0, offset))
     sc = jax.lax.dynamic_update_slice(sc, row_s.conj().T, (0, offset))
     return hc, sc
+
+
+def _width_ladder(nvecx: int, nbnd: int) -> tuple[int, ...]:
+    """The static widths the live subspace is rounded up to.
+
+    ``cegterg`` sizes its ZGEMMs and its ``cdiaghg`` by ``nbase``, the number of
+    vectors actually in the subspace, which grows by ``notcnv`` a step. A
+    ``lax.while_loop`` body has one shape, so ``nbase`` cannot be a bound here;
+    what can is a short ladder of multiples of ``nbnd``, chosen by a
+    ``lax.switch``. Four rungs at the default ``david = 4``.
+    """
+    return tuple(range(nbnd, nvecx, nbnd)) + (nvecx,)
+
+
+def _at_width(live, widths: tuple[int, ...], make, narrow: bool):
+    """``make(m)`` at the smallest ladder width ``m`` that still covers ``live``.
+
+    ``narrow = False`` takes the full width unconditionally. That is what the
+    batched path needs: ``lax.switch`` is ``lax.cond``'s twin under ``vmap`` and
+    evaluates *every* branch, so narrowing there would cost the ladder's whole
+    height instead of saving anything.
+    """
+    if not narrow or len(widths) == 1:
+        return make(widths[-1])
+    if isinstance(live, int):                 # the first solve, known at trace time
+        return make(next(m for m in widths if m >= live))
+    index = jnp.clip(jnp.searchsorted(jnp.asarray(widths), live),
+                     0, len(widths) - 1)
+    return jax.lax.switch(index, [(lambda m: lambda: make(m))(m) for m in widths])
 
 
 def _precondition(residual, diagonal, overlap_diagonal, energies):
@@ -310,6 +345,7 @@ def davidson_eigensolver(
     david: int = DAVID_NDIM,
     max_iterations: int = MAX_ITERATIONS,
     robust: bool = False,
+    narrow: bool = True,
     return_steps: bool = False,
     return_finite: bool = False,
 ):
@@ -330,6 +366,15 @@ def davidson_eigensolver(
             comes from). ``None`` uses :data:`ETHR`; the SCF driver passes its
             scheduled value, which starts loose and tightens as the density
             converges.
+        narrow: size the subspace solve and the two Ritz rotations by the
+            *live* basis rather than by ``nvecx``, which is what ``cegterg``
+            does with its ``nbase``. The widths are quantised to a ladder of
+            multiples of ``nbnd`` and picked with a ``lax.switch``
+            (:func:`_at_width`), and the answer is unchanged to the last bit
+            because every buffer is exactly zero past the live subspace. It
+            must be ``False`` wherever this is called under a ``vmap`` -- a
+            ``switch`` there evaluates every branch -- which is what
+            :func:`_every_k` decides from the k-batch.
         return_steps: also return how many Davidson steps the solve took and
             how many bands were still unsettled when it stopped. Both are
             already computed inside the loop -- they are its trip counter and
@@ -368,6 +413,7 @@ def davidson_eigensolver(
     # the ones below it. ``davidson_eigensolver_all`` refuses the cases a cap
     # cannot rescue; this is the cap itself, and it is static.
     nvecx = min(david * nbnd, hamiltonian.space)
+    widths = _width_ladder(nvecx, nbnd)
     mask = hamiltonian.state_mask[ik]
     kinetic = hamiltonian.state_kinetic[ik]
     diagonal = hamiltonian.diagonal(ik)
@@ -403,38 +449,51 @@ def davidson_eigensolver(
     becq = jnp.zeros((nvecx, nkb), dtype).at[:nbnd].set(becq0)
     first = jnp.arange(nvecx) < nbnd
     empty = jnp.zeros((nvecx, nvecx), dtype)
-    hc0, sc0 = _extend_projection(empty, empty, psi, hpsi, becp, becq, 0, nbnd,
-                                  gamma_only)
+    hc0, sc0 = _at_width(
+        nbnd, widths,
+        lambda m: _extend_projection(empty, empty, psi, hpsi, becp, becq, 0,
+                                     nbnd, gamma_only, width=m),
+        narrow,
+    )
 
-    def solve(psi, hpsi, becq, active, hc_raw, sc_raw, previous):
-        """Diagonalise in the current subspace and measure what is left."""
-        pair = active[:, None] & active[None, :]
-        inactive = jnp.where(active, 0.0, 1.0).astype(dtype)
-        hc = jnp.where(pair, hc_raw, 0.0) + jnp.diag(shift * inactive)
-        sc = jnp.where(pair, sc_raw, 0.0) + jnp.diag(inactive)
+    def solve(psi, hpsi, becq, active, hc_raw, sc_raw, previous, live):
+        """Diagonalise in the current subspace and measure what is left.
 
-        if gamma_only:
-            # Real symmetric, as ``regterg``'s ``hr``/``sr`` are. Taking the
-            # real part is not a truncation: the imaginary part is round-off in
-            # a quantity that is real by construction, and leaving it in is what
-            # gives each eigenvector an arbitrary phase.
-            hc, sc = hc.real, sc.real
-        values, vectors = generalised_eigh(0.5 * (hc + hc.conj().T),
-                                           0.5 * (sc + sc.conj().T),
-                                           robust=robust)
-        vectors = vectors.astype(psi.dtype)
-        energies = values[:nbnd].real
-        coefficients = vectors[:, :nbnd]
+        Everything that scales with the subspace is inside :func:`at`, which is
+        run at the live width rather than at ``nvecx`` -- the solve, and the two
+        rotations that carry the estimate back into the plane-wave basis. See
+        :func:`_at_width`.
+        """
+        def at(m):
+            pair = active[:m, None] & active[None, :m]
+            inactive = jnp.where(active[:m], 0.0, 1.0).astype(dtype)
+            hc = jnp.where(pair, hc_raw[:m, :m], 0.0) + jnp.diag(shift * inactive)
+            sc = jnp.where(pair, sc_raw[:m, :m], 0.0) + jnp.diag(inactive)
 
-        # ... the estimate in the plane-wave basis, and H applied to it, both
-        # rotations of vectors already computed -- no extra application of H.
-        evc = coefficients.T @ psi
-        hevc = coefficients.T @ hpsi
-        # ``q <beta|evc>``, the only thing S needs beyond ``evc`` itself: the
-        # Ritz vector's projections are the same rotation of the stored ones,
-        # so ``S|psi>`` is never formed. ``(nbnd, nkb)``, and zero-width
-        # without an augmentation charge.
-        sbec = coefficients.T @ becq
+            if gamma_only:
+                # Real symmetric, as ``regterg``'s ``hr``/``sr`` are. Taking the
+                # real part is not a truncation: the imaginary part is round-off
+                # in a quantity that is real by construction, and leaving it in
+                # is what gives each eigenvector an arbitrary phase.
+                hc, sc = hc.real, sc.real
+            values, vectors = generalised_eigh(0.5 * (hc + hc.conj().T),
+                                               0.5 * (sc + sc.conj().T),
+                                               robust=robust)
+            vectors = vectors.astype(psi.dtype)
+            coefficients = vectors[:, :nbnd]
+
+            # ... the estimate in the plane-wave basis, and H applied to it,
+            # both rotations of vectors already computed -- no extra H.
+            # ``sbec`` is ``q <beta|evc>``, the only thing S needs beyond
+            # ``evc`` itself: the Ritz vector's projections are the same
+            # rotation of the stored ones, so ``S|psi>`` is never formed.
+            # ``(nbnd, nkb)``, and zero-width without an augmentation charge.
+            return (values[:nbnd].real,
+                    coefficients.T @ psi[:m],
+                    coefficients.T @ hpsi[:m],
+                    coefficients.T @ becq[:m])
+
+        energies, evc, hevc, sbec = _at_width(live, widths, at, narrow)
 
         settled = jnp.abs(energies - previous) < ethr
         if residual_threshold is not None:
@@ -505,7 +564,7 @@ def davidson_eigensolver(
 
     energies0, evc0, hevc0, sbec0, settled0, notcnv0, converged0 = solve(
         psi, hpsi, becq, first, hc0, sc0,
-        jnp.full((nbnd,), jnp.inf, dtype=diagonal.dtype),
+        jnp.full((nbnd,), jnp.inf, dtype=diagonal.dtype), nbnd,
     )
 
     state = (
@@ -576,12 +635,16 @@ def davidson_eigensolver(
         becp = jax.lax.dynamic_update_slice(becp, new_becp, (nbase, 0))
         becq = jax.lax.dynamic_update_slice(becq, new_becq, (nbase, 0))
         active = jax.lax.dynamic_update_slice(active, jnp.arange(nbnd) < notcnv, (nbase,))
-        hc_raw, sc_raw = _extend_projection(hc_raw, sc_raw, psi, hpsi, becp, becq,
-                                            nbase, nbnd, gamma_only)
+        hc_raw, sc_raw = _at_width(
+            nbase + nbnd, widths,
+            lambda m: _extend_projection(hc_raw, sc_raw, psi, hpsi, becp, becq,
+                                         nbase, nbnd, gamma_only, width=m),
+            narrow,
+        )
         nbase = nbase + notcnv
 
         energies, evc, hevc, sbec, settled, notcnv, converged = solve(
-            psi, hpsi, becq, active, hc_raw, sc_raw, energies
+            psi, hpsi, becq, active, hc_raw, sc_raw, energies, nbase
         )
         return (psi, hpsi, becp, becq, active, hc_raw, sc_raw, nbase,
                 evc, hevc, energies, sbec, settled, notcnv, iteration + 1,
@@ -659,6 +722,16 @@ def _every_k(
     sizes, which is the other half of the same problem: an allocation outside
     that unit appears in no line of the size report.
     """
+    batch = resolve_k_batch(k_batch)
+    # **Whether the subspace may be sized by the live basis is decided here,
+    # because it is a property of the route rather than of the solve.**
+    # ``map_axis`` puts a ``vmap`` around the body for every batch but one --
+    # a single k-point, or ``batch = 1``, which is a plain ``lax.map`` -- and
+    # ``lax.switch`` under ``vmap`` evaluates every branch of the ladder
+    # instead of one. So the narrowing is taken on exactly the routes that have
+    # no batch axis, which are the ones the large single-k cells run on anyway.
+    narrow = hamiltonian.nk == 1 or batch == 1
+
     def solve(ik, start):
         # The threshold rides the traced ``ethr`` slot as an ``(nk, nbnd)``
         # array and is gathered here with the same ``ik`` the solver already
@@ -671,11 +744,10 @@ def _every_k(
         return davidson_eigensolver(
             hamiltonian, ik, nbnd, start, ethr=row,
             residual_threshold=residual_threshold, david=david,
-            max_iterations=max_iterations, robust=robust,
+            max_iterations=max_iterations, robust=robust, narrow=narrow,
             return_steps=return_steps, return_finite=return_finite,
         )
 
-    batch = resolve_k_batch(k_batch)
     indices = jnp.arange(hamiltonian.nk)
     if psi0 is None:
         return map_k(lambda ik: solve(ik, None), indices, batch=batch)
