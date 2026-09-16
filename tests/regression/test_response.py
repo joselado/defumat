@@ -823,7 +823,9 @@ def test_the_wedge_and_the_closed_grid_give_one_born_charge():
 
     Its neighbour below is the same construction on the dielectric constant, and
     it could not have found this: ``eps`` is right to 3e-5 in every case here,
-    including the ones whose ``Z*`` was wrong by 1.4e-2. Two things have to
+    including the ones whose ``Z*`` was wrong (1.4e-2 on the unshifted 4x4x4
+    wedge of this crystal, 7.7e-3 on the coarser sample used here). Two things
+    have to
     change for the check to bite. The crystal must be **polar**, so that ``Z*``
     has an antisymmetric part -- on diamond the two atoms are one species and
     the whole of ``Z*`` is the sum-rule residue, which was never wrong. And the
