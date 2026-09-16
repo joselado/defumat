@@ -3267,34 +3267,60 @@ above went wrong.
 `h_psi` itself is **1.24x** QE per band (2.45 ms against 1.97) and is not where
 the remaining factor is.
 
-**Backlog item 3 is worth nothing on this cell, which is the measurement it was
-waiting for.** The live-root count after each step, reconstructed by capping the
-loop at `m` steps and reading the solver's own exit `notcnv`, is **0 after every
-step when seeded** -- the regime the SCF runs in, where the solve converges in
-one step and every root settles together -- and **32 of 32 after every step from
-a cold start**, at `ethr` 1e-6, 1e-10 and 1e-13 alike. There is no intermediate
-value to narrow to, so a `lax.switch` on `notcnv` would select the full width
-every time and buy the ladder's cost for nothing. This does **not** carry to
-every cell: `si10-nc`'s seven k-points fall 20 to 13 to 10 to 0 over four steps
-("Inside a Davidson step"), so the quantity is cell-dependent and the item is
-suspended rather than closed.
+**Backlog item 3 is live, and the measurement that said otherwise was taken in
+the wrong regime.** An earlier run here reported the live-root count as 0 after
+every step when seeded and 32 of 32 from cold, and concluded the item was worth
+nothing on silicon. Both readings are real and neither is the SCF: the seeded
+probe used the **converged** density, where the solve finishes in one step and
+every root settles together, and the cold probe used no density at all. QE's
+25.2 bands of 32 is an average over a whole thirteen-iteration run, so the
+comparable measurement is the same probe applied at **every SCF iteration's own
+density and `ethr`**, hooking `Calculation.diagonalize` where the arguments are
+still concrete.
 
-**It also does not explain QE's 25.2 bands of 32**, and the two measurements are
-not in contradiction: that average is over a whole 13-iteration run with QE's
-own `ethr` schedule and its `btype`, while this probe is at one converged
-density. The 25.2 is `pw.x`'s observed block width, not a saving measured for
-this code, and nothing here has established what item 3 would be worth in the
-regime that produced it.
+Done that way the live width does fall, and it falls to about where `pw.x` is:
 
-**The structural difference to `cegterg` is the rotation's output width, not
-`h_psi`'s.** `cegterg.f90:353-395` forms only the `notcnv` correction vectors a
-step -- two ZGEMMs of width `notcnv` straight into `psi(1,nb1)` -- and rotates
-to the full `nbnd` Ritz vectors only at the refresh (`:576-581`). `solve` here
-returns `evc` and `hevc` at `nbnd` **every step**, because `expansion` is built
-from them. Where `notcnv` is genuinely smaller than `nbnd` that is the whole
-difference, and it is a change to what the loop carries rather than a ladder on
-top of what it already does. Nothing above prices it, for the reason the
-paragraph before this one gives.
+| | `si8-1k-ecut30` | `si16-1k-ecut30` |
+|---|---|---|
+| live roots per step, by SCF iteration | 16 / 0 / 0 / 12 / 16 / 16 / 10 / 16,3,2 | 32 / 0 / 0 / 24 / 32 / 32 / 20 / 32,6,4 / 32,6 / 32 |
+| mean live width | **11.4 of 16** | **22.9 of 32** |
+| the same fraction | 0.71 | 0.72 |
+| `pw.x` on the same input | | 0.79 (25.2 of 32) |
+
+**And that one number accounts for the whole remaining algebra gap.** Counting
+the subspace products of one eigensolver call -- two Ritz rotations and two
+projection rows, each `nbnd x m x npwx` -- against `cegterg`'s, which are
+`notcnv x nbase x npw`:
+
+| | complex FMA | GFLOP |
+|---|---|---|
+| here, at the ladder widths 32, 64, 96, 128 | 241.7 M | 1.93 |
+| `pw.x`, at `nbase` 32, 57, 82 and `notcnv` 25 | 100.9 M | 0.81 |
+
+**2.40x, and it factorises as 1.87x on the widths times 1.28x on the output
+width -- both of which are `notcnv` being 25 where this code uses 32.** `nbase`
+already grows by `notcnv` here (`nbase = nbase + notcnv`), so the widths follow
+for free once the output width does. At the 22 GFLOP/s the rotation actually
+runs at, 1.93 GFLOP is 88 ms against the 29 ms `pw.x` spends on its whole
+algebra.
+
+**The GEMM is not bandwidth-bound, which is worth knowing before anyone tries to
+fix it that way.** Warm against cold -- a fresh 12.1 MB operand every repeat, so
+nothing is resident from the one before -- the rotation runs at 20.3/24.5/24.5/21.6
+GFLOP/s warm and 22.4/21.2/23.5/22.5 cold at widths 32/64/96/128, a ratio of
+0.91 to 1.16 with no trend. The remaining factor is **work**, not throughput, and
+the work is set by `notcnv`.
+
+**The structural difference to `cegterg` is the rotation's output width.**
+`cegterg.f90:353-395` forms only the `notcnv` correction vectors a step -- two
+ZGEMMs of width `notcnv` straight into `psi(1,nb1)` -- and rotates to the full
+`nbnd` Ritz vectors only at the refresh (`:576-581`). `solve` here returns `evc`
+and `hevc` at `nbnd` **every step**, and `hamiltonian.apply` is handed all
+`nbnd` rows of a correction block whose last `nbnd - notcnv` are zero. The
+memory objection stands and shapes the fix rather than blocking it: a
+`lax.switch` over `notcnv` puts a copy of `h_psi` in the executable per rung,
+which is the duplication `davidson_eigensolver_all`'s docstring sizes at 5.8 GiB
+on a 157-atom slab, so the ladder there wants **two rungs, not four**.
 
 ## Optimisation backlog
 
@@ -3318,13 +3344,16 @@ then it is a place to look, not a claim.
    unbatched path only. **1.74x on the algebra of a forced three-step solve and
    1.12-1.13x on the whole SCF**, bit-identical energies and eigenvalues. See
    "Where the CPU gap against `pw.x` actually is".
-3. **Expand by `notcnv` rather than by `nbnd`.** In the seeded regime the SCF
-   runs, the live roots fall 20 -> 13 -> 10 -> 0 over four steps at
-   `ethr = 1e-13`, and `h_psi` is exactly linear in the block's width on a CPU —
-   so this is about half the expansion cost of the endgame steps. It is worth
-   **nothing** on a cold band-structure solve, where no root settles at all, and
-   whether it is worth anything on a device depends on whether a narrow block is
-   launch-bound there. Same `vmap` restriction as the item above.
+3. **Expand by `notcnv` rather than by `nbnd`**, and take the two Ritz rotations
+   and the projection rows at that width too. **Now priced: the mean live width
+   over a whole SCF is 0.71-0.72 of `nbnd` on the two silicon cells against
+   `pw.x`'s 0.79, and it is the entire remaining algebra gap** -- 2.40x of
+   subspace GEMM work, factorising as 1.87x on the widths and 1.28x on the
+   output width, both of them `notcnv`. `h_psi` is exactly linear in the block's
+   width on a CPU, so it gains the same 1.4x. Worth **nothing** on a cold
+   band-structure solve, where no root settles. Same `vmap` restriction as the
+   item above, and **two rungs rather than four**, because each rung is a copy of
+   `h_psi` in the executable. See "Where the CPU gap against `pw.x` actually is".
 4. **Fold `dr2` into the iteration's other reductions.** It costs a transform and
    a dispatch of its own (~3% of an iteration) for a quantity the loop already
    computes a residual for. Mixing in G space would save another transform.
