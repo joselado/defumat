@@ -264,18 +264,18 @@ workstation core, slowest last:
 
 | | s | | s | | s | | s |
 |---|---|---|---|---|---|---|---|
-| `01` | 5 | `06` | 23 | `34` | 40 | `41` | 164 |
-| `09` | 6 | `25` | 28 | `10` | 50 | `08` | 171 |
-| `02` | 8 | `18` | 29 | `29` | 59 | `43` | 173 |
-| `37` | 9 | `12` | 30 | `45` | 85 | `27` | 178 |
-| `03` | 10 | `21` | 30 | `11` | 81 | `44` | 188 |
-| `05` | 10 | `15` | 31 | `14` | 89 | `17` | 203 |
-| `04` | 12 | `24` | 31 | `26` | 109 | `38` | 242 |
+| `01` | 5 | `06` | 23 | `34` | 40 | `08` | 171 |
+| `09` | 6 | `25` | 28 | `10` | 50 | `43` | 173 |
+| `02` | 8 | `18` | 29 | `29` | 59 | `27` | 178 |
+| `37` | 9 | `12` | 30 | `11` | 81 | `44` | 188 |
+| `03` | 10 | `21` | 30 | `45` | 85 | `17` | 203 |
+| `05` | 10 | `15` | 31 | `14` | 89 | `38` | 242 |
+| `04` | 12 | `24` | 31 | `26` | 109 | `19` | 243 |
 | `22` | 12 | `28` | 33 | `33` | 115 | `36` | 244 |
-| `42` | 13 | `31` | 34 | `19` | 125 | `35` | 276 |
-| `16` | 18 | `40` | 34 | `13` | 131 | `20` | 282 |
-| `00` | 22 | `23` | 35 | `30` | 131 |  |  |
-| `07` | 22 | `32` | 35 | `39` | 151 |  |  |
+| `42` | 13 | `31` | 34 | `13` | 131 | `35` | 276 |
+| `16` | 18 | `40` | 34 | `30` | 131 | `20` | 282 |
+| `00` | 22 | `23` | 35 | `39` | 151 |  |  |
+| `07` | 22 | `32` | 35 | `41` | 164 |  |  |
 
 `43` reads 173 s on 2026-09-15 with its starting-guess section in it, against the 240 s
 recorded before that section existed. **The pair is not a delta.** The new section is two
@@ -298,6 +298,12 @@ through two mixers, and that figure is an **upper bound**: it was taken while th
 jobs held the machine, so an idle re-timing will read lower. It is well under the ceiling
 either way, and the pair of self-consistent runs is the physics of that section rather than
 a sweep, so it is not the cell to cut.
+
+`19` reads 243 s on 2026-09-16 against 125 s before, and the 118 s is one added cell:
+AlAs, whose Born charge is a charge rather than the residue silicon's is, at
+`ecutwfc = 25` with a dual of 8 where silicon runs at 20 and 4. It is the notebook's
+subject rather than a sweep -- a notebook about Born charges that shows only a quantity
+symmetry forces to zero is the blind spot `PLAN.md` P39a is about, in public.
 
 Three of those used to be much slower, and each for the same reason. `19` lost two
 hand-built linear solves and a second self-consistent run that were demonstrating

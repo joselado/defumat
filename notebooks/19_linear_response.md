@@ -24,7 +24,10 @@ vendored `ph.x`:
 | $\varepsilon_\infty$, **PAW** Si | **14.320211** | 14.320177 |
 | $\varepsilon_\infty$, ultrasoft C | **5.756059** | 5.756182 |
 | $Z^*$, norm-conserving Si | **-0.075715** | -0.07571 |
-| $Z^*$, ultrasoft Si | **-0.079442** | -0.07945 |
+| $Z^*$, ultrasoft Si | **-0.079440** | -0.07945 |
+| $Z^*$, **PAW** Si | **-0.079601** | -0.07961 |
+| $Z^*$, ultrasoft AlAs, Al | **2.101065** | 2.10106 |
+| $Z^*$, ultrasoft AlAs, As | **-2.165827** | -2.16581 |
 
 The reference is regenerated rather than the committed one, which dates from
 release 6.0 and has drifted by 3e-4, six times the disagreement being measured.
@@ -49,18 +52,15 @@ print(np.round(field.epsilon, 6))
 print(f"\ndeparture from cubic symmetry   {field.anisotropy:.1e}")
 ```
 
-    An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
-
-
     [defumat] the dielectric tensor: no ground state cached, running the SCF first (conv_thr = 1e-12). Call get_scf() to do this explicitly.
 
 
     dielectric tensor, cartesian axes:
-    [[13.806646  0.       -0.      ]
-     [ 0.       13.806646  0.      ]
-     [-0.       -0.       13.806646]]
+    [[13.806646 -0.       -0.      ]
+     [-0.       13.806646  0.      ]
+     [-0.        0.       13.806646]]
     
-    departure from cubic symmetry   6.2e-15
+    departure from cubic symmetry   5.3e-15
 
 
 The tensor came out isotropic to 4e-15 with nothing imposing that it should be.
@@ -114,7 +114,7 @@ print(f"smallest                 {speeds.min():.4f} Ry bohr")
 
     band velocities, one vector per band per k-point: (10, 4)
     largest group velocity   1.2857 Ry bohr
-    smallest                 0.1860 Ry bohr
+    smallest                 0.1890 Ry bohr
 
 
 Nothing there was differenced: each number is an expectation value of an
@@ -144,7 +144,7 @@ print(comparison_table(
 ```
 
                     defumat       ph.x  difference
-    epsilon (nc)  13.806646  13.806689     4.3e-05
+    epsilon (nc)  13.806646  13.806689     4.4e-05
     Z* Si 1       -0.075715  -0.075710     5.0e-06
     Z* Si 2       -0.075715  -0.075710     5.0e-06
 
@@ -225,7 +225,46 @@ print(comparison_table(
 
                            defumat       ph.x  difference
     epsilon (ultrasoft)  14.325321  14.325270     5.1e-05
-    Z* (ultrasoft)       -0.079442  -0.079450     8.3e-06
+    Z* (ultrasoft)       -0.079440  -0.079450     9.8e-06
+
+
+## A charge, rather than a number symmetry has already fixed
+
+Silicon's Born charge is zero. The crystal has two atoms of one species, and
+what sends one of them forward under a field sends the other forward too, so
+the two charges are equal and the sum rule forces them both to vanish. The
+$-0.0757$ above is therefore not a charge at all, it is what an incomplete
+plane-wave basis leaves behind of a cancellation between $4$ and $4.076$, and
+reproducing it is a statement about the machinery rather than about silicon.
+
+A Born charge is only a charge when the two sites are different. AlAs has the
+same diamond skeleton with aluminium on one site and arsenic on the other, so
+displacing the aluminium moves charge one way and displacing the arsenic moves
+it the other, and the two come out near $+2.1$ and $-2.2$: the ionicity of the
+bond, read off a derivative. What does not cancel is the sum, which is the same
+basis-set residue silicon shows on its own.
+
+
+
+```python
+polar = Calculator.from_file(CASES / "alas-epsilon-us.in", pseudo_dir=PSEUDO)
+z = np.asarray(polar.get_born_charges())
+
+print(comparison_table(
+    [("Z* Al", float(z[0, 0, 0]), 2.10106),
+     ("Z* As", float(z[1, 0, 0]), -2.16581),
+     ("sum over the cell", float(z[:, 0, 0].sum()), -0.06475)],
+    fmt="{:.6f}", headers=("", "defumat", "ph.x", "difference")))
+
+```
+
+    [defumat] the dielectric tensor: no ground state cached, running the SCF first (conv_thr = 1e-12). Call get_scf() to do this explicitly.
+
+
+                         defumat       ph.x  difference
+    Z* Al               2.101065   2.101060     5.0e-06
+    Z* As              -2.165827  -2.165810     1.7e-05
+    sum over the cell  -0.064762  -0.064750     1.2e-05
 
 
 ## Spin-orbit coupling, where a band holds one electron
@@ -255,7 +294,7 @@ print(comparison_table(
 
 
                 spinor     scalar  difference
-    epsilon  13.806641  13.806646     4.9e-06
+    epsilon  13.806641  13.806646     4.5e-06
 
 
 The same number to seven figures, and held to a tighter convergence the two
@@ -303,8 +342,7 @@ off-diagonal entries of **3.77 that cubic symmetry forbids**, all of it looking
 like a working calculation. That combination is refused by name. An unshifted
 grid is closed exactly, and there the escape does work.
 
-Also refused by name: **PAW Born charges**, at 1.3e-3 with the missing term
-identified rather than fitted; DFT+U and spin spirals in the response, and a
+Also refused by name: DFT+U and spin spirals in the response, and a
 noncollinear run that carries a moment; a potential-only meta-GGA; a fixed occupation that cuts a
 **degenerate multiplet**, where which member falls below the cut is arbitrary and
 the response depends on that choice; and the *screened* response of a magnetic
