@@ -237,10 +237,12 @@ def nonorthogonal(hamiltonian, s: float = 0.25, tau=None):
 
     Args:
         hamiltonian: the orthonormal model, ``H_0(k)``.
-        s: how far from orthonormal. ``A = 1 + s M(k)`` with ``M`` Hermitian and
-            bounded by 1 in norm, so anything below 1 keeps ``A`` invertible;
-            0.25 makes ``dS/dk`` the same order as ``dH/dk`` without pushing the
-            conditioning anywhere interesting.
+        s: how far from orthonormal. ``A = 1 + s M(k)`` with ``M`` Hermitian;
+            ``M`` is an off-diagonal part bounded by 1 plus a diagonal one
+            bounded by 1, so its norm reaches 2 and ``s < 1/2`` is what keeps
+            ``A`` invertible. 0.25 makes ``dS/dk`` the same order as ``dH/dk``
+            without pushing the conditioning anywhere interesting -- at that
+            value ``S`` runs from 0.85 to 2.02.
         tau: the phase the k-dependence of ``M`` is built from, a 3-vector in
             crystal coordinates. Defaults to a generic one, on purpose: a
             high-symmetry choice makes ``M`` commute with ``H_0`` at special

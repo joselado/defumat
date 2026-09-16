@@ -388,12 +388,15 @@ def require_a_conductivity_regime(calculation) -> None:
     if calculation.is_ultrasoft or calculation.is_paw:
         raise NotImplementedError(
             "the optical conductivity with an ultrasoft or PAW "
-            "pseudopotential is not implemented: the current operator of a "
-            "generalised eigenproblem carries <psi_n|dS/dk_a|psi_m> beside "
-            "dH/dk, and that term is identically zero for a norm-conserving "
-            "dataset -- so nothing validated here can see whether its "
-            "convention is right. It is the refusal defumat.topology.kubo "
-            "makes for the same matrix element. Use a norm-conserving dataset"
+            "pseudopotential is not implemented, and a term is missing rather "
+            "than unchecked. The current operator of a generalised "
+            "eigenproblem carries <psi_n|dS/dk_a|psi_m> beside dH/dk, which "
+            "is here and is right by derivation; what is not here is the "
+            "augmentation dipole <psi_n|T^dag dT/dk|psi_m> that goes with it, "
+            "measured at 18 per cent of the answer on a model where the exact "
+            "one is free (PLAN.md P94). It is the refusal "
+            "defumat.topology.kubo makes for the same matrix element. Use a "
+            "norm-conserving dataset"
         )
     if getattr(calculation, "spiral", False):
         raise NotImplementedError(

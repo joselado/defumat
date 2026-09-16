@@ -235,9 +235,22 @@ because that is what decides whether it is a session or a phase.
 - **The force on an atom of a spin spiral** — the two components live on different
   plane-wave spheres, so the nonlocal term needs the projectors of both. `dE/dq` (P21) is
   what a spiral has instead.
-- **The Kubo Berry curvature of an ultrasoft or PAW dataset** (P47: the `e_n dS/dk` term
-  is written and unvalidated).
+- **The Kubo Berry curvature of an ultrasoft or PAW dataset**, and with it the **optical
+  conductivity** and the **shift current** (P47, P94). The missing term is the
+  **augmentation dipole** `<psi_n|T^dagger d_k T|psi_m>`, `adddvepsi_us`'s `dpqq`, which a
+  formula written in `dH/dk` and `dS/dk` has nowhere to put; the `e_n dS/dk` piece beside
+  it is right by derivation. P94 measured the omission at 18 per cent of `Omega` and 0.010
+  of a Chern number on a model whose exact answer is free, and pinned its shape: the two
+  factors need *different* blocks. `efield.py` computes the object already
+  (`_ultrasoft_position`); what is missing is its matrix-element form in
+  `velocity_matrices`, and then an **assembly** check on plane waves.
 - **PAW Born charges** (P39a: two candidates, both measured, both rejected).
+- **The sum-over-states `chi_0` of an ultrasoft dataset** (P40, P94). Two routes to
+  `Q_ij(G)` at `G != 0` disagree -- 57.200 with a residual of +0.540 through
+  `augmentation_at_q` against P40's 55.5 and -1.20 through the dense table -- and the
+  residual is positive at every band count where the norm-conserving control falls to
+  zero, so what is left is neither a truncation nor a normalisation. The head also still
+  carries no `-e_n dS/dk` and no `dpqq`.
 - **The electro-optic tensor and a truncation-free `chi^(2)` by the 2n+1 route** — the
   second-order response `solve_e2`, which is what P35 refuses for. The
   frequency-dependent `chi^(2)(-2w; w, w)` is in as of P54, by a sum over states, which
@@ -6010,6 +6023,18 @@ by Miller index; `VelocityOperator.dipole_elements`, which is
 `dielectric_tensor(screening="hartree")` on the same states, on a small `nosym` cell
 (`si-us-nosym.in`, committed for P39) with a norm-conserving control beside it. It is
 sharp — 0.06% on the control — and it needs no reference beyond this code.
+
+**Later (P94): finding 2 above is contradicted and finding 1 is not.** "The next attempt
+should not start with [the body]" rested on the body being right, and the body is the half
+that was never checked at `G != 0`. Reached through `augmentation_at_q` instead of a
+gather from the dense table, the same cell at the same `nbnd = 60` gives **57.200** with a
+residual of **+0.540**, against the 55.5 and -1.20 recorded here, so the two routes
+disagree and the dense-table gather is the one with no independent support. P94 also ran
+the band count out, which this phase did not: the residual is positive at 30, 45, 60 and
+80 bands and does not tend to zero, where the norm-conserving control falls
+-0.0675, -0.0129, -0.0022 and reproduces this entry's own middle figure exactly. So what
+is left over is neither a truncation nor a missing normalisation, which is a different
+statement from the one here.
 
 
 ### P41 — The strain response when `S` deforms with the cell. ✅ DONE.
@@ -16692,7 +16717,7 @@ sum-over-states or a Sternheimer solver. Nothing in P0–P8 should make them har
 in practice means D1, D2, and D3 are respected as the earlier phases are written.
 
 
-### P94 -- Two checks P40 named and never ran, and a test that could not have failed. 📋 OPEN, three findings banked.
+### P94 -- Two checks P40 named and never ran, and a test that could not have failed. 📋 OPEN, five findings banked.
 
 `defumat/tddft/chi0.py` (reverted), `defumat/topology/kubo.py` (unchanged),
 `AUGMENTATION-NEXT.md`.

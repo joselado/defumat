@@ -326,8 +326,8 @@ def test_a_moving_overlap_needs_more_than_dh_and_ds():
     :func:`~defumat.topology.kubo.kubo_from_matrices` -- which sees ``dH`` and
     ``dS`` and nothing else -- has no slot for it. Whether that matters cannot
     be settled on a plane-wave crystal: ``PLAN.md`` P94 measured the term at
-    2.5 per cent of ``Omega`` where the coarsest comparison available has a
-    mesh floor of 4.4, so the check there cannot fail.
+    2.5 per cent of ``Omega`` where the *finest* mesh run still leaves the two
+    methods 4.4 per cent apart, so the check there cannot fail.
 
     Here it can. Take Haldane's ``H_0`` and any smooth invertible ``A(k)``, set
     ``H = A^dagger H_0 A`` and ``S = A^dagger A``: the eigenvalues are ``H_0``'s,

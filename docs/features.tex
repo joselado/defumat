@@ -2977,11 +2977,14 @@ removing Fermi surface, and its tensor is isotropic to \textbf{1.7e-4} eV with
 nothing imposing that.
 
 \begin{refuses}
-\textbf{Refuses.} \textbf{Ultrasoft and PAW}, for the Kubo curvature's reason:
-with a moving $\hat S$ the current operator carries
-$\epsilon_n\,\partial S/\partial k$ off the diagonal, and that term is
-identically zero for a norm-conserving dataset, so nothing validated here can
-see whether its convention is right. A \textbf{spin spiral}, whose two spinor
+\textbf{Refuses.} \textbf{Ultrasoft and PAW}, for the Kubo curvature's reason,
+and a \emph{term} is missing rather than unchecked. With $\hat S = T^\dagger T$
+the states a current is about are $T|\psi\rangle$, so the operator carries
+$\langle\psi_n|T^\dagger\partial_k T|\psi_m\rangle$ --- the augmentation
+dipole --- beside the $\epsilon_n\,\partial S/\partial k$ this assembly does
+have, and there is nowhere in a formula written in $\partial H/\partial k$ and
+$\partial S/\partial k$ to put it. Measured on a model where the exact answer
+is free: \textbf{18\,\%} of a curvature and 0.010 of a Chern number. A \textbf{spin spiral}, whose two spinor
 components live on different spheres. A \textbf{symmetry-reduced $k$-set},
 because the antisymmetric part is an axial vector --- the escape is the whole
 unshifted grid, which is closed under the point group. And
@@ -3104,10 +3107,12 @@ is worth nothing to better than a factor of two.
 
 \begin{refuses}
 \textbf{Refuses.} \textbf{Ultrasoft and PAW}, for the Kubo curvature's reason
-one order further out: with a moving $\hat S$ the dipole carries
-$\partial S/\partial k$ and its derivative carries $\partial^2 S/\partial
-k_a\partial k_b$, both identically zero for a norm-conserving dataset, so
-nothing validated here can see whether their convention is right. A
+one order further out. The dipole carries $\partial S/\partial k$ and its
+derivative carries $\partial^2 S/\partial k_a\partial k_b$, and both are here;
+what is not here is the augmentation dipole
+$\langle\psi_n|T^\dagger\partial_k T|\psi_m\rangle$ that belongs with them, nor
+its own derivative beside that. It is a missing term rather than an unchecked
+convention, measured at 18\,\% of a curvature on a model. A
 \textbf{spin spiral}. A \textbf{symmetry-reduced $k$-set}, because
 $\sigma^{abc}$ is a polar rank-3 tensor and a wedge sum is not the cell's until
 it is averaged over the point group; the escape is the whole unshifted grid. A
@@ -3337,11 +3342,17 @@ silicon the curvature vanishes \emph{pointwise} to $3.5\times10^{-5}$.
 its denominator $(\varepsilon_n-\varepsilon_m)^{-2}$ is singular at a degeneracy
 and its Brillouin-zone sum is an ordinary Riemann sum, which converges to an
 integer without ever being one --- \code{method="fhs"} is the default and is
-exact on any mesh. \textbf{Ultrasoft and PAW are refused by name}: the
-$\varepsilon_n \partial_k S$ term is identically zero for a norm-conserving
-dataset, so no validation here can see whether its off-diagonal convention is
-right, and $q_{ij}(\mathbf b)$ is the second missing piece; \code{method="fhs"}
-carries both correctly on all three dataset kinds. The sum over empty states is
+exact on any mesh. \textbf{Ultrasoft and PAW are refused by name}, and for a
+missing term rather than an unchecked convention. The $\varepsilon_n\partial_k
+S$ piece is right by derivation; what a moving $\hat S = T^\dagger T$ needs
+beside it is $\langle\psi_n|T^\dagger\partial_k T|\psi_m\rangle$, the
+augmentation dipole, and a formula written in $\partial H/\partial k$ and
+$\partial S/\partial k$ has nowhere to put it. On a model built so the exact
+curvature is known, leaving it out costs \textbf{18\,\%} of $\Omega$ and
+\textbf{0.010} of the Chern number, and the two factors of the sum need
+\emph{different} blocks --- so no rearrangement of $\partial S/\partial k$
+supplies it. \code{method="fhs"} carries the whole thing as $q_{ij}(\mathbf b)$
+on all three dataset kinds. The sum over empty states is
 truncated at \code{nbnd} and the truncation is \emph{reported} rather than
 hidden --- read \code{BerryCurvature.truncation}, or \code{truncation\_abs}
 wherever symmetry forces the curvature to vanish, since the ratio is then noise

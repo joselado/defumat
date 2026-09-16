@@ -235,13 +235,14 @@ def _refuse_augmented(states) -> None:
         return
     raise NotImplementedError(
         "the Kubo Berry curvature with an ultrasoft or PAW pseudopotential is "
-        "not implemented: the *off-diagonal* element <psi_n|dS/dk_a|psi_m> "
-        "enters the velocity as -e_n dS/dk and is identically zero for a "
-        "norm-conserving dataset, so no norm-conserving check can see whether "
-        "the convention is right. The term is written (VelocityOperator."
-        "apply_s, one jvp of s_psi) and unvalidated, and there is a second one "
-        "beside it -- the augmentation charge's own k-derivative, which the "
-        "overlap between two *different* k-points needs as q_ij(b) rather than "
-        "qq (topology/augmentation.py). Use method='fhs', which carries both "
-        "correctly and is what an invariant needs anyway"
+        "not implemented: a term is missing rather than unchecked. With "
+        "S = T^dag T the states a Berry phase is about are T|psi>, so the "
+        "connection carries <psi_n|T^dag dT/dk|psi_m> beside <psi_n|S d/dk "
+        "psi_m> -- the augmentation dipole, adddvepsi_us's dpqq -- and this "
+        "assembly sees only dH/dk and dS/dk and has nowhere to put it. "
+        "Measured on a model where the exact answer is free (PLAN.md P94): "
+        "18 per cent of the curvature and 0.010 of the Chern number, with the "
+        "two factors needing different blocks. The e_n dS/dk piece itself is "
+        "right by derivation, not by luck. Use method='fhs', which carries the "
+        "whole thing as q_ij(b) and is what an invariant needs anyway"
     )

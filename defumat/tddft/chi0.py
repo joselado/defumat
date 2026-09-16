@@ -271,6 +271,16 @@ def require_a_sum_over_states_regime(calculation) -> None:
         control on the same machinery is at **0.06%**. So a third term is
         missing and the refusal stands until it is found; what is *excluded* is
         worth as much as what is not.
+
+        **A second attempt reached ``Q_ij(G)`` by another route and disagrees
+        with the first** (``PLAN.md`` P94): through
+        ``topology/augmentation.py``'s ``augmentation_at_q`` rather than a
+        gather from the dense table, the same cell at the same ``nbnd = 60``
+        gives 57.200 with a residual of **+0.540** against P40's 55.5 and
+        -1.20. And the residual is positive at every band count and does not
+        tend to zero where the norm-conserving control does, so it is neither
+        a truncation nor a missing normalisation. Only the *body* was corrected
+        there; the head still carries no ``-e_n dS/dk`` and no ``dpqq``.
     metals
         the ``f_i - f_j`` weight kills the ``i = j`` term, so the intraband
         (Drude) response is missing entirely at ``q = 0``. Elk's ``tddftlr``

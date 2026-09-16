@@ -523,13 +523,15 @@ def require_a_shift_current_regime(calculation) -> None:
     if calculation.is_ultrasoft or calculation.is_paw:
         raise NotImplementedError(
             "the shift current with an ultrasoft or PAW pseudopotential is "
-            "not implemented: the dipole of a generalised eigenproblem carries "
-            "<psi_n|dS/dk_a|psi_m> beside dH/dk, and its second derivative "
-            "carries d^2S/dk_a dk_b as well. Both are identically zero for a "
-            "norm-conserving dataset, so nothing validated here can see "
-            "whether their convention is right -- the refusal "
-            "defumat.topology.kubo and defumat.response.conductivity both "
-            "make for the first of the two. Use a norm-conserving dataset"
+            "not implemented, and a term is missing rather than unchecked. "
+            "The dipole of a generalised eigenproblem carries "
+            "<psi_n|dS/dk_a|psi_m> beside dH/dk and its second derivative "
+            "carries d^2S/dk_a dk_b; both are here. What is not here is the "
+            "augmentation dipole <psi_n|T^dag dT/dk|psi_m> that belongs with "
+            "them, and one order further out its own derivative -- the "
+            "refusal defumat.topology.kubo and defumat.response.conductivity "
+            "both make, measured at 18 per cent of a curvature on a model "
+            "(PLAN.md P94). Use a norm-conserving dataset"
         )
     if getattr(calculation, "spiral", False):
         raise NotImplementedError(
