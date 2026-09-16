@@ -184,9 +184,16 @@ def test_the_live_width_ladder_survives_a_basis_refresh(silicon):
     )
     assert live[2] == full[2] and live[3] == full[3] == 0
     assert np.max(np.abs(live[0] - full[0])) < 1e-12
-    # the span, which is the part a degenerate solver may not rotate
-    gram = lambda w: np.abs(w.conj() @ w.T)
-    assert np.max(np.abs(gram(live[1]) - gram(full[1]))) < 1e-8
+    # **The two spans, compared by their principal angles.** The obvious check
+    # -- that ``|psi psi^H|`` agrees -- is worthless: the rows are orthonormal,
+    # so that product is the identity in *any* basis and the assertion passes
+    # without looking at anything. The singular values of ``psi_a psi_b^H`` are
+    # the cosines of the angles between the two subspaces, they are invariant
+    # under a unitary rotation of either basis, and they are all one exactly
+    # when the spans coincide -- which is the most that may be asked of a
+    # solver free to rotate within a degenerate multiplet.
+    angles = np.linalg.svd(live[1] @ full[1].conj().T, compute_uv=False)
+    assert np.max(np.abs(angles - 1.0)) < 1e-8
 
 
 def test_the_band_ladder_is_a_no_op_on_the_answer(silicon):
