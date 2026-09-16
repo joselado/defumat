@@ -3189,14 +3189,32 @@ made all of that `nvecx = 4 nbnd` here, so on a cell converging in two or three
 steps most of every product was over exact zeros. The widths are now multiples of
 `nbnd` chosen by a `lax.switch`, taken only where there is no batch axis --
 `lax.switch` under `vmap` evaluates every branch. Ablated on `si16` at a forced
-three steps, `h_psi` replaced by the identity to weigh the rest:
+three steps, `h_psi` replaced by a **diagonal** operator to weigh the rest:
 
 | | total | `h_psi` | everything else |
 |---|---|---|---|
-| at `nvecx` | 629.79 ms | 483.53 ms | 146.26 ms |
-| at the live width | **535.90 ms** | 451.86 ms | **84.04 ms** |
+| at `nvecx` | 638.92 ms | 322.48 ms | 316.44 ms |
+| at the live width | **552.96 ms** | 325.69 ms | **227.27 ms** |
 
-**1.74x on the algebra**, which is the item as written.
+**1.39x on the algebra**, which is the item as written, and 1.16x on the call.
+
+**The operator the ablation substitutes has to be one the compiler cannot see
+through, and the first one here was not.** Replacing `h_psi` by the *identity*
+makes `hpsi` equal to `psi`, so `coefficients.T @ psi` and
+`coefficients.T @ hpsi` become the same expression and XLA deletes one of them,
+and `_extend_projection`'s `row_h` and `row_s` collapse the same way. The
+ablation then charges that deleted algebra to `h_psi`. It read 483.53 ms of
+`h_psi` against 313.19 ms for four standalone calls and was reported here as a
+**1.43x penalty for running inside the loop**, with a further table showing the
+penalty growing with `nvecx` -- 1.31x, 1.42x, 1.51x at 64, 96, 128 -- which
+looked exactly like cache pressure from the live subspace buffers. **All of that
+is withdrawn.** A buffer that is merely live costs nothing, measured directly:
+`h_psi` beside a 6.0, 9.1 or 12.1 MB array touched in the same `jit` is 0.99x,
+0.97x and 1.00x of `h_psi` alone. With a diagonal operator in place of the
+identity the same ablation gives 322.48 ms against those 313.19, so **`h_psi`
+costs the same inside the loop as outside it**, and the 1.51x that scaled so
+convincingly with `nvecx` was the amount of algebra the identity let XLA delete,
+which grows with `nvecx` for the same reason the algebra does.
 
 **Two traps this measurement produced, both of which gave a confident wrong
 number first.**
@@ -3213,14 +3231,23 @@ number first.**
   separate processes the same comparison is 1.12x and 1.13x. Any A/B on a static
   argument needs a process each, or `jax.clear_caches()` between them.
 
-**What is left, sized.** `h_psi` inside the loop costs **113 ms a call against
-79 ms standalone**, 1.43x, on identical shapes -- the subspace buffers are
-12 MB each and live across it, where QE's `vloc_psi_k` works a band at a time in
-one `psic`. That 1.43x, and the 1.27x of backlog item 3, are what stands between
-2.2x and parity on this cell. Item 3 is **not** bundled here: a `lax.switch` over
-`notcnv` puts a copy of `h_psi` in the executable per rung, which is the
-duplication `davidson_eigensolver_all`'s docstring already sizes at 5.8 GiB on a
-157-atom slab, so it needs `notcnv` measured per step before it is written.
+**What is left, sized, and the algebra is still most of it.** After the ladder
+the subspace algebra is **41 per cent** of a Davidson call here against
+`cegterg`'s **14 per cent**, which is 56.8 ms per `h_psi`-step against QE's
+7.8 ms. The ZGEMMs and the `eigh` account for only about 87 ms of that 227 ms at
+the widths the ladder now uses, so **roughly 140 ms a call is neither, and it has
+not been attributed** -- the candidates are the four `dynamic_update_slice`
+writes into the 12 MB subspace buffers each step, the `lax.cond` collapse that
+allocates `zeros_like(psi)`, `expansion`'s elementwise chain and the two
+`project` calls. That is the next measurement and it wants an op-level profile
+rather than another ablation.
+
+`h_psi` itself is **1.24x** QE per band (2.45 ms against 1.97) and is not where
+the remaining factor is. Backlog item 3 is worth 1.27x on it and is **not**
+bundled here: a `lax.switch` over `notcnv` puts a copy of `h_psi` in the
+executable per rung, which is the duplication `davidson_eigensolver_all`'s
+docstring already sizes at 5.8 GiB on a 157-atom slab, so it needs `notcnv`
+measured per step before it is written.
 
 ## Optimisation backlog
 
