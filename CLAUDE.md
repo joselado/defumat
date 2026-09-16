@@ -539,6 +539,23 @@ plausible wrong answer rather than an error. `PLAN.md` has the phase that found 
   fact that the number was still *climbing* at iteration 77. A constant cannot explain a
   derivative, and the arithmetic said the node effect covered 0.47 of a 3.2 excess in any
   case. (The NiBr2 helix runs, 2026-09-10/11.)
+- **A quantity symmetry forces to zero is a residue, and agreeing about a residue
+  says nothing about the half symmetry deleted.** The Born charge against `ph.x` was
+  this project's tightest reference number for a year -- **8e-6** on ultrasoft silicon,
+  every printed digit on norm-conserving -- and silicon is centrosymmetric, so `Z*` is
+  zero there by symmetry and what both codes print is the *symmetric* part alone, the
+  sum-rule residue an incomplete basis leaves. The **antisymmetric** part is what a Born
+  charge physically is, it had never been compared against anything, and it was wrong by
+  **1.4e-2 on a charge of 3.3** the whole time. One polar cell found it in an afternoon
+  (`alas-epsilon-us.in`, zincblende AlAs), and the same measurement dissolved a refusal
+  that had been sized as a phase: PAW Born charges were refused for a missing one-centre
+  term that does not exist, the 1.3e-3 behind the refusal being this error measured on a
+  wedge. The habit is to ask, of any reference agreement, **which components of the
+  quantity the validation cell allows to be nonzero** -- and silicon, carbon and every
+  diamond-structure cell in `tests/data/qe` allow fewer than a reader assumes. It is the
+  "a check whose null result cannot be told from a pass" trap one level out: the check
+  returned a number, the number was right, and it was right about the wrong half.
+  (`PLAN.md` P39a, 2026-09-16.)
 - **A sum of N terms that matches one measured total is one equation in N unknowns.** It is
   the most convincing wrong answer this project produces, because the agreement is real and
   the arithmetic is right -- what is unproved is that the terms were ever *simultaneously

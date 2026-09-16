@@ -22,15 +22,27 @@ Where the other files fit (`CLAUDE.md` has the full table):
 **File and line references go stale.** The function or the guard is named wherever there
 is one, so `grep` the name rather than trusting the number.
 
-**The sizings in this file have been wrong three times, always in the same direction and
+**The sizings in this file have been wrong four times, always in the same direction and
 always for the same reason.** §1a was called the easiest lift here when `PLAN.md` P40 had
 already measured that route as not closing; §1i was called "the most likely of the class
 to be an afternoon" when its projector set is scalar and cannot take the spinor operator
 at all; §1j was called plumbing when the object it wanted to move is indexed by a
 projector set that does not survive the handoff. Each came from reading the refusal's
 *message* and not the code around it. So **a size in this file is a hypothesis until the
-guard's surroundings have been read**, and the three corrected entries say what reading
-them changed.
+guard's surroundings have been read**, and the corrected entries say what reading them
+changed.
+
+**The fourth was the worst, because it was the entry this file ranked first.** PAW Born
+charges were called "the only item here whose target, method and reference are all already
+written down". The target was `int3_paw` against `becsumort`, a term that turned out not
+to be missing; the reference number quoted, -0.07945, was the *ultrasoft* case's rather
+than PAW's -0.07961; and the 1.3e-3 the whole entry rested on was a **wedge sum that had
+never been completed**, which PAW inherited from the ultrasoft path and which silicon
+could not show. On a `nosym` grid PAW reached `ph.x` to 8e-6 with nothing added. The entry
+is gone and `PLAN.md` P39a has what closing it found. **The reading that would have caught
+it is the one this file already prescribes** -- P39a's own last paragraph named the
+missing measurement, a polar crystal, and the entry here was written from the refusal's
+message instead.
 
 ## How the list was made, and what that method cannot see
 
@@ -138,23 +150,6 @@ It is three lines.
 whatever happens**, for `spinchi0`'s reason rather than this one: its exchange-correlation
 kernel has a one-centre part on the spheres that the grid does not carry.
 
-### 1b. Born effective charges with a PAW dataset
-
-`response/born.py:157`, `require_born_charges`. PAW only; ultrasoft works.
-
-**What is missing.** `zstar_eu_us.f90`'s one-centre stage, `int3_paw` contracted against
-`becsumort`.
-
-**The gap is measured rather than guessed.** Without it: **-0.078293** against `ph.x`'s
--0.07945, so 1.5e-3. The ultrasoft answer beside it is -0.079442, 8e-6 from the same
-reference, and the norm-conserving one reproduces every digit of -0.07571. So PAW is
-wrong in the third decimal rather than in sign, which is what makes the refusal worth
-keeping: 1.5e-3 on a Born charge is small enough to be read as convergence.
-
-**What it needs first.** `PAW_dpotential` is already one `jvp` of `onecenter`, so the
-one-centre response exists; what is not there is its contraction against the *ordered*
-`becsum` that `zstar_eu_us.f90` uses. **Size:** a phase.
-
 ### 1c. A phonon at `q != 0` with an ultrasoft or PAW dataset
 
 `response/phononq.py:845`. Both.
@@ -225,9 +220,10 @@ a non-trivial metric.
 
 **What is missing.** Nothing in the piezoelectric assembly itself is norm-conserving: it
 is one `jvp` of the stress along the field's response. What it stands on is the strain
-response, which is item 3b below, and the Born charge, which is item 1b for PAW. So this
-is a **consequence** rather than a term, and it lifts when those do. **Size:** free, once
-3b lands.
+response, which is item 3b below; the Born charge it also stands on was the other half
+and is no longer refused on any dataset (`PLAN.md` P39a). So this is a **consequence**
+rather than a term, and one of its two halves has already gone. **Size:** free, once 3b
+lands.
 
 ### 1i. Site-resolved angular momenta on a fully-relativistic augmented dataset
 
@@ -431,17 +427,24 @@ phase.
 
 By what the first step costs, not by what the item is worth.
 
-The first two entries of this list were run in P94 and neither lifted a refusal; what
-they left is a sharper target and a warning about the instrument. What is left:
+The first two entries of this list were run in P94 and neither lifted a refusal; the
+third, PAW Born charges, was run on 2026-09-16 and **lifted its refusal by finding that
+the term it named did not exist** (`PLAN.md` P39a). What is left:
 
-1. **Born charges on PAW** (§1b). One named term, a gap measured at 1.5e-3, and a
-   reference routine to transcribe -- the only item here whose target, method and
-   reference are all already written down.
-2. **The moving overlap in a Kubo sum** (§2). The missing term's shape is now pinned
-   exactly on a model, so what is left is writing it in matrix-element form from
-   `efield.py`'s machinery and checking the *assembly*.
-3. **Site angular momenta on a relativistic augmented dataset** (§1i). The code route is
+1. **The moving overlap in a Kubo sum** (§2). The missing term's shape is pinned exactly
+   on a model, so what is left is writing it in matrix-element form from `efield.py`'s
+   machinery and checking the *assembly*.
+2. **Site angular momenta on a relativistic augmented dataset** (§1i). The code route is
    clear; the open question is what to validate it against.
-4. **The `chi_0` gap** (§1a), now not a truncation and about 1 per cent rather than an
+3. **The `chi_0` gap** (§1a), now not a truncation and about 1 per cent rather than an
    unknown.
-5. Everything else, in whatever order the physics wants.
+4. Everything else, in whatever order the physics wants.
+
+**And one thing to do to the whole list rather than to an item in it.** What closed P39a
+was not a term, it was a *cell*: silicon is centrosymmetric, so every `Z*` this project
+had ever compared against `ph.x` was a quantity symmetry forces to zero, and five digits
+of agreement about a residue said nothing about the half symmetry had deleted. Several
+entries below are sized from a gap measured on silicon alone -- §1c, §1d and §3a among
+them -- and a gap measured on a centrosymmetric cell is a hypothesis in exactly the way
+this file's sizings keep turning out to be. **Before writing a term for any of them, run
+the refused quantity on `alas-epsilon-us.in` and see what the number is there.**

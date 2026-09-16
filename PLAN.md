@@ -244,7 +244,6 @@ because that is what decides whether it is a session or a phase.
   factors need *different* blocks. `efield.py` computes the object already
   (`_ultrasoft_position`); what is missing is its matrix-element form in
   `velocity_matrices`, and then an **assembly** check on plane waves.
-- **PAW Born charges** (P39a: two candidates, both measured, both rejected).
 - **The sum-over-states `chi_0` of an ultrasoft dataset** (P40, P94). Two routes to
   `Q_ij(G)` at `G != 0` disagree -- 57.200 with a residual of +0.540 through
   `augmentation_at_q` against P40's 55.5 and -1.20 through the dense table -- and the
@@ -3173,9 +3172,12 @@ computed for it — the perturbation is contracted differently.
 
 | case | here | `ph.x` | difference |
 |---|---|---|---|
-| norm-conserving Si | −0.0757150 | −0.07571 | every digit |
-| ultrasoft Si | −0.0794417 | −0.07945 | **8.3e-6** |
-| ultrasoft C | +0.0415594 | +0.04179 | 2.3e-4 |
+| norm-conserving Si | −0.075715 | −0.07571 | every digit |
+| ultrasoft Si | −0.079440 | −0.07945 | 1.0e-5 |
+| PAW Si | −0.079601 | −0.07961 | 9e-6 |
+| ultrasoft C | +0.041839 | +0.04179 | 4.9e-5 |
+| ultrasoft AlAs, Al | +2.101065 | +2.10106 | 5e-6 |
+| ultrasoft AlAs, As | −2.165827 | −2.16581 | 1.7e-5 |
 
 Carbon is the independent case — different element, cutoffs and lattice
 constant, and the **opposite sign** — and its 2.3e-4 is where its dielectric
@@ -3186,21 +3188,13 @@ beside it to **1.3e-14**, which is the phase's regression gate: every term added
 here has to switch itself off when `S = 1`, and that equality is what says it
 does.
 
-**PAW is refused by name**, and the gap is one term rather than a method.
-Everything above reaches **1.3e-3** on it — −0.078293 against `ph.x`'s −0.07961 —
-and what is left is QE's fifth stage, `int3_paw` against `becsumort`: the
-one-centre twin of `add_for_charges`, pairing the field's response of the
-one-centre coefficients (which `paw_response` already produces) with the
-displacement's orthogonality `becsum`. It has no counterpart in the plane-wave
-part because `<psi|S|psi> = 1` carries the whole of `becsum`'s share of the
-energy for an ultrasoft dataset and not for a PAW one, whose one-centre energy is
-a second, independent function of it. Its factor was not settled from the
-Fortran: `compute_drhous` builds its `dbecsum` without the one-half the
-orthogonality correction carries, and `addusdbec` accumulates one of the two
-cross terms rather than both, so the coefficient is a product of two conventions.
-Fitting it to −0.07961 would make the number a measurement of `ph.x`. 1.3e-3 is
-sixteen times the last digit it prints, so it is refused; the dielectric constant
-from the same run is right to 3.4e-5 and is not.
+**AlAs is the row that is a charge rather than a residue, and it was added after
+P39a** — every silicon and carbon entry above is a *symmetric* sum-rule residue,
+because those crystals have two atoms of one species and `Z*(1) = Z*(2)` by
+symmetry. The antisymmetric part, which is what a Born charge physically is, went
+unchecked until a polar cell was run, and it was wrong by 1.4e-2 on a charge of
+3.3 while silicon agreed to 8e-6. **PAW is no longer refused**: what the refusal
+measured was that error, not a missing one-centre term. See P39a.
 
 *Notebook 19.*
 
@@ -5941,44 +5935,97 @@ constants, electrostriction and the Raman tensor still refuse ultrasoft and PAW 
 the strain coordinate on top of what this phase writes.
 
 
-### P39a — PAW Born charges: two candidates, both measured, both rejected. 📋 OPEN.
+### P39a — PAW Born charges: the term that was missing was not a term. ✅ DONE.
 
-**Where it stands.** Everything in `born.py` works for a PAW dataset up to **1.3e-3**
-(-0.078293 against the vendored `ph.x`'s -0.07961), where the ultrasoft case of the same
-assembly reaches 8e-6 and the norm-conserving one is exact to every printed digit. The
-refusal stays; what is new is that the two obvious explanations are now *excluded* rather
-than untried, and the machinery to try them exists as tested functions.
+**The refusal was measuring a bug in something else, and the two candidates were
+rejected for the right reasons.** P39a stood as "everything in `born.py` works
+for a PAW dataset up to 1.3e-3, and what is left is `zstar_eu_us.f90`'s fifth
+stage, `int3_paw` against `becsumort`". It is not. On a `nosym` grid PAW silicon
+reaches `ph.x` to **8e-6** with nothing added — -1.254966 and -1.254992 against
+-1.25497 and -1.25500 on an unshifted 4x4x4 sample, where the residue is 1.25
+rather than 0.08 and the comparison is therefore sharper than the committed
+case's. The 1.3e-3 was a **wedge sum that had never been completed**, and every
+number the refusal quoted was taken on a wedge.
 
-**Candidate 1 — QE's fifth stage, `int3_paw` against `becsumort`.** Both objects exist
-after P39: `paw_response` along the field's `dbecsum` is `int3_paw` (`efield`'s
-`internals["onecentre"]`), and `non_variational_response` gives the displacement's
-`becsumort`, constraint-verified to 1.6e-16. Contracted in this code's full-matrix
-convention the term is **0.004882** where the gap is **0.001317** — **3.7 times too
-large**, in either sign, so no sign choice lands on `ph.x`. The reading that fits is that
-the Lagrangian *already contains* it: the u-leg's orthogonality correction reaches the
-one-centre energy through the multiplier tangent `d_Lambda d_j L`, which
-`_multiplier_response` builds from a perturbation that already carries `dddd_paw`.
-Adding QE's term on top would count it twice, and scaling it to fit would make the
-number a measurement of `ph.x`.
+**What made it invisible is the crystal, and it is the same blind spot twice.**
+Silicon and carbon both put two atoms of *one species* on the two sites, so
+`Z*(1) = Z*(2)` and the whole of what either code prints is the **symmetric**
+part — the sum-rule violation an incomplete basis leaves, 4 against an electronic
+4.076. The **antisymmetric** part is what a Born charge physically is, it is zero
+by symmetry on those cells, and nothing had ever compared it against anything.
+P39a's own closing paragraph said a polar PAW crystal was the missing
+measurement and sized it as telling "whether 1.3e-3 on a residue is 1.3e-3 on a
+real charge"; what it actually said is that the machinery was wrong in a way
+neither committed case could show.
 
-**Candidate 2 — the wedge sum inside a nonlinear functional.** P36's finding says the
-*value* fed to a nonlinear functional must be the full-zone object while its *derivative*
-stays the raw wedge sum, and PAW's one-centre energy is exactly such a functional of
-`becsum`. The raw and symmetrised field responses of `becsum` differ by **19 to 46 per
-cent** on PAW silicon, so the effect is not small. Implemented (the symmetrised response
-handed over from `efield`'s loop, with the chain rule's raw tangent corrected to it) it
-moves PAW **the wrong way — 1.3e-3 to 2.8e-3** — while leaving norm-conserving silicon
-exact to every digit and ultrasoft at 1.0e-5. Reverted. The norm-conserving invariance is
-itself the useful half of the result: it confirms that for everything *linear* in the
-response, `symtensor` on the assembled tensor really does complete the wedge, which is
-the convention `born.py` was written on.
+**The measurement.** `alas-epsilon-us.in`, ultrasoft AlAs at `ecutwfc = 25`,
+`ecutrho = 200`, against the vendored `ph.x` with `epsil = .true.`, read from the
+"without acoustic sum rule" block:
 
-**Worth knowing before the next attempt.** Silicon's `Z*` is **zero by symmetry**; the
--0.0757 both codes print is a basis-set residue. So this comparison is between two codes'
-*errors*, and that they agree to 8e-6 for ultrasoft and to every digit for
-norm-conserving is what makes the PAW disagreement meaningful rather than noise. A polar
-PAW crystal — AlAs with a PAW dataset, against `ph.x` — would say whether 1.3e-3 on a
-residue is 1.3e-3 on a real charge, and that measurement does not exist yet.
+| unshifted 4x4x4 | `Z*(Al)` | `Z*(As)` |
+|---|---|---|
+| `ph.x`, symmetry on (8 k) | 1.83010 | −3.28590 |
+| `ph.x`, `nosym` (64 k) | 1.83010 | −3.28589 |
+| here, `nosym` | 1.830112 | −3.285854 |
+| here, symmetry on, **before** | 1.831894 | **−3.300047** |
+| here, symmetry on, after | 1.830109 | −3.285856 |
+
+`ph.x` agrees with itself by either route to 1e-5 and this code did not, by
+**1.4e-2**. Three things were excluded before the diagnosis: the Sternheimer
+threshold (1e-12 and 1e-14 give the same digits), time reversal (`noinv` moves it
+by 2e-4), and the dataset kind — the **norm-conserving** AlAs of
+`alas-raman-wedge.in` against `alas-raman.in` reproduces its own closed grid to
+**every digit**, which is what said the defect belongs to the augmentation charge
+rather than to the assembly.
+
+**The term.** At frozen wavefunctions `drho/du` is zero for a norm-conserving
+dataset and is `-grad Q(r - tau) becsum` for an augmented one, so the mixed
+derivative carries `int (drho/du) K (drho/dE)` — a product of **two** per-k
+tangents, present only when `S` moves with the atoms. `CLAUDE.md`'s rule applies
+unchanged: a wedge sum completes only for a quantity linear in a covariant per-k
+object, so one factor has to be the full-zone object and the other stays raw, and
+then `symtensor` on the assembled tensor delivers the rest.
+`_full_zone_field_response` makes the **field** response full-zone, which is the
+same choice P36 makes one order up in `electrostriction.py`, with
+`symmetrize_directional` on the density and `PAW_dusymmetrize` on `becsum`.
+Two things about it, both of which cost a measurement to find:
+
+* **PAW needs the `becsum` leg and ultrasoft does not.** An ultrasoft dataset
+  carries `becsum`'s whole share of the energy through the augmentation charge
+  inside the density, so the density leg alone takes AlAs to 2e-6; PAW's
+  one-centre energy is a second, independent functional of `becsum`, and the
+  density leg alone leaves PAW silicon's wedge at −1.257257 against its own
+  closed grid's −1.254979.
+* **The augmentation would otherwise be corrected twice**, because the density is
+  built *from* `becsum`, and that path has to be subtracted. Left in, it
+  overshoots to −1.241744.
+
+*Check met.* With both legs, every committed case and the new polar one, against
+the vendored `ph.x`: −0.075715 / −0.07571 norm-conserving Si, −0.079440 /
+−0.07945 ultrasoft Si, **−0.079601 / −0.07961 PAW Si** (the refusal's own case,
+from 1.3e-3 to 9e-6), 0.041839 / 0.04179 ultrasoft C, and 2.101065 / −2.165827
+against 2.10106 / −2.16581 on ultrasoft AlAs. The norm-conserving cases do not
+move at all, which is the structural check: the term corrected does not exist
+there.
+
+**The refusal is gone and the sizing that stood behind it was wrong in the
+direction this file keeps being wrong in.** `AUGMENTATION-NEXT.md` ranked PAW
+Born charges first as "the only item whose target, method and reference are all
+already written down" — the target was a term that does not exist, and the
+reference number it quoted (−0.07945) was the *ultrasoft* case's.
+
+**What the check that would have caught it looks like**, and it is committed:
+`test_the_wedge_and_the_closed_grid_give_one_born_charge`. A wedge-against-closed-
+grid pair already existed and compared the **dielectric constant**, which is right
+to 3e-5 in every case above and could never have seen this; it also ran on
+norm-conserving silicon, where the term is absent twice over. Two things had to
+change for it to bite — a **polar** crystal and an **augmented** dataset — and it
+is verified to fail without the fix, at 7.7e-3 against a 1e-4 bound.
+
+**The general lesson, and it is not about Born charges.** A quantity that is zero
+by symmetry is a residue, and agreeing with another code about a residue to five
+digits says nothing about the part of it symmetry has deleted. Silicon is the
+default validation cell in this repository, and it is centrosymmetric.
 
 
 ### P40 — Ultrasoft and PAW in the sum-over-states `chi_0`. 📋 OPEN, two findings banked.

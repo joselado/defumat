@@ -242,8 +242,9 @@ than twenty-five. A cached result under a moved atom
 would otherwise answer for the geometry it was converged at.
 
 \textbf{The refusals pass through untouched.} Every restriction in this document
---- PAW Born charges, a metal's Raman tensor, a spiral with spin-orbit coupling
---- raises through the bound method exactly as through the function beneath it.
+--- a metal's Raman tensor, a spiral with spin-orbit coupling, a phonon away from
+$\Gamma$ on an augmented dataset --- raises through the bound method exactly as
+through the function beneath it.
 
 The functional entry points the rest of this document names --- \code{run\_scf},
 \code{run\_bands}, \code{dielectric\_tensor} and the others --- are unchanged and
@@ -2044,6 +2045,16 @@ print(spectrum.raman_activity, spectrum.depolarisation)
 \code{dynmat.x}'s \code{RamanIR}, kept a pure function of arrays so it is
 testable without a self-consistent run.
 
+\textbf{A Born charge is validated on a polar crystal, and the reason is worth
+one sentence.} In silicon $Z^{\ast}$ is zero by symmetry, so the $-0.0757$ both
+codes print is a basis-set residue and agreeing about it says nothing about the
+antisymmetric part, which is what a Born charge physically is. On zincblende
+AlAs the two sites carry different species and $Z^{\ast}$ is a real charge:
+$+2.101065$ on the Al and $-2.165827$ on the As, against \code{ph.x}'s
+$+2.10106$ and $-2.16581$. The three silicon datasets agree with \code{ph.x} to
+every printed digit, $1.0\times10^{-5}$ and $9\times10^{-6}$ for
+norm-conserving, ultrasoft and PAW.
+
 Ultrasoft and PAW work for the dielectric constant ($\le$1.2e-4 against
 \code{ph.x} on four cases) \emph{and for the dynamical matrix} --- silicon's
 optical mode comes out at \textbf{513.295} and \textbf{513.378}~cm$^{-1}$
@@ -2271,9 +2282,7 @@ frozen term that one \emph{is} a function of $\mathbf q$.
 \end{refuses}
 
 \begin{refuses}
-\textbf{Refuses.} Born charges for PAW (\code{int3\_paw} against
-\code{becsumort} is missing, and without it the expression is wrong in sign as
-well as size); $\chi^{(2)}$ and the electro-optic tensor (the second-order
+\textbf{Refuses.} $\chi^{(2)}$ and the electro-optic tensor (the second-order
 source term has nothing to build the $\langle u_i|r_k|u_j\rangle$ piece from ---
 and it is \textbf{42\%} of the answer, measured);
 a partial dynamical matrix (\code{atoms=}) of a
@@ -2523,9 +2532,10 @@ pair are different --- so $e_{14}$ of a zincblende crystal never carries the
 ambiguity --- and they vanish for every component of a class that admits no
 invariant vector, which is what is checked. \textbf{Ultrasoft and PAW}, and that one is a gap rather
 than a missing term: nothing in the assembly is norm-conserving and the
-displacement leg of it is the Born charge, which is validated on all three
-kinds, but every ultrasoft and PAW crystal here is centrosymmetric and agrees
-with zero whatever is wrong. Beyond that: insulators, \code{nspin = 1}, and
+displacement leg of it is the Born charge, which is now validated on a
+\emph{polar} ultrasoft crystal as well (\code{alas-epsilon-us.in}, $2.101065$
+and $-2.165827$ against \code{ph.x}'s $2.10106$ and $-2.16581$), so what is
+left refused is the \emph{strain} leg alone. Beyond that: insulators, \code{nspin = 1}, and
 everything the Sternheimer regime and the differentiable cell refuse (a metal, a
 spin spiral, a magnetic field, a shifted grid run with \code{nosym}).
 \end{refuses}
@@ -5566,6 +5576,7 @@ relaxed geometry & 1e-6 bohr \\
 \midrule
 dielectric constant (NC, US, PAW) & $\le$1.2e-4 \\
 Born effective charges (NC) & every printed digit \\
+Born effective charges (US, PAW) & $\le$1.7e-5 \\
 phonons at $\Gamma$, silicon & 0.05 cm$^{-1}$ \\
 phonons at $\Gamma$, silicon (US, PAW) & 0.02--0.03 cm$^{-1}$ \\
 phonons at $\Gamma$, aluminium (metal) & 0.002 cm$^{-1}$ \\
