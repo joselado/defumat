@@ -77,24 +77,42 @@ named.
 every matrix element, so without it the matrix is wrong by the whole augmentation and
 still looks like a dielectric function.
 
-**What it needs first: nothing.** This is the one item on the list whose missing object
-is already written, validated and in the package.
-`tddft/spinchi0.augmentation_factors(calculation, q, sphere)` returns `q^a_ij(q + G)`
-for every `G` of a response sphere, built on
-`topology.augmentation.augmentation_at_q`, and `spinchi0.state_projections` gives the
-`<beta|psi>` it multiplies. At `q = 0` that is exactly the term `chi0` refuses for. The
-change is one additive contribution per pair per `G` inside `_pair_terms`.
+**This entry said "what it needs first: nothing" and that was wrong.** P40 had already
+built exactly this -- the body's `Q_ij(G)` with the volume factor restored, and the
+head's `q`-linear dipole beside it -- and measured that it does not close: ultrasoft
+silicon's `eps_M(0)` sat **2.1 per cent** from the Sternheimer solve where a
+norm-conserving control on the same machinery sat at **0.06 per cent** (-1.20 on 55.5
+against -0.0129 on 22.3, both at 60 bands and `ecut_response = 8`, both in RPA against
+`screening = "hartree"`). The refusal was kept and the code reverted. The mistake in
+writing this entry was reading the raise at `chi0.py:301` without reading the docstring
+twelve lines above it, which is the "inherit a refusal only after checking which machine
+it belongs to" trap run backwards.
 
-**How it is checked.** The Sternheimer dielectric constant on the same ultrasoft cell is
-pinned to `ph.x` at 3.4e-10 and shares no machinery with a sum over states. The pass
-criterion is **not** that the two close: `chi0.py:270` already records a 2.1 per cent gap
-on a norm-conserving dataset from the truncated sum over empty states. What has to hold
-is that the ultrasoft gap matches the norm-conserving one at the same `nbnd` and shrinks
-the same way when `nbnd` grows, which is why it is run at two band counts.
+**What P40 excluded, and what it did not.** Finding 1: the tabulated `Q_ij(G)` is a
+charge per unit volume and has to be multiplied by `Omega` before it is paired with
+`<beta|psi>`, which is a factor of 265 on that silicon and halved the residual when it
+went in. Finding 2: with the body right, adding the head's `q`-linear part
+(`adddvepsi_us`'s `dpqq`) moves `eps_M(0)` by **0.0015**, so neither half of the
+augmentation accounts for the 1.2 and the next attempt should not start with either. Left
+open by name: the pair density's normalisation at `G != 0`, never checked independently,
+and the `f_i - f_j` weight, which for an ultrasoft dataset multiplies a generalised
+density whose norm is `<psi|S|psi>` rather than `<psi|psi>`.
 
-**Size:** a phase, and the smallest one here. **PAW stays refused**, for
-`spinchi0`'s reason rather than this one: its exchange-correlation kernel has a
-one-centre part on the spheres that the grid does not carry.
+**What is worth doing, and it is the check P40 named.** The objects P40 reverted can be
+had from a *different* code path: `tddft/spinchi0.augmentation_factors` builds
+`q^a_ij(q + G)` from `topology.augmentation.augmentation_at_q` -- radial Bessel
+transforms evaluated at `|G|`, the structure factor and the volume already in it, pinned
+at `b -> 0` by reproducing `qq` -- where P40 gathered it from the dense table by Miller
+index. Running P40's own validation with that route is exactly the independent check at
+`G != 0` that P40 said had never been made. A second thing P40 did not do is the `nbnd`
+trend: its numbers are at 60 bands on both datasets and there is a reason to expect the
+ultrasoft sum to converge slower, since the augmentation term carries `<beta|psi_j>` and
+a localised projector keeps weight at high `G` where a pseudo pair density does not.
+
+**Size:** the two checks are an afternoon each and both return a number. Closing the
+2.1 per cent is a phase and nobody knows yet how large. **PAW stays refused whatever
+happens**, for `spinchi0`'s reason rather than this one: its exchange-correlation kernel
+has a one-centre part on the spheres that the grid does not carry.
 
 ### 1b. Born effective charges with a PAW dataset
 
@@ -332,9 +350,9 @@ By what the first step costs, not by what the item is worth.
 
 1. **The Kubo-against-FHS measurement** (§2). An afternoon, and it returns a number
    whichever way it goes. It decides three refusals at once.
-2. **`chi_0` on an ultrasoft dataset** (§1a). The missing object is already in the
-   package and validated; this is the only item whose first step is not writing new
-   physics.
+2. **The two checks P40 left open on `chi_0`** (§1a). Not the lift, which P40 measured
+   as not closing: the second route to `Q_ij(G)` at `G != 0`, and the `nbnd` trend of
+   the residual. Both return a number and neither writes new physics.
 3. **Site angular momenta on a relativistic augmented dataset** (§1i) and **the force
    theorem's PAW handoff** (§1j). Both are applying an object that exists in a place that
    does not yet call it.
