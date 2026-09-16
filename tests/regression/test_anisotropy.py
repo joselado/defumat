@@ -395,14 +395,16 @@ def test_a_collinear_one_shot_leg_is_refused():
                           np.zeros((2, 4, 4, 4)), direction=(0, 0, 1))
 
 
-def test_a_paw_dataset_is_refused_with_qe_s_own_reason():
+def test_a_paw_dataset_without_becsum_is_refused_with_qe_s_own_reason():
     """``potinit.f90:98``, and the refusal has to fire *before* the NSCF's.
 
     ``fixed_density_states`` refuses PAW too, and its advice -- pass
-    ``becsum = scf_result.becsum`` -- cannot be followed here: that ``becsum``
-    belongs to a run with a different pseudopotential file and a different
-    number of projectors. So the message has to come from this workflow, which
-    means the check has to run before any array is built.
+    ``becsum = scf_result.becsum`` -- cannot be followed on the **two-file**
+    route this cell is written for: that ``becsum`` belongs to a run with a
+    different pseudopotential file and a different number of projectors. So the
+    message has to come from this workflow, which means the check has to run
+    before any array is built. The one-file route, where it can be followed, is
+    the test below.
     """
     scalar, _ = _smoke_pair()
     text = _SMOKE_SOC.replace(
@@ -411,6 +413,109 @@ def test_a_paw_dataset_is_refused_with_qe_s_own_reason():
     paw = Calculator.from_text(text, pseudo_dir=GENERATED.parent / "pseudo")
     with pytest.raises(NotImplementedError, match="PAW"):
         run_force_theorem(paw.system, paw.pseudos, np.zeros((2, 24, 24, 24)))
+
+
+
+#: One file and one projector set for both legs: a collinear PAW run to
+#: converge the state and the same file, noncollinear, for the one-shot. It is
+#: the route a PAW anisotropy needs, since ``becsum`` cannot cross between the
+#: two files of the scalar/relativistic pair.
+_PAW_SR = """
+&control
+   calculation = 'scf'
+/
+&system
+   ibrav = 1, celldm(1) = 14.0, nat = 2, ntyp = 1,
+   ecutwfc = 30, ecutrho = 240,
+   occupations = 'smearing', smearing = 'gaussian', degauss = 0.02,
+   nspin = 2, nosym = .true.,
+   starting_magnetization(1) = 0.3,
+/
+&electrons
+   conv_thr = 1.0d-9
+/
+ATOMIC_SPECIES
+ O  15.999  O.pz-kjpaw.UPF
+ATOMIC_POSITIONS crystal
+ O  0.25 0.25 0.25
+ O  0.75 0.75 0.75
+K_POINTS gamma
+STARTING_MOMENTS
+  0.0 0.0  1.5
+  0.0 0.0 -1.5
+"""
+
+_PAW_NC = _PAW_SR.replace("calculation = 'scf'", "calculation = 'nscf'").replace(
+    "   nspin = 2, nosym = .true.,",
+    "   noncolin = .true., lforcet = .true., nosym = .true.,",
+)
+
+
+@pytest.mark.slow
+def test_a_paw_force_theorem_carries_becsum_and_the_rotation_identity_holds():
+    """Rung 1 on a PAW dataset, which is what the handoff had to reach.
+
+    A PAW Hamiltonian's one-centre coefficients are a functional of ``becsum``
+    exactly as the grid potential is a functional of ``rho``, so the pair is
+    what the theorem freezes. Both legs run the same file here -- the projector
+    sets of a scalar-relativistic dataset and of its fully-relativistic partner
+    are indexed differently, so a ``becsum`` cannot cross between them -- and
+    with the coupling off the band energy cannot depend on where the moment
+    points. Measured: **3.1e-10 meV** over five directions.
+
+    **The guard is fed a case that must trip it**, because a clean zero here is
+    also what a run that ignored ``becsum`` would give: handing the same
+    ``becsum`` to every direction without rotating it with the density leaves
+    the one-centre field pointing along ``z`` while the grid field points where
+    it was asked to, and the spread is then **468 meV** on a cell whose answer
+    is exactly zero.
+
+    The cell is antiferromagnetic on purpose: the rotation is read off the
+    *density's* axis, and one species' own ``becsum`` would answer a different
+    question, the two sublattices pointing opposite ways while the cell has one
+    frame to rotate.
+    """
+    import defumat.workflows.anisotropy as anisotropy
+
+    directory = GENERATED.parent / "pseudo"
+    collinear = Calculator.from_text(_PAW_SR, pseudo_dir=directory)
+    assert any(pseudo.is_paw for pseudo in collinear.pseudos), "the cell must be PAW"
+    scf = collinear.get_scf()
+    assert scf.converged
+    assert scf.becsum, "a PAW run has to carry becsum for this to test anything"
+    spinor = Calculator.from_text(_PAW_NC, pseudo_dir=directory)
+    directions = [(0, 0, 1), (1, 0, 0), (0, 1, 0), (1, 1, 1), (0, 1, 1)]
+
+    def spread(becsum):
+        energies = [
+            run_force_theorem(
+                spinor.system, spinor.pseudos, scf.density, direction=d,
+                require_spin_orbit=False, becsum=becsum,
+            ).band_energy
+            for d in directions
+        ]
+        return (max(energies) - min(energies)) * RY_TO_EV * 1000.0
+
+    assert spread(scf.becsum) < 1.0e-6
+
+    # ... and the same run with the rotation removed, which must not pass.
+    frozen = tuple(
+        None if b is None else nc_magnetization_from_lsda(b, (0.0, 0.0, 1.0))
+        for b in scf.becsum
+    )
+    rotate = anisotropy.nc_magnetization_from_lsda
+    anisotropy.nc_magnetization_from_lsda = lambda values, direction, axis_from=None: (
+        rotate(values, direction) if axis_from is None else values
+    )
+    try:
+        stuck = spread(frozen)
+    finally:
+        anisotropy.nc_magnetization_from_lsda = rotate
+    assert stuck > 1.0, (
+        "an unrotated becsum has to break the identity; it gave "
+        f"{stuck:.3e} meV, so the test cannot tell a carried becsum from an "
+        "ignored one"
+    )
 
 
 @pytest.mark.slow

@@ -845,11 +845,23 @@ def require_a_two_sphere_regime(calculation, q_crystal) -> None:
     if calculation.is_ultrasoft:
         raise NotImplementedError(
             "a phonon at q != 0 with an ultrasoft or PAW dataset is not "
-            "implemented: S moves with the atoms, so the orthonormality "
-            "multipliers carry a term <psi|dS/du|psi> that has no two-sphere "
-            "form here -- the bra is at k and the ket at k+q, and qq_ij pairs "
-            "projectors on one sphere. P39 wrote that term at Gamma and it is "
-            "the piece that does not follow"
+            "implemented, and it is four absent terms rather than the one "
+            "this message used to name. (1) The response density has no "
+            "augmentation: response_density_at_q returns the pseudo pair "
+            "density and stops, where addusddens.f90 adds sum_ij dbecsum_ij "
+            "Q_ij(q+G), the table evaluated at the *shifted* modulus (its "
+            "setqmod call before qvan2). (2) The induced potential has no "
+            "int3: induced_perturbation_at_q applies dV_scf as a local "
+            "operator, where int3_ij = int dV_scf Q_ij e^{iqr} multiplies the "
+            "projectors (LR_Modules/adddvscf.f90). (3) The bare term freezes "
+            "D_ij: bare_displacements_at_q closes over the unperturbed "
+            "coefficients, so d/du of int V_eff Q_ij is missing "
+            "(dvanqq.f90's int1/int2). (4) The orthonormality multipliers do "
+            "not exist at q != 0 at all -- P39's overlap_derivatives pairs "
+            "becp at one k-point, which is the Gamma case by construction. "
+            "The object the first two need is q_ij(q+G), which is written "
+            "(defumat.tddft.spinchi0.augmentation_factors, over "
+            "topology.augmentation.augmentation_at_q)"
         )
     if system.nspin != 1 or system.noncolin:
         raise NotImplementedError(

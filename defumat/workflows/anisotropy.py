@@ -69,9 +69,23 @@ wedges and their band energies differ by the k-sampling rather than by the
 physics. QE's own example sets ``nosym = .true.`` for exactly this reason, and
 so does the refusal in :func:`run_force_theorem`.
 
-**Refused by name.** PAW, because the handoff carries no ``becsum`` and a PAW
-Hamiltonian needs ``ddd_paw`` (QE refuses it in the same place,
-``potinit.f90:98``); a Hubbard ``U``, whose ``ns`` is not in the handoff either;
+**PAW needs one file rather than two, and that is the whole of it.** A PAW
+Hamiltonian's one-centre coefficients ``ddd_paw`` are a functional of
+``becsum`` exactly as the grid potential is a functional of ``rho``, so what
+the theorem freezes on this dataset is the *pair*: the potential has two
+representations and both are held fixed. ``becsum`` cannot cross between the
+two files of the route above -- a scalar-relativistic dataset has one projector
+per ``(n, l)`` channel and its fully-relativistic partner one per ``(n, l, j)``,
+so the arrays are indexed by different things -- and that is why ``pw.x``
+refuses the path outright (``potinit.f90:98``), ``average_pp`` having no way to
+average a PAW dataset's ``j`` channels back into a scalar one. The way round it
+is Elk's dial rather than QE's file pair: run the **self-consistent** leg on the
+fully-relativistic dataset with ``soc_scale = 0`` and the one-shot leg on the
+same file with the coupling on, so that both legs share a projector set by
+construction and ``becsum`` crosses by shape. It is rotated onto the requested
+direction with the density, off the axis the *density* defines.
+
+**Refused by name.** A Hubbard ``U``, whose ``ns`` is not in the handoff;
 a potential-only meta-GGA, whose ``tau`` is not; a converged magnetic field or
 constrained moment, whose energy is outside the reported total; and a spin
 spiral, which has no spin-orbit coupling to switch on.
@@ -85,6 +99,7 @@ from dataclasses import dataclass, field
 import jax.numpy as jnp
 import numpy as np
 
+from defumat.pseudo.projectors import projector_channels
 from defumat.pseudo.upf import Pseudopotential
 from defumat.scf.continuation import (
     direction_from_angles,
@@ -96,6 +111,7 @@ from defumat.units import RY_TO_EV
 from defumat.workflows.nscf import fixed_density_states
 
 __all__ = [
+    "becsum_fits",
     "ForceTheorem",
     "MagneticAnisotropy",
     "run_force_theorem",
@@ -245,7 +261,78 @@ class MagneticAnisotropy:
         return float(self.band_energies[i] - self.band_energies[j])
 
 
-def _refuse_system(system: System, pseudos, require_spin_orbit: bool = True) -> None:
+def becsum_fits(becsum, pseudos) -> bool:
+    """Whether ``becsum`` is indexed by *these* projectors.
+
+    What the front door asks before it hands the first leg's ``becsum`` on. On
+    the two-file route -- a scalar-relativistic dataset for the self-consistent
+    leg and its fully-relativistic partner for the one-shot -- the answer is no
+    and the right thing to do is to hand over nothing, an ultrasoft dataset
+    needing no ``becsum`` and a PAW one refusing by name with the one-file
+    route in the message. On the one-file route, ``soc_scale = 0`` and then
+    ``1``, the answer is yes.
+    """
+    becsum = tuple(becsum or ())
+    if not becsum or len(becsum) != len(pseudos):
+        return False
+    for pseudo, values in zip(pseudos, becsum):
+        if values is None:
+            continue
+        shape = tuple(np.shape(values))
+        nh = len(projector_channels(pseudo))
+        if len(shape) != 4 or shape[-2:] != (nh, nh) or shape[0] not in (2, 4):
+            return False
+    return True
+
+
+def _checked_becsum(becsum, pseudos) -> tuple:
+    """The first leg's ``becsum``, checked against *this* leg's projector set.
+
+    The check is the whole reason a PAW force theorem can be run at all, so it
+    is made here rather than left to fail somewhere inside the Hamiltonian.
+    ``becsum`` is indexed by projector pairs, ``(nspin_mag, natom, nh, nh)``
+    per species, and ``nh`` is a property of the pseudopotential file: a
+    scalar-relativistic dataset has one projector per ``(n, l)`` channel and
+    its fully-relativistic partner has one per ``(n, l, j)``, so the two
+    numbers differ and the arrays do not describe the same object. A mismatch
+    is a swapped file rather than a mistake in the shapes, and saying which
+    file is what makes the error fixable.
+    """
+    becsum = tuple(becsum or ())
+    if not becsum:
+        return ()
+    if len(becsum) != len(pseudos):
+        raise ValueError(
+            f"the force theorem was handed becsum for {len(becsum)} species "
+            f"and this leg has {len(pseudos)}: it has to come from a run on "
+            "the same structure"
+        )
+    for pseudo, values in zip(pseudos, becsum):
+        if values is None:
+            continue
+        shape = tuple(np.shape(values))
+        nh = len(projector_channels(pseudo))
+        if len(shape) != 4 or shape[-2:] != (nh, nh):
+            raise ValueError(
+                f"the becsum handed over for {pseudo.element} has shape "
+                f"{shape} where this leg's dataset has {nh} projector "
+                f"channels and needs (nspin_mag, natom, {nh}, {nh}). That is "
+                "a different pseudopotential file, not a different spin "
+                "regime: run the self-consistent leg on *this* file with "
+                "soc_scale = 0 rather than on its scalar-relativistic partner"
+            )
+        if shape[0] not in (2, 4):
+            raise ValueError(
+                f"the becsum handed over for {pseudo.element} has "
+                f"nspin_mag = {shape[0]}: the force theorem rotates a magnetic "
+                "state onto a direction, so the first leg has to be magnetic"
+            )
+    return becsum
+
+
+def _refuse_system(
+    system: System, pseudos, require_spin_orbit: bool = True, becsum: tuple = ()
+) -> None:
     """Everything this handoff cannot carry, from the input alone.
 
     **All of it has to be decided here rather than from the assembled
@@ -262,16 +349,20 @@ def _refuse_system(system: System, pseudos, require_spin_orbit: bool = True) -> 
     than of the density, so it does not cross with ``rho``: QE's own handoff is
     ``read_rhog`` and nothing else (``potinit.f90:96``).
     """
-    if any(pseudo.is_paw for pseudo in pseudos):
+    if any(pseudo.is_paw for pseudo in pseudos) and not becsum:
         raise NotImplementedError(
-            "the force theorem with a PAW dataset: the handoff from the "
-            "collinear run carries the density and nothing else, and a PAW "
-            "Hamiltonian needs ddd_paw, which is built from becsum -- a "
-            "property of the wavefunctions of a run that used a different "
-            "pseudopotential file, with a different number of projectors. QE "
-            "refuses this in the same place (potinit.f90:98). An ultrasoft "
-            "dataset works, its augmentation charge already being inside the "
-            "density that crosses"
+            "the force theorem with a PAW dataset needs the converged becsum "
+            "beside the density: a PAW Hamiltonian's one-centre coefficients "
+            "ddd_paw are built from becsum, which is a property of the "
+            "wavefunctions and cannot be rebuilt from the density. Pass "
+            "becsum = scf_result.becsum from a first leg that ran *this* "
+            "dataset with soc_scale = 0 -- the matched scalar-relativistic "
+            "file has a different number of projectors, so its becsum does "
+            "not fit this Hamiltonian at all, and that is why QE refuses the "
+            "path outright (potinit.f90:98) rather than for a reason that "
+            "could be plumbed around. An ultrasoft dataset needs none of "
+            "this, its augmentation charge being inside the density that "
+            "crosses"
         )
     if system.hubbard:
         raise NotImplementedError(
@@ -330,6 +421,7 @@ def run_force_theorem(
     projected: bool = False,
     require_spin_orbit: bool = True,
     soc_scale: float | None = None,
+    becsum: tuple = (),
 ) -> ForceTheorem:
     """One direction: rotate the density onto ``n``, diagonalise once, sum.
 
@@ -358,6 +450,20 @@ def run_force_theorem(
     which is the same identity ``require_spin_orbit = False`` gives but on
     **one** file rather than on a matched scalar/relativistic pair.
 
+    ``becsum`` is the first leg's converged projector occupations
+    (``SCFResult.becsum``) and is what a **PAW** dataset needs beside the
+    density, its one-centre coefficients ``ddd_paw`` being a functional of
+    ``becsum`` exactly as the grid potential is of ``rho``. Freezing the pair
+    is what the theorem asks for on this dataset: the frozen object is the
+    whole potential, and on a PAW dataset the potential has two representations
+    rather than one. It only crosses from a leg that used **this** file, so the
+    route is one fully-relativistic dataset run twice -- ``soc_scale = 0`` for
+    the self-consistent leg and ``1`` for the one-shot -- rather than the
+    matched scalar/relativistic pair an ultrasoft run uses, whose two files
+    have different numbers of projectors. It is rotated onto ``direction``
+    with the density and with the axis the *density* defines, so that the
+    one-centre field and the grid field point the same way.
+
     ``require_spin_orbit = False`` runs the same assembly on a
     *scalar-relativistic* one-shot leg, where the answer is known in advance:
     the Hamiltonian without spin-orbit coupling commutes with a global spin
@@ -368,7 +474,8 @@ def run_force_theorem(
     """
     if soc_scale is not None:
         system = system.with_soc_scale(soc_scale)
-    _refuse_system(system, pseudos, require_spin_orbit)
+    becsum = _checked_becsum(becsum, pseudos)
+    _refuse_system(system, pseudos, require_spin_orbit, becsum)
     if direction is None:
         direction = direction_from_angles(system.angle1[0], system.angle2[0])
     else:
@@ -392,9 +499,20 @@ def run_force_theorem(
     system = _with_quantization_axis(system, direction)
 
     rotated = nc_magnetization_from_lsda(density, direction)
+    # The one-centre occupations follow the density onto the same axis, and
+    # they are handed the *density* to read the old axis off: a species' own
+    # ``becsum`` knows which way that species points, which is the wrong
+    # question, an antiferromagnet's two sublattices pointing opposite ways
+    # while the cell has one frame to rotate.
+    rotated_becsum = tuple(
+        None if values is None
+        else nc_magnetization_from_lsda(values, direction, axis_from=density)
+        for values in becsum
+    )
 
     calculation, system, eigenvalues, wavefunctions = fixed_density_states(
         system, pseudos, rotated, nbnd=nbnd, conv_thr=conv_thr, k_batch=k_batch,
+        becsum=rotated_becsum,
     )
 
     wg, levels = calculation.occupations(jnp.asarray(eigenvalues))
@@ -508,6 +626,7 @@ def run_anisotropy(
     k_batch: int | None | str = "default",
     projected: bool = False,
     soc_scale: float | None = None,
+    becsum: tuple = (),
 ) -> MagneticAnisotropy:
     """The band energy of every direction in ``directions``, and their spread.
 
@@ -528,7 +647,7 @@ def run_anisotropy(
         run_force_theorem(
             system, pseudos, density, direction=direction, nbnd=nbnd,
             conv_thr=conv_thr, k_batch=k_batch, projected=projected,
-            soc_scale=soc_scale,
+            soc_scale=soc_scale, becsum=becsum,
         )
         for direction in directions
     )

@@ -52,10 +52,14 @@ and the sphere's truncation reaches only the part being subtracted.
   ``z`` has ``x`` and ``y`` components, which a collinear density has nowhere to
   put; Elk refuses it the same way and for the same reason
   (``init0.f90:184-186`` requires ``ncmag``).
-* **PAW**, because the one-centre field on the spheres is a second copy of
-  ``B_xc`` that this projection does not reach. Elk projects its muffin-tin part
-  together with the interstitial one; projecting half the field here would leave
-  the two halves belonging to different functionals.
+* **PAW**, and the reason is the projection rather than a missing term: it is
+  a *nonlocal* operator, so applying it to the smooth field and leaving the two
+  one-centre fields alone is not applying it to their sum. What a source-free
+  PAW field would need is one Poisson equation solved across both
+  representations, the sphere solution's multipoles matched to the smooth one
+  outside -- the compensation-charge problem :mod:`defumat.paw.hartree` already
+  solves for the density. Elk's own projection is one line because its muffin
+  tins and its interstitial partition space, where PAW's three terms overlap.
 * a **spin spiral**, because ``div B`` is a statement in the laboratory frame
   and the magnetization is stored in the rotating one.
 
@@ -130,8 +134,35 @@ def project_source_free(
     return v_xc.at[1:].add(-longitudinal_field(field, gvectors, cell))
 
 
-def refuse_source_free(system, functional=None) -> None:
-    """The regimes ``nosource`` cannot be asked for, each by name."""
+def refuse_source_free(system, functional=None, pseudos=()) -> None:
+    """The regimes ``nosource`` cannot be asked for, each by name.
+
+    ``pseudos`` is optional so that a caller with only a system in hand keeps
+    working; a PAW dataset is refused when it is given, and
+    :class:`~defumat.scf.driver.Calculation` gives it. The refusal used to live
+    in the driver and this docstring's own module header claimed it lived here,
+    which is the reading a caller of this function got wrong.
+    """
+    if any(getattr(pseudo, "is_paw", False) for pseudo in pseudos or ()):
+        raise NotImplementedError(
+            "a source-free exchange-correlation field with a PAW dataset is "
+            "not implemented, and what is missing is the projection rather "
+            "than a term in it. The projection is P = 1 - grad (lap)^-1 div, "
+            "which is nonlocal: (lap)^-1 couples every point of the cell, so "
+            "P applied to a sum is not the sum of P applied to each part. A "
+            "PAW field is a sum of three parts in two representations -- the "
+            "smooth one on the plane-wave grid and, inside every sphere, the "
+            "all-electron and pseudo one-centre fields -- and running the "
+            "reciprocal-space line on the first of them alone is a projection "
+            "of nothing. Doing it properly means solving one Poisson equation "
+            "for div B across both representations, with the multipoles of "
+            "the sphere solution matched to the smooth one outside, which is "
+            "the compensation-charge problem PAW's Hartree term already "
+            "solves for the density (defumat.paw.hartree). Elk gets it in one "
+            "line because its muffin tins and its interstitial *partition* "
+            "space, where PAW's three terms overlap. Use a norm-conserving or "
+            "ultrasoft dataset"
+        )
     if not bool(getattr(system, "noncolin", False)):
         raise NotImplementedError(
             "a source-free exchange-correlation field needs a noncollinear "

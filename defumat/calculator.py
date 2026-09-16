@@ -1537,7 +1537,7 @@ class Calculator:
 
         See :mod:`defumat.workflows.anisotropy`.
         """
-        from defumat.workflows.anisotropy import run_anisotropy
+        from defumat.workflows.anisotropy import becsum_fits, run_anisotropy
 
         result = self._ground_state("the magnetic anisotropy")
         if result.nspin == 1:
@@ -1547,9 +1547,16 @@ class Calculator:
                 "and every direction would come out equal"
             )
         system, pseudos = _spinor_leg(spinor)
+        forwarded = self._defaults_for(run_anisotropy, options)
+        if "becsum" not in forwarded and becsum_fits(result.becsum, pseudos):
+            # The one-file route, where the two legs differ by ``soc_scale``
+            # alone: ``becsum`` is indexed by the projectors this leg has, so
+            # it crosses and a PAW dataset runs. On the two-file route the
+            # shapes do not match, nothing is handed over, and an ultrasoft
+            # run is unaffected while a PAW one refuses by name.
+            forwarded["becsum"] = result.becsum
         return run_anisotropy(
-            system, pseudos, result.density, directions=directions,
-            **self._defaults_for(run_anisotropy, options),
+            system, pseudos, result.density, directions=directions, **forwarded,
         )
 
     def get_relaxed_anisotropy(self, directions=None, **options):

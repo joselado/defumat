@@ -922,7 +922,7 @@ def continued_state(
     )
 
 
-def nc_magnetization_from_lsda(density, direction):
+def nc_magnetization_from_lsda(density, direction, axis_from=None):
     """``potinit.f90``'s rotation of a collinear density onto an arbitrary axis.
 
     The force theorem's whole handoff (:mod:`defumat.workflows.anisotropy`).
@@ -948,6 +948,16 @@ def nc_magnetization_from_lsda(density, direction):
     ``density`` is ``(2, ...)`` or ``(4, ...)``; ``direction`` is a unit vector.
     A ``(4, ...)`` density is rotated *from its own axis*, so promoting an
     already-noncollinear collinear-along-z state is the same operation.
+
+    ``axis_from`` is the field that decides which axis the state is being
+    rotated *off*, when that is not the array being rotated. The force theorem
+    on a PAW dataset is why it exists: ``becsum`` has to be laid along the same
+    direction as the density, and its own axis is not the right one to read it
+    from, because one species of an antiferromagnet has a moment whose sign is
+    a property of that species rather than of the cell. It is
+    :class:`_SpinTransfer`'s rule stated for a rotation: the density is the
+    only part big enough to say reliably which way the state points, so it
+    decides once and every smaller part follows.
     """
     direction = np.asarray(direction, dtype=float)
     norm = float(np.sqrt(np.sum(direction**2)))
@@ -967,7 +977,10 @@ def nc_magnetization_from_lsda(density, direction):
         # Already a vector field: rotate it off *its* axis rather than off z,
         # so that this is idempotent on a state that is already along
         # ``direction`` and so that a second call cannot silently re-tilt one.
-        along = _collinear_axis(density)
+        source = density if axis_from is None else jnp.asarray(axis_from)
+        # A collinear field's axis is z by construction and ``_collinear_axis``
+        # wants the four-component layout, so it is not asked in that case.
+        along = None if source.shape[0] == 2 else _collinear_axis(source)
         scalar = jnp.sum(_axis(along or (0.0, 0.0, 1.0), moment.ndim) * moment, axis=0)
     else:
         scalar = moment[2]

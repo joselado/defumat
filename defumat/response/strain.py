@@ -91,7 +91,6 @@ import numpy as np
 from defumat.basis.interpolate import to_dense
 from defumat.batching import map_k
 from defumat.response.efield import require_a_symmetrisable_response
-from defumat.response.phonon import require_norm_conserving
 from defumat.response.mixing import DEFAULT_RESPONSE_MIXING, ResponseMixer
 from defumat.response.sternheimer import (
     paw_response,

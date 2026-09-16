@@ -1796,18 +1796,10 @@ class Calculation:
         #: start, since the symptom otherwise is a converged number.
         self.source_free = bool(getattr(system, "nosource", False))
         if self.source_free:
-            refuse_source_free(system, self.functional)
-            if self.is_paw:
-                raise NotImplementedError(
-                    "a source-free exchange-correlation field with a PAW "
-                    "dataset is not implemented: the one-centre B_xc on the "
-                    "spheres is a second copy of the field that this "
-                    "projection does not reach, so the two halves of one "
-                    "potential would belong to different functionals. Elk "
-                    "projects its muffin-tin part together with the "
-                    "interstitial one. Use a norm-conserving or ultrasoft "
-                    "dataset"
-                )
+            # ``pseudos`` rather than ``self.is_paw``: the PAW refusal belongs
+            # with the others, so that a caller who reaches the guard directly
+            # gets it too.
+            refuse_source_free(system, self.functional, self.pseudos)
 
         self.symmetries = system.symmetry_group()
         #: Whether this run actually symmetrises with :attr:`symmetries`.

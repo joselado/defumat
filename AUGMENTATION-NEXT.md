@@ -154,13 +154,41 @@ kernel has a one-centre part on the spheres that the grid does not carry.
 
 `response/phononq.py:845`. Both.
 
-**What is missing.** `S` moves with the atoms, so the orthonormality multipliers carry
-`<psi|dS/du|psi>` between states at `k` and at `k + q`, and that has no two-sphere form
-here. The `Gamma` case is written (P39) because there both states sit on the same sphere.
+**This entry named one term and the code has four missing, which is the sixth time this
+file has been written from a refusal's message rather than from the code around it**
+(2026-09-16). The message said the blocker was the orthonormality multipliers' term
+`<psi|dS/du|psi>` between states at `k` and at `k + q`. That term is indeed absent, but so
+are three others, and three of the four are in the augmentation rather than in the
+multipliers, so the sizing sentence pointed at the smallest of the four. Read off
+`response/phononq.py` rather than off its raise:
 
-**What it needs first.** The same object item 1a uses, `q^a_ij(b)` at `b = q`, since the
-two spheres are separated by exactly `q`. **Size:** a phase, and the work is in the
-multipliers rather than in the augmentation.
+- **The response density has no augmentation at all.** `response_density_at_q` builds the
+  pseudo pair density and returns `to_dense(2 total / volume, ...)`, where
+  `addusddens.f90` adds `sum_ij dbecsum_ij Q_ij(q + G)` on top of it, with the table
+  evaluated at the **shifted** modulus: the routine calls `setqmod(ngm, xq, g, qmod, qpg)`
+  and passes that `qmod` to `qvan2`.
+- **The induced potential has no `int3`.** `induced_perturbation_at_q` applies `dV_scf` as
+  a local operator through the FFT and nothing else, where an augmented dataset also
+  carries `int3_ij = int dV_scf Q_ij e^{iqr}` on the projectors
+  (`LR_Modules/adddvscf.f90`).
+- **The bare term freezes `D_ij`.** `bare_displacements_at_q` takes
+  `dij = tuple(h.coefficients for h in solver.hamiltonians)` and closes over it inside the
+  `jvp`, so `d/du` of `int V_eff Q_ij` is missing -- `dvanqq.f90`'s `int1` and `int2`.
+- **The multipliers do not exist at `q != 0`.** There is no `overlap_derivatives`, no
+  `orthogonality_states` and no `multiplier_response` in `phononq.py` at all; P39's are
+  written with both `becp` at the same k-point, which is the `Gamma` case by construction.
+
+**What it needs first.** The object the first two want is `q^a_ij(q + G)`, and it is
+**written**: `tddft/spinchi0.augmentation_factors` builds it over a response sphere from
+`topology/augmentation.augmentation_at_q`, pinned at `b = 0` against `projectors.qq`
+(`tests/regression/test_topology.py`) and against `augmentation_at_q` at `+q` to 1e-14
+with the opposite sign differing by more than 1e-6 (`tests/regression/test_ultrasoft_magnon.py`).
+**Size:** a phase, and the work is spread over the four terms rather than concentrated in
+the multipliers. The sign is the trap: the displaced table's spiral special case is what
+pins it, and the record of this file's own §1k has been inconsistent about `Q - Q'` against
+`Q' - Q` in prose, so pin it on the zone-boundary identity -- the dynamical matrix at a
+zone-boundary `q` against the validated `Gamma` matrix of the doubled supercell -- rather
+than on any sentence.
 
 ### 1d. A noncollinear ultrasoft or PAW response
 
@@ -497,13 +525,29 @@ ingredients transfer and are already wired in behind the refusal: the state tang
 improvement and still fifty times the control, which is what says the third ingredient is
 a term rather than a tolerance.
 
-**What is missing.** The third ingredient, which is the strain derivative of the
-augmentation charge itself: `Q_ij(G)` depends on the cell through `G`, and
-`stres_us`/`addusstress` are the QE routines that are not transcribed here, so the
-analytic route offers terms and no total to check against. **Size:** a phase, and the
-hardest one on the list. Note that the **displacement** coordinate of the same third
-derivative is *not* refused and is validated at 1.2e-4 on both datasets (the Raman
-tensor, P43), so what is wrong is specific to strain.
+**What is missing is not the strain derivative of the augmentation charge, and this
+entry said it was** (corrected 2026-09-16). `Calculation.at_strain` rebuilds
+`build_augmentation` whole -- the table is sampled on a moving `G` set, so it has to be --
+and every link of the strain response is a `jvp` through that call: the bare perturbation,
+`dS/deps`, the frozen `drho` and `dbecsum`, and `_position_response`'s operators. The one
+object held at the unstrained cell is `projectors.qq`, and that is correct rather than an
+omission, `int Q_ij(r) dr` carrying no cell at all. The strain *response* itself runs on
+both datasets and is pinned against a central difference of the converged density at
+4.6e-4 (ultrasoft) and 4.7e-4 (PAW) against a norm-conserving 1.9e-4, which is P41.
+
+**What is missing is what P44's own measurement says**, and `require_norm_conserving`'s
+docstring is where it is written rather than here: the residue is **entirely the `b`
+partial**, -1.72 on 112, the *same* number on ultrasoft and on PAW, which is what says it
+is structural rather than a dataset's physics. One candidate for it is excluded by
+measurement: writing `_position_response`'s commutator source with the multiplier matrix
+rather than the frozen scalar eigenvalue takes the strain coordinate to 1.7e-4 on both
+datasets **and breaks the displacement one**, in every pairing tried. So one of the two
+coordinates carries a further term that compensates it, and finding that is what closes
+this. **Size:** a phase, and the hardest one on the list -- but the hard part is a term in
+the position response, not an augmentation table nobody wrote. Note that the
+**displacement** coordinate of the same third derivative is *not* refused and is validated
+at 1.2e-4 on both datasets (the Raman tensor, P43), so what is wrong is specific to
+strain.
 
 **The piezoelectric tensor (item 1h) lifts with this.**
 
