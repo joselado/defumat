@@ -309,21 +309,27 @@ empty space with `P_c`, and adds the dipole separately as `_ultrasoft_position` 
 ultrasoft dielectric constant is 8e-6 from `ph.x`, so the object exists and is pinned. It
 is the *Kubo* assembly that does not carry it.
 
-**What decides it is not a finer mesh.** The model that shows the missing term without a
-mesh at all: Haldane's `H_0(k)` with `H = A^dagger H_0 A` and `S = A^dagger A` for a
-smooth invertible `A(k)`, where the generalised problem's physical curvature is `H_0`'s
-exactly. `kubo_from_matrices` then misses it by `(e_m - e_n) c_n^dagger (dA)^dagger A c_m`
-in each factor, which is the model's `T^dagger dT`, and subtracting that recovers it. The
-correction depends on `A` rather than on `S = A^dagger A` alone -- `U(k) A` leaves `S`
-unchanged and moves the physical states -- which is why the plane-wave version needs
-`dpqq` rather than only `dS/dk`.
+**The term is measured, on a model with no mesh floor at all** (P94,
+`tests/unit/test_topology_curvature.py::test_a_moving_overlap_needs_more_than_dh_and_ds`).
+Haldane's `H_0(k)` with `H = A^dagger H_0 A` and `S = A^dagger A` has the generalised
+problem's physical curvature equal to `H_0`'s exactly, so the reference is free. Feeding
+`dH` and `dS` to `kubo_from_matrices` is wrong by **18 per cent** of the curvature's scale
+and moves the Chern number by 0.010, so the term does not integrate away either; putting
+the two `A^dagger dA` blocks in recovers it to **4.5e-16**.
 
-**Size:** a phase. The model check is an afternoon and pins the structure; what follows is
-the dipole in matrix-element form inside `velocity_matrices`, from `efield.py`'s
-machinery, and then an **assembly** check on plane waves, because a sum of separately
-validated pieces is this repository's most convincing wrong answer. That check is the one
-P94 used for `dS/dk`: zero the dipole on AlAs-US and read the shift, and only run the
-AlAs comparison if the two terms together exceed its 4.4 to 6.3 per cent floor.
+**What that pins is the shape.** The two factors need *different* blocks and neither is
+`dS`: `(e_m - e_n) L` on the first and `-(e_m - e_n) K` on the second, with
+`L = c^dagger (dA)^dagger A c`, `K = c^dagger A^dagger (dA) c` and `L + K = dS` to
+1.8e-15. So no arrangement of `dS/dk` can supply it, which is the same statement as the
+correction depending on `A` rather than on `S = A^dagger A` -- `U(k) A` leaves `S`
+unchanged and moves the physical states.
+
+**Size:** a phase, and the model check is done. What is left is the dipole in
+matrix-element form inside `velocity_matrices`, from `efield.py`'s machinery, and then an
+**assembly** check on plane waves, because a sum of separately validated pieces is this
+repository's most convincing wrong answer. That check is the one P94 used for `dS/dk`:
+zero the dipole on AlAs-US and read the shift, and only run the AlAs comparison if the two
+terms together exceed its 4.4 per cent floor.
 
 ---
 

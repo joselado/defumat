@@ -262,3 +262,120 @@ def test_the_degeneracy_guard_uses_one_threshold_in_both_places():
     assert float(value) == 0.0
     gradient = jax.grad(lambda k: _kubo_point(hamiltonian, k, 1, axes, tol)[0])
     assert np.all(np.isfinite(np.asarray(gradient(at_k))))
+
+
+# --- a moving overlap: what the Kubo route is missing ------------------------
+
+def _generalised_blocks(points, h, s, a, h0):
+    """Band-basis ``dH``, ``dS`` and the two ``A^dagger dA`` blocks, per direction.
+
+    ``L = c^dagger (dA)^dagger A c`` and ``K = c^dagger A^dagger (dA) c``, which
+    sum to ``dS`` in this basis and are what the two factors of the curvature
+    need separately.
+    """
+    import jax
+    import jax.numpy as jnp
+    import scipy.linalg as sla
+
+    from defumat.topology.mesh import PLANE_AXES
+
+    directions = PLANE_AXES[2]
+    out = {name: {d: [] for d in directions}
+           for name in ("dh", "ds", "dh0", "first", "second")}
+    energies, reference = [], []
+    residual = 0.0
+    for point in points:
+        matrix, metric, frame = (np.asarray(f(point)) for f in (h, s, a))
+        value, vector = sla.eigh(matrix, metric)
+        value0, vector0 = np.linalg.eigh(np.asarray(h0(point)))
+        energies.append(value)
+        reference.append(value0)
+        gap = value[None, :] - value[:, None]  # [n, m] = e_m - e_n
+        for d in directions:
+            tangent = jnp.asarray(np.eye(3)[d])
+            derivative = {
+                name: np.asarray(jax.jvp(f, (jnp.asarray(point),), (tangent,))[1])
+                for name, f in (("h", h), ("s", s), ("a", a), ("h0", h0))
+            }
+            left = vector.conj().T @ derivative["a"].conj().T @ frame @ vector
+            right = vector.conj().T @ frame.conj().T @ derivative["a"] @ vector
+            ds = vector.conj().T @ derivative["s"] @ vector
+            residual = max(residual, float(np.max(np.abs(left + right - ds))))
+            out["dh"][d].append(vector.conj().T @ derivative["h"] @ vector)
+            out["ds"][d].append(ds)
+            out["dh0"][d].append(vector0.conj().T @ derivative["h0"] @ vector0)
+            # The first factor is used as it stands; the second is transposed
+            # inside ``kubo_from_matrices``, so its correction is transposed and
+            # conjugated here -- which is why ``K`` appears and not ``L`` again.
+            out["first"][d].append(gap * left)
+            out["second"][d].append(-gap * right)
+    stacked = {name: {d: np.array(v) for d, v in block.items()}
+               for name, block in out.items()}
+    return stacked, np.array(energies), np.array(reference), residual, directions
+
+
+def test_a_moving_overlap_needs_more_than_dh_and_ds():
+    """The Kubo curvature of a generalised eigenproblem misses a term, exactly.
+
+    An ultrasoft dataset has ``S = T^dagger T`` with ``T`` carrying ``beta^k``,
+    so the states a Berry phase is about are ``T c`` and the connection is
+
+        <Psi_n|d Psi_m> = c_n^dagger S d c_m + c_n^dagger T^dagger (d T) c_m.
+
+    The second piece is the augmentation dipole, and
+    :func:`~defumat.topology.kubo.kubo_from_matrices` -- which sees ``dH`` and
+    ``dS`` and nothing else -- has no slot for it. Whether that matters cannot
+    be settled on a plane-wave crystal: ``PLAN.md`` P94 measured the term at
+    2.5 per cent of ``Omega`` where the coarsest comparison available has a
+    mesh floor of 4.4, so the check there cannot fail.
+
+    Here it can. Take Haldane's ``H_0`` and any smooth invertible ``A(k)``, set
+    ``H = A^dagger H_0 A`` and ``S = A^dagger A``: the eigenvalues are ``H_0``'s,
+    the eigenvectors are ``c = A^{-1} v``, and the physical curvature is
+    therefore ``H_0``'s **exactly**, at the same k-points, with no mesh error
+    and a two-band sum that is complete. ``A`` plays ``T``.
+
+    Two things are asserted and the second is the useful one. The plain
+    generalised formula is wrong by 18 per cent of the curvature's own scale, so
+    the term is not a refinement. And adding the two ``A^dagger dA`` blocks
+    recovers ``H_0``'s curvature to machine precision -- **different blocks in
+    the two factors**, ``(e_m - e_n) L`` in the first and ``-(e_m - e_n) K`` in
+    the second, where ``L + K = dS``. So neither correction is ``dS`` and the
+    pair is not symmetric, which is the structure a plane-wave implementation
+    has to reproduce and the reason ``dpqq`` is a separate object from
+    ``dS/dk``.
+    """
+    from defumat.topology.kubo import kubo_from_matrices
+    from tests.models import nonorthogonal
+
+    h0 = haldane()
+    h, s, a = nonorthogonal(h0, s=0.25)
+    mesh = plane_mesh((8, 8), axis=2)
+    points = np.asarray(mesh.flat())
+    blocks, energies, reference, residual, (d1, d2) = _generalised_blocks(
+        points, h, s, a, h0
+    )
+    assert residual < 1.0e-12  # L + K = dS, so the pair is a split of one object
+
+    zero = {d: np.zeros_like(blocks["ds"][d]) for d in (d1, d2)}
+    exact, _ = kubo_from_matrices(
+        blocks["dh0"][d1], zero[d1], blocks["dh0"][d2], zero[d2], reference, 1
+    )
+    plain, _ = kubo_from_matrices(
+        blocks["dh"][d1], blocks["ds"][d1],
+        blocks["dh"][d2], blocks["ds"][d2], energies, 1,
+    )
+    corrected, _ = kubo_from_matrices(
+        blocks["dh"][d1] - blocks["first"][d1], blocks["ds"][d1],
+        blocks["dh"][d2] - blocks["second"][d2], blocks["ds"][d2], energies, 1,
+    )
+    exact, plain, corrected = (np.asarray(x) for x in (exact, plain, corrected))
+    scale = np.max(np.abs(exact))
+
+    assert np.max(np.abs(plain - exact)) / scale > 0.1
+    assert np.max(np.abs(corrected - exact)) / scale < 1.0e-12
+    # And the Chern number with it: the missing term is not a pure gauge that
+    # integrates away, so the zone sum moves too.
+    quantum = 2.0 * np.pi
+    assert abs(plain.mean() / quantum - exact.mean() / quantum) > 1.0e-3
+    assert corrected.mean() == pytest.approx(exact.mean(), rel=1.0e-12)

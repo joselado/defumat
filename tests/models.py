@@ -205,3 +205,69 @@ def random_gauge(key_seed: int, shape, unitary: bool = False):
         q, r = np.linalg.qr(matrix)
         out[i] = q * (np.diag(r) / np.abs(np.diag(r)))
     return out
+
+
+def nonorthogonal(hamiltonian, s: float = 0.25, tau=None):
+    """An orthonormal model rewritten in a **non-orthogonal** basis of its own.
+
+    Returns ``(h, overlap, frame)``, three functions of a crystal k-point. With
+    ``A(k)`` any smooth invertible matrix, setting ``H = A^dagger H_0 A`` and
+    ``S = A^dagger A`` gives a generalised eigenproblem ``H c = e S c`` whose
+    eigenvalues are ``H_0``'s and whose eigenvectors are ``c = A^{-1} v``. So the
+    *physical* states are unchanged and their Berry curvature is exactly
+    ``H_0``'s -- computable at the same k-points, with no mesh error and no sum
+    to truncate.
+
+    **This is the model an ultrasoft dataset is**, which is the point of it.
+    There ``S = T^dagger T`` with ``T`` carrying ``beta^k``, the true states are
+    ``T c``, and the Berry connection is
+
+        <Psi_n|d Psi_m> = c_n^dagger S d c_m + c_n^dagger T^dagger (d T) c_m,
+
+    the second piece being the augmentation dipole. ``A`` plays ``T`` here, so a
+    curvature built from ``dH`` and ``dS`` alone must miss ``H_0``'s by exactly
+    that second piece and nothing else -- which is what makes the omission
+    measurable rather than arguable.
+
+    ``frame`` returns ``A(k)`` itself, because **the correction is a property of
+    ``A`` and not of ``S``**: replacing ``A`` by ``U(k) A`` with ``U`` unitary
+    leaves ``S = A^dagger A`` untouched and moves the physical states. That is
+    the same statement as an ultrasoft code needing ``dpqq`` rather than only
+    ``dS/dk``.
+
+    Args:
+        hamiltonian: the orthonormal model, ``H_0(k)``.
+        s: how far from orthonormal. ``A = 1 + s M(k)`` with ``M`` Hermitian and
+            bounded by 1 in norm, so anything below 1 keeps ``A`` invertible;
+            0.25 makes ``dS/dk`` the same order as ``dH/dk`` without pushing the
+            conditioning anywhere interesting.
+        tau: the phase the k-dependence of ``M`` is built from, a 3-vector in
+            crystal coordinates. Defaults to a generic one, on purpose: a
+            high-symmetry choice makes ``M`` commute with ``H_0`` at special
+            k-points and the missing term vanish exactly there.
+    """
+    tau = np.array([0.31, 0.17, 0.0]) if tau is None else np.asarray(tau, dtype=float)
+
+    def frame(k):
+        k = jnp.asarray(k)
+        phase = jnp.exp(1j * TWOPI * jnp.dot(jnp.asarray(tau), k))
+        size = hamiltonian(k).shape[0]
+        # Hermitian, periodic in k, and not diagonal -- a diagonal M commutes
+        # with nothing in particular but leaves the off-diagonal block of
+        # ``A^dagger (dA)`` zero, which is the block the missing term lives in.
+        off = jnp.zeros((size, size), dtype=complex)
+        rows = jnp.arange(size - 1)
+        off = off.at[rows, rows + 1].set(phase)
+        off = off.at[rows + 1, rows].set(jnp.conj(phase))
+        diagonal = jnp.diag(jnp.cos(TWOPI * k[0]) * jnp.ones(size))
+        return jnp.eye(size, dtype=complex) + s * (off + diagonal)
+
+    def h(k):
+        a = frame(k)
+        return a.conj().T @ hamiltonian(k) @ a
+
+    def overlap(k):
+        a = frame(k)
+        return a.conj().T @ a
+
+    return h, overlap, frame

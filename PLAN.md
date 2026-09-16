@@ -16838,7 +16838,8 @@ One thing is in their favour: `efield.py` already computes the object
 (`_ultrasoft_position`, from `dipole`), pinned by the ultrasoft dielectric constant
 agreeing with `ph.x` to 8e-6.
 
-**The model that shows the term exists, and it costs an afternoon.** Take Haldane's
+**Finding 5 -- the missing term is now demonstrated exactly, and its shape is pinned.**
+Take Haldane's
 `H_0(k)` and a smooth invertible `A(k) = 1 + s M(k)`, `M` Hermitian and periodic in `k`
 with `s` well below `1/||M||`; set `H = A^dagger H_0 A` and `S = A^dagger A`. The
 generalised problem has the same eigenvalues and `c = A^{-1} v`, so the physical curvature
@@ -16849,11 +16850,36 @@ is `H_0`'s exactly, computable at the same k-points from `kubo_from_matrices(dH_
                                        + (e_m - e_n) c_n^dagger (d_a A)^dagger A c_m,
 
 so the generalised formula **misses** `Omega_0` by exactly the leftover, and that leftover
-is the model's `T^dagger d T`. Two assertions: the plain call does not reproduce `Omega_0`,
-and subtracting the leftover from both factors does, to 1e-12. Note the correction depends
-on `A` and not only on `S = A^dagger A` -- replacing `A` by `U(k) A` with `U` unitary
-leaves `S` alone and moves the physical states -- which is precisely why the plane-wave
-version needs `dpqq` rather than only `dS/dk`.
+is the model's `T^dagger d T`.
+
+**Run** (`tests/unit/test_topology_curvature.py::test_a_moving_overlap_needs_more_than_dh_and_ds`,
+`tests/models.py:nonorthogonal`), Haldane at `t2 = 0.2`, `phi = pi/2`, `s = 0.25`, an 8x8
+mesh:
+
+=============================  =====================  ==================
+what went into the formula       max deviation          Chern number
+=============================  =====================  ==================
+`dH` and `dS` alone              **0.179** of scale     -1.011268
+both `A^dagger dA` blocks        **4.5e-16**            -1.000942
+the reference, `H_0` itself      --                     -1.000942
+=============================  =====================  ==================
+
+So the term is worth **18 per cent** of the curvature and it does not integrate away:
+the Chern number moves by 0.0103 as well, where the reference's own -1.000942 is Kubo's
+spectral convergence on an 8x8 mesh and nothing else.
+
+**The structure is the result, and it is sharper than "a term is missing".** The two
+factors need **different** blocks, and neither is `dS`:
+
+    a1: subtract (e_m - e_n) L,  L = c^dagger (dA)^dagger A c
+    a2: subtract -(e_m - e_n) K, K = c^dagger A^dagger (dA) c,   L + K = dS
+
+with `L + K = dS` asserted to 1.8e-15 in the test, so the pair is a *split* of the object
+the formula already has rather than a new one beside it. That asymmetry is why a plane-wave
+implementation cannot assemble this out of `dS/dk` however it is arranged, and it is the
+same statement as the correction depending on `A` rather than on `S = A^dagger A` alone --
+replacing `A` by `U(k) A` with `U` unitary leaves `S` untouched and moves the physical
+states.
 
 **And what a lift needs after that, stated so it is not skipped.** The dipole in
 matrix-element form inside `velocity_matrices`, taken from `efield.py`'s machinery, and
