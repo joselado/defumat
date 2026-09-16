@@ -3863,10 +3863,12 @@ plumbed around. The way round it is \code{soc\_scale}: run the
 \emph{self-consistent} leg on the fully-relativistic file with
 \code{soc\_scale = 0} and the one-shot leg on the same file with the coupling
 on, so that both legs share a projector set by construction. \code{becsum} is
-then rotated onto the requested direction with the density, off the axis the
+then laid along the requested direction with the density, off the axis the
 \emph{density} defines rather than its own, which is what an antiferromagnet
 needs: its two sublattices point opposite ways while the cell has one frame to
-turn.
+turn. It is a projection onto that axis rather than a rigid rotation, exactly as
+it is for the density, so a canted first leg hands over the collinear part of
+its moment and not the canting.
 
 \begin{pycode}
 from defumat.scf import run_scf

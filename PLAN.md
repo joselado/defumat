@@ -17394,10 +17394,25 @@ rotation removed -- `becsum` carried but laid along `z` for every direction, whi
 whose answer is exactly zero. So the clean zero is a pass rather than a silence, which is
 the discipline `CLAUDE.md` asks for after the five nulls of the NiBr2 runs.
 
-The shape check is separate and refuses rather than reshapes: a `becsum` whose trailing
-pair is not `(nh, nh)` for *this* leg's dataset is a swapped file, and the message says so
-and names the one-file route. `Calculator.get_anisotropy` passes `becsum` when it fits and
-hands over nothing when it does not, so the two-file ultrasoft route is untouched.
+**The shape check is necessary and not sufficient, and that was measured on the committed
+files rather than assumed.** A `becsum` whose trailing pair is not `(nh, nh)` for this
+leg's dataset is refused rather than reshaped, and on both committed scalar/relativistic
+pairs the two files do separate: `nh` is 18 against 34 for platinum and for cobalt alike,
+so the two-file route cannot slip through. What a shape cannot see is two datasets of the
+*same* generation -- `Si.pbe-n-rrkjus_psl.0.1` and `Si.pbe-n-kjpaw_psl.0.1` both have
+`nh = 8`, and `Ni.rel-pbe-spn-rrkjus_psl.1.0.0` and its `kjpaw` partner both have 34 --
+where the radial projectors are different functions with the same count and a `becsum`
+would cross silently. So the front door asks the question a shape cannot: the file each
+species names has to be the same on both legs (`becsum_fits`). `Calculator.get_anisotropy`
+passes `becsum` when both hold and hands over nothing when either does not, so the
+two-file ultrasoft route is untouched.
+
+**One thing to know about the rotation.** It is a projection onto the source's axis and
+then a lay-down along the new direction, not a rigid rotation: the transverse part of a
+source magnetization is discarded, for `becsum` exactly as for the density, so the two stay
+consistent. For a collinear first leg that is exact. For a noncollinear `soc_scale = 0`
+leg it means a canted state's canting does not survive the handoff, which is the same
+statement `nc_magnetization_from_lsda` has always made about the density.
 
 **What is outstanding.** The identity above is measured on a *scalar* PAW dataset with the
 coupling off, which is what tests the handoff and the rotation. A magnetocrystalline

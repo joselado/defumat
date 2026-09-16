@@ -1548,7 +1548,9 @@ class Calculator:
             )
         system, pseudos = _spinor_leg(spinor)
         forwarded = self._defaults_for(run_anisotropy, options)
-        if "becsum" not in forwarded and becsum_fits(result.becsum, pseudos):
+        if "becsum" not in forwarded and becsum_fits(
+            result.becsum, pseudos, source=self.pseudos
+        ):
             # The one-file route, where the two legs differ by ``soc_scale``
             # alone: ``becsum`` is indexed by the projectors this leg has, so
             # it crosses and a PAW dataset runs. On the two-file route the

@@ -22,13 +22,17 @@ Where the other files fit (`CLAUDE.md` has the full table):
 **File and line references go stale.** The function or the guard is named wherever there
 is one, so `grep` the name rather than trusting the number.
 
-**The sizings in this file have been wrong four times, always in the same direction and
+**The sizings in this file have been wrong seven times, always in the same direction and
 always for the same reason.** §1a was called the easiest lift here when `PLAN.md` P40 had
 already measured that route as not closing; §1i was called "the most likely of the class
 to be an afternoon" when its projector set is scalar and cannot take the spinor operator
 at all; §1j was called plumbing when the object it wanted to move is indexed by a
-projector set that does not survive the handoff. Each came from reading the refusal's
-*message* and not the code around it. So **a size in this file is a hypothesis until the
+projector set that does not survive the handoff, and then, once that was corrected, was
+called ill posed when the question it was asking was the wrong one (P97). §1e and §1e'
+each named one missing term and had two and three. §1c named one and the code is missing
+four, three of them in the augmentation rather than in the multipliers. §3b named the
+strain derivative of `Q_ij(G)`, which `at_strain` had been rebuilding all along. Each came
+from reading the refusal's *message* and not the code around it. So **a size in this file is a hypothesis until the
 guard's surroundings have been read**, and the corrected entries say what reading them
 changed.
 

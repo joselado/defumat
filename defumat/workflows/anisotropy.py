@@ -261,7 +261,17 @@ class MagneticAnisotropy:
         return float(self.band_energies[i] - self.band_energies[j])
 
 
-def becsum_fits(becsum, pseudos) -> bool:
+def _files(pseudos) -> tuple:
+    """The file each species names, which is what identifies a dataset."""
+    import os
+
+    return tuple(
+        os.path.basename(str(getattr(pseudo, "path", "") or "")) or pseudo.element
+        for pseudo in pseudos
+    )
+
+
+def becsum_fits(becsum, pseudos, source=None) -> bool:
     """Whether ``becsum`` is indexed by *these* projectors.
 
     What the front door asks before it hands the first leg's ``becsum`` on. On
@@ -271,9 +281,22 @@ def becsum_fits(becsum, pseudos) -> bool:
     needing no ``becsum`` and a PAW one refusing by name with the one-file
     route in the message. On the one-file route, ``soc_scale = 0`` and then
     ``1``, the answer is yes.
+
+    ``source`` is the first leg's own pseudopotentials, and it is the
+    discriminator that cannot be fooled where the shape can. **A matching
+    ``nh`` does not mean matching projectors**: it separates the two files of
+    the route above (18 against 34 on both the platinum and the cobalt pairs
+    committed here), and it does *not* separate two datasets of the same
+    generation, where ``Si.pbe-n-rrkjus_psl.0.1`` and ``Si.pbe-n-kjpaw_psl.0.1``
+    both have ``nh = 8`` and ``Ni.rel-pbe-spn-rrkjus_psl.1.0.0`` and its
+    ``kjpaw`` partner both have 34. Those are different radial projectors with
+    the same count, so a ``becsum`` would cross silently. Comparing the file
+    each species names is what says the two legs are one dataset.
     """
     becsum = tuple(becsum or ())
     if not becsum or len(becsum) != len(pseudos):
+        return False
+    if source is not None and _files(source) != _files(pseudos):
         return False
     for pseudo, values in zip(pseudos, becsum):
         if values is None:
@@ -297,6 +320,14 @@ def _checked_becsum(becsum, pseudos) -> tuple:
     numbers differ and the arrays do not describe the same object. A mismatch
     is a swapped file rather than a mistake in the shapes, and saying which
     file is what makes the error fixable.
+
+    **The check is necessary and not sufficient, and the caller owns the rest.**
+    It separates the two files of the two-file route -- ``nh`` is 18 against 34
+    on both committed pairs -- and it cannot separate two datasets of the *same*
+    generation, an ultrasoft and a PAW silicon both having ``nh = 8``. Passing
+    a ``becsum`` from a run on a different file with the same projector count
+    would cross silently, so the rule is one file for both legs and the front
+    door checks that by name (:func:`becsum_fits`).
     """
     becsum = tuple(becsum or ())
     if not becsum:

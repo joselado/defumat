@@ -451,6 +451,42 @@ _PAW_NC = _PAW_SR.replace("calculation = 'scf'", "calculation = 'nscf'").replace
 )
 
 
+def test_a_becsum_from_the_other_file_is_refused_and_a_matching_count_is_not_enough():
+    """The two ways a wrong ``becsum`` can arrive, and only one has a shape.
+
+    The route's own rule is one file for both legs, and the check has to hold
+    it. A ``becsum`` from the scalar-relativistic partner is caught by its
+    shape, ``nh`` being 18 there against 34 in the relativistic file for both
+    committed pairs. A ``becsum`` from a *different* dataset with the same
+    count is not caught by any shape at all -- ``Si.pbe-n-rrkjus_psl.0.1`` and
+    ``Si.pbe-n-kjpaw_psl.0.1`` both have ``nh = 8``, and
+    ``Ni.rel-pbe-spn-rrkjus_psl.1.0.0`` and its ``kjpaw`` partner both have 34
+    -- so what separates those is the file each species names, which is what
+    the front door asks. Both halves are asserted because only the first of
+    them announces itself.
+    """
+    from defumat.pseudo import read_upf
+    from defumat.workflows.anisotropy import _checked_becsum, becsum_fits
+
+    directory = GENERATED.parent / "pseudo"
+    scalar = read_upf(directory / "Co.pbe-nd-rrkjus.UPF")
+    relativistic = read_upf(directory / "Co.rel-pbe-nd-rrkjus.UPF")
+
+    wrong_shape = (np.zeros((2, 1, 18, 18)),)
+    with pytest.raises(ValueError, match="projector channels"):
+        _checked_becsum(wrong_shape, (relativistic,))
+    assert not becsum_fits(wrong_shape, (relativistic,), source=(scalar,))
+
+    # ... and the half no shape can see: the right count, the wrong file.
+    right_shape = (np.zeros((2, 1, 34, 34)),)
+    _checked_becsum(right_shape, (relativistic,))          # passes, as it must
+    assert becsum_fits(right_shape, (relativistic,), source=(relativistic,))
+    assert not becsum_fits(right_shape, (relativistic,), source=(scalar,)), (
+        "a becsum from another file with the same projector count has to be "
+        "refused by the file it names, since nothing about its shape differs"
+    )
+
+
 @pytest.mark.slow
 def test_a_paw_force_theorem_carries_becsum_and_the_rotation_identity_holds():
     """Rung 1 on a PAW dataset, which is what the handoff had to reach.
