@@ -3198,6 +3198,26 @@ three steps, `h_psi` replaced by a **diagonal** operator to weigh the rest:
 
 **1.39x on the algebra**, which is the item as written, and 1.16x on the call.
 
+**The refresh is exercised and the narrowing survives it, which needed its own
+run because nothing else here reached it.** `cegterg`'s collapse fires when
+`nbase + nbnd > nvecx`, and every timing above converges in one to four steps
+and never gets there. A **cold** solve does: on `si8-1k-ecut30` it takes 15
+steps to `ethr = 1e-6` and 23 to 1e-10, and on ultrasoft `si2-us-1k` 14 and 21,
+so the basis is refreshed several times in each. Narrow against full, the two
+arms take **the same number of steps**, settle the same roots, and agree to
+**6.4e-15 Ry** on the eigenvalues with the wavefunctions' Gram matrix -- the
+part a degenerate solver may not rotate -- agreeing to 7.0e-11.
+
+**Exact and bit-identical are not the same claim here, and which one holds
+depends on the regime.** On the seeded path the SCF runs, both cells give the
+same total energy and the same eigenvalues to the last bit. On a cold solve the
+agreement is round-off rather than bit-for-bit, because a narrower product sums
+the same terms in a different order. A solve **stopped at `max_iterations`
+before it converged** is a third case and agrees on neither: truncated at 12
+steps the eigenvalues still match to 4.7e-15 but the coefficients differ by
+1.4e-3, which is an unconverged, path-dependent state rather than a defect, and
+is worth knowing before someone compares two runs that both hit the cap.
+
 **The operator the ablation substitutes has to be one the compiler cannot see
 through, and the first one here was not.** Replacing `h_psi` by the *identity*
 makes `hpsi` equal to `psi`, so `coefficients.T @ psi` and
@@ -3234,13 +3254,15 @@ number first.**
 **What is left, sized, and the algebra is still most of it.** After the ladder
 the subspace algebra is **41 per cent** of a Davidson call here against
 `cegterg`'s **14 per cent**, which is 56.8 ms per `h_psi`-step against QE's
-7.8 ms. The ZGEMMs and the `eigh` account for only about 87 ms of that 227 ms at
-the widths the ladder now uses, so **roughly 140 ms a call is neither, and it has
-not been attributed** -- the candidates are the four `dynamic_update_slice`
-writes into the 12 MB subspace buffers each step, the `lax.cond` collapse that
-allocates `zeros_like(psi)`, `expansion`'s elementwise chain and the two
-`project` calls. That is the next measurement and it wants an op-level profile
-rather than another ablation.
+7.8 ms. Sizing the ZGEMMs and the `eigh` from standalone timings at the ladder's widths
+puts them somewhere between 85 and 170 ms of that 227 ms, and **the range is that
+wide because the standalone timings themselves are not stable**: one Ritz
+rotation at `(32,128) x (128,5900)` read 8.28, 7.99 and 16.59 ms in three
+processes. So the unattributed remainder is anywhere from 60 to 140 ms and no
+number here should be quoted for it. **What the next session needs is an
+op-level profile, not another ablation** -- the pieces are too close in size to
+separate by subtraction, which is the same reason the identity-operator ablation
+above went wrong.
 
 `h_psi` itself is **1.24x** QE per band (2.45 ms against 1.97) and is not where
 the remaining factor is.

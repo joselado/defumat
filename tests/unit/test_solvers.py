@@ -29,9 +29,11 @@ from defumat.scf.potential import v_of_rho
 from defumat.solvers import (
     DEFAULT_EIGENSOLVER,
     EIGENSOLVERS,
+    davidson_eigensolver,
     davidson_eigensolver_all,
     get_eigensolver,
 )
+from defumat.solvers.davidson import DAVID_NDIM
 from defumat.system import build_system
 from tests.exact_reference import exact_eigenpairs_all
 
@@ -145,6 +147,46 @@ def test_a_separate_smooth_grid_does_not_break_convergence(pseudo_dir, silicon):
     # different answer: the two must agree to the size of that improvement.
     reference = run_scf(system, pseudos, conv_thr=1e-10)
     assert result.total_energy == pytest.approx(reference.total_energy, abs=1e-4)
+
+
+def test_the_live_width_ladder_survives_a_basis_refresh(silicon):
+    """Narrowing the subspace to `nbase` is exact across `cegterg`'s collapse.
+
+    The solve, the two Ritz rotations and the projection update run at the live
+    width rather than at `nvecx` (`_at_width`), which is right only because
+    every buffer is exactly zero past `nbase`. The one place that argument has
+    to be rechecked is the refresh, where `nbase` drops back to `nbnd` and the
+    buffers are rewritten -- and a seeded solve never reaches it, because it
+    converges in a step or two. A **cold** solve at a tight threshold takes
+    enough steps to refresh the basis several times, which is what this runs.
+
+    Eigenvalues, not eigenvectors: the cell is degenerate and a narrower
+    product sums the same terms in a different order, so the two arms agree to
+    round-off rather than bit for bit. The **step count** is compared as well,
+    because a solve that took a different route to the same eigenvalues would
+    be a change in the algorithm rather than in the arithmetic.
+    """
+    _, _, hamiltonian = silicon
+    runs = {}
+    for narrow in (False, True):
+        values, vectors, steps, unsettled = davidson_eigensolver(
+            hamiltonian, 0, NBND, None, ethr=1e-13, max_iterations=100,
+            narrow=narrow, return_steps=True,
+        )
+        runs[narrow] = (np.asarray(values), np.asarray(vectors),
+                        int(np.asarray(steps)), int(np.asarray(unsettled)))
+
+    full, live = runs[False], runs[True]
+    nvecx = DAVID_NDIM * NBND
+    assert NBND * (1 + live[2]) > nvecx, (
+        f"{live[2]} steps never filled a subspace of {nvecx}, so the refresh "
+        "this test exists for did not fire"
+    )
+    assert live[2] == full[2] and live[3] == full[3] == 0
+    assert np.max(np.abs(live[0] - full[0])) < 1e-12
+    # the span, which is the part a degenerate solver may not rotate
+    gram = lambda w: np.abs(w.conj() @ w.T)
+    assert np.max(np.abs(gram(live[1]) - gram(full[1]))) < 1e-8
 
 
 def test_the_registry_covers_every_solver():

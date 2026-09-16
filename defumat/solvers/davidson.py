@@ -297,6 +297,12 @@ def _width_ladder(nvecx: int, nbnd: int) -> tuple[int, ...]:
     ``lax.while_loop`` body has one shape, so ``nbase`` cannot be a bound here;
     what can is a short ladder of multiples of ``nbnd``, chosen by a
     ``lax.switch``. Four rungs at the default ``david = 4``.
+
+    **The top rung is ``nvecx`` and is not always a multiple of ``nbnd``.**
+    ``nvecx`` is ``min(david * nbnd, space)``, and a small basis can cut it
+    anywhere above ``2 nbnd`` (which is what ``_refuse_a_space_too_small``
+    guarantees). The ladder is still sorted and still covers ``nvecx``, which is
+    all :func:`_at_width` needs to round up correctly.
     """
     return tuple(range(nbnd, nvecx, nbnd)) + (nvecx,)
 
