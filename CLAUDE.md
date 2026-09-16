@@ -52,6 +52,7 @@ missing, are indexed at the head of `PLAN.md` §3.
 | where the peak working set goes, sized and ranked | `MEMORY-AUDIT.md` |
 | what is left to do about magnetism, sized, and what each piece needs first | `MAGNETISM-NEXT.md` |
 | what is left to do about continuing one run from another, sized | `CONTINUATION-NEXT.md` |
+| what still refuses an ultrasoft or PAW dataset, and what each piece needs first | `AUGMENTATION-NEXT.md` |
 
 **The claims in this project are numbers, not adjectives.** A phase is done when it has a
 concrete figure against `pw.x`, against Elk, or against an identity that shares no

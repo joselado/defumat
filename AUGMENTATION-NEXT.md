@@ -1,0 +1,343 @@
+# Ultrasoft and PAW: what still refuses them, and what each piece needs
+
+## What this file is
+
+The queue for the one axis that cuts across every other feature in this project. A
+dataset that carries an augmentation charge changes three things at once, and each of
+them reaches a different part of the code: the density is no longer `|psi|^2`, the
+overlap operator is no longer the identity, and `D_ij` is a function of the potential
+rather than a number in the file. The ground state, the forces, the stress, both
+relaxations, the dynamical matrix at `Gamma`, the dielectric constant and the Raman
+tensor all carry that already. What is below is everything that does not.
+
+Where the other files fit (`CLAUDE.md` has the full table):
+
+| question | file |
+|---|---|
+| what a phase found, and what it was measured at | `PLAN.md` §3 |
+| what a feature refuses, and how a user reaches it | `docs/features.tex` |
+| what is known to be broken, and what to do about it | `OPEN.md` |
+| **what still refuses ultrasoft or PAW, and what each piece needs first** | this file |
+
+**File and line references go stale.** The function or the guard is named wherever there
+is one, so `grep` the name rather than trusting the number.
+
+## How the list was made, and what that method cannot see
+
+Two sweeps, because one of them cannot surprise you. The first was a scan for every
+`raise` whose message contains "ultrasoft" or "PAW", which finds a refusal that says
+which dataset it is about and misses one that names only the quantity. The second was a
+scan for every `if` on `is_ultrasoft`, `is_paw` or `augmentation is (not) None` within
+eight lines of a `raise` or a `warn`, plus the callers of
+`response.phonon.require_norm_conserving`, which is how three of the third derivatives
+refuse without the word appearing anywhere near the raise. The amber boxes of
+`docs/features.tex` were taken as an independent third list and the set difference
+checked. The one thing neither sweep reaches is a path that runs on an augmented dataset
+and is quietly wrong, which is what `OPEN.md` is for.
+
+Two definitions that matter for reading the table. `Calculation.is_ultrasoft` is
+`augmentation is not None`, which is **true for a PAW dataset as well**, so a guard
+written as `if calculation.is_ultrasoft: raise` refuses both. `Calculation.is_paw` is the
+narrower one. Where an item below says "ultrasoft only" or "PAW only" it is because the
+guard was read, not because the message was.
+
+## What was excluded, and why
+
+- `hubbard/manifold.py:632`, `hubbard_slater = 'yukawa'`. The refusal points the other
+  way: the full interaction matrix is built from the manifold's all-electron partial
+  wave, which only a PAW dataset carries, so this is a norm-conserving and ultrasoft gap
+  rather than an augmented one.
+- `pseudo/spinorbit.py`, `soc_scale`. It works on ultrasoft and PAW, where QE's
+  `average_pp` refuses them outright.
+- `workflows/stm.py`. The docstring's norm-conserving remark is about `stm.f90`, not
+  about this code: the tunnelling weights go through `Calculation.density`, so the
+  augmentation charge follows them and nothing here refuses.
+- `pseudo/augmentation.py:797`, gamma-only storage. Substituted with a warning rather
+  than refused, which is the decision `CLAUDE.md` records: the same physics at twice the
+  storage, and the run says so.
+- `workflows/transport.py:1214`, a tip plane inside an augmentation sphere. Geometric and
+  correct: inside the sphere the pseudo-wavefunction is not the true one, and a tip
+  belongs in vacuum.
+- Meta-GGA with an ultrasoft dataset (`scf/driver.py:1863`). PAW works here and `pw.x`
+  refuses both, so this is ahead of the reference rather than behind it. An ultrasoft
+  dataset has no partial waves to reconstruct `tau` from and the refusal is permanent.
+
+---
+
+## 1. A term that has to be written
+
+The largest class and the slowest. Each of these is missing an object, and the object is
+named.
+
+### 1a. A sum-over-states `chi_0` with an ultrasoft dataset
+
+`tddft/chi0.py:301`, `require_a_sum_over_states_regime`. Ultrasoft and PAW, both.
+
+**What is missing.** `<u_i|e^{-iG.r}|u_j>` gains the augmentation charge `Q_ij(G)` in
+every matrix element, so without it the matrix is wrong by the whole augmentation and
+still looks like a dielectric function.
+
+**What it needs first: nothing.** This is the one item on the list whose missing object
+is already written, validated and in the package.
+`tddft/spinchi0.augmentation_factors(calculation, q, sphere)` returns `q^a_ij(q + G)`
+for every `G` of a response sphere, built on
+`topology.augmentation.augmentation_at_q`, and `spinchi0.state_projections` gives the
+`<beta|psi>` it multiplies. At `q = 0` that is exactly the term `chi0` refuses for. The
+change is one additive contribution per pair per `G` inside `_pair_terms`.
+
+**How it is checked.** The Sternheimer dielectric constant on the same ultrasoft cell is
+pinned to `ph.x` at 3.4e-10 and shares no machinery with a sum over states. The pass
+criterion is **not** that the two close: `chi0.py:270` already records a 2.1 per cent gap
+on a norm-conserving dataset from the truncated sum over empty states. What has to hold
+is that the ultrasoft gap matches the norm-conserving one at the same `nbnd` and shrinks
+the same way when `nbnd` grows, which is why it is run at two band counts.
+
+**Size:** a phase, and the smallest one here. **PAW stays refused**, for
+`spinchi0`'s reason rather than this one: its exchange-correlation kernel has a
+one-centre part on the spheres that the grid does not carry.
+
+### 1b. Born effective charges with a PAW dataset
+
+`response/born.py:157`, `require_born_charges`. PAW only; ultrasoft works.
+
+**What is missing.** `zstar_eu_us.f90`'s one-centre stage, `int3_paw` contracted against
+`becsumort`.
+
+**The gap is measured rather than guessed.** Without it: **-0.078293** against `ph.x`'s
+-0.07945, so 1.5e-3. The ultrasoft answer beside it is -0.079442, 8e-6 from the same
+reference, and the norm-conserving one reproduces every digit of -0.07571. So PAW is
+wrong in the third decimal rather than in sign, which is what makes the refusal worth
+keeping: 1.5e-3 on a Born charge is small enough to be read as convergence.
+
+**What it needs first.** `PAW_dpotential` is already one `jvp` of `onecenter`, so the
+one-centre response exists; what is not there is its contraction against the *ordered*
+`becsum` that `zstar_eu_us.f90` uses. **Size:** a phase.
+
+### 1c. A phonon at `q != 0` with an ultrasoft or PAW dataset
+
+`response/phononq.py:845`. Both.
+
+**What is missing.** `S` moves with the atoms, so the orthonormality multipliers carry
+`<psi|dS/du|psi>` between states at `k` and at `k + q`, and that has no two-sphere form
+here. The `Gamma` case is written (P39) because there both states sit on the same sphere.
+
+**What it needs first.** The same object item 1a uses, `q^a_ij(b)` at `b = q`, since the
+two spheres are separated by exactly `q`. **Size:** a phase, and the work is in the
+multipliers rather than in the augmentation.
+
+### 1d. A noncollinear ultrasoft or PAW response
+
+`response/sternheimer.py:1202` and `:903`. Both, and only in the spinor regime.
+
+**What is missing.** One object: `int3` as a 2x2 matrix in spin space, which is QE's
+`set_int3_nc`. A norm-conserving dataset has no `dD` at all, so nothing already
+validated reaches it.
+
+**What this blocks.** The dielectric constant and the Born charges of a spinor run on an
+augmented dataset, which is every heavy element. The collinear ultrasoft and PAW
+responses are unaffected and are validated. **Size:** a phase.
+
+### 1e. A spin spiral with an ultrasoft or PAW dataset
+
+`scf/driver.py:1545`. Both, and it takes `forces/spiral.py:387` with it.
+
+**What is missing.** The augmentation charge between the two spinor components is
+`q_ij(q)` rather than `qq`, since they sit on spheres centred at `k + q/2` and `k - q/2`.
+PAW needs one thing beyond that: Elk's per-atom phase `e^{-i q.tau/2}` (`zqss`,
+`init0.f90`) on the transverse one-centre term.
+
+**What it needs first.** `topology.augmentation.augmentation_at_q` again, which is the
+third item on this list to want it. `dE/dq` for a spiral (`forces/spiral.py:387`) is
+unreachable until this lands and is a line of work of its own afterwards. **Size:** a
+phase, and the one with the most surface: the spiral path also refuses symmetry, so
+everything runs on the full grid.
+
+### 1f. A source-free exchange-correlation field with a PAW dataset
+
+`scf/driver.py:1719`. PAW only.
+
+**What is missing.** The one-centre `B_xc` on the spheres is a second copy of the field
+that the projection does not reach, so the projection would make the grid field
+source-free and leave the sphere field alone. **Size:** part of a phase; the projection
+itself is short and the question is what "source-free" means for a field living on two
+representations.
+
+### 1g. The orbital magnetization with an ultrasoft or PAW dataset
+
+`workflows/orbital_magnetization.py:112`, and `topology/orbital_magnetization.py:79`.
+Both.
+
+**What is missing.** The overlaps between neighbouring k-points that the covariant
+derivative is built from need `q^a_ij(b)`, and the dual states are built in the `S`
+metric.
+
+**`setup.f90` refuses the same combination** ("Orbital Magnetization not implemented with
+USPP/PAW"), so this is a gap shared with the reference rather than a deficit against it.
+**Size:** a phase. Worth noting that the FHS invariants already carry `q^a_ij(b)`
+correctly on all three dataset kinds, so the missing half is the `zgefa`/`zgedi` dual in
+a non-trivial metric.
+
+### 1h. The piezoelectric tensor with an ultrasoft or PAW dataset
+
+`response/piezo.py:273`. Both.
+
+**What is missing.** Nothing in the piezoelectric assembly itself is norm-conserving: it
+is one `jvp` of the stress along the field's response. What it stands on is the strain
+response, which is item 3b below, and the Born charge, which is item 1b for PAW. So this
+is a **consequence** rather than a term, and it lifts when those do. **Size:** free, once
+3b lands.
+
+### 1i. Site-resolved angular momenta on a fully-relativistic augmented dataset
+
+`projwfc/angular_momentum.py:267`. Ultrasoft and PAW, and only when fully relativistic.
+
+**What is missing.** The spinor overlap's off-diagonal spin blocks are `qq_so`
+(`transform_qq_so`), and the projection here applies the scalar `S` to each component. A
+fully-relativistic **norm-conserving** dataset has `S = 1` and is exact, which is the
+regime the `j`-resolved PDOS of P69 runs in.
+
+**What it needs first.** `SpinOrbitCoupling.qq_so` exists and
+`topology/augmentation.py` already routes `q^a_ij(b)` through it, so the map is written;
+what is missing is applying it inside the projection. **Size:** part of a phase, and the
+most likely of the class to be an afternoon.
+
+### 1j. The force theorem for magnetocrystalline anisotropy with PAW
+
+`workflows/anisotropy.py:265`. PAW only; ultrasoft is allowed.
+
+**What is missing.** The handoff from the collinear first leg carries the density and
+nothing else, and a PAW Hamiltonian needs `ddd_paw`, which is built from `becsum` -- a
+property of the states rather than of the density.
+
+**What it needs first.** Widening the handoff to carry `becsum`, which is the same object
+`run_nscf` and the topology workflows already demand by name. **Size:** part of a phase,
+and it is plumbing rather than physics.
+
+### 1k. The ultracell with an ultrasoft or PAW dataset
+
+`ultracell/driver.py:356`. Both.
+
+**What is missing.** The augmentation charge is a function of the density through `D_ij`,
+so the frozen unit-cell states the ultracell is built from are not a fixed basis any
+more. P88's stage 1 is norm-conserving by design. **Size:** a phase, and it belongs to
+the ultracell's own roadmap rather than to this one.
+
+---
+
+## 2. A term that is written and unvalidated
+
+Three refusals, one term. All three say the same sentence in `docs/features.tex` and all
+three would lift or stay together.
+
+The term is the off-diagonal `<psi_n| dS/dk_a |psi_m>`, which enters the velocity of a
+generalised eigenproblem as `-e_n dS/dk_a` and is **identically zero for a
+norm-conserving dataset**. It is written -- `VelocityOperator.apply_s`, one `jvp` of
+`s_psi`, the second tangent of the same `jvp` that gives `dH/dk`. What has never been
+checked is its convention, because no norm-conserving validation can see a term that
+vanishes.
+
+- **The Kubo Berry curvature**, `topology/kubo.py:236`. `method='fhs'` is the default,
+  carries both this term and `q^a_ij(b)` correctly, and is exact on any mesh, so nothing
+  is unreachable.
+- **The optical conductivity**, `response/conductivity.py:388`.
+- **The shift current**, `response/photocurrent.py:523`, which needs the same term one
+  order further out: the dipole carries `dS/dk` and its derivative carries
+  `d^2 S/dk_a dk_b`.
+
+**What is already pinned, and what is not.** `response/efield.py:336` builds
+`-i (dH/dk_a - eps_v dS/dk_a)|psi_v>` from `VelocityOperator.both`, solves it into the
+empty space with `P_c`, and the resulting ultrasoft dielectric constant is 8e-6 from
+`ph.x`. So `apply_s` acting on an occupied state, with the occupied eigenvalue
+multiplying it, is validated, and the occupied-to-empty off-diagonal is exercised by the
+projector. What efield carries and the three above do **not** is the augmentation
+dipole, `_ultrasoft_position`, which is `adddvepsi_us`: the position operator acting on
+the augmentation charge. Whether a Kubo sum needs an analogue of it is the open question,
+and it is not settled by argument.
+
+**The measurement that settles it, and it is short.** `method='kubo'` against
+`method='fhs'` for the Chern number of the same ultrasoft cell. FHS is exact on any mesh
+and carries the augmentation correctly; Kubo converges spectrally to the same integer if
+and only if its velocity is the right one. The ultrasoft fixture exists
+(`tests/data/qe/si2-us.in`, used by `tests/regression/test_topology.py` for the `b -> 0`
+check that pins `q^a_ij(b)` against `qq`). If they agree, the Kubo refusal lifts with a
+number and the conductivity's lifts with it; if they do not, the refusal stays and the
+disagreement is the measurement. **Either outcome is a deliverable**, which is why this
+is the first thing to run.
+
+**Size:** the measurement is an afternoon. Lifting all three afterwards is a phase.
+
+---
+
+## 3. A compound refusal
+
+Not a dataset and not a quantity, but the two together. These are the ones where the
+augmented path works and something else about the run makes it not work.
+
+### 3a. The dynamical matrix of an ultrasoft or PAW **metal**
+
+`response/phonon.py:1618`, `_require_a_moving_overlap_regime`. The guard is
+`is_ultrasoft and occupations != "fixed"`, so it catches PAW and it catches only metals.
+
+**What is missing.** P28's `wg`/`wk` weight split was derived for a response whose
+`becsum` dependence is entirely through the wavefunctions, and with smearing the
+occupations respond to the perturbation as well. **Size:** a phase, and the derivation is
+the work rather than the code.
+
+### 3b. Third derivatives in the **strain** coordinate
+
+`response/phonon.require_norm_conserving`, reached from `response/elastic.py:169` and
+`response/electrostriction.py:860`. The elastic constants, electrostriction and the
+elasto-optic tensor. Both datasets.
+
+**This is the best-measured item on the list, and P44 is why.** Against a central
+difference of the strain over re-converged cells, on the `(0,0)` strain of the `nosym`
+cells:
+
+| tangents | ultrasoft | PAW |
+|---|---|---|
+| neither | 4.58e-2 | 5.53e-2 |
+| both | 1.30e-2 | 1.30e-2 |
+
+against a norm-conserving control of 2.3e-4 that does not move at all. Two of the three
+ingredients transfer and are already wired in behind the refusal: the state tangent is
+`dpsi + ort`, and `_position_response` is handed `internals["commutators"]`. A thirtyfold
+improvement and still fifty times the control, which is what says the third ingredient is
+a term rather than a tolerance.
+
+**What is missing.** The third ingredient, which is the strain derivative of the
+augmentation charge itself: `Q_ij(G)` depends on the cell through `G`, and
+`stres_us`/`addusstress` are the QE routines that are not transcribed here, so the
+analytic route offers terms and no total to check against. **Size:** a phase, and the
+hardest one on the list. Note that the **displacement** coordinate of the same third
+derivative is *not* refused and is validated at 1.2e-4 on both datasets (the Raman
+tensor, P43), so what is wrong is specific to strain.
+
+**The piezoelectric tensor (item 1h) lifts with this.**
+
+### 3c. Orthonormality multipliers for an ultrasoft or PAW **spinor** force
+
+`forces/energy.py:471`. Both, and only in the noncollinear regime, and only on the matrix
+form of the constraint.
+
+**What is missing.** `_constraint_energy` contracts the scalar `qq`, where a spinor's
+metric is `qq_so` and `Lambda` carries a spin index. The scalar spinor forces of P46 run
+and are validated; this is the matrix-multiplier path beside them. **Size:** part of a
+phase.
+
+---
+
+## The order to do them in
+
+By what the first step costs, not by what the item is worth.
+
+1. **The Kubo-against-FHS measurement** (§2). An afternoon, and it returns a number
+   whichever way it goes. It decides three refusals at once.
+2. **`chi_0` on an ultrasoft dataset** (§1a). The missing object is already in the
+   package and validated; this is the only item whose first step is not writing new
+   physics.
+3. **Site angular momenta on a relativistic augmented dataset** (§1i) and **the force
+   theorem's PAW handoff** (§1j). Both are applying an object that exists in a place that
+   does not yet call it.
+4. **Born charges on PAW** (§1b). One named term, a measured 1.5e-3 gap, and a reference
+   routine to transcribe.
+5. Everything else, in whatever order the physics wants.
