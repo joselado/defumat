@@ -16466,6 +16466,21 @@ Whether the ratio grows with `N` is one pair per `N` and is not measured.
 * **Stage 2** as planned above: the central-k route beside the direct one and the two
   errors separated. (Stages 3a, 3b and 4 -- collinear spin, the noncollinear regime and the
   total energy -- are above; what each does not have is listed with it.)
+* **A seeded modulation** -- Elk's `rndbfcu` faded by `reducebf` -- which the driver's own
+  docstring names as the route that is not written, and what its absence costs is now a
+  number rather than a statement of scope. **Measured in another session's NiBr2 helix run
+  rather than here**, so it is reported and attributed: from the ferromagnetic start the
+  only state `run_ultracell` can begin from, an `N = 3` cell turns **103.5 degrees per cell
+  against a real nine-atom supercell's 120**, with the halogen moments left along the
+  reference direction and an out-of-plane canting thirty times Elk's. Raising the driving
+  field twenty times, to where the ferromagnetic basin does not survive, brings the two
+  together -- **119.95 against 120.00 degrees**, and 6 to 12 per cent on the charge and
+  magnetization harmonics at `nbnd = 128`. So what the method delivers today on a magnet
+  whose order it is not handed is a **Q-resolved susceptibility**, which is a real quantity
+  and is not the ground state a tip sees; every comparison of an ordered state has to be
+  against a supercell that was seeded into it. The mechanism is the one the weak-field entry
+  below already names: nothing in the SCF breaks spin symmetry on its own, and a 0.1 eV
+  Zeeman term against an eV-scale exchange field finds the response rather than the order.
 * **The noncollinear crossover against the supercell.** `PERFORMANCE.md` states where the
   ultracell should overtake the supercell it approximates as an *expectation* from the
   collinear pair and the measured spinor cost, not as a measurement. The collinear crossover

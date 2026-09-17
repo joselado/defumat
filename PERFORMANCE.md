@@ -5865,6 +5865,16 @@ interpolation and is what the unit cell's own SCF already carries between the tw
 The stored arm reproduces the 13.89 s row above to within its own scatter, which is what
 says the protocol is the same one.
 
+**At a production `N` the dial stops being about speed at all**, which is the half this
+two-cell pair cannot show. The stored set is `N` tables of `nh^2 ngm x 16` bytes per
+species, so on the NiBr2 cell this fix came from -- `nh` of 34 and 14, `ngm = 83477` --
+one cell's pair of tables is **1.68 GiB** (1.44 for nickel and 0.24 for bromine), and the
+`N = 15` run that matches the reference Elk spiral would hold **25.2 GiB** of them against
+a few MB of radial knots. The 1.30 times above is then the price of fitting on the card
+rather than a cost to weigh against anything. **Whether the ratio itself grows with `N` is
+not measured** and would be one interleaved pair per `N`; `N = 15` on that three-atom cell
+is the realistic point and the session running it has offered the pair.
+
 **Where it differs from the unit cell is that there the same trade came out level**, 5.56 s
 against 5.42 s on `benchmarks/si8-us-1k.in`, because the table is *cheaper to build* than
 the stored array is and that repays the dearer contractions. An ultracell holds `N` tables
