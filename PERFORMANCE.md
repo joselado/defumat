@@ -4047,6 +4047,17 @@ three `jvp` calls rather than the frequency sum.
 **The whole regression file is 6 tests in 559 s**, of which the nickel pair is
 about 250: one spinor SCF at `ecutwfc = 60` and four conductivities off it.
 
+It read **8 tests in 1032 s** on 2026-09-18, and **that pair is not a delta.**
+Three things moved at once and only one of them is the code: two tests were
+added, `generalised_matrix_elements` doubles the `vkb` jvps on an augmented call
+(measured at 66 per cent of one call, in the P99 paragraph above, and *nothing*
+on a norm-conserving one, where the connection is `None` before any work
+happens), and the run shared the machine with a notebook export and five other
+test files. `tests/regression/test_shg.py` read **11 tests in 986 s** in the
+same run and has no earlier number to be compared with at all. Both are ceiling
+checks rather than timings, and the way to get a timing is the one this file
+already prescribes: one file, one core, an idle machine, and the second call.
+
 **The pair against `epsilon.x`, and where the reference stops (P99).** Two-atom
 silicon on the whole 4x4x4 grid at `ecutwfc = 12` with `nbnd = 24`, one core
 each (`taskset -c 0`, `OMP_NUM_THREADS=1`), both sides starting from the input
