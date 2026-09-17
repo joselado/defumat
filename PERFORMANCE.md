@@ -6817,7 +6817,8 @@ more expensive all the same: its SCF takes 60 s against AlAs's 9.9, and **one re
 not finish in 70 minutes**, against 144 s, so it was stopped rather than measured. What
 differs is `nbnd` and the box: 30 occupied spinor bands against 8, `nh = 34` per atom
 against 34 and 14, and a 45x45x81 dense grid of 60543 G-vectors against 36^3 and 14163.
-`ph.x` does the whole field stage on that cell in about **4 minutes**, so the ratio there
-is at least an order worse than AlAs's 4.4x and is where a heavy-element run would be
-paid. It is not a new regression -- the same two backlog items scale with `nbnd` -- but it
+`ph.x` does the whole field stage on that cell in **279 s**, read off the committed
+reference's cumulative clock at the end of its eighth and last field iteration
+(`av.it.` 8.2 to 15.2), so the ratio there is at least an order worse than AlAs's 4.4x
+and is where a heavy-element run would be paid. It is not a new regression -- the same two backlog items scale with `nbnd` -- but it
 is the first cell on which they are the difference between a coffee and an afternoon.
