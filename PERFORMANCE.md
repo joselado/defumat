@@ -5837,6 +5837,42 @@ suggests, and no claim about the crossover should be read off these rows -- they
 cell at the wrong end of it.
 
 
+### What QE's radial table costs inside an ultracell (P88 stage 7)
+
+**This path had never run to completion on a PAW cell**, which is why it is timed now
+rather than with stage 5: PAW's one-centre assembly read each species' block size off
+`Q_ij(G)`, which the tabulated table does not have, so a run that fell to it died after a
+converged SCF (`PLAN.md` P88 stage 7). The dial matters more here than in a unit cell
+because the displaced tables ask the byte gate about `max_bytes / N`, so an ultracell
+reaches the table `N` times sooner -- on the 45-atom NiBr2 slab the fix was reported from,
+1.7 GiB per table against a 683 MiB share of the default budget, which means the table is
+not an option there but the route the run takes.
+
+Stage 5's cell and protocol exactly -- silicon, two atoms, `nosym`, `ecutwfc = 16`,
+`ecutrho = 64`, `N = 2` on `kgrid = (1, 2, 2)` at `nbnd = 24` under the same
+`0.05 cos(pi x_1)` Ry modulation, PAW. Both arms are measured **here** rather than one of
+them read off the table above, single core by the affinity mask, the first call of each arm
+discarded, and the two arms **interleaved** so that a drift in the machine lands on both.
+
+| route | ultracell, s | samples | its | total energy, Ry |
+|---|---|---|---|---|
+| stored `Q_ij(G)` | **14.19** | 14.19, 13.81, 15.73 | 10 | -89.0900085631 |
+| QE's radial table | **18.47** | 18.15, 18.47, 19.10 | 10 | -89.0900085635 |
+
+**The table costs 1.30 times the stored array on the whole run, at the same iteration
+count and for the same answer** -- the two energies are 4e-10 Ry apart, which is the radial
+interpolation and is what the unit cell's own SCF already carries between the two routes.
+The stored arm reproduces the 13.89 s row above to within its own scatter, which is what
+says the protocol is the same one.
+
+**Where it differs from the unit cell is that there the same trade came out level**, 5.56 s
+against 5.42 s on `benchmarks/si8-us-1k.in`, because the table is *cheaper to build* than
+the stored array is and that repays the dearer contractions. An ultracell holds `N` tables
+and contracts against each of them every iteration while paying their build once per run,
+so the repayment is diluted and 1.30 is what is left of it at `N = 2`. **Whether that grows
+with `N` is not measured**: it would be one pair per `N`, and the sentence above is the
+mechanism rather than a fit to two points.
+
 ### Memory
 
 Two objects grow with `N` and neither is the Hamiltonian until the dense solve has

@@ -16422,8 +16422,9 @@ measures it against `eta`). The rung that discriminates is the modulated one, be
 folded state is one basis function whose normalisation is the unit cell's, where a state
 mixing `Q` makes `sum_Q |c_Q|^2 = 1` the `S`-orthonormality claim itself: against a real
 two-cell supercell's own transmission under the same `0.05 cos(pi x_1)` Ry modulation, the map
-converges: **1.09e-2** at `nbnd = 12` and **1.96e-3** at 24, the same ladder the induced
-density climbs one quantity down.
+converges: **1.09e-2** at `nbnd = 12` and **1.96e-3** at 24. The two rungs are the ladder
+the norm-conserving version of this test walks, and the cell is a different one from stage
+5's, so what carries across is the shape of the convergence rather than the numbers.
 
 **The crash: a memory dial divided by `N` is exercised `N` times sooner.** The displaced
 tables ask the byte gate about `max_bytes / N` rather than `max_bytes`, so an ultracell
@@ -16451,12 +16452,14 @@ either way, with the induced density agreeing to 3.5e-10 and 2.8e-9 of its own m
 said -- the unit cell's own SCF moves by the same amount between the two routes, so the `N`
 displaced tables add nothing to it.
 
-**What stage 7 does not have.** A timing of the table route *inside* an ultracell, which is
-owed to `PERFORMANCE.md`: what was measured here was taken in fresh processes beside other
-work, so it is a first call and a contended one, and the number it would give is neither the
-work nor this code's cost. The unit cell's own pair is measured (stage 5's entry in
-`PERFORMANCE.md`), and there the table is level on the whole run while changing the memory by
-38 times.
+**What the table route costs inside an ultracell is measured and is in `PERFORMANCE.md`**,
+because until this fix that path had never run to completion on a PAW cell at all. On stage
+5's own cell and protocol, both arms interleaved on one core after a discarded first call:
+**14.19 s stored against 18.47 s tabulated**, 1.30 times, at the same ten iterations and for
+an energy 4e-10 Ry away. The unit cell's own pair came out *level* (5.56 against 5.42 s),
+and the reason the ultracell does not is that it holds `N` tables and contracts against each
+every iteration while paying their build once per run, so the build's saving is diluted.
+Whether the ratio grows with `N` is one pair per `N` and is not measured.
 
 **What is outstanding.**
 
