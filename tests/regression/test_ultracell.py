@@ -1634,6 +1634,213 @@ def test_the_noncollinear_ultracell_converges_to_the_supercell(
     assert max(errors[0]) < 3e-3 and max(errors[-1]) < 5e-4, errors
 
 
+#: A helix as a real supercell: ``n`` species pointing at one UPF, because
+#: ``angle1``/``angle2`` are per species and a texture is per atom. The moments
+#: lie in the plane perpendicular to the modulated axis is not the point --- what
+#: matters is that they are perpendicular to the **reference**'s own direction,
+#: which the test below sets along ``z``, for the reason it gives.
+HELIX = """&control
+ calculation='scf'
+/
+&system
+ ibrav=0, celldm(1)=5.5, nat={nat}, ntyp={nat}, ecutwfc=15.0,
+ nosym=.true., noinv=.true.,
+ noncolin=.true.,
+{magnetism}
+ occupations='smearing', smearing='gaussian', degauss=0.02
+/
+&electrons
+ conv_thr=1.0d-11
+ mixing_beta=0.3
+/
+CELL_PARAMETERS alat
+{rows}
+ATOMIC_SPECIES
+{species}
+ATOMIC_POSITIONS crystal
+{atoms}
+K_POINTS automatic
+ {k0} {k1} {k2} 0 0 0
+"""
+
+
+def _helix_supercell(tmp_path, pseudo_dir, n, kgrid) -> Calculator:
+    """``n`` hydrogens along ``x``, each moment turned ``360/n`` from the last."""
+    rows = "\n".join(" %.10f %.10f %.10f" % tuple(v)
+                     for v in np.diag((n, 1, 1)).astype(float))
+    names = [f"H{i + 1}" for i in range(n)]
+    species = "\n".join(f" {name} 1.008 H.pz-vbc.UPF" for name in names)
+    atoms = "\n".join(" %s %.10f 0.0 0.0" % (names[i], i / n) for i in range(n))
+    magnetism = "\n".join(
+        f" starting_magnetization({i + 1})=0.8, angle1({i + 1})=90.0, "
+        f"angle2({i + 1})={360.0 * i / n},"
+        for i in range(n))
+    path = tmp_path / f"h_helix{n}.in"
+    path.write_text(HELIX.format(nat=n, rows=rows, species=species, atoms=atoms,
+                                 magnetism=magnetism, k0=kgrid[0], k1=kgrid[1],
+                                 k2=kgrid[2]))
+    return Calculator.from_file(path, pseudo_dir=pseudo_dir)
+
+
+def _pitch(moments):
+    """The angle each cell's moment turns about ``z``, in degrees.
+
+    The projection onto the plane perpendicular to ``z`` is the right thing
+    *here* and would not be in general: the reference's magnetization is along
+    ``z`` and the rotation the protected sector is protected by is the rotation
+    about ``z``, so this is the pitch about the seed's own axis. What the
+    projection throws away is the moments' common out-of-plane component, and
+    that is a quantity in its own right -- see :func:`_cone`.
+    """
+    angles = np.arctan2(np.asarray(moments)[:, 1], np.asarray(moments)[:, 0])
+    return np.degrees(np.diff(np.unwrap(angles)))
+
+
+def _cone(moments):
+    """How far each cell's moment stands off the helix plane, in degrees.
+
+    An exact helix is flat, so this is zero; a truncated one cants uniformly
+    towards the direction its basis was built around, which is a ferromagnetic
+    remnant at ``Q = 0`` that the wave's own Fourier component cannot see.
+    """
+    m = np.asarray(moments)
+    return np.degrees(np.arcsin(
+        np.clip(m[:, 2] / np.linalg.norm(m, axis=1), -1.0, 1.0)))
+
+
+@pytest.mark.slow
+def test_a_seeded_helix_keeps_the_pitch_it_was_given(tmp_path, pseudo_dir):
+    """A spontaneous helix: which sector the loop stays in, and what the
+    truncation charges for it.
+
+    A helix of pitch ``N`` cells is invariant under a translation by one cell
+    followed by a spin rotation of ``360/N`` about its own axis, and the
+    self-consistent map commutes with both -- so that sector is closed and a run
+    started in it stays in it. **In the truncated problem it is closed only if
+    the basis is**, and the basis is the unit cell's own spinors: a rotation
+    about the reference's own magnetization is a *phase* on each of them, since
+    without spin-orbit coupling they are eigenstates of ``sigma . e_0``, and a
+    rotation about any other axis is not. So there is one closed sector and its
+    axis is ``e_0``: **write the seed about the direction the reference's moment
+    already points along.**
+
+    **What that buys is the iteration count and the frame, not the pitch.**
+    Seeded about ``z`` with the reference along ``z``, four cells at
+    ``nbnd = 16`` converge in **14** iterations; seeded about ``z`` with the
+    reference along ``(1,1,1)/sqrt(3)`` the same run takes **290** and arrives
+    at a helix turning about ``(1,1,1)/sqrt(3)`` instead. It is the same state:
+    after one global rotation the two runs' cell moments agree to 1.23e-3 on
+    moments of 0.272, 0.45 per cent, and their energies to 3.5e-9 Ry. A global
+    spin rotation costs nothing without spin-orbit coupling, so the unprotected
+    run is not wrong -- it is traversing a flat manifold to reach the frame its
+    basis prefers, which is what 290 iterations buys and why the fix is the axis
+    rather than ``mixing_beta``.
+
+    **What the truncation costs is the canting**, and that is the half a pitch
+    check cannot see. The converged moments stand off the helix plane by a
+    *uniform* angle -- which the closed sector allows, a cone being as invariant
+    under the pair as a flat helix -- and it is a ferromagnetic remnant at
+    ``Q = 0``, along the axis, that the wave's own Fourier component is blind to.
+    It falls with the one knob the method has, where the pitch has nothing left
+    to converge:
+
+    | ``nbnd`` | pitch error, deg | cone, deg | net moment | ``E`` above the supercell |
+    |---|---|---|---|---|
+    | 16 | 1.35e-04 | 10.64 | 0.0628 | +4.37e-04 |
+    | 24 | 8.50e-05 | 6.30 | 0.0370 | +2.54e-04 |
+    | 40 | 3.27e-05 | 3.00 | 0.0176 | +1.22e-04 |
+    | 64 | 1.20e-05 | 0.91 | 0.0054 | +3.74e-05 |
+
+    so reading the pitch alone at ``nbnd = 16`` would call the state exact while
+    18 per cent of its moment stood off the helix. Across that range the cone
+    falls by 11.65 and the energy error by 11.68, which is reported as a fact
+    rather than explained. The reference is the same four atoms as a real
+    supercell with the helix seeded per species, whose site moments are flat to
+    1e-5 and whose energy is **0.739 mRy per cell below** the ferromagnet the
+    ultracell expands around -- which is what makes reaching it worth a seed.
+
+    ``nbnd = 8`` is quoted and not run: it holds the pitch to 4.2e-3 degrees,
+    the closure not needing convergence, and does not reach ``conv_thr`` in 300
+    iterations.
+    """
+    n, kgrid = 4, (1, 2, 2)
+    shape = (n, 1, 1)
+    folded = tuple(a * b for a, b in zip(shape, kgrid))
+    # The reference points along ``z`` and the helix turns about ``z``: the one
+    # arrangement in which the truncated basis is closed under the rotations
+    # relating the cells.
+    calculator = _noncollinear(tmp_path, pseudo_dir, (1, 1, 1), folded,
+                               angle1=0.0, angle2=0.0, tag="helix_unit")
+    scf = calculator.get_scf(conv_thr=1e-11, nbnd=8, max_iterations=300)
+    assert scf.converged
+    moment = np.asarray(scf.magnetization_vector)
+    assert abs(moment[2]) > 0.5 and np.abs(moment[:2]).max() < 1e-4, moment
+
+    supercell = _helix_supercell(tmp_path, pseudo_dir, n, kgrid)
+    reference = supercell.get_scf(conv_thr=1e-11, nbnd=16, max_iterations=300)
+    assert reference.converged
+    sites = np.asarray(reference.site_moments)
+    assert np.abs(_pitch(sites) - 360.0 / n).max() < 1e-2, sites
+    # The state this is a reference for is a *flat* helix, which is the claim
+    # the canting below is measured against.
+    assert np.abs(_cone(sites)).max() < 1e-2, sites
+    volume = float(calculator.system.cell.volume)
+    miller = np.array([[1, 0, 0]])
+    theirs = np.asarray(reference.density)[1:]
+    their_grid = tuple(theirs.shape[1:])
+    their_amplitude = float(np.linalg.norm([
+        _fourier(theirs[c], their_grid, miller)[0] for c in range(3)
+    ])) * volume
+    their_energy = float(reference.total_energy) / n
+    # The helix is the lower state, which is what makes reaching it worth a seed.
+    assert their_energy < float(scf.total_energy) - 5e-4
+
+    def helix(x):
+        phase = 2 * np.pi * x[..., 0] / n
+        return np.stack([np.cos(phase), np.sin(phase),
+                         np.zeros_like(phase)], axis=-1)
+
+    amplitudes, energies, cones = [], [], []
+    for nbnd in (16, 24):
+        result = run_ultracell(
+            calculator.system, calculator.pseudos, scf, shape, kgrid,
+            nbnd=nbnd, seed_magnetization=helix, conv_thr=1e-10,
+            states_conv_thr=1e-8, mixing_beta=0.3, max_iterations=300,
+            david=None if nbnd < 24 else 2,
+        )
+        assert result.converged
+        moments = np.asarray(result.cell_moments())
+        # Three separate statements about the texture. The pitch is exact
+        # because the sector is closed; the lengths are equal and the canting
+        # uniform because the same closure makes every cell the image of the
+        # first -- and none of the three needs the other two.
+        assert np.abs(_pitch(moments) - 360.0 / n).max() < 1e-3, moments
+        lengths = np.linalg.norm(moments, axis=1)
+        assert np.abs(lengths / lengths[0] - 1.0).max() < 1e-4, lengths
+        cone = _cone(moments)
+        assert np.abs(cone - cone[0]).max() < 1e-3, cone
+        cones.append(abs(float(cone[0])))
+        # The cone's axis stays on the reference's direction, which is what
+        # says the run never left the closed sector: the remnant is along z
+        # and has nothing in the plane the moments turn in.
+        net = moments.mean(axis=0)
+        assert np.abs(net[:2]).max() < 1e-4 * abs(net[2]) + 1e-6, net
+        ours = np.asarray(result.magnetization)
+        box = tuple(result.ultracell.grid)
+        amplitudes.append(abs(float(np.linalg.norm([
+            _fourier(ours[c], box, miller)[0] for c in range(3)
+        ])) * volume - their_amplitude) / their_amplitude)
+        energies.append(float(result.total_energy) - their_energy)
+        jax.clear_caches()
+
+    assert amplitudes == sorted(amplitudes, reverse=True), amplitudes
+    assert energies == sorted(energies, reverse=True), energies
+    assert cones == sorted(cones, reverse=True), cones
+    assert all(e > 0.0 for e in energies), energies
+    assert amplitudes[-1] < 1e-2 and energies[-1] < 3e-4, (amplitudes, energies)
+    assert cones[-1] < 8.0, cones
+
+
 @pytest.mark.slow
 def test_fixed_occupations_fill_spinor_bands_one_electron_at_a_time(pseudo_dir):
     """Spin-orbit coupling in an ultracell, and the bug that found itself here.

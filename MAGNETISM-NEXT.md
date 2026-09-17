@@ -727,6 +727,19 @@ decide it, because a departure from `pw.x` needs a number rather than an argumen
   stationary points nothing guarantees the same one is found at each `nbnd`, so the energy
   ranks solutions at one fixed `nbnd` and certifies no sequence across several. Quote the
   grid, the field and the `nbnd` with every number, which is this section's own rule.
+
+  **And the second missing instrument now exists too, with a warning about what "three
+  solutions" can mean** (2026-09-17, `PLAN.md` P88 stage 8). `seed_magnetization` puts the
+  loop into a texture of the caller's choosing rather than leaving it to find one, so the
+  three can be entered deliberately instead of stumbled on. The warning is the finding that
+  came with it: two seeded helix runs whose cell moments looked like *different* textures --
+  projected pitches of 90.0, 90.0, 90.0 against 88.9, 82.2, 115.2 degrees -- turned out to
+  be **the same state in two global spin frames**, agreeing to 0.45 per cent after one
+  global rotation and to 3.5e-9 Ry in energy. So before counting solutions on a flat
+  manifold, align them: fit the one global rotation between two candidates' cell moments
+  and read the residual, because a component-by-component comparison counts frames rather
+  than states. It is rule D4's habit one object up -- the gauge here is a rigid spin
+  rotation instead of a multiplet's mixing.
 - **Projecting the rigid rotation out of the magnetic residual.** Fully specified already in
   `OPEN.md` Part VI item 3, including the `lspinorb` gate (the mode is gapped there and the
   projection would be actively wrong) and the decisive run (0.002 Ry at `mixing_beta = 0.7`,

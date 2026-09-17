@@ -10,6 +10,8 @@ has nothing to do with the loop. The tiled null the regression suite runs cannot
 see the first of those at all, because a tiled seed is the same on every copy.
 """
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -19,6 +21,7 @@ from defumat.ultracell.seed import (
     refuse_an_unmagnetized_reference,
     seeded_becsum,
     seeded_density,
+    warn_if_the_seed_leaves_the_closed_sector,
 )
 
 AXIS = np.array([1.0, 1.0, 1.0]) / np.sqrt(3.0)
@@ -115,6 +118,7 @@ def test_a_collinear_seed_scales_the_moment_and_leaves_the_charge(ultracell):
     assert np.abs((got[0] - got[1]) - expected).max() < 1.0e-15
 
 
+@pytest.mark.filterwarnings("ignore:this seed does not turn")
 def test_a_noncollinear_seed_turns_the_moment_and_keeps_its_length(ultracell):
     """A unit seed is a rotation, so ``|m(r)|`` is pointwise unchanged.
 
@@ -246,6 +250,35 @@ def test_a_compensated_reference_has_no_direction_to_turn_from(ultracell):
     assert net == 0.0
     with pytest.raises(NotImplementedError, match="residue of cancellation"):
         reference_axis(density[1:], 1.0)
+
+
+def test_a_seed_that_leaves_the_closed_sector_says_so(ultracell):
+    """The warning that is worth 290 iterations against 14, and its null.
+
+    The truncated basis closes one sector and its axis is the reference's own
+    magnetization, so a seed whose directions sit on a cone about that axis
+    stays where it was put and one that does not has to traverse a flat
+    manifold to get to the frame the basis prefers. Both halves are checked
+    here, because a warning that fires on everything says nothing: the helix
+    about ``z`` with the reference along ``z`` is silent, and the same helix
+    against a reference 54.7 degrees away is not.
+    """
+    pitch = ultracell.shape[0]
+    helix = _on_the_box(ultracell, lambda x: np.stack([
+        np.cos(2 * np.pi * x[..., 0] / pitch),
+        np.sin(2 * np.pi * x[..., 0] / pitch),
+        np.zeros(x.shape[:-1]),
+    ], axis=-1), components=3)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        spread = warn_if_the_seed_leaves_the_closed_sector(
+            helix, np.array([0.0, 0.0, 1.0]))
+    assert spread < 1.0e-15
+
+    with pytest.warns(UserWarning, match="290 iterations against 14"):
+        spread = warn_if_the_seed_leaves_the_closed_sector(helix, AXIS)
+    assert spread > 0.4
 
 
 @pytest.mark.parametrize("nspin_mag", [2, 4])

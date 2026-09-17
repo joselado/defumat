@@ -77,6 +77,7 @@ REWRITTEN = {
     "35_magnetoelectric_effect",
     "44_ultra_long_range",
     "45_imaging_a_modulation",
+    "46_a_spin_wave_that_stays",
 }
 
 #: Notebooks that still say ``jvp`` in a plot label or a code cell. Prose debt

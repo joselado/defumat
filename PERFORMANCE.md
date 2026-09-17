@@ -5837,6 +5837,46 @@ suggests, and no claim about the crossover should be read off these rows -- they
 cell at the wrong end of it.
 
 
+### What a seeded texture costs (P88 stage 8)
+
+**The seed costs nothing per iteration and that is the whole result**, so what is
+measured here is the pair a user faces -- the seeded ultracell against the seeded
+supercell it approximates -- and the check that the seed did not change it.
+
+Two cells of the partly-polarized hydrogen lattice at `a = 5.5`
+(`tests/data/qe/h-mag-ultracell.in`), both arms started from the *same* staggered
+moments: the ultracell through `seed_magnetization=cos(pi x)` at `nbnd = 24`, the
+supercell through `starting_magnetization` of opposite sign on two species. Both
+converge to the same antiferromagnet (4e-5 relative on the wave's own Fourier
+component). One core with the affinity mask set before JAX is imported, first call
+discarded, median of three:
+
+| route | s | samples | its | total energy, Ry/cell |
+|---|---|---|---|---|
+| seeded supercell | **1.85** | 1.85, 1.84, 1.85 | 9 | -0.9360931899 |
+| seeded ultracell | **16.16** | 15.61, 16.16, 16.82 | 7 | -0.9360252009 |
+
+**The supercell wins by 8.7 times, and that is the crossover table above rather
+than anything the seed did.** At `N = 2` that table reads 0.12 on unpolarized
+silicon under an applied potential; this pair reads **0.11** on a magnetic cell
+under a seed, at twice the band count and with two spin channels. Two
+measurements of the same ratio through different physics is what says the seed is
+not on the bill: it is one array operation on the starting density before the
+loop, and the crossover stays where stage 1 measured it, near `N = 6`.
+
+**What a seed does change is the iteration count, and that is a property of the
+state rather than of the code.** On the same machinery: **1** iteration for the
+tiled state, which is an exact fixed point and the reason a seed is needed at
+all; **7** for the staggered wave; **14** for a four-cell helix seeded about the
+reference's own magnetization; and **290** for the same helix seeded about an
+axis 54.7 degrees away from it. The last number is the one worth knowing and it
+is not overhead -- both runs reach the same state, agreeing to 0.45 per cent
+after one global rotation and to 3.5e-9 Ry, and the 276 extra iterations are a
+flat manifold being traversed, because without spin-orbit coupling a global spin
+rotation costs nothing and only the sector whose axis is the reference's
+direction is closed under the truncation (`PLAN.md` P88 stage 8). `run_ultracell`
+warns when a seed leaves it.
+
 ### What QE's radial table costs inside an ultracell (P88 stage 7)
 
 **This path had never run to completion on a PAW cell**, which is why it is timed now

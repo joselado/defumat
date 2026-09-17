@@ -331,7 +331,7 @@ because that is what decides whether it is a session or a phase.
   follow-up; memory held by **child** processes, which the cgroup charges and this does
   not; and the fact that the failure lands at *teardown*, after the peak — if the peak is
   the kill, what survives is the log line, which is why it is written first.
-- **The ultracell beyond an LDA** (P88, stages 1, 3a, 3b, 4 and 5 done). Spin is in, collinear
+- **The ultracell beyond an LDA** (P88, stages 1, 3a, 3b, 4, 5, 6, 7 and 8 done). Spin is in, collinear
   and noncollinear both: an applied `magnetic_field` modulates the moment, the two collinear
   channels share one Fermi level, and a spinor ultracell is *one* matrix per folded k-point
   rather than two, acted on by `V_0 + sigma . B`, so a texture that **turns** is reachable
@@ -341,8 +341,10 @@ because that is what decides whether it is a session or a phase.
   along it and a 0.002 Ry run takes 263 iterations (`OPEN.md` Part VI item 3). The
   **total energy** is in and Elk still has none (`energyulr.f90` is the eigenvalue sum alone), so the
   energy gain of a modulated state over the uniform one is a quantity this code reports
-  and no other does; what is missing beside it is the *spontaneous* wave it would judge,
-  seeded by Elk's `rndbfcu` and faded by `reducebf`. Term by term, what is left: a **GGA**,
+  and no other does -- and the *spontaneous* wave it exists to judge is now reachable, by
+  a **seed** rather than by Elk's faded field (stage 8): nothing is faded because the mixed
+  quantity here is the density, so the seed is an initial condition and not a term in the
+  functional. Term by term, what is left: a **GGA**,
   where the gradient of the ultracell density carries the
   envelope's own gradient that Elk's per-cell `potxc` call silently drops -- **and it is what
   blocks the paper's own chromium case**, the only Cr dataset committed here being PBE; and
@@ -14920,7 +14922,7 @@ told from silence is this project's most-repeated trap.
   which is a statement about that route rather than this one, and QE's own `average_pp.f90`
   refuses ultrasoft and PAW outright.
 
-### P88 -- The ultracell: a modulation a thousand cells long, solved in the unit cell's own states. ✅ DONE, stages 1, 3a, 3b, 4, 5, 6 and 7 (LDA, direct route, `nspin = 1`, `2` and `4`, the total energy, ultrasoft/PAW in all three spin regimes, and the augmented transmission); stage 2 planned.
+### P88 -- The ultracell: a modulation a thousand cells long, solved in the unit cell's own states. ✅ DONE, stages 1, 3a, 3b, 4, 5, 6, 7 and 8 (LDA, direct route, `nspin = 1`, `2` and `4`, the total energy, ultrasoft/PAW in all three spin regimes, the augmented transmission, and the seeded modulation); stage 2 planned.
 
 Elk tasks 700/701 (ground state), 720/725 (band structure and spectral function), 731-3,
 741-3, 771-3 (plots); `src/modulr.f90` and the twenty routines around it. The method paper is
@@ -15424,7 +15426,9 @@ knob is `magnetic_field`: a collinear `B(r)` in Ry entering as `v_up -= B`, `v_d
 is `add_bfield.f90:237-238` transcribed and unit-tested on its own. What that induces is the
 `Q`-resolved response, which is a quantity rather than an initial condition; Elk's other route
 -- a random seed field (`rndbfcu`) faded away by `reducebf`, which lets a *spontaneous* wave
-find its own period -- is not written and is named below.
+find its own period -- is not written and is named below. **Written in stage 8, and not as a
+faded field**: the mixed quantity here is the density, so a seed is an initial condition
+rather than a term in the functional and there is nothing to fade.
 
 **The number for the field, and it shares nothing with the ultracell.** At `N = 1` a
 **uniform** applied field is the same physics as an ordinary SCF with `B_field(3)`: the
@@ -15519,6 +15523,11 @@ thing that is actually still moving. A **spontaneous** wave -- Elk's `rndbfcu` s
 is outstanding below -- has no field holding its moment, and there the soft direction is
 the one with no `1/|G+Q|^2` in front of it. `OPEN.md` Part VI item 2 carries the factor
 (2.2e3 in the weights at this cell's `|Q|`) and the instruction to re-measure then.
+**Re-measured in stage 8, and the prediction did not hold for a collinear wave**: a
+collinear spontaneous wave has no soft direction at all -- only the moment's *magnitude* is
+a degree of freedom and it is stiff -- so its magnetic half came out 7 to 39 times *below*
+the charge one across a thousandfold change of `conv_thr`. The soft direction is the
+noncollinear one, and there it shows as iterations rather than as a residual.
 
 **A ground state converged under a field is refused, and it is the same argument
 `fixed_density_states` makes one layer down.** The frozen eigenvalues carry the field the SCF
@@ -15546,12 +15555,14 @@ merely unlikely.
   **not** in the reported total. So the field is validated by the `N = 1` uniform identity
   above (which needs no hook, because `B_field(3)` is an ordinary input) and the spin plumbing
   by the scalar supercell ladder, and the two are not fused into one run.
-* **Elk's seeded random field (`rndbfcu`) and `reducebf`**, which is how a *spontaneous* wave
-  finds its own period rather than being told one. Everything it needs exists -- the field
-  enters `dV` and `MagneticField.reducebf` is already implemented for the ordinary SCF -- so
-  this is a loop variable and a warning, not new physics. Without it the ultracell answers
-  "what does this modulation do" and not "is a modulation the ground state", and **the second
-  question needs the total energy anyway** (stage 4), so the two belong together.
+* ~~**Elk's seeded random field (`rndbfcu`) and `reducebf`**, which is how a *spontaneous*
+  wave finds its own period rather than being told one.~~ **Done in stage 8, and not this
+  way.** The seed goes into the **density** rather than into the field, because the density
+  is what this loop mixes -- so it is an initial condition and not a term in the functional,
+  nothing has to fade, and the criterion this bullet would have needed (a fixed point of a
+  field going to zero) never arises. A *random* seed is an ordinary argument, so finding a
+  period rather than being told one is available and is not measured; what is measured is a
+  seed whose period was handed over.
 * **The Cr spin density wave against Elk.** `Cr.pbe-nc-sg15.UPF` is the only chromium dataset
   committed here and it is **PBE**, which the ultracell refuses -- the gradient of the
   ultracell density carries the envelope's own gradient, which Elk's per-cell `potxc` drops.
@@ -16039,9 +16050,12 @@ not zero.
 
 **What stage 4 does not have.**
 
-* **The energy gain of a *spontaneous* wave**, which is the question the energy was written
-  for and which needs Elk's `rndbfcu` seed and `reducebf` to ask -- still outstanding, and
-  now unblocked: the two belong together and the missing half was this one.
+* ~~**The energy gain of a *spontaneous* wave**, which is the question the energy was
+  written for.~~ **Asked and answered in stage 8**, the missing half having been the seed:
+  on two cells of hydrogen the staggered wave is **3.085 mRy per cell** below the tiled
+  ferromagnet, and on four cells the helix is **0.739 mRy** below it in the supercell the
+  ultracell is compared against. The energy is what ranks them and the seed is what reaches
+  them.
 * **A ranking of the three solutions the `(4, 2, 2)` hydrogen ultracell was measured to
   have** (`OPEN.md` Part VI item 3). The instrument now exists and the run has not been
   made. Note before making it that the bound above does **not** apply there: with three
@@ -16461,26 +16475,151 @@ and the reason the ultracell does not is that it holds `N` tables and contracts 
 every iteration while paying their build once per run, so the build's saving is diluted.
 Whether the ratio grows with `N` is one pair per `N` and is not measured.
 
+**Stage 8: the seed, and the sector it has to be written in.** What was outstanding here
+was named as "Elk's `rndbfcu` faded by `reducebf`", and the awkward half of it -- a fixed
+point of a field that is going to zero -- turned out to be a property of **Elk's** choice
+rather than of the problem. Elk seeds its *potential*, where a seed is a term in the
+functional and therefore has to leave before the converged state means anything. The mixed
+quantity here is the **density** (that is stage 1's own departure, taken for `conv_thr`'s
+sake), so a seed is an initial condition and not a term: the functional is the field-free
+one from the first iteration, and the convergence test is the ordinary `dr2` with nothing
+subtracted from it. Nothing is faded, and there is no criterion to invent.
+`seed_magnetization` is the argument, `defumat/ultracell/seed.py` the module.
+
+**What a seed is: a factor on the converged unit cell's own moment**, which is
+`starting_magnetization`'s role one level up and carries its range, `|s| <= 1`. A number
+collinear (`m -> s m`) and a vector noncollinear (`m -> |s| R(e_0 -> s-hat) m`, the whole
+cell's magnetization turned rigidly). It multiplies a moment rather than replacing one
+because a caller knows the texture -- one direction per cell -- and does not know the
+profile *inside* a unit cell. Evaluated pointwise, so a helix turns continuously across a
+cell the way a spiral does; `floor(x)` in the callable is the per-cell step. **An augmented
+dataset is seeded in both of its mixed variables**: most of a transition metal's moment is
+inside the projector spheres, so a seed reaching the grid alone would seed almost nothing
+on a PAW magnet and would leave the first iteration's one-centre potential disagreeing with
+its own density -- `becsum` therefore reads the *same* evaluated field at each atom's own
+grid point of the box. That half is checked on constructed occupations rather than in a
+converged run, because no tiled null can see it: a tiled seed is the same on every copy,
+and the copy index is a lattice translation in C-order over the triple.
+
+**The collinear number: a state the loop could not reach.** The tiled state is an exact
+fixed point, so an unseeded magnetic ultracell converges in **one** iteration and stays as
+ferromagnetic as its unit cell. Seeded with `cos(pi x)` on two cells of hydrogen, the same
+cell converges to the staggered wave, **3.085 mRy per cell below** the tiled ferromagnet.
+Against the same two atoms as a real supercell seeded through `starting_magnetization` of
+opposite sign on two species, the wave's own Fourier component agrees to **1.51e-3,
+5.04e-4, 1.74e-4 and 3.10e-5** relative at `nbnd = 16, 24, 40, 64`, with the energy
+**+1.53e-4, +6.80e-5, +2.32e-5 and +5.57e-6** Ry above the supercell's -- above at every
+rung and falling, which is the nested-basis property. The supercell's amplitude is
+0.36546537 mu_B per cell.
+
+**The noncollinear finding, which is the result of this stage.** A helix of pitch `N` cells
+is invariant under a translation by one cell followed by a spin rotation of `360/N` about
+its own axis, and the self-consistent map commutes with both, so that sector is closed. **In
+the truncated problem it is closed only if the basis is** -- and the basis is the unit
+cell's own spinors, on which a rotation about the reference's own magnetization is a *phase*
+(they are eigenstates of `sigma . e_0` without spin-orbit coupling) and a rotation about
+any other axis is not. So there is **one** closed sector and its axis is `e_0`: write the
+seed about the direction the reference's moment already points along.
+
+**What that buys is the iteration count and the frame, and not the pitch**, which is the
+correction this stage nearly recorded the wrong way round. Four cells of hydrogen at
+`nbnd = 16`, seeded about `z`: with the reference along `z` the run converges in **14**
+iterations at a pitch of 90.0001, 90.0000, 89.9999 degrees; with the reference along
+`(1,1,1)/sqrt(3)` it takes **290** and arrives at a helix turning about `(1,1,1)/sqrt(3)`
+instead. Read in the `xy` projection the second one's steps are 88.9, 82.2 and 115.2
+degrees and look like a bent pitch; they are not. The two are the **same state in two
+global spin frames** -- after one global rotation their cell moments agree to 1.23e-3 on
+moments of 0.272, 0.45 per cent, and their energies to **3.5e-9 Ry** -- and a global spin
+rotation costs nothing without spin-orbit coupling. The unprotected run is traversing a
+flat manifold to reach the frame its own basis prefers, which is what 290 iterations are
+and why the fix is the axis rather than `mixing_beta`. **The run says so by name**: a seed
+whose directions do not sit on a cone about the reference's magnetization is warned about,
+with that pair of iteration counts in the message, and the test feeds the guard both a seed
+that trips it and one that does not. **The energies agreeing to 3.5e-9 on
+states whose projected pitches differ by 25 degrees is what said "tilt" rather than
+"distortion"**, and checking it was the difference between recording the mechanism and
+recording an artefact of the diagnostic.
+
+**What the truncation charges instead is the canting**, and a pitch check on its own cannot
+see it. The converged moments stand off the helix plane by a *uniform* angle -- a cone is as
+invariant under the pair as a flat helix -- and that is a ferromagnetic remnant at `Q = 0`,
+along the axis, which the wave's own Fourier component is blind to:
+
+| `nbnd` | pitch error, deg | cone, deg | net moment | `E` above the supercell, Ry |
+|---|---|---|---|---|
+| 16 | 1.35e-04 | 10.64 | 0.0628 | +4.37e-04 |
+| 24 | 8.50e-05 | 6.30 | 0.0370 | +2.54e-04 |
+| 40 | 3.27e-05 | 3.00 | 0.0176 | +1.22e-04 |
+| 64 | 1.20e-05 | 0.91 | 0.0054 | +3.74e-05 |
+
+so reading the pitch alone at `nbnd = 16` would have called the state exact while 18 per
+cent of its moment stood off the helix -- the "a check whose null result cannot be told
+from a pass" trap in the form where the check returns the *right* number about the wrong
+half, which is P39a's lesson on another quantity. Across that range the cone falls by
+11.65 and the energy error by 11.68; the two tracking is recorded and not explained. The
+reference is the same four atoms as a real supercell with the helix seeded per species,
+whose site moments are flat to 1e-5 and whose energy is **0.739 mRy per cell below** the
+ferromagnet the ultracell expands around. At `nbnd = 8` the pitch still comes back to
+4.2e-3 degrees -- the closure does not need convergence to hold -- while the run does not
+reach `conv_thr` in 300 iterations.
+
+**With `lspinorb` the closure fails for every axis**, a spin-orbit Hamiltonian's eigenstates
+being eigenstates of no `sigma . n`. The pitch is then not protected and it is not supposed
+to be, the anisotropy making different pitches inequivalent, so a texture that relaxes is
+physics; the two cannot be separated by reading the pitch, and the comparison to make is
+against a seeded supercell at the same `N`.
+
+**Two refusals, both of which would otherwise be silent.** A reference with **no moment**:
+the seed scales a moment, so on a cell that converged unpolarized every iteration is a
+no-op and the unpolarized state comes back as a converged answer -- the calculation
+returning the null, which is one level out from the usual form of that trap. And, for a
+vector seed, a **compensated** reference, whose net moment is a residue of cancellation
+whose direction is round-off: an antiferromagnetic unit cell would have to be turned
+sublattice by sublattice, which is not written. `|s| > 1` is refused for the reason
+`starting_magnetization` has the same range -- the reference's `|m| <= n` pointwise, so a
+larger factor makes a channel density negative.
+
+**What the seed costs is nothing per iteration**, and `PERFORMANCE.md` carries the pair:
+the seeded ultracell against the seeded supercell at `N = 2`, 16.16 s against 1.85 s on one
+core, a ratio of **0.11** where stage 1's crossover table reads 0.12 at the same `N` on
+unpolarized silicon under an applied potential. Two measurements of one ratio through
+different physics is what says the seed is not on the bill -- it is one array operation
+before the loop -- and the crossover stays near `N = 6`. What a seed changes is the
+*iteration count*, which is a property of the state: 1 for the tiled fixed point, 7 for the
+staggered wave, 14 for a helix inside the closed sector, 290 for one outside it.
+
+**`OPEN.md`'s deferred measurement, taken.** That entry asked for the charge-against-magnetic
+weighting of `dr2` to be re-measured on a *spontaneous* wave, where the moment has no field
+holding it, and predicted the magnetic half would be the one that decides. On the collinear
+seeded wave it is not: at `conv_thr = 1e-8` the halves are 1.312e-10 and 1.819e-11 and at
+1e-11 they are 1.098e-12 and 2.798e-14, the magnetic half **7 to 39 times below** the
+charge one, and across that thousandfold change the wave's amplitude moves 2.17e-5 relative
+and the energy 2.7e-11 Ry. The reason is that a *collinear* wave has no soft direction at
+all -- only the moment's magnitude is a degree of freedom, and it is stiff. The soft
+direction is the noncollinear one, and there the seeded helix shows it as iterations rather
+than as a residual: 5.44e-11 charge against 1.54e-11 magnetic in the closed sector at 14
+iterations, and 4.14e-11 against 3.33e-11 out of it at 290.
+
 **What is outstanding.**
 
 * **Stage 2** as planned above: the central-k route beside the direct one and the two
   errors separated. (Stages 3a, 3b and 4 -- collinear spin, the noncollinear regime and the
   total energy -- are above; what each does not have is listed with it.)
-* **A seeded modulation** -- Elk's `rndbfcu` faded by `reducebf` -- which the driver's own
-  docstring names as the route that is not written, and what its absence costs is now a
-  number rather than a statement of scope. **Measured in another session's NiBr2 helix run
-  rather than here**, so it is reported and attributed: from the ferromagnetic start the
-  only state `run_ultracell` can begin from, an `N = 3` cell turns **103.5 degrees per cell
+* **The seeded modulation is in (stage 8) and what remains of it is one measurement on a
+  real magnet.** What its absence cost is the number that asked for it, and it is kept here
+  because it is what the stage has to be judged against: **measured in another session's
+  NiBr2 helix run rather than here**, from the ferromagnetic start that was then the only
+  state `run_ultracell` could begin from, an `N = 3` cell turned **103.5 degrees per cell
   against a real nine-atom supercell's 120**, with the halogen moments left along the
-  reference direction and an out-of-plane canting thirty times Elk's. Raising the driving
-  field twenty times, to where the ferromagnetic basin does not survive, brings the two
-  together -- **119.95 against 120.00 degrees**, and 6 to 12 per cent on the charge and
-  magnetization harmonics at `nbnd = 128`. So what the method delivers today on a magnet
-  whose order it is not handed is a **Q-resolved susceptibility**, which is a real quantity
-  and is not the ground state a tip sees; every comparison of an ordered state has to be
-  against a supercell that was seeded into it. The mechanism is the one the weak-field entry
-  below already names: nothing in the SCF breaks spin symmetry on its own, and a 0.1 eV
-  Zeeman term against an eV-scale exchange field finds the response rather than the order.
+  reference direction and an out-of-plane canting thirty times Elk's; raising the driving
+  field twenty times, to where the ferromagnetic basin does not survive, brought the two
+  together at **119.95 against 120.00 degrees**, with 6 to 12 per cent on the charge and
+  magnetization harmonics at `nbnd = 128`. A seed removes the need for that field
+  altogether. **What has not been measured is the seed on that cell**, which is the case
+  the closure argument in stage 8 does *not* cover -- NiBr2 runs `lspinorb`, so no axis
+  closes the sector, the pitch is not protected, and whether the texture that comes back is
+  the material's or the truncation's has to be settled against a seeded supercell at the
+  same `N`. The inputs for it are the other session's to send.
 * **The noncollinear crossover against the supercell.** `PERFORMANCE.md` states where the
   ultracell should overtake the supercell it approximates as an *expectation* from the
   collinear pair and the measured spinor cost, not as a measurement. The collinear crossover

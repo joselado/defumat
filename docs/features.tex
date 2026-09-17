@@ -5156,10 +5156,20 @@ Fermi level} over all $2N\,\code{nbnd}$ states, and that sharing is the physics
 --- it is what lets an electron cross from the minority channel in one cell to
 the majority channel in the next, which is what a spin density wave is.
 
-Nothing in a collinear calculation breaks spin symmetry on its own, so a
-modulated moment has to be driven. \code{magnetic\_field} is the knob: a
-collinear $B(\mathbf r)$ in Ry, entering as $v_\uparrow \mathrel{-}= B$ and
-$v_\downarrow \mathrel{+}= B$, in the same two forms \code{external} takes.
+Nothing in a calculation breaks spin symmetry on its own, so a modulated moment
+has to come from somewhere --- and the tiled state is an \emph{exact} fixed
+point of this loop, so a magnetic ultracell given nothing converges in one
+iteration and stays exactly as ferromagnetic as its unit cell. There are two
+doors, and \textbf{they are different quantities rather than two routes to
+one}. An applied field \emph{drives} a modulation, and what comes back is the
+$\mathbf Q$-resolved spin susceptibility: a response. A \emph{seed} hands the
+loop the texture as its initial condition and the loop keeps it: the ordered
+state itself. The field comes first here because it is the honest measurement of
+a susceptibility; the seed is under \emph{Seeding the texture} below.
+
+\code{magnetic\_field} is the first knob: a collinear $B(\mathbf r)$ in Ry,
+entering as $v_\uparrow \mathrel{-}= B$ and $v_\downarrow \mathrel{+}= B$, in
+the same two forms \code{external} takes.
 
 \begin{pycode}
 from defumat import Calculator
@@ -5183,6 +5193,100 @@ each unit cell of the ultracell, which needs no sphere and no radius: the cells
 tile the ultracell exactly, so the partition is the geometry. On the cell above
 the two come back equal and opposite, which is the two-cell wave the field asked
 for.
+
+\subsection*{Seeding the texture}
+
+\code{seed\_magnetization} is the second door. It is a factor
+$s(\mathbf r)$ on the \emph{converged unit cell's own} magnetization,
+\begin{equation*}
+  \mathbf m(\mathbf r) \;\longmapsto\;
+  |s(\mathbf r)|\; R\!\left(\hat{\mathbf e}_0 \to \hat s(\mathbf r)\right)
+  \mathbf m_0(\mathbf r),
+  \qquad |s| \le 1,
+\end{equation*}
+which reduces to $m \mapsto s\,m_0$ for a collinear run, where $s$ is a number.
+That is \code{starting\_magnetization}'s role one level up --- a fraction of a
+moment that is already there, with its range --- and it is a factor rather than
+a magnetization because a caller knows the texture, one direction per cell, and
+does not know the magnetization profile \emph{inside} a unit cell. $s = 1$, and
+$s = \hat{\mathbf e}_0$ for a vector, are the identity. $|s| > 1$ is refused: the
+reference's $|\mathbf m| \le n$ pointwise, so a factor above one asks for more
+magnetization than the cell has and makes a channel density negative.
+
+\textbf{Nothing is faded, and that is the design decision.} Elk seeds a random
+\emph{field} (\code{rndbfcu}) and takes it away geometrically
+(\code{reducebf}), and it has to: its self-consistency runs on the potential,
+where a seed is a term in the functional and has to leave before the converged
+state means anything --- which leaves the awkward criterion, a fixed point of a
+field that is going to zero. Here the mixed quantity is the \emph{density}, so a
+seed is an initial condition and not a term: the functional is the field-free one
+from the first iteration onwards, and \code{conv\_thr} means exactly what it
+means in every other run in this package. The price of that choice is the other
+half of the same sentence --- a seed cannot \emph{hold} a texture the way a field
+can, so a state whose basin the seed misses decays back to the tiled one, and the
+loop says so by converging to it.
+
+\begin{pycode}
+from defumat import Calculator
+import numpy as np
+
+cal = Calculator.from_file("h-mag.in")   # partly polarized hydrogen, nspin = 2
+
+# one period of the wave over two cells, as a factor on the cell's own moment
+stagger = lambda x: np.cos(np.pi * x[..., 0])
+
+ulr = cal.get_ultracell(supercell=(2, 1, 1), kgrid=(2, 2, 2), nbnd=24,
+                        seed_magnetization=stagger)
+
+print(ulr.iterations, ulr.converged)   # 8 True
+print(ulr.total_energy)                # -0.93602520 Ry/cell: the staggered state
+print(cal.get_scf().total_energy)      # -0.93300778: the ferromagnet it started in
+print(ulr.cell_moments())              # [ 0.07381, -0.073736]
+\end{pycode}
+
+\textbf{What that buys, as a number.} The seeded run converges to a state
+\textbf{3.085~mRy per cell below} the tiled ferromagnet --- a state the method
+could not previously reach at all, since the ferromagnet is a fixed point and
+nothing moves off it. And it is the right state: against the same two atoms run
+as a real supercell through this package's own SCF, seeded the same way with
+\code{starting\_magnetization} of opposite sign on two species, the wave's own
+Fourier component agrees to $1.51\times10^{-3}$, $5.04\times10^{-4}$,
+$1.74\times10^{-4}$ and $3.10\times10^{-5}$ relative at
+\code{nbnd = 16, 24, 40, 64}, and the energy sits $+1.53\times10^{-4}$,
+$+6.80\times10^{-5}$, $+2.32\times10^{-5}$ and $+5.57\times10^{-6}$~Ry above
+the supercell's, above at every rung and falling. The supercell's amplitude is
+$0.36546537\,\mu_{\mathrm B}$ per cell.
+
+\textbf{The seed is evaluated pointwise, and a smooth seed is not a per-cell
+sign.} $\cos(\pi x)$ changes sign halfway through each cell, so the
+\emph{cell} moments it leaves are small ($0.0738$ against the atoms'
+$0.365$) while the \emph{atoms} are cleanly opposite --- which is the physical
+state, and the supercell agreement is what says so. Read a seeded wave off its
+Fourier component, or off \code{cell\_moments()} only for a seed that is
+constant within each cell, which is \code{floor(x)} in the callable. Turning
+pointwise rather than in steps is also what makes a helix's pitch exact, below.
+
+\textbf{Two refusals, and both would otherwise be silent.} A reference with
+\textbf{no moment}: the seed scales a moment, so on a cell that converged
+unpolarized it scales zero, every iteration is a no-op and the unpolarized state
+comes back as a converged answer. And, for a vector seed, a \textbf{compensated}
+reference --- an antiferromagnetic unit cell, whose net moment is a residue of
+cancellation whose direction is round-off, so there is no direction to turn the
+texture rigidly from. Turning such a cell sublattice by sublattice is not
+written.
+
+\textbf{An ultrasoft or PAW dataset is seeded in both of its mixed variables.}
+Most of a transition metal's moment is inside the projector spheres rather than
+on the grid, so a seed that reached the density alone would seed almost nothing
+on a PAW magnet and would leave the first iteration's one-centre potential
+disagreeing with its own density. \code{becsum} is therefore seeded from the
+\emph{same} evaluated field, read at each atom's own grid point of the box, so
+the spheres and the grid cannot disagree about the period. That half is checked
+on constructed occupations rather than in a converged run
+(\code{tests/unit/test\_ultracell\_seed.py}), because the copy index is a
+lattice translation in C-order over the integer triple and a seed landing on the
+wrong copy is a converged, plausible and wrong modulation that no tiled null can
+see --- a tiled seed being the same on every copy.
 
 \textbf{Read \code{magnetic\_accuracy}, not \code{accuracy}, on a magnetic
 run.} \code{dr2} is the Hartree energy of the density residual, so its charge
@@ -5316,12 +5420,103 @@ in \code{nbnd} several times more slowly than one that tilts it by 6, because a
 change of the local spin frame has to be built out of empty states of the
 opposite spin channel, which the exchange splitting puts far away.
 
-\textbf{There is no total energy}, in this code or in Elk, whose
-\code{energyulr.f90} reports the sum of occupied eigenvalues and the Fermi level
-and nothing else. \code{ulr.band\_energy} is that sum, per unit cell. The energy
-\emph{gain} of a modulated state over the uniform one --- the quantity that says
-whether a spin density wave is the ground state at all --- is therefore a
-quantity neither code computes.
+\textbf{Seeding a texture, and which axis to write the seed about.}
+\code{seed\_magnetization} takes a vector here, so the seed turns the moment
+rather than scaling it, and a helix of pitch $N$ cells is the case to have in
+mind. Such a helix is invariant under a translation by one cell followed by a
+spin rotation of $360/N$ about its own axis, and the self-consistent map
+commutes with both --- so that sector is closed and a run started in it stays in
+it. \textbf{In the truncated problem it is closed only if the basis is}, and the
+basis is the unit cell's own spinors: a rotation about the reference's own
+magnetization is a \emph{phase} on each of them, since without spin-orbit
+coupling they are eigenstates of
+$\boldsymbol\sigma\cdot\hat{\mathbf e}_0$, and a rotation about any other axis is
+not. There is therefore \emph{one} closed sector and its axis is
+$\hat{\mathbf e}_0$, which makes the rule short: \textbf{write the seed about the
+direction the reference's moment already points along}, which is to say converge
+the unit cell with its moment along the axis the helix is to turn about.
+
+\textbf{What that buys is the iteration count and the frame, not the pitch.} On
+four cells of hydrogen at \code{nbnd = 16}, seeded about $z$ with the reference
+along $z$, the run converges in \textbf{14} iterations and the pitch comes back
+at $90.0001$, $90.0000$, $89.9999$ degrees. The same seed on a reference along
+$(1,1,1)/\sqrt3$ takes \textbf{290} iterations and arrives at a helix turning
+about $(1,1,1)/\sqrt3$ instead --- and it is the \emph{same state}: after one
+global rotation the two runs' cell moments agree to $1.23\times10^{-3}$ on
+moments of $0.272$, and their energies to $3.5\times10^{-9}$~Ry. A global spin
+rotation costs nothing without spin-orbit coupling, so the unprotected run is
+not wrong; it is traversing a flat manifold to reach the frame its own basis
+prefers. That is what the 290 iterations are, and it is why the fix is the axis
+rather than \code{mixing\_beta} --- the same lesson the weak-field case above
+teaches, arriving from the other side. \textbf{The run says so}: a seed whose
+directions do not sit on a cone about the reference's magnetization is warned
+about by name, with that pair of iteration counts in the message.
+
+\textbf{What the truncation costs instead is the canting}, and that is the half a
+pitch check cannot see. The converged moments stand off the helix plane by a
+\emph{uniform} angle --- which the closed sector allows, a cone being as
+invariant under the pair as a flat helix is --- and that is a ferromagnetic
+remnant at $\mathbf Q = 0$, towards the direction the basis was built around,
+which the wave's own Fourier component is blind to. It falls with \code{nbnd}
+where the pitch has nothing left to converge:
+
+\begin{center}
+\begin{tabular}{lllll}
+\code{nbnd} & pitch error & cone & net moment & $E$ above the supercell \\
+\hline
+16 & $1.35\times10^{-4\,\circ}$ & $10.64^\circ$ & $0.0628$ & $+4.37\times10^{-4}$ \\
+24 & $8.50\times10^{-5\,\circ}$ & $6.30^\circ$ & $0.0370$ & $+2.54\times10^{-4}$ \\
+40 & $3.27\times10^{-5\,\circ}$ & $3.00^\circ$ & $0.0176$ & $+1.22\times10^{-4}$ \\
+64 & $1.20\times10^{-5\,\circ}$ & $0.91^\circ$ & $0.0054$ & $+3.74\times10^{-5}$ \\
+\end{tabular}
+\end{center}
+
+so reading the pitch alone at \code{nbnd = 16} would call the state exact while
+18 per cent of its moment stood off the helix. Across that range the cone falls
+by $11.65$ and the energy error by $11.68$, which is worth recording and is not
+explained here. The reference is the same four
+atoms as a real supercell with the helix seeded per species, whose site moments
+are flat to $10^{-5}$ and whose energy is $0.739$~mRy per cell \emph{below} the
+ferromagnet the ultracell expands around --- which is what makes reaching it
+worth a seed at all. At \code{nbnd = 8} the pitch still comes back to
+$4.2\times10^{-3}$ degrees, the closure not needing convergence to hold, while
+the run does not reach \code{conv\_thr} in 300 iterations and its energy sits
+$+9.06\times10^{-4}$~Ry above the supercell.
+
+\textbf{With \code{lspinorb} the closure fails for every axis}, because a
+spin-orbit Hamiltonian's eigenstates are not eigenstates of
+$\boldsymbol\sigma\cdot\hat{\mathbf n}$ for any $\hat{\mathbf n}$. The pitch is
+then not protected and it is not supposed to be --- the anisotropy makes
+different pitches inequivalent, so a texture that relaxes is physics rather than
+error --- but the two cannot be separated by reading the pitch, and the
+comparison to make is against a seeded supercell at the same $N$.
+
+\begin{pycode}
+from defumat import Calculator
+import numpy as np
+
+cal = Calculator.from_file("h-noncolin-z.in")  # the moment along z, free to turn
+
+# 90 degrees per cell, turning about the direction the moment already points in
+def helix(x):
+    phase = 2 * np.pi * x[..., 0] / 4
+    return np.stack([np.cos(phase), np.sin(phase),
+                     np.zeros_like(phase)], axis=-1)
+
+ulr = cal.get_ultracell(supercell=(4, 1, 1), kgrid=(1, 2, 2), nbnd=24,
+                        seed_magnetization=helix, mixing_beta=0.3)
+
+m = ulr.cell_moments()
+print(ulr.iterations)                              # 14
+print(np.degrees(np.arctan2(m[:, 1], m[:, 0])))    # 35.32 125.32 -144.68 -54.68
+print(np.linalg.norm(m, axis=1))                   # 0.33687 on all four
+print(m.mean(axis=0))                              # [0, 0, 0.036926]: the remnant
+\end{pycode}
+
+The four directions are $90.0000$ degrees apart and the offset is not a defect:
+the seed is evaluated pointwise, so the helix turns continuously across a cell
+and a cell's own moment sits at the average of the phases inside it. The
+\emph{differences} are the pitch.
 
 \begin{refuses}
 Gradient-corrected functionals: the gradient of the
@@ -5334,7 +5529,16 @@ the transmission itself runs, as do the image and the spectrum, because all
 three sample the state in the \emph{vacuum}, where a pseudo-wavefunction is the
 true one, and all three refuse a plane inside an augmentation sphere as the unit
 cell's own versions do.
-Meta-GGA. An applied \code{magnetic\_field} on a noncollinear cell that
+Meta-GGA. A \code{seed\_magnetization} of $|s| > 1$, which asks for more
+magnetization than the cell has and makes a channel density negative --- it is
+a fraction of the reference's own moment, with
+\code{starting\_magnetization}'s range. A seed on a reference with \textbf{no
+moment}, since scaling zero leaves every iteration a no-op and returns the
+unpolarized state as a converged answer; and a \emph{vector} seed on a
+\textbf{compensated} reference, an antiferromagnetic unit cell whose net moment
+is a residue of cancellation whose direction is round-off, so the texture has no
+direction to be turned rigidly from --- turning one sublattice by sublattice is
+not written. An applied \code{magnetic\_field} on a noncollinear cell that
 \textbf{carries no magnetization} --- a spin-orbit run on a nonmagnetic
 crystal, where the density and the potential have one component apiece and a
 field has nothing to be added to; give the unit cell a small

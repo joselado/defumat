@@ -36,6 +36,7 @@ instead, which means the physics is selected in the input file rather than at th
 | What a diffraction experiment measures: X-ray and magnetic structure factors | `get_structure_factors()` | [37](37_structure_factors.ipynb) |
 | A run started from an all-electron ground state, and how far a pseudopotential density is from one | `get_elk_seed()` | [42](42_all_electron_start.ipynb) |
 | A density or potential modulated over many unit cells at once | `get_ultracell()` | [44](44_ultra_long_range.ipynb) |
+| A long-wavelength magnetic texture the calculation is *put into* rather than driven into: a staggered wave, a helix, and the energy that says it is the ground state | `get_ultracell(seed_magnetization=...)` | [46](46_a_spin_wave_that_stays.ipynb) |
 | What a tip sees above a modulation: an image of a spin density wave | `get_ultracell_stm()` | [45](45_imaging_a_modulation.ipynb) |
 | A tunnelling spectrum across a modulation: where the band edge sits, cell by cell | `get_ultracell_sts()`, `get_sts()` | [45](45_imaging_a_modulation.ipynb) |
 
@@ -174,6 +175,7 @@ want a number.
 | [`43_magnetic_textures.ipynb`](43_magnetic_textures.ipynb) | A moment per atom rather than a moment per crystal: a 90 degree helix that survives self consistency, the symmetry a texture leaves behind, the two numbers it takes to say it is still there, and the same four sites landing on two magnetic states 11 mRy apart depending on what their moments started as |
 | [`44_ultra_long_range.ipynb`](44_ultra_long_range.ipynb) | A potential that varies over eight unit cells of silicon, and the electrons screening it: the long cell solved in the ordinary cell's own states, computed once. What the modulation costs in energy, which is what says whether a modulation is the ground state at all. Then the two kinds of spin wave it carries, one modulating a moment's length and one its direction, and whether the screening cares that a pseudopotential smooths away the charge close to the nucleus |
 | [`45_imaging_a_modulation.ipynb`](45_imaging_a_modulation.ipynb) | What a scanning-tunnelling microscope sees above a spin density wave eight unit cells long: a polarized tip images the wave itself and an unpolarized one images its square, at twice the wavevector, because a collinear crystal cannot respond in the charge at first order in the field. Then the same states read as a *spectrum* rather than an image, where the band edge is seen to move through the wave by a third of an electronvolt and the two spin channels peak four cells apart |
+| [`46_a_spin_wave_that_stays.ipynb`](46_a_spin_wave_that_stays.ipynb) | A long cell built out of a ferromagnet stays ferromagnetic however long it is, the tiled state being an exact solution of its own equations, so a wave has to be handed over: a staggered wave that comes out three millirydberg per cell below the ferromagnet it was started from, a helix that keeps its ninety degrees per cell, and the canting a pitch check on its own would not see |
 
 ## Conventions
 
@@ -276,6 +278,7 @@ workstation core, slowest last:
 | `16` | 18 | `40` | 34 | `30` | 131 | `20` | 282 |
 | `00` | 22 | `23` | 35 | `39` | 151 |  |  |
 | `07` | 22 | `32` | 35 | `41` | 164 |  |  |
+| `46` | 61 |  |  |  |  |  |  |
 
 `43` reads 173 s on 2026-09-15 with its starting-guess section in it, against the 240 s
 recorded before that section existed. **The pair is not a delta.** The new section is two
@@ -283,6 +286,12 @@ SCF runs on the four-atom chain and cannot be worth a negative 67 s; what the tw
 differ in is everything else about when they were taken, and the one that is a measurement
 is the new one, taken pinned to a single core with `OMP_NUM_THREADS=1` on an otherwise
 quiet machine.
+
+`46` reads **61 s** on 2026-09-17, its first measurement: two ultracell runs on two cells
+of hydrogen and one on four cells of a spinor, all of which converge in single figures of
+iterations. It is taken through `tools/export_notebooks.sh`, which does not pin the thread
+pool, so it is a ceiling check rather than a single-core number -- the same caveat the `44`
+entry below carries.
 
 `44` reads 191 s on 2026-09-17 with its augmented section in it, against 188 s before, and
 **that pair is not a delta and not even a comparison.** The 191 s was taken through

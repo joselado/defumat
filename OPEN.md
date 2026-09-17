@@ -2730,12 +2730,32 @@ field that does not move, while the charge is the soft direction that sloshes. T
 weighting is charge-dominated and so is the residual, so the test bounds the thing that is
 actually still moving.
 
-**Where that argument fails is the case this code cannot yet run.** A *spontaneous* wave --
-Elk's `rndbfcu` seed faded by `reducebf`, listed as outstanding in `PLAN.md` P88 -- has no
-field holding its magnetization, so the moment is the soft direction and the one that
-sloshes, and it is bounded by the half of `dr2` that carries no `1/|G+Q|^2`. **Take this
-measurement again when that lands**; the factor of 2.2e3 in the weights is what it would
-be paid at.
+**Where that argument was expected to fail was the case this code could not yet run.** A
+*spontaneous* wave has no field holding its magnetization, so the moment would be the soft
+direction and the one that sloshes, bounded by the half of `dr2` that carries no
+`1/|G+Q|^2` -- with 2.2e3 in the weights at this cell's `|Q|`.
+
+**Measured, 2026-09-17, and for a collinear wave the prediction does not hold**
+(`PLAN.md` P88 stage 8, which put the seed into the *density* rather than into a faded
+field). The seeded staggered wave on two cells of hydrogen, at two thresholds:
+
+| `conv_thr` | iterations | `dr2` | charge | magnetic |
+|---|---|---|---|---|
+| 1e-8 | 6 | 1.494e-10 | 1.312e-10 | 1.819e-11 |
+| 1e-11 | 8 | 1.126e-12 | 1.098e-12 | 2.798e-14 |
+
+so the magnetic half is **7 times below** the charge one at the loose threshold and 39
+times below it at the tight one, and across that thousandfold change the wave's own Fourier
+amplitude moves 2.17e-5 relative and the energy 2.7e-11 Ry. **The reason is that a
+collinear wave has no soft direction at all**: with `nspin = 2` the moment's *direction* is
+not a degree of freedom and only its magnitude is, which is stiff. So the paragraph above
+identified the right mechanism and the wrong regime -- the soft direction is the
+**noncollinear** one, a rigid rotation of the whole texture, and there it shows as
+iterations rather than as a residual: the seeded helix converges in 14 iterations when the
+seed is written about the reference's own axis (where the truncated basis closes the sector)
+and 290 when it is not, with residual halves 5.44e-11/1.54e-11 and 4.14e-11/3.33e-11. A
+residual that does not separate those two is the thing still worth a note, and it is the
+iteration count rather than the threshold that tells them apart.
 
 **The case arrived from somewhere else, and it is the ordinary SCF rather than an ultracell**
 (reported 2026-09-15 by the NiBr2 session on Triton, job 20260032, a 45-atom slab under a
@@ -2874,6 +2894,21 @@ converges *to*, not only how many iterations it took** -- on a clean basis this 
 self-consistent solutions at `(4, 2, 2)`, so "converged in well under 263" is satisfied by a
 run that found a different one, which is precisely the failure this entry's own mechanism
 predicts and which an iteration count cannot see.
+
+**The target pair this entry says it lacks now exists, and it is cleaner than the 263**
+(2026-09-17, `PLAN.md` P88 stage 8). A *seeded* helix on four cells of the same hydrogen
+lattice converges in **14** iterations when the seed turns about the reference's own
+magnetization and **290** when it turns about an axis 54.7 degrees away, at
+`nbnd = 16, mixing_beta = 0.3, kgrid = (1, 2, 2), conv_thr = 1e-10`, with no field at all.
+**Both arms reach the same state**, which is what the 263 could never establish: after one
+global rotation their cell moments agree to 1.23e-3 on moments of 0.272 and their energies
+to 3.5e-9 Ry. So the 276 extra iterations are the flat manifold being traversed and nothing
+else, which makes this the pair to measure a projection against -- same cell, same
+threshold, same converged state, and the only difference the distance the rotation has to
+travel. It also hands this entry the missing half of its own "state the number it converges
+*to*": **compare two candidate solutions after fitting the one global rotation between
+them**, because a component-by-component comparison on a flat manifold counts frames rather
+than states.
 
 **The measurement the ultracell could not make, it now can** (2026-09-15, `PLAN.md` P88
 stage 4). This entry was written when an ultracell reported only an eigenvalue sum, so

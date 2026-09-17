@@ -1,0 +1,36 @@
+! The collinear counterpart of `h-noncolin-ultracell.in`: the same simple-cubic
+! hydrogen lattice at `nspin = 2`, which is the cell a *seeded* modulation is
+! demonstrated on.
+!
+! **The lattice constant is chosen and neither end of its range works.** At
+! `a = 5.0` the moment is 0.027 and the cell sits on the Stoner threshold, where
+! the moment is the difference of two large numbers; at `a = 6.0` it is 0.9997,
+! a saturated atom whose `|zeta| = 1` is the clamp-tangent trap. At 5.5 with a
+! 0.8 seed it converges in six iterations to 0.62 and responds to everything.
+!
+! **The k-grid is part of that statement.** The moment is 0.6234 on this
+! `4 2 2` grid and on nothing else -- `4 1 1` gives 1.0000, a saturated atom,
+! `4 4 4` gives 0.7901 and `6 6 6` gives 0.8020 -- so quote the grid with the
+! number or it is a different cell. `4 2 2` is what a `(2, 1, 1)` ultracell on a
+! `(2, 2, 2)` mesh of its own zone folds to.
+!
+! `nosym` because an ultracell needs it: a modulation breaks the crystal's point
+! group.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 1, celldm(1) = 5.5, nat = 1, ntyp = 1, ecutwfc = 15.0,
+    nosym = .true., noinv = .true.,
+    nspin = 2, starting_magnetization(1) = 0.8,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.02
+ /
+ &electrons
+    conv_thr = 1.0d-11
+ /
+ATOMIC_SPECIES
+ H  1.008  H.pz-vbc.UPF
+ATOMIC_POSITIONS crystal
+ H 0.0 0.0 0.0
+K_POINTS automatic
+ 4 2 2 0 0 0
