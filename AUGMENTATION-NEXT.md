@@ -356,7 +356,7 @@ and `PLAN.md` P97 names the two cells that were run for it and how each failed -
 committed tetragonal nickel diverged and a platinum dimer converged nonmagnetic. The next
 attempt wants a third cell rather than a third run of those two.
 
-### 1k. The ultracell with an ultrasoft or PAW dataset. ✅ DONE for the two scalar spin regimes.
+### 1k. The ultracell with an ultrasoft or PAW dataset. ✅ DONE in all three spin regimes.
 
 `PLAN.md` P88 stage 5, 2026-09-17. `ultracell/augmentation.py`. The full record, with the
 numbers, is there; what belongs here is the shape of the answer and the one sentence this

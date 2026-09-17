@@ -533,16 +533,26 @@ def build_spin_orbit(pseudos: tuple[Pseudopotential, ...], soc_scale: float = 1.
 # drift between the setup version and the traced one.
 
 
-def becsum_transform(fcoef, becsum_nc, nspin_mag: int):
+def becsum_transform(fcoef, becsum_nc, nspin_mag: int, real: bool = True):
     """``add_becsum_so`` for a whole species at once, in JAX.
 
     Args:
         fcoef: ``(nh, nh, 2, 2)`` complex -- the zeroed coefficients.
         becsum_nc: ``(nat, nh, 2, nh, 2)`` complex, from
             :func:`defumat.scf.density.spinor_becsum`.
+        real: take the real part, which is what a *periodic* occupation matrix
+            is. **False is not a relaxation of a tolerance**: an ultracell
+            resolves ``becsum`` by the difference of two ultracell wavevectors
+            (:func:`defumat.ultracell.augmentation.spinor_ultracell_becsum`),
+            and away from zero difference the occupations of one atom copy
+            against another are genuinely complex -- their conjugate sits at the
+            *opposite* difference rather than in the same array. Taking the real
+            part there keeps every zero-difference number right, including the
+            tiled null, and silently halves the rest.
 
-    Returns ``(nspin_mag, nat, nh, nh)`` real: the projector occupations in the
-    representation the augmentation charge and the one-centre terms use.
+    Returns ``(nspin_mag, nat, nh, nh)``, real unless ``real`` is false: the
+    projector occupations in the representation the augmentation charge and the
+    one-centre terms use.
 
     The four output components are the Pauli traces of the transformed
     spin-density matrix; the Fortran writes them out one at a time with the
@@ -557,8 +567,9 @@ def becsum_transform(fcoef, becsum_nc, nspin_mag: int):
     transformed = jnp.einsum(
         "cst,kias,nkalb,jltb->cnij", sigma, fcoef, becsum_nc, fcoef, optimize=True
     )
-    real = jnp.real(transformed)
+    if real:
+        transformed = jnp.real(transformed)
     # QE stores the packed upper triangle with the off-diagonal entries doubled;
     # this code stores the full symmetric matrix, and the two agree exactly when
     # the transpose is folded in here rather than left to the caller.
-    return 0.5 * (real + jnp.swapaxes(real, -1, -2))
+    return 0.5 * (transformed + jnp.swapaxes(transformed, -1, -2))

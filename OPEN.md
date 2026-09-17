@@ -3544,3 +3544,49 @@ identical on both sides of every comparison this project has made (the ultracell
 itself at different `nbnd`), and it is *not* identical to the supercell's own truncation --
 which is the one place it could matter, and where the measured 3.7e-3 induced-density
 agreement at `nbnd = 48` already bounds it from above.
+
+
+## 2. A nickel comparison that looked like a violated variational bound, and was a void test cell **[closed 2026-09-17, same day, from P88 stage 6]**
+
+Kept because the chain of three refuted explanations is the point, not the answer.
+
+**What it looked like.** Fcc nickel, `Ni.pz-nd-rrkjus.UPF`, `N = 2` at `ecutwfc = 22`,
+`ecutrho = 88`, under a `0.05 cos(pi x_1)` Ry applied potential on both sides: the ultracell
+reached **-85.55680649** Ry per unit cell against the supercell's **-85.55677126**, so
+**3.5e-5 below**, and further below with more bands. The ultracell's basis is a subspace of
+the supercell's plane-wave space, so that is forbidden.
+
+**Three explanations, each tested and each wrong.** *Several self-consistent states*: the
+supercell reaches -85.55677126 from `starting_magnetization` of 0.7, 0.4, 0.9 and 0.2, to
+eight decimals, in 30 to 73 iterations. *The entropy*, which is what a metal suggests
+first: it differs by 7.9e-6 where the total differs by 3.5e-5, and the electron count is
+10.0000000000 per cell on both sides with the Fermi levels 4.4e-5 Ry apart. *The
+linearisation* -- the ultracell's matrix being the supercell's Hamiltonian only to first
+order in the density change, with the unit cell's bands frozen, which would bite exactly
+where `v_xc` is nonlinear in `m`: refuted by the amplitude scan below.
+
+**What the amplitude scan showed instead.** The ultracell's moment modulation scales with
+the applied potential as a response must -- 0.0137, 0.0055, 0.0014, 0.0003 at amplitudes
+0.05, 0.02, 0.005, 0.001 -- and **the supercell's does not move at all**, sitting at 0.242,
+0.237, 0.235, 0.234. The gap converges to -3.92e-5 Ry as the perturbation goes to zero, so
+it is a difference between the two *unperturbed* states and has nothing to do with the
+modulation.
+
+**And with nothing applied the supercell breaks its own symmetry.** Moments
+`[1.4478, 1.2137]`, a 17.6 per cent spread, at `E/N = -85.55561421` Ry -- against the unit
+cell's `-85.55565341` on the equivalent grid, which is **3.92e-5 lower**, the whole of the
+gap. So the supercell SCF was converging to a symmetry-broken state *above* the uniform one,
+the ultracell was reporting the uniform state's energy correctly, and the "violation" was
+the supercell failing to reach its own minimum. The breaking survives refining the k-grid
+(`[0.6753, 0.5572]`, 19.2 per cent, at `2 4 4`), where the moment also halves from 1.33 to
+0.62 -- the physical LDA value -- which says the cell was under-sampled by a factor of two
+in the moment as well.
+
+**What to take from it.** The ultracell was never wrong here, and the test cell was built in
+an afternoon without checking that its supercell reproduced its unit cell with nothing
+applied. **That check costs one run and is the first thing a supercell comparison on a metal
+should do** -- on a gapped cell it is invisible because there is nothing to break. The
+separate observation, that `run_scf` on a doubled nickel cell converges to a symmetry-broken
+state with nothing applied and stays there, is real and is not the ultracell's; whether it is
+a genuine instability of LDA nickel at this cutoff or an SCF that stalls in a broken state is
+not settled here.

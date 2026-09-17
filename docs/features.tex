@@ -5063,6 +5063,47 @@ and falling. With no modulation applied the total reproduces the unit cell's own
 SCF to $8.5\times10^{-12}$~Ry and $2.5\times10^{-11}$~Ry, the second including a
 $-67.18$~Ry one-centre term.
 
+\textbf{A spinor works the same way, with one line that is not the unit cell's.}
+At \code{npol = 2} the four integrals are recombined into $2\times2$ spin blocks
+and sandwiched between \code{fcoef} --- \code{newd\_so}, with a wavevector on it
+--- and PAW's one-centre coefficients are added to the \emph{scalar} components
+before that transform rather than after, which is the order the unit cell uses
+and the one that puts them in the right spin structure. What differs is the lower
+off-diagonal block. In a unit cell it is the conjugate transpose of the upper one,
+because both are built from the same two real components; here every component is
+a function of the $\mathbf Q$-difference and
+$D_a(\mathbf Q_d)^{*} = D_a(-\mathbf Q_d)$, so that conjugate transpose belongs
+to the \emph{opposite} difference. Both blocks are written out from the
+components, and the matrix is Hermitian across the pair
+$(\mathbf Q_d, -\mathbf Q_d)$ rather than within one entry.
+
+With nothing applied the tiled total reproduces the unit cell's own SCF to
+$2.8\times10^{-12}$~Ry ultrasoft, $8.5\times10^{-13}$~Ry PAW, and
+$7.5\times10^{-13}$~Ry on fully relativistic platinum, which is the one cell
+where \code{fcoef} is not the identity. Against a real supercell under the same
+modulation the total sits above it at every rung and falls:
+$+4.80\times10^{-5}$, $+4.48\times10^{-6}$, $+6.37\times10^{-7}$~Ry at
+\code{nbnd = 24, 48, 96} for spinor PAW silicon, and $+3.09\times10^{-5}$,
+$+1.55\times10^{-5}$, $+5.21\times10^{-6}$ at \code{nbnd = 16, 24, 40} for
+platinum. \textbf{A spinor band holds one electron where a collinear band holds
+two}, so the comparison against the collinear route is at half the band count,
+and there the two agree to every digit printed --- $+6.37\times10^{-7}$ on both
+at the last rung.
+
+\begin{pycode}
+from defumat import Calculator
+import numpy as np
+
+cal = Calculator.from_file("pt-ultracell-soc.in")   # fcc Pt, lspinorb, ultrasoft
+
+ulr = cal.get_ultracell(supercell=(2, 1, 1), kgrid=(2, 2, 2), nbnd=40,
+                        external=lambda x: 0.05 * np.cos(np.pi * x[..., 0]))
+
+print(cal.system.npol, cal.system.nspin_mag)  # 2 1 -- a spinor carrying no moment
+print(ulr.total_energy)                       # -69.34673356 Ry per unit cell
+print(ulr.augmentation_residual)              # 2.8266e-07
+\end{pycode}
+
 \textbf{One number comes back with an augmented run that a norm-conserving one
 does not report.} \code{ulr.augmentation\_residual} is how complex the augmented
 density came back, relative to its own largest value, and it is a convergence
@@ -5280,11 +5321,6 @@ whether a spin density wave is the ground state at all --- is therefore a
 quantity neither code computes.
 
 \begin{refuses}
-Ultrasoft and PAW datasets in a \textbf{noncollinear or spin-orbit} run: the
-two scalar spin regimes are in, and what is missing at \code{npol = 2} is that a
-spinor $D_{ij}$ is the scalar integrals sandwiched between \code{fcoef} rather
-than the integrals themselves, so the displaced table would have to enter inside
-that transform and the matrix element carry the $2\times2$ spin blocks with it.
 Gradient-corrected functionals: the gradient of the
 ultracell density carries the envelope's own gradient, which a per-cell
 evaluation drops (Elk takes that approximation silently; it is refused here).

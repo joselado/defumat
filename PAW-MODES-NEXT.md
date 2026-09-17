@@ -152,7 +152,7 @@ The caution that applies to this entry more than to any other here is
 `AUGMENTATION-NEXT.md`'s last one: a gap sized on silicon is a gap sized on a
 centrosymmetric crystal, and this one has never been run on a polar cell.
 
-## 8. The ultracell. ✅ DONE for the two scalar spin regimes.
+## 8. The ultracell. ✅ DONE in all three spin regimes.
 
 `PLAN.md` P88 stage 5, 2026-09-17; `defumat/ultracell/augmentation.py`. The refusal is
 lifted for `nspin = 1` and `2`, and what this entry got right is worth keeping because two

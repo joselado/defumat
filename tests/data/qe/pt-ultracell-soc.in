@@ -1,0 +1,38 @@
+! Fcc platinum with spin-orbit coupling, for a spinor ultracell on an augmented
+! dataset. `pt-soc-nosym.in` with ecutrho brought down to 4 ecutwfc and the
+! k-grid raised so that a two-cell ultracell at kgrid = (2, 2, 2) folds onto it.
+!
+! This is the only committed fully relativistic LDA dataset -- every other one
+! (Co, I, Ni, the other two Pt) is PBE, which an ultracell refuses by name -- so
+! it is the one cell where `fcoef` is not the identity and the spin-orbit
+! sandwich inside the displaced tables is exercised at all. Silicon's two
+! datasets are scalar-relativistic, where that sandwich collapses.
+!
+! starting_magnetization = 0.0 makes this nspin_mag = 1: spinor wavefunctions
+! carrying no magnetization, so the four Pauli components reduce to the charge
+! one. That is deliberate -- it isolates the sandwich from the spin blocks, and
+! the spin blocks are measured on silicon where the sandwich is trivial.
+!
+! ecutrho = 4 ecutwfc rather than the dataset's own dual, which an ultracell
+! refuses; the comparison against a real supercell is at the same pair on both
+! sides and is like for like, and the absolute energy is not converged in
+! ecutrho.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 7.42, nat = 1, ntyp = 1,
+    lspinorb = .true., noncolin = .true., starting_magnetization = 0.0,
+    ecutwfc = 30.0, ecutrho = 120.0,
+    occupations = 'smearing', smearing = 'mp', degauss = 0.02,
+    nosym = .true., noinv = .true.
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Pt  195.08  Pt.rel-pz-n-rrkjus.UPF
+ATOMIC_POSITIONS alat
+ Pt  0.0  0.0  0.0
+K_POINTS automatic
+ 4 2 2 0 0 0

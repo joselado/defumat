@@ -348,7 +348,7 @@ because that is what decides whether it is a session or a phase.
   blocks the paper's own chromium case**, the only Cr dataset committed here being PBE; and
   the **central-k route**, which would remove the direct route's `N^2` at the cost of a
   second approximation, with the two errors separated. **Ultrasoft and PAW** are no longer
-  among them: stage 5 lifted that refusal for the two scalar spin regimes, the missing piece
+  among them: stages 5 and 6 lifted that refusal in all three spin regimes, the missing piece
   having been one term -- the augmentation table displaced by `Q' - Q` -- rather than the
   two structural obstacles the refusal named, both of which were wrong. What is still refused
   there is the *spinor* combination and, before it, a double grid.
@@ -14919,7 +14919,7 @@ told from silence is this project's most-repeated trap.
   which is a statement about that route rather than this one, and QE's own `average_pp.f90`
   refuses ultrasoft and PAW outright.
 
-### P88 -- The ultracell: a modulation a thousand cells long, solved in the unit cell's own states. ✅ DONE, stages 1, 3a, 3b, 4 and 5 (LDA, direct route, `nspin = 1`, `2` and `4`, the total energy, and ultrasoft/PAW in the two scalar regimes); stage 2 planned.
+### P88 -- The ultracell: a modulation a thousand cells long, solved in the unit cell's own states. ✅ DONE, stages 1, 3a, 3b, 4, 5 and 6 (LDA, direct route, `nspin = 1`, `2` and `4`, the total energy, and ultrasoft/PAW in all three spin regimes); stage 2 planned.
 
 Elk tasks 700/701 (ground state), 720/725 (band structure and spectral function), 731-3,
 741-3, 771-3 (plots); `src/modulr.f90` and the twenty routines around it. The method paper is
@@ -15102,8 +15102,8 @@ row with both tick columns empty.
 - **Ultrasoft and PAW.** ~~The augmentation charge is a function of the density through
   `D_ij`, so the frozen unit-cell states are no longer a fixed basis, and `S` enters every
   overlap.~~ **Both halves of that were wrong, were corrected 2026-09-16, and the refusal
-  is now lifted for the two scalar spin regimes -- stage 5 below.** What remains refused
-  is the *spinor* combination and, before it, the double grid.
+  is now lifted in all three spin regimes -- stages 5 and 6 below.** What remains refused
+  is the double grid.
 - **A non-integer ultracell.** Elk's `avecu` is an independent input with no consistency
   check against `ngridq` (`readinput.f90:1919`, `init1.f90:168`), so an ultracell that is not
   an integer multiple of the unit cell is *accepted* and its `R`-grid is then not a set of
@@ -15203,6 +15203,10 @@ occupied set.
 5. **Ultrasoft and PAW** (added 2026-09-17, after the refusal's two stated reasons turned out
    to be wrong). Number: the same supercell comparison on an augmented dataset, plus the
    tiled null including the augmentation charge and PAW's one-centre energy.
+6. **The spinor combination on an augmented dataset** (added 2026-09-17, the piece stage 5
+   named as missing). Number: the supercell comparison again on a fully relativistic dataset,
+   where `fcoef` is not the identity, plus the collinear regime run at half the band count as
+   an answer the spinor route shares no assembly with.
 
 **What is deliberately not staged: the ultracell band structure and spectral function**
 (Elk's 720/725, `bandstrulr.f90`, where 720 is the central `kappa = 0` and 725 averages over
@@ -16143,9 +16147,51 @@ sphere: **1.71e-4, 7.21e-5, 2.96e-5** at `ecutrho = 64, 96, 144` Ry, which is
 it measures is the displacement of the sphere rather than `N`.
 
 So it is reported as `UltracellResult.augmentation_residual`, read the way a cutoff
-convergence is read, and the warning is set two decades below what a wrong pairing gives
-rather than at round-off. The `becsum` half keeps the tight threshold and deserves it: the
-transform over the Q-set involves no truncation at all. **And the sibling is pre-existing**
+convergence is read, and the warning is set well above it rather than at round-off. The
+`becsum` half keeps the tight threshold and deserves it: the transform over the Q-set
+involves no truncation at all.
+
+> **Amendment, 2026-09-17 (stage 6).** The sentence above used to say the warning was set
+> "two decades below what a wrong pairing gives", and **that claim is false, measured on
+> four deliberate index errors at `N = 4`.** What the guards catch is narrower and more
+> specific than "a wrong pairing", and the one they miss is the one that matters.
+>
+> | what was broken | `becsum` | fires? | density | fires? |
+> |---|---|---|---|---|
+> | nothing | 3.96e-17 | no | 8.40e-5 | no |
+> | the sum table transposed | 3.96e-17 | no | 8.40e-5 | no |
+> | the difference table in the sum's place | **8.98e-7** | **yes** | 1.73e-3 | no |
+> | the conjugate on the ket | 3.96e-17 | no | 1.06e-4 | no |
+> | **the displacement flipped** | 4.71e-17 | no | 8.28e-5 | no |
+>
+> Three things follow. The **transposed sum table is not an error at any `N`**: `sum_index`
+> is the index of `Q_q + Q_d` and addition commutes, so that table is symmetric by
+> construction -- which is why it reads identically, and it should not be counted as a miss.
+> The **difference table in the sum's place is caught**, at three decades above the
+> threshold. And the **flipped displacement is not caught at all**, by either guard, on a
+> run where it moves the total energy by 2.0e-7 Ry and the iteration count from 10 to 12 --
+> that being the very error stage 5 measured to give wrong physics and the one this warning
+> named itself after.
+>
+> The pattern is structural. A pairing `sum_q conj(A[q]) A[f(q)]` transforms over the
+> difference index into `conj(a(R)) a(R)` whenever `f` is a **translation** of the Q index,
+> which is real after the channel pair is symmetrised -- and the correct pairing, the
+> flipped one and the conjugate swap are all translations. The difference table is a
+> *reflection*, `q -> d - q`, which gives `conj(a(-R)) a(R)` and is not real. So the check
+> confirms the array has the form a translation-paired assembly has: it catches a corrupted
+> assembly, a reflected index, an array built from the wrong species, and it cannot see a
+> shift. **What catches a shifted index is the supercell ladder, which is what caught it in
+> the first place.**
+>
+> **And a second thing was found while measuring the first, which invalidates a check before
+> it invalidates a claim.** The first attempt at this measurement ran at `N = 2` and every
+> break came back identical to the correct run, including the energy to ten digits. At
+> `N = 2` the only non-zero `Q` is the zone boundary, where `-Q` and `Q` are the same point
+> of the reciprocal lattice: the difference table is **symmetric** (asserted for `N = 2, 3, 4`
+> in `tests/unit/test_ultracell_augmentation.py`), so transposing it is not a break. **Every
+> `N = 2` measurement in this project is blind to the sign of the displacement**, which is
+> why stage 5's own sign experiment used `N = 4` and why nothing was wrong with it -- but the
+> reason was luck of choice rather than a stated one, and it is stated now. **And the sibling is pre-existing**
 -- the Hartree term of a *norm-conserving* ultracell masks a conjugate-symmetric density
 with the same asymmetric `keep` and takes the real part, so it carries this truncation too
 and has never reported it, which is `OPEN.md` Part X item 1 with what it would take to
@@ -16163,11 +16209,10 @@ functional of `becsum` and would otherwise be a fixed-point iteration with no mi
 
 **What stage 5 does not have.**
 
-* **The spinor combination**, `npol = 2` with an augmented dataset, refused by name. A spinor
-  `D_ij` is the scalar integrals sandwiched between `fcoef` (`_newd_noncollinear`) rather than
-  the integrals themselves, so the displaced table has to enter *inside* that transform, one
-  Q-difference at a time, and the matrix element has to carry the `(2, 2, nkb, nkb)` blocks
-  with it. Neither is written.
+* ~~**The spinor combination**, `npol = 2` with an augmented dataset, refused by name.~~
+  **Written, 2026-09-17 -- stage 6 below.** The three functions it needed are
+  `spinor_ultracell_deeq`, `spinor_augmentation_matrix` and `spinor_ultracell_becsum`,
+  and they sit beside the scalar ones rather than inside them.
 * **The double grid**, which is the wall such a dataset meets first whenever its input sets
   the `ecutrho` it wants, and is the reason every number above is at `ecutrho = 4 ecutwfc`.
   **The half of this that is not a refusal is the one that will be met**: `ecutrho` defaults
@@ -16197,6 +16242,140 @@ functional of `becsum` and would otherwise be a fixed-point iteration with no mi
   unit-cell spheres with their own projectors and that operator is a piece of work rather
   than a call. `_ultracell_geometry` had `apply_s = None` with a comment saying the ultracell
   refuses these datasets, which is how the stale claim was found.
+
+**What stage 6 measured: the spinor combination.** Stage 5 refused `npol = 2` with an
+augmented dataset, and what it named as missing is what was written: a spinor `D_ij` is the
+four scalar integrals recombined into spin blocks and sandwiched between `fcoef`
+(`newd_so`), so the displaced table enters *inside* that transform, one Q-difference at a
+time, and the matrix element carries the `(2, 2)` blocks with it. Three functions do it --
+`spinor_ultracell_deeq`, `spinor_augmentation_matrix` and `spinor_ultracell_becsum` -- and
+they sit beside the scalar ones rather than as branches inside them, because the shapes
+differ all the way down.
+
+**The one line that is not the unit cell's.** `_newd_noncollinear` spells the lower
+off-diagonal spin block as the conjugate transpose of the upper one, which is right there
+because both are built from the same two *real* components. Here every component is a
+function of the Q-difference and `conj(D_a(Q_d)) = D_a(-Q_d)`, so the conjugate transpose
+of the block at `Q_d` is the lower block of the **opposite** difference rather than of this
+one. Both blocks are therefore written out from the components directly, and the matrix
+comes out Hermitian across the pair `(Q_d, -Q_d)` rather than within one entry. The same
+trap sits in `becsum_transform`, whose `real` part is right for a periodic occupation
+matrix and wrong at a non-zero difference; it gained a flag rather than a copy.
+
+**The nulls, on three datasets.** With nothing applied the tiled ultracell reproduces the
+unit cell's own SCF total to **2.8e-12 Ry** on ultrasoft silicon, **8.5e-13 Ry** on PAW
+silicon, and **7.5e-13 Ry** on fully relativistic platinum (`Pt.rel-pz-n-rrkjus.UPF`,
+`lspinorb`), with the density tiled to 2e-7 to 5e-7 pointwise. Platinum is the one that
+tests the sandwich: silicon's two datasets are scalar-relativistic, where `fcoef` is the
+identity on each diagonal spin block and the sandwich collapses to the plain recombination.
+
+**The number that shares no spinor code: the two regimes at a matched band count.** A
+collinear ultracell solves one matrix per channel and builds each channel's `becsum` from
+that channel's states; a spinor solves one matrix on a space twice as large and builds four
+Pauli components through `fcoef`. With the moment along `z` and a uniform `B_z` the two are
+the same physics, so they must agree -- and the only thing between them is that **a spinor
+band holds one electron where a collinear band holds two**, so the comparison is spinor
+`2n` against collinear `n`. Under `B_z = 0.01` Ry against `m = 0.53861` from each regime's
+own `run_scf`:
+
+| basis | collinear | spinor | `m_z` |
+|---|---|---|---|
+| `n = 12` | 1.91e-2 | 1.91e-2 | 0.52831902 / 0.52832511 |
+| `n = 24` | 7.38e-3 | 7.38e-3 | 0.53463396 / 0.53463398 |
+| `n = 40` | 2.25e-3 | 2.25e-3 | 0.53739818 / 0.53739819 |
+
+Comparing the two at the *same* `nbnd` instead reads as a factor of two of missing
+convergence -- 3.4e-2 against 1.9e-2 at `nbnd = 12` -- and looks exactly like a missing
+term. That is the trap this measurement exists to name.
+
+**The supercell ladder, which is what sees the displaced tables.** Against a real four-atom
+supercell under the same `0.05 cos(pi x_1)` Ry modulation, in a spin-polarized run, `N = 2`
+at `kgrid = (1, 2, 2)`:
+
+| dataset and regime | `nbnd` | `E - E_super/N`, Ry |
+|---|---|---|
+| ultrasoft, collinear | 12, 24, 48 | +4.062e-5, +3.635e-6, +3.335e-7 |
+| PAW, collinear | 12, 24, 48 | +4.286e-5, +4.401e-6, +6.372e-7 |
+| ultrasoft, spinor | 24, 48, 96 | +3.971e-5, +3.616e-6, +3.335e-7 |
+| PAW, spinor | 24, 48, 96 | +4.801e-5, +4.482e-6, +6.372e-7 |
+
+Above the supercell at every rung and falling, and each spinor row lands on its collinear
+one at matched basis -- both last rungs agree to every digit printed, 3.335e-7 and 6.372e-7. **This closes what stage 5 recorded
+as its honest edge**, a modulation and a spin compared against a supercell together, for the
+energy. What it does not close is the *moment*: silicon is not magnetic, so the supercell's
+own per-cell moments come back at 1e-6 and there is no profile to compare.
+
+**And the fully relativistic ladder**, which is the one where `fcoef` is not the identity.
+Platinum, `N = 2`, against a real two-atom supercell under the same modulation:
+**+3.092e-5, +1.549e-5, +5.211e-6** Ry at `nbnd = 16, 24, 40`, above at every rung and
+falling, with `augmentation_residual` at 1.27e-6, 8.20e-7 and 2.83e-7 rather than at
+round-off, so the displaced tables are carrying content. The combination this does **not**
+reach is a fully relativistic dataset that is also magnetic: `starting_magnetization = 0.0`
+makes platinum `nspin_mag = 1`, so the sandwich is tested on the charge block with
+`fcoef != 1` and on all four blocks with `fcoef = 1`, and the two together are not the same
+as testing it on all four with `fcoef != 1`. Every committed fully relativistic dataset for
+a magnetic element is PBE, which an ultracell refuses, so this is a missing *cell* rather
+than missing code.
+
+**The sense of a turning field**, which is the sign the spin blocks carry. A field that
+points `+y` in one cell and `-y` in the next induces a transverse moment of **+7.95e-2 and
+-7.95e-2** on both datasets: parallel to the field, which is what a paramagnet does. The
+opposite sign in the off-diagonal block gives the mirror texture, degenerate in energy and
+caught by nothing else. The witness that this is not another null is `augmentation_residual`,
+**3.4e-5** here against 1e-16 with nothing applied.
+
+**A comparison without a floor, and the floor when it was finally measured.** Without
+spin-orbit coupling a spin rotation is exact, so a field turning in the `x-y` plane and the
+same field turning in `x-z` must agree. They agreed in energy to **9.4e-10 Ry** and in the
+transverse moment to only **1.34e-4**, and that number did not move with `conv_thr` from
+1e-9 to 1e-13, did not move when the seed was rotated with the field, and did **not** follow
+the cutoff: across `ecutrho = 64, 96, 144` it read 1.34e-4, 3.45e-4, 2.58e-4 while
+`augmentation_residual` fell 3.38e-5, 1.31e-5, 3.37e-6, which rules out the sphere
+truncation by anti-correlation rather than by argument.
+
+What it was is that **nothing had established what agreement meant**, and the two controls
+that establish it say the number is inside the noise. Running the identical calculation
+twice reproduces it **bit for bit**, so the run is deterministic and the disagreement is
+not scatter. Running the exact *mirror* -- the same plane with the field reversed, which is
+a degeneracy rather than an approximation, so the transverse moment must be identical --
+gives the same energy to **3.55e-15 Ry** and a transverse moment differing by **7.25e-4**,
+five times the number being chased. So the transverse moment on this cell carries a 7e-4
+uncertainty under a transformation that changes nothing, and a 1.34e-4 disagreement under
+one that should change nothing says only that it is below that. The energies, which are the
+quantity the method is for, are covariant to 1e-9 Ry and exactly degenerate under the mirror
+to 1e-15. **There is nothing here to fix and nothing here that was shown to be right
+either**, which is the honest form.
+
+The likely cause is the seed and it was **not** tested: silicon is not magnetic, the seed
+converges to `m = [6.6e-7, -3.7e-11, -8.6e-10]` and the field induces the whole moment, so
+the residual `m_x` is a preferred axis the mirror does not reverse, and a first-order
+quantity would feel it where the energy, being stationary, does not. That explanation fits
+and fitting is not evidence. The test it predicts is that a *larger* residual gives a larger
+mirror discrepancy, and the measurement with a floor set by physics rather than by a seed is
+a magnetic cell -- nickel's `pz` ultrasoft dataset, which is where the modulated moment
+below also has to be taken.
+
+**What stage 6 does not have.**
+
+* **A modulated moment against a supercell.** The energy ladder above is spin-polarized and
+  the moment is not, because silicon has none. It was attempted on **nickel**, and the
+  attempt failed for a reason worth keeping: that supercell **breaks its own symmetry with
+  nothing applied**, converging to moments `[1.4478, 1.2137]` at an energy 3.92e-5 Ry per
+  cell *above* the uniform state, so every comparison against it was void and the ultracell
+  was reporting the lower energy correctly throughout. Three explanations were tested and
+  refuted on the way to that (`OPEN.md` Part X item 2, closed the same day), and the
+  measurement the whole detour reduces to is one run: **a supercell comparison on a metal
+  starts by checking that the supercell reproduces its own unit cell with nothing applied.**
+  It also gave stage 6 a confirmation it would not otherwise have had -- collinear
+  `nbnd = 32` and spinor `nbnd = 64` agree to -3.523e-5 apiece on that cell, which is the
+  regime pairing holding on a magnetic metal.
+
+  So the modulated moment stays open, and the cell for it wants a k-grid that converges the
+  moment: at `2 2 2` nickel's came out 1.33 against 0.62 at `4 4 4`, the physical LDA value.
+* **A fully relativistic magnetic cell**, for the reason given above: no committed dataset.
+* Nothing else. The timing is in `PERFORMANCE.md` beside stage 5's, and the number it
+  carries is that the augmentation costs the same in both spin regimes -- 1.19 and 2.54
+  times the norm-conserving ultracell here against 1.24 and 2.45 there.
 
 **What is outstanding.**
 

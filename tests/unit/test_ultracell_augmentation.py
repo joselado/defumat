@@ -161,3 +161,37 @@ def test_a_broken_pairing_is_caught(shape):
 
     _, residual = becsum_per_copy(jnp.asarray(broken), shape)
     assert residual > 1.0e-2, residual
+
+
+@pytest.mark.parametrize("shape,symmetric", [
+    ((2, 1, 1), True), ((2, 2, 1), True), ((2, 2, 2), True),
+    ((3, 1, 1), False), ((4, 1, 1), False), ((3, 2, 1), False),
+])
+def test_two_cells_along_an_axis_cannot_see_the_sign(shape, symmetric):
+    """``N = 2`` along every axis makes the difference table symmetric.
+
+    The displacement is ``Q' - Q``, the ket's wavevector minus the bra's, and
+    the opposite spelling is a different calculation -- except where every
+    non-zero ``Q`` is its own negative. With two cells along an axis the only
+    ``Q`` on it is the zone boundary, where ``-b/2`` and ``+b/2`` differ by a
+    reciprocal vector and are therefore the same entry, so transposing the table
+    changes nothing at all.
+
+    **This is a statement about what a test can see, not about the code.** A
+    ``(2, 1, 1)`` ultracell run with the displacement deliberately flipped
+    reproduces the correct total energy to ten digits, so no ``N = 2`` case can
+    validate that sign; at ``N = 4`` the same flip moves the energy by 2.0e-7 Ry
+    and the iteration count from 10 to 12 (``PLAN.md`` P88, the stage 5
+    amendment). Anything meant to test the sign uses an odd count or four.
+    """
+    ultracell = Ultracell.build(shape, (2, 2, 2))
+    table = np.asarray(ultracell.difference_index)
+    assert np.array_equal(table, table.T) is symmetric
+
+    # The *sum* table is symmetric at every shape, because addition commutes.
+    # Worth asserting beside the one above: transposing it reads like a broken
+    # pairing and is not one, which is how a guard measurement was misread once
+    # (``PLAN.md`` P88, the stage 5 amendment's table).
+    triples = np.asarray(ultracell.q_triples)
+    sums = np.asarray(ultracell.q_index(triples[:, None, :] + triples[None, :, :]))
+    assert np.array_equal(sums, sums.T)

@@ -5808,6 +5808,34 @@ method**, for the reason the crossover table above gives: at two cells the super
 four atoms and wins by a factor of six. The augmented rows say what the dataset costs, not
 who wins, and the crossover itself has not been run on an augmented dataset.
 
+### The same table in the spinor regime (P88 stage 6)
+
+The identical cell, protocol and modulation with `noncolin = .true.` and a starting
+moment, at `nbnd = 48` rather than 24 so that the basis is the same size -- **a spinor band
+holds one electron where a collinear band holds two**, and comparing the two regimes at the
+same `nbnd` compares different bases.
+
+| dataset | ultracell, s | its | supercell, s | its | supercell / ultracell |
+|---|---|---|---|---|---|
+| norm-conserving | 16.14 | 8 | 6.06 | 16 | 0.38 |
+| ultrasoft | 19.23 | 8 | 9.20 | 17 | 0.48 |
+| PAW | 40.96 | 9 | 16.50 | 18 | 0.40 |
+
+**What the augmentation costs is the same in both regimes, which is the number worth
+having.** Ultrasoft is 1.19 times the norm-conserving ultracell here against 1.24 in the
+scalar table, and PAW 2.54 against 2.45. The spinor structure and the augmentation charge
+therefore multiply rather than compound: the displaced tables are the same objects and the
+`fcoef` sandwich is four `nkb x nkb` products per Q-difference, which is small beside the
+`N^2` ultracell transforms either way.
+
+**The ultracell's position against the supercell improves**, 0.38 / 0.48 / 0.40 against
+0.15 / 0.28 / 0.22, and **most of that is the iteration count rather than the physics**:
+the supercell takes 16 to 18 iterations here where it took 10 to 12 in the scalar table,
+because a spinor SCF with smearing on this cell converges more slowly, while the ultracell
+takes 8 or 9 in both. Per iteration the supercell has gained less than the wall clock
+suggests, and no claim about the crossover should be read off these rows -- they are one
+cell at the wrong end of it.
+
 
 ### Memory
 

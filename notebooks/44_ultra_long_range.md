@@ -167,6 +167,17 @@ being a free choice is an element whose valence density really does pile up clos
 transition metal above all, and that is where the long cell has to take the augmented
 description rather than choose it.
 
+The same question can be asked of a magnet rather than of a screening charge, and
+it gets the same answer. Putting this silicon cell under a field that turns from
+one cell to the next, the induced moment per cell comes out 0.07953 with the core
+charge restored against 0.07952 with it smoothed away, and -0.07947 against
+-0.07946 in the cell where the field points the other way. So neither how well a
+crystal screens nor how stiff it is against a slow twist depends on the
+description of the region near the nucleus, which is not obvious in advance,
+since both quantities are built from states that spend much of their weight
+close in.
+
+
 ## What the modulation costs
 
 The long cell has a total energy of its own, per unit cell, and the difference between

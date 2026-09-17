@@ -55,3 +55,8 @@ slides/*.toc
 # the generated sbatch array scripts describe one cluster account.
 performance/results/
 performance/cluster/generated/
+
+# editor swap files
+*.swp
+*.swo
+*~

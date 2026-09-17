@@ -305,38 +305,194 @@ def test_the_augmented_ultracell_converges_to_the_supercell(
     assert gaps[48] < 2.0e-6
 
 
-# -- what is still refused ---------------------------------------------------
+# -- a spinor, where D_ij is the integrals sandwiched between fcoef ----------
 
 
-class _Overridden:
-    """A system with one field replaced, so a refusal can be triggered alone."""
+SPINOR = """&control
+ calculation='scf'
+/
+&system
+ ibrav=2, celldm(1)=10.20, nat=2, ntyp=1,
+ ecutwfc={ecutwfc:.1f}, ecutrho={ecutrho:.1f},
+ nosym=.true., noinv=.true.,
+ noncolin=.true., starting_magnetization(1)=0.2,
+ angle1(1)={angle1:.1f}, angle2(1)=0.0,
+ occupations='smearing', smearing='gaussian', degauss=0.02
+/
+&electrons
+ conv_thr=1.0d-11
+/
+ATOMIC_SPECIES
+ Si 28.086 {upf}
+ATOMIC_POSITIONS alat
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS automatic
+ {k0} 2 2 0 0 0
+"""
 
-    def __init__(self, system, **replaced):
-        self._system, self._replaced = system, replaced
 
-    def __getattr__(self, name):
-        if name in self._replaced:
-            return self._replaced[name]
-        return getattr(self._system, name)
+def _spinor(tmp_path, pseudo_dir, dataset, k0=2, angle1=0.0) -> Calculator:
+    """The same cell as a spinor, with the moment along ``z`` or along ``x``."""
+    path = tmp_path / f"si-{dataset}-spinor-{int(angle1)}-{k0}.in"
+    path.write_text(SPINOR.format(
+        upf=DATASETS[dataset], ecutwfc=ECUTWFC, ecutrho=ECUTRHO,
+        angle1=angle1, k0=k0,
+    ))
+    return Calculator.from_file(path, pseudo_dir=pseudo_dir)
+
+
+def _spinor_with_field(tmp_path, pseudo_dir, dataset, field) -> Calculator:
+    """The same spinor cell under a uniform ``B_z``, for the reference SCF."""
+    text = SPINOR.format(
+        upf=DATASETS[dataset], ecutwfc=ECUTWFC, ecutrho=ECUTRHO,
+        angle1=0.0, k0=2,
+    ).replace(" degauss=0.02\n", f" degauss=0.02\n B_field(3) = {field}\n")
+    path = tmp_path / f"si-{dataset}-spinor-field.in"
+    path.write_text(text)
+    return Calculator.from_file(path, pseudo_dir=pseudo_dir)
 
 
 @pytest.mark.slow
-def test_the_spinor_augmentation_refusal_fires(tmp_path, pseudo_dir):
-    """A scalar augmented run is accepted and a spinor one is refused by name.
+@pytest.mark.parametrize("dataset", list(DATASETS))
+def test_a_spinor_augmented_ultracell_is_the_tiled_unit_cell(
+        dataset, tmp_path, pseudo_dir):
+    """``npol = 2`` and an augmented dataset, with nothing applied.
 
-    Both halves, because a refusal is only a promise if it has been shown to
-    fire and a lift is only a lift if the thing it lifted is shown to pass.
+    Measured: the total reproduces the unit cell's own SCF to 2.8e-12 Ry
+    ultrasoft and 8.5e-13 PAW, and the density to 2e-7 pointwise.
+
+    **What this cannot see is the same thing the collinear null could not**:
+    with nothing applied every ``becsum`` at a non-zero Q-difference is zero, so
+    the displaced tables are multiplied by nothing and the spin blocks are only
+    exercised at ``Q_d = 0``. What it does establish is that the sandwich and
+    the four-component ``becsum`` reproduce the unit cell exactly there, which
+    the tests below build on rather than repeat.
     """
-    from defumat.ultracell.driver import require_an_ultracell_regime
+    calculator = _spinor(tmp_path, pseudo_dir, dataset)
+    scf = calculator.get_scf(conv_thr=1e-11, nbnd=24)
+    assert scf.converged
 
-    calculator = _silicon(tmp_path, pseudo_dir, "paw", (2, 2, 2))
-    basis = build_basis(calculator.system)
-    require_an_ultracell_regime(calculator.system, calculator.pseudos, basis)
+    result = run_ultracell(
+        calculator.system, calculator.pseudos, scf, (2, 1, 1), (1, 2, 2),
+        nbnd=32, conv_thr=1e-11, states_conv_thr=1e-11, max_iterations=60,
+    )
+    assert result.converged
+    tiled = np.asarray(result.ultracell.tile(np.asarray(scf.density)))
+    assert np.max(np.abs(np.asarray(result.density) - tiled)) < 1.0e-6
+    assert abs(result.total_energy - scf.total_energy) < 1.0e-9
 
-    with pytest.raises(NotImplementedError, match="noncollinear or spin-orbit"):
-        require_an_ultracell_regime(
-            _Overridden(calculator.system, npol=2), calculator.pseudos, basis
+
+@pytest.mark.slow
+def test_the_two_spin_regimes_agree_at_a_matched_band_count(tmp_path, pseudo_dir):
+    """The spinor route against the collinear one, which shares none of it.
+
+    A collinear ultracell solves one matrix per channel and builds each
+    channel's ``becsum`` from that channel's states; a spinor solves one matrix
+    on a space twice as large and builds four Pauli components through the
+    ``fcoef`` sandwich. With the moment along ``z`` and a uniform field along
+    ``z`` the two describe the same physics, so they have to give the same
+    answer -- and the only thing between them is the band count, because **a
+    spinor band holds one electron where a collinear band holds two**.
+
+    Measured under ``B_z = 0.01`` Ry against ``m = 0.53861`` from each regime's
+    own ``run_scf``: collinear ``nbnd = 12, 24, 40`` gives 1.91e-2, 7.38e-3 and
+    2.25e-3 relative, and spinor ``nbnd = 24, 48, 80`` gives the same three to
+    every digit printed (``m_z`` 0.52832511 against 0.52831902 at the first
+    rung). Comparing the two at the *same* ``nbnd`` instead reads as a factor
+    of two of missing convergence and is the trap this test exists to name.
+
+    One rung is run here; the ladder is in ``PLAN.md`` P88 stage 6.
+    """
+    field, nbnd = 0.01, 12
+    results = {}
+    for regime in ("collinear", "spinor"):
+        factor = 1 if regime == "collinear" else 2
+        build = _magnetic if regime == "collinear" else _spinor
+        plain = build(tmp_path, pseudo_dir, "ultrasoft")
+        seed = plain.get_scf(conv_thr=1e-11, nbnd=12 * factor)
+        reference = (
+            _magnetic(tmp_path, pseudo_dir, "ultrasoft", field=field)
+            if regime == "collinear" else
+            _spinor_with_field(tmp_path, pseudo_dir, "ultrasoft", field)
+        ).get_scf(conv_thr=1e-11, nbnd=12 * factor)
+        moment = (float(reference.magnetization) if regime == "collinear"
+                  else float(np.asarray(reference.magnetization_vector)[2]))
+        result = run_ultracell(
+            plain.system, plain.pseudos, seed, (1, 1, 1), (2, 2, 2),
+            nbnd=nbnd * factor, conv_thr=1e-11, states_conv_thr=1e-8,
+            max_iterations=120,
+            magnetic_field=(
+                (lambda x: np.full(x.shape[:-1], field)) if factor == 1 else
+                (lambda x: np.stack([np.zeros(x.shape[:-1]),
+                                     np.zeros(x.shape[:-1]),
+                                     np.full(x.shape[:-1], field)], axis=-1))),
         )
+        assert result.converged
+        got = (float(result.cell_moments().sum()) if factor == 1 else
+               float(np.asarray(result.cell_moments()).reshape(-1, 3).sum(0)[2]))
+        results[regime] = (got, abs(got - moment) / abs(moment))
+
+    (collinear, error), (spinor, spinor_error) = (
+        results["collinear"], results["spinor"])
+    assert error < 2.5e-2 and spinor_error < 2.5e-2
+    # The two regimes, not the two band counts: this is the assertion. The
+    # measured agreement is 1.2e-5 relative, so the bound has room to catch a
+    # regression rather than room to hide one.
+    assert abs(spinor - collinear) < 5.0e-5 * abs(collinear)
+
+
+@pytest.mark.slow
+def test_a_turning_field_puts_the_moment_where_the_field_points(
+        tmp_path, pseudo_dir):
+    """A field that turns from one cell to the next, on an augmented dataset.
+
+    This is the run where the spin blocks carry content at a non-zero
+    Q-difference: the null cannot, and a field along one fixed axis leaves the
+    two off-diagonal blocks empty. The witness that it is not another null is
+    ``augmentation_residual``, which reads 3.4e-5 here against 1e-16 with
+    nothing applied -- the displaced tables have something to multiply.
+
+    The assertion is the **sense**. Silicon is paramagnetic, so the induced
+    moment follows the applied field cell by cell; the opposite sign in the
+    off-diagonal block gives the mirror texture, which is degenerate in energy
+    with this one (there is no spin-orbit coupling in this dataset), converges
+    just as well, and is caught by nothing else here. Measured: +7.95e-2 in the
+    cell where the field is positive and -7.95e-2 in the cell where it is not,
+    on both datasets.
+
+    **``N = 2`` cannot see the sign of the *displacement*** and is not asked to:
+    the only non-zero ``Q`` is the zone boundary, where ``-Q`` and ``Q`` are the
+    same point of the reciprocal lattice, so the difference table is symmetric
+    and flipping it changes nothing at all. That sign is stage 5's and was
+    measured at ``N = 4``. What this test covers is the sign the spin blocks
+    carry, which is visible at any ``N``.
+    """
+    shape, kgrid, amplitude = (2, 1, 1), (2, 2, 2), 0.01
+    calculator = _spinor(tmp_path, pseudo_dir, "paw", k0=4, angle1=90.0)
+    scf = calculator.get_scf(conv_thr=1e-11, nbnd=24)
+    assert scf.converged
+
+    def turning(x):
+        """``+y`` in the first cell and ``-y`` in the second."""
+        sign = np.cos(2 * np.pi * x[..., 0] / shape[0] - np.pi / 2)
+        zero = np.zeros_like(sign)
+        return np.stack([zero, amplitude * sign, zero], axis=-1)
+
+    result = run_ultracell(
+        calculator.system, calculator.pseudos, scf, shape, kgrid, nbnd=24,
+        conv_thr=1e-9, states_conv_thr=1e-9, mixing_beta=0.3,
+        magnetic_field=turning, max_iterations=150,
+    )
+    assert result.converged
+    moments = np.asarray(result.cell_moments())
+    assert moments[0][1] > 0.0 and moments[1][1] < 0.0
+    assert moments[0][1] == pytest.approx(-moments[1][1], rel=1e-3)
+    # Not a null: the displaced tables are carrying content at Q_d != 0.
+    assert result.augmentation_residual > 1.0e-6
+
+
+# -- what is still refused ---------------------------------------------------
 
 
 @pytest.mark.slow

@@ -72,6 +72,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.pseudo.augmentation import _aug_max_bytes, build_augmentation
+from defumat.pseudo.spinorbit import becsum_transform
 from defumat.system.cell import Cell
 from defumat.ultracell.grid import Ultracell
 
@@ -80,8 +81,11 @@ __all__ = [
     "build_ultracell_augmentation",
     "ultracell_projections",
     "ultracell_deeq",
+    "spinor_ultracell_deeq",
     "augmentation_matrix",
+    "spinor_augmentation_matrix",
     "ultracell_becsum",
+    "spinor_ultracell_becsum",
     "ultracell_augmentation_charge",
     "becsum_per_copy",
     "coefficients_per_difference",
@@ -187,17 +191,24 @@ def build_ultracell_augmentation(
 # -- the projections the whole module contracts against -----------------------
 
 
-def ultracell_projections(coefficients, projectors, batch: int | None = 1):
+def ultracell_projections(coefficients, projectors, batch: int | None = 1,
+                          npol: int = 1):
     """``B^{a,Q}_i = <beta_i|psi_{k0+Q,n}>`` for every frozen state.
 
     Args:
-        coefficients: ``(blocks, nk0, N, nbnd, npwx)`` frozen states, padding
-            already zeroed.
+        coefficients: ``(blocks, nk0, N, nbnd, npol npwx)`` frozen states,
+            padding already zeroed.
         projectors: the folded-k :class:`~defumat.pseudo.projectors.Projectors`,
             whose k-list is ordered ``ik = ik0 * N + iq`` exactly as
             :func:`~defumat.ultracell.grid.folded_kpoints` builds it.
+        npol: spinor components per state, 2 noncollinear and 1 not.
 
-    Returns ``(blocks, nk0, N, nbnd, nkb)`` complex.
+    Returns ``(blocks, nk0, N, nbnd, nkb)`` complex, or
+    ``(blocks, nk0, N, nbnd, 2, nkb)`` for a spinor, where the extra axis is the
+    component the projection was taken of. **The two components share one
+    ``vkb``**, which is what makes a spinor different from a spiral: they live
+    on the same sphere at the same k-point, so the projector is the same array
+    and only the coefficients differ.
 
     Built one folded k-point at a time through
     :meth:`~defumat.pseudo.projectors.Projectors.at_k` rather than off the whole
@@ -205,7 +216,9 @@ def ultracell_projections(coefficients, projectors, batch: int | None = 1):
     this method would otherwise hold -- 1.5 GB on a 21-cell slab where the
     result is 12 MB.
     """
-    blocks, nk0, cells, nbnd, npwx = coefficients.shape
+    blocks, nk0, cells, nbnd, width = coefficients.shape
+    npol = int(npol)
+    npwx = int(width) // npol
     out = []
     for block in range(int(blocks)):
         rows = []
@@ -213,9 +226,9 @@ def ultracell_projections(coefficients, projectors, batch: int | None = 1):
             per_q = []
             for iq in range(int(cells)):
                 vkb = projectors.at_k(int(ik0) * int(cells) + int(iq))
-                per_q.append(jnp.einsum(
-                    "gc,bg->bc", vkb.conj(), coefficients[block, ik0, iq]
-                ))
+                spinor = coefficients[block, ik0, iq].reshape(nbnd, npol, npwx)
+                projected = jnp.einsum("gc,bpg->bpc", vkb.conj(), spinor)
+                per_q.append(projected[:, 0] if npol == 1 else projected)
             rows.append(jnp.stack(per_q, axis=0))
         out.append(jnp.stack(rows, axis=0))
     return jnp.stack(out, axis=0)
@@ -259,6 +272,69 @@ def ultracell_deeq(delta_v, augmentation: UltracellAugmentation, grid):
             for s in range(delta_v.shape[0])
         ]))
     return jnp.stack(out, axis=1)
+
+
+def spinor_ultracell_deeq(components, fcoef, soc_scale: float = 1.0):
+    """``newd_so`` per Q-difference: the scalar integrals as a 2x2 spin matrix.
+
+    Args:
+        components: ``(nspin_mag, N, nkb, nkb)`` complex -- the integrals
+            :func:`ultracell_deeq` builds, with PAW's one-centre coefficients
+            already added to them if there are any. They are added **before**
+            this transform for the reason ``add_paw_to_deeq`` adds them before
+            ``newd_so``'s: they are a contribution to the same integral, and
+            putting them in afterwards gives them the wrong spin structure.
+        fcoef: ``(2, 2, nkb, nkb)`` complex, the spin-orbit coefficients
+            assembled over the atoms (``scf/driver.py``'s
+            ``_spin_block_diagonal``). For a scalar-relativistic species it is
+            the identity on each diagonal spin block and the sandwich collapses
+            to the plain recombination.
+        soc_scale: Elk's ``socscf``, interpolating between the plain
+            recombination and the sandwiched one.
+
+    Returns ``(N, 2, 2, nkb, nkb)`` complex.
+
+    **The bare ``dvan_so`` is not added here**, exactly as :func:`ultracell_deeq`
+    does not add ``dion``: what an ultracell matrix element takes is the
+    *difference* potential, and the bare nonlocal term is already inside every
+    frozen eigenvalue.
+
+    **The lower off-diagonal block is written out rather than conjugated**, and
+    that is the one line where this differs from ``_newd_noncollinear``. The
+    unit cell has ``D^{down,up} = (D^{up,down})^dagger`` because both blocks are
+    built from the same two real components; here
+    ``conj(D_a(Q_d)) = D_a(-Q_d)``, so the conjugate transpose of the block at
+    ``Q_d`` is the lower block of the **opposite** difference rather than of
+    this one. All four components are available at every difference, so both
+    blocks are built from them directly and the matrix is Hermitian across the
+    pair ``(Q_d, -Q_d)`` as it should be. The wrong spelling is Hermitian too --
+    the same trap the sign of the displacement itself carries, one index further
+    in.
+    """
+    nspin_mag = int(components.shape[0])
+    charge = components[0]
+    if nspin_mag == 1:
+        zero = jnp.zeros_like(charge)
+        blocks = jnp.stack([jnp.stack([charge, zero]), jnp.stack([zero, charge])])
+    else:
+        mx, my, mz = components[1], components[2], components[3]
+        blocks = jnp.stack([
+            jnp.stack([charge + mz, mx - 1j * my]),
+            jnp.stack([mx + 1j * my, charge - mz]),
+        ])
+    blocks = blocks.astype(fcoef.dtype)
+    # (2, 2, N, nkb, nkb) -> (N, 2, 2, nkb, nkb), the difference index leading
+    # so that ``deeq[difference]`` gathers it the way the scalar path does.
+    plain = jnp.moveaxis(blocks, 2, 0)
+    dressed = jnp.einsum(
+        "asij,stdjk,tbkl->dabil", fcoef, blocks, fcoef, optimize=True
+    )
+    if soc_scale != 1.0:
+        # The scale is on the *coupling* and not on the exchange field, which is
+        # what ``blocks`` carries; ``scf/driver.py``'s ``_newd_noncollinear``
+        # has the measurement behind that distinction.
+        dressed = plain + soc_scale * (dressed - plain)
+    return dressed
 
 
 def coefficients_per_difference(ddd_r, shape):
@@ -330,6 +406,27 @@ def augmentation_matrix(becp, deeq, difference):
     ).reshape(becp.shape[0] * becp.shape[1], -1)
 
 
+def spinor_augmentation_matrix(becp, deeq, difference):
+    """``sum_{a,ij,st} conj(B^{Q,m}_{s i}) D^{s t}_ij(Q' - Q) B^{Q',n}_{t j}``.
+
+    Args:
+        becp: ``(N, nbnd, 2, nkb)`` the projections of one ``k0``'s frozen
+            spinor states, from :func:`ultracell_projections`.
+        deeq: ``(N, 2, 2, nkb, nkb)`` from :func:`spinor_ultracell_deeq`,
+            indexed by difference.
+        difference: ``(N, N)`` the difference index of ``Q_ket - Q_bra``.
+
+    Returns ``(N nbnd, N nbnd)``, the same shape and the same ``(Q, n)``
+    C-order the scalar :func:`augmentation_matrix` returns, so
+    :func:`~defumat.ultracell.hamiltonian.ultracell_matrix` takes it unchanged
+    and the spinor structure is contracted away before it is reached.
+    """
+    gathered = deeq[difference]
+    return jnp.einsum(
+        "qmsi,qQstij,Qntj->qmQn", becp.conj(), gathered, becp, optimize=True,
+    ).reshape(becp.shape[0] * becp.shape[1], -1)
+
+
 # -- becsum and the charge it puts on the box ---------------------------------
 
 
@@ -379,6 +476,62 @@ def ultracell_becsum(becp, vectors, weights, augmentation: UltracellAugmentation
                 "j,qjai,qjak->aik", weights, mixed.conj(), partner, optimize=True,
             )
             blocks.append(0.5 * (block + jnp.swapaxes(block, -1, -2)))
+        values.append(jnp.stack(blocks, axis=0))
+    return tuple(values)
+
+
+def spinor_ultracell_becsum(becp, vectors, weights, augmentation, fcoef,
+                            nspin_mag: int):
+    """``add_becsum_so`` resolved by Q-difference, per species.
+
+    Args:
+        becp: ``(N, nbnd, 2, nkb)`` the spinor projections at one ``k0``.
+        vectors: ``(N nbnd, nstate)`` the envelope amplitudes, in the ``(Q, n)``
+            C-order the matrix uses.
+        weights: ``(nstate,)`` ``w_k0 f_j / N``, the ultracell-normalised
+            occupations :func:`ultracell_becsum` takes.
+        fcoef: one ``(nh, nh, 2, 2)`` array per species, aligned with
+            ``augmentation.species_channels``.
+        nspin_mag: 4 for a magnetic run, 1 for a spin-orbit run carrying no
+            magnetization.
+
+    Returns one ``(N, nspin_mag, nat_t, nh_t, nh_t)`` complex array per species,
+    or ``None`` where the species is norm-conserving -- the layout the collinear
+    path reaches by summing :func:`ultracell_becsum` over its spin blocks, so
+    everything below this point is shared.
+
+    **The real part is not taken**, where the unit cell's ``add_becsum_so``
+    takes it. A periodic occupation matrix is real; these are the occupations of
+    one atom copy against another at a difference of ultracell wavevectors, and
+    their conjugate sits at ``-Q_d`` rather than in the same entry. Taking the
+    real part leaves every ``Q_d = 0`` number right, the tiled null included,
+    and halves the rest -- see :func:`~defumat.pseudo.spinorbit.becsum_transform`.
+    """
+    cells, nbnd = becp.shape[0], becp.shape[1]
+    amplitudes = jnp.asarray(vectors).reshape(cells, nbnd, -1)
+    weights = jnp.asarray(weights).astype(becp.dtype)
+    sum_index = augmentation.sum_index
+
+    values = []
+    for species, channels in enumerate(augmentation.species_channels):
+        if channels is None:
+            values.append(None)
+            continue
+        columns = becp[:, :, :, jnp.asarray(channels)]   # (N, nbnd, 2, nat, nh)
+        mixed = jnp.einsum("qnj,qnsai->qjsai", amplitudes, columns)
+        coefficients = jnp.asarray(fcoef[species]).astype(mixed.dtype)
+        blocks = []
+        for d in range(cells):
+            partner = mixed[jnp.asarray(sum_index[:, d])]
+            # (nat, nh, 2, nh, 2), the spin-density matrix per atom that
+            # ``becsum_transform`` contracts with ``fcoef`` and the Pauli set.
+            spin_density = jnp.einsum(
+                "j,qjsai,qjtak->aiskt", weights, mixed.conj(), partner,
+                optimize=True,
+            )
+            blocks.append(becsum_transform(
+                coefficients, spin_density, int(nspin_mag), real=False,
+            ))
         values.append(jnp.stack(blocks, axis=0))
     return tuple(values)
 
