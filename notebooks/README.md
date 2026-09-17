@@ -172,7 +172,7 @@ want a number.
 | [`41_vertical_transport.ipynb`](41_vertical_transport.ipynb) | Tunnelling *through* a two-dimensional material into the substrate beneath it: graphene, where the current map is the microscope's picture, and a bilayer, where the two layers' paths interfere and it is not |
 | [`42_all_electron_start.ipynb`](42_all_electron_start.ipynb) | A converged all-electron density brought here and used to start a run: where a pseudopotential density is allowed to differ from the real one, and where it is not |
 | [`43_magnetic_textures.ipynb`](43_magnetic_textures.ipynb) | A moment per atom rather than a moment per crystal: a 90 degree helix that survives self consistency, the symmetry a texture leaves behind, the two numbers it takes to say it is still there, and the same four sites landing on two magnetic states 11 mRy apart depending on what their moments started as |
-| [`44_ultra_long_range.ipynb`](44_ultra_long_range.ipynb) | A potential that varies over eight unit cells of silicon, and the electrons screening it: the long cell solved in the ordinary cell's own states, computed once. What the modulation costs in energy, which is what says whether a modulation is the ground state at all. Then the two kinds of spin wave it carries, one modulating a moment's length and one its direction, |
+| [`44_ultra_long_range.ipynb`](44_ultra_long_range.ipynb) | A potential that varies over eight unit cells of silicon, and the electrons screening it: the long cell solved in the ordinary cell's own states, computed once. What the modulation costs in energy, which is what says whether a modulation is the ground state at all. Then the two kinds of spin wave it carries, one modulating a moment's length and one its direction, and whether the screening cares that a pseudopotential smooths away the charge close to the nucleus |
 | [`45_imaging_a_modulation.ipynb`](45_imaging_a_modulation.ipynb) | What a scanning-tunnelling microscope sees above a spin density wave eight unit cells long: a polarized tip images the wave itself and an unpolarized one images its square, at twice the wavevector, because a collinear crystal cannot respond in the charge at first order in the field. Then the same states read as a *spectrum* rather than an image, where the band edge is seen to move through the wave by a third of an electronvolt and the two spin channels peak four cells apart |
 
 ## Conventions
@@ -267,7 +267,7 @@ workstation core, slowest last:
 | `01` | 5 | `06` | 23 | `34` | 40 | `08` | 171 |
 | `09` | 6 | `25` | 28 | `10` | 50 | `43` | 173 |
 | `02` | 8 | `18` | 29 | `29` | 59 | `27` | 178 |
-| `37` | 9 | `12` | 30 | `11` | 81 | `44` | 188 |
+| `37` | 9 | `12` | 30 | `11` | 81 | `44` | 191 |
 | `03` | 10 | `21` | 30 | `45` | 85 | `17` | 203 |
 | `05` | 10 | `15` | 31 | `14` | 89 | `38` | 242 |
 | `04` | 12 | `24` | 31 | `26` | 109 | `19` | 243 |
@@ -283,6 +283,14 @@ SCF runs on the four-atom chain and cannot be worth a negative 67 s; what the tw
 differ in is everything else about when they were taken, and the one that is a measurement
 is the new one, taken pinned to a single core with `OMP_NUM_THREADS=1` on an otherwise
 quiet machine.
+
+`44` reads 191 s on 2026-09-17 with its augmented section in it, against 188 s before, and
+**that pair is not a delta and not even a comparison.** The 191 s was taken through
+`tools/export_notebooks.sh`, which does not pin the thread pool, where the 188 s is recorded
+as a single-core number -- so the added section, one more four-cell ultracell, is hidden
+inside a change of core count rather than measured. What the number does establish is the
+only thing the ceiling check asks of it: the notebook is inside ten minutes. Pinning the
+exporter is the fix and is unstarted.
 
 `44` read 188 s on 2026-09-15 against 164 s before it gained the total energy, and **the
 24 s is not attributed to the energy**, which is the honest version of a sentence that

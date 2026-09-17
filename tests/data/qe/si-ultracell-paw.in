@@ -1,0 +1,31 @@
+! Silicon with a PAW dataset, for an augmented ultracell calculation. The k-grid is
+! 4 2 2 so that a four-cell ultracell at kgrid = (1, 2, 2) folds onto exactly it.
+!
+! ecutrho is set to 4 ecutwfc explicitly. A PAW dataset asks for 8 to 12 by
+! default, and an ultracell refuses a double grid: the smooth half of its
+! matrix element would carry dV's dense components where h_psi truncates them
+! to the smooth sphere, so the ultracell and the supercell it is validated
+! against would not be discretising the same functional.
+!
+! Symmetry is off because a modulation breaks the crystal's point group, and
+! the grid is unshifted because the folded set k0 + Q is a Monkhorst-Pack grid
+! only if its origin is.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.20,
+    nat = 2, ntyp = 1,
+    ecutwfc = 16.0, ecutrho = 64.0,
+    nosym = .true., noinv = .true.
+ /
+ &electrons
+    conv_thr = 1.0d-12
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-n-kjpaw_psl.0.1.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS automatic
+ 4 2 2 0 0 0

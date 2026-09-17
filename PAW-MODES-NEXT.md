@@ -152,53 +152,42 @@ The caution that applies to this entry more than to any other here is
 `AUGMENTATION-NEXT.md`'s last one: a gap sized on silicon is a gap sized on a
 centrosymmetric crystal, and this one has never been run on a polar cell.
 
-## 8. The ultracell
+## 8. The ultracell. ✅ DONE for the two scalar spin regimes.
 
-**What was read.** `require_an_ultracell_regime` in `ultracell/driver.py` on `master`,
-where its comment was rewritten, together with section 1k of `AUGMENTATION-NEXT.md` at
-the same revision. This branch carries the older text, which said the frozen states stop
-being a fixed basis and that `S` enters every ultracell overlap, and both of those are
-now written down as wrong.
+`PLAN.md` P88 stage 5, 2026-09-17; `defumat/ultracell/augmentation.py`. The refusal is
+lifted for `nspin = 1` and `2`, and what this entry got right is worth keeping because two
+sessions had to rediscover it: the frozen states stay a fixed basis, `S` does not enter, and
+what was missing is one term used three times -- the matrix element, `becsum` per atom copy
+for the density, and PAW's one-centre terms per copy.
 
-**What is missing.** One term and its two consumers. The matrix element gains the
-augmentation part of `<psi_{k0+Q,m}|dV|psi_{k0+Q',n}>`, which is a sum over atoms and
-projector pairs of `int dV(r) Q~^a_ij(r) dr` contracted with `conj(B^Q_i) B^{Q'}_j`,
-where `Q~` is the resident table displaced by the **ket's** wavevector minus the bra's
-and the conjugate sits on the **bra's** projection. The frozen states stay a fixed basis
-and `S` does not enter, because the augmentation part of the cross-`Q` overlap carries
-`sum_R e^{i(Q'-Q).R}`, which is `N delta_{QQ'}`. Both indices are fixed by the spiral
-rather than by the derivation alone: the spiral is this formula's special case with
-`Q = +q/2` on the bra and `Q' = -q/2` on the ket, so the displacement is `-q`, which is
-what the spiral path implements and what the 90-degree supercell measures. Section 1k and
-the guard's comment both credit that displacement to `Calculation.augmented`; the call
-that carries it is `Calculation.at_spiral_q`, which builds the displaced table with
-`shift = -qcart`, while `augmented` is the method that puts the augmentation charge on
-the density.
+**The sign this entry flagged was the live question and it is settled.** The displacement is
+the **ket's** wavevector minus the bra's, `Q' - Q`, which is what the guard's comment on
+`master` said and what `AUGMENTATION-NEXT.md` §1k's derivation sentence had backwards. It was
+settled by running the other spelling rather than by reading: the induced density's error
+stalls at 6.7e-2 where the right one falls to 3.7e-3, and the total energy goes 2.6e-5 Ry
+**below** the four-atom supercell's, which the nested-basis bound forbids. §1k is corrected.
 
-**What PAW adds.** Its one-centre terms per cell copy, on top of the `becsum` per
-`(atom, cell copy)` the density needs. That sentence is physics rather than a reading:
-no guard states it, because the dataset refusal fires before anything PAW-specific is
-reached, and it is not sized from the code here.
+**Two things this entry did not have.** Its sizing said PAW's one-centre terms per copy were
+not sized; they turned out to need no new physics at all, because
+`PawCorrections.energy_and_coefficients` reads its atom count off `becsum.shape[1]` and knows
+nothing about positions, so `N` copies are simply `N nat` atoms of the same species. And the
+entry did not name the second mixed variable: PAW's one-centre `D` is a functional of
+`becsum` rather than of the density, so `becsum` joins the box density in the mixer, packed
+after it exactly as `_mix` packs it in the unit cell. An ultrasoft run needs neither.
 
-**The practical gate is the second wall rather than the first.** The refusals in
-`require_an_ultracell_regime` run in order, the dataset first and then DFT+U, a spiral,
-symmetry, gamma-only storage and finally `basis.doublegrid`, and that last one refuses a
-smooth and a dense grid that do not coincide. An ultrasoft or PAW run normally sets
-`ecutrho` above `4 ecutwfc`, so lifting the dataset refusal moves the run onto the double
-grid refusal rather than into a calculation, and the interpolation between two ultracell
-boxes is not written.
+**And lifting it made three things reachable that the refusal had been protecting.** The
+ultracell image and the ultracell spectrum run on an augmented dataset, because a tip sits
+in the vacuum where the smooth states are exact, and both now inherit the unit cell's
+`_refuse_an_augmented_plane`. The ultracell **transmission** does not: its exit-plane Gram
+matrix needs `S`, and `_ultracell_geometry` passed `apply_s = None` with a comment saying
+the ultracell refuses these datasets -- which is how the stale claim was found, and it is
+refused by name now.
 
-**One sign to settle before anyone writes this.** The guard's comment on `master` says
-the displaced table is `build_augmentation(shift = Q' - Q)` and section 1k's derivation
-sentence says `shift = Q - Q'`, while section 1k's own formula line says the displacement
-is `Q' - Q`. The spiral special case decides it: `at_spiral_q` calls the builder with
-`shift = -qcart` and the spiral's `Q' - Q` is `-q`, so `Q' - Q` is the consistent
-spelling and the one sentence in section 1k is the stale one.
-
-**Size, as a hypothesis.** Section 1k says nothing is needed that does not already exist,
-the `N` displaced tables being `N` calls to a builder that is written and has a `b -> 0`
-test, at `nh^2 x ngm x N` per species. PAW's one-centre terms per copy are not sized
-there either.
+**The practical gate this entry named is still the practical gate.** `basis.doublegrid`
+refuses a dataset at its usual `ecutrho`, and every number above is at `ecutrho = 4 ecutwfc`.
+`PLAN.md` P88 stage 5 has what lifting it costs, and it is smaller than this entry implied:
+the box is already the dense one, so nothing has to be interpolated between two boxes -- what
+is needed is the mask that makes the smooth half of the matrix element agree with `h_psi`.
 
 ## 9. Every fixed-density mode needs `becsum` beside the density
 

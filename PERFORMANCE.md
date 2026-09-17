@@ -5763,6 +5763,52 @@ the other side, and the same two fixes would move it.
 one more field (the magnetization, Kerker-screened only in the charge, as
 `approx_screening` does it) and does not need more steps for it.
 
+### What the augmentation charge costs (P88 stage 5)
+
+**Neither reference code has an augmented ultracell**, so there is no pair to take in the
+standing sense: `pw.x` has no ultracell at all, and Elk's is LAPW, where an augmentation
+charge is not a separate object that could be added or left out. What is measured instead
+is the two comparisons that *are* like-for-like -- the augmented ultracell beside the
+norm-conserving one on the same cell, which is what the dataset costs, and beside the real
+supercell it approximates, which is the crossover question asked again on a dataset that
+carries charge inside the projector spheres.
+
+Silicon, two atoms, `nosym`, `ecutwfc = 16`, **`ecutrho = 4 ecutwfc`** -- the only dual an
+ultracell accepts, and not the 8 to 12 such a dataset wants, so these are the cost of the
+method rather than of a production run. `N = 2` on `kgrid = (1, 2, 2)` at `nbnd = 24`
+against a real four-atom supercell, both under the same `0.05 cos(pi x_1)` Ry applied
+potential. Single core, warm, median of three after a discarded first call.
+
+**Which steps each column adds up**, since that is where a comparison like this goes
+wrong: the ultracell column is `run_ultracell` alone, which includes the folded
+diagonalisation that builds its basis and **excludes** the unit-cell ground state it
+expands around; the supercell column is a full `run_scf` from scratch. That is the
+crossover table's own convention and it is the one that makes the two comparable at
+large `N`, where the seed is a fixed cost and the supercell is not. At `N = 2` it
+flatters the ultracell by one two-atom SCF, and **that SCF was not timed here**, so the
+size of the flattery is stated as a direction rather than as a number.
+
+| dataset | ultracell, s | its | supercell, s | its | supercell / ultracell |
+|---|---|---|---|---|---|
+| norm-conserving | 5.66 | 9 | 0.84 | 10 | 0.15 |
+| ultrasoft | 7.03 | 9 | 1.96 | 10 | 0.28 |
+| PAW | 13.89 | 9 | 3.11 | 12 | 0.22 |
+
+**The ultracell pays less for the augmentation than the supercell does**, and that is the
+number worth having: ultrasoft costs it 1.24 times the norm-conserving run and PAW 2.45,
+where the supercell pays 2.3 and 3.7. The reason is structural rather than lucky -- an
+ultracell iteration is dominated by the `N^2` ultracell transforms of the matrix build,
+which know nothing about the dataset, and what the augmentation adds is `N` `newd`
+integrals and one contraction over projector channels. PAW's extra factor over ultrasoft
+is its one-centre radial work, which is done **per atom copy** and is therefore the one
+term here that scales with `N` the way the supercell's own work does.
+
+**`N = 2` is the wrong end of the crossover and these rows are not a claim about the
+method**, for the reason the crossover table above gives: at two cells the supercell is
+four atoms and wins by a factor of six. The augmented rows say what the dataset costs, not
+who wins, and the crossover itself has not been run on an augmented dataset.
+
+
 ### Memory
 
 Two objects grow with `N` and neither is the Hamiltonian until the dense solve has

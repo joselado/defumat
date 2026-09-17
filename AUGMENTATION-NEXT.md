@@ -188,11 +188,12 @@ multipliers, so the sizing sentence pointed at the smallest of the four. Read of
 (`tests/regression/test_topology.py`) and against `augmentation_at_q` at `+q` to 1e-14
 with the opposite sign differing by more than 1e-6 (`tests/regression/test_ultrasoft_magnon.py`).
 **Size:** a phase, and the work is spread over the four terms rather than concentrated in
-the multipliers. The sign is the trap: the displaced table's spiral special case is what
-pins it, and the record of this file's own §1k has been inconsistent about `Q - Q'` against
-`Q' - Q` in prose, so pin it on the zone-boundary identity -- the dynamical matrix at a
-zone-boundary `q` against the validated `Gamma` matrix of the doubled supercell -- rather
-than on any sentence.
+the multipliers. The sign is the trap, and §1k has now settled it in code rather than in
+prose: the displacement is the **ket's** wavevector minus the bra's, which the spiral's
+special case pins and which the ultracell's supercell comparison was run against the
+opposite spelling to confirm. Pin it here the same way, on an identity rather than on a
+sentence -- the dynamical matrix at a zone-boundary `q` against the validated `Gamma` matrix
+of the doubled supercell.
 
 ### 1d. A noncollinear ultrasoft or PAW response
 
@@ -355,71 +356,35 @@ and `PLAN.md` P97 names the two cells that were run for it and how each failed -
 committed tetragonal nickel diverged and a platinum dimer converged nonmagnetic. The next
 attempt wants a third cell rather than a third run of those two.
 
-### 1k. The ultracell with an ultrasoft or PAW dataset
+### 1k. The ultracell with an ultrasoft or PAW dataset. ✅ DONE for the two scalar spin regimes.
 
-`ultracell/driver.py`, `require_an_ultracell_regime`. Both.
+`PLAN.md` P88 stage 5, 2026-09-17. `ultracell/augmentation.py`. The full record, with the
+numbers, is there; what belongs here is the shape of the answer and the one sentence this
+entry had wrong.
 
-**This entry used to say the wrong thing, in the same way §1e did**, and it is rewritten
-from the code rather than from the refusal's message (2026-09-16). It said the frozen
-unit-cell states "are not a fixed basis any more" because `D_ij` depends on the density.
-They are a fixed basis: they are frozen by construction, and what a modulation changes is
-`H` inside their span. The refusal's other reason, that `S` enters every ultracell
-overlap, is also wrong, and the sum is one line -- the augmentation part of
-`<psi_{k0+Q}|S|psi_{k0+Q'}>` over the `N` cells carries `sum_R e^{i(Q'-Q).R}`, and `Q - Q'`
-is a reciprocal vector of the ultracell, so it is `N delta_{QQ'}`. **The basis is exactly
-S-orthonormal across `Q` and the eigenproblem stays an ordinary one.**
+The refusal's two stated reasons were both wrong and this file already said so: the frozen
+states are a fixed basis by construction, and `S` does not enter because the augmentation part
+of the cross-`Q` overlap is `N delta_{QQ'}`. What was missing was one term used three times --
+the matrix element, the density's `becsum`, and PAW's one-centre terms per copy -- and it is
+the resident table displaced by `Q' - Q`, the **ket's** wavevector minus the bra's.
 
-**What is actually missing is one term and its two consumers.** The matrix element gains
+**The sign in this entry's derivation sentence was wrong** and `PAW-MODES-NEXT.md` §8 had
+already flagged the disagreement: the formula line said the displacement is `Q' - Q`, which is
+right, and the sentence after it said `build_augmentation(shift = Q - Q')`, which is not. The
+guard's comment on `master` had `Q' - Q` throughout and was the consistent one. `Q' - Q` is
+what the spiral fixes (`at_spiral_q` passes `shift = -qcart` and the spiral's `Q' - Q` is
+`-q`) and what was implemented and measured; the other spelling was run deliberately and
+breaks the variational bound.
 
-    <psi_{k0+Q,m}| dV |psi_{k0+Q',n}>
-        += sum_a sum_ij [int dV(r) Q~^a_ij(r) dr] conj(B^Q_i) B^{Q'}_j
-
-with `B^Q_i = <beta^{k0+Q}_i|psi_{k0+Q,m}>` and `Q~` the augmentation charge **displaced
-by `Q' - Q`**, the ket's wavevector minus the bra's. The conjugate sits on the **bra's**
-projection: the other spelling is real, correctly Hermitian and wrong, which is this
-repository's "index order in a transposed pair reads as a sign" trap and has cost two
-phases already.
-
-**Both signs are fixed by the spiral rather than by the derivation alone**, which is the
-point of writing them down here: the spiral is this formula's special case with
-`Q = +q/2` (the up component, the bra) and `Q' = -q/2` (the down component, the ket), so
-`Q' - Q = -q` -- and `-q` is the displacement `Calculation.augmented` implements and the
-90-degree supercell measures to 1.65e-09 Ry. The first draft of this entry had `Q - Q'`
-and would have sent the next session to `+q`. The derivation is the spin spiral's, one index further out: the per-copy
-integrals summed against `e^{i(Q'-Q).R}` leave only the ultracell G vectors congruent to
-`Q - Q'` modulo the unit cell's reciprocal lattice, which is
-`build_augmentation(shift=Q - Q')` -- the primitive §1e built and validated. **That term
-*is* `delta D` per atom copy**; there is no second one to find.
-
-Its two consumers: the **density** needs `becsum` per `(atom, cell copy)`, which is a
-quadratic form over the `(Q, n)` amplitudes with the phases `e^{i(k0+Q).R}`, and then the
-augmented charge on the ultracell box through the same displaced tables; and **PAW** needs
-its one-centre terms per copy.
-
-**What it needs first.** Nothing that does not exist. The `N` displaced tables are `N`
-calls to a builder that is written and has a `b -> 0` test; the cost to size before
-building is `nh^2 x ngm x N` per species, the same `N` the box already pays, with P73's
-chunked rebuild as the fallback.
-
-**The practical gate is the *other* refusal, not this one.** `require_an_ultracell_regime`
-also refuses a double grid, and an ultrasoft run at the usual `ecutrho = 8 to 12 ecutwfc`
-trips that first. So stage 1 of this item is: lift the ultrasoft/PAW refusal, keep the
-doublegrid one, and validate at `ecutrho = 4 ecutwfc`, which `pw.x` accepts. On the
-ultracell the smooth set `{G+Q}` is a subset of the dense one, so the interpolation between
-the two grids is exact zero-padding when someone comes to write it.
-
-**The checks, in the order they should be run.** The tiled null first -- with no modulation
-the ultracell density must reproduce the tiled unit-cell density *including* the
-augmentation charge, to round-off, and it is the one check that needs no supercell. Then an
-applied modulation against the `N`-cell supercell under the same modulation **on the same
-FFT box**, since two discretisations of one functional differ by about 1e-6 Ry per cell
-here. Then the `nbnd` ladder, which for the total energy converges from above.
-
-**Size:** a phase. Smaller than this file previously implied, because the object it needs
-is built and the eigenproblem does not change, and larger than one sitting, because PAW's
-one-centre terms per copy are their own piece.
-
----
+**What is still refused**, and all three are in `PLAN.md` P88 stage 5 with what each needs:
+the **spinor** combination, where `D_ij` is the scalar integrals sandwiched between `fcoef`
+rather than the integrals themselves; the **double grid**, which is the wall such a dataset
+meets first and is why every number is at `ecutrho = 4 ecutwfc`; and the ultracell
+**transmission**, whose exit-plane Gram matrix needs `S` for a state spanning `N` spheres,
+where the image and the spectrum do run because a tip is in vacuum. The double-grid lift is about three
+lines -- mask `dV` to the tiled smooth sphere for the smooth half of the matrix element, keep
+the dense `dV` for `newd`'s integral, which is QE's own split -- and was deliberately kept out
+of the same measurement rather than folded into it.
 
 ## 2. A term that is half written, and the half that is missing is a term
 

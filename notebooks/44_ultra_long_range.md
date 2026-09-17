@@ -30,15 +30,14 @@ calc = Calculator.from_file('../tests/data/qe/si-ultracell.in',
 applied = lambda x: 0.02 * np.cos(2 * np.pi * x[..., 0] / 8)
 ulr = calc.get_ultracell(supercell=(8, 1, 1), kgrid=(1, 2, 2),
                          nbnd=32, external=applied)
-print(f'eight unit cells, {ulr.iterations} iterations')
-print(f'induced density   {np.abs(ulr.modulation).max():.3e} e/bohr^3')
+print(f'eight unit cells, {ulr.iterations} iterations; induced density '
+      f'{np.abs(ulr.modulation).max():.3e} e/bohr^3')
 ```
 
     [defumat] an ultracell calculation: no ground state cached, running the SCF first (conv_thr = 1e-10). Call get_scf() to do this explicitly.
 
 
-    eight unit cells, 9 iterations
-    induced density   7.655e-05 e/bohr^3
+    eight unit cells, 9 iterations; induced density 7.655e-05 e/bohr^3
 
 
 ## What is being solved
@@ -87,8 +86,7 @@ top.set_ylabel('potential (mRy)'); top.legend(); top.axhline(0, lw=0.5, c='k')
 bottom.plot(x, rho_ind * 1000, color='C2'); bottom.axhline(0, lw=0.5, c='k')
 bottom.set_xlabel('position along the long cell (unit cells)')
 bottom.set_ylabel(r'induced density (10$^{-3}$ e/bohr$^3$)')
-fig.suptitle('Silicon screening a potential eight unit cells long')
-fig.tight_layout()
+fig.suptitle('Silicon screening a potential eight unit cells long'); fig.tight_layout()
 ```
 
 
@@ -112,28 +110,62 @@ fall as the modulation is squeezed into fewer cells, and it does. The cutoff her
 tutorial one rather than a converged one, so read these as the right size and the right
 trend rather than as converged values.
 
+**And the charge close to the nucleus.** A norm-conserving pseudopotential replaces
+the region inside a small radius around each nucleus with a smooth function carrying
+the right total charge and nothing of its shape. A projector-augmented-wave dataset
+does not make that trade: it keeps the part of the valence density that lives inside
+the radius and restores it on the grid, which is the description a transition metal or
+a first-row element needs. The long cell takes one, so the third row below is the same
+four-cell modulation screened with that charge put back.
+
 
 ```python
-def screening(result):
-    # epsilon(Q) from the induced charge's own Hartree potential
+def screening(result, cal=calc):
+    # epsilon(Q) from the induced charge's own Hartree potential, in Rydberg units
     shape = result.ultracell.grid
-    induced = np.fft.fftn(np.asarray(result.modulation[0])) / np.prod(shape)
-    q2 = result.ultracell.g2(calc.system.cell).reshape(shape)[1, 0, 0]
-    hartree = 8 * np.pi * induced[1, 0, 0].real / q2   # Rydberg atomic units
-    return np.sqrt(q2), 0.01, hartree, 0.01 / (0.01 + hartree)
+    q2 = result.ultracell.g2(cal.system.cell).reshape(shape)[1, 0, 0]
+    induced = np.fft.fftn(np.asarray(result.modulation[0]))[1, 0, 0].real / np.prod(shape)
+    return 8 * np.pi * induced / q2, 0.01 / (0.01 + 8 * np.pi * induced / q2)
 
-short = calc.get_ultracell(supercell=(4, 1, 1), kgrid=(1, 2, 2), nbnd=32,
-    external=lambda x: 0.02 * np.cos(2 * np.pi * x[..., 0] / 4))
-print(f"{'cells':>6}{'|Q| (1/bohr)':>15}{'applied':>12}{'induced V_H':>14}{'epsilon':>10}")
-for cells, run in ((4, short), (8, ulr)):
-    q, applied, hartree, eps = screening(run)
-    print(f'{cells:>6}{q:>15.4f}{applied*1000:>10.2f} mRy{hartree*1000:>11.2f} mRy{eps:>10.2f}')
+four = lambda x: 0.02 * np.cos(np.pi * x[..., 0] / 2)
+short = calc.get_ultracell(supercell=(4, 1, 1), kgrid=(1, 2, 2), nbnd=32, external=four)
+paw = Calculator.from_file('../tests/data/qe/si-ultracell-paw.in', pseudo_dir='../tests/data/pseudo')
+deep = paw.get_ultracell(supercell=(4, 1, 1), kgrid=(1, 2, 2), nbnd=32, external=four)
+for name, run, cal in (('4 cells', short, calc), ('8 cells', ulr, calc),
+                       ('4 cells, PAW', deep, paw)):
+    hartree, eps = screening(run, cal)
+    print(f'{name:>14}   applied 10.00 mRy   induced V_H {hartree*1000:7.2f} mRy   epsilon {eps:5.2f}')
+paw_core = deep.energy_terms['one_center_paw']; print(f'inside the spheres: {paw_core:.1f} Ry per unit cell, against {deep.total_energy - paw_core:.1f} Ry for everything else')
 ```
 
-     cells   |Q| (1/bohr)     applied   induced V_H   epsilon
-         4         0.2667     10.00 mRy      -8.53 mRy      6.79
-         8         0.1334     10.00 mRy      -9.06 mRy     10.61
+    [defumat] an ultracell calculation: no ground state cached, running the SCF first (conv_thr = 1e-12). Call get_scf() to do this explicitly.
 
+
+    /u/40/ladovj1/data/Documents/programs/claude/defumat/defumat/ultracell/driver.py:805: UserWarning: this ultracell runs an ultrasoft or PAW dataset at ecutrho = 4 ecutwfc, because that is the only value it accepts -- a double grid is refused. Such a dataset is normally run at 8 to 12 times ecutwfc, and at 4 the augmentation charge is represented on the wavefunction grid: the run is self-consistent and a comparison against a supercell at the same cutoffs is still like for like, but the absolute energy is not converged in ecutrho and cannot be compared against a pw.x number taken at the dataset's own dual
+      require_an_ultracell_regime(system, pseudos, basis)
+
+
+           4 cells   applied 10.00 mRy   induced V_H   -8.53 mRy   epsilon  6.79
+           8 cells   applied 10.00 mRy   induced V_H   -9.06 mRy   epsilon 10.61
+      4 cells, PAW   applied 10.00 mRy   induced V_H   -8.55 mRy   epsilon  6.88
+    inside the spheres: -67.2 Ry per unit cell, against -22.0 Ry for everything else
+
+
+The screening falls as the modulation is squeezed, which is the physics the first two rows
+are there for. The third says something else. The two descriptions of the region near the
+nucleus disagree completely there, by the 67 Ry of one-centre energy printed against the 22
+Ry of everything else, and they agree on the screening to about one per cent. So what
+screens a slow modulation is the bonding charge between the atoms, and the answer is
+insensitive to how the core region is described, which is the reason a smooth
+pseudopotential is a reasonable thing to use for this at all.
+
+The one per cent is not all physics. The two runs are at different plane-wave cutoffs,
+12 Ry and 16 Ry, and the long cell also warns that it is holding the augmentation charge on
+the coarser of the two grids such a dataset normally uses, which is the price of a
+modulation needing one grid where an ordinary calculation can afford two. Where this stops
+being a free choice is an element whose valence density really does pile up close in, a 3d
+transition metal above all, and that is where the long cell has to take the augmented
+description rather than choose it.
 
 ## What the modulation costs
 
@@ -199,7 +231,7 @@ print(f'eight unit cells, {wave.iterations} iterations; largest cell moment '
     [defumat] an ultracell calculation: no ground state cached, running the SCF first (conv_thr = 1e-10). Call get_scf() to do this explicitly.
 
 
-    /u/40/ladovj1/data/Documents/programs/claude/defumat/defumat/ultracell/driver.py:634: UserWarning: the fixed-density solve did not converge at 14 of 64 k-points: up to 2 of 32 bands are unsettled and the worst k-point took 100 Davidson steps, at ethr = 1.3e-07 (from conv_thr = 1.0e-05). There is no later iteration to fix this -- the density is fixed -- so these wavefunctions are what every quantity built on them will use. Loosen conv_thr (ethr is 0.1 x conv_thr / nelec, QE's setup.f90 rule) before raising the iteration budget: a threshold the solve cannot reach costs the whole budget at every k-point and is where an overlap loses positivity
+    /u/40/ladovj1/data/Documents/programs/claude/defumat/defumat/ultracell/driver.py:854: UserWarning: the fixed-density solve did not converge at 14 of 64 k-points: up to 2 of 32 bands are unsettled and the worst k-point took 100 Davidson steps, at ethr = 1.3e-07 (from conv_thr = 1.0e-05). There is no later iteration to fix this -- the density is fixed -- so these wavefunctions are what every quantity built on them will use. Loosen conv_thr (ethr is 0.1 x conv_thr / nelec, QE's setup.f90 rule) before raising the iteration budget: a threshold the solve cannot reach costs the whole budget at every k-point and is where an overlap loses positivity
       calculation, folded_system, eigenvalues, wavefunctions = fixed_density_states(
 
 
@@ -210,19 +242,17 @@ print(f'eight unit cells, {wave.iterations} iterations; largest cell moment '
 ```python
 cells = np.arange(len(moments))
 fig, ax = plt.subplots(figsize=(7, 3.2))
-ax.axhline(0, color='0.7', lw=0.8)
 ax.plot(cells + 0.5, 0.02 * np.cos(2 * np.pi * (cells + 0.5) / 8) * 6,
         color='0.6', lw=1.2, ls='--', label='applied field (arbitrary scale)')
 ax.bar(cells + 0.5, moments, width=0.7, color='#3b6ea5', label='moment of each cell')
 ax.set(xlabel='unit cell along $a_1$', ylabel=r'moment  ($\mu_B$)',
        title='A spin density wave eight unit cells long')
 ax.legend(frameon=False, loc='upper right'); fig.tight_layout()
-
 ```
 
 
     
-![png](44_ultra_long_range_files/44_ultra_long_range_11_0.png)
+![png](44_ultra_long_range_files/44_ultra_long_range_12_0.png)
     
 
 
@@ -290,7 +320,6 @@ print(f'{helix.iterations} iterations; the moment points', np.round(angles, 1),
 cells = np.arange(4) + 0.5
 field = np.stack([np.cos(2 * np.pi * cells / 4), np.sin(2 * np.pi * cells / 4)], -1)
 unit = vectors[:, :2] / np.linalg.norm(vectors[:, :2], axis=1)[:, None]
-
 fig, ax = plt.subplots(figsize=(7, 2.6))
 for arrows, colour, name in ((field, '0.65', 'applied field'),
                              (unit, '#b5432f', 'moment of each cell')):
@@ -303,7 +332,7 @@ ax.legend(frameon=False, loc='upper right', ncol=2); fig.tight_layout()
 
 
     
-![png](44_ultra_long_range_files/44_ultra_long_range_15_0.png)
+![png](44_ultra_long_range_files/44_ultra_long_range_16_0.png)
     
 
 
@@ -341,5 +370,8 @@ The checks live in `tests/regression/test_ultracell.py`, where a two-cell ultrac
 compared against a real four-atom supercell run in full, and the disagreement in the
 induced density is shown to fall from 43 per cent at eight bands to 0.2 per cent at
 eighty. The magnetic side is checked the same way, against a supercell and against an
-ordinary calculation carrying the same uniform field. The index bookkeeping the long cell needs is checked separately in
-`tests/unit/test_ultracell_grid.py`.
+ordinary calculation carrying the same uniform field, and in
+`tests/regression/test_ultracell_augmented.py` for the description that keeps the
+charge inside the spheres. The index bookkeeping the long cell needs is checked
+separately in `tests/unit/test_ultracell_grid.py` and
+`tests/unit/test_ultracell_augmentation.py`.

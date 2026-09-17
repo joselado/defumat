@@ -58,6 +58,7 @@ from defumat.workflows.transport import (
     _check_bias_axis,
     _energies,
     _label,
+    _refuse_an_augmented_plane,
     _tip_points,
     _warn_if_the_slab_is_not_between,
 )
@@ -175,11 +176,26 @@ def run_ultracell_stm(
 
     geometry = _plane(system.cell, height, axis, plane, shape,
                       span=ultracell.shape)
+    scale = np.asarray(ultracell.shape, dtype=float)
+    # **The tip has to be outside the augmentation spheres**, and an augmented
+    # dataset reaches here now that the ultracell takes one. In the vacuum a
+    # pseudo-wavefunction *is* the true one, so a Tersoff-Hamann image built
+    # from the smooth states alone is exact there; inside a sphere it falls
+    # short by the augmentation charge, which is not in the sampled field and
+    # cannot be. The unit cell's own guard says it, and it is asked on the
+    # **unit cell's** coordinates -- every copy of the ultracell holds the same
+    # atoms at the same heights, so one cell decides for all of them. A
+    # constant-current search moves the tip, so its own bounds go in too.
+    sampled = list(np.asarray(geometry.flat())[:, axis] / scale[axis])
+    if heights is not None:
+        sampled += [float(h) for h in heights]
+    _refuse_an_augmented_plane(
+        system, pseudos, axis, np.unique(np.round(sampled, 10)),
+        "an ultracell image's tip")
     coefficients, miller = _box_coefficients(field, states, system)
     channels = (_box_coefficients(density, states, system)[0]
                 if density.shape[0] > 1 else None)
 
-    scale = np.asarray(ultracell.shape, dtype=float)
     if mode == "constant-height":
         values = sample_miller(coefficients, miller, geometry.flat() / scale)
         values = values.reshape(geometry.shape)
@@ -303,6 +319,7 @@ def run_ultracell_transport(
         axis = exit_axis
     _check_bias_axis(bias, nenergies, broadening)
     _refuse_what_has_no_tip_energy(system, result)
+    _refuse_an_augmented_ultracell_transmission(pseudos)
     _refuse_a_stacked_ultracell(states, exit_axis)
     _refuse_a_k_set_this_cannot_sum(states, exit_axis)
 
@@ -446,6 +463,14 @@ def run_ultracell_sts(
     geometry, points = _tip_points(system.cell, height, axis, plane,
                                    shape or (24, 8), tip,
                                    span=ultracell.shape)
+    # The same guard the image takes, and in the same coordinates: the points
+    # come back on the ultracell's span, the unit cell's atoms are what they
+    # have to clear, and every copy holds the same ones.
+    _refuse_an_augmented_plane(
+        system, pseudos, axis,
+        np.unique(np.round(np.asarray(points)[:, axis]
+                           / float(ultracell.shape[axis]), 10)),
+        "an ultracell spectrum's tip")
     nspin_mag = int(np.asarray(result.density).shape[0])
     channels, dos = sample_spectrum(
         _ultracell_geometry(states), states, np.asarray(states.eigenvalues),
@@ -459,12 +484,38 @@ def run_ultracell_sts(
     )
 
 
+def _refuse_an_augmented_ultracell_transmission(pseudos) -> None:
+    """A transmission needs ``S`` and an ultracell state has no ``S`` written.
+
+    The image and the spectrum run on an augmented dataset because a tip in
+    vacuum sees the smooth states and nothing else, and both refuse a tip
+    inside a sphere. A transmission is different: its exit-plane Gram matrix is
+    built from the whole state and the unit cell's own route hands the assembly
+    an overlap operator for it (``workflows/transport.py``'s
+    ``calculation._overlap``). An ultracell state spans ``N`` unit-cell spheres
+    with a different projector set on each, so that operator is a piece of work
+    rather than a call, and it is not written -- which is a refusal rather than
+    an approximation, because the identity it would otherwise use is wrong by
+    the augmentation charge on every atom the plane sees.
+    """
+    if any(p.is_ultrasoft or p.is_paw for p in pseudos):
+        raise NotImplementedError(
+            "an ultracell tunnelling transmission refuses an ultrasoft or PAW "
+            "dataset: the exit-plane Gram matrix needs the overlap operator S, "
+            "which for an ultracell state spans N unit-cell spheres with their "
+            "own projectors and is not written. The image and the spectrum "
+            "(run_ultracell_stm, run_ultracell_sts) do run on such a dataset, "
+            "because a tip in vacuum sees the smooth states exactly"
+        )
+
+
 def _ultracell_geometry(states) -> TransportGeometry:
     """Where an ultracell's bands live, as the transmission's own bundle.
 
-    The overlap is ``None`` rather than a function, and that is exact: the
-    ultracell refuses ultrasoft and PAW datasets, so ``S`` is the identity and
-    ``sum_G c* c`` is orthonormality itself. The peak here is the stacked Miller
+    The overlap is ``None`` rather than a function, and that is exact *here*:
+    :func:`_refuse_an_augmented_ultracell_transmission` has already refused the
+    only datasets for which ``S`` is not the identity, so ``sum_G c* c`` is
+    orthonormality itself. The peak here is the stacked Miller
     indices, ``nk0 x N npwx x 3`` integers, which is small beside the one
     ``k0`` block :meth:`~defumat.ultracell.states.UltracellStates.block` builds
     inside the loop.

@@ -73,6 +73,7 @@ def ultracell_matrix(
     grid: tuple[int, int, int],
     batch: int | None = 1,
     npol: int = 1,
+    augmentation: jnp.ndarray | None = None,
 ) -> jnp.ndarray:
     """The ``(N nbnd, N nbnd)`` matrix at one ``k0``.
 
@@ -97,6 +98,14 @@ def ultracell_matrix(
             ``N nbnd`` of them at once, which is the peak this method is
             supposed not to have. A spinor ket holds ``npol`` boxes.
         npol: spinor components per basis function, 2 noncollinear and 1 not.
+        augmentation: the ``(N nbnd, N nbnd)`` augmentation term of an
+            ultrasoft or PAW dataset, from
+            :func:`~defumat.ultracell.augmentation.augmentation_matrix`, or
+            ``None``. It is added **inside** this function rather than by the
+            caller so that the one Hermitian symmetrisation below covers both
+            halves of ``dV``: the two are the smooth and the augmented parts of
+            a single matrix element, and nothing downstream should be able to
+            see them apart.
 
     The state index is ``(Q, n)`` flattened C-order, so band ``n`` of ``Q``
     is row ``Q * nbnd + n`` -- the same order
@@ -143,6 +152,8 @@ def ultracell_matrix(
     columns = map_k(column, kets, batch=batch)
 
     matrix = columns.T + jnp.diag(eigenvalues.reshape(-1).astype(columns.dtype))
+    if augmentation is not None:
+        matrix = matrix + jnp.asarray(augmentation).astype(matrix.dtype)
     # Hermitian by construction -- ``dV`` is real -- so this only removes the
     # round-off asymmetry the two transforms leave, and it is what ``eigh``
     # would silently impose anyway by reading one triangle.

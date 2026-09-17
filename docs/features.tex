@@ -5014,6 +5014,76 @@ $(18,18,18)$ and the two-cell supercell on $(36,18,18)$ --- and do it through
 grid. Within one ladder the box is the same on every rung and the monotonicity
 is exact.
 
+\textbf{An ultrasoft or PAW dataset.} The augmentation charge changes nothing
+structural about the method, and saying why is shorter than the code. A matrix
+element between two ultracell basis functions runs over the whole ultracell, so
+it sums over the $N$ copies of every atom, and each copy's projectors carry the
+Bloch phase $e^{i(\mathbf k_0+\mathbf Q)\cdot\mathbf R}$; what survives is
+\[
+  \sum_{\mathbf R} e^{i(\mathbf Q'-\mathbf Q)\cdot\mathbf R}\,
+  Q^a_{ij}(\mathbf r - \boldsymbol\tau_a - \mathbf R),
+\]
+the ordinary augmentation charge \emph{displaced} by $\mathbf Q' - \mathbf Q$,
+the ket's wavevector minus the bra's. That is the same object a spin spiral
+already uses, which is its special case at $\mathbf Q = +\mathbf q/2$ and
+$\mathbf Q' = -\mathbf q/2$. The overlap operator does \emph{not} enter: the
+augmentation part of $\langle\psi_{\mathbf k_0+\mathbf Q}|S|
+\psi_{\mathbf k_0+\mathbf Q'}\rangle$ carries the same lattice sum, and
+$\mathbf Q - \mathbf Q'$ is a reciprocal vector of the ultracell, so that sum is
+$N\delta_{\mathbf Q\mathbf Q'}$ --- the frozen states are exactly
+$S$-orthonormal across $\mathbf Q$ and the eigenproblem stays an ordinary one.
+The density gains the augmentation charge of every copy, built from a
+\code{becsum} resolved by $\mathbf Q$-difference, and PAW gains its one-centre
+terms per copy, the copies' occupations being the transform of that same
+\code{becsum} over the same index.
+
+\begin{pycode}
+from defumat import Calculator
+import numpy as np
+
+cal = Calculator.from_file("si-ultracell-paw.in")   # PAW, ecutrho = 4 ecutwfc
+
+ulr = cal.get_ultracell(supercell=(4, 1, 1), kgrid=(1, 2, 2), nbnd=32,
+                        external=lambda x: 0.02 * np.cos(2 * np.pi * x[..., 0] / 4))
+
+print(ulr.total_energy)                       # -89.18116879 Ry per unit cell
+print(ulr.energy_terms["one_center_paw"])     # -67.17927909, the one-centre term
+print(float(np.abs(ulr.modulation).max()))    # 1.7738e-04 e/bohr^3, the response
+\end{pycode}
+
+\code{ecutrho = 4 ecutwfc} is the only value an ultracell accepts, and it is
+not what such a dataset wants: \code{run\_ultracell} says so with a warning,
+because the run is then self-consistent and comparable against a supercell at
+the same cutoffs while its absolute energy is not converged in \code{ecutrho}. Both datasets were measured against a real
+four-atom supercell under the same applied potential: the induced density's
+error falls $1.18\times10^{-1}$, $1.56\times10^{-2}$, $3.72\times10^{-3}$
+ultrasoft and $1.17\times10^{-1}$, $1.71\times10^{-2}$, $5.09\times10^{-3}$ PAW
+at \code{nbnd = 12, 24, 48}, with the total above the supercell's at every rung
+and falling. With no modulation applied the total reproduces the unit cell's own
+SCF to $8.5\times10^{-12}$~Ry and $2.5\times10^{-11}$~Ry, the second including a
+$-67.18$~Ry one-centre term.
+
+\textbf{One number comes back with an augmented run that a norm-conserving one
+does not report.} \code{ulr.augmentation\_residual} is how complex the augmented
+density came back, relative to its own largest value, and it is a convergence
+number in \code{ecutrho} rather than an error: the ultracell's reciprocal cutoff
+set is the unit cell's dense sphere at \emph{every} $\mathbf Q$, and the negative
+of $\mathbf G + \mathbf Q$ is that sphere \emph{displaced} rather than that
+sphere, so a real function represented on it is not exactly real. It is
+\textbf{exactly zero} at $N=1$, and on ultrasoft silicon it reads
+$1.71\times10^{-4}$, $7.21\times10^{-5}$ and $2.96\times10^{-5}$ at
+\code{ecutrho} of 64, 96 and 144~Ry. The Hartree term of a norm-conserving
+ultracell carries the same truncation and does not report it.
+
+\textbf{Two spin channels are in and are measured separately}, since everything
+above runs one channel and would not see the other. The null at \code{nspin = 2}
+reproduces the unit cell to $7.2\times10^{-13}$~Ry, and a uniform applied field at
+$N=1$ --- where each channel gets its own $\delta V$ and therefore its own
+$\int \delta V\,Q$ in $D_{ij}$, with opposite signs --- reproduces an ordinary
+SCF's moment to $5.0\times10^{-3}$, $1.8\times10^{-3}$ and $4.9\times10^{-4}$
+relative at \code{nbnd = 12, 24, 40}. What has \emph{not} been compared against a
+supercell is a \emph{modulated} moment on an augmented dataset.
+
 \textbf{An applied field's energy is not in the total}, which is QE's and Elk's
 shared convention and this package's everywhere else: \code{ulr.field\_energy}
 carries $-\int B\cdot m$ beside it. An applied \emph{scalar} potential is
@@ -5210,11 +5280,19 @@ whether a spin density wave is the ground state at all --- is therefore a
 quantity neither code computes.
 
 \begin{refuses}
-Ultrasoft and PAW datasets: the augmentation charge is a function of the density
-through $D_{ij}$, so the frozen unit-cell states stop being a fixed basis as soon
-as the modulation moves. Gradient-corrected functionals: the gradient of the
+Ultrasoft and PAW datasets in a \textbf{noncollinear or spin-orbit} run: the
+two scalar spin regimes are in, and what is missing at \code{npol = 2} is that a
+spinor $D_{ij}$ is the scalar integrals sandwiched between \code{fcoef} rather
+than the integrals themselves, so the displaced table would have to enter inside
+that transform and the matrix element carry the $2\times2$ spin blocks with it.
+Gradient-corrected functionals: the gradient of the
 ultracell density carries the envelope's own gradient, which a per-cell
 evaluation drops (Elk takes that approximation silently; it is refused here).
+The tunnelling \emph{transmission} of an ultracell on an augmented dataset
+(\code{run\_ultracell\_transport}), whose exit-plane Gram matrix needs the
+overlap operator $S$ --- where the image and the spectrum do run on one, because
+a tip sits in the vacuum and sees the smooth states exactly, and both refuse a
+tip inside an augmentation sphere as the unit cell's own versions do.
 Meta-GGA. An applied \code{magnetic\_field} on a noncollinear cell that
 \textbf{carries no magnetization} --- a spin-orbit run on a nonmagnetic
 crystal, where the density and the potential have one component apiece and a
@@ -5229,8 +5307,16 @@ rebuilt here from the density alone; apply the field through
 \code{magnetic\_field} instead. DFT+U, the occupation matrix being per atom
 where an ultracell has $N$ copies of each. Spin spirals, as a second modulation of the same states.
 Gamma-only storage, the basis being built at $N$ points none of which is
-$\Gamma$. A double grid, the wavefunctions and the density then living on
-different ultracell boxes. Symmetry is not used at all: a modulation breaks the
+$\Gamma$. A double grid --- which is the wall an ultrasoft or PAW run meets
+first whenever its input sets the \code{ecutrho} such a dataset wants: the
+smooth half of the matrix element would then carry $\delta V$'s dense
+components where \code{h\_psi} truncates them to the smooth sphere, and the
+ultracell and the supercell it is validated against would not be discretising
+the same functional. Set \code{ecutrho = 4 ecutwfc}, and read the warning that
+comes with it --- \code{ecutrho} defaults to four times \code{ecutwfc} here as
+it does in \code{pw.x}, so an input that simply leaves it out is \emph{accepted}
+and runs with the augmentation charge on the wavefunction grid, which is the one
+thing such a dataset exists not to do. Symmetry is not used at all: a modulation breaks the
 crystal's point group, so the run needs \code{nosym} and the whole k-grid. And a
 non-integer ultracell is refused, where Elk's \code{avecu} is an independent
 input with no consistency check against its Q-grid. An \textbf{unconverged}

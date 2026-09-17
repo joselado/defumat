@@ -152,6 +152,8 @@ def ultracell_energy(
     magnetic_potential=None,
     entropy: float = 0.0,
     dispersion: float = 0.0,
+    onecentre: float = 0.0,
+    paw_deband: float = 0.0,
 ) -> dict:
     """The energy terms of one ultracell iteration, per unit cell, in Ry.
 
@@ -179,6 +181,16 @@ def ultracell_energy(
             Waals correction -- ``require_an_ultracell_regime`` has no check for
             one -- so a D2 unit cell reaches here, and dropping the term would
             leave its total short by a real energy rather than by a convention.
+        onecentre: PAW's one-centre energy, **per unit cell** -- the sum over
+            the ``N`` copies divided by ``N``, at the output ``becsum``. It
+            enters the total whole, exactly as ``one_center_paw`` does in the
+            unit cell, and what removes the part already inside every eigenvalue
+            is ``paw_deband`` rather than any subtraction here.
+        paw_deband: ``-(1/N) sum_R sum_ij ddd^R_ij becsum^R_ij``, the one-centre
+            half of ``delta_e``. It is folded into the one-electron term beside
+            the grid's ``deband`` because that is what it is: the one-centre
+            potential is inside every eigenvalue through ``D_ij``, so ``eband``
+            double-counts it exactly the way it double-counts ``int rho v``.
 
     Returns a dict whose non-underscored entries sum to the total energy, in
     the shape ``SCFResult.energy_terms`` uses, plus ``_field_energy``, which is
@@ -205,7 +217,7 @@ def ultracell_energy(
         field_energy = element * float(
             jnp.sum(density_out * jnp.asarray(magnetic_potential))
         ) / cells
-    deband = -element * float(jnp.sum(density_out * v)) / cells
+    deband = -element * float(jnp.sum(density_out * v)) / cells + float(paw_deband)
 
     terms = {
         "one-electron": float(band_energy) + deband,
@@ -213,6 +225,8 @@ def ultracell_energy(
         "xc": float(potential_out.etxc) / cells,
         "ewald": float(ewald),
     }
+    if onecentre:
+        terms["one_center_paw"] = float(onecentre)
     if dispersion:
         terms["dispersion"] = float(dispersion)
     if entropy:

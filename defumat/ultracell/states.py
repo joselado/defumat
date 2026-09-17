@@ -225,6 +225,16 @@ class UltracellStates:
         overwrites ``occsv`` and calls ``rhomagv`` again, and this is the same
         sentence with one function name in it. ``weights`` is
         ``(blocks, nk0, N nbnd)`` either way.
+
+        **On an ultrasoft or PAW dataset this is the smooth density and not the
+        whole one**: the augmentation charge is built from ``becsum`` rather
+        than from the states, so the loop adds it separately
+        (:func:`~defumat.ultracell.augmentation.ultracell_augmentation_charge`)
+        and an image does not. That is right rather than a shortfall for the
+        one thing that asks for it -- a tip sits in the vacuum, where the
+        augmentation charge is zero and a pseudo-wavefunction is the true one --
+        and it is why ``run_ultracell_stm`` and ``run_ultracell_sts`` refuse a
+        tip inside a sphere rather than correcting for one.
         """
         return ultracell_band_density(
             self.coefficients, self.vectors, weights, self.box_index,

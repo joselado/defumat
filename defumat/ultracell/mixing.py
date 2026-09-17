@@ -50,6 +50,13 @@ def box_kerker(
     takes a flat residual and the input density, as the mixer protocol asks,
     and ignores the second -- Kerker's screening length is a property of the
     cell rather than of ``rho(r)``.
+
+    **Anything past the density in the flat vector is PAW's ``becsum`` and gets
+    the plain scalar ``beta``**, which is what
+    :func:`~defumat.scf.mixing.kerker_preconditioner` does with the same tail
+    for the same reason: the preconditioner is an approximate inverse Jacobian
+    rather than a step length, and ``becsum`` lives on the atoms rather than on
+    the grid, so the ``q^-2`` divergence Kerker cancels is not a thing it has.
     """
     if screening is None:
         screening = thomas_fermi_screening(float(cell.volume), float(nelec))
@@ -58,9 +65,12 @@ def box_kerker(
     factor = beta * g2 / (g2 + screening)
     nspin = int(shape[0])
 
+    size = int(np.prod(shape))
+
     @jax.jit
     def apply(vector):
-        head = vector.reshape(shape)
+        head = vector[:size].reshape(shape)
+        tail = vector[size:]
 
         def screened(channel):
             box = jnp.fft.fftn(channel.reshape(grid))
@@ -80,7 +90,7 @@ def box_kerker(
             out = [screened(head[0])] + [
                 beta * head[c].reshape(-1) for c in range(1, nspin)
             ]
-        return jnp.concatenate(out)
+        return jnp.concatenate(out + [beta * tail])
 
     def preconditioner(residual, density=None):
         return np.asarray(apply(jnp.asarray(np.asarray(residual).ravel())))

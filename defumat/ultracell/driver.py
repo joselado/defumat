@@ -119,6 +119,19 @@ from defumat.ultracell.energy import (
     ultracell_energy,
     ultracell_entropy,
 )
+from defumat.ultracell.augmentation import (
+    as_onecentre_becsum,
+    augmentation_matrix,
+    becsum_per_copy,
+    build_ultracell_augmentation,
+    coefficients_per_difference,
+    from_onecentre_coefficients,
+    onecentre_deeq,
+    ultracell_augmentation_charge,
+    ultracell_becsum,
+    ultracell_deeq,
+    ultracell_projections,
+)
 from defumat.ultracell.grid import Ultracell, folded_kpoints
 from defumat.ultracell.hamiltonian import multiplet_cut, ultracell_matrix
 from defumat.ultracell.mixing import box_kerker
@@ -212,6 +225,30 @@ class UltracellResult:
     #: The converged unit-cell state this was built on.
     reference: object = None
     seconds: float = 0.0
+    #: How complex the augmented density came back, relative to its own largest
+    #: value, or ``0`` for a norm-conserving run that has no augmentation charge.
+    #:
+    #: **It is a convergence number in ``ecutrho`` and not an error.** The
+    #: ultracell's reciprocal cutoff set is the unit cell's dense sphere at every
+    #: ``Q`` (Elk's choice, :meth:`Ultracell.reciprocal_mask`), and that set is
+    #: **not closed under negation** once ``Q`` is non-zero: the negative of
+    #: ``G + Q`` is ``-G - Q``, which is the sphere displaced rather than the
+    #: sphere: on the silicon cell this was measured on, **235 of 4554** kept
+    #: entries have no negative partner at ``N = 2`` and 470 of 6831 at
+    #: ``N = 3``, where at ``N = 1`` every one of the 2277 does. A real
+    #: function represented on such a set is not exactly real, and the imaginary
+    #: part that is dropped is the augmentation charge's weight at the edge of
+    #: the sphere.
+    #:
+    #: Measured on ultrasoft silicon: **exactly zero at ``N = 1``**, where the
+    #: only ``Q`` is zero and the set is symmetric; 1.71e-4 at ``N = 2`` with
+    #: ``ecutrho = 64`` Ry, falling to 7.21e-5 at 96 and 2.96e-5 at 144, which is
+    #: ``ecutrho^-2.2``; and 1.32e-4 at ``N = 3``, the same order, because what
+    #: it measures is the displacement of the sphere rather than ``N``. So it is
+    #: read the way a cutoff convergence is read, and the Hartree term of a
+    #: *norm-conserving* ultracell carries the same truncation without reporting
+    #: it.
+    augmentation_residual: float = 0.0
     #: The charge half of :attr:`accuracy` -- the residual weighted by
     #: ``1/|G+Q|^2``.
     charge_accuracy: float = 0.0
@@ -341,7 +378,15 @@ def require_an_ultracell_regime(system, pseudos, basis) -> None:
 
     **All three spin regimes are here**, and spin-orbit coupling with them --
     it lives entirely in the frozen unit-cell states and adds no term to
-    anything below. What is *not* here and is refused where it is reached: a
+    anything below. An **ultrasoft or PAW** dataset runs too, in the two scalar
+    regimes (``PLAN.md`` P88 stage 5): the displaced tables of
+    :mod:`defumat.ultracell.augmentation` carry the augmentation charge, PAW's
+    one-centre terms are evaluated per atom copy, and what is still refused
+    here is the *spinor* combination, where ``D_ij`` is the scalar integrals
+    sandwiched between ``fcoef`` rather than the integrals themselves. The
+    practical wall such a dataset meets first is the double grid below.
+
+    What is *not* here and is refused where it is reached: a
     ground state converged under a field (:func:`run_ultracell`, because the
     frozen eigenvalues then carry a field ``dV`` does not), and an applied
     field on a noncollinear cell that carries no magnetization
@@ -353,64 +398,27 @@ def require_an_ultracell_regime(system, pseudos, basis) -> None:
         resolve_functional([p.functional for p in pseudos], system.input_dft),
         bool(getattr(system, "nosource", False)),
     )
-    if any(p.is_ultrasoft or p.is_paw for p in pseudos):
-        # **Both reasons this refusal used to give are wrong**, and they are
-        # written out here rather than deleted, because each made the lift look
-        # like a different and larger piece of work than it is (``PLAN.md``
-        # P95 closed the sibling refusal on the spin spiral after the same
-        # mistake).
-        #
-        # It said the frozen states "stop being a fixed basis the moment the
-        # modulation moves". They do not: they are frozen by construction, and
-        # what the modulation changes is ``H`` inside their span, not the span.
-        # That ``D_ij`` depends on the density is exactly why there is an extra
-        # term in the matrix element, and it is that term, not the basis.
-        #
-        # It also said "S enters every ultracell overlap". It does not, and the
-        # sum is one line: the augmentation part of
-        # ``<psi_{k0+Q}|S|psi_{k0+Q'}>`` over the ``N`` cells of the ultracell
-        # carries ``sum_R e^{i(Q'-Q).R}``, and ``Q - Q'`` is a reciprocal vector
-        # of the ultracell, so that sum is ``N delta_{QQ'}``. The basis is
-        # exactly S-orthonormal across ``Q``, and the eigenproblem stays an
-        # ordinary one.
-        #
-        # What is actually missing is one term and its two consumers:
-        #
-        #   <psi_{k0+Q,m}| dV |psi_{k0+Q',n}> gains
-        #       sum_a sum_ij [int dV(r) Q~^a_ij(r) dr] conj(B^Q_i) B^{Q'}_j
-        #
-        # with B^Q_i = <beta^{k0+Q}_i | psi_{k0+Q,m}>. The conjugate is on the
-        # **bra's** projection, which is the ordering trap this repository has
-        # met twice: the other spelling is real, correctly Hermitian and wrong.
-        #
-        # where ``Q~`` is the augmentation charge displaced by ``Q' - Q``, the
-        # **ket's** wavevector minus the bra's. The derivation is the spiral's:
-        # summing the per-copy integrals against ``e^{i(Q'-Q).R}`` leaves only
-        # the ultracell G vectors congruent to ``Q' - Q`` modulo the unit
-        # cell's reciprocal lattice, which is
-        # ``build_augmentation(shift=Q' - Q)`` -- the primitive P95 built and
-        # validated. That term *is* ``delta D`` per atom copy; there is no
-        # second one.
-        #
-        # **The sign is checked against the spiral rather than trusted**, since
-        # the spiral is the special case ``Q = +q/2`` (the up component, the
-        # bra) and ``Q' = -q/2`` (the down component, the ket): ``Q' - Q`` is
-        # then ``-q``, which is the displacement
-        # :meth:`defumat.scf.driver.Calculation.augmented` implements and the
-        # 90-degree supercell measures. The opposite spelling gives ``+q`` and
-        # is wrong. Its consumers are the density (``becsum`` per atom copy,
-        # then the augmented charge on the ultracell box) and, for PAW, the
-        # one-centre terms per copy.
-        #
-        # ``AUGMENTATION-NEXT.md`` has this as a sized item. It stays refused
-        # because none of it is written, not because it is hard.
+    if any(p.is_ultrasoft or p.is_paw for p in pseudos) and int(
+            getattr(system, "npol", 1)) == 2:
+        # **The scalar regimes run and this one does not**, and the reason is
+        # ``newd_so`` rather than anything about the ultracell. A spinor run's
+        # ``D`` is not four independent integrals: the components are
+        # integrated against ``Q_ij`` and then sandwiched between ``fcoef``
+        # (``_newd_noncollinear``), and the displaced table would have to enter
+        # *inside* that sandwich, one Q-difference at a time, with the
+        # ``(2, 2, nkb, nkb)`` block structure carried through the matrix
+        # element as well. That is a layer of its own and none of it is
+        # written, where the collinear term is the one contraction
+        # :mod:`defumat.ultracell.augmentation` implements.
         raise NotImplementedError(
-            "the ultracell refuses ultrasoft and PAW datasets (PLAN.md P88, "
-            "stage 1 is norm-conserving). What is missing is the augmentation "
-            "term in <psi_Q|dV|psi_Q'>, which is the resident table displaced "
-            "by Q - Q', together with becsum and PAW's one-centre terms per "
-            "atom copy; the frozen states stay a fixed basis and S does not "
-            "enter, see the comment above this raise"
+            "the ultracell refuses an ultrasoft or PAW dataset in a "
+            "noncollinear or spin-orbit run (PLAN.md P88 stage 5 is nspin = 1 "
+            "and 2). The augmentation term itself is there, but a spinor D_ij "
+            "is the scalar integrals sandwiched between fcoef rather than the "
+            "integrals themselves, so the displaced table has to enter inside "
+            "that transform and the matrix element has to carry the 2x2 spin "
+            "blocks with it; neither is written. A norm-conserving dataset "
+            "runs in every spin regime"
         )
     if getattr(system, "hubbard", None) is not None:
         raise NotImplementedError(
@@ -441,11 +449,45 @@ def require_an_ultracell_regime(system, pseudos, basis) -> None:
             "k0 + Q for N different Q and none of them is Gamma"
         )
     if basis.doublegrid:
+        # **This is the refusal an ultrasoft or PAW run meets first** whenever
+        # its input sets the ``ecutrho`` such a dataset actually wants. The
+        # ultracell box is built on the *dense* grid and everything already
+        # lives on it, so what is missing is not an interpolation between two
+        # boxes but the truncation that makes the two halves agree: ``h_psi``
+        # multiplies a wavefunction by the potential **interpolated down to the
+        # smooth sphere**, so a ``dV`` carrying its dense components into the
+        # matrix element would give the ultracell a term the frozen eigenvalue
+        # and the reference supercell do not have. Both halves are one line and
+        # neither is measured, which is why this is refused rather than taken.
         raise NotImplementedError(
             "the ultracell needs the smooth and dense grids to coincide, which "
-            "they do for a norm-conserving dataset at ecutrho = 4 ecutwfc. With "
-            "a double grid the wavefunctions and the density live on different "
-            "ultracell boxes and the interpolation between them is not written"
+            "they do at ecutrho = 4 ecutwfc. With a double grid the smooth half "
+            "of the matrix element would carry dV's dense components where "
+            "h_psi truncates them to the smooth sphere, so the ultracell and "
+            "the supercell it is validated against would not be discretising "
+            "the same functional. Lower ecutrho to 4 ecutwfc, and read the "
+            "warning that comes with doing so"
+        )
+    if any(p.is_ultrasoft or p.is_paw for p in pseudos):
+        # **The silent half of the refusal above, and it is the one that will
+        # actually be met.** ``ecutrho`` defaults to ``4 ecutwfc`` here as it
+        # does in ``pw.x`` (``system/builder.py``), so an ultrasoft or PAW input
+        # that simply leaves it out is *accepted* by the double-grid check and
+        # runs with the augmentation charge represented on the wavefunction
+        # grid -- which is the one thing such a dataset is built not to do. The
+        # run is internally consistent and a comparison against a supercell at
+        # the same pair is still like-for-like; what is wrong is the absolute
+        # number, and nothing downstream would say so.
+        warnings.warn(
+            "this ultracell runs an ultrasoft or PAW dataset at ecutrho = "
+            "4 ecutwfc, because that is the only value it accepts -- a double "
+            "grid is refused. Such a dataset is normally run at 8 to 12 times "
+            "ecutwfc, and at 4 the augmentation charge is represented on the "
+            "wavefunction grid: the run is self-consistent and a comparison "
+            "against a supercell at the same cutoffs is still like for like, "
+            "but the absolute energy is not converged in ecutrho and cannot be "
+            "compared against a pw.x number taken at the dataset's own dual",
+            stacklevel=2,
         )
 
 
@@ -467,6 +509,131 @@ def _box_indices(ultracell: Ultracell, calculation, nk0: int) -> np.ndarray:
     # the accumulating scatter downstream is safe wherever it lands: it sends
     # the pad to its own Q-row's G = 0 and adds nothing there.
     return index
+
+
+#: How complex an atom copy's ``becsum`` is allowed to come back, relative to its
+#: own largest entry. It is a **diagnostic rather than a tolerance**: the
+#: transform over the Q-difference index involves no truncation at all, so it is
+#: real to round-off and anything at this level is an index order in the pair
+#: ``(Q, Q')``.
+#:
+#: **Both sides of it are measured**, in ``tests/unit/test_ultracell_augmentation.py``
+#: rather than asserted here: a correctly paired synthetic set comes back at
+#: 1e-14 and a deliberately broken one above 1e-2, so this sits five decades
+#: above the first and seven below the second. That gap is what makes it a
+#: diagnostic rather than a threshold anyone has to tune.
+#:
+#: **It does not apply to the augmented density**, which is a different quantity
+#: for a reason worth knowing -- see
+#: :attr:`UltracellResult.augmentation_residual`.
+_BECSUM_REAL_TOLERANCE = 1.0e-9
+
+#: How complex the augmented **density** may come back before it stops being the
+#: truncation it normally is. Seven decades above what the truncation was
+#: measured at and two below what a wrong pairing would give, which is the same
+#: kind of gap the tolerance above rests on.
+_AUGMENTATION_REAL_TOLERANCE = 1.0e-2
+
+
+def _tiled_becsum(becsum, cells: int) -> tuple:
+    """The unit cell's ``becsum`` on every copy -- the loop's starting state.
+
+    It is the fixed point of the tiled null by construction, which is what makes
+    that check a statement about the machinery rather than about the seed.
+    """
+    out = []
+    for values in becsum:
+        if values is None:
+            out.append(None)
+            continue
+        values = jnp.asarray(values)
+        out.append(jnp.broadcast_to(values[None], (int(cells),) + values.shape))
+    return tuple(out)
+
+
+def _ultracell_becsum(becp, vectors, occupations, augmentation, blocks, nk0,
+                      nspin_mag: int) -> tuple:
+    """``becsum`` by Q-difference, accumulated over the blocks and over ``k0``.
+
+    The spin axis is the block index, because a collinear ultracell solves one
+    matrix per channel and a channel's projector occupations are built from that
+    channel's states alone -- the same statement the density makes one line
+    above, and the reason neither needs a spin argument of its own.
+    """
+    totals = None
+    for block in range(int(blocks)):
+        for ik in range(int(nk0)):
+            values = ultracell_becsum(
+                becp[block, ik], vectors[block][ik],
+                jnp.asarray(occupations[block][ik]), augmentation,
+            )
+            if totals is None:
+                totals = [
+                    None if v is None else jnp.zeros(
+                        (v.shape[0], int(nspin_mag)) + v.shape[1:], dtype=v.dtype)
+                    for v in values
+                ]
+            for t, v in enumerate(values):
+                if v is not None:
+                    totals[t] = totals[t].at[:, block].add(v)
+    return tuple(totals)
+
+
+def _becsum_copies(becsum_q, augmentation) -> tuple:
+    """Every atom copy's own occupations, and how complex they came back.
+
+    The second number is the check that costs nothing and would have caught a
+    wrong index order in the pair ``(Q, Q')`` before any energy was compared:
+    a projector occupation matrix is Hermitian on each copy, so its transform
+    over the difference index is real, and the residual is reported relative to
+    the largest entry rather than absolutely.
+    """
+    copies, residual = [], 0.0
+    for values in becsum_q:
+        if values is None:
+            copies.append(None)
+            continue
+        real, worst = becsum_per_copy(values, augmentation.shape)
+        scale = float(jnp.max(jnp.abs(real)))
+        residual = max(residual, worst / max(scale, 1.0e-30))
+        copies.append(real)
+    return tuple(copies), residual
+
+
+def _flatten_becsum(becsum) -> np.ndarray:
+    """The per-copy occupations as one real vector, for the mixer."""
+    parts = [np.asarray(v).ravel() for v in becsum if v is not None]
+    return np.concatenate(parts) if parts else np.zeros(0)
+
+
+def _unflatten_becsum(vector, template) -> tuple:
+    """:func:`_flatten_becsum` inverted, against the shapes it was built from."""
+    out, offset = [], 0
+    for values in template:
+        if values is None:
+            out.append(None)
+            continue
+        size = int(np.prod(values.shape))
+        out.append(jnp.asarray(vector[offset:offset + size]).reshape(values.shape))
+        offset += size
+    return tuple(out)
+
+
+def _paw_deband(ddd, becsum_copies, cells: int) -> float:
+    """``-(1/N) sum_R sum_s sum_ij ddd^R_ij becsum^R_ij``, per unit cell.
+
+    ``delta_e``'s PAW half (``scf/driver.py``'s ``_paw_deband``) with the copies
+    summed and divided by ``N``, and it pairs the coefficients built from the
+    **input** ``becsum`` with the **output** one, exactly as the unit cell does
+    -- the asymmetry is QE's, ``delta_e`` running before ``PAW_potential`` is
+    called again, and it vanishes at self-consistency.
+    """
+    total = 0.0
+    for coefficients, values in zip(ddd, becsum_copies):
+        if coefficients is None or values is None:
+            continue
+        total += float(jnp.sum(jnp.real(coefficients) * jnp.asarray(values)))
+    return -total / int(cells)
 
 
 def _accuracy(residual, ultracell, cell, g2_inverse, keep):
@@ -686,6 +853,15 @@ def run_ultracell(
 
     calculation, folded_system, eigenvalues, wavefunctions = fixed_density_states(
         system, pseudos, jnp.asarray(reference.density), kpoints=folded, nbnd=nbnd,
+        # **The frozen states of a PAW run need the converged ``becsum`` and not
+        # only the converged density.** The one-centre potential is a functional
+        # of ``becsum`` rather than of ``rho``, so a fixed-density solve handed
+        # nothing rebuilds ``ddd_paw`` from the *atomic* occupations and returns
+        # eigenvalues of a Hamiltonian this loop never subtracts -- the whole
+        # expansion is around a state that is not the ground state, and the
+        # tiled null would fail by the one-centre energy rather than by
+        # round-off.
+        becsum=tuple(getattr(reference, "becsum", ()) or ()),
         **({} if states_conv_thr is None else {"conv_thr": states_conv_thr}),
         david=david,
     )
@@ -780,6 +956,26 @@ def run_ultracell(
     box_index = jnp.asarray(_box_indices(ultracell, calculation, nk0))
     grid = ultracell.grid
 
+    # **The augmented layer, and it is built once.** The ``N`` displaced tables
+    # and the projections of the frozen states are both functions of the basis
+    # alone, so neither moves as the modulation converges -- the same sentence
+    # that makes the frozen states a basis at all. What the loop rebuilds is the
+    # integral of ``dV`` against those tables, which is ``newd`` ``N`` times.
+    augmentation = build_ultracell_augmentation(calculation, ultracell, cell)
+    becp = None
+    if augmentation is not None:
+        becp = ultracell_projections(coefficients, calculation.projectors)
+    # The unit cell's own one-centre coefficients, which every frozen eigenvalue
+    # already carries: what the matrix takes is the ultracell's *minus* these,
+    # for exactly the reason ``delta_potential`` subtracts the unit cell's
+    # ``v_scf``. Put the whole one-centre operator in instead and every
+    # eigenvalue is doubled in it.
+    reference_ddd = None
+    if calculation.is_paw:
+        _, reference_ddd = calculation.paw.energy_and_coefficients(
+            tuple(reference.becsum)
+        )
+
     cell_mask = np.zeros(basis.dense.grid, dtype=bool)
     cell_mask.reshape(-1)[np.asarray(basis.dense.fft_index)] = True
     keep = jnp.asarray(ultracell.reciprocal_mask(cell_mask))
@@ -826,6 +1022,17 @@ def run_ultracell(
         mixer.precondition = box_kerker(
             ultracell, cell, nelec, (nspin_mag,) + grid, beta=mixer.beta,
         )
+    # **PAW's second mixed variable.** The one-centre potential is a functional
+    # of ``becsum`` and not of ``rho``, so it has to be part of the state the
+    # loop carries rather than something rebuilt from the density -- which is
+    # exactly why ``mix_rho.f90`` mixes ``rho%bec`` under ``okpaw`` and nothing
+    # else does. An ultrasoft dataset needs no such thing: its ``D`` is an
+    # integral of the potential, and the potential is a functional of the
+    # density the box already carries.
+    becsum_state = ()
+    if augmentation is not None:
+        becsum_state = _tiled_becsum(reference.becsum, cells)
+
     result = None
     history = []
     energies = []
@@ -848,14 +1055,38 @@ def run_ultracell(
         # block diagonal in anything: the potential's off-diagonal Pauli terms
         # mix the components at every point of the grid, which is what lets the
         # magnetization turn from one cell of the ultracell to the next.
+        # **The augmented half of the same matrix element.** ``newd`` once per
+        # Q-difference against the displaced tables, plus -- for PAW -- the
+        # one-centre coefficients of every atom copy, transformed to the same
+        # difference index and with the unit cell's subtracted at ``Q_d = 0``.
+        # The two are added before either reaches the matrix, exactly as
+        # ``add_paw_to_deeq`` adds them in the unit cell.
+        deeq, ddd_state = None, None
+        if augmentation is not None:
+            deeq = ultracell_deeq(delta_v, augmentation, grid)
+            if calculation.is_paw:
+                _, coefficients_in = calculation.paw.energy_and_coefficients(
+                    as_onecentre_becsum(becsum_state)
+                )
+                ddd_state = from_onecentre_coefficients(coefficients_in, cells)
+                deeq = deeq + onecentre_deeq(
+                    ddd_state, reference_ddd, augmentation, nspin_mag
+                )
+
         levels = np.empty((blocks, nk0, cells * nbnd))
         vectors = [[] for _ in range(blocks)]
         for spin in range(blocks):
             channel = delta_v[spin] if blocks == 2 else delta_v
             for ik in range(nk0):
+                extra = None
+                if deeq is not None:
+                    extra = augmentation_matrix(
+                        becp[spin, ik], deeq[spin], augmentation.difference
+                    )
                 matrix = ultracell_matrix(
                     coefficients[spin, ik], jnp.asarray(eigenvalues[spin, ik]),
                     box_index[ik], channel, grid, batch=state_batch, npol=npol,
+                    augmentation=extra,
                 )
                 values, states = jnp.linalg.eigh(matrix)
                 levels[spin, ik] = np.asarray(values)
@@ -875,6 +1106,54 @@ def run_ultracell(
             float(cell.volume), npol=npol, nspin_mag=nspin_mag,
             batch=state_batch, dtype=density.dtype,
         )
+
+        # **The charge inside the projector spheres, which no state carries.**
+        # ``becsum`` here is resolved by Q-difference rather than by atom copy,
+        # because that is the form the displaced tables consume and because the
+        # copies' own occupations are its transform rather than the other way
+        # round. PAW needs them per copy as well, and that is where the loop
+        # takes them apart again.
+        becsum_out, becsum_copies, augmentation_residual = (), None, 0.0
+        if augmentation is not None:
+            becsum_out = _ultracell_becsum(
+                becp, vectors, occupations, augmentation, blocks, nk0, nspin_mag,
+            )
+            charge, augmentation_residual = ultracell_augmentation_charge(
+                becsum_out, augmentation, grid, nspin_mag
+            )
+            new = new + charge.astype(new.dtype)
+            # **The pairing across ``d`` is checked where it is exact and
+            # reported where it is not**, and the two halves are different
+            # quantities. ``becsum`` per copy involves no truncation -- it is a
+            # sum over the whole Q-set -- so it is real to round-off and
+            # anything above the tolerance is an index order. The augmented
+            # *density* is truncated to the tiled dense sphere, which is
+            # **not closed under negation** at a non-zero ``Q``, so a real
+            # function represented on it is not exactly real and what is dropped
+            # is a statement about ``ecutrho``. See
+            # :attr:`UltracellResult.augmentation_residual`.
+            if calculation.is_paw:
+                becsum_copies, worst = _becsum_copies(becsum_out, augmentation)
+                if worst > _BECSUM_REAL_TOLERANCE and iteration == 1:
+                    warnings.warn(
+                        f"an atom copy's becsum came back complex, by "
+                        f"{worst:.2e} relative, where the sum over the whole "
+                        f"Q-set makes it real with no truncation anywhere in "
+                        f"it. That is an index order in the pair (Q, Q') rather "
+                        f"than a convergence problem, and PAW's one-centre "
+                        f"terms built from it are wrong rather than noisy",
+                        stacklevel=2,
+                    )
+            if augmentation_residual > _AUGMENTATION_REAL_TOLERANCE and iteration == 1:
+                warnings.warn(
+                    f"the ultracell's augmented density came back complex by "
+                    f"{augmentation_residual:.2e} relative, which is far above "
+                    f"the sphere truncation this quantity normally carries "
+                    f"(1.7e-4 on silicon at ecutrho = 4 ecutwfc, falling as "
+                    f"ecutrho^-2.2 and exactly zero at N = 1). At this size it "
+                    f"is an index order in the pair (Q, Q') instead",
+                    stacklevel=2,
+                )
 
         accuracy, charge_dr2, magnetic_dr2 = _accuracy(
             new - density, ultracell, cell, g2_inverse, keep
@@ -896,10 +1175,23 @@ def run_ultracell(
         entropy = 0.0
         if smearing:
             entropy = ultracell_entropy(levels, weights0, fermi, ultracell, system)
+        # **PAW's two terms, and they are the unit cell's with the copies summed
+        # and divided by ``N``.** The one-centre energy is taken at the output
+        # ``becsum`` where the Hartree and exchange-correlation energies are
+        # taken at the output density, and ``deband`` subtracts the one-centre
+        # potential at the *input* ``becsum`` contracted against the output one
+        # -- the pairing ``delta_e`` uses, for the reason it uses it.
+        onecentre, paw_deband = 0.0, 0.0
+        if calculation.is_paw and becsum_copies is not None:
+            epaw, _ = calculation.paw.energy_and_coefficients(
+                as_onecentre_becsum(becsum_copies)
+            )
+            onecentre = float(epaw) / cells
+            paw_deband = _paw_deband(ddd_state, becsum_copies, cells)
         terms = ultracell_energy(
             new, potential, potential_out, band, ultracell, cell,
             float(calculation.ewald), magnetic_potential, entropy,
-            dispersion=dispersion,
+            dispersion=dispersion, onecentre=onecentre, paw_deband=paw_deband,
         )
         energy = total_of(terms)
 
@@ -918,18 +1210,41 @@ def run_ultracell(
 
         converged = accuracy < conv_thr
         if not converged:
-            density = jnp.asarray(
-                mixer.mix(np.asarray(density), np.asarray(new)), dtype=density.dtype
-            )
+            # **One packed vector, because a mixer with a history cannot be
+            # asked to mix two states independently** -- two Anderson instances
+            # would each extrapolate along their own residual and the pair they
+            # produced would not be a step of anything. ``_mix`` packs ``rho``,
+            # ``becsum`` and ``ns`` the same way in the unit cell, and the
+            # preconditioner reads the density's shape to know where the tail
+            # starts: Kerker is an approximate inverse Jacobian and has nothing
+            # to say about a quantity that lives on the atoms rather than on the
+            # grid, which gets the plain ``beta`` instead.
+            head_in, head_out = np.asarray(density), np.asarray(new)
+            if calculation.is_paw and becsum_copies is not None:
+                vector = mixer.mix(
+                    np.concatenate([head_in.ravel(), _flatten_becsum(becsum_state)]),
+                    np.concatenate([head_out.ravel(), _flatten_becsum(becsum_copies)]),
+                )
+                size = head_in.size
+                density = jnp.asarray(
+                    vector[:size].reshape(head_in.shape), dtype=density.dtype
+                )
+                becsum_state = _unflatten_becsum(vector[size:], becsum_copies)
+            else:
+                density = jnp.asarray(
+                    mixer.mix(head_in, head_out), dtype=density.dtype
+                )
         else:
             density = new
+            if calculation.is_paw and becsum_copies is not None:
+                becsum_state = becsum_copies
 
         if converged:
             result = _result(
                 density, delta_v, levels, occupations, fermi, True, iteration,
                 (accuracy, charge_dr2, magnetic_dr2), gap, ultracell, reference,
                 started, history, float(cell.volume), blocks, band, terms,
-                energies,
+                energies, augmentation_residual,
             )
             break
 
@@ -987,6 +1302,7 @@ def run_ultracell(
             density, delta_v, levels, occupations, fermi, False, max_iterations,
             history[-1], gap, ultracell, reference, started, history,
             float(cell.volume), blocks, band, terms, energies,
+            augmentation_residual,
         )
     if keep_states:
         # **The last iteration's amplitudes, which are the ones the density
@@ -1007,7 +1323,8 @@ def run_ultracell(
 
 def _result(density, delta_v, levels, occupations, fermi, converged, iterations,
             accuracy, gap, ultracell, reference, started, history, cell_volume,
-            blocks, band, terms, energies) -> UltracellResult:
+            blocks, band, terms, energies,
+            augmentation_residual=0.0) -> UltracellResult:
     """Pack the loop's state, squeezing the spin axis the way every result does.
 
     One matrix block drops the leading channel axis from the eigenvalues and the
@@ -1035,6 +1352,7 @@ def _result(density, delta_v, levels, occupations, fermi, converged, iterations,
         converged=converged, iterations=iterations,
         accuracy=total, charge_accuracy=charge_dr2,
         magnetic_accuracy=magnetic_dr2, multiplet_gap=gap,
+        augmentation_residual=float(augmentation_residual),
         ultracell=ultracell, reference=reference,
         seconds=time.time() - started, history=tuple(history),
         energy_history=tuple(energies),

@@ -331,7 +331,7 @@ because that is what decides whether it is a session or a phase.
   follow-up; memory held by **child** processes, which the cgroup charges and this does
   not; and the fact that the failure lands at *teardown*, after the peak — if the peak is
   the kill, what survives is the log line, which is why it is written first.
-- **The ultracell beyond an LDA** (P88, stages 1, 3a, 3b and 4 done). Spin is in, collinear
+- **The ultracell beyond an LDA** (P88, stages 1, 3a, 3b, 4 and 5 done). Spin is in, collinear
   and noncollinear both: an applied `magnetic_field` modulates the moment, the two collinear
   channels share one Fermi level, and a spinor ultracell is *one* matrix per folded k-point
   rather than two, acted on by `V_0 + sigma . B`, so a texture that **turns** is reachable
@@ -347,9 +347,11 @@ because that is what decides whether it is a session or a phase.
   envelope's own gradient that Elk's per-cell `potxc` call silently drops -- **and it is what
   blocks the paper's own chromium case**, the only Cr dataset committed here being PBE; and
   the **central-k route**, which would remove the direct route's `N^2` at the cost of a
-  second approximation, with the two errors separated. **Ultrasoft and PAW** are refused for
-  their own reason and are the nearest of these: `D_ij` is a functional of the density, so
-  the frozen states stop being a fixed basis as soon as the modulation moves.
+  second approximation, with the two errors separated. **Ultrasoft and PAW** are no longer
+  among them: stage 5 lifted that refusal for the two scalar spin regimes, the missing piece
+  having been one term -- the augmentation table displaced by `Q' - Q` -- rather than the
+  two structural obstacles the refusal named, both of which were wrong. What is still refused
+  there is the *spinor* combination and, before it, a double grid.
 - **Imaging a modulation** (P89, done; the conjugate is not) **and reading it over an energy
   axis** (P90, done). The STM image, the vertical
   tunnelling transmission and now the **tunnelling spectrum** of an ultracell are in, the
@@ -14917,7 +14919,7 @@ told from silence is this project's most-repeated trap.
   which is a statement about that route rather than this one, and QE's own `average_pp.f90`
   refuses ultrasoft and PAW outright.
 
-### P88 -- The ultracell: a modulation a thousand cells long, solved in the unit cell's own states. ✅ DONE, stages 1, 3a, 3b and 4 (norm-conserving, LDA, direct route, `nspin = 1`, `2` and `4`, and the total energy); stage 2 planned.
+### P88 -- The ultracell: a modulation a thousand cells long, solved in the unit cell's own states. ✅ DONE, stages 1, 3a, 3b, 4 and 5 (LDA, direct route, `nspin = 1`, `2` and `4`, the total energy, and ultrasoft/PAW in the two scalar regimes); stage 2 planned.
 
 Elk tasks 700/701 (ground state), 720/725 (band structure and spectral function), 731-3,
 741-3, 771-3 (plots); `src/modulr.f90` and the twenty routines around it. The method paper is
@@ -15099,17 +15101,9 @@ row with both tick columns empty.
 
 - **Ultrasoft and PAW.** ~~The augmentation charge is a function of the density through
   `D_ij`, so the frozen unit-cell states are no longer a fixed basis, and `S` enters every
-  overlap.~~ **Both halves of that are wrong and were corrected 2026-09-16** (P95, and
-  `AUGMENTATION-NEXT.md` §1k has the sized item). The frozen states stay a fixed basis --
-  they are frozen by construction, and the modulation changes `H` inside their span, not
-  the span. And `S` does not enter: the augmentation part of
-  `<psi_{k0+Q}|S|psi_{k0+Q'}>` over the `N` cells carries `sum_R e^{i(Q'-Q).R}`, which is
-  `N delta_{QQ'}`, so the basis is exactly S-orthonormal across `Q` and the eigenproblem
-  stays an ordinary one. What is missing is **one** term, `sum_a sum_ij [int dV Q~^a_ij]
-  conj(B^Q_i) B^{Q'}_j` in the matrix element with `Q~` displaced by `Q' - Q`, plus
-  `becsum` and PAW's one-centre terms per atom copy. The displaced table is
-  `build_augmentation(shift=...)`, written and validated by P95; the practical gate is the
-  *doublegrid* refusal, which an ultrasoft run trips first.
+  overlap.~~ **Both halves of that were wrong, were corrected 2026-09-16, and the refusal
+  is now lifted for the two scalar spin regimes -- stage 5 below.** What remains refused
+  is the *spinor* combination and, before it, the double grid.
 - **A non-integer ultracell.** Elk's `avecu` is an independent input with no consistency
   check against `ngridq` (`readinput.f90:1919`, `init1.f90:168`), so an ultracell that is not
   an integer multiple of the unit cell is *accepted* and its `R`-grid is then not a set of
@@ -15206,6 +15200,9 @@ occupied set.
 4. **The total energy.** Number: the energy gain of the modulated state over the uniform one,
    checked against the supercell's own total energy difference -- the only check there is,
    since Elk does not compute it.
+5. **Ultrasoft and PAW** (added 2026-09-17, after the refusal's two stated reasons turned out
+   to be wrong). Number: the same supercell comparison on an augmented dataset, plus the
+   tiled null including the augmentation charge and PAW's one-centre energy.
 
 **What is deliberately not staged: the ultracell band structure and spectral function**
 (Elk's 720/725, `bandstrulr.f90`, where 720 is the central `kappa = 0` and 725 averages over
@@ -16055,6 +16052,151 @@ not zero.
   (`Ultracell.reciprocal_mask` is the union of `N` shifted unit-cell spheres, Elk's choice,
   where the supercell sums over its own sphere), and `ewald_alpha` differs with the charge.
   The last two are at the 1e-8 level and the matched-box ladder's floor is where they live.
+
+**What stage 5 measured: an ultrasoft or PAW dataset, and the refusal that was written
+around two wrong reasons.** 2026-09-17. The refusal said the frozen states stop being a
+fixed basis and that `S` enters every ultracell overlap; §1k of `AUGMENTATION-NEXT.md` had
+already recorded both as wrong and sized what was actually missing, and what was missing is
+one term used three times. The code is `defumat/ultracell/augmentation.py`.
+
+**The term, and where its sign comes from.** A matrix element of `dV` between two ultracell
+basis functions runs over the whole ultracell, so it sums over the `N` copies of every atom
+and each copy's projectors carry `e^{i(k0+Q).R}`; what is left over is
+`sum_R e^{i(Q'-Q).R}`, and pushing that sum inside the integral gives the ordinary
+augmentation charge **displaced by `Q' - Q`**, the ket's wavevector minus the bra's. That is
+`build_augmentation(shift=...)`, the primitive P95 built for the spin spiral, which is this
+formula's special case at `Q = +q/2` (the bra) and `Q' = -q/2` (the ket) and therefore at
+`shift = -q`. The same displaced table then serves the density -- `becsum` resolved by
+Q-difference, with the copies' own occupations its transform over that index -- and PAW's
+one-centre terms, which are evaluated per atom copy and transformed back. `S` does not enter:
+the augmentation part of the cross-`Q` overlap carries the same `sum_R e^{i(Q'-Q).R}` and
+`Q - Q'` is a reciprocal vector of the ultracell, so it is `N delta_{QQ'}`.
+
+**The numbers, on silicon at `ecutwfc = 16`, `ecutrho = 4 ecutwfc`, with the two committed
+LDA datasets `Si.pz-n-rrkjus_psl.0.1` and `Si.pz-n-kjpaw_psl.0.1`.** The tiled null
+reproduces the unit cell's own SCF total to **8.5e-12 Ry** ultrasoft and **2.5e-11 Ry** PAW,
+the second including a **-67.18 Ry** one-centre term out of a -89.09 Ry total. Against a
+real four-atom supercell under the same applied modulation, on the same k-set:
+
+| `nbnd` | induced density, US | `E - E_super/N`, US | induced density, PAW | `E - E_super/N`, PAW |
+|---|---|---|---|---|
+| 12 | 1.18e-1 | +1.07e-4 Ry | 1.17e-1 | +1.07e-4 Ry |
+| 24 | 1.56e-2 | +4.46e-6 Ry | 1.71e-2 | +5.27e-6 Ry |
+| 48 | 3.72e-3 | +4.82e-7 Ry | 5.09e-3 | +8.19e-7 Ry |
+
+which is the same shape stage 1 measured norm-conserving (+8.15e-5, +3.52e-6, +3.62e-7),
+above the supercell at every rung and falling.
+
+**Two spin channels, which every number above is blind to.** `nspin = 1` exercises one
+`deeq`, one `becsum` and one set of one-centre terms, so the two-block path had to be
+measured separately or the claim would be the project's defining failure mode -- structurally
+plausible and untested. Two checks. The **tiled null at `nspin = 2`** reproduces the unit
+cell's SCF total to **7.2e-13 Ry** ultrasoft and **5.4e-13 Ry** PAW, in one iteration; on
+silicon the two channels come out nearly equal, so that is the plumbing rather than the spin
+physics. What exercises the channels against each other is a **uniform applied field at
+`N = 1`**, against `run_scf` with `B_field(3)` -- a route that shares no ultracell code and
+gives each channel its own `dV`, and therefore its own `int dV Q` in `D_ij`, with opposite
+signs. At `B = 0.02` Ry against `m = 0.73089286` the ladder reads **5.0e-3, 1.8e-3, 4.9e-4**
+relative at `nbnd = 12, 24, 40` ultrasoft, and 5.2e-3, 1.9e-3, 5.3e-4 against `m = 0.73114462`
+PAW, which is the norm-conserving ladder's own shape (9.6e-3, 3.2e-3, 7.7e-4).
+
+**The first attempt at that ladder read 27 per cent flat in `nbnd` and the defect was in the
+measurement.** The seed was converged on a `(1, 2, 2)` k-set while the ultracell folded onto
+`(2, 2, 2)`, so the two sides were not the same calculation; a moment 27 per cent off that
+does *not* improve with `nbnd` reads exactly like a missing term, which is what makes it
+worth writing down. The test asserts the matched grid rather than relying on it.
+
+**What is *not* measured and is the honest edge of the claim:** a **modulated** moment on an
+augmented dataset has never been compared against a supercell. The charge has, at both
+datasets and three band counts; the spin comparison is the uniform field at `N = 1` and the
+tiled null at `N = 2`, and a spin density wave on an augmented cell rests on those two plus
+the charge ladder rather than on a number of its own.
+
+**The tiled null cannot see the sign, and that was checked by breaking it rather than
+argued.** With nothing applied every `becsum(Q_d != 0)` is identically zero, so the whole set
+of displaced tables is multiplied by nothing -- it is "a check whose null result cannot be
+told from a pass" for exactly the object the phase adds. Hermiticity does not discriminate
+either: `D(-Q_d)_ji = conj(D(Q_d)_ij)` holds for both spellings, because `Q_ij(r)` is real
+and symmetric in its channel pair. **Running the flipped sign**: the induced density's error
+stalls at **6.7e-2** where the right one falls to 3.7e-3, and the total energy goes
+**2.6e-5 Ry below** the supercell's, which the nested-basis argument forbids. One rung alone
+would not have caught it -- at `nbnd = 12` the wrong sign sits *nearer* the supercell
+(+7.4e-5) than the right one (+1.07e-4). So the assertion that carries this phase is the pair
+"the error falls" **and** "the gap is positive at every rung", not either alone.
+
+**The ultracell's reciprocal cutoff set is not closed under negation, and the check written
+to catch a wrong index order found that instead.** The diagnostic added with this stage
+measures how complex the augmented density comes back, on the argument that
+`becsum(-Q_d) = conj(becsum(Q_d))` makes it real; it fired at **1.7e-4** on a correct run.
+The relation is right and the truncation is what breaks it: the cutoff set is the unit
+cell's dense sphere *at every* `Q` (Elk's choice, `Ultracell.reciprocal_mask`), and the
+negative of `G + Q` is `-G - Q`, which is that sphere **displaced** rather than that sphere
+-- on this cell **235 of 4554** kept entries have no negative partner at `N = 2`, and 470 of 6831 at `N = 3`, where at `N = 1` every one of the 2277 does. A real function represented on such a set
+is not exactly real.
+
+**That explanation was checked against two predictions rather than accepted because it
+fits**, which is the habit `CLAUDE.md` asks for. It must vanish at `N = 1`, where the only
+`Q` is zero and the set is symmetric: **exactly 0.000e+00**. And it must fall with the
+cutoff, since what it measures is the augmentation charge's weight at the edge of the
+sphere: **1.71e-4, 7.21e-5, 2.96e-5** at `ecutrho = 64, 96, 144` Ry, which is
+`ecutrho^-2.2`. At `N = 3` and the same cutoff it is 1.32e-4, the same order, because what
+it measures is the displacement of the sphere rather than `N`.
+
+So it is reported as `UltracellResult.augmentation_residual`, read the way a cutoff
+convergence is read, and the warning is set two decades below what a wrong pairing gives
+rather than at round-off. The `becsum` half keeps the tight threshold and deserves it: the
+transform over the Q-set involves no truncation at all. **And the sibling is pre-existing**
+-- the Hartree term of a *norm-conserving* ultracell masks a conjugate-symmetric density
+with the same asymmetric `keep` and takes the real part, so it carries this truncation too
+and has never reported it, which is `OPEN.md` Part X item 1 with what it would take to
+settle.
+
+**Two things the wiring needed that are not the term.** The frozen states of a PAW run have
+to be diagonalised at the converged `becsum` and not only at the converged density --
+`fixed_density_states(becsum=...)` -- because the one-centre potential is a functional of
+`becsum`, and a solve handed nothing rebuilds `ddd_paw` from the *atomic* occupations and
+returns eigenvalues of a Hamiltonian the loop never subtracts. And `becsum` joins the density
+as a **mixed** variable for PAW alone, packed after it in one vector the way `_mix` packs it
+in the unit cell, with `box_kerker` passing the tail through at the plain `beta`: an ultrasoft
+`D` is an integral of the potential and needs nothing, where PAW's one-centre `D` is a
+functional of `becsum` and would otherwise be a fixed-point iteration with no mixing at all.
+
+**What stage 5 does not have.**
+
+* **The spinor combination**, `npol = 2` with an augmented dataset, refused by name. A spinor
+  `D_ij` is the scalar integrals sandwiched between `fcoef` (`_newd_noncollinear`) rather than
+  the integrals themselves, so the displaced table has to enter *inside* that transform, one
+  Q-difference at a time, and the matrix element has to carry the `(2, 2, nkb, nkb)` blocks
+  with it. Neither is written.
+* **The double grid**, which is the wall such a dataset meets first whenever its input sets
+  the `ecutrho` it wants, and is the reason every number above is at `ecutrho = 4 ecutwfc`.
+  **The half of this that is not a refusal is the one that will be met**: `ecutrho` defaults
+  to `4 ecutwfc` here as it does in `pw.x`, so an input that leaves it out is *accepted* and
+  runs with the augmentation charge on the wavefunction grid. That is now a warning by name
+  -- the run stays self-consistent and comparable against a supercell at the same pair, and
+  its absolute energy is not converged in `ecutrho` and must not be put beside a `pw.x`
+  number taken at the dataset's own dual. The ultracell box is built on the dense grid and
+  everything already lives on it, so what is missing is not an interpolation between two
+  boxes: it is that `h_psi` multiplies a wavefunction by the potential truncated to the
+  *smooth* sphere, so a `dV` carrying its dense components into the matrix element would give
+  the ultracell a term neither the frozen eigenvalue nor the reference supercell has. Masking
+  `dV` to the tiled smooth sphere for the smooth half while `newd`'s integral keeps the dense
+  one is QE's own split and is about three lines; it is a second unknown and is deliberately
+  not folded into the same measurement.
+* **Symmetrisation of `becsum` across the copies**, which is not needed and is not a gap: an
+  ultracell runs `nosym` by force, so `_becsum_symmetry` is `None` and the unit cell's own
+  path does nothing either.
+* **The ultracell tunnelling transmission** (`run_ultracell_transport`), refused by name.
+  Lifting the dataset refusal made three downstream workflows reachable that the refusal had
+  been protecting, and they do not all fare the same. The **image and the spectrum run**: a
+  tip sits in the vacuum, where the augmentation charge is zero and a pseudo-wavefunction is
+  the true one, so the smooth states are exact there -- and both now inherit the unit cell's
+  own `_refuse_an_augmented_plane`, which refuses a tip inside a sphere. The **transmission
+  does not**: its exit-plane Gram matrix is built from the whole state and the unit cell's
+  route hands the assembly `calculation._overlap` for it, where an ultracell state spans `N`
+  unit-cell spheres with their own projectors and that operator is a piece of work rather
+  than a call. `_ultracell_geometry` had `apply_s = None` with a comment saying the ultracell
+  refuses these datasets, which is how the stale claim was found.
 
 **What is outstanding.**
 

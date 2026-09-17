@@ -3504,3 +3504,43 @@ taken beside one is not a measurement (`PERFORMANCE.md` says so in the entry). W
 instead is this code's own two routes run back to back under the same load, where the **ratio**
 is robust and the absolute figures are for scale. Take the pair on a quiet machine: 41 biases
 through `pp.x` against one `run_sts` call, both single core, same cell.
+
+# Part X -- from the augmented ultracell, 2026-09-17 (P88 stage 5)
+
+## 1. The ultracell's reciprocal cutoff set is not closed under negation, so a real field on it is not exactly real
+
+**Where it is.** `Ultracell.reciprocal_mask` in `ultracell/grid.py`, and every consumer of
+`keep` in `ultracell/potential.py` and `ultracell/augmentation.py`.
+
+**What it is.** The ultracell keeps the unit cell's dense sphere at *every* `Q` -- Elk's
+choice, `ngvec` G-vectors per `Q`, and what makes the `N = 1` limit reduce to the unit cell
+exactly. The negative of `G + Q` is `-G - Q`, which is that sphere **displaced** rather than
+that sphere, so once `Q` is non-zero the kept set has entries whose negative is not kept.
+Measured on the silicon cell of `tests/data/qe/si-ultracell-paw.in`: **235 of 4554 at
+`N = 2` and 470 of 6831 at `N = 3`**, against none at all of the 2277 at `N = 1`.
+
+A real function represented on such a set is therefore not exactly real, and both places
+that hold one take the real part and move on: `ultracell_potential`'s Hartree term masks a
+conjugate-symmetric density with `keep` and takes `jnp.real` of the transform, and
+`ultracell_augmentation_charge` does the same with the augmented charge.
+
+**What is measured and what is not.** The augmentation side is measured, because the check
+that found this was written for it: `UltracellResult.augmentation_residual` is 1.71e-4 on
+ultrasoft silicon at `ecutrho = 64` Ry, falling to 7.21e-5 at 96 and 2.96e-5 at 144, which
+is `ecutrho^-2.2`, and exactly zero at `N = 1`. **The Hartree side is not measured at all**
+and is the older of the two -- it has been there since stage 1 and nothing reports it.
+
+**What it would take.** Symmetrising the kept set is one line, `keep & flip` with
+`flip = np.roll(keep[::-1, ::-1, ::-1], 1, axis=(0, 1, 2))`, and it changes the method's
+cutoff from Elk's set to its symmetric hull, which is a *different truncation* rather than a
+fix -- it throws away components that are there. So the thing to measure first is what the
+present convention is worth: the Hartree energy and the total at `N = 2` with `keep` and
+with `keep & flip`, on the same cell. If that difference is at the level the energy ladder
+resolves (1e-7 Ry per cell), it belongs in the convergence story; if it is below, this entry
+closes as a convention with a number behind it.
+
+**Why it is not urgent.** It is a truncation and it converges away with `ecutrho`, it is
+identical on both sides of every comparison this project has made (the ultracell against
+itself at different `nbnd`), and it is *not* identical to the supercell's own truncation --
+which is the one place it could matter, and where the measured 3.7e-3 induced-density
+agreement at `nbnd = 48` already bounds it from above.
