@@ -109,12 +109,13 @@ fully-relativistic ultrasoft AlAs. What is left of the entry is written at the e
 §1d: PAW's one-centre tangent now rides the same `jvp` rather than being added after the
 sandwich, and no committed cell distinguishes the two orders.
 
-**`qq_so` in the matrix orthonormality multipliers of a spinor force.** The guard is
-inside `energy_at` in `forces/energy.py` and it fires only when `multipliers is not None`,
-in the noncollinear regime, on an augmented dataset: `_constraint_energy` contracts the
-scalar `qq` where a spinor's metric is `qq_so`, and `Lambda` then carries a spin pair as
-well. The scalar spinor forces of P46 run and are validated, so what is refused is the
-matrix-multiplier path beside them rather than the force. **Size:** part of a phase.
+**`qq_so` in the matrix orthonormality multipliers of a spinor force.** ✅ **DONE
+2026-09-17**, `AUGMENTATION-NEXT.md` §3c and `PLAN.md` P98. `Lambda` does *not* carry a
+spin pair, which is where this entry (and the guard it was read off) was wrong: it
+multiplies the band pair and both states are whole spinors, so only the augmentation half
+changes and it takes `qq_so`. The Born charges of a fully-relativistic ultrasoft cell
+reach `ph.x` to 3.2e-6 and 3.9e-5 on the two atoms. Three further collinear sites in the
+Born assembly came with it, all of them broadcast failures rather than wrong numbers.
 
 **The spinor projector set for site-resolved angular momenta.**
 `_refuse_what_is_not_written` keys on `any(pseudo.has_so)` together with

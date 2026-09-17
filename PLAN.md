@@ -18205,6 +18205,16 @@ heaviest species with a committed fully-relativistic ultrasoft dataset, and the 
 is an insulator once the coupling is on, so `occupations = 'fixed'` is legitimate there
 where `bismuthene-soc-small.in` smears.
 
+**The Born charges of an augmented spinor, which is 3c, and they are a number.** Against
+the vendored `ph.x` on the same relativistic AlAs: **2.101143 against 2.10114** on
+aluminium, **-2.165831 against -2.16587** on arsenic, and the sum-rule residue
+**-0.064688 against -0.06473**, all inside the 1e-4 the four scalar cases are held to.
+**What that agreement is evidence for is narrower than it looks**, and the reason is the
+one P39a wrote down: `ph.x`'s own `Z*` moves by 8e-5 between the scalar and the
+relativistic run, where `epsilon` moves by 8.6e-3, so this comparison says the assembly
+runs on a spinor and does not pin the spin structure of the multipliers' metric. The unit
+test against `_spinor_overlap` is what pins that.
+
 **3c, the matrix orthonormality multipliers.** `_constraint_energy` contracts the scalar
 `qq`, and the Gram matrix was never the problem: `<psi_m|psi_n>` over the whole
 `2 npwx`-long vector already *is* a spinor inner product. The augmentation half is what
@@ -18216,11 +18226,15 @@ pair, both of whose states are whole spinors. It is pinned against
 see an index order and the two factors of the trace are where a transpose hides
 (`tests/unit/test_force_machinery.py`).
 
-**Asking for the Born charges found one more collinear site**, the same class as the three
-P83 found: `born._raw_mixed_state`'s own `raw_becsum` called the collinear `becsum_of`,
-where a spinor needs `sum_bec` followed by `add_becsum_so`. It failed to broadcast rather
-than returning a number, which is the good failure and is how the site was found -- the
-twin of the density builder P83 fixed four lines below it.
+**Asking for the Born charges found three more collinear sites**, the same class as the
+three P83 found and each found the same way, one run at a time: `_raw_mixed_state`'s
+`raw_becsum`, which called the collinear `becsum_of` where a spinor needs `sum_bec`
+followed by `add_becsum_so` (the twin of the density builder P83 fixed four lines below
+it); `_augmentation_expectation` together with `_position_operator`, the polarization's
+own `A_a`, whose two matrices are `qq_so` and `dpqq_so`; and `constraint_position_term`'s
+`sandwich`, `add_for_charges`, whose metric is `qq_so`. Every one of them failed to
+broadcast rather than returning a number, which is the good failure and is the only reason
+they were found in an afternoon.
 
 **What is outstanding.**
 

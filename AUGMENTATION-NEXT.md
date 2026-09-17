@@ -345,19 +345,29 @@ cannot be handed is this module's projector set, which is *scalar*
 is `ortho-atomic`, so the Löwdin matrix `<phi|S|phi>` is spin-blocked too and cannot be
 left scalar either.
 
-The route that works is the one `workflows/anisotropy.py:_project_band_energy` already
-takes: build the set with `Calculation._as_spinors`, which is
-`atomic_wfc_nc_updown` -- a real harmonic times a pure up or down spinor -- orthogonalise
-it in the spinor space against `_spinor_overlap`, and contract. That basis is the right
-one here for a reason beyond convenience: `_contract` labels its blocks by `(m, spin)`,
-and `m` and the spin are good labels in `nc_updown` and are **not** good labels in the
-`j`-resolved `atomic_wfc_nc_proj` that `projwfc/projections.py` uses. So the columns
-double to `2 natomwfc` with a known order and the shell bookkeeping survives.
+**The route this entry prescribed is wrong on the datasets the entry is about**, read
+2026-09-17 and not implemented. It said to build the set with `Calculation._as_spinors`,
+`atomic_wfc_nc_updown`, because `_contract` labels its blocks by `(m, spin)` and those are
+good labels there and not in the `j`-resolved set. The labels are the easy half. The basis
+is not: a **fully-relativistic** file carries the two `j` of a shell as two separate
+`PP_CHI` entries, so the scalar count already has `2l+1` for each of them, and doubling
+each with both spins gives `4(2l+1)` columns where the spin-angle set has `sum (2j+1) =
+2(2l+1)`. That is 22 against 12 on `Pt.rel-pz-n-rrkjus`, and it is the same over-count
+`_as_spinors`'s own docstring records as a 0.20 Ry wrong answer in `wfcinit` (`GAPS.md`
+2c). An over-complete set whose extra columns differ from the kept ones only by a radial
+function is not a decomposition anyone should read a moment off, and a Löwdin `O^{-1/2}`
+of it is worse than the refusal.
 
-**Size:** an afternoon for the code and a phase for the number, which is the part with no
-route yet: `<L>` and `<S>` per site on a fully-relativistic augmented dataset need a
-reference, and neither `projwfc.x` nor Elk's `LSJ.OUT` has been located for that
-combination.
+**What the route has to be instead.** Keep the `j`-resolved set -- `spinor_basis = "jmj"`,
+`atomic_wfc_nc_proj`, which is what P69's validated PDOS decomposes on -- build it against
+`_spinor_overlap` rather than the scalar `S`, and **transform the operators** rather than
+the basis: `L` and `S` in the `|l j m_j>` basis are `M† L M` and `M† S M` with `M` the
+spin-angle matrix `_spin_angle_matrix` already builds, so nothing new is derived and
+`_contract`'s `(m, spin)` loop becomes a loop over `j` shells.
+
+**Size:** a phase, not the afternoon this entry claimed, and the number is still the open
+part: `<L>` and `<S>` per site on a fully-relativistic augmented dataset need a reference,
+and neither `projwfc.x` nor Elk's `LSJ.OUT` has been located for that combination.
 
 ### 1j. The force theorem for magnetocrystalline anisotropy with PAW. ✅ DONE.
 
@@ -644,15 +654,34 @@ strain.
 
 **The piezoelectric tensor (item 1h) lifts with this.**
 
-### 3c. Orthonormality multipliers for an ultrasoft or PAW **spinor** force
+### 3c. Orthonormality multipliers for an ultrasoft or PAW **spinor** force. ✅ DONE.
 
-`forces/energy.py:471`. Both, and only in the noncollinear regime, and only on the matrix
-form of the constraint.
+**Closed 2026-09-17**, with 1d and in the same pass; `PLAN.md` P98 has the numbers.
 
-**What is missing.** `_constraint_energy` contracts the scalar `qq`, where a spinor's
-metric is `qq_so` and `Lambda` carries a spin index. The scalar spinor forces of P46 run
-and are validated; this is the matrix-multiplier path beside them. **Size:** part of a
-phase.
+**The entry's own sentence was half right, and the half that was wrong is the one that
+would have made the work larger.** `Lambda` gains **no** spin index: it multiplies the
+band pair, and both of its states are whole spinors. The Gram matrix was never the
+problem either -- `<psi_m|psi_n>` over the whole `2 npwx`-long coefficient vector already
+*is* a spinor inner product. What could not stay scalar is the augmentation half, which
+takes `qq_so`, so `_spinor_constraint_energy` is `_constraint_energy` with one spin sum
+added and is pinned against `Calculation._spinor_overlap` with a **random Hermitian**
+`Lambda` -- a diagonal one cannot see an index order.
+
+**What it cost beyond that was three collinear sites the Born assembly still had**, each
+of which fails to broadcast rather than returning a number, which is the good failure:
+`_raw_mixed_state`'s `raw_becsum` (the collinear `becsum_of` where a spinor needs
+`sum_bec` then `add_becsum_so`), `_augmentation_expectation` and `_position_operator` (the
+polarization's own `A_a`, which takes `qq_so` and `dpqq_so`), and
+`constraint_position_term`'s `sandwich` (`add_for_charges`, whose metric is `qq_so`).
+They are the same class as the three P83 found and they were found the same way, one run
+at a time.
+
+**The number.** The Born charges of fully-relativistic ultrasoft AlAs against the vendored
+`ph.x`: **2.101143 against 2.10114** on aluminium and **-2.165831 against -2.16587** on
+arsenic, with the sum-rule residue at **-0.064688 against -0.06473**. What that agreement
+is and is not evidence for is in `PLAN.md` P98: `ph.x`'s own `Z*` moves by 8e-5 between
+the scalar and the relativistic run, so the comparison confirms the assembly and is not
+what pins `qq_so` in the multipliers -- the unit test is.
 
 ---
 

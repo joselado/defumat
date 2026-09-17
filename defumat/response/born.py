@@ -671,13 +671,35 @@ def constraint_position_term(calculation, positions, solver, weights, commutator
     nocc = solver.nocc
     batch = calculation.k_batch
 
+    noncolin = bool(calculation.noncolin)
+
     def sandwich(pos):
         moved = calculation.at_positions(pos)
         vkb = moved.projectors.vkb
-        qq = moved.projectors.qq.astype(vkb.dtype)
+        npwx = vkb.shape[1]
+        # ``S`` is the metric, so a spinor takes ``qq_so`` here for the reason
+        # it takes it everywhere else: the off-diagonal spin blocks are what a
+        # fully-relativistic dataset's overlap consists of, and dropping them
+        # leaves the ``j``-averaged operator.
+        qq = jnp.asarray(
+            moved.qq_so if noncolin else moved.projectors.qq
+        ).astype(vkb.dtype)
         total = jnp.zeros((), dtype=vkb.dtype)
         for spin in range(occupied.shape[0]):
             def one_k(ik, spin=spin):
+                if noncolin:
+                    shape = occupied[spin][ik].shape[:-1] + (2, npwx)
+                    left = jnp.einsum(
+                        "gc,nag->nac", vkb[ik].conj(),
+                        occupied[spin][ik].reshape(shape),
+                    )
+                    right = jnp.einsum(
+                        "gc,nag->nac", vkb[ik].conj(),
+                        commutator[spin][ik].reshape(shape),
+                    )
+                    return jnp.einsum(
+                        "nai,abij,nbj->n", left.conj(), qq, right
+                    )
                 left = jnp.einsum("gc,ng->nc", vkb[ik].conj(), occupied[spin][ik])
                 right = jnp.einsum("gc,ng->nc", vkb[ik].conj(), commutator[spin][ik])
                 return jnp.einsum("ni,ij,nj->n", left.conj(), qq, right)
