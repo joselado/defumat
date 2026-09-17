@@ -6615,11 +6615,26 @@ gradient of a physical cell is out of reach on a 30 GB machine.
 
 **There is no reference code on the other side of this one, and that is the first thing to
 say.** The rule here is that a feature taken from Quantum ESPRESSO or from Elk is timed
-against the code it was taken from; this is not taken from either. `pw.x` has no Kubo
-Berry curvature map at all, Elk's task list has none with an augmented dataset, and the
-term itself -- the augmentation dipole inside the connection -- exists in neither. So what
-is measured is the only comparison that exists: the assembly with the term against the
-same assembly without it, which is also the quantity a user is choosing between, since
+against the code it was taken from; this is not taken from either, and the reason is
+stronger than "with an augmented dataset". **Neither code writes a k-resolved `Omega(k)`
+at all**, which was grepped rather than assumed, across the whole vendored QE 7.5 tree and
+Elk 11.0.2's source and task list:
+
+- QE has the Berry-phase polarization (`PW/src/bp_c_phase.f90`, `lberry`), which is one
+  integrated vector, and the orbital magnetization (`PW/src/orbm_kubo.f90`), whose per-k
+  neighbour overlaps are summed inside the k-loop and never written. `PP/src/epsilon.f90`
+  accumulates `sigma_ab(omega)` over k as an OpenMP reduction, and refuses ultrasoft
+  outright at its `okvan` check. The route that does produce a map is
+  `PP/src/pw2wannier90.f90` handing `.mmn` overlaps to Wannier90, where the curvature is
+  Wannier90's output and not QE's.
+- Elk has the same polarization (`src/polar.f90`, King-Smith and Vanderbilt) and the
+  optical tensor of tasks 121 and 122 (`src/dielectric.f90`, `src/moke.f90`), both
+  functions of frequency with k summed away. `dielectric.f90` builds its response from
+  momentum matrix elements at a single k-point, so the connection's overlap dependence
+  does not enter its implementation at all.
+
+So what is measured is the only comparison that exists: the assembly with the term against
+the same assembly without it, which is also the quantity a user is choosing between, since
 `method='fhs'` carries the physics at either cost.
 
 Ultrasoft AlAs (`tests/data/qe/alas-epsilon-us.in`, `ecutwfc = 25`, `ecutrho = 200`), a

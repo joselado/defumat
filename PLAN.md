@@ -17637,10 +17637,17 @@ rests on.
   `e_n dS/dk` and `e_n d^2S/dk dk` it needs `T^dag dT`, which is done, and
   `d(T^dag dT)/dk`, which is a second projector derivative against `dpqq` and `dpqq`'s own
   first moment and is not written. Unsized.
-- **No timing was taken against a reference code**, because neither `pw.x` nor Elk computes
-  a Kubo Berry curvature map with an augmented dataset, so there is nothing to time against.
-  What is recorded in `PERFORMANCE.md` instead is the cost of the term against the
-  curvature it is added to, which is the only comparison that exists.
+- **No timing was taken against a reference code, and the reason is stronger than the
+  dataset.** Neither `pw.x` nor Elk writes a k-resolved `Omega(k)` at all, which was
+  grepped across the vendored QE 7.5 tree and Elk 11.0.2 rather than assumed: both have
+  the Berry-phase polarization as one integrated vector (`bp_c_phase.f90`, `polar.f90`),
+  both have optical tensors with k summed away (`PP/src/epsilon.f90`, which refuses
+  ultrasoft at `okvan`; Elk tasks 121 and 122), QE's `orbm_kubo.f90` sums its per-k
+  overlaps inside the loop and writes two scalars, and the one route that does give a map
+  is `pw2wannier90.f90` handing `.mmn` to Wannier90, where the curvature is Wannier90's
+  output. So the README row's two blanks are a located negative. What
+  `PERFORMANCE.md` records instead is the cost of the term against the curvature it is
+  added to, which is the only comparison that exists.
 
 **One thing moved.** `_augmentation_dipole` left `response/efield.py` for
 `pseudo/augmentation.py:augmentation_dipole_blocks`, because three response assemblies and

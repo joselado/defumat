@@ -445,7 +445,8 @@ projector derivative about the atom's own centre, and `kubo_from_matrices` takes
 per direction and forms `L = K^dagger` itself.
 
 **The anchor is an identity**, because no norm-conserving run can see a term that vanishes
-there and no reference code computes this map with an augmented dataset: the same object is
+there and neither `pw.x` nor Elk writes a k-resolved `Omega(k)` at all to compare against
+(grepped, `PLAN.md` P98): the same object is
 the k-derivative of the two-point overlap `S(k, k')` at *frozen* coefficients, and a central
 difference of it reproduces the connection to **8.5e-10** against `max|K| = 2.09e-2`,
 falling by a clean factor of four per halving of the step. Beside it `K + K^dag = dS/dk` to

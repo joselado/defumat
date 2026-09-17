@@ -128,8 +128,9 @@ about two per cent of $\Omega$ and the second about half a per cent, so neither 
 decoration and neither is large.
 
 Both vanish identically for a norm-conserving dataset, so nothing computed above could
-have said whether they are right, and no established code computes this map with an
-augmented dataset either. What settles them is that the same object appears in the
+have said whether they are right, and neither Quantum ESPRESSO nor Elk writes a curvature
+map to compare against: both give the Berry phase as one number for the whole zone. What
+settles them is that the same object appears in the
 lattice-flux route, as the overlap $q_{ij}(\mathbf b)$ between two neighbouring
 k-points, and the connection is its derivative: differencing the one reproduces the other
 to four parts in $10^{8}$.
