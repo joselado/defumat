@@ -6770,3 +6770,54 @@ whole file peaks at 4.25 GB and the eight new tests take 78 s.
 rematting took a spinor PAW force tape from 2.32 GiB to 0.99 GiB with the force unchanged
 to one ulp. Nobody has measured it here, and until somebody does, the `ecutrho = 400`
 gradient of a physical cell is out of reach on a 30 GB machine.
+
+## What the dielectric response of an augmented spinor costs, against `ph.x` (P98)
+
+The regime P98 opened: `noncolin` with `lspinorb` on an ultrasoft dataset, which is what a
+heavy element is described with. The cell is `tests/data/qe/alas-epsilon-us-soc.in` --
+zincblende AlAs with both species fully relativistic, `ecutwfc = 25`, `ecutrho = 200`, a
+4x4x4 shifted grid reducing to **10 k-points**, 8 occupied spinor bands, a dense 36^3 box
+of 14163 G-vectors and a smooth 24^3 of 5029.
+
+**Machine and date:** this workstation, CPU only, 2026-09-17. Both codes on one core:
+`pw.x` and `ph.x` are the vendored **serial** build with `OMP_NUM_THREADS=1`, and defumat
+is pinned with `taskset -c 0` beside `OMP_NUM_THREADS=1` and `MKL_NUM_THREADS=1` set
+before JAX is imported. That is not `tools/compare_qe.py`'s own mechanism, which sets the
+affinity mask inside the process, and the two are equivalent here; it is written down
+because the pinning is what makes the ratio mean anything.
+
+| | defumat | QE |
+|---|---|---|
+| the SCF | **9.9 s**, 12 iterations | **12.65 s** CPU (15.75 wall), 16 iterations |
+| the field response | **144.0 s**, 12 iterations, `av.it. = 33.7` | **32.5 s**, 6 iterations, `av.it.` 10.4 to 11.6 |
+
+**Which `ph.x` number this is, and which it is not.** The field stage's figure is `ph.x`'s
+own cumulative clock where the dielectric constant is printed, so it includes `phq_init`,
+the bare `dvpsi_e` and all six self-consistent iterations -- the same span
+`dielectric_tensor` covers. It is **not** `solve_e`'s timer, which reads 27.16 s and
+excludes the bare term, and it is **not** the `PHONON` total of 1m20.55 s, which goes on
+to the dynamical matrix that is not computed here.
+
+**4.4x on the response, and the structure says where it is.** Twice the self-consistent
+iterations and three times the CG steps per band per solve, which is P25's pair of backlog
+items unchanged rather than anything the spin axis added -- the mixer and the
+diagonalisation threshold. The **SCF is faster than `pw.x`'s** on the same cell, 9.9 s
+against 12.65 s at 12 iterations against 16, so the ratio is the response's own and not a
+cost the spinor regime carries into everything.
+
+**Warm against cold, since this is a new code path and therefore a cache miss the first
+time.** The same warm call reads 144.0 s where the first reads **172.8 s**, and the SCF
+9.9 s where the first reads **30.0 s**. Every figure above is the second call, as
+`CLAUDE.md` requires.
+
+**The heavy-element cost, which is the number to know before running one.**
+`bismuthene-epsilon-us-soc.in` -- the cell P98 added so that a heavier element could
+resolve the `fcoef` dressing -- has **fewer** k-points than AlAs (4 against 10) and is far
+more expensive all the same: its SCF takes 60 s against AlAs's 9.9, and **one response did
+not finish in 70 minutes**, against 144 s, so it was stopped rather than measured. What
+differs is `nbnd` and the box: 30 occupied spinor bands against 8, `nh = 34` per atom
+against 34 and 14, and a 45x45x81 dense grid of 60543 G-vectors against 36^3 and 14163.
+`ph.x` does the whole field stage on that cell in about **4 minutes**, so the ratio there
+is at least an order worse than AlAs's 4.4x and is where a heavy-element run would be
+paid. It is not a new regression -- the same two backlog items scale with `nbnd` -- but it
+is the first cell on which they are the difference between a coffee and an afternoon.

@@ -18203,7 +18203,16 @@ ground state does resolve -- the total energy agrees to the printed digit and th
 **The cell that should resolve it** is `bismuthene-epsilon-us-soc.in`: bismuth is the
 heaviest species with a committed fully-relativistic ultrasoft dataset, and the honeycomb
 is an insulator once the coupling is on, so `occupations = 'fixed'` is legitimate there
-where `bismuthene-soc-small.in` smears.
+where `bismuthene-soc-small.in` smears. **Its A/B did not fit this session and the reason
+is a cost rather than a difficulty**: the cell has *fewer* k-points than AlAs (4 against
+10) and one response did not finish in 70 minutes where AlAs's takes 144 s on one core,
+because it carries 30 occupied spinor bands against 8 on a 45x45x81 dense grid against
+36^3 (`PERFORMANCE.md`). The input, its `ph.x` input and the reference output are
+committed, so the run is set up and not taken -- `ph.x` gives
+`diag(17.732384482, 17.732384482, 1.415704688)`, and the in-plane component is the one to
+compare, the third being a slab's vacuum. Its **ground state** is also further from `pw.x`
+than any other cell here, 3.5e-5 Ry against AlAs's 2e-9 with both codes converged on the
+same grids, which is `OPEN.md` Part XII and is a separate question from the dressing.
 
 **The Born charges of an augmented spinor, which is 3c, and they are a number.** Against
 the vendored `ph.x` on the same relativistic AlAs: **2.101143 against 2.10114** on

@@ -691,22 +691,26 @@ By what the first step costs, not by what the item is worth.
 
 The first two entries of this list were run in P94 and neither lifted a refusal; the
 third, PAW Born charges, was run on 2026-09-16 and **lifted its refusal by finding that
-the term it named did not exist** (`PLAN.md` P39a). What is left:
+the term it named did not exist** (`PLAN.md` P39a); the fourth and fifth, the noncollinear
+augmented response and its multipliers, were run on 2026-09-17 and lifted theirs the same
+way -- `set_int3_nc` did not have to be written either (P98). What is left:
 
 1. **The moving overlap in a Kubo sum** (§2). The missing term's shape is pinned exactly
    on a model, so what is left is writing it in matrix-element form from `efield.py`'s
    machinery and checking the *assembly*.
-2. **Site angular momenta on a relativistic augmented dataset** (§1i). The code route is
-   clear; the open question is what to validate it against.
-3. **The `chi_0` gap** (§1a), now not a truncation and about 1 per cent rather than an
+2. **The `chi_0` gap** (§1a), now not a truncation and about 1 per cent rather than an
    unknown.
+3. **Site angular momenta on a relativistic augmented dataset** (§1i), which moved *down*
+   this list on 2026-09-17: the code route the entry named over-counts the basis by a
+   factor of two on the datasets it is for, so the first step is a design decision and not
+   an afternoon, and the open question about the reference is unchanged.
 4. Everything else, in whatever order the physics wants.
 
 **And one thing to do to the whole list rather than to an item in it.** What closed P39a
 was not a term, it was a *cell*: silicon is centrosymmetric, so every `Z*` this project
 had ever compared against `ph.x` was a quantity symmetry forces to zero, and five digits
 of agreement about a residue said nothing about the half symmetry had deleted. Several
-entries below are sized from a gap measured on silicon alone -- §1c, §1d and §3a among
+entries below are sized from a gap measured on silicon alone -- §1c and §3a among
 them -- and a gap measured on a centrosymmetric cell is a hypothesis in exactly the way
 this file's sizings keep turning out to be. **Before writing a term for any of them, run
 the refused quantity on `alas-epsilon-us.in` and see what the number is there.**
