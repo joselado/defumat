@@ -833,6 +833,11 @@ def test_the_augmented_exit_plane_transmission_is_the_unit_cell_s_tiled(
     assert np.abs(np.asarray(ours.values) - tiled).max() / tiled.max() < 1.0e-5
     # What the unit cell's own augmented test asserts of its Gram matrices, on
     # the ultracell's: Hermitian and positive semi-definite, neither imposed.
+    # The hermiticity comes back **exactly** zero here where the unit cell's
+    # reads 3.5e-17, which is `b.conj() @ b.T` being Hermitian to the last bit
+    # at these shapes rather than a diagnostic that never ran -- and what rules
+    # the second reading out is the comparison above, which no overlap at all
+    # would fail first.
     assert ours.notes["hermiticity"] < 1.0e-13
     assert ours.least_eigenvalue > -1.0e-12
 

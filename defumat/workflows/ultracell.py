@@ -550,13 +550,18 @@ def _refuse_an_augmented_volume_diagnostic(pseudos, exit_region: str) -> None:
 def _ultracell_geometry(states) -> TransportGeometry:
     """Where an ultracell's bands live, as the transmission's own bundle.
 
-    The overlap is ``None`` rather than a function, and for the plane that is
-    exact on any dataset: ``exit_overlap`` integrates over one height in the
-    vacuum, where the augmentation charge is zero and a pseudo-wavefunction is
-    the true one, so nothing between it and the answer wants ``S``. What does
-    want it is ``exit_region = "volume"``, and
-    :func:`_refuse_an_augmented_volume_diagnostic` refuses exactly that
-    combination and no more. The peak here is the stacked Miller
+    The overlap is ``None`` rather than a function, and the three cases that
+    reach this bundle are each exact with it. For the **plane**, on any dataset:
+    ``exit_overlap`` integrates over one height in the vacuum, where the
+    augmentation charge is zero and a pseudo-wavefunction is the true one, so
+    nothing between it and the answer wants ``S``. For the **whole cell** on a
+    norm-conserving dataset, because there ``S`` *is* the identity and
+    ``sum_G c* c`` is orthonormality itself -- which is what makes that
+    diagnostic a check rather than a tautology. For the whole cell on an
+    augmented one it would not be exact, and that is the one combination
+    :func:`_refuse_an_augmented_volume_diagnostic` refuses. The spectrum
+    (:func:`run_ultracell_sts`) takes this bundle too and samples the state at a
+    point, which is the first case again. The peak here is the stacked Miller
     indices, ``nk0 x N npwx x 3`` integers, which is small beside the one
     ``k0`` block :meth:`~defumat.ultracell.states.UltracellStates.block` builds
     inside the loop.
