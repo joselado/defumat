@@ -3246,13 +3246,25 @@ half-scissor of 0.0500, and its height falls to \textbf{0.60} of the unscissored
 value against Elk's 0.58.
 
 \begin{refuses}
-\textbf{Refuses.} The same five the shift current refuses, since this is the same
-velocity matrix elements contracted a different way and it inherits every reason:
-\textbf{ultrasoft and PAW} (a moving $\hat S$ puts $\partial S/\partial k$ in the
-dipole), a \textbf{spin spiral}, a \textbf{symmetry-reduced $k$-set} (a polar
-rank-3 tensor is not the cell's until averaged over the point group; the escape
-is the whole unshifted grid), a \textbf{metal}, \textbf{DFT+$U$}, and
-\textbf{\code{nspin} = 2}. A \emph{spinor} run is supported and tested.
+\textbf{Refuses.} Four, and they are what a \emph{sum over velocity matrix
+elements} refuses rather than what the shift current does: a \textbf{spin
+spiral}, a \textbf{symmetry-reduced $k$-set} (a polar rank-3 tensor is not the
+cell's until averaged over the point group; the escape is the whole unshifted
+grid), a \textbf{metal}, \textbf{DFT+$U$}, and \textbf{\code{nspin} = 2}. A
+\emph{spinor} run is supported and tested.
+
+\textbf{Ultrasoft and PAW are not among them, and were until P99 because this
+module inherited the shift current's guard whole.} That refusal belongs to the
+generalised derivative $r^{c;a}$, which the shift current differentiates and
+this assembly does not: the triple sum over $l$ above \emph{is} that
+derivative's sum-rule expansion written out, so what an augmented dataset needs
+here is the velocity matrix element and nothing beyond it. That element is
+$\langle n|\partial_a H - \varepsilon_m\partial_a S|m\rangle + (\varepsilon_m -
+\varepsilon_n)K^a_{nm}$, whose last piece is the augmentation dipole of the
+Kubo section, and deleting it moves $|\chi^{(2)}|$ on ultrasoft AlAs by \textbf{40.8}~pm/V on a
+peak of \textbf{1577.3} --- 2.6\,\%, where the same deletion is worth 0.5\,\% in
+the linear conductivity, because $\chi^{(2)}$ carries the velocity matrix
+element three times rather than twice.
 
 \textbf{This does not lift the \code{chi\^{}(2)} refusal in the Raman section},
 and the distinction matters. That one is about the $2n+1$ route through the

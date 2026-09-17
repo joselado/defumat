@@ -4105,6 +4105,17 @@ weight of 0.9432 that itself moves by 1e-3 -- which is the sharpest k-convergenc
 diagnostic in the package, and the only quantity here that is an integral of a
 *second* derivative.
 
+**What an augmented dataset costs here, and there is no reference for it (P99).**
+`alas-us.in` -- the same AlAs cell and the same 64-point grid as the
+norm-conserving `alas-shg.in`, with the PBE ultrasoft `psl` pair -- runs the
+whole chain in **137 s** against 54 s, at 24 bands and 120 frequencies. **That
+is not a ratio**: the two cells differ in the functional, in `ecutwfc` (25
+against 30) and in carrying a dual grid at `ecutrho = 200` at all, so what the
+pair shows is that the augmented case is the same order and nothing finer. Elk
+has no augmentation charge to compare against, and QE has no second-harmonic
+tensor on any dataset, so the Elk pair below stays the only reference number
+this quantity has.
+
 ### Against Elk, which is where this one was taken from
 
 Two-atom silicon, `a = 10.2` bohr, the **same** 4x4x4 non-reduced grid (64

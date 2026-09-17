@@ -33,9 +33,11 @@ energy because it is exact rather than approximate.
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import numpy as np
 
 from defumat import Calculator
 from defumat.io import comparison_table, read_qe_output
+from defumat.system.kpoints import KPoints
 
 CASES, PSEUDO = Path("../tests/data/qe"), Path("../tests/data/pseudo")
 
@@ -137,7 +139,7 @@ print(comparison_table(rows, fmt="{:.8f}",
                        headers=("case", "defumat [Ry]", "pw.x", "difference")))
 ```
 
-    case          defumat [Ry]           pw.x  difference
+    case           defumat [Ry]           pw.x  difference
     si2-nc-dual8   -15.79449489   -15.79449489     9.2e-10
     si2-us         -22.75348130   -22.75348130     2.4e-09
     si2-paw        -89.27493665   -89.27493665     2.9e-09
@@ -154,6 +156,71 @@ is what lets it reconstruct all-electron quantities the pseudo density has throw
 The one-centre term is about 75% of PAW's total energy, and most of *that* is a constant:
 the exchange-correlation energy of the frozen core, which the dataset fixes and no
 calculation changes.
+
+## What the core region is allowed to change, and what it is not
+
+Everything above is the ground state. The reason the three descriptions are worth having
+side by side is that an augmentation charge is a statement about the **core region** and
+about nothing else: two datasets built from the same all-electron atom, one ultrasoft and
+one PAW, differ in how much of the sphere problem they carry forward and not in what the
+valence electrons do. So a valence property has to come out the same from both.
+
+Take the one that is most sensitive to the valence states, the optical absorption
+spectrum. It is an interband sum over the whole zone, so every occupied state and every
+empty one is in it, and there is nothing in it that a total energy would average away.
+
+The agreement is not automatic, and that is the point of checking it. Once a dataset has
+an augmentation charge, the state a current is about is no longer the vector of plane-wave
+coefficients the calculation stores: the two are related by a transformation that itself
+depends on $\mathbf{k}$, so the current operator picks up a term with no norm-conserving
+counterpart. Leaving it out gives a spectrum that is smooth, positive, and slightly wrong.
+
+
+```python
+cases = {"norm-conserving": "si2-nosym.in", "ultrasoft": "si-us-nosym.in",
+         "PAW": "si-paw-nosym.in"}
+
+grid, spectra = None, {}
+for label, case in cases.items():
+    crystal = Calculator.from_file(CASES / case, pseudo_dir=PSEUDO, announce=False)
+    if grid is None:
+        grid = KPoints.automatic((4, 4, 4), (0, 0, 0), crystal.system.cell,
+                                 precision=crystal.system.cell.precision)
+    optical = crystal.get_optical_conductivity(kpoints=grid, nbnd=20, window=0.8,
+                                               nw=200, broadening=0.015)
+    spectra[label] = np.imag(np.einsum("wii->w", optical.dielectric)) / 3.0
+
+fig, ax = plt.subplots(figsize=(5.6, 3.2))
+for label, curve in spectra.items():
+    ax.plot(optical.frequencies * 13.6056980659, curve, label=label, lw=1.6)
+ax.set_xlabel("energy (eV)"), ax.set_ylabel(r"Im $\epsilon$"), ax.legend(frameon=False)
+
+peak = spectra["ultrasoft"].max()
+for other in ("PAW", "norm-conserving"):
+    gap = np.abs(spectra["ultrasoft"] - spectra[other]).max() / peak
+    print(f"ultrasoft against {other:16s}{gap:9.5f} of the peak")
+```
+
+    ultrasoft against PAW               0.00142 of the peak
+    ultrasoft against norm-conserving   0.38332 of the peak
+
+
+
+    
+![png](04_ultrasoft_and_paw_files/04_ultrasoft_and_paw_10_1.png)
+    
+
+
+The two augmented curves lie on top of each other to **0.14 per cent** of the peak, which
+is what the argument above says they must do.
+
+The norm-conserving curve is a different story and not a worrying one. It peaks 0.16 eV
+higher and differs by 38 per cent there, because it is a different *atom*: an older file,
+generated with a harder core, which gives silicon a slightly different gap. That is the
+pseudopotential rather than the method, and it is the ordinary reason two datasets for the
+same element do not agree to better than a few tenths of an electron volt. Four by four by
+four k-points is also far too coarse for either curve to be a converged spectrum; what is
+converged here is the *difference* between two datasets on the same grid.
 
 ---
 The tests behind this notebook: `tests/regression/test_uspp.py`, which holds the total

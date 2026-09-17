@@ -134,7 +134,7 @@ want a number.
 | [`01_silicon_setup.ipynb`](01_silicon_setup.ipynb) | Input file to cell to k-points to the plane-wave basis, and what a cutoff can represent |
 | [`02_silicon_scf_and_bands.ipynb`](02_silicon_scf_and_bands.ipynb) | The SCF, the energy term by term (1e-9 Ry against QE), silicon's band structure and its covalent bond |
 | [`03_eigensolver_and_performance.ipynb`](03_eigensolver_and_performance.ipynb) | What an iterative eigensolver saves over a dense one, and the single-core comparison with QE |
-| [`04_ultrasoft_and_paw.ipynb`](04_ultrasoft_and_paw.ipynb) | Softer pseudopotentials: the augmentation charge, the overlap operator, and the charge identity it has to satisfy |
+| [`04_ultrasoft_and_paw.ipynb`](04_ultrasoft_and_paw.ipynb) | Softer pseudopotentials: the augmentation charge, the overlap operator, the charge identity it has to satisfy, and the absorption spectrum three descriptions of the core region have to agree on |
 | [`05_gradient_corrections.ipynb`](05_gradient_corrections.ipynb) | PBE, revPBE and PBEsol, what each is fitted for, and the bands they give |
 | [`06_density_of_states.ipynb`](06_density_of_states.ipynb) | Smearing and tetrahedra, silicon's gap as what separates them, and free-electron aluminium |
 | [`07_spin_polarization.ipynb`](07_spin_polarization.ipynb) | LSDA: nickel's moment as an output, the exchange splitting behind it, and the spin-resolved DOS |
@@ -160,7 +160,7 @@ want a number.
 | [`27_excitons_and_tddft.ipynb`](27_excitons_and_tddft.ipynb) | Absorption spectra and the bootstrap kernel, and why no adiabatic local kernel binds an exciton |
 | [`28_piezoelectricity.ipynb`](28_piezoelectricity.ipynb) | The voltage a squeezed crystal produces: AlAs's one independent component, and the inversion centre that gives silicon none |
 | [`29_effective_mass_and_angular_momenta.ipynb`](29_effective_mass_and_angular_momenta.ipynb) | Band curvature as an effective mass, and site-resolved `<L>`, `<S>` and `<J>` against Elk |
-| [`30_magneto_optics.ipynb`](30_magneto_optics.ipynb) | Light reflected off a magnet comes back rotated: nickel's Kerr angle, and the two ingredients it needs |
+| [`30_magneto_optics.ipynb`](30_magneto_optics.ipynb) | Light reflected off a magnet comes back rotated: nickel's Kerr angle, the two ingredients it needs, and the same spectrum from three descriptions of the core region |
 | [`31_fermi_surface_nesting.ipynb`](31_fermi_surface_nesting.ipynb) | Where a metal will go unstable: a hydrogen chain nesting at 2k_F, and the spin spiral that relaxes to the same pitch |
 | [`32_shift_current.ipynb`](32_shift_current.ipynb) | A solar cell with no junction: AlAs carries a current under light where silicon's inversion centre forbids one |
 | [`33_second_harmonic_generation.ipynb`](33_second_harmonic_generation.ipynb) | Frequency doubling: AlAs against the all-electron code Elk, and why the absorption starts at half the gap |
@@ -272,10 +272,10 @@ workstation core, slowest last:
 | `37` | 9 | `12` | 30 | `11` | 81 | `44` | 191 |
 | `03` | 10 | `21` | 30 | `45` | 85 | `17` | 203 |
 | `05` | 10 | `15` | 31 | `14` | 89 | `38` | 242 |
-| `04` | 12 | `24` | 31 | `26` | 109 | `19` | 243 |
+| `04` | 122 | `24` | 31 | `26` | 109 | `19` | 243 |
 | `22` | 12 | `28` | 33 | `33` | 115 | `36` | 244 |
 | `42` | 13 | `31` | 34 | `13` | 131 | `35` | 276 |
-| `16` | 18 | `40` | 34 | `30` | 131 | `20` | 282 |
+| `16` | 18 | `40` | 34 | `30` | 232 | `20` | 282 |
 | `00` | 22 | `23` | 35 | `39` | 151 |  |  |
 | `07` | 22 | `32` | 35 | `41` | 164 |  |  |
 | `46` | 61 |  |  |  |  |  |  |
@@ -286,6 +286,20 @@ SCF runs on the four-atom chain and cannot be worth a negative 67 s; what the tw
 differ in is everything else about when they were taken, and the one that is a measurement
 is the new one, taken pinned to a single core with `OMP_NUM_THREADS=1` on an otherwise
 quiet machine.
+
+`30` reads **232 s** on 2026-09-18 with its three-dataset section in it, against 131 s
+before. **That pair is not a delta**, for the reason the `44` entry below gives: the 232 s
+was taken through `tools/export_notebooks.sh`, which does not pin the thread pool, where
+the 131 s is a single-core number. What the added section costs on its own is three
+conductivities on a 4x4x4 grid, measured separately at 47 s together, so the notebook is
+comfortably inside the ceiling either way and the rest of the difference is the core count.
+
+`04` reads **122 s** on 2026-09-18 with its absorption section in it, against 12 s before.
+The added section is three optical conductivities on a 4x4x4 grid, measured on their own at
+47 s, and the rest of the difference is that the 122 s is taken through
+`tools/export_notebooks.sh`, which does not pin the thread pool, where the 12 s is a
+single-core number. It is the same caveat the `44` entry below carries and it is worth
+repeating: the number is a ceiling check, not a delta.
 
 `46` reads **61 s** on 2026-09-17, its first measurement: two ultracell runs on two cells
 of hydrogen and one on four cells of a spinor, all of which converge in single figures of

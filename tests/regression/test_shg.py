@@ -91,10 +91,15 @@ def full_mesh(system, n: int) -> KPoints:
     )
 
 
+#: What the two augmented cases below are run at, shared so that the number in
+#: one docstring is the number the other is compared against.
+SHG_OPTIONS = dict(window=0.6, nw=120)
+
+
 def spectrum(name: str, n: int, nbnd: int, **options):
     system, pseudos, result = converged(name)
     return run_shg(system, pseudos, result.density, kpoints=full_mesh(system, n),
-                   nbnd=nbnd, **options)
+                   nbnd=nbnd, becsum=result.becsum, **options)
 
 
 def read_elk_chi(path: Path):
@@ -399,13 +404,89 @@ def test_a_symmetry_reduced_wedge_is_refused_by_name():
 
 
 @pytest.mark.slow
+def test_an_augmented_second_harmonic_is_still_exactly_zincblende():
+    """The tensor of ultrasoft AlAs, which was refused until P99.
+
+    The refusal was inherited rather than written: this module wrapped the
+    *whole* of the shift current's guard, whose dataset clause is about the
+    generalised derivative ``r^{c;a}``. The triple sum over the intermediate
+    state here **is** that derivative's sum-rule expansion, so what an
+    augmented dataset needs is the velocity matrix element and nothing beyond
+    it.
+
+    The symmetry is what this asserts, and it is worth being clear about what
+    that does and does not establish: a wrong augmentation term would still
+    respect the crystal's point group, so a zincblende tensor is evidence that
+    the assembly runs and not evidence about the term. What is evidence about
+    the term is the test below.
+
+    Measured on ``alas-us.in``, the whole 4x4x4 grid, 24 bands: the peak is
+    **1577.3 pm/V** at 2.74 eV, the six allowed components agree to
+    **3.5e-6** of it and the largest forbidden one is **6.6e-4** of it.
+
+    **Three orders looser than the norm-conserving cell above**, whose own
+    spread is 2.3e-9, and that gap is the augmentation's floor rather than a
+    defect of the assembly: the same order shows in every quantity here that
+    has to interpolate a radial table, and the symmetry is imposed by nothing
+    on either cell.
+    """
+    chi = np.asarray(spectrum("alas-us.in", 4, 24, **SHG_OPTIONS).chi)
+    peak = {(a, b, c): float(np.max(np.abs(chi[:, a, b, c])))
+            for a in range(3) for b in range(3) for c in range(3)}
+    allowed = [peak[t] for t in ZINCBLENDE]
+    forbidden = [v for t, v in peak.items() if t not in ZINCBLENDE]
+
+    assert min(allowed) > 100.0
+    assert max(allowed) - min(allowed) < 1.0e-4 * max(allowed)   # 3.5e-6
+    # Looser than the norm-conserving cell's 1e-3 above, and the margin is
+    # thin: the measured 6.6e-4 is what an augmented run's radial
+    # interpolation leaves, so this bound is about a factor of five and not
+    # about an order of magnitude.
+    assert max(forbidden) < 3.0e-3 * max(allowed)
+
+
+@pytest.mark.slow
+def test_the_augmentation_dipole_reaches_the_second_harmonic_tensor():
+    """The A/B, because an assembly that runs is not an assembly that is right.
+
+    ``VelocityOperator.augmentation_connection`` is the term P99 wrote and the
+    reason this module no longer refuses an augmented dataset; the finite
+    difference that validates it lives in
+    ``tests/regression/test_kubo_curvature.py``. What is checked here is that
+    it reaches *this* assembly, which the symmetry above cannot see: deleting
+    it must move the tensor, and by more than the eigensolver's own scatter.
+
+    Measured: **40.8 pm/V** on a peak of 1577.3, which is 2.6 per cent, against
+    0.5 per cent for the same deletion in the linear conductivity. That ratio
+    is what it should be: ``chi^(2)`` carries the velocity matrix element three
+    times where ``sigma`` carries it twice.
+    """
+    from defumat.response.velocity import VelocityOperator
+
+    chi = np.asarray(spectrum("alas-us.in", 4, 24, **SHG_OPTIONS).chi)
+    original = VelocityOperator.augmentation_connection
+    VelocityOperator.augmentation_connection = lambda self, psi, direction: None
+    try:
+        dropped = np.asarray(spectrum("alas-us.in", 4, 24, **SHG_OPTIONS).chi)
+    finally:
+        VelocityOperator.augmentation_connection = original
+
+    peak = float(np.max(np.abs(chi)))
+    moved = float(np.max(np.abs(chi - dropped)))
+    assert moved / peak > 1.0e-3
+
+
+@pytest.mark.slow
 def test_the_refusals_name_second_harmonic_generation_rather_than_the_shift_current():
-    """The guard is inherited from :mod:`~defumat.response.photocurrent`.
+    """The guard is :func:`~defumat.response.photocurrent.
+    require_a_velocity_sum_regime`, which is the shift current's minus one.
 
     Sharing the refusals is right -- this module is the same velocity matrix
     elements contracted a different way, so it has every one of their reasons --
     but a caller who asked for ``chi^(2)`` and is told about "the shift current"
     has been handed the wrong quantity's error, which is its own small defect.
+    Sharing the *dataset* refusal was not right and is the reason the shared
+    part is now its own function.
     """
     system = build_system(read_pw_input(CASES / "alas-raman-wedge.in"))
     pseudos = tuple(

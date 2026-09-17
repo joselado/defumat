@@ -60,9 +60,19 @@ conductivity carries ``1/w_nm`` once and this carries it three times.
 Scope
 -----
 
-Norm-conserving, ``nspin = 1`` or a spinor run, an **insulator** with fixed
-occupations, on a k-grid closed under the point group. Refused by name, each
-for its own missing term, in :func:`require_an_shg_regime`.
+Norm-conserving, ultrasoft or PAW; ``nspin = 1`` or a spinor run; an
+**insulator** with fixed occupations, on a k-grid closed under the point group.
+Refused by name, each for its own missing term, in
+:func:`require_an_shg_regime`.
+
+An augmented dataset was refused here until P99 and should not have been by the
+time this was written: the refusal came from wrapping
+``require_a_shift_current_regime`` whole, and its dataset clause is about the
+*generalised derivative* -- which the triple sum above replaces by its sum-rule
+expansion. What an augmentation charge does change is the velocity matrix
+element, and
+:meth:`~defumat.response.velocity.VelocityOperator.generalised_matrix_elements`
+is the one that carries it.
 """
 
 from __future__ import annotations
@@ -542,6 +552,7 @@ def second_harmonic(
     broadening: float = 0.003,
     scissor: float = 0.0,
     band_cut_gap: float = float("nan"),
+    ddd_paw=None,
     k_batch: int | None | str = "default",
     degeneracy_tol: float | None = None,
 ) -> SecondHarmonic:
@@ -590,8 +601,15 @@ def second_harmonic(
     volume = float(calculation.system.cell.volume)
     nbnd = int(eigenvalues.shape[-1])
 
-    velocity = VelocityOperator(calculation, v_scf)
-    v = velocity.matrix_elements(wavefunctions)[:, 0]  # (3, nk, nb, nb)
+    velocity = VelocityOperator(calculation, v_scf, ddd_paw)
+    # ``<n|dH_a - e_m dS_a|m> + (e_m - e_n) K^a_{nm}``: the velocity matrix
+    # element of a *generalised* eigenproblem, which is ``<n|dH_a|m>``
+    # unchanged when the overlap is the identity. Every expression below is a
+    # sum over the true eigenstates and their energies, so the only thing an
+    # augmentation charge changes here is which matrix element goes in.
+    v = velocity.generalised_matrix_elements(
+        wavefunctions, eigenvalues
+    )[:, 0]                                            # (3, nk, nb, nb)
 
     wg, _ = calculation.occupations(eigenvalues)
     wg = jnp.asarray(wg)[0]
@@ -661,19 +679,29 @@ def second_harmonic(
 
 
 def require_an_shg_regime(calculation) -> None:
-    """The same five refusals :func:`~defumat.response.photocurrent.
-    require_a_shift_current_regime` makes, and for the same reasons.
+    """Four refusals, and the fifth one this module used to inherit and does not.
 
-    This module is the same velocity matrix elements contracted a different
-    way, so it inherits every one of them: an ultrasoft or PAW ``dS/dk``, a
-    spiral's two spheres, a wedge that a polar rank-3 tensor is not summed
-    over, a Hubbard term with a velocity of its own, and a metal whose
-    partially filled bands put a vanishing denominator in every term.
+    The four are :func:`~defumat.response.photocurrent.
+    require_a_velocity_sum_regime`'s, because this module is the same velocity
+    matrix elements contracted a different way: a spiral's two spheres, a wedge
+    that a polar rank-3 tensor is not summed over, a Hubbard term with a
+    velocity of its own, and a metal whose partially filled bands put a
+    vanishing denominator in every term.
+
+    **An ultrasoft or PAW dataset is not among them**, and inheriting it was
+    the trap ``CLAUDE.md`` names: this module wrapped the whole of
+    ``require_a_shift_current_regime``, whose dataset refusal is about the
+    *generalised derivative* ``r^{c;a}``. The triple sum over ``l`` here is
+    that derivative's sum-rule expansion written out rather than
+    differentiated, so what it needs is the velocity matrix element and nothing
+    beyond it -- and that is
+    :meth:`~defumat.response.velocity.VelocityOperator.
+    generalised_matrix_elements`, which carries the augmentation dipole (P99).
     """
-    from defumat.response.photocurrent import require_a_shift_current_regime
+    from defumat.response.photocurrent import require_a_velocity_sum_regime
 
     try:
-        require_a_shift_current_regime(calculation)
+        require_a_velocity_sum_regime(calculation)
     except NotImplementedError as error:
         message = str(error).replace(
             "the shift current", "second-harmonic generation"

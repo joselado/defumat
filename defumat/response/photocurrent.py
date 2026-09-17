@@ -140,6 +140,7 @@ __all__ = [
     "shift_current",
     "shift_integrand",
     "require_a_shift_current_regime",
+    "require_a_velocity_sum_regime",
 ]
 
 #: Below this energy (Ry) a pair of bands counts as degenerate and every
@@ -513,12 +514,16 @@ def shift_current(
 
 
 def require_a_shift_current_regime(calculation) -> None:
-    """Four refusals, each with the term it is missing named.
+    """The dataset refusal that is this module's own, plus the shared four.
 
-    The first three are :func:`~defumat.response.conductivity.
+    The shared ones are :func:`~defumat.response.conductivity.
     require_a_conductivity_regime`'s, because this module is the same velocity
     matrix elements one derivative further along and inherits every reason. The
-    fourth is its own.
+    dataset one is **not** shared any more and is checked here rather than in
+    :func:`require_a_velocity_sum_regime`, which is what
+    :mod:`defumat.response.shg` calls: an ultrasoft or PAW second-harmonic
+    tensor runs, because that assembly writes the generalised derivative out as
+    a sum over the intermediate state instead of differentiating it.
     """
     if calculation.is_ultrasoft or calculation.is_paw:
         raise NotImplementedError(
@@ -536,6 +541,19 @@ def require_a_shift_current_regime(calculation) -> None:
             "which nothing here builds for a bare projector. Use a "
             "norm-conserving dataset"
         )
+    require_a_velocity_sum_regime(calculation)
+
+
+def require_a_velocity_sum_regime(calculation) -> None:
+    """The four refusals a *sum over velocity matrix elements* makes.
+
+    Everything except the dataset, which is the one refusal that belongs to the
+    generalised derivative rather than to the sum -- the trap ``CLAUDE.md``
+    calls "inherit a refusal only after checking which machine it belongs to",
+    and it had already bitten here: :mod:`defumat.response.shg` wrapped the
+    whole of :func:`require_a_shift_current_regime` and so refused an augmented
+    dataset for a term it does not use.
+    """
     if getattr(calculation, "spiral", False):
         raise NotImplementedError(
             "the shift current of a spin spiral is not implemented: the two "

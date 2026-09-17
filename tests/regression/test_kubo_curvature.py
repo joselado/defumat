@@ -502,6 +502,10 @@ def test_the_augmented_connection_is_the_overlap_s_own_derivative(name, augmente
     difference = (sides[0] - sides[1]) / (2.0 * eps)
 
     residual = float(np.max(np.abs(difference - analytic)[off]))
+    # The control measures 1.698e-4 here, so this is a 15 per cent margin on a
+    # second-order difference. If it ever fails on another machine the answer is
+    # a looser tolerance, not a rerun: what the test is about is the ratio to
+    # the line below, which is 94 rather than 1.2.
     assert residual < 2.0e-4                          # the control's own floor
     if not augmented:
         return

@@ -515,10 +515,11 @@ the sphere half is an A/B with the `becsum` seeding switched off, which is not e
 should not be added as a knob for a diagnostic; here it needs the magnetic augmented cell
 this entry is already waiting for, so the two questions close together.
 
-## 2. A term that is half written, and the half that is missing is a term. ✅ DONE for two of the three.
+## 2. A term that is half written, and the half that is missing is a term. ✅ DONE for three of the four.
 
-**Closed 2026-09-17 for the Kubo Berry curvature and the optical conductivity**; the shift
-current stays, one derivative further out. `PLAN.md` P99 has the numbers.
+**Closed 2026-09-18 for the Kubo Berry curvature, the optical conductivity and
+second-harmonic generation**; the shift current stays, one derivative further out.
+`PLAN.md` P99 has the numbers.
 
 **This is the first entry in this file whose sizing survived reading the code**, and the
 reason is that the reading had already been done: P94 built the model that makes the exact
@@ -544,6 +545,20 @@ term dropped -- 94 times larger and not moving as the step shrinks.
 **Neither reference code has the augmented case**, so the row is an extension:
 `PP/src/epsilon.f90:65` refuses ultrasoft outright with the comment "dipole matrix elements
 are not trivial at all", which is this term, and Elk is all-electron.
+
+**And a fourth refusal fell out of it that this file never listed**, because neither of the
+two sweeps that built the list could see it: **second-harmonic generation**
+(`response/shg.py`) refused an augmented dataset by calling
+`require_a_shift_current_regime` whole, so the word "ultrasoft" appears nowhere in that
+module and the guard has no `if` on a dataset in it. It is the trap `CLAUDE.md` names --
+inherit a refusal only after checking which machine it belongs to -- and the machine was
+the wrong one: the shift current's dataset clause is about the *generalised derivative*
+`r^{c;a}`, and the SHG assembly replaces that derivative by its sum-rule expansion, a
+triple sum over the intermediate state. So it needs the velocity matrix element and nothing
+beyond it, and it runs with the same one-line change the conductivity took. **The lesson
+for the list**: a refusal reached through another module's guard is invisible to a scan for
+`raise`, to a scan for `is_ultrasoft`, and to the amber boxes, which had copied the
+inherited sentence.
 
 **What is left, and it is genuinely one order further out.** The shift current
 (`response/photocurrent.py:523`) needs `dK/dk_b` beside `K`, and that is built from

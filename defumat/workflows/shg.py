@@ -52,6 +52,7 @@ def run_shg(
     nw: int = 200,
     broadening: float = 0.003,
     scissor: float = 0.0,
+    becsum: tuple = (),
     degeneracy_tol: float | None = None,
     conv_thr: float = 1.0e-10,
     k_batch="default",
@@ -99,7 +100,7 @@ def run_shg(
 
     calculation, system, eigenvalues, wavefunctions = fixed_density_states(
         system, pseudos, density, nbnd=nbnd + 1,
-        conv_thr=conv_thr, k_batch=k_batch,
+        conv_thr=conv_thr, k_batch=k_batch, becsum=becsum,
     )
     eigenvalues = jnp.asarray(eigenvalues)
     if eigenvalues.ndim == 2:
@@ -111,10 +112,13 @@ def run_shg(
     eigenvalues = eigenvalues[..., :nbnd]
     wavefunctions = jnp.asarray(wavefunctions)[..., :nbnd, :]
     potential = calculation.potential(jnp.asarray(density))
+    # PAW's one-centre coefficients are built from ``becsum`` and multiply
+    # ``vkb(k)``, so they belong to ``dH/dk`` as much as to ``H``.
+    _, ddd_paw = calculation.onecenter(becsum)
 
     return second_harmonic(
         calculation, wavefunctions, eigenvalues, potential.v_scf,
         frequencies=frequencies, window=window, nw=nw, broadening=broadening,
-        scissor=scissor, degeneracy_tol=degeneracy_tol,
+        scissor=scissor, degeneracy_tol=degeneracy_tol, ddd_paw=ddd_paw,
         band_cut_gap=band_cut_gap, k_batch=k_batch,
     )

@@ -236,7 +236,8 @@ because that is what decides whether it is a session or a phase.
   plane-wave spheres, so the nonlocal term needs the projectors of both. `dE/dq` (P21) is
   what a spiral has instead.
 - **The shift current of an ultrasoft or PAW dataset** (P47, P94, P99). The Kubo Berry
-  curvature and the optical conductivity were refused with it and are not any more: P99
+  curvature, the optical conductivity and second-harmonic generation were refused with it
+  and are not any more: P99
   wrote the **augmentation dipole** `<psi_n|T^dagger d_k T|psi_m>` in matrix-element form
   (`VelocityOperator.augmentation_connection`). What this one needs beyond it is that
   term's own **k-derivative**, which is built from `<beta|psi>` and `d(beta)/dk_a` and so
@@ -6754,6 +6755,10 @@ is Part I item 2's sibling and the same measurement it asks for.
 
 
 ### P47 — The Kubo Berry curvature of a real crystal. ✅ DONE, ultrasoft/PAW refused by name.
+
+**Superseded in one place, 2026-09-18.** The refusal is gone: P99 wrote the augmentation
+dipole this phase had nowhere to put, and the Kubo curvature now runs on all three dataset
+kinds. Everything else below stands.
 
 `defumat/topology/berry.py` has carried a `kubo` curvature method since P16 and
 it has only ever been reachable from a tight-binding model. Its refusal for a
@@ -18257,7 +18262,7 @@ they were found in an afternoon.
 - The phonons, the Raman tensor and the strain response stay refused for a spinor, for
   `symmetrize_displacement`'s reason rather than this one.
 
-### P99 -- The augmentation dipole a moving overlap needs, and the two refusals it lifts. ✅ DONE for the Kubo curvature and the optical conductivity; the shift current stays refused, one derivative further out.
+### P99 -- The augmentation dipole a moving overlap needs, and the three refusals it lifts. ✅ DONE for the Kubo curvature, the optical conductivity and second-harmonic generation; the shift current stays refused, one derivative further out.
 
 **What was refused, and for once the refusal named the right term.** `AUGMENTATION-NEXT.md`
 §2 held three entries -- the Kubo Berry curvature (`topology/kubo.py`), the optical
@@ -18354,6 +18359,37 @@ row an extension rather than a reimplementation. `PP/src/epsilon.f90:65` refuses
 has no augmentation charge to have a dipole. And QE has no Kubo Berry curvature on any
 dataset.
 
+**A fourth refusal fell out of it, and no sweep could have found it.**
+`AUGMENTATION-NEXT.md` §2 listed three quantities and there were four:
+**second-harmonic generation** refused an augmented dataset too, by calling
+`require_a_shift_current_regime` whole. The word "ultrasoft" appears nowhere in
+`response/shg.py` and its guard has no `if` on a dataset in it, so neither the scan for
+`raise` nor the scan for `is_ultrasoft` could see it, and the amber box had copied the
+inherited sentence. It is the trap `CLAUDE.md` names -- inherit a refusal only after
+checking which machine it belongs to -- and the machine was the wrong one: the shift
+current's dataset clause is about the generalised derivative `r^{c;a}`, and this assembly
+*replaces* that derivative by its sum-rule expansion, the triple sum over the intermediate
+state (`shg.py`'s own docstring says so: "`second_matrix_elements` never appears"). Every
+expression in it is a sum over the true eigenstates and their energies, so the only thing
+an augmentation charge changes is which matrix element goes in. The guard is now split --
+`require_a_velocity_sum_regime` is the shared four and `require_a_shift_current_regime` is
+that plus the dataset -- and SHG took the same one-line change the conductivity did.
+
+**Its number is the A/B, and it is larger than the conductivity's for a reason.** On
+`alas-us.in`, the whole 4x4x4 grid, 24 bands: the tensor comes out **1577.3378 pm/V** at
+2.74 eV with only `xyz` and its permutations nonzero, and deleting the connection moves it
+by **40.832 pm/V**, 2.59 per cent, against 0.5 per cent in the linear conductivity -- which
+is what a quantity carrying the velocity matrix element three times rather than twice
+should do. The zincblende symmetry is *not* evidence about the term, and the test says so:
+a wrong augmentation term respects the point group exactly as a right one does.
+
+**What the symmetry is evidence for is the augmentation's own floor**, and it is three
+orders worse than the norm-conserving cell's. The six allowed components agree to
+**3.5e-6** of the peak and the largest forbidden one is **6.6e-4** of it, where
+`alas-raman.in` on the same grid gives **2.3e-9** for the first. Nothing imposes the
+symmetry on either cell, so the gap is the radial interpolation of `Q_ij(G)` and `dpqq`,
+the same order the project has measured for it elsewhere (P39a's carbon, 2.3e-4).
+
 **What is outstanding.**
 
 - The **shift current** stays refused, and its message now names what is actually missing
@@ -18363,3 +18399,11 @@ dataset.
   term inside a *zone-integrated* quantity where the answer is independently known. The
   Chern number would do it and needs a magnetic ultrasoft insulator, which no committed
   cell is.
+- **The spinor branch inherits at no cost in code and not in measurement.** The
+  fully-relativistic identity at 2.9e-16 sees `qq_so` in the index order and sees nothing
+  at all of `dpqq_so`'s sign, which cancels between `K` and `K^dagger` exactly as the
+  scalar dipole does. What pins that sign is P98's validation of `ultrasoft_position`,
+  where the `fcoef` dressing of the dipole was measured at 1.6e-6 against a 3.5e-5
+  residual -- below the floor. The finite difference is what would settle it and no
+  committed spinor cell holds the same plane-wave sphere across the step: AlAs does not,
+  and it is the only relativistic insulator here.
