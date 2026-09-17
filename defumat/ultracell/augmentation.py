@@ -639,10 +639,18 @@ def _blocks_like(table, values, dtype) -> tuple:
     would decide it. ``cross_integrals`` solves this by returning complex zeros
     of the right shape and this does the same, which is why the two can be
     added before either is assembled.
+
+    **The block size comes from ``nh_species`` and not from ``qgm``**, because
+    a table over the byte budget is a
+    :class:`~defumat.pseudo.augmentation.TabulatedAugmentation`, which never
+    materialises ``Q_ij(G)`` and carries ``qgm = ()``. Iterating that gave no
+    blocks at all, and the failure was an ``IndexError`` on ``blocks[0]`` one
+    layer down, after a converged SCF -- the budget here is ``max_bytes / N``,
+    so an ultracell falls to the tabulated route ``N`` times sooner than the
+    unit cell does and this is the path a real slab takes.
     """
     out = []
-    for t, (q, atoms) in enumerate(zip(table.qgm, table.species_atoms)):
-        nh = int(q.shape[0])
+    for t, (nh, atoms) in enumerate(zip(table.nh_species, table.species_atoms)):
         entry = None if values is None else values[t]
         if entry is None or nh == 0 or not atoms:
             out.append(jnp.zeros((len(atoms), nh, nh), dtype=dtype))

@@ -4337,8 +4337,11 @@ true one and the norm is short by 3 to 9 per cent. On a dense bulk crystal that
 leaves nowhere to put a tip at all --- SiC's radius is 2.4 bohr and its layers
 are closer together than that --- which is the right answer rather than an
 obstacle: a tip sits above a \emph{surface}, in vacuum, where a pseudo-wavefunction
-is the true one. An ultracell is exempt from
-both: it requires \code{nosym} and refuses ultrasoft and PAW already.
+is the true one. An ultracell is exempt from the
+\emph{first} of these, requiring \code{nosym} already, and takes the second:
+its image, its spectrum and its transmission all ask the guard on the unit
+cell's own coordinates, every copy of the ultracell holding the same atoms at
+the same heights.
 Also refused: \code{bias} together with an energy axis, since the window is the
 integral the axis already carries and \code{current} is it; and a
 constant-current spectrum, where the tip moves as the bias is swept, which is a
@@ -5324,11 +5327,13 @@ quantity neither code computes.
 Gradient-corrected functionals: the gradient of the
 ultracell density carries the envelope's own gradient, which a per-cell
 evaluation drops (Elk takes that approximation silently; it is refused here).
-The tunnelling \emph{transmission} of an ultracell on an augmented dataset
-(\code{run\_ultracell\_transport}), whose exit-plane Gram matrix needs the
-overlap operator $S$ --- where the image and the spectrum do run on one, because
-a tip sits in the vacuum and sees the smooth states exactly, and both refuse a
-tip inside an augmentation sphere as the unit cell's own versions do.
+The \emph{whole-cell} exit region of a transmission
+(\code{run\_ultracell\_transport(exit\_region="volume")}) on an augmented
+dataset, which is the one Gram matrix that is $\langle\psi|S|\psi\rangle$ ---
+the transmission itself runs, as do the image and the spectrum, because all
+three sample the state in the \emph{vacuum}, where a pseudo-wavefunction is the
+true one, and all three refuse a plane inside an augmentation sphere as the unit
+cell's own versions do.
 Meta-GGA. An applied \code{magnetic\_field} on a noncollinear cell that
 \textbf{carries no magnetization} --- a spin-orbit run on a nonmagnetic
 crystal, where the density and the potential have one component apiece and a
@@ -5463,10 +5468,54 @@ truncation to \code{nbnd} bands per folded k-point": 22.2, 5.2 and 2.0 per cent
 at \code{nbnd} $= 12$, 24 and 48 on a two-cell silicon ultracell, where the
 induced corrugation is itself 0.6 per cent of the image. Widening the exit
 region of the transmission to the whole ultracell must give the image back
-exactly, with no factor between them, and does so to $10^{-11}$; that identity
-is what holds the two normalisations against each other, since the image carries
-its $N$ in the weights and the transmission carries it in the volume the states
-are normalised over.
+exactly, with no factor between them, and on a norm-conserving dataset does so
+to $10^{-11}$; that identity is what holds the two normalisations against each
+other, since the image carries its $N$ in the weights and the transmission
+carries it in the volume the states are normalised over.
+
+\textbf{An ultrasoft or PAW dataset needs nothing extra, and where the planes
+are is the reason.} A tip point and an exit plane both sit in the vacuum, where
+the augmentation charge is zero and a pseudo-wavefunction is the true one, so the
+sampled amplitude and the plane's Gram matrix are exact as they stand --- which
+is the same argument a unit-cell junction rests on, and it has always run on such
+a dataset. The exception is the \emph{whole-cell} exit region: there the Gram
+matrix is $\langle\Psi|S|\Psi\rangle$ rather than an integral over a plane, and
+$S$ for an ultracell state spans $N$ unit-cell spheres with their own projectors,
+so \code{exit\_region = "volume"} is refused by name. It is refused rather than
+returned, and on purpose: the frozen basis is exactly $S$-orthonormal across
+$\mathbf Q$, so that Gram matrix \emph{is} the identity by construction, and
+handing the assembly the identity would make the diagnostic agree without looking
+at the coefficients it exists to check.
+
+\textbf{What such a run needs is a cell with vacuum in it, which a bulk crystal
+is not.} Silicon's PAW dataset reaches 2.647~bohr where the interplanar spacing
+along the stacking axis is 5.889~bohr with an atom every quarter of it, so the
+widest clearance any plane can have is 2.208~bohr and the guard refuses every
+height --- correctly, since a substrate and a tip belong either side of a
+\emph{sheet}. On the square silicon sheet committed as
+\code{ultracell-sheet-paw.in}, with the two planes at 0.15 and 0.85 and the atom
+at 0.5, the unmodulated two-cell ultracell reproduces the unit cell's map tiled
+to $6.2\times10^{-7}$ (ultrasoft) and $9.7\times10^{-7}$ (PAW) of the peak, and
+under a $0.05\cos(\pi x_1)$~Ry modulation the map converges to a real two-cell
+supercell's own transmission: $1.09\times10^{-2}$ at \code{nbnd = 12} and
+$1.96\times10^{-3}$ at 24. The modulated rung is the one that discriminates,
+because an unmodulated folded state is a single basis function whose
+normalisation is the unit cell's, while a state that mixes $\mathbf Q$ makes
+$\sum_{\mathbf Q}|a_{\mathbf Q}|^2 = 1$ the $S$-orthonormality claim itself.
+
+\begin{pycode}
+from defumat import Calculator
+
+cal = Calculator.from_file("ultracell-sheet-paw.in")   # a PAW sheet in vacuum
+
+cal.get_ultracell(supercell=(2, 1, 1), kgrid=(2, 4, 1), nbnd=12)
+
+t = cal.get_ultracell_transport(exit_height=0.15, height=0.85, axis=2,
+                                shape=(12, 4), broadening=0.05)
+print(t.values.shape)            # (12, 4): the map spans both cells
+print(float(t.values.max()))     # 4.1856e-05, in the transmission's own units
+print(t.notes["hermiticity"])    # 0.0 -- the Gram matrices, not imposed
+\end{pycode}
 
 \textbf{Sampling the plane is exact and its set is the ultracell's own dense
 sphere}, $|\mathbf G + \mathbf Q|^2 \le \code{ecutrho}$, rather than Elk's
@@ -5492,7 +5541,10 @@ way \code{grid} re-solves the bands for a unit-cell image: on an ultracell that
 is not post-processing but another run of the whole loop, so it is asked for
 with \code{kgrid} in \code{get\_ultracell} instead. And a constrained
 \code{tot\_magnetization}, whose two channels have their own Fermi levels where
-a tip sees one energy. An applied \code{magnetic\_field} is \textbf{not} refused
+a tip sees one energy. On an ultrasoft or PAW dataset: a plane inside an
+\textbf{augmentation sphere}, which the guard reports the distance for, and the
+transmission's \textbf{whole-cell} exit region, for the reason given above ---
+the transmission itself, the image and the spectrum all run. An applied \code{magnetic\_field} is \textbf{not} refused
 here, where a unit-cell image refuses it: there the field is something the
 ground state was converged under and the reported total does not carry, while
 here it is the modulation's own driver and the eigenvalues the tip energy is

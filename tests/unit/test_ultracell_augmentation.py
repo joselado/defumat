@@ -3,7 +3,10 @@
 Three tables and one pair of transforms, all of them host-side integer or FFT
 arithmetic and none of them needing a calculation -- so they are checked here,
 in the gate, rather than only through the supercell comparison that would
-notice them eventually and would not say which one had moved.
+notice them eventually and would not say which one had moved. The last section
+is the same kind of thing one layer out: which *storage scheme* the displaced
+tables were built with, which is a question about their shape metadata and
+needs a dataset but no self-consistency.
 
 The pair of transforms is the one worth having a test of its own, and the
 first thing to say about it is what it is *not*. ``becsum`` lives on the
@@ -16,6 +19,8 @@ below; getting a direction wrong there is a modulation running backwards
 through the ultracell, a plausible answer rather than an error.
 """
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -23,9 +28,14 @@ import jax.numpy as jnp
 
 from defumat.ultracell.augmentation import (
     becsum_per_copy,
+    build_ultracell_augmentation,
     coefficients_per_difference,
+    onecentre_deeq,
 )
 from defumat.ultracell.grid import Ultracell
+
+CASES = Path(__file__).resolve().parents[1] / "data" / "qe"
+PSEUDO = Path(__file__).resolve().parents[1] / "data" / "pseudo"
 
 SHAPES = [(1, 1, 1), (2, 1, 1), (4, 1, 1), (2, 3, 1), (2, 2, 2)]
 
@@ -195,3 +205,76 @@ def test_two_cells_along_an_axis_cannot_see_the_sign(shape, symmetric):
     triples = np.asarray(ultracell.q_triples)
     sums = np.asarray(ultracell.q_index(triples[:, None, :] + triples[None, :, :]))
     assert np.array_equal(sums, sums.T)
+
+
+# -- the table the budget falls back to --------------------------------------
+
+
+def _paw_ultracell(shape, budget, monkeypatch):
+    """The displaced tables of a PAW silicon ultracell, under one byte budget.
+
+    No SCF: everything below is about the tables' shape metadata, and a
+    :class:`~defumat.scf.driver.Calculation` built from the input alone already
+    carries the dense G set, the atoms and the projector channels they need.
+    """
+    from defumat.io.pwin import read_pw_input
+    from defumat.pseudo import read_upf
+    from defumat.scf.driver import Calculation
+    from defumat.system.builder import build_system
+
+    system = build_system(read_pw_input(CASES / "si-ultracell-paw.in"))
+    pseudos = tuple(
+        read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species
+    )
+    calculation = Calculation(system, pseudos)
+    ultracell = Ultracell.build(shape, tuple(calculation.basis.dense.grid))
+    monkeypatch.setenv("DEFUMAT_AUG_MAX_BYTES", budget)
+    return build_ultracell_augmentation(calculation, ultracell, system.cell)
+
+
+def test_the_one_centre_matrix_is_the_same_through_either_storage_scheme(
+        monkeypatch):
+    """A tabulated table has no ``Q_ij(G)``, and the block sizes come from it.
+
+    The budget the displaced tables are built against is ``max_bytes / N``, so
+    an ultracell falls to
+    :class:`~defumat.pseudo.augmentation.TabulatedAugmentation` ``N`` times
+    sooner than the unit cell does -- and that table never materialises
+    ``Q_ij(G)``. Asking it for ``qgm`` gave an empty tuple, so the per-species
+    blocks came out empty and PAW's one-centre assembly died on
+    ``blocks[0].dtype``, an ``IndexError`` two layers down and after a whole
+    converged SCF (the bug this test is for).
+
+    What it asserts is stronger than agreement: the two are **bit-identical**,
+    because ``onecentre_deeq`` reads only how large each species' block is and
+    where it sits, and no storage scheme changes either. Interpolation error
+    enters where a table's *values* are read, which is the SCF above this and
+    is measured in ``tests/regression/test_ultracell_augmented.py``.
+    """
+    shape = (2, 1, 1)
+    stored = _paw_ultracell(shape, "off", monkeypatch)
+    tabulated = _paw_ultracell(shape, "0", monkeypatch)
+    from defumat.pseudo.augmentation import TabulatedAugmentation
+
+    assert not isinstance(stored.tables[0], TabulatedAugmentation)
+    assert isinstance(tabulated.tables[0], TabulatedAugmentation)
+    # The question the assembly asks, and the one answer both have to give.
+    assert stored.tables[0].nh_species == tabulated.tables[0].nh_species
+    assert stored.nkb == tabulated.nkb
+
+    cells = int(np.prod(shape))
+    nspin, nat = 1, 2
+    nh = stored.tables[0].nh_species[0]
+    rng = np.random.default_rng(0)
+    values = rng.normal(size=(cells, nspin, nat, nh, nh))
+    values = jnp.asarray(0.5 * (values + values.transpose(0, 1, 2, 4, 3)))
+    reference = rng.normal(size=(nspin, nat, nh, nh))
+    reference = jnp.asarray(0.5 * (reference + reference.transpose(0, 1, 3, 2)))
+
+    matrices = [
+        np.asarray(onecentre_deeq((values,), (reference,), table, nspin))
+        for table in (stored, tabulated)
+    ]
+    assert matrices[0].shape == (nspin, cells, stored.nkb, stored.nkb)
+    assert np.abs(matrices[0]).max() > 0.0
+    assert np.array_equal(matrices[0], matrices[1])

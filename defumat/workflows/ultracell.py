@@ -298,7 +298,10 @@ def run_ultracell_transport(
         exit_region: ``"plane"``, the substrate, or ``"volume"``, which widens
             the exit region to the whole ultracell and must then reproduce
             :func:`run_ultracell_stm` exactly -- the Tersoff-Hamann limit, and
-            the check that the two normalisations agree.
+            the check that the two normalisations agree. The diagnostic is the
+            one part of this that an **ultrasoft or PAW** dataset is refused
+            for, because the whole cell's Gram matrix is ``<psi|S|psi>`` where
+            the plane's is not; the transmission itself runs.
         k_batch: how many ``k0`` points' amplitudes are held at once. It bounds
             a **host** array, ``(npol, k_batch, N nbnd, npoints)`` with another
             of the same size beside it inside the contraction, and an ultracell
@@ -319,14 +322,29 @@ def run_ultracell_transport(
         axis = exit_axis
     _check_bias_axis(bias, nenergies, broadening)
     _refuse_what_has_no_tip_energy(system, result)
-    _refuse_an_augmented_ultracell_transmission(pseudos)
+    _refuse_an_augmented_volume_diagnostic(pseudos, exit_region)
     _refuse_a_stacked_ultracell(states, exit_axis)
     _refuse_a_k_set_this_cannot_sum(states, exit_axis)
+    # **Both planes have to clear the augmentation spheres**, which is the one
+    # thing an augmented dataset does need here and is the unit cell's own
+    # guard, asked on the unit cell's coordinates: the ultracell is one cell
+    # deep along the stacking axis, so a crystal coordinate along it is the
+    # same number in both, and every copy holds the same atoms at the same
+    # heights. It comes after ``_refuse_a_stacked_ultracell``, which is what
+    # makes that sentence true.
+    _refuse_an_augmented_plane(system, pseudos, exit_axis,
+                               (float(exit_height),),
+                               "an ultracell transmission's exit plane")
 
     ultracell = states.ultracell
     scale = np.asarray(ultracell.shape, dtype=float)
     geometry, points = _tip_points(system.cell, height, axis, plane, shape, tip,
                                    span=ultracell.shape)
+    _refuse_an_augmented_plane(
+        system, pseudos, axis,
+        np.unique(np.round(np.asarray(points)[:, axis]
+                           / float(ultracell.shape[axis]), 10)),
+        "an ultracell transmission's tip")
     _warn_if_the_slab_is_not_between(system, exit_axis, exit_height, points, axis)
 
     levels = _levels(system, result, states)
@@ -484,38 +502,61 @@ def run_ultracell_sts(
     )
 
 
-def _refuse_an_augmented_ultracell_transmission(pseudos) -> None:
-    """A transmission needs ``S`` and an ultracell state has no ``S`` written.
+def _refuse_an_augmented_volume_diagnostic(pseudos, exit_region: str) -> None:
+    """``S`` over the whole ultracell, which only the diagnostic asks for.
 
-    The image and the spectrum run on an augmented dataset because a tip in
-    vacuum sees the smooth states and nothing else, and both refuse a tip
-    inside a sphere. A transmission is different: its exit-plane Gram matrix is
-    built from the whole state and the unit cell's own route hands the assembly
-    an overlap operator for it (``workflows/transport.py``'s
-    ``calculation._overlap``). An ultracell state spans ``N`` unit-cell spheres
-    with a different projector set on each, so that operator is a piece of work
-    rather than a call, and it is not written -- which is a refusal rather than
-    an approximation, because the identity it would otherwise use is wrong by
-    the augmentation charge on every atom the plane sees.
+    **The plane needs no ``S`` and that is where the wider refusal was wrong.**
+    What stood here refused an augmented dataset outright, on the reading that
+    an exit-plane Gram matrix is built from the whole state and that the unit
+    cell's route hands the assembly ``calculation._overlap`` for it. Neither
+    half holds. ``_assemble`` passes that operator to
+    :func:`~defumat.transport.substrate.volume_overlap` alone; the plane goes
+    through :func:`~defumat.transport.substrate.exit_overlap`, which collapses
+    the sphere onto its shadow on the surface reciprocal lattice at one height
+    in the **vacuum**, where a pseudo-wavefunction is the true one and the
+    augmentation charge is zero. It is the same argument that lets the image
+    and the spectrum run, and the guard that goes with it is the same one --
+    :func:`~defumat.workflows.transport._refuse_an_augmented_plane`, asked here
+    of the exit plane as well as of the tip.
+
+    So what is left to refuse is ``exit_region = "volume"``, the Tersoff-Hamann
+    diagnostic, which widens the exit region to the whole cell and therefore
+    does want ``<psi|S|psi>``. Two things are true of it and only the second is
+    a reason to refuse: ``S`` in an ultracell state's *plane-wave*
+    representation is a piece of work, because the state spans ``N`` unit-cell
+    spheres with their own projectors; and the answer is known without it, since
+    the frozen basis is exactly ``S``-orthonormal across ``Q``
+    (:mod:`defumat.ultracell.augmentation`), so the Gram matrix is the identity
+    by construction. Handing the assembly that identity would make the
+    diagnostic pass without looking at anything -- where the norm-conserving
+    one builds it from the coefficients and so checks the reconstruction on the
+    way -- which is a check whose null result cannot be told from a pass. The
+    plain ``sum_G c* c`` is the other option and is short by the augmentation
+    charge, 3 to 9 per cent on the cells ``volume_overlap`` measured it on.
     """
+    if exit_region != "volume":
+        return
     if any(p.is_ultrasoft or p.is_paw for p in pseudos):
         raise NotImplementedError(
-            "an ultracell tunnelling transmission refuses an ultrasoft or PAW "
-            "dataset: the exit-plane Gram matrix needs the overlap operator S, "
-            "which for an ultracell state spans N unit-cell spheres with their "
-            "own projectors and is not written. The image and the spectrum "
-            "(run_ultracell_stm, run_ultracell_sts) do run on such a dataset, "
-            "because a tip in vacuum sees the smooth states exactly"
+            "exit_region='volume' refuses an ultrasoft or PAW dataset: the "
+            "whole-cell Gram matrix is <psi|S|psi>, and S in an ultracell "
+            "state's plane-wave representation spans N unit-cell spheres with "
+            "their own projectors and is not written. The transmission itself "
+            "(exit_region='plane') runs on such a dataset, because both planes "
+            "are in the vacuum where a pseudo-wavefunction is the true one"
         )
 
 
 def _ultracell_geometry(states) -> TransportGeometry:
     """Where an ultracell's bands live, as the transmission's own bundle.
 
-    The overlap is ``None`` rather than a function, and that is exact *here*:
-    :func:`_refuse_an_augmented_ultracell_transmission` has already refused the
-    only datasets for which ``S`` is not the identity, so ``sum_G c* c`` is
-    orthonormality itself. The peak here is the stacked Miller
+    The overlap is ``None`` rather than a function, and for the plane that is
+    exact on any dataset: ``exit_overlap`` integrates over one height in the
+    vacuum, where the augmentation charge is zero and a pseudo-wavefunction is
+    the true one, so nothing between it and the answer wants ``S``. What does
+    want it is ``exit_region = "volume"``, and
+    :func:`_refuse_an_augmented_volume_diagnostic` refuses exactly that
+    combination and no more. The peak here is the stacked Miller
     indices, ``nk0 x N npwx x 3`` integers, which is small beside the one
     ``k0`` block :meth:`~defumat.ultracell.states.UltracellStates.block` builds
     inside the loop.

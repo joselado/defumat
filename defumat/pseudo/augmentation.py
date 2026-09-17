@@ -115,6 +115,19 @@ class AugmentationCharge(eqx.Module):
     def ntyp(self) -> int:
         return len(self.qgm)
 
+    @property
+    def nh_species(self) -> tuple:
+        """``nh_t`` per species: the block size of ``Q_ij`` and of ``D_ij``.
+
+        Zero for a norm-conserving species, which carries no augmentation
+        charge and therefore no block. It is a property rather than a field
+        because :class:`TabulatedAugmentation` never materialises ``qgm`` and
+        has to answer the same question off its radial tables -- a caller that
+        needs only the *shape* of a species' block must not have to know which
+        of the two it is holding.
+        """
+        return tuple(int(q.shape[0]) for q in self.qgm)
+
     def charge(self, becsum: tuple) -> jnp.ndarray:
         """``rho_aug(G)`` on the dense grid, from the per-atom ``becsum``.
 
@@ -563,6 +576,14 @@ class TabulatedAugmentation(AugmentationCharge):
     def ntyp(self) -> int:
         return len(self.tables)
 
+    @property
+    def nh_species(self) -> tuple:
+        """As the base class, read off ``beta_of`` instead of off ``qgm``."""
+        return tuple(
+            0 if table is None else int(betas.shape[0])
+            for table, betas in zip(self.tables, self.beta_of)
+        )
+
     def _builder(self, t: int):
         """``Q_ij(G)`` for species ``t``, as a function of a block of G."""
         table, coefficients = self.tables[t], self.coefficients[t]
@@ -594,7 +615,7 @@ class TabulatedAugmentation(AugmentationCharge):
         padded = jnp.pad(potential_g, (0, self.mask.shape[0] - self.ngm))
         result = []
         for t, atoms in enumerate(self.species_atoms):
-            nh = 0 if self.tables[t] is None else self.beta_of[t].shape[0]
+            nh = self.nh_species[t]
             if self.tables[t] is None or not atoms:
                 result.append(
                     jnp.zeros((len(atoms), nh, nh), dtype=self.phases.real.dtype)
@@ -613,7 +634,7 @@ class TabulatedAugmentation(AugmentationCharge):
         padded = jnp.pad(potential_g, (0, self.mask.shape[0] - self.ngm))
         result = []
         for t, atoms in enumerate(self.species_atoms):
-            nh = 0 if self.tables[t] is None else self.beta_of[t].shape[0]
+            nh = self.nh_species[t]
             if self.tables[t] is None or not atoms:
                 result.append(
                     jnp.zeros((len(atoms), nh, nh), dtype=self.phases.dtype)

@@ -22,6 +22,18 @@ supercell's, which the variational argument forbids. One rung alone would not
 have caught it, since at ``nbnd = 12`` the wrong sign sits nearer the supercell
 than the right one.
 
+**The transmission is here too, and it is a refusal that dissolved rather than a
+term that was written.** ``run_ultracell_transport`` refused an augmented
+dataset outright, on the reading that an exit-plane Gram matrix needs the
+overlap operator ``S``. It does not: the plane sits in the vacuum, where a
+pseudo-wavefunction is the true one, and the unit cell hands ``S`` to the
+*whole-cell* diagnostic alone. So the checks the norm-conserving file makes of
+that quantity are made here on a dataset that carries charge inside the
+spheres, on a sheet in vacuum rather than on bulk silicon -- because with an
+augmentation sphere of 2.6 bohr against silicon's 5.9 bohr interplanar spacing
+there is no height in that cell a tip may legally sit at, which the guard says
+by name.
+
 This is a separate file from ``test_ultracell.py`` rather than a section of it,
 and the reason is the runner: ``tools/run_regression.sh`` invokes pytest once
 per file, so a file boundary there is a *process* boundary, and these two
@@ -41,6 +53,8 @@ from defumat import Calculator
 from defumat.basis.builder import build_basis
 from defumat.scf.driver import Calculation, run_scf
 from defumat.ultracell import run_ultracell, with_external_potential
+from defumat.workflows.transport import run_vertical_transport
+from defumat.workflows.ultracell import run_ultracell_transport
 
 pytestmark = pytest.mark.regression
 
@@ -90,6 +104,10 @@ ATOMIC_POSITIONS alat
 K_POINTS automatic
  {k0} {k1} {k2} 0 0 0
 """
+
+
+#: The committed inputs, for the one cell that is read rather than written.
+CASES = Path(__file__).resolve().parents[1] / "data" / "qe"
 
 
 @pytest.fixture
@@ -634,3 +652,261 @@ def test_a_uniform_field_on_an_augmented_ultracell_is_the_unit_cells_own(
 
     assert errors == sorted(errors, reverse=True), errors
     assert errors[-1] < 1.5e-3
+
+
+# -- the budget that falls back to QE's radial table -------------------------
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("regime", ["collinear", "spinor"])
+def test_an_augmented_ultracell_runs_through_the_radial_table(
+        regime, tmp_path, pseudo_dir, monkeypatch):
+    """The displaced tables are ``N`` of them, so the budget is ``max_bytes / N``.
+
+    An ultracell therefore falls to
+    :class:`~defumat.pseudo.augmentation.TabulatedAugmentation` ``N`` times
+    sooner than the unit cell does, and on a real slab it is the route that is
+    taken rather than an option: the 45-atom NiBr2 cell this was reported from
+    needs 1.7 GiB per table against a 683 MiB share of the default budget.
+    PAW's one-centre assembly read the block sizes off ``Q_ij(G)``, which that
+    table does not have, and died on an ``IndexError`` after a converged SCF.
+
+    Measured here, with the modulation applied so that every Q-difference
+    carries weight: through the table against off it, the total is 3.90e-10 Ry
+    apart collinear and 3.94e-10 spinor, both in ten iterations either way, and
+    the induced density agrees to 3.5e-10 of its own maximum collinear and
+    2.8e-9 spinor. **That 3.9e-10 is the radial interpolation and not the
+    ultracell**, which is asserted rather than said: the unit cell's own SCF
+    moves by the same amount between the two routes, so the ``N`` displaced
+    tables add nothing to it.
+    """
+    modulation = _modulation((2, 1, 1))
+    energies, iterations, induced, seeds = [], [], [], []
+    for budget in ("off", "0"):
+        monkeypatch.setenv("DEFUMAT_AUG_MAX_BYTES", budget)
+        if regime == "collinear":
+            calculator = _silicon(tmp_path, pseudo_dir, "paw", (2, 2, 1))
+            scf = calculator.get_scf(conv_thr=1e-12)
+            kgrid = (1, 2, 1)
+            kwargs = dict(nbnd=12, conv_thr=1e-10, states_conv_thr=1e-10)
+        else:
+            calculator = _spinor(tmp_path, pseudo_dir, "paw")
+            scf = calculator.get_scf(conv_thr=1e-11, nbnd=24)
+            kgrid = (1, 2, 2)
+            kwargs = dict(nbnd=32, conv_thr=1e-11, states_conv_thr=1e-11,
+                          max_iterations=60)
+        assert scf.converged
+        seeds.append(float(scf.total_energy))
+        result = run_ultracell(
+            calculator.system, calculator.pseudos, scf, (2, 1, 1), kgrid,
+            external=modulation, **kwargs,
+        )
+        assert result.converged
+        energies.append(float(result.total_energy))
+        iterations.append(len(result.history))
+        tiled = np.asarray(result.ultracell.tile(np.asarray(scf.density)))
+        induced.append(np.asarray(result.density) - tiled)
+
+    assert iterations[0] == iterations[1]
+    assert abs(energies[0] - energies[1]) < 1.0e-8
+    scale = np.abs(induced[0]).max()
+    assert scale > 1.0e-4  # the modulation is what makes the check discriminate
+    assert np.abs(induced[0] - induced[1]).max() < 1.0e-8 * scale
+    # The whole difference is the frozen states', carried in from the unit
+    # cell's own SCF: the displaced tables add nothing to it.
+    assert abs((energies[0] - energies[1]) - (seeds[0] - seeds[1])) < 1.0e-11
+
+
+# -- the transmission, which was refused for the wrong reason -----------------
+
+#: Where the two planes go, and how wide the map is. One k-division along the
+#: stacking axis is the quantity's own requirement rather than an economy.
+SHEET_PLANES = dict(exit_height=0.15, exit_axis=2, height=0.85, axis=2,
+                    broadening=0.05)
+
+
+def _sheet(tmp_path, pseudo_dir, dataset) -> Calculator:
+    """The committed silicon sheet, whose dataset is swapped for the other one.
+
+    A tunnelling geometry needs vacuum and bulk silicon has none: with an
+    augmentation sphere of 2.6 bohr against a 5.9 bohr interplanar spacing and
+    an atom every quarter of it, no height in that cell clears the spheres and
+    the guard refuses every one of them. The cell is committed rather than
+    written from a template here because ``docs/features.tex`` runs a snippet
+    on it, and two copies of one cell drift.
+    """
+    text = (CASES / "ultracell-sheet-paw.in").read_text()
+    if dataset != "paw":
+        text = text.replace(DATASETS["paw"], DATASETS[dataset])
+    path = tmp_path / f"sheet-{dataset}.in"
+    path.write_text(text)
+    return Calculator.from_file(path, pseudo_dir=pseudo_dir)
+
+
+def _sheet_supercell(tmp_path, pseudo_dir, calculator, dataset, shape,
+                     kgrid) -> Calculator:
+    """The sheet as a real ``shape`` supercell, atoms and all.
+
+    :func:`_supercell`'s twin for this cell: ``a^s_i = n_i a_i`` exactly, so a
+    plane spanning one supercell is the plane spanning ``n_i`` unit cells point
+    for point and the two maps are compared without interpolating either.
+    """
+    cell = calculator.system.cell
+    vectors = np.asarray(cell.at_alat) * np.asarray(shape)[:, None]
+    tau = np.asarray(calculator.system.structure.positions_alat(cell))
+    shifts = np.stack(
+        np.meshgrid(*[np.arange(n) for n in shape], indexing="ij"), axis=-1
+    ).reshape(-1, 3)
+    positions = np.concatenate(
+        [tau + shift @ np.asarray(cell.at_alat) for shift in shifts]
+    )
+    rows = "\n".join(f" {v[0]:.12f} {v[1]:.12f} {v[2]:.12f}" for v in vectors)
+    atoms = "\n".join(f" Si {p[0]:.12f} {p[1]:.12f} {p[2]:.12f}" for p in positions)
+    path = tmp_path / f"sheet-{dataset}-supercell.in"
+    path.write_text(f"""&control
+ calculation='scf'
+/
+&system
+ ibrav=0, celldm(1)={float(cell.alat):.10f}, nat={len(positions)}, ntyp=1,
+ ecutwfc={float(calculator.system.ecutwfc):.1f},
+ ecutrho={float(calculator.system.ecutrho):.1f},
+ nosym=.true., noinv=.true.,
+ occupations='smearing', smearing='gaussian', degauss=0.05
+/
+&electrons
+ conv_thr=1.0d-11
+/
+CELL_PARAMETERS alat
+{rows}
+ATOMIC_SPECIES
+ Si 28.086 {DATASETS[dataset]}
+ATOMIC_POSITIONS alat
+{atoms}
+K_POINTS automatic
+ {kgrid[0]} {kgrid[1]} {kgrid[2]} 0 0 0
+""")
+    return Calculator.from_file(path, pseudo_dir=pseudo_dir)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("dataset", list(DATASETS))
+def test_the_augmented_exit_plane_transmission_is_the_unit_cell_s_tiled(
+        dataset, tmp_path, pseudo_dir):
+    """The plane needs no ``S``, and this is the null that says the wiring runs.
+
+    With nothing applied the ultracell states are the folded unit-cell states,
+    and two of them at different ``Q`` carry different lateral momentum, so the
+    exit integral cannot mix them: the map comes back as the unit cell's,
+    tiled. Measured 6.2e-7 ultrasoft and 9.7e-7 PAW relative. The floor is 1e-5
+    and it is the resolvent rather than either threshold -- the two sides
+    diagonalise the same Hamiltonian in two different bases, so their levels
+    disagree slightly and ``1/(E - e + i eta)`` carries that into the map, which
+    is measured as a function of ``eta`` on the norm-conserving cell in
+    ``test_ultracell_stm.py`` rather than again here.
+
+    **What it cannot see is whether ``S`` was needed**, because a folded state
+    is one basis function and its normalisation is the unit cell's. The rung
+    that can is the supercell comparison below, where the state mixes ``Q`` and
+    ``sum_Q |c_Q|^2 = 1`` becomes the claim that the frozen basis is
+    ``S``-orthonormal across ``Q``.
+
+    The two refusals are asserted here rather than in a section of their own,
+    because both need a converged ultracell and this test has one in hand.
+    """
+    shape, kgrid = (2, 1, 1), (2, 4, 1)
+    calculator = _sheet(tmp_path, pseudo_dir, dataset)
+    scf = calculator.get_scf()
+    assert scf.converged
+    geometry = dict(energies=float(scf.fermi_energy), **SHEET_PLANES)
+
+    plain = run_vertical_transport(calculator.system, calculator.pseudos, scf,
+                                   shape=(6, 4), **geometry)
+    result = run_ultracell(calculator.system, calculator.pseudos, scf, shape,
+                           kgrid, nbnd=12, conv_thr=1e-10,
+                           states_conv_thr=1e-12)
+    assert result.converged
+    ours = run_ultracell_transport(calculator.system, calculator.pseudos,
+                                   result, shape=(12, 4), **geometry)
+
+    tiled = np.concatenate([np.asarray(plain.values)] * shape[0], axis=0)
+    assert tiled.max() > 0.0
+    assert np.abs(np.asarray(ours.values) - tiled).max() / tiled.max() < 1.0e-5
+    # What the unit cell's own augmented test asserts of its Gram matrices, on
+    # the ultracell's: Hermitian and positive semi-definite, neither imposed.
+    assert ours.notes["hermiticity"] < 1.0e-13
+    assert ours.least_eigenvalue > -1.0e-12
+
+    # **The whole-cell diagnostic is the one thing still refused**, because it
+    # is the one Gram matrix that is <psi|S|psi>. Widening the exit region to
+    # the cell puts both planes inside the spheres by construction, so this is
+    # the refusal by name rather than the guard below.
+    with pytest.raises(NotImplementedError, match="whole-cell Gram matrix"):
+        run_ultracell_transport(calculator.system, calculator.pseudos, result,
+                                shape=(4, 4), exit_region="volume", **geometry)
+
+    # And the guard that replaces the old dataset refusal fires: a plane at the
+    # atom is inside the augmentation sphere, where the smooth state is not the
+    # true one. Tested rather than trusted -- it is a refusal that has to be
+    # *reached* through two new call sites.
+    for moved in (dict(exit_height=0.5), dict(height=0.5)):
+        with pytest.raises(NotImplementedError, match="augmentation sphere"):
+            run_ultracell_transport(
+                calculator.system, calculator.pseudos, result, shape=(4, 4),
+                **{**geometry, **moved})
+
+
+@pytest.mark.slow
+def test_the_augmented_transmission_converges_to_the_supercell(
+        tmp_path, pseudo_dir):
+    """The rung that discriminates: a state that genuinely mixes ``Q``.
+
+    The image's ladder one quantity along, on a dataset that carries charge
+    inside the spheres. What is open here and nowhere else is the
+    ``S``-orthonormality of the frozen basis: an ultracell state is
+    ``sum_Q c_Q psi_Q`` normalised as ``sum_Q |c_Q|^2 = 1``, which is the true
+    normalisation only because the augmentation part of
+    ``<psi_Q|S|psi_Q'>`` carries ``sum_R e^{i(Q'-Q).R}`` and vanishes off the
+    diagonal. A transmission is a quadratic form in that state, so an overlap
+    short by the augmentation charge would show here as a map that is off by a
+    few per cent and does not converge to the supercell's.
+
+    Measured against a real two-cell supercell's own transmission, PAW:
+    1.09e-2 at ``nbnd = 12`` falling to 1.96e-3 at 24. The ultrasoft dataset is
+    not run here, because the one-centre terms PAW adds are a superset of it and
+    the rung above covers both.
+    """
+    shape, kgrid = (2, 1, 1), (2, 4, 1)
+    calculator = _sheet(tmp_path, pseudo_dir, "paw")
+    scf = calculator.get_scf()
+    assert scf.converged
+    geometry = dict(energies=float(scf.fermi_energy), shape=(12, 4),
+                    **SHEET_PLANES)
+
+    supercell = _sheet_supercell(tmp_path, pseudo_dir, calculator, "paw",
+                                 shape, kgrid)
+    grid = build_basis(supercell.system).dense.grid
+    coordinates = np.stack(
+        np.meshgrid(*[np.arange(m) / m for m in grid], indexing="ij"), axis=-1)
+    calculation = with_external_potential(
+        Calculation(supercell.system, supercell.pseudos),
+        jnp.asarray(AMPLITUDE * np.cos(2 * np.pi * coordinates[..., 0])))
+    exact = run_scf(supercell.system, supercell.pseudos,
+                    calculation=calculation, conv_thr=1e-11, nbnd=16)
+    assert exact.converged
+    reference = np.asarray(run_vertical_transport(
+        supercell.system, supercell.pseudos, exact, **geometry).values)
+    assert reference.max() > 0.0
+
+    errors = {}
+    for nbnd in (12, 24):
+        result = run_ultracell(
+            calculator.system, calculator.pseudos, scf, shape, kgrid,
+            nbnd=nbnd, external=_modulation(shape), conv_thr=1e-10,
+            states_conv_thr=1e-11)
+        assert result.converged
+        ours = np.asarray(run_ultracell_transport(
+            calculator.system, calculator.pseudos, result, **geometry).values)
+        errors[nbnd] = float(np.abs(ours - reference).max() / reference.max())
+
+    assert errors[24] < errors[12]
+    assert errors[24] < 0.05

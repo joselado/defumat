@@ -376,15 +376,19 @@ what the spiral fixes (`at_spiral_q` passes `shift = -qcart` and the spiral's `Q
 `-q`) and what was implemented and measured; the other spelling was run deliberately and
 breaks the variational bound.
 
-**What is still refused**, and all three are in `PLAN.md` P88 stage 5 with what each needs:
-the **spinor** combination, where `D_ij` is the scalar integrals sandwiched between `fcoef`
-rather than the integrals themselves; the **double grid**, which is the wall such a dataset
-meets first and is why every number is at `ecutrho = 4 ecutwfc`; and the ultracell
-**transmission**, whose exit-plane Gram matrix needs `S` for a state spanning `N` spheres,
-where the image and the spectrum do run because a tip is in vacuum. The double-grid lift is about three
-lines -- mask `dV` to the tiled smooth sphere for the smooth half of the matrix element, keep
-the dense `dV` for `newd`'s integral, which is QE's own split -- and was deliberately kept out
-of the same measurement rather than folded into it.
+**What is still refused is one thing, the double grid**, and two of the three this entry
+listed have since gone. The **spinor** combination was written the same day (`PLAN.md` P88
+stage 6): `D_ij` is the scalar integrals sandwiched between `fcoef`, with the displaced table
+inside that transform. And the ultracell **transmission** was never a missing term at all
+(stage 7): its exit-plane Gram matrix is not built from the whole state, and the unit cell
+hands `calculation._overlap` to the *whole-cell* diagnostic alone, so the plane needed the
+same vacuum guard the image and the spectrum inherit rather than an overlap operator. What
+refuses now is `exit_region = "volume"` on an augmented dataset, which is the one Gram matrix
+that is `<psi|S|psi>`. The **double grid** is the wall such a dataset meets first and is why
+every number here is at `ecutrho = 4 ecutwfc`; its lift is about three lines -- mask `dV` to
+the tiled smooth sphere for the smooth half of the matrix element, keep the dense `dV` for
+`newd`'s integral, which is QE's own split -- and was deliberately kept out of the same
+measurement rather than folded into it.
 
 ## 2. A term that is half written, and the half that is missing is a term
 

@@ -1,0 +1,35 @@
+! A square silicon sheet in vacuum with a PAW dataset: the cheapest cell that is
+! both a two-dimensional material and an augmented one, so that a tunnelling
+! geometry has somewhere legal to put its two planes. They go at 0.15 and 0.85
+! and the atom sits at 0.5, which clears the dataset's 2.6 bohr augmentation
+! sphere by 3.4 bohr. Bulk silicon cannot be used for this at all: its
+! interplanar spacing along the stacking axis is 5.9 bohr with an atom every
+! quarter of it, so no height clears the spheres and the guard refuses every
+! one of them.
+!
+! The k-grid is 4 4 1 so that a two-cell ultracell at kgrid = (2, 4, 1) folds
+! onto exactly it, and one division along the stacking axis is the
+! transmission's own requirement rather than an economy: lateral momentum is
+! conserved exactly and the perpendicular one is not.
+!
+! ecutrho is 4 ecutwfc explicitly, which is the only dual an ultracell accepts.
+! Used by tests/regression/test_ultracell_augmented.py (PLAN.md P88 stage 7).
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 6, celldm(1) = 5.5, celldm(3) = 2.5,
+    nat = 1, ntyp = 1,
+    ecutwfc = 20.0, ecutrho = 80.0,
+    nosym = .true., noinv = .true., nbnd = 8,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.05
+ /
+ &electrons
+    conv_thr = 1.0d-11
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-n-kjpaw_psl.0.1.UPF
+ATOMIC_POSITIONS (crystal)
+ Si 0.0 0.0 0.5
+K_POINTS {automatic}
+ 4 4 1 0 0 0

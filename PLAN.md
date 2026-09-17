@@ -351,7 +351,8 @@ because that is what decides whether it is a session or a phase.
   among them: stages 5 and 6 lifted that refusal in all three spin regimes, the missing piece
   having been one term -- the augmentation table displaced by `Q' - Q` -- rather than the
   two structural obstacles the refusal named, both of which were wrong. What is still refused
-  there is the *spinor* combination and, before it, a double grid.
+  there is a **double grid**, and -- for the transmission alone -- the whole-cell
+  Tersoff-Hamann diagnostic, which is the one Gram matrix that needs `S`.
 - **Imaging a modulation** (P89, done; the conjugate is not) **and reading it over an energy
   axis** (P90, done). The STM image, the vertical
   tunnelling transmission and now the **tunnelling spectrum** of an ultracell are in, the
@@ -14919,7 +14920,7 @@ told from silence is this project's most-repeated trap.
   which is a statement about that route rather than this one, and QE's own `average_pp.f90`
   refuses ultrasoft and PAW outright.
 
-### P88 -- The ultracell: a modulation a thousand cells long, solved in the unit cell's own states. ✅ DONE, stages 1, 3a, 3b, 4, 5 and 6 (LDA, direct route, `nspin = 1`, `2` and `4`, the total energy, and ultrasoft/PAW in all three spin regimes); stage 2 planned.
+### P88 -- The ultracell: a modulation a thousand cells long, solved in the unit cell's own states. ✅ DONE, stages 1, 3a, 3b, 4, 5, 6 and 7 (LDA, direct route, `nspin = 1`, `2` and `4`, the total energy, ultrasoft/PAW in all three spin regimes, and the augmented transmission); stage 2 planned.
 
 Elk tasks 700/701 (ground state), 720/725 (band structure and spectral function), 731-3,
 741-3, 771-3 (plots); `src/modulr.f90` and the twenty routines around it. The method paper is
@@ -16231,17 +16232,13 @@ functional of `becsum` and would otherwise be a fixed-point iteration with no mi
 * **Symmetrisation of `becsum` across the copies**, which is not needed and is not a gap: an
   ultracell runs `nosym` by force, so `_becsum_symmetry` is `None` and the unit cell's own
   path does nothing either.
-* **The ultracell tunnelling transmission** (`run_ultracell_transport`), refused by name.
-  Lifting the dataset refusal made three downstream workflows reachable that the refusal had
-  been protecting, and they do not all fare the same. The **image and the spectrum run**: a
-  tip sits in the vacuum, where the augmentation charge is zero and a pseudo-wavefunction is
-  the true one, so the smooth states are exact there -- and both now inherit the unit cell's
-  own `_refuse_an_augmented_plane`, which refuses a tip inside a sphere. The **transmission
-  does not**: its exit-plane Gram matrix is built from the whole state and the unit cell's
-  route hands the assembly `calculation._overlap` for it, where an ultracell state spans `N`
-  unit-cell spheres with their own projectors and that operator is a piece of work rather
-  than a call. `_ultracell_geometry` had `apply_s = None` with a comment saying the ultracell
-  refuses these datasets, which is how the stale claim was found.
+* ~~**The ultracell tunnelling transmission** (`run_ultracell_transport`), refused by
+  name.~~ **Dissolved, 2026-09-17 -- stage 7 below.** The refusal rested on two readings of
+  the unit cell's route and both were wrong: the exit-plane Gram matrix is not built from
+  the whole state, and `calculation._overlap` is handed to the *whole-cell* diagnostic
+  alone. What was true of the image and the spectrum is true of the plane as well -- both
+  planes sit in the vacuum, where the augmentation charge is zero -- so what the
+  transmission needed was the same guard they inherit rather than an overlap operator.
 
 **What stage 6 measured: the spinor combination.** Stage 5 refused `npol = 2` with an
 augmented dataset, and what it named as missing is what was written: a spinor `D_ij` is the
@@ -16376,6 +16373,90 @@ below also has to be taken.
 * Nothing else. The timing is in `PERFORMANCE.md` beside stage 5's, and the number it
   carries is that the augmentation costs the same in both spin regimes -- 1.19 and 2.54
   times the norm-conserving ultracell here against 1.24 and 2.45 there.
+
+**Stage 7: the transmission needed no `S`, and the byte budget needed a shape.** Both came
+from one production run -- a NiBr2 helix put through the ultracell on a fully relativistic
+PAW pair -- and they are opposite kinds of finding: the first is a refusal that dissolved
+when its premise was read, the second a crash that a dial nobody had exercised had been
+hiding.
+
+**The refusal rested on two readings of the unit cell's route and both were wrong.** What
+stood in `_refuse_an_augmented_ultracell_transmission` said that the exit-plane Gram matrix
+is built from the whole state and that the unit cell's own route hands the assembly
+`calculation._overlap` for it. Neither is what the code does. `exit_overlap` collapses the
+sphere onto its shadow on the *surface* reciprocal lattice at one height -- the `h3` sum
+first, then a product over in-plane groups -- so it is a plane integral and not a cell
+integral; and `_assemble` passes `apply_s` to `volume_overlap` alone, with a comment saying
+exactly why ("which the volume diagnostic needs and the plane does not: the augmentation
+charge is zero in the vacuum where both planes of a tunnelling geometry sit"). The
+confirmation that costs nothing is that **`run_vertical_transport` has never refused these
+datasets**: `tests/regression/test_transport.py` runs it on ultrasoft carbon and PAW silicon
+and asserts the Gram matrix's Hermiticity and positivity there. So the transmission is in the
+same position as the image and the spectrum, and what it needed was the guard they inherit,
+`_refuse_an_augmented_plane`, asked now of the exit plane as well as of the tip.
+
+**What refuses instead is `exit_region = "volume"`**, the Tersoff-Hamann diagnostic, and the
+reason it is a refusal rather than a two-line identity is worth keeping. `S` in an ultracell
+state's *plane-wave* representation is a piece of work -- the state spans `N` unit-cell
+spheres with their own projectors. The answer, though, is known without it: the frozen basis
+is exactly `S`-orthonormal across `Q` (the stage 5 derivation above), so the whole-cell Gram
+matrix **is** the identity by construction. Handing the assembly that identity would make the
+diagnostic agree without looking at the coefficients, where the norm-conserving version
+builds it from them and so checks the reconstruction on the way -- a check whose null result
+cannot be told from a pass. The plain `sum_G c* c` is the other option and is short by the
+augmentation charge, 3 to 9 per cent where `volume_overlap` measured it.
+
+**The cell for it is not bulk silicon, and that is the part to know before repeating this.**
+The PAW dataset's augmentation radius is **2.647 bohr** against a **5.889 bohr** interplanar
+spacing along the stacking axis with an atom every quarter of it, so the widest clearance any
+plane can have there is 2.208 bohr and the guard refuses *every* height -- correctly, since a
+substrate and a tip belong either side of a sheet. `tests/data/qe/ultracell-sheet-paw.in` is
+committed for it: a square silicon sheet, `celldm(3) = 2.5`, one atom at 0.5, planes at 0.15
+and 0.85, `ecutrho = 4 ecutwfc` as everything augmented here is, and the dataset swapped for
+the ultrasoft one to run the pair.
+
+**The numbers.** With nothing applied the two-cell ultracell's map is the unit cell's tiled,
+to **6.2e-7** ultrasoft and **9.7e-7** PAW of the peak, against a floor of 1e-5 that is the
+resolvent rather than either threshold (`test_ultracell_stm.py`'s own version of this
+measures it against `eta`). The rung that discriminates is the modulated one, because a
+folded state is one basis function whose normalisation is the unit cell's, where a state
+mixing `Q` makes `sum_Q |c_Q|^2 = 1` the `S`-orthonormality claim itself: against a real
+two-cell supercell's own transmission under the same `0.05 cos(pi x_1)` Ry modulation, the map
+converges: **1.09e-2** at `nbnd = 12` and **1.96e-3** at 24, the same ladder the induced
+density climbs one quantity down.
+
+**The crash: a memory dial divided by `N` is exercised `N` times sooner.** The displaced
+tables ask the byte gate about `max_bytes / N` rather than `max_bytes`, so an ultracell
+reaches `TabulatedAugmentation` -- QE's radial table, rebuilt a block of G at a time -- where
+the unit cell would still store `Q_ij(G)`. That class never materialises `qgm` and carries
+`qgm = ()`, `_blocks_like` read each species' block size off it, got no blocks at all, and
+`block_matrix` died on `blocks[0].dtype`: an `IndexError` two layers from its cause and
+**after a converged SCF**, which is the expensive half. Reported at NiBr2, 3 atoms,
+`Ni.rel-pbe-n-kjpaw_psl.0.1` and `Br.rel-pbe-n-kjpaw_psl.1.0.0` (`nh` of 34 and 14),
+`noncolin` with `lspinorb`, `ngm = 83477`, `N = 3`: 1.7 GiB per table against a 683 MiB
+share of the 2 GiB default, so the fallback was taken and the run died every time.
+
+The fix is one property, `nh_species`, on both table classes -- how large each species'
+block is, which is the only thing the one-centre assembly ever wanted from `qgm`. The
+tabulated class answers it from `beta_of`, and its own `integrals`/`cross_integrals` now ask
+the property rather than recomputing it beside it. What the test asserts is stronger than
+agreement: the two routes give the one-centre matrix **bit for bit**, because the assembly
+reads only the shape and no storage scheme changes it. Reverting `_blocks_like` to the `qgm`
+zip reproduces the reported `IndexError` on the same call, which is what says the test fires.
+
+End to end on a modulated PAW silicon ultracell, through the table against off it: the total
+energy is **3.90e-10 Ry** apart collinear and **3.94e-10** spinor, both in ten iterations
+either way, with the induced density agreeing to 3.5e-10 and 2.8e-9 of its own maximum. That
+3.9e-10 is the radial interpolation and **not** the ultracell, and it is asserted rather than
+said -- the unit cell's own SCF moves by the same amount between the two routes, so the `N`
+displaced tables add nothing to it.
+
+**What stage 7 does not have.** A timing of the table route *inside* an ultracell, which is
+owed to `PERFORMANCE.md`: what was measured here was taken in fresh processes beside other
+work, so it is a first call and a contended one, and the number it would give is neither the
+work nor this code's cost. The unit cell's own pair is measured (stage 5's entry in
+`PERFORMANCE.md`), and there the table is level on the whole run while changing the memory by
+38 times.
 
 **What is outstanding.**
 
@@ -16670,8 +16751,9 @@ is sampled and squared here, where an image sums into a density.
   which is exactly where a pseudo-wavefunction is the true one. The test takes two heights
   and checks the guard reports two different distances, 0.0 and 1.665 bohr, because a guard
   returning one constant could not be told from one that had stopped looking. `run_sts` inherits
-  the transmission's `_refuse_an_augmented_plane`; the ultracell refuses ultrasoft and PAW
-  outright and is exempt.
+  the transmission's `_refuse_an_augmented_plane`, and so, since P88's stage 7, do all three
+  of the ultracell's own routes -- the image, the spectrum and the transmission -- which is
+  what replaced the dataset refusal they used to be exempt by.
 
 **`current` is `I(V)` in this limit and the limit is stated rather than implied**: a tip
 whose own density of states is flat and a barrier that does not depend on the bias. The
