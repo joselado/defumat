@@ -611,7 +611,14 @@ def test_what_a_spinor_response_still_refuses():
         require_a_sternheimer_regime(calculation, metals=True)
     require_a_sternheimer_regime(calculation, metals=True, noncollinear=True)
 
-    # Ultrasoft and PAW stay refused, and the reason is a real missing term.
+    # **Ultrasoft and PAW no longer refuse** (P98). The term that was named,
+    # ``set_int3_nc``, did not have to be written: one ``jvp`` of
+    # ``Calculation.coefficients`` passes through the noncollinear
+    # recombination, whose ``fcoef`` sandwich is linear, so the tangent comes
+    # out dressed. What had to be written was the position operator's spin
+    # blocks. The dataset half of this edge is therefore gone, and what the
+    # platinum cell still meets is the guard about **metals** -- which is the
+    # edge that moved rather than the one that went.
     ultrasoft = build_system(read_pw_input(CASES / "pt-soc-nosym.in"))
     calculation = Calculation(
         ultrasoft,
@@ -619,7 +626,6 @@ def test_what_a_spinor_response_still_refuses():
               for s in ultrasoft.structure.species),
     )
     assert calculation.is_ultrasoft
-    with pytest.raises(NotImplementedError, match="set_int3_nc"):
-        require_a_sternheimer_regime(
-            calculation, metals=True, noncollinear=True
-        )
+    require_a_sternheimer_regime(calculation, metals=True, noncollinear=True)
+    with pytest.raises(NotImplementedError, match="refused for a metal"):
+        require_a_sternheimer_regime(calculation, noncollinear=True)
