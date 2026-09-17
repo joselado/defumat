@@ -114,6 +114,38 @@ writing this entry was reading the raise at `chi0.py:301` without reading the do
 twelve lines above it, which is the "inherit a refusal only after checking which machine
 it belongs to" trap run backwards.
 
+**What the next session starts from, written down 2026-09-18 rather than re-derived.**
+The reading is done and the two pieces are both one call each; what is not done is running
+them, and the sizing below is a route and not a promise.
+
+- **The head is a one-line change and the object now exists.** `chi0.py:456` builds the
+  head from `velocity.matrix_elements`, which is `<u_i|dH/dk_a|u_j>` and is the velocity
+  only when `S` is the identity. What it wants is
+  `VelocityOperator.generalised_matrix_elements(wavefunctions, eigenvalues)` -- P99's
+  object, `<i|dH_a - e_j dS_a|j> + (e_j - e_i)K^a_{ij}`, validated against a central
+  difference of the FHS overlap. Note the *unshifted* eigenvalues go in: the scissors
+  renormalisation below it is applied to the matrix element afterwards. This is what the
+  module docstring's "the head still carries no `-e_n dS/dk` and no `dpqq`" is about, and
+  P94 left it that way deliberately because only the body had been corrected.
+- **The body is `augmentation_factors` and the contraction is already written.**
+  `tddft/spinchi0.augmentation_factors(calculation, q, sphere)` returns `q^a_ij(q + G)`
+  over the response sphere, and `spinchi0._one_k_terms` contracts it as
+  `matrix + einsum("ai,gij,maj->mg", conj(projection), factors, becp)` -- added to
+  `r_to_g(conj(field) * fields)` with **no volume factor**, which is the normalisation P40
+  got wrong twice. That contraction is validated by the ultrasoft magnon, so it is a
+  convention that works rather than one to re-derive.
+- **Pin the normalisation before reading a spectrum.** At `G = 0` the sum
+  `sum_G conj(c_i) c_j + sum_ij becp_i^* q_ij becp_j` must be exactly `delta_ij`, because
+  that is `<u_i|S|u_j>`. `G = 0` is the head rather than a body entry here, so it has to be
+  computed on the side -- and it is the check that settles the volume factor with no
+  spectrum in it at all. Do it first.
+- **The target is a number and not a convergence.** P94's body-only route gives
+  **57.200 with a residual of +0.540** against the Sternheimer solve at `nbnd = 60`,
+  `ecut_response = 8`, RPA against `screening = "hartree"`, where the norm-conserving
+  control is -0.0129 on 22.3. If the head closes it, the residual falls toward the
+  control's 0.06 per cent; if it does not, the remaining term is somewhere else and the
+  refusal stays with a third measurement behind it.
+
 **What P40 excluded, and what it did not.** Finding 1: the tabulated `Q_ij(G)` is a
 charge per unit volume and has to be multiplied by `Omega` before it is paired with
 `<beta|psi>`, which is a factor of 265 on that silicon and halved the residual when it

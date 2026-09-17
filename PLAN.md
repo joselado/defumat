@@ -18334,7 +18334,10 @@ a correction.
 4. **The A/B, because an identity that closes is not evidence.** Deleting the connection
    moves the optical conductivity's static dielectric constant by **0.38 on 64.81**
    (ultrasoft silicon) and **0.38 on 64.85** (PAW), 0.47 per cent either way, and moves the
-   Kubo curvature of ultrasoft AlAs by **0.34 per cent** of its largest value.
+   Kubo curvature of ultrasoft AlAs by **0.34 per cent** of its largest value. **What that
+   A/B deletes is the dipole and not the whole augmentation correction**: it removes `K`
+   and leaves `- e_m dS/dk` standing, so the number is what the term P99 wrote is worth,
+   not what an augmented dataset costs a norm-conserving formula.
 
 **What the obvious assembly check cannot do, said before it is read as a pass.** Kubo
 against FHS on ultrasoft AlAs is **61.7 per cent** apart pointwise at 12x12 and **49.9 per

@@ -3131,7 +3131,8 @@ is worth nothing to better than a factor of two.
 
 \begin{refuses}
 \textbf{Refuses.} \textbf{Ultrasoft and PAW}, one order further out than the
-Kubo curvature and the optical conductivity, which no longer refuse them. The
+Kubo curvature, the optical conductivity and second-harmonic generation, none
+of which refuse them any more. The
 dipole carries $\partial S/\partial k$, its derivative carries
 $\partial^2 S/\partial k_a\partial k_b$, and the augmentation dipole
 $\langle\psi_n|T^\dagger\partial_k T|\psi_m\rangle$ that belongs with them is
@@ -3371,7 +3372,16 @@ as $\langle\Psi_n|\partial_a\Psi_m\rangle = \langle\psi_n|\hat S|\partial_a
   d^{a}_{ij} = \int r_a\,Q_{ij}(\mathbf r)\,\mathrm d\mathbf r,
 \end{equation*}
 the augmentation dipole \code{adddvepsi\_us} adds to an electric field's
-position operator. Only $\partial_{k_a}H$ and $\partial_{k_a}S$ can be got from
+position operator.
+
+\textbf{Written that way $A^a$ is Hermitian and is the generalised velocity
+matrix}, which is what \code{defumat.response.conductivity} contracts; the code
+here writes the equivalent form with the \emph{outer} band's energy
+$\varepsilon_n$ in both factors and the two blocks $K^\dagger$ and $K$ split
+between them, because that is what falls out of resolving the identity inside
+$-2\,\mathrm{Im}\langle\partial_1 n|\hat S|\partial_2 n\rangle$. The two agree
+identically, and the reason they do is the identity below. Only
+$\partial_{k_a}H$ and $\partial_{k_a}S$ can be got from
 the two tangents of one \code{jvp}, and $K$ is neither: $K^\dagger + K$ is
 \emph{exactly} $\langle\psi_n|\partial_{k_a}S|\psi_m\rangle$, the dipole
 cancelling between the two and the rest adding, so the two factors of the sum

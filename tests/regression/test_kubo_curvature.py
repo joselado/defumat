@@ -38,6 +38,7 @@ control exists for.
 from functools import lru_cache
 from pathlib import Path
 
+import jax
 import numpy as np
 import pytest
 
@@ -66,6 +67,19 @@ GENERIC_K = np.array([0.1875, 0.3125, 0.0])
 #: A point where the second and third valence bands are exactly degenerate
 #: (measured: 9.4e-16 Ry apart), which is what the gauge test needs.
 DEGENERATE_K = np.array([0.0, 0.375, 0.0])
+
+
+@pytest.fixture(autouse=True)
+def _drop_compiled_code():
+    """``CLAUDE.md``'s bound on a file that runs several distinct cells.
+
+    Six of them now -- three silicons, two AlAs and a fully-relativistic one --
+    which share no shape, so each compiles the whole NSCF and velocity stack
+    afresh and the backend keeps every executable for the life of the process.
+    The converged states stay cached; only the compiled code is dropped.
+    """
+    yield
+    jax.clear_caches()
 
 
 @lru_cache(maxsize=4)
@@ -471,9 +485,8 @@ def test_the_augmented_connection_is_the_overlap_s_own_derivative(name, augmente
     """
     point = np.array([0.13, 0.21, 0.07])
     nocc = 4
-    states = source(name, nocc, nbnd=8).states(
-        point.reshape(1, 3), keep_velocity=True
-    )
+    source_set = source(name, nocc, nbnd=8)
+    states = source_set.states(point.reshape(1, 3), keep_velocity=True)
     direction = np.asarray(states.bg)[0]
     dh, ds = (np.asarray(x)[0] for x in velocity_matrices(states, direction))
     energies = np.asarray(states.energies)[0]
@@ -487,7 +500,6 @@ def test_the_augmented_connection_is_the_overlap_s_own_derivative(name, augmente
     block, gap = block[:nocc, :nocc], gap[:nocc, :nocc]
     off = (~np.eye(nocc, dtype=bool)) & (np.abs(gap) > 1.0e-2)
 
-    source_set = source(name, nocc, nbnd=8)
     eps = 5.0e-4
     sides, counts = [], []
     for sign in (+1.0, -1.0):

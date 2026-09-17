@@ -27,6 +27,14 @@ The expression, for a **generalised** eigenproblem ``H|n> = e_n S|n>``:
     Omega_n^{12}(k) = -2 Im sum_{m != n} A^1_{nm} A^2_{mn} / (e_n - e_m)^2,
     A^a_{nm} = <psi_n| dH/dk_a - e_n dS/dk_a |psi_m>.
 
+The same matrix has a second spelling, ``<n|dH_a - e_m dS_a|m> + (e_m - e_n)
+K^a_{nm}``, which is Hermitian and is the generalised velocity
+:mod:`defumat.response.conductivity` contracts
+(:meth:`~defumat.response.velocity.VelocityOperator.
+generalised_matrix_elements`). The two are equal because ``K^dagger + K`` is
+exactly ``dS/dk``, and that equality is asserted rather than trusted --
+``tests/regression/test_kubo_curvature.py`` contracts both and compares.
+
 The ``e_n dS/dk`` piece is not decoration and its index is not free: it comes
 from differentiating ``H|m> = e_m S|m>`` and projecting on ``<n|``, which gives
 ``<n|S|d_a m> = <n|(dH/dk_a - e_m dS/dk_a)|m> / (e_m - e_n)``. Carrying that

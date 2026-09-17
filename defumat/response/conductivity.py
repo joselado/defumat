@@ -121,15 +121,22 @@ curvature route, which is the quantity's definition, together with its
 k-convergence. The frequency route's ``w = 0`` value is what a spectrum
 extrapolates to at finite scattering, and is a different number.
 
-**What is refused, and each for its own reason.** An **ultrasoft or PAW**
-dataset, for :mod:`defumat.topology.kubo`'s reason: with a moving ``S`` the
-current operator acquires ``e_n dS/dk`` off the diagonal, the term is
-identically zero for a norm-conserving dataset, and nothing validated here can
-see whether its convention is right. A **spin spiral**, whose two spinor
-components live on different spheres. And a **symmetry-reduced k-set**: the
-antisymmetric part of ``sigma`` is an axial vector and a wedge does not sum to
-the cell's, exactly as P48b's angular momenta are refused on one -- the escape
-is the whole unshifted grid, which is closed under the point group.
+**An ultrasoft or PAW dataset runs, and did not until P99.** With a moving
+``S`` the current operator is ``<n|dH_a - e_m dS_a|m>`` plus the augmentation
+dipole ``(e_m - e_n) K^a_{nm}``, and the last of those is neither tangent of
+the ``jvp`` that gives the first two:
+:meth:`~defumat.response.velocity.VelocityOperator.
+generalised_matrix_elements` assembles all three, and
+:meth:`~defumat.response.velocity.VelocityOperator.augmentation_connection` is
+where the term is written and validated. Note that this is a quantity
+``epsilon.x`` refuses outright on the same datasets, for the same object: its
+comment says the dipole matrix elements "are not trivial at all".
+
+**What is refused, and each for its own reason.** A **spin spiral**, whose two
+spinor components live on different spheres. And a **symmetry-reduced k-set**:
+the antisymmetric part of ``sigma`` is an axial vector and a wedge does not sum
+to the cell's, exactly as P48b's angular momenta are refused on one -- the
+escape is the whole unshifted grid, which is closed under the point group.
 
 **Cost and peak.** One NSCF with empty states, then ``(3, nk, nbnd, nbnd)``
 velocity matrix elements -- three ``jvp`` calls over the k axis, which is the
