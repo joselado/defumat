@@ -168,6 +168,19 @@ def augmentation_connection(states, direction):
 
     Returns ``None`` for a norm-conserving dataset, where ``T`` is the identity
     and there is nothing to add.
+
+    **What it costs, since the rule is that an allocation is stated.** One
+    ``(nk, npwx, nkb)`` complex tangent of ``vkb`` per crystal direction, from
+    :meth:`~defumat.response.velocity.VelocityOperator.projectors`, which is the
+    same shape the resident ``vkb`` already has and is the whole of the peak
+    here -- the projections it is contracted into are ``(nk, nb, nkb)`` and the
+    result ``(nk, nb, nb)``, both smaller by ``npwx/nb``. Two directions are
+    live at once inside :func:`plane_wave_kubo`, so the curvature's peak grows
+    by ``2 nk npwx nkb`` complex numbers over a norm-conserving run's, which on
+    the two-atom ultrasoft cells here is megabytes and on a slab with a
+    fully-relativistic dataset is the term to size first. The contraction walks
+    the k axis through :func:`~defumat.batching.map_k`, so it does not add a
+    third array of that shape.
     """
     calculation = getattr(states, "calculation", None)
     if calculation is None or getattr(calculation, "augmentation", None) is None:

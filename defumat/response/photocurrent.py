@@ -523,16 +523,18 @@ def require_a_shift_current_regime(calculation) -> None:
     if calculation.is_ultrasoft or calculation.is_paw:
         raise NotImplementedError(
             "the shift current with an ultrasoft or PAW pseudopotential is "
-            "not implemented, and one of its two missing terms is now "
-            "written. The dipole of a generalised eigenproblem carries "
-            "<psi_n|dS/dk_a|psi_m> beside dH/dk and its second derivative "
-            "carries d^2S/dk_a dk_b; both are here. The augmentation dipole "
-            "<psi_n|T^dag dT/dk|psi_m> that belongs with them is here too as "
-            "defumat.topology.kubo.augmentation_connection (PLAN.md P98) -- "
-            "but this module is that matrix element one derivative further "
-            "along, so it needs d(T^dag dT)/dk as well, which is a second "
-            "projector derivative against the dipole and the dipole's own "
-            "first moment. Neither is written. Use a norm-conserving dataset"
+            "not implemented, and one of the four terms it is missing is now "
+            "written. The velocity and its derivative here are "
+            "matrix_elements and second_matrix_elements, which are <n|dH/dk|m> "
+            "and <n|d^2H/dk dk|m> and nothing else; a generalised "
+            "eigenproblem's carry e_n dS/dk and e_n d^2S/dk dk beside them, "
+            "and the connection carries the augmentation dipole "
+            "<psi_n|T^dag dT/dk|psi_m> and, one order further out, "
+            "d(T^dag dT)/dk. Only the third of those four is written "
+            "(defumat.topology.kubo.augmentation_connection, PLAN.md P98); the "
+            "fourth is a second projector derivative against dpqq and dpqq's "
+            "own first moment, and is not. Use a norm-conserving dataset, "
+            "where S = 1 and all four are identically zero"
         )
     if getattr(calculation, "spiral", False):
         raise NotImplementedError(

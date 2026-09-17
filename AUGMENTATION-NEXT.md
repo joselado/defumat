@@ -22,8 +22,11 @@ Where the other files fit (`CLAUDE.md` has the full table):
 **File and line references go stale.** The function or the guard is named wherever there
 is one, so `grep` the name rather than trusting the number.
 
-**The sizings in this file have been wrong seven times, always in the same direction and
-always for the same reason.** §1a was called the easiest lift here when `PLAN.md` P40 had
+**The sizings in this file have been wrong eight times, always in the same direction and
+always for the same reason.** The eighth is §2, whose "all three refusals lift or stay
+together" survived two rewrites of the entry and was wrong in both directions at once: one
+of the three lifted with the term, one needs an assembly change the entry never named, and
+one needs a further term. §1a was called the easiest lift here when `PLAN.md` P40 had
 already measured that route as not closing; §1i was called "the most likely of the class
 to be an afternoon" when its projector set is scalar and cannot take the spinor operator
 at all; §1j was called plumbing when the object it wanted to move is indexed by a
@@ -421,17 +424,87 @@ one-centre terms per copy are their own piece.
 
 ---
 
-## 2. A term that is half written, and the half that is missing is a term
+## 2. The term is written; two assemblies still cannot take it. ✅ PARTLY DONE (P98).
 
-Three refusals, one term. All three say the same sentence in `docs/features.tex` and all
-three would lift or stay together.
+Three refusals, one term. **"All three would lift or stay together" was wrong**, and that
+is the third correction this section has taken: the term lifted one of them, the second
+needs plumbing it does not have, and the third needs the term's own derivative and cannot
+lift at all. What is below is the state after P98; the history is kept because the sizing
+was wrong twice before that in the same direction.
 
-**This section used to be called "a term that is written and unvalidated" and that was
-wrong** (P94). Writing the derivation out splits it: the *convention* is right by
-construction and needed a derivation rather than a measurement, and what is actually
-missing is a second term that has nowhere to go in the present assembly. So this belongs
-with §1 rather than beside it, and the sizing is a phase rather than the afternoon this
-file first claimed.
+**It used to be called "a term that is written and unvalidated" and that was wrong**
+(P94). Writing the derivation out split it: the *convention* is right by construction and
+needed a derivation rather than a measurement, and what was actually missing was a second
+term with nowhere to go in the present assembly.
+
+### 2a. The Kubo Berry curvature. ✅ DONE (P98).
+
+`topology/kubo.py:augmentation_connection` builds
+`T^dag d_a T = sum q_ij |beta_i><d_a beta_j| - i sum dpqq^a_ij |beta_i><beta_j|`, with the
+projector derivative about the atom's own centre, and `kubo_from_matrices` takes one block
+per direction and forms `L = K^dagger` itself.
+
+**The anchor is an identity**, because no norm-conserving run can see a term that vanishes
+there and no reference code computes this map with an augmented dataset: the same object is
+the k-derivative of the two-point overlap `S(k, k')` at *frozen* coefficients, and a central
+difference of it reproduces the connection to **8.5e-10** against `max|K| = 2.09e-2`,
+falling by a clean factor of four per halving of the step. Beside it `K + K^dag = dS/dk` to
+1.4e-16.
+
+**Both are kept because the second cannot see the dipole**: it enters as `-i D` with `D`
+Hermitian and cancels out of `K + K^dag` with any sign and any size. Nor can the curvature
+see it -- dropping the dipole while keeping the projector motion moves `Omega` by **0.03
+per cent** on ultrasoft AlAs. The whole term is worth 0.57 per cent there and `dS/dk` 1.78.
+`PLAN.md` P98 has the tables.
+
+### 2b. The optical conductivity. Three terms, not one, and the entry said one.
+
+`response/conductivity.py`, `require_a_conductivity_regime`. **Its refusal message was
+wrong before P98 and P98's first draft copied the error forward**, which is this file's own
+recurring failure met once more and is recorded rather than quietly fixed. The message said
+the `e_n dS/dk` piece "is here and is right by derivation". It is not here:
+`optical_conductivity` builds `elements = velocity.matrix_elements(wavefunctions)`, and
+`VelocityOperator.matrix_elements` is `<n|dH/dk|m>` and nothing else -- `apply`, not
+`both`. Neither `apply_s` nor `both` appears anywhere in the module. The claim was
+harmless while the module refused every dataset with an overlap, which is exactly why
+nobody checked it.
+
+So three things are missing:
+
+- `e_n dS/dk` inside the matrix element, which is one `jvp` already written
+  (`VelocityOperator.both` returns it for free beside `dH/dk`);
+- the augmentation dipole `K`, which is `augmentation_connection` and is done;
+- the **two-slot split**. `_resolvent_sum` and `_curvature_sum` build
+  `z = <n|v_i|m><m|v_j|n>` out of **one** `element` array, and the two corrected factors
+  are not transposes of each other -- the first takes `K^dagger` and the second `K`, both
+  times the gap -- so the sum needs a second array rather than a second index. Every
+  consumer of `z` is inside those two functions.
+
+`_drude` needs the **first** of the three and not the third: a band velocity of a
+generalised eigenproblem is `<n|dH/dk - e_n dS/dk|n>`, so the plasma frequency of an
+augmented run would be wrong without it, while the dipole carries `e_n - e_m` and vanishes
+on the diagonal.
+
+**Size: an afternoon for the plumbing and a phase for its validation.** What is not an
+afternoon is saying the answer is right afterwards, because the f-sum rule of a generalised
+eigenproblem is not the norm-conserving one -- `OpticalConductivity.fsum`'s docstring
+states the exact version for a `dH/dk` velocity -- so the check the norm-conserving path
+rests on does not carry over unexamined. **Read that docstring, and read what
+`matrix_elements` actually returns, before sizing this.**
+
+### 2c. The shift current. Four terms, one of them written.
+
+`response/photocurrent.py`, `require_a_shift_current_regime`, and its message carried the
+same error §2b's did. It builds `matrix_elements` and `second_matrix_elements`, which are
+`<n|dH/dk|m>` and `<n|d^2H/dk dk|m>` and nothing else, so beside the two overlap pieces
+`e_n dS/dk` and `e_n d^2S/dk dk` it needs `T^dag dT`, which is done, and
+`d(T^dag dT)/dk`, which is not: a second projector derivative contracted against `dpqq`,
+and `dpqq`'s own first moment, which is the `L = 2` radial moment of `Q_ij` where
+`augmentation_dipole` takes the `L = 1` one. The two-slot split of §2b applies here too,
+one order further out.
+
+**What follows is the record of how the term was found and sized, kept because two of its
+corrections are the general lesson rather than this item's.**
 
 The term is the off-diagonal `<psi_n| dS/dk_a |psi_m>`, which enters the velocity of a
 generalised eigenproblem as `-e_n dS/dk_a` and is **identically zero for a
@@ -489,12 +562,23 @@ the two `A^dagger dA` blocks in recovers it to **4.5e-16**.
 correction depending on `A` rather than on `S = A^dagger A` -- `U(k) A` leaves `S`
 unchanged and moves the physical states.
 
-**Size:** a phase, and the model check is done. What is left is the dipole in
-matrix-element form inside `velocity_matrices`, from `efield.py`'s machinery, and then an
-**assembly** check on plane waves, because a sum of separately validated pieces is this
-repository's most convincing wrong answer. That check is the one P94 used for `dS/dk`:
-zero the dipole on AlAs-US and read the shift, and only run the AlAs comparison if the two
-terms together exceed its 4.4 per cent floor.
+**Size, as it stood before P98:** a phase, and the model check is done. What is left is
+the dipole in matrix-element form inside `velocity_matrices`, from `efield.py`'s machinery,
+and then an **assembly** check on plane waves, because a sum of separately validated pieces
+is this repository's most convincing wrong answer. That check is the one P94 used for
+`dS/dk`: zero the dipole on AlAs-US and read the shift, and only run the AlAs comparison if
+the two terms together exceed its 4.4 per cent floor.
+
+**That sizing was right about the phase and wrong about the check, and the way it was wrong
+is worth keeping.** The prescribed measurement was run and the two terms together came to
+2.34 per cent, under the floor, so by its own rule the AlAs comparison should not have been
+run and the refusal should have stayed with the assembly written down as unchecked. What
+the rule missed is that a *third* check existed and had not been looked for: the object is
+the derivative of a two-point overlap this repository already computes, so the validation
+is an identity with no mesh in it at all, and it discriminates the dipole where neither the
+curvature nor `K + K^dag = dS` can. The habit the entry above prescribes -- ask what would
+have falsified the term and whether the instrument could produce it -- was applied to the
+*result* of the planned check and not to the *choice* of check.
 
 ---
 
@@ -578,16 +662,26 @@ By what the first step costs, not by what the item is worth.
 
 The first two entries of this list were run in P94 and neither lifted a refusal; the
 third, PAW Born charges, was run on 2026-09-16 and **lifted its refusal by finding that
-the term it named did not exist** (`PLAN.md` P39a). What is left:
+the term it named did not exist** (`PLAN.md` P39a); the fourth, the moving overlap in a
+Kubo sum, was written on 2026-09-17 and lifted one of the three refusals it was supposed
+to lift together (`PLAN.md` P98, §2 above). What is left:
 
-1. **The moving overlap in a Kubo sum** (§2). The missing term's shape is pinned exactly
-   on a model, so what is left is writing it in matrix-element form from `efield.py`'s
-   machinery and checking the *assembly*.
+1. **The optical conductivity's second array** (§2b). The term it needs exists and is
+   validated; what is left is two functions and a check that is not the norm-conserving
+   f-sum rule.
 2. **Site angular momenta on a relativistic augmented dataset** (§1i). The code route is
    clear; the open question is what to validate it against.
 3. **The `chi_0` gap** (§1a), now not a truncation and about 1 per cent rather than an
    unknown.
 4. Everything else, in whatever order the physics wants.
+
+**And one thing P98 adds to the method rather than to the list.** Before sizing any entry
+here, ask whether the object it names is already computed somewhere as a function of a
+parameter the entry wants the derivative of. The Kubo term was sized as a phase of writing
+and then checking, and the check that settled it was a finite difference of
+`augmentation_at_q` -- a function P93 had written, that P95 and P96 both used, and that
+nothing in §2 mentioned. A derivative validated against a difference of the primal is free,
+has no mesh, and cannot be got wrong by the assembly it is being put into.
 
 **And one thing to do to the whole list rather than to an item in it.** What closed P39a
 was not a term, it was a *cell*: silicon is centrosymmetric, so every `Z*` this project

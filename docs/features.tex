@@ -2987,17 +2987,20 @@ removing Fermi surface, and its tensor is isotropic to \textbf{1.7e-4} eV with
 nothing imposing that.
 
 \begin{refuses}
-\textbf{Refuses.} \textbf{Ultrasoft and PAW}, and what is missing is now the
-\emph{assembly} rather than the term. The term --- the augmentation dipole
-$\langle\psi_n|T^\dagger\partial_k T|\psi_m\rangle$, which belongs beside the
-$\epsilon_n\,\partial S/\partial k$ this assembly already has --- is written
-and validated as \code{topology.kubo.augmentation\_connection}. What this
-module cannot yet do with it is hold the two slots apart: it contracts
-$z = \langle n|v_i|m\rangle\langle m|v_j|n\rangle$ out of one array, and the
+\textbf{Refuses.} \textbf{Ultrasoft and PAW}, and three things are missing
+rather than one. The velocity here is $\langle n|\partial_k H|m\rangle$ and
+nothing else, where a generalised eigenproblem's is
+$\langle n|\partial_k H - \varepsilon_n \partial_k S|m\rangle$ plus the
+augmentation dipole $\langle\psi_n|T^\dagger\partial_k T|\psi_m\rangle$. Only
+the last of the three is written, as
+\code{topology.kubo.augmentation\_connection}, and putting the other two in is
+not enough on its own: this module contracts
+$z = \langle n|v_i|m\rangle\langle m|v_j|n\rangle$ out of one array and the two
 corrected factors are not transposes of each other, the first taking
-$K^\dagger$ and the second $K$. The Drude term is unaffected, since the
-correction carries $\varepsilon_n - \varepsilon_m$ and vanishes on the
-diagonal. For the static limit alone, \code{topology.kubo} does carry it. A
+$K^\dagger$ and the second $K$, so the sum needs a second array. The Drude term
+needs the $\varepsilon_n\partial_k S$ piece as well, since a band velocity
+carries it, and not the dipole, which vanishes on the diagonal. For the static
+limit alone, \code{topology.kubo} carries all three. A
 \textbf{spin spiral}, whose two spinor
 components live on different spheres. A \textbf{symmetry-reduced $k$-set},
 because the antisymmetric part is an axial vector --- the escape is the whole
@@ -3121,15 +3124,16 @@ is worth nothing to better than a factor of two.
 
 \begin{refuses}
 \textbf{Refuses.} \textbf{Ultrasoft and PAW}, for the Kubo curvature's reason
-one order further out, and one of the two terms is now written. The dipole
-carries $\partial S/\partial k$ and its derivative carries
-$\partial^2 S/\partial k_a\partial k_b$, and both are here; the augmentation
-dipole $\langle\psi_n|T^\dagger\partial_k T|\psi_m\rangle$ that belongs with
-them is here too, as \code{topology.kubo.augmentation\_connection}. What is
-still missing is its own derivative, $\partial_k(T^\dagger\partial_k T)$ ---
-a second projector derivative against $\mathrm{dpqq}$ and $\mathrm{dpqq}$'s own
-first moment --- which this module needs because it is that matrix element one
-order further along. A
+one order further out, and one of the four terms it is missing is now written.
+The velocity and its derivative here are $\langle n|\partial_k H|m\rangle$ and
+$\langle n|\partial^2_k H|m\rangle$ and nothing else, where a generalised
+eigenproblem's carry $\varepsilon_n\partial_k S$ and
+$\varepsilon_n\partial^2_k S$ beside them, and the connection carries the
+augmentation dipole $\langle\psi_n|T^\dagger\partial_k T|\psi_m\rangle$ and,
+one order further out, $\partial_k(T^\dagger\partial_k T)$. Only the third is
+written, as \code{topology.kubo.augmentation\_connection}; the fourth is a
+second projector derivative against $\mathrm{dpqq}$ and $\mathrm{dpqq}$'s own
+first moment. A
 \textbf{spin spiral}. A \textbf{symmetry-reduced $k$-set}, because
 $\sigma^{abc}$ is a polar rank-3 tensor and a wedge sum is not the cell's until
 it is averaged over the point group; the escape is the whole unshifted grid. A

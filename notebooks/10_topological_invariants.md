@@ -109,9 +109,47 @@ print("silicon  max|Omega|, pointwise        %9.2e   <- inversion and time rever
       % np.abs(si.curvature).max())
 ```
 
-    AlAs     Chern number, lattice flux    1.83e-16   <- an integer by construction
+    AlAs     Chern number, lattice flux   -8.05e-17   <- an integer by construction
              the same map, Riemann sum     1.99e-06   <- near zero, and not zero
-    silicon  max|Omega|, pointwise         8.71e-08   <- inversion and time reversal
+    silicon  max|Omega|, pointwise         8.56e-08   <- inversion and time reversal
+
+
+## When the charge is not all in the wavefunction
+
+An ultrasoft or PAW dataset does not carry the whole electron in $|\psi|^2$. Part of the
+charge sits inside a sphere around each nucleus and is put back by a compensation charge
+$Q_{ij}(\mathbf r)$, which is what makes the overlap operator $\hat S$ something other
+than the identity. That reaches the curvature twice. The overlap depends on $\mathbf k$,
+which is the $\partial_k S$ term already in the expression above; and the states a phase
+is about are not the plane-wave coefficients alone but those coefficients with the
+compensation charge attached, so the connection picks up a further piece, and that piece
+is the **dipole** of $Q_{ij}$ about its own nucleus. On ultrasoft AlAs the first is worth
+about two per cent of $\Omega$ and the second about half a per cent, so neither is
+decoration and neither is large.
+
+Both vanish identically for a norm-conserving dataset, so nothing computed above could
+have said whether they are right, and no established code computes this map with an
+augmented dataset either. What settles them is that the same object appears in the
+lattice-flux route, as the overlap $q_{ij}(\mathbf b)$ between two neighbouring
+k-points, and the connection is its derivative: differencing the one reproduces the other
+to four parts in $10^{8}$.
+
+
+```python
+alas_us = Calculator.from_file(
+    CASES / "alas-epsilon-us.in", pseudo_dir=PSEUDO, announce=False
+)
+us = alas_us.get_berry_curvature(shape=(8, 8), nbnd=16, method="kubo")
+
+print("AlAs, ultrasoft   max|Omega|                  %8.4f" % np.abs(us.curvature).max())
+print("                  Chern number, lattice flux %9.2e   <- still an integer"
+      % alas_us.get_chern(shape=(8, 8)))
+```
+
+    AlAs, ultrasoft   max|Omega|                    1.4326
+
+
+                      Chern number, lattice flux  2.87e-17   <- still an integer
 
 
 ## Where the invariant is not zero
@@ -183,7 +221,7 @@ fig.tight_layout()
 
 
     
-![png](10_topological_invariants_files/10_topological_invariants_9_0.png)
+![png](10_topological_invariants_files/10_topological_invariants_11_0.png)
     
 
 
@@ -209,10 +247,11 @@ pumping step. Where they disagree like this, the parity answer is the one to tak
 
 ## What it refuses
 
-The Kubo map runs on **norm-conserving** datasets only: the $\varepsilon_n\,\partial_k S$
-term is identically zero without an augmentation charge, so nothing validated here can say
-whether its convention is right, and it is refused rather than guessed. The lattice flux
-carries the augmentation charge correctly and runs on all three kinds of dataset. A
+The Kubo map runs on norm-conserving, ultrasoft and PAW datasets, and is refused for a
+**spinor** augmented one: with spin-orbit coupling the compensation charge becomes a
+matrix in spin space, and the dipole above has not been written in that form. The lattice
+flux carries the whole thing whatever the dataset, which is one more reason it is the
+route an invariant is read from. A
 $\mathbb{Z}_2$ needs `noncolin = .true.` and asks for it by name: without spin-orbit
 coupling the bands are spin degenerate, the two copies wind oppositely, and the invariant
 is zero for a reason that has nothing to do with the band structure. And a **per-band**

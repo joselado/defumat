@@ -255,7 +255,10 @@ jupyter lab notebooks/
 ```
 
 **Every notebook in the set is timed and every one is inside the ten-minute
-ceiling.** `20` is now the slowest at 4m42s: three wavevectors of a phonon on a
+ceiling.** `10` moved from 50 s to 172 s on 2026-09-17 when it gained the ultrasoft
+curvature map: one more ground state and one more k-mesh, at a cutoff three times the
+notebook's other crystal's, which is what an augmentation charge costs and is the physics
+the section is about. `20` is still the slowest at 4m42s: three wavevectors of a phonon on a
 64-point grid is what a dispersion costs, and the cell to cut if it ever grows is
 a wavevector rather than the physics. `tools/export_notebooks.sh` measures them as it re-executes them and
 fails over that ceiling, so the table below is a by-product of keeping the outputs
@@ -264,18 +267,18 @@ workstation core, slowest last:
 
 | | s | | s | | s | | s |
 |---|---|---|---|---|---|---|---|
-| `01` | 5 | `06` | 23 | `34` | 40 | `08` | 171 |
-| `09` | 6 | `25` | 28 | `10` | 50 | `43` | 173 |
-| `02` | 8 | `18` | 29 | `29` | 59 | `27` | 178 |
-| `37` | 9 | `12` | 30 | `11` | 81 | `44` | 188 |
-| `03` | 10 | `21` | 30 | `45` | 85 | `17` | 203 |
-| `05` | 10 | `15` | 31 | `14` | 89 | `38` | 242 |
-| `04` | 12 | `24` | 31 | `26` | 109 | `19` | 243 |
-| `22` | 12 | `28` | 33 | `33` | 115 | `36` | 244 |
-| `42` | 13 | `31` | 34 | `13` | 131 | `35` | 276 |
-| `16` | 18 | `40` | 34 | `30` | 131 | `20` | 282 |
-| `00` | 22 | `23` | 35 | `39` | 151 |  |  |
-| `07` | 22 | `32` | 35 | `41` | 164 |  |  |
+| `01` | 5 | `06` | 23 | `34` | 40 | `10` | 172 |
+| `09` | 6 | `25` | 28 | `29` | 59 | `43` | 173 |
+| `02` | 8 | `18` | 29 | `11` | 81 | `27` | 178 |
+| `37` | 9 | `12` | 30 | `45` | 85 | `44` | 188 |
+| `03` | 10 | `21` | 30 | `14` | 89 | `17` | 203 |
+| `05` | 10 | `15` | 31 | `26` | 109 | `38` | 242 |
+| `04` | 12 | `24` | 31 | `33` | 115 | `19` | 243 |
+| `22` | 12 | `28` | 33 | `13` | 131 | `36` | 244 |
+| `42` | 13 | `31` | 34 | `30` | 131 | `35` | 276 |
+| `16` | 18 | `40` | 34 | `39` | 151 | `20` | 282 |
+| `00` | 22 | `23` | 35 | `41` | 164 |  |  |
+| `07` | 22 | `32` | 35 | `08` | 171 |  |  |
 
 `43` reads 173 s on 2026-09-15 with its starting-guess section in it, against the 240 s
 recorded before that section existed. **The pair is not a delta.** The new section is two

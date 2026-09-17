@@ -490,11 +490,14 @@ def test_the_paw_moving_overlap_is_the_same_derivative():
     ``dH/dk`` carries. So this is a check that nothing in the PAW path perturbs
     the connection, not a second physical statement.
     """
-    errors, scale, _, _ = _connection_against_finite_difference(
+    errors, scale, residual, overlap = _connection_against_finite_difference(
         "si2-paw.in", becsum=True
     )
     assert scale > 1.0e-3
     assert errors[2.5e-4] / scale < 1.0e-6
+    # And the same adjoint identity the ultrasoft cell asserts, which is what
+    # says the metric this uses is S's own qq and not something PAW replaces.
+    assert residual / overlap < 1.0e-12
 
 
 @pytest.mark.slow

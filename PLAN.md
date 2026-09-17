@@ -240,13 +240,14 @@ because that is what decides whether it is a session or a phase.
   is `topology/kubo.py:augmentation_connection`, validated as the k-derivative of the
   two-point overlap at frozen coefficients -- 8.5e-10 against a `max|K|` of 2.09e-2,
   falling as `eps^2` -- and worth 0.57 per cent of `Omega` on ultrasoft AlAs. What is
-  outstanding is the two assemblies that share the matrix element. The **optical
-  conductivity** is now missing the assembly rather than the term: `_resolvent_sum` builds
-  `z = <n|v_i|m><m|v_j|n>` out of one array and the two corrected factors are not
-  transposes of each other, so it needs a second array; `_drude` is already right, because
-  the correction carries `e_n - e_m` and vanishes on the diagonal. The **shift current**
-  needs `d(T^dag dT)/dk` as well and is unsized. A **spinor** augmented run is refused in
-  all three, for `qq_so` and the `fcoef` transform of `dpqq`.
+  outstanding is the two assemblies that share the matrix element, and **both of them need
+  more than the dipole, which their refusal messages denied until P98 read them**: neither
+  builds `dS/dk` at all, since `VelocityOperator.matrix_elements` is `<n|dH/dk|m>` alone.
+  The **optical conductivity** needs `e_n dS/dk`, the dipole, and a second array for the
+  transposed slot, and its Drude term needs the first of those. The **shift current** needs
+  those one order further out as well, of which `d(T^dag dT)/dk` is unwritten and unsized.
+  A **spinor** augmented run is refused in all three, for `qq_so` and the `fcoef` transform
+  of `dpqq`.
 - **The sum-over-states `chi_0` of an ultrasoft dataset** (P40, P94). Two routes to
   `Q_ij(G)` at `G != 0` disagree -- 57.200 with a residual of +0.540 through
   `augmentation_at_q` against P40's 55.5 and -1.20 through the dense table -- and the
@@ -17615,18 +17616,27 @@ rests on.
   connection's dipole is that same transform applied to `dpqq`, which
   `augmentation_dipole_blocks` does not build. `method='fhs'` carries the whole thing at
   every `npol` and is untouched.
-- **The optical conductivity** (`response/conductivity.py`), which is the same matrix
-  element contracted differently and is now missing the *assembly* rather than the term.
-  `_resolvent_sum` builds `z = <n|v_i|m><m|v_j|n>` out of **one** `element` array, and the
-  corrected factors are not transposes of each other -- the first takes `K^dagger` and the
-  second `K`, both times the gap -- so the sum needs a second array rather than a second
-  index. `_drude` is unaffected: the correction carries `e_n - e_m` and vanishes on the
-  diagonal, so a plasma frequency is already right. Sized as an afternoon for the plumbing
-  and a phase for its validation, since the f-sum rule of a generalised eigenproblem is not
-  the norm-conserving one.
-- **The shift current**, which needs `d(T^dag dT)/dk` as well -- a second projector
-  derivative against `dpqq` and `dpqq`'s own first moment. Neither is written and neither
-  is sized.
+- **The optical conductivity** (`response/conductivity.py`), and the sizing of it was
+  wrong in this entry's own first draft, which is worth more than the sizing. Its refusal
+  message said the `e_n dS/dk` piece "is here and is right by derivation", P94's record
+  repeated it, and **it is not here**: `optical_conductivity` builds
+  `velocity.matrix_elements(wavefunctions)`, which is `apply` and therefore `<n|dH/dk|m>`
+  alone, and neither `apply_s` nor `both` appears in the module. The claim was harmless
+  while every dataset with an overlap was refused, which is exactly why nobody read it.
+  So three things are missing, not one: `e_n dS/dk` inside the matrix element (free, it is
+  the second tangent of a `jvp` already taken), the dipole `K` (done), and the **two-slot
+  split** -- `_resolvent_sum` builds `z = <n|v_i|m><m|v_j|n>` out of one `element` array
+  and the corrected factors are not transposes of each other, so the sum needs a second
+  array rather than a second index. `_drude` needs the *first* of the three and not the
+  third, because a band velocity of a generalised eigenproblem carries `e_n dS/dk` while
+  the dipole vanishes on the diagonal. An afternoon for the plumbing and a phase for its
+  validation, since the f-sum rule of a generalised eigenproblem is not the
+  norm-conserving one.
+- **The shift current**, whose message carried the same error: it builds `matrix_elements`
+  and `second_matrix_elements` and neither carries an overlap term, so beside
+  `e_n dS/dk` and `e_n d^2S/dk dk` it needs `T^dag dT`, which is done, and
+  `d(T^dag dT)/dk`, which is a second projector derivative against `dpqq` and `dpqq`'s own
+  first moment and is not written. Unsized.
 - **No timing was taken against a reference code**, because neither `pw.x` nor Elk computes
   a Kubo Berry curvature map with an augmented dataset, so there is nothing to time against.
   What is recorded in `PERFORMANCE.md` instead is the cost of the term against the

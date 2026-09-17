@@ -6610,3 +6610,53 @@ whole file peaks at 4.25 GB and the eight new tests take 78 s.
 rematting took a spinor PAW force tape from 2.32 GiB to 0.99 GiB with the force unchanged
 to one ulp. Nobody has measured it here, and until somebody does, the `ecutrho = 400`
 gradient of a physical cell is out of reach on a 30 GB machine.
+
+## What the moving-overlap term costs the Kubo curvature (P98)
+
+**There is no reference code on the other side of this one, and that is the first thing to
+say.** The rule here is that a feature taken from Quantum ESPRESSO or from Elk is timed
+against the code it was taken from; this is not taken from either. `pw.x` has no Kubo
+Berry curvature map at all, Elk's task list has none with an augmented dataset, and the
+term itself -- the augmentation dipole inside the connection -- exists in neither. So what
+is measured is the only comparison that exists: the assembly with the term against the
+same assembly without it, which is also the quantity a user is choosing between, since
+`method='fhs'` carries the physics at either cost.
+
+Ultrasoft AlAs (`tests/data/qe/alas-epsilon-us.in`, `ecutwfc = 25`, `ecutrho = 200`), a
+16x16 plane mesh at `k_3 = 0`, `nbnd = 20`, one core with `OMP_NUM_THREADS=1` and
+`MKL_NUM_THREADS=1`, on an otherwise quiet workstation. The first call of each is thrown
+away, because it compiles; what is reported is the median of five after it.
+
+================================  ===========  =============
+the assembly                       median (s)   `max|Omega|`
+================================  ===========  =============
+with the moving-overlap term        178.4        1.477582
+without it                           96.5        1.474535
+================================  ===========  =============
+
+beside a 9.4 s ground state and a 66.9 s non-self-consistent pass over the 256 k-points.
+
+**The term costs 1.85x, and the factor is entirely a second `jvp` rather than the
+contraction.** What `augmentation_connection` needs beyond the curvature's own ingredients
+is `d(vkb)/dk_a` about each atom's centre, and
+`VelocityOperator.projectors` gets it from a `jvp` of `vkb(k)` that is separate from the
+`jvp` of `H(k)` inside `velocity_matrices`. Two crystal directions therefore take four
+tangents of `vkb` where a norm-conserving run takes two, and 178.4/96.5 = 1.85 is that
+doubling minus the part of the assembly which is not the `jvp`. The two contractions the
+term adds are `(nk, nb, nkb)` and `(nk, nb, nb)`, three orders below the tangent, and do
+not show.
+
+**The fix is a fusion and is not written.** `VelocityOperator.both` already differentiates
+`vkb(k)` on its way to `dH/dk` and `dS/dk` and throws the tangent away; returning it beside
+them would make the term free, exactly as `dS/dk` is free beside `dH/dk` today. What stops
+it being a one-line change is that `both` returns operators *applied to* `psi` while this
+wants the projector array itself, so the fused form has to return a third object of a
+different shape and every caller of `both` sees the signature. Recorded rather than done,
+and the number above is what it would be worth: the whole of the 81.9 s.
+
+**Both columns are the same physics to 0.21 per cent**, and that is the honest reading of
+the trade: what the term buys is not a different picture but a curvature that is right
+where it is read quantitatively, which is what `PLAN.md` P98's 0.57 per cent at a
+converged band count measures. A reader who wants the Chern number rather than the map
+should use `method='fhs'`, which carries the augmentation charge exactly and costs neither
+`jvp`.
