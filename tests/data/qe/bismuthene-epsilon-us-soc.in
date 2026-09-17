@@ -1,0 +1,41 @@
+! `bismuthene-soc-small.in` with fixed occupations, as a dielectric case: the
+! heavy-element counterpart of `alas-epsilon-us-soc.in`.
+!
+! AlAs answers whether the augmentation terms of a spinor response are there at
+! all -- the dipole is worth 0.108 and `int3` 3.6e-4 against a residual of
+! 3.5e-5 -- and cannot answer whether their **spin structure** is right: the
+! `fcoef` dressing of `dpqq_so` is worth 1.6e-6 there and the dressing of the
+! `int3` tangent 4.2e-7, both below the residual, so the comparison against
+! `ph.x` would read the same with either one deleted. Bismuth is the heaviest
+! species with a committed fully-relativistic ultrasoft dataset, and the whole
+! point of the cell is that the dressing should be resolvable on it.
+!
+! `occupations = 'fixed'`, where `bismuthene-soc-small.in` smears: an
+! `epsilon_infinity` is not defined for a metal and both codes refuse one. The
+! honeycomb is a quantum spin Hall insulator once spin-orbit coupling is on, so
+! the gap is the coupling's own doing.
+!
+! The reference is regenerated with the vendored `ph.x`
+! (`bismuthene-epsilon-us-soc.ph.in`) and committed as
+! `reference.out.ph-bismuthene-epsilon-us-soc`.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 4, celldm(1) = 10.109950, celldm(3) = 1.978248,
+    nat = 2, ntyp = 1,
+    ecutwfc = 20.0, ecutrho = 160.0,
+    noncolin = .true., lspinorb = .true.,
+    starting_magnetization = 0.0,
+ /
+ &electrons
+    conv_thr = 1.0d-12
+    mixing_beta = 0.7
+ /
+ATOMIC_SPECIES
+ Bi 208.98 Bi.rel-pbe-dn-rrkjus_psl.1.0.0.UPF
+ATOMIC_POSITIONS (crystal)
+ Bi 0.333333333333 0.666666666667 0.0
+ Bi 0.666666666667 0.333333333333 0.0
+K_POINTS AUTOMATIC
+ 4 4 1 0 0 0

@@ -13774,7 +13774,11 @@ closed the DFT+U continuation for fourteen phases after P62b removed the blocker
 
 `set_int3_nc` is real and stays refused by name: for an ultrasoft or PAW dataset `dD_ij` is
 a 2x2 matrix in spin space that then has to be sandwiched between the spin-orbit
-coefficients, where a norm-conserving dataset has **no** `dD` at all.
+coefficients, where a norm-conserving dataset has **no** `dD` at all. ***Lifted by P98, and
+the sentence above is what it was lifted against: there is no second implementation here
+to write, because one `jvp` of `Calculation.coefficients` goes through the recombination
+and the sandwich, both linear, and comes out dressed. What had to be written was the
+position operator's spin blocks.***
 
 **Three QE-free numbers, on committed cells** (`tests/regression/test_spinor_response.py`,
 9 tests, 16m15s, peak RSS 1338 M).
@@ -18123,3 +18127,111 @@ the three had been written from the raise's message. Two of them had then been c
 into `PLAN.md`'s index, where they read as settled. The rule that catches it is the one
 `AUGMENTATION-NEXT.md` states for its own sizings and does not apply to the rest of the
 record: **a refusal's message is a claim about the code and ages like one**.
+
+### P98 -- The dielectric response of an augmented spinor: one term that came free, one that had to be written, and a dressing below the floor. ✅ DONE for the dielectric constant.
+
+`AUGMENTATION-NEXT.md` 1d and 3c, and `PAW-MODES-NEXT.md` item 6's first two bullets. The
+quantity is `epsilon_infinity` and the Born charges of a `noncolin` run on an ultrasoft or
+PAW dataset, which is what every heavy element is described with, and what stood in front
+of it was a refusal naming `set_int3_nc`.
+
+**The object the refusal named did not have to be written, and the object that did was not
+named** -- the eighth entry in `AUGMENTATION-NEXT.md`'s own tally of sizings taken from a
+raise's message rather than from the code around it. `_perturbed_coefficients` is one
+`jvp` of `Calculation.coefficients`, and that method **already dispatches on `noncolin`**:
+the recombination into spin blocks and the `fcoef` sandwich are linear in the integrals,
+so the tangent comes out dressed with nothing added. `set_int3_nc` is a routine QE needs
+because it differentiates by hand and this code does not need at all. What was missing was
+two contractions and one object:
+
+- `adddvscf`'s nonlocal term in the spinor branch of `local_perturbation`, which held the
+  `NotImplementedError` where the collinear branch held the projection;
+- the **position** operator, `adddvepsi_us`'s `lspinorb` branch. `ultrasoft_position`
+  could not even broadcast on a spinor -- it projects over `npwx` where a spinor is
+  `2 npwx` long -- and its two terms take `qq_so` and `dpqq_so` in place of the scalars;
+- `dpqq_so` itself, `compute_qdipol_so`, which is `transform_qq_so`'s congruence with the
+  augmentation dipole in place of `qq` and is now `SpinOrbitCoupling.dipole_so`. It
+  follows `qq_so`'s `soc_scale` rule rather than `_newd_noncollinear`'s, and for `qq_so`'s
+  reason: what is sandwiched is spin-independent radial data, so everything spin-dependent
+  in the result is the coupling.
+
+**The identity, and why it decides nothing about the spin structure.** `si-epsilon-us` and
+`si-epsilon-paw` with `noncolin = .true.` added are the same physics on a doubled space,
+and they reproduce the scalar runs' dielectric constants to **9.2e-14** and **1.0e-13**,
+with the total energies 0 and 1.4e-14 Ry apart. That catches a shape error, a dropped
+component and the whole `degspin` chain. It cannot catch a wrong spin structure: a
+scalar-relativistic dataset has `fcoef = 1`, so `qq_so` is block diagonal, `dpqq_so` is
+the scalar dipole on both blocks and the recombination collapses, and the identity would
+pass with the sandwich deleted from all three terms.
+
+**The number is `alas-epsilon-us-soc.in`**, which is `alas-epsilon-us.in` with the two
+fully-relativistic files in place of the scalar ones and nothing else changed, against the
+vendored `ph.x`:
+
+| | defumat | `ph.x` |
+|---|---|---|
+| total energy | -25.564414817853 Ry | -25.56441482 Ry |
+| `epsilon_infinity` | 9.528810788 | 9.528846009 |
+
+**3.5e-5**, the same `dq = 0.01` radial-table floor the four scalar cases sit at (4.3e-5,
+5.2e-5, 3.4e-5, 1.2e-4). Spin-orbit coupling is worth **8.6e-3** on this cell -- the
+scalar-relativistic AlAs is 9.520257751 -- so the agreement is 245 times finer than the
+effect being added.
+
+**What each new term is worth, measured by deleting it.** An identity that closes is not
+evidence; this is the A/B, on the same converged ground state:
+
+| what was changed | `epsilon` | moved by |
+|---|---|---|
+| as written | 9.528810788 | |
+| no augmentation dipole at all | 9.420509014 | 1.1e-1 |
+| no `int3` in the perturbation | 9.528450903 | 3.6e-4 |
+| `dpqq_so` spin-traced | 9.528809205 | 1.6e-6 |
+| the `int3` tangent spin-traced | 9.528811208 | 4.2e-7 |
+
+**The last two rows are the finding, and they are a caveat rather than a result.** The
+augmentation terms are resolved by this comparison -- the dipole at 1.1e-1 and `int3` at
+3.6e-4 against a residual of 3.5e-5 -- so their *presence* is validated. Their **spin
+dressing** is not: the `fcoef` congruence on the dipole and on the `int3` tangent moves
+the answer by less than the residual, so the comparison against `ph.x` would read the same
+with either one deleted. That is P94's lesson met again in a new place: a term below a
+test's own resolution is a term the test does not check. What the spin structure rests on
+here is that both are the same congruence `transform_qq_so` applies to `qq`, which the
+ground state does resolve -- the total energy agrees to the printed digit and the overlap
+`S` is built from `qq_so` -- and not on the dielectric comparison.
+
+**The cell that should resolve it** is `bismuthene-epsilon-us-soc.in`: bismuth is the
+heaviest species with a committed fully-relativistic ultrasoft dataset, and the honeycomb
+is an insulator once the coupling is on, so `occupations = 'fixed'` is legitimate there
+where `bismuthene-soc-small.in` smears.
+
+**3c, the matrix orthonormality multipliers.** `_constraint_energy` contracts the scalar
+`qq`, and the Gram matrix was never the problem: `<psi_m|psi_n>` over the whole
+`2 npwx`-long vector already *is* a spinor inner product. The augmentation half is what
+could not stay scalar, so `_spinor_constraint_energy` contracts `qq_so` with the
+projections of both components, and `Lambda` gains no spin index -- it multiplies the band
+pair, both of whose states are whole spinors. It is pinned against
+`Calculation._spinor_overlap`, a separate implementation of `S`, with a **random Hermitian**
+`Lambda` rather than the diagonal one a ground state has, because a diagonal test cannot
+see an index order and the two factors of the trace are where a transpose hides
+(`tests/unit/test_force_machinery.py`).
+
+**Asking for the Born charges found one more collinear site**, the same class as the three
+P83 found: `born._raw_mixed_state`'s own `raw_becsum` called the collinear `becsum_of`,
+where a spinor needs `sum_bec` followed by `add_becsum_so`. It failed to broadcast rather
+than returning a number, which is the good failure and is how the site was found -- the
+twin of the density builder P83 fixed four lines below it.
+
+**What is outstanding.**
+
+- The **placement** of PAW's one-centre tangent is by construction and not by measurement.
+  `_noncollinear_coefficients` adds `ddd_paw` to the scalar integrals *before* the `fcoef`
+  sandwich, so `dddd_paw` now rides the same `jvp` rather than being added to its result;
+  on every cell available here the two orders agree, because `alas-epsilon-us-soc` is not
+  PAW and `si-epsilon-paw` has `fcoef = 1`. Distinguishing them needs a fully-relativistic
+  **PAW insulator**, and the committed relativistic PAW species are iodine, platinum and
+  nickel, none of which gives one without building a molecule in a box.
+- A spinor augmented **metal** is still refused, by the guard about metals rather than the
+  one about datasets. That edge moved rather than went.
+- The phonons, the Raman tensor and the strain response stay refused for a spinor, for
+  `symmetrize_displacement`'s reason rather than this one.

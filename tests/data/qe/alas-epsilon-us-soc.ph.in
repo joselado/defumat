@@ -1,0 +1,17 @@
+! The `ph.x` input that generated `reference.out.ph-alas-epsilon-us-soc`, so that
+! the reference is regenerable rather than merely committed.
+!
+!   pw.x -in alas-epsilon-us-soc.in && ph.x -in alas-epsilon-us-soc.ph.in
+!
+! with `outdir` pointing at the same scratch for both. The dielectric constant
+! and the Born charges are what `epsil = .true.` prints at the end.
+! (fully-relativistic ultrasoft AlAs, a polar crystal with spin-orbit coupling.)
+dielectric constant of AlAs, ultrasoft, spin-orbit
+ &inputph
+  tr2_ph = 1.0d-14,
+  epsil = .true.,
+  fildyn = 'alas-soc.dynG',
+  amass(1) = 26.98,
+  amass(2) = 74.92,
+ /
+0.0 0.0 0.0

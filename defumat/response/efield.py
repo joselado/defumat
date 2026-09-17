@@ -633,6 +633,8 @@ def _augmentation_dipole(calculation):
     if not calculation.is_ultrasoft:
         return None
     per_species = [augmentation_dipole(pseudo) for pseudo in calculation.pseudos]
+    if calculation.noncolin:
+        return _spinor_augmentation_dipole(calculation, per_species)
     blocks = []
     for values, atoms in zip(per_species, calculation.augmentation.species_atoms):
         nh = values.shape[-1]
@@ -645,6 +647,42 @@ def _augmentation_dipole(calculation):
         calculation.augmentation.block_matrix(
             tuple(None if b.shape[0] == 0 else b[:, axis] for b in blocks)
         )
+        for axis in range(3)
+    ])
+
+
+def _spinor_augmentation_dipole(calculation, per_species):
+    """``dpqq_so`` as the ``(3, 2, 2, nkb, nkb)`` matrix a spinor projection contracts.
+
+    ``compute_qdipol_so``. The dipole is dressed by the same ``fcoef``
+    congruence ``qq_so`` is (:meth:`~defumat.pseudo.spinorbit.
+    SpinOrbitCoupling.dipole_so`), and a scalar-relativistic species inside a
+    spin-orbit run comes back with ``dpqq`` on both diagonal spin blocks and
+    zero off them, which is the Fortran's ``else`` branch.
+    """
+    transforms = calculation.spin_orbit
+    dressed = [
+        np.stack([
+            transforms[species].dipole_so(np.asarray(values[axis]))
+            for axis in range(3)
+        ])                                 # (3, nh, nh, 2, 2)
+        for species, values in enumerate(per_species)
+    ]
+    augmentation = calculation.augmentation
+    return jnp.stack([
+        jnp.stack([
+            jnp.stack([
+                augmentation.block_matrix(tuple(
+                    jnp.asarray(np.broadcast_to(
+                        matrix[axis, :, :, a, b][None],
+                        (len(atoms),) + matrix.shape[1:3],
+                    ))
+                    for matrix, atoms in zip(dressed, augmentation.species_atoms)
+                ))
+                for b in range(2)
+            ])
+            for a in range(2)
+        ])
         for axis in range(3)
     ])
 
@@ -672,6 +710,27 @@ def ultrasoft_position(calculation, hamiltonians, states, position, dipole,
 
         def one_k(ik, hamiltonian=hamiltonian, occupied=occupied, spin=spin):
             overlapped = hamiltonian.apply_s(position[spin][ik], ik)
+            if calculation.noncolin:
+                # ``adddvepsi_us``'s ``lspinorb`` branch, which is the same two
+                # terms with a spin pair on each matrix: the two components of
+                # the spinor are projected on the *same* projectors, and what
+                # mixes them is ``qq_so`` and ``dpqq_so``. A spiral is the one
+                # case where the projectors differ between components and the
+                # velocity operator refuses it before this is reached.
+                npwx = vkb.shape[1]
+                pair = occupied[ik].reshape(
+                    occupied[ik].shape[:-1] + (2, npwx)
+                )
+                becp1 = jnp.einsum("gk,nag->nak", vkb[ik].conj(), pair)
+                becp2 = jnp.einsum(
+                    "gk,nag->nak", projector_velocity[ik].conj(), pair
+                )
+                qq = hamiltonian.qq.astype(vkb.dtype)
+                coefficients = 1j * jnp.einsum(
+                    "abij,nbj->nai", qq, becp2
+                ) + jnp.einsum("abij,nbj->nai", dipole, becp1)
+                added = jnp.einsum("gk,nak->nag", vkb[ik], coefficients)
+                return overlapped + added.reshape(occupied[ik].shape)
             qq = hamiltonian.projectors.qq.astype(vkb.dtype)
             becp1 = jnp.einsum("gk,ng->nk", vkb[ik].conj(), occupied[ik])
             becp2 = jnp.einsum("gk,ng->nk",

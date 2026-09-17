@@ -1,0 +1,16 @@
+! The `ph.x` input that generated `reference.out.ph-bismuthene-epsilon-us-soc`,
+! so that the reference is regenerable rather than merely committed.
+!
+!   pw.x -in bismuthene-epsilon-us-soc.in && ph.x -in bismuthene-epsilon-us-soc.ph.in
+!
+! with `outdir` pointing at the same scratch for both. The dielectric constant is
+! what `epsil = .true.` prints at the end. (fully-relativistic ultrasoft
+! bismuthene, the heavy-element case.)
+dielectric constant of bismuthene, ultrasoft, spin-orbit
+ &inputph
+  tr2_ph = 1.0d-14,
+  epsil = .true.,
+  fildyn = 'bi.dynG',
+  amass(1) = 208.98,
+ /
+0.0 0.0 0.0

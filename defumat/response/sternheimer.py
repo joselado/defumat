@@ -899,12 +899,32 @@ def local_perturbation(calculation, dv, v_scf=None, ddd_paw=None, dddd_paw=None)
             return gathered.reshape(block.shape)
 
         if noncolin:
+            out = map_bands(spinor_block, states)
             if coefficients is not None:
-                raise NotImplementedError(
-                    "a noncollinear ultrasoft or PAW perturbation needs int3 as "
-                    "a 2x2 spin matrix (set_int3_nc), which is not implemented"
+                # ``set_int3_nc``: ``int3`` carries a spin pair here, and it is
+                # **not** assembled a second time. The ``jvp`` in
+                # :func:`_perturbed_coefficients` runs through
+                # ``_noncollinear_coefficients``, whose recombination and
+                # ``fcoef`` sandwich are linear in the integrals, so the tangent
+                # comes out already dressed -- which is what makes
+                # ``set_int3_nc`` a routine QE needs and this code does not.
+                # What is written here is ``adddvscf``'s contraction alone,
+                # which is :meth:`~defumat.hamiltonian.noncollinear.
+                # SpinorHamiltonian._nonlocal` with ``int3`` in place of
+                # ``deeq_nc``.
+                projectors = vkb[ik]
+                pair = jnp.where(mask[ik], states, 0.0).reshape(
+                    states.shape[:-1] + (2, npwx)
                 )
-            return jnp.where(mask[ik], map_bands(spinor_block, states), 0.0)
+                becp = jnp.einsum("gk,...ag->...ak", projectors.conj(), pair)
+                applied = jnp.einsum(
+                    "abij,...bj->...ai",
+                    coefficients.astype(projectors.dtype), becp,
+                )
+                out = out + jnp.einsum(
+                    "gk,...ak->...ag", projectors, applied
+                ).reshape(states.shape)
+            return jnp.where(mask[ik], out, 0.0)
 
         # **The bands are walked, not batched**, as everywhere else a block of
         # states goes through the grid. This is the whole linear-response
@@ -960,12 +980,26 @@ def _perturbed_coefficients(calculation, dv, v_scf, ddd_paw, dddd_paw):
             "taken at the converged potential"
         )
     components = as_potential_components(calculation.vltot, calculation.nspin_mag)
+    potential = jnp.asarray(v_scf) + components
+    if ddd_paw is None:
+        _, int3 = jax.jvp(
+            lambda field: calculation.coefficients(field, None),
+            (potential,),
+            (dv,),
+        )
+        return int3 if dddd_paw is None else int3 + dddd_paw
+    # **PAW's one-centre response rides the same ``jvp`` instead of being added
+    # to its result**, and the two agree only for a collinear run. ``newd``
+    # there is additive in ``ddd_paw``, so the order does not matter; a spinor's
+    # :meth:`~defumat.scf.driver.Calculation._noncollinear_coefficients` adds it
+    # to the *scalar* integrals **before** the ``fcoef`` sandwich, and a tangent
+    # added after the sandwich is in the wrong spin structure -- which is
+    # ``add_paw_to_deeq``'s own placement trap, one derivative out.
+    tangent = jnp.zeros_like(ddd_paw) if dddd_paw is None else dddd_paw
     _, int3 = jax.jvp(
-        lambda potential: calculation.coefficients(potential, ddd_paw),
-        (jnp.asarray(v_scf) + components,),
-        (dv,),
+        calculation.coefficients, (potential, ddd_paw), (dv, tangent)
     )
-    return int3 if dddd_paw is None else int3 + dddd_paw
+    return int3
 
 
 def paw_response(calculation, dbecsum, becsum_):
@@ -1157,6 +1191,16 @@ def require_a_sternheimer_regime(
     the first message there answered a question the user had not asked, and left
     nothing in the output to say what the real gap was.
 
+    **A noncollinear ultrasoft or PAW dataset is no longer refused here** (P98).
+    ``int3`` is a 2x2 matrix in spin space for a spinor, which is what
+    ``set_int3_nc`` builds -- and it is not built a second time here: the
+    ``jvp`` of :meth:`~defumat.scf.driver.Calculation.coefficients` already
+    passes through the noncollinear recombination, whose ``fcoef`` sandwich is
+    linear, so the tangent comes out dressed. What that leaves the caller is its
+    own assembly, and the *position* operator was the term that had to be
+    written: an ultrasoft state's augmentation dipole carries a spin pair too
+    (``compute_qdipol_so``).
+
     ``spin_polarized = True`` says the same thing about ``nspin = 2``: the
     *solve* now takes one occupied-band count per channel
     (:func:`occupied_counts`) and is validated for both regimes, but a caller's
@@ -1198,20 +1242,6 @@ def require_a_sternheimer_regime(
             "perturbation, which is dv_0 I + dm . sigma rather than one "
             "potential per channel. What is *not* validated is this caller's "
             "assembly on top of it"
-        )
-    if calculation.noncolin and calculation.is_ultrasoft:
-        # ``int3`` is a *scalar* per projector pair here, and for a spinor it is
-        # a 2x2 matrix in spin space that then has to be sandwiched between the
-        # spin-orbit coefficients -- ``set_int3_nc`` and ``newd_so``'s partner.
-        # One ``jvp`` of ``Calculation.coefficients`` gives the scalar
-        # integrals; what is missing is the recombination, which is
-        # ``_newd_noncollinear`` applied to a *tangent* rather than to a value.
-        raise NotImplementedError(
-            "the Sternheimer response of a noncollinear ultrasoft or PAW "
-            "dataset is not implemented: dD_ij is a 2x2 matrix in spin space "
-            "(set_int3_nc), where the norm-conserving case has no dD at all. "
-            "The noncollinear response is implemented for norm-conserving "
-            "datasets"
         )
     if getattr(calculation, "magnetic_field", None) is not None:
         # **The field the run converged under is not the field the input asked

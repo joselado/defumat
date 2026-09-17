@@ -456,25 +456,6 @@ def energy_at(moved, state: FrozenState, terms: bool = False, density=None,
     reject_potential_only(moved)
     if moved.noncolin:
         reject_spinor_spiral(moved)
-        if multipliers is not None and moved.is_ultrasoft:
-            # **The refusal is about the metric, not about the spinor.** The
-            # Gram matrix :func:`_constraint_energy` builds is
-            # ``<psi_m|psi_n>`` over the whole ``2 npwx``-long coefficient
-            # vector, which is already a spinor's own inner product -- summing
-            # both components is what a spinor overlap *is*. What it cannot do
-            # is the augmentation half: it contracts the scalar ``qq`` where a
-            # spinor's metric is ``qq_so``, a complex 2x2 matrix in spin space,
-            # and ``Lambda`` then carries a spin pair as well. So a
-            # norm-conserving spinor, where ``S = 1`` and the augmentation term
-            # is not reached at all, is exactly the case this was refusing for
-            # no reason -- and it is the case P83's Born charges need.
-            raise NotImplementedError(
-                "the matrix orthonormality multipliers are not implemented for "
-                "an ultrasoft or PAW spinor: _constraint_energy contracts the "
-                "scalar qq, where a spinor's metric is qq_so and Lambda carries "
-                "a spin pair as well. A norm-conserving spinor has S = 1 and is "
-                "implemented (defumat.response.born, P83)"
-            )
 
     psi, weights = state.wavefunctions, state.weights
 
@@ -539,9 +520,15 @@ def energy_at(moved, state: FrozenState, terms: bool = False, density=None,
         # :func:`_constraint_energy`. Identical at the ground state, where
         # ``Lambda = diag(w eps)``, and the two terms above are what it replaces.
         overlap = jnp.zeros(())
-        norm = _constraint_energy(
-            psi, moved.projectors.vkb, moved.projectors.qq, multipliers, gamma_only
-        )
+        if moved.noncolin:
+            norm = _spinor_constraint_energy(
+                psi, moved.projectors.vkb, moved.qq_so, multipliers
+            )
+        else:
+            norm = _constraint_energy(
+                psi, moved.projectors.vkb, moved.projectors.qq, multipliers,
+                gamma_only,
+            )
 
     contributions = {
         "kinetic": kinetic,
@@ -708,6 +695,39 @@ def _projector_energies(psi, vkb, dij, qq, weights, eigenvalues,
 
 
 @jax.jit
+@jax.jit
+def _spinor_constraint_energy(psi, vkb, qq_so, multipliers):
+    """:func:`_constraint_energy` for a two-component spinor.
+
+    **The Gram matrix was never the problem and the metric was.**
+    ``<psi_m|psi_n>`` over the whole ``2 npwx``-long coefficient vector already
+    *is* a spinor overlap -- summing the two components is what a spinor inner
+    product does -- so the plane-wave half below is the scalar expression
+    unchanged. What cannot be left scalar is the augmentation half: ``S`` pairs
+    each component with the other through ``qq_so``, the complex 2x2 matrix in
+    spin space that ``transform_qq_so`` builds, and contracting the scalar
+    ``qq`` against one component at a time would drop the off-diagonal spin
+    blocks -- which are the whole of spin-orbit coupling in the overlap, exactly
+    as they are in ``dvan_so``.
+
+    ``Lambda`` keeps its ``(nspin, nk, nbnd, nbnd)`` shape and gains no spin
+    index: it multiplies the *band* pair and the spin pair is inside the Gram
+    matrix, which is what ``psidspsi``'s own ``Lambda_mp = w_m <psi_p|H|psi_m>``
+    says -- both states there are whole spinors.
+    """
+    gram = jnp.einsum("skmg,skng->skmn", psi.conj(), psi)
+    if vkb.shape[-1] != 0 and qq_so is not None:
+        npwx = vkb.shape[1]
+        components = psi.reshape(psi.shape[:-1] + (2, npwx))
+        becp = jnp.einsum("kgi,sknag->sknai", vkb.conj(), components)
+        gram = gram + jnp.einsum(
+            "skmai,abij,sknbj->skmn",
+            becp.conj(), qq_so.astype(becp.dtype), becp, optimize=True,
+        )
+    identity = jnp.eye(gram.shape[-1], dtype=gram.dtype)
+    return jnp.real(jnp.einsum("skmn,sknm->", multipliers, gram - identity))
+
+
 def _spinor_projector_energies(psi, vkb, dvan_so, qq_so, weights, eigenvalues):
     """:func:`_projector_energies` for a two-component spinor.
 

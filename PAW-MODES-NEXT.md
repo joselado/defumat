@@ -93,18 +93,21 @@ places that needs it needs a different one of them.
 third one would take, `Calculation._as_spinors` and `Calculation._spinor_overlap` in
 `scf/driver.py`.
 
-**`int3` as a 2x2 matrix in spin space**, which is QE's `set_int3_nc`. The door is
-`require_a_sternheimer_regime`, on `calculation.noncolin and calculation.is_ultrasoft`,
-so it takes PAW with it; a second raise inside `local_perturbation`'s `apply` is the
-backstop for a noncollinear perturbation that arrives with augmentation coefficients. The
-guard's own comment says what the work is and it is worth quoting rather than
-paraphrasing: one `jvp` of `Calculation.coefficients` already gives the scalar integrals,
-and what is missing is the recombination, which is `_newd_noncollinear` applied to a
-**tangent** rather than to a value. This is what blocks the dielectric constant and the
-Born charges of a spinor run on an augmented dataset, which is every heavy element; the
-collinear augmented responses are unaffected and are validated. **Size:** a phase, on the
-hypothesis that the recombination is the whole of it, which the comment asserts and
-nothing measures.
+**`int3` as a 2x2 matrix in spin space**, which is QE's `set_int3_nc`. ✅ **DONE
+2026-09-17**, `PLAN.md` P98 and `AUGMENTATION-NEXT.md` §1d.
+
+The hypothesis this entry flagged -- "that the recombination is the whole of it, which the
+comment asserts and nothing measures" -- was right to flag and wrong in both directions.
+The recombination is **not** work at all: `Calculation.coefficients` dispatches on
+`noncolin` itself, so the `jvp` passes through `_newd_noncollinear` and its `fcoef`
+sandwich is linear, and the tangent comes out dressed with nothing written. And it is not
+the whole of it: the *position* operator was the term that had to be written, an ultrasoft
+state's augmentation dipole coupling the two spinor components through `dpqq_so`
+(`compute_qdipol_so`), which `ultrasoft_position` could not even broadcast for a spinor.
+The dielectric constant of an augmented spinor reaches `ph.x` to **3.5e-5** on
+fully-relativistic ultrasoft AlAs. What is left of the entry is written at the end of
+§1d: PAW's one-centre tangent now rides the same `jvp` rather than being added after the
+sandwich, and no committed cell distinguishes the two orders.
 
 **`qq_so` in the matrix orthonormality multipliers of a spinor force.** The guard is
 inside `energy_at` in `forces/energy.py` and it fires only when `multipliers is not None`,

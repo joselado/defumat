@@ -2296,16 +2296,26 @@ say which weight the three further tangents belong with); any response under a
 potential-only meta-GGA; and a shifted grid with a reduced $k$-set.
 
 A \textbf{spinor} run (\code{noncolin}, with or without \code{lspinorb}) has a
-dielectric constant and Born charges on a \textbf{norm-conserving} dataset,
-provided it carries \emph{no net moment}. A \textbf{textured} one
+dielectric constant and Born charges on all three datasets, provided it carries
+\emph{no net moment}. A \textbf{textured} one
 (\code{nspin\_mag = 4}) is refused by name and the refusal carries its own
 measurement: it runs, its tensor is uniaxial along the moment and follows the
 moment when that is turned, and it is 5.3\% from \code{ph.x} in the component
 along the moment with the two across it agreeing to $5\times10^{-4}$. An
-\emph{ultrasoft or PAW} one is refused by name and the missing piece is exactly
-one object: $\mathrm dD_{ij}$ is a $2\times2$ matrix in spin space
-(\code{set\_int3\_nc}) where a norm-conserving dataset has no $\mathrm dD$ at
-all. The \textbf{phonons, the Raman tensor, the strain response} and everything
+\emph{ultrasoft or PAW} one runs, and the object it was refused for is not
+written here either: $\mathrm dD_{ij}$ is a $2\times2$ matrix in spin space
+(\code{set\_int3\_nc}), and one \code{jvp} of \code{newd} already passes
+through the noncollinear recombination, whose \code{fcoef} sandwich is linear,
+so the tangent comes out dressed. What had to be written was the \emph{position}
+operator's spin blocks, the augmentation charge having a dipole that couples the
+two components (\code{compute\_qdipol\_so}). Fully-relativistic ultrasoft AlAs
+reaches \code{ph.x} to $3.5\times10^{-5}$ on a spin-orbit shift of
+$8.6\times10^{-3}$; a relativistic \emph{PAW} insulator has no reference here,
+so that combination is validated only through the identity against the scalar
+run. A spinor \emph{metal} is refused, and for the reason every metal is: an
+\code{epsilon\_infinity} is not defined there.
+
+The \textbf{phonons, the Raman tensor, the strain response} and everything
 built on them stay refused for a spinor, and for their own reason rather than
 this one: \code{symmetrize\_displacement} carries the axial landmine the field
 path had --- three of the four \code{nspin\_mag} channels are a magnetization

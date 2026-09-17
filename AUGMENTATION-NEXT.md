@@ -195,17 +195,46 @@ opposite spelling to confirm. Pin it here the same way, on an identity rather th
 sentence -- the dynamical matrix at a zone-boundary `q` against the validated `Gamma` matrix
 of the doubled supercell.
 
-### 1d. A noncollinear ultrasoft or PAW response
+### 1d. A noncollinear ultrasoft or PAW response. ✅ DONE for the dielectric constant.
 
-`response/sternheimer.py:1202` and `:903`. Both, and only in the spinor regime.
+**Closed 2026-09-17.** `PLAN.md` P98 has the numbers. The dielectric constant of a spinor
+run on an ultrasoft or PAW dataset runs, which is every heavy element.
 
-**What is missing.** One object: `int3` as a 2x2 matrix in spin space, which is QE's
-`set_int3_nc`. A norm-conserving dataset has no `dD` at all, so nothing already
-validated reaches it.
+**The entry named one object and that object did not have to be written, and the one that
+did have to be written was not named** -- the eighth time this file has been written from
+a refusal's message rather than from the code around it. `set_int3_nc` is QE's routine and
+there is no counterpart here: `_perturbed_coefficients` is a `jvp` of
+`Calculation.coefficients`, which **already dispatches on `noncolin`**, and the
+recombination and the `fcoef` sandwich inside it are linear in the integrals, so the
+tangent comes out dressed with nothing added. What was missing was two contractions and
+one object:
 
-**What this blocks.** The dielectric constant and the Born charges of a spinor run on an
-augmented dataset, which is every heavy element. The collinear ultrasoft and PAW
-responses are unaffected and are validated. **Size:** a phase.
+* `adddvscf`'s nonlocal term in the spinor branch of `local_perturbation`, which raised
+  rather than running -- the branch had a `NotImplementedError` where the collinear one
+  had the projection;
+* the **position** operator, `adddvepsi_us`'s `lspinorb` branch, whose two terms take
+  `qq_so` and `dpqq_so` in place of the scalars. `ultrasoft_position` would not even
+  broadcast on a spinor, its projection being over `npwx` where a spinor is `2 npwx` long;
+* `dpqq_so` itself (`compute_qdipol_so`), which is `transform_qq_so`'s congruence with the
+  augmentation dipole in place of `qq` and is now `SpinOrbitCoupling.dipole_so`.
+
+**What the check had to be, and the first one chosen could not discriminate.** A
+scalar-relativistic dataset run with `noncolin = .true.` has `fcoef = 1`, so `qq_so` is
+block diagonal, `dpqq_so` is the scalar dipole on both spin blocks and the recombination
+collapses: the identity against the scalar run passes at **9.2e-14** (ultrasoft) and
+**1.0e-13** (PAW) and would pass with the `fcoef` sandwich deleted from all three terms.
+The discriminating cell is `alas-epsilon-us-soc.in`, `alas-epsilon-us.in` with the two
+fully-relativistic files in place of the scalar ones and nothing else changed:
+**9.528810788 against `ph.x`'s 9.528846009**, 3.5e-5, on a spin-orbit shift of 8.6e-3.
+
+**What is still open in this entry.** The Born charges of an augmented spinor, which
+needed §3c beside this and are closed with it; and the **placement** of PAW's one-centre
+tangent, which is by construction rather than by measurement -- `_noncollinear_coefficients`
+adds `ddd_paw` to the scalar integrals *before* the sandwich, so `dddd_paw` now rides the
+same `jvp` rather than being added to its result, and no cell here distinguishes the two.
+It would take a fully-relativistic **PAW insulator**, and the committed relativistic PAW
+species are iodine, platinum and nickel, none of which gives one without building a
+molecule in a box.
 
 ### 1e. A spin spiral with an ultrasoft or PAW dataset. ✅ DONE for the ground state.
 

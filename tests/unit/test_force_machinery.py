@@ -178,3 +178,62 @@ def test_a_noncollinear_force_is_refused_rather_than_approximated(pseudo_dir):
     )
     with pytest.raises(NotImplementedError, match="noncollinear"):
         energy_of(calculation, np.zeros((1, 3)), state)
+
+
+def test_the_spinor_constraint_is_the_spinor_overlap_it_claims_to_be(pseudo_dir):
+    """``Tr[Lambda (<psi|S|psi> - 1)]`` against ``s_psi`` itself, off the diagonal.
+
+    The matrix multipliers were refused for an augmented spinor because
+    :func:`~defumat.forces.energy._constraint_energy` contracts the scalar
+    ``qq`` where the metric is ``qq_so``. What replaces it is checked here
+    against :meth:`~defumat.scf.driver.Calculation._spinor_overlap`, which is a
+    separate implementation of ``S`` written for the projections, with a
+    **random Hermitian** ``Lambda`` rather than the diagonal one a ground state
+    has: a diagonal test cannot see an index order, and the two factors of the
+    trace are where a transpose hides. Random states rather than converged ones,
+    for the same reason -- an eigenstate satisfies the constraint, so the thing
+    being measured would be zero.
+    """
+    from defumat.forces.energy import _spinor_constraint_energy
+
+    system = build_system(read_pw_input(CASES / "pt2-soc-force.in"))
+    pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species)
+    calculation = Calculation(system, pseudos)
+    assert calculation.noncolin and calculation.qq_so is not None
+
+    rng = np.random.default_rng(3)
+    nk, nbnd = calculation.projectors.vkb.shape[0], 3
+    shape = (1, nk, nbnd, 2 * calculation.basis.npwx)
+    psi = (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)) / 10.0
+    # Masked, because a state *is* masked everywhere this is reached: the
+    # padding to ``npwx`` is not part of the sphere, and the two expressions
+    # compared here zero it in different places.
+    mask = np.asarray(calculation.basis.planewaves.mask)
+    psi = np.where(np.concatenate([mask, mask], axis=-1)[None, :, None], psi, 0.0)
+    block = rng.standard_normal((nbnd, nbnd)) + 1j * rng.standard_normal((nbnd, nbnd))
+    multipliers = np.broadcast_to(
+        (block + block.conj().T)[None, None], (1, nk, nbnd, nbnd)
+    )
+
+    reference = 0.0
+    for ik in range(nk):
+        overlapped = calculation._spinor_overlap(psi[0, ik], ik)
+        gram = np.asarray(np.conj(psi[0, ik]) @ overlapped.T)
+        reference += float(np.real(np.trace(multipliers[0, ik] @ (gram - np.eye(nbnd)))))
+    written = float(_spinor_constraint_energy(
+        psi, calculation.projectors.vkb, calculation.qq_so, multipliers
+    ))
+    assert written == pytest.approx(reference, rel=1e-12, abs=1e-12)
+
+    # And the off-diagonal spin blocks are what it is for. Zeroing them leaves
+    # the ``j``-averaged metric, which is what contracting the scalar ``qq``
+    # against each component separately would have given -- the scalar
+    # expression cannot even be applied here, its projection being over ``npwx``
+    # where a spinor is ``2 npwx`` long, which is how this refusal was found.
+    diagonal = np.asarray(calculation.qq_so).copy()
+    diagonal[0, 1] = 0.0
+    diagonal[1, 0] = 0.0
+    averaged = float(_spinor_constraint_energy(
+        psi, calculation.projectors.vkb, diagonal, multipliers
+    ))
+    assert abs(averaged - written) > 1e-6 * abs(written)

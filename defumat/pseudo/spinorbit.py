@@ -420,6 +420,26 @@ class SpinOrbitCoupling:
         scalar = spin_trace(full)
         return scalar + self.soc_scale * (full - scalar)
 
+    def dipole_so(self, dpqq: np.ndarray) -> np.ndarray:
+        """``compute_qdipol_so``: the augmentation dipole as spin blocks.
+
+        ``dpqq^a_ij = int Q_ij(r) r_a dr`` is spin-independent radial data, the
+        same as ``qq``, and it is dressed by the same congruence
+        (``PW/src/compute_qdipol_so.f90``, which is ``transform_qq_so`` with
+        ``dpqq`` in place of ``qq``). One cartesian component at a time, since
+        the sandwich does not touch the direction.
+
+        It follows :meth:`qq_so`'s ``soc_scale`` rule and not
+        ``_newd_noncollinear``'s, and for :meth:`qq_so`'s reason: what is
+        sandwiched here is spin-independent, so everything spin-dependent in the
+        result is the coupling.
+        """
+        full = self._sandwich({(0, 0): dpqq, (1, 1): dpqq})
+        if self.soc_scale == 1.0:
+            return full
+        scalar = spin_trace(full)
+        return scalar + self.soc_scale * (full - scalar)
+
     def _sandwich(self, blocks: dict) -> np.ndarray:
         """``sum_{s t} F^{s1 s} M^{s t} F^{t s2}`` for a block-structured ``M``.
 

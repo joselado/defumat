@@ -1,0 +1,41 @@
+! `alas-epsilon-us.in` with the fully-relativistic datasets and spin-orbit
+! coupling on: the first dielectric response of an **augmented spinor** (P98).
+!
+! The cell, the cutoffs, the grid and the wedge are `alas-epsilon-us.in`'s and
+! only the two pseudopotential files change, so what separates this case from
+! that one is the spin structure alone. That is what makes it the discriminating
+! check: a scalar-relativistic dataset run with `noncolin = .true.` has
+! `fcoef = 1`, so `qq_so` is block diagonal, `dpqq_so` is the scalar dipole on
+! both spin blocks and the recombination inside `int3` collapses -- every term
+! this phase wrote is exercised and none of them is *distinguished*. A
+! fully-relativistic file couples the two components through `fcoef` and none of
+! the three collapses.
+!
+! AlAs is chosen over a heavier crystal because the answer stays close to the
+! scalar one, so the comparison against `ph.x` is not dominated by the coupling
+! itself: what is being validated is the augmentation terms in the spinor
+! response, not the size of spin-orbit splitting in arsenic.
+!
+! The reference is regenerated with the vendored `ph.x`
+! (`alas-epsilon-us-soc.ph.in`) and committed as
+! `reference.out.ph-alas-epsilon-us-soc`.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.575, nat = 2, ntyp = 2,
+    ecutwfc = 25.0, ecutrho = 200.0,
+    noncolin = .true., lspinorb = .true.
+ /
+ &electrons
+    conv_thr = 1.0d-12
+    mixing_beta = 0.7
+ /
+ATOMIC_SPECIES
+ Al  26.98  Al.rel-pbe-n-rrkjus_psl.1.0.0.UPF
+ As  74.92  As.rel-pbe-n-rrkjus_psl.1.0.0.UPF
+ATOMIC_POSITIONS (alat)
+ Al 0.00 0.00 0.00
+ As 0.25 0.25 0.25
+K_POINTS (automatic)
+ 4 4 4 1 1 1

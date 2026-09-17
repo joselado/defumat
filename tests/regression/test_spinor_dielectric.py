@@ -280,22 +280,119 @@ def test_a_textured_spinor_is_refused_by_name():
         )
 
 
-@pytest.mark.slow
-def test_an_ultrasoft_spinor_is_refused_and_a_norm_conserving_one_is_not():
-    """The dataset half of the edge, checked from both sides.
+#: What the vendored ``ph.x`` prints for the fully-relativistic ultrasoft AlAs
+#: (``alas-epsilon-us-soc.ph.in``, committed as
+#: ``reference.out.ph-alas-epsilon-us-soc``). The scalar-relativistic cell's own
+#: number is 9.520257751, so spin-orbit coupling is worth **8.6e-3** here --
+#: 245 times the residual below, which is what makes the agreement a statement
+#: about the coupling rather than about the crystal.
+QE_RELATIVISTIC_EPSILON = 9.528846009
+QE_RELATIVISTIC_BORN = (2.10114, -2.16587)
 
-    ``set_int3_nc`` is the missing object and it is a statement about the
-    *dataset*: ``dD_ij`` is a 2x2 matrix in spin space where a norm-conserving
-    dataset has no ``dD`` at all. Both sides are asserted because a refusal that
-    fires for everything is not an edge.
+
+@lru_cache(maxsize=2)
+def _augmented(case: str, noncolin: bool):
+    """One of the augmented cases, converged and solved.
+
+    ``maxsize = 2`` for the reason :func:`_silicon` gives: the response holds
+    the wavefunctions and three first-order responses beside them.
+    """
+    from defumat.scf import Calculation
+
+    parsed = read_pw_input(CASES / f"{case}.in")
+    if noncolin:
+        parsed.namelists["system"]["noncolin"] = True
+    system = build_system(parsed)
+    pseudos = tuple(
+        read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species
+    )
+    calculation = Calculation(system, pseudos)
+    assert calculation.noncolin == (noncolin or system.noncolin)
+    result = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-12,
+                     max_iterations=100)
+    assert result.converged
+    response = dielectric_tensor(
+        calculation, result.wavefunctions, result.eigenvalues, result.density,
+        result.becsum, born_charges=False,
+    )
+    assert response.converged
+    return calculation, result, response
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("case", ["si-epsilon-us", "si-epsilon-paw"])
+def test_an_augmented_spinor_gives_the_scalar_run_s_dielectric_tensor(case):
+    """The identity, one dataset at a time: ultrasoft and then PAW.
+
+    The same file with ``noncolin = .true.`` added, on a dataset that is not
+    relativistic and a cell that seeds no moment, so ``nspin_mag`` stays 1 and
+    the two runs are the same physics on a doubled space. Every term this phase
+    wrote is on the path -- the spinor ``int3`` contraction, the spinor position
+    operator and the dipole's spin blocks -- so a shape error or a dropped
+    component shows here at 100 per cent.
+
+    Measured: **9.2e-14** on ultrasoft and **1.0e-13** on PAW, with the total
+    energies 0 and 1.4e-14 Ry apart.
+
+    **What this cannot see, and it is the reason
+    :func:`test_the_relativistic_ultrasoft_dielectric_constant_matches_quantum_espresso`
+    exists.** A scalar-relativistic dataset has ``fcoef = 1``, so ``qq_so`` is
+    block diagonal, ``dpqq_so`` is the scalar dipole on both spin blocks and the
+    recombination inside ``int3`` collapses to the collinear one. The identity
+    therefore exercises all three terms and *distinguishes* none of them: it
+    would pass with the ``fcoef`` sandwich deleted from every one.
+    """
+    scalar = _augmented(case, False)[2].isotropic
+    spinor = _augmented(case, True)[2].isotropic
+    print(f"\n{case}: scalar {scalar:.12f}  spinor {spinor:.12f}")
+    assert abs(scalar - spinor) < 1e-12
+
+
+@pytest.mark.slow
+def test_the_relativistic_ultrasoft_dielectric_constant_matches_quantum_espresso():
+    """``epsilon_infinity`` of an augmented **spinor**, against the vendored ``ph.x``.
+
+    ``alas-epsilon-us-soc`` is ``alas-epsilon-us`` with the two
+    fully-relativistic files in place of the scalar ones and nothing else
+    changed, so ``fcoef`` is not the identity and none of the three spin-space
+    objects collapses: the overlap's ``qq_so``, the augmentation dipole's
+    ``dpqq_so`` and the recombination inside ``int3``.
+
+    Measured: **9.528810788** against ``ph.x``'s **9.528846009**, 3.5e-5, beside
+    the ground-state total energy at -25.564414818 Ry against -25.56441482. That
+    residual is the same ``dq = 0.01`` radial-table floor the scalar cases sit
+    at (4.3e-5, 5.2e-5, 3.4e-5, 1.2e-4).
+    """
+    calculation, result, response = _augmented("alas-epsilon-us-soc", False)
+    assert calculation.is_ultrasoft and any(p.has_so for p in calculation.pseudos)
+    print(f"\nrelativistic AlAs: {response.isotropic:.12f} against "
+          f"{QE_RELATIVISTIC_EPSILON}")
+    assert response.isotropic == pytest.approx(
+        QE_RELATIVISTIC_EPSILON, abs=5e-4
+    )
+
+
+def test_an_augmented_spinor_is_no_longer_refused():
+    """The dataset half of the edge, which is gone (P98).
+
+    ``set_int3_nc`` was named as the missing object and it is not written here
+    either: the ``jvp`` of :meth:`~defumat.scf.driver.Calculation.coefficients`
+    passes through the noncollinear recombination, whose ``fcoef`` sandwich is
+    linear, so the tangent comes out already dressed. All three datasets pass
+    the guard now, and what still refuses is the *texture*, one line below.
+
+    The cells are insulators on purpose. A spinor ultrasoft **metal** -- the
+    platinum cells this test used to refuse -- is still refused, by the guard
+    about metals rather than the one about datasets, which is the edge that
+    moved rather than the one that went.
     """
     from defumat.scf import Calculation
     from defumat.response.sternheimer import require_a_sternheimer_regime
 
-    for case, allowed in (("si-epsilon", True), ("pt2-soc-force", False),
-                          ("pt2-soc-paw-force", False)):
+    for case in ("si-epsilon", "si-epsilon-us", "si-epsilon-paw",
+                 "alas-epsilon-us-soc"):
         parsed = read_pw_input(CASES / f"{case}.in")
-        if case == "si-epsilon":
+        if not case.endswith("-soc"):
             parsed.namelists["system"]["noncolin"] = True
         system = build_system(parsed)
         pseudos = tuple(
@@ -303,15 +400,9 @@ def test_an_ultrasoft_spinor_is_refused_and_a_norm_conserving_one_is_not():
         )
         calculation = Calculation(system, pseudos)
         assert calculation.noncolin
-        if allowed:
-            require_a_sternheimer_regime(
-                calculation, spin_polarized=True, noncollinear=True
-            )
-        else:
-            with pytest.raises(NotImplementedError, match="set_int3_nc"):
-                require_a_sternheimer_regime(
-                    calculation, spin_polarized=True, noncollinear=True
-                )
+        require_a_sternheimer_regime(
+            calculation, spin_polarized=True, noncollinear=True
+        )
 
 
 def test_the_opt_in_is_what_lifts_the_refusal():

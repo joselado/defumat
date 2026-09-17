@@ -398,6 +398,15 @@ def _raw_mixed_state(calculation, positions, psi, weights, density, becsum):
     def raw_becsum(moved, states, occupations):
         if not moved.is_ultrasoft:
             return ()
+        if moved.noncolin:
+            # ``sum_bec`` then ``add_becsum_so``: the projections are
+            # accumulated as a spin-density *matrix* and only then contracted
+            # with ``fcoef`` into the ``nspin_mag`` real components. It is the
+            # same split :func:`raw_density` below makes and it is the same
+            # site one layer in -- the collinear builder projects over ``npwx``
+            # where a spinor is ``2 npwx`` long, so it fails to broadcast
+            # rather than returning a wrong number.
+            return moved._noncollinear_becsum(states, occupations)
         return becsum_of(
             states, moved.projectors.vkb, occupations, moved.species_channels,
             moved.k_batch,
@@ -501,12 +510,31 @@ def frozen_polarization(calculation, positions, psi, weights, operator):
 
 
 def _augmentation_expectation(calculation, psi, weights, vkb, dvkb, qq, dipole):
-    """``sum_kn w_n <psi_n| A_a |psi_n>`` for one cartesian direction."""
+    """``sum_kn w_n <psi_n| A_a |psi_n>`` for one cartesian direction.
+
+    For a spinor both matrices carry a spin pair -- ``qq_so`` and ``dpqq_so`` --
+    and the two components are projected on the same ``beta``, which is
+    ``adddvepsi_us``'s ``lspinorb`` branch and the operator ``add_dkmds`` is the
+    derivative of. Nothing else changes: the operator is the one
+    :func:`frozen_polarization` names, one spin index wider.
+    """
     total = jnp.zeros(())
+    noncolin = bool(calculation.noncolin)
+    npwx = vkb.shape[1]
     for spin in range(psi.shape[0]):
         states = psi[spin]
 
         def one_k(ik, states=states):
+            if noncolin:
+                pair = states[ik].reshape(states[ik].shape[:-1] + (2, npwx))
+                projected = jnp.einsum("gc,nag->nac", vkb[ik].conj(), pair)
+                derived = jnp.einsum("gc,nag->nac", dvkb[ik].conj(), pair)
+                return jnp.real(
+                    jnp.einsum("nai,abij,nbj->n",
+                               projected.conj(), 1j * qq, derived)
+                    + jnp.einsum("nai,abij,nbj->n",
+                                 projected.conj(), dipole, projected)
+                )
             projected = jnp.einsum("gc,ng->nc", vkb[ik].conj(), states[ik])
             derived = jnp.einsum("gc,ng->nc", dvkb[ik].conj(), states[ik])
             return jnp.real(
@@ -545,7 +573,9 @@ def _position_operator(calculation, projector_velocities):
         jnp.asarray(np.asarray(list(projectors.atom_of_channel))),
         vkb,
         [jnp.asarray(d) for d in projector_velocities],
-        jnp.asarray(projectors.qq).astype(vkb.dtype),
+        jnp.asarray(
+            calculation.qq_so if calculation.noncolin else projectors.qq
+        ).astype(vkb.dtype),
         [dipole[axis].astype(vkb.dtype) for axis in range(3)],
     )
 
