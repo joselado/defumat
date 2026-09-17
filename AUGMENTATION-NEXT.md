@@ -396,14 +396,49 @@ to: most of a transition metal's moment is inside the projector spheres, so a se
 the grid alone would seed almost nothing on a PAW magnet and would leave the first
 iteration's one-centre potential disagreeing with its own density. Both halves read the same
 evaluated field, `becsum` at each atom's own grid point of the box, and the copy index is a
-lattice translation in C-order over the triple. **What is missing is a converged run**: no
-*magnetic* ultrasoft or PAW cell is committed here -- PAW silicon converges to no moment, so
-the seed refuses it by name -- so the check is `tests/unit/test_ultracell_seed.py`, which
-reads a deliberately non-uniform seed back copy by copy on constructed occupations. A tiled
-null cannot stand in for it, a tiled seed being the same on every copy. The first-iteration
-tell on a real cell is that `cell_moments()` already shows the texture and the one-centre
-energy differs from the tiled run's, and the cell to do it on is the NiBr2 helix another
-session runs.
+lattice translation in C-order over the triple. **No converged run exists here**: no *magnetic* ultrasoft or PAW cell is
+committed -- PAW silicon converges to no moment, so the seed refuses it by name -- so the
+check in this repository is `tests/unit/test_ultracell_seed.py`, which reads a deliberately
+non-uniform seed back copy by copy on constructed occupations. A tiled null cannot stand in
+for it, a tiled seed being the same on every copy.
+
+**It ran on a real PAW magnet elsewhere and the outcome says the sphere half works**
+(2026-09-17, measured in another session and reported here). Seeded `N = 15` NiBr2,
+fully relativistic PAW, 24 electrons per cell, `nbnd = 40`: converged in 54 iterations to a
+24.2 degree per cell helix with the halogen moment at 0.211 mu_B against the reference Elk
+spiral's 0.202, where **every unseeded run of that cell sat at 0.043 and turned 103.5
+degrees per cell instead of 120**. On that dataset most of the Ni moment is inside the
+projector spheres, so a seed reaching the grid alone could not have produced it, and the
+first iteration's residual halves are comparable (charge 1.824e-02 against magnetic
+1.616e-02) where a seed that had missed the spheres would leave the magnetic half small.
+
+**The sharper half of that argument is what the unseeded runs did rather than how small
+their moment was.** They did not merely land at a weaker halogen moment: they landed at the
+*ferromagnetic* one, with the halogen moments all along the reference direction rather than
+following the metal. That is precisely the signature a **grid-only** seed would leave -- the
+spheres holding the reference texture while the grid tries to turn -- and it is what does
+not happen when the seed is applied. An argument about a mechanism rather than about a
+magnitude, which is why it carries more than the two numbers above.
+
+**What that argument does not pin is the copy index**, which is the one thing here whose
+failure is silent: a permuted copy ordering seeds the spheres in a scrambled order while the
+grid is seeded correctly, and the loop can still converge to a texture of the right period
+because the grid drives it. The agreement above argues against a permutation and does not
+exclude one. The direct check is a short seeded run at a small `N`
+reading `cell_moments()` back against the seed **in order**, which a permutation cannot
+survive at 120 degrees per cell; that session has offered it at `N = 3` and it is the number
+this entry is waiting for.
+
+**Two result fields that look like they would settle the sphere half and do not.**
+`energy_terms["one_center_paw"]` is taken at the **output** `becsum` and the input one
+reaches the total only through `paw_deband`, folded into the one-electron term, so a seeded
+and an unseeded run differ in it either way -- seeding the density alone changes `deeq`,
+which changes the states, which changes the output `becsum`. And `max_iterations = 1`
+returns the *mixed* density rather than that iteration's output, because the
+non-converged branch stores what the next iteration would start from. What would isolate
+the sphere half is an A/B with the `becsum` seeding switched off, which is not exposed and
+should not be added as a knob for a diagnostic; here it needs the magnetic augmented cell
+this entry is already waiting for, so the two questions close together.
 
 ## 2. A term that is half written, and the half that is missing is a term
 

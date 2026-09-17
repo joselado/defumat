@@ -234,8 +234,16 @@ def warn_if_the_seed_leaves_the_closed_sector(seed, axis: np.ndarray) -> float:
     With ``lspinorb`` no axis closes the sector at all, since a spin-orbit
     Hamiltonian's eigenstates are eigenstates of no ``sigma . n``. The warning
     is then advice about a cheaper starting point and not about a protected
-    quantity, which is why it is a warning and not a refusal. Returns the
-    spread, for a caller that would rather test than catch.
+    quantity, which is why it is a warning and not a refusal -- **and the cost
+    it quotes may not appear there at all.** The 290 iterations are a *flat*
+    manifold being traversed, and spin-orbit coupling gaps that manifold: a
+    15-cell NiBr2 PAW helix seeded about ``z`` with its reference along ``x``,
+    which is this function's expensive arrangement, converged in **54**
+    iterations (measured in another session, 2026-09-17, and reported here
+    rather than taken here). One cell is not a scaling, so what this says is
+    that the traversal is the no-spin-orbit case's bill and the warning is worth
+    reading as advice rather than as a forecast. Returns the spread, for a
+    caller that would rather test than catch.
     """
     values = np.asarray(seed, dtype=float)
     length = np.sqrt(np.sum(values**2, axis=0))
@@ -259,8 +267,10 @@ def warn_if_the_seed_leaves_the_closed_sector(seed, axis: np.ndarray) -> float:
             f"290 iterations against 14 for the same state. Converge the unit "
             f"cell with its moment along the axis the texture is to turn about, "
             f"and write the seed about that axis. With spin-orbit coupling no "
-            f"axis closes the sector, so this is advice about a cheaper start "
-            f"rather than about a protected pitch",
+            f"axis closes the sector and that flat manifold is gapped, so this "
+            f"is advice about a cheaper start rather than about a protected "
+            f"pitch, and the traversal may not be charged at all -- a 15-cell "
+            f"PAW helix in exactly this arrangement took 54 iterations",
             stacklevel=3,
         )
     return spread

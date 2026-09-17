@@ -16567,7 +16567,38 @@ reach `conv_thr` in 300 iterations.
 being eigenstates of no `sigma . n`. The pitch is then not protected and it is not supposed
 to be, the anisotropy making different pitches inequivalent, so a texture that relaxes is
 physics; the two cannot be separated by reading the pitch, and the comparison to make is
-against a seeded supercell at the same `N`.
+against a seeded supercell at the same `N`. **And the traversal may not be charged there at
+all**, which is the one thing the hydrogen cell cannot show: spin-orbit coupling *gaps* the
+flat manifold, so there is nothing to wander along. A 15-cell NiBr2 PAW helix seeded about
+`z` with its reference along `x` -- the expensive arrangement above -- converged in **54**
+iterations rather than anything like 290 (**measured in another session and reported here**,
+2026-09-17). One cell is not a scaling; what it says is that the 290 is the
+no-spin-orbit case's bill.
+
+**The remnant was confirmed on a real magnet, and it was spoiling the quantity this project
+is for** (same session, same run, and the strongest reason this stage's canting paragraph is
+written the way it is). Seeded `N = 15` NiBr2 on a PAW dataset at the physical field,
+`nbnd = 40`, 24 electrons per cell: the mean moment over the fifteen cells is
+**(0.2967, -0.00003, -0.00002)**, which is **22.8 per cent** of the mean length and points
+along the reference direction to 0.0 degrees. Read through the pitch alone the run looked
+clean with one puzzle -- 24.51 degrees per cell against the 24.0 asked for, `|m_z|/|m|`
+below 2e-3, and a 9 per cent *amplitude* wave at the period of the texture that Elk does not
+have. The amplitude wave is the remnant: the correlation of `|m|` with `cos(angle)` is
+**+0.9987**, which is a uniform vector added to a helix making the length largest where the
+two align, and removing it takes the pitch from 24.51 +- 7.31 to **24.18 +- 3.42** degrees -- so it carries
+about **half the apparent scatter in the pitch** as well as the whole of the false amplitude
+wave, which is a third way the wave's own Fourier component is blind to it.
+
+**What it cost is the harmonic content**: a coplanar helix of uniform length has no charge
+response at `q` at all, and that run's charge came out at `q` over `2q` by a factor of two,
+because a remnant along the reference gives `|m|` a component at the texture's own period
+and feeds the charge at `q` directly. So the parity the tunnelling spectrum is wanted for was
+being set by the truncation rather than by the material, and the pitch was blind to it. That
+session reads its `nbnd = 40` as a much lower rung than its label suggests, on the ground
+that `nbnd` against *electrons* is 1.67 there against 16 to 64 on the hydrogen cell; this
+project's own measure is `nbnd` against `npw` (the guide quotes 37 per cent at
+`nbnd = 128` on hydrogen) and it says the same thing more strongly, so the two ladders are
+not comparable rung for rung and the NiBr2 one is far from converged.
 
 **Two refusals, both of which would otherwise be silent.** A reference with **no moment**:
 the seed scales a moment, so on a cell that converged unpolarized every iteration is a
@@ -16615,11 +16646,16 @@ iterations, and 4.14e-11 against 3.33e-11 out of it at 290.
   field twenty times, to where the ferromagnetic basin does not survive, brought the two
   together at **119.95 against 120.00 degrees**, with 6 to 12 per cent on the charge and
   magnetization harmonics at `nbnd = 128`. A seed removes the need for that field
-  altogether. **What has not been measured is the seed on that cell**, which is the case
-  the closure argument in stage 8 does *not* cover -- NiBr2 runs `lspinorb`, so no axis
-  closes the sector, the pitch is not protected, and whether the texture that comes back is
-  the material's or the truncation's has to be settled against a seeded supercell at the
-  same `N`. The inputs for it are the other session's to send.
+  altogether, and **it was run the same day** (reported in stage 8 above, and attributed):
+  seeded at the physical field the same cell converges to a 24.2 degree per cell helix with
+  the halogen moment at 0.211 mu_B against the reference spiral's 0.202, where every
+  unseeded run sat at 0.043. **What is outstanding is now one comparison and it is gated on
+  a number**: whether the texture that comes back is the material's or the truncation's has
+  to be settled against a **seeded supercell at the same `N`**, which is 45 atoms, and that
+  is worth running only once the `Q = 0` remnant is small enough that the two would be
+  comparing the same state -- at `nbnd = 40` it is 22.8 per cent of the moment and it is
+  what put that run's charge on the wrong harmonic. So the order is: climb `nbnd` until the
+  remnant is a correction, then pay for the supercell.
 * **The noncollinear crossover against the supercell.** `PERFORMANCE.md` states where the
   ultracell should overtake the supercell it approximates as an *expectation* from the
   collinear pair and the measured spinor cost, not as a measurement. The collinear crossover

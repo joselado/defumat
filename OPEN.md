@@ -3625,3 +3625,43 @@ separate observation, that `run_scf` on a doubled nickel cell converges to a sym
 state with nothing applied and stays there, is real and is not the ultracell's; whether it is
 a genuine instability of LDA nickel at this cutoff or an SCF that stalls in a broken state is
 not settled here.
+
+# Part XI -- from the seeded NiBr2 helix on a GPU, reported 2026-09-17 (P88 stage 8)
+
+## 1. A batched FFT plan fails to build at an ultracell's band count, and it is not an out-of-memory
+
+**Reported by the NiBr2 session and not reproduced here** -- this workstation has no GPU, so
+what follows is their observation with their numbers, recorded because the batching dial it
+implicates is this package's.
+
+A seeded `N = 15` ultracell on a fully relativistic PAW NiBr2 cell ran at `nbnd = 40` and
+died at `nbnd = 56`, in the **NSCF Davidson** rather than in the ultracell loop, with
+
+```
+RET_CHECK failure ... fft_plan != nullptr
+Failed to create cuFFT batched plan with scratch allocator
+```
+
+at `DEFUMAT_K_BATCH = 16` and `DEFUMAT_BAND_BATCH = 64` on an 80 GB card. Dropping to 4 and
+16 is what they reran with.
+
+**Why it is worth an entry rather than a shrug.** It is a *plan creation* failure and not an
+allocation failure, so it is a limit on the transform's batched shape rather than on the
+memory available -- and the step it happens in is the one an ultracell makes large in a way
+no ordinary run does: `fixed_density_states` diagonalises the whole folded k-set, which is
+`N` times the unit cell's, so `k_batch x band_batch` transforms at `nbnd = 56` on a 3-atom
+cell at `ecutwfc = 45` is a batch shape that only this method reaches. The defaults follow
+the platform (`defumat/batching.py`), and on an accelerator they are the batched end of the
+dial, so an ultracell is exactly where they are least tested.
+
+**What is not known**: whether the limit is cuFFT's own plan size, the scratch allocator's
+budget under XLA, or a shape this code builds needlessly wide. Nothing here reads the batch
+size in a way a result depends on -- the chunk size must never be visible beyond round-off,
+which is asserted -- so the workaround is sound and the question is only where the wall is.
+
+**What to do before anything else**: on a machine with a card, walk `DEFUMAT_BAND_BATCH` at
+fixed `k_batch` and find the largest batch that plans, then the same for `k_batch`, and see
+whether the product or one factor is the bound. If it is the product, the fix is to cap the
+batched shape in `batching.py` for the folded-set solve rather than to leave a user to find
+it; if it is one factor, the cap belongs there. **Do not size it from the card's memory**,
+which is the reading this failure already rules out.

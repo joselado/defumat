@@ -5474,7 +5474,22 @@ where the pitch has nothing left to converge:
 so reading the pitch alone at \code{nbnd = 16} would call the state exact while
 18 per cent of its moment stood off the helix. Across that range the cone falls
 by $11.65$ and the energy error by $11.68$, which is worth recording and is not
-explained here. The reference is the same four
+explained here.
+
+\textbf{On a real magnet this is the number to watch, and it is not cosmetic.} A
+seeded 15-cell helix on a fully relativistic PAW NiBr2 cell at \code{nbnd = 40}
+came back with a pitch of $24.51^\circ$ against the $24.0^\circ$ asked for and
+nothing measurable out of the plane, and with a 22.8 per cent remnant along the
+reference direction that the pitch could not see: the moment's \emph{length} then
+ran 9 per cent with the texture's own period, which reads as an amplitude wave and
+is a uniform vector added to a helix. Removing it took the pitch to
+$24.18^\circ$. What it cost is the harmonic content, which is usually the reason
+for the calculation --- a coplanar helix of uniform length has no charge response
+at $\mathbf q$ at all, and that run's charge came out at $\mathbf q$ over
+$2\mathbf q$ by a factor of two, because a remnant along the reference feeds the
+charge at $\mathbf q$ directly. So read \code{cell\_moments().mean(axis=0)} beside
+the pitch, and treat it as a convergence parameter in \code{nbnd} rather than as
+a property of the material. (Measured in another session and reported here.) The reference is the same four
 atoms as a real supercell with the helix seeded per species, whose site moments
 are flat to $10^{-5}$ and whose energy is $0.739$~mRy per cell \emph{below} the
 ferromagnet the ultracell expands around --- which is what makes reaching it
@@ -5489,7 +5504,12 @@ $\boldsymbol\sigma\cdot\hat{\mathbf n}$ for any $\hat{\mathbf n}$. The pitch is
 then not protected and it is not supposed to be --- the anisotropy makes
 different pitches inequivalent, so a texture that relaxes is physics rather than
 error --- but the two cannot be separated by reading the pitch, and the
-comparison to make is against a seeded supercell at the same $N$.
+comparison to make is against a seeded supercell at the same $N$. \textbf{The
+iteration count above may also not be charged there}, because spin-orbit coupling
+\emph{gaps} the flat manifold and leaves nothing to wander along: a 15-cell PAW
+NiBr2 helix seeded about $z$ with its reference along $x$ --- the expensive
+arrangement --- converged in 54 iterations rather than anything like 290. One cell
+is not a scaling, so read the warning as advice and not as a forecast.
 
 \begin{pycode}
 from defumat import Calculator
