@@ -150,12 +150,18 @@ def _calculation(case: str, **overrides):
     return SimpleNamespace(**fields)
 
 
-def test_an_ultrasoft_dataset_is_refused_for_the_overlaps_velocity():
-    """The ``dS/dk`` term is written and unvalidated, exactly as in P47."""
-    with pytest.raises(NotImplementedError, match="dS/dk"):
-        require_a_conductivity_regime(_calculation("si2-nosym", is_ultrasoft=True))
-    with pytest.raises(NotImplementedError, match="dS/dk"):
-        require_a_conductivity_regime(_calculation("si2-nosym", is_paw=True))
+def test_an_augmented_dataset_is_no_longer_refused_for_the_overlaps_velocity():
+    """P99 wrote the term this used to refuse, so the guard has to let it past.
+
+    What was missing was never ``dS/dk`` -- that is one tangent of the same
+    ``jvp`` as ``dH/dk`` and has been here since P24. It was
+    ``<psi_n|T^dag dT/dk_a|psi_m>``, the augmentation dipole, which no
+    arrangement of the two tangents can supply. The guard is checked from both
+    ends: an augmented calculation passes, and the two refusals that remain
+    still fire.
+    """
+    require_a_conductivity_regime(_calculation("si2-nosym", is_ultrasoft=True))
+    require_a_conductivity_regime(_calculation("si2-nosym", is_paw=True))
 
 
 def test_a_spin_spiral_is_refused_for_its_two_spheres():

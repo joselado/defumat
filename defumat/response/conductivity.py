@@ -379,25 +379,16 @@ def _hartree(x):
 
 
 def require_a_conductivity_regime(calculation) -> None:
-    """Three refusals, each with the missing term named.
+    """Two refusals, each with the missing term named.
 
-    They are the same three :mod:`defumat.topology.kubo` makes, for the same
-    reasons and in the same order, because this module and that one are the
-    same velocity matrix elements contracted differently.
+    They are :mod:`defumat.topology.kubo`'s, for the same reasons and in the
+    same order, because this module and that one are the same velocity matrix
+    elements contracted differently. **An ultrasoft or PAW dataset was a third
+    of them until P99** and is not any more: the current operator of a
+    generalised eigenproblem is ``<n|dH_a - e_m dS_a|m> + (e_m - e_n)K^a_{nm}``
+    and all three pieces are here, the last being
+    :meth:`~defumat.response.velocity.VelocityOperator.augmentation_connection`.
     """
-    if calculation.is_ultrasoft or calculation.is_paw:
-        raise NotImplementedError(
-            "the optical conductivity with an ultrasoft or PAW "
-            "pseudopotential is not implemented, and a term is missing rather "
-            "than unchecked. The current operator of a generalised "
-            "eigenproblem carries <psi_n|dS/dk_a|psi_m> beside dH/dk, which "
-            "is here and is right by derivation; what is not here is the "
-            "augmentation dipole <psi_n|T^dag dT/dk|psi_m> that goes with it, "
-            "measured at 18 per cent of the answer on a model where the exact "
-            "one is free (PLAN.md P94). It is the refusal "
-            "defumat.topology.kubo makes for the same matrix element. Use a "
-            "norm-conserving dataset"
-        )
     if getattr(calculation, "spiral", False):
         raise NotImplementedError(
             "the optical conductivity of a spin spiral is not implemented: "
@@ -546,7 +537,14 @@ def optical_conductivity(
                             eigenvalues)
 
     velocity = VelocityOperator(calculation, v_scf, ddd_paw, ns)
-    elements = velocity.matrix_elements(wavefunctions)  # (3, nspin, nk, nb, nb)
+    # ``<n|dH_a - e_m dS_a|m> + (e_m - e_n) K^a_{nm}``, which is
+    # ``<n|dH_a|m>`` unchanged on a norm-conserving dataset and the whole
+    # generalised velocity on one with an augmentation charge. The *unshifted*
+    # eigenvalues, because those are the ones the eigenproblem was solved with;
+    # the scissors is applied to the matrix element afterwards.
+    elements = velocity.generalised_matrix_elements(
+        wavefunctions, eigenvalues
+    )                                               # (3, nspin, nk, nb, nb)
     elements = jnp.moveaxis(elements[:, 0], 0, 1)  # (nk, 3, nbnd, nbnd)
 
     if scissor:

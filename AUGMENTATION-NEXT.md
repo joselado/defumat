@@ -515,80 +515,41 @@ the sphere half is an A/B with the `becsum` seeding switched off, which is not e
 should not be added as a knob for a diagnostic; here it needs the magnetic augmented cell
 this entry is already waiting for, so the two questions close together.
 
-## 2. A term that is half written, and the half that is missing is a term
+## 2. A term that is half written, and the half that is missing is a term. ✅ DONE for two of the three.
 
-Three refusals, one term. All three say the same sentence in `docs/features.tex` and all
-three would lift or stay together.
+**Closed 2026-09-17 for the Kubo Berry curvature and the optical conductivity**; the shift
+current stays, one derivative further out. `PLAN.md` P99 has the numbers.
 
-**This section used to be called "a term that is written and unvalidated" and that was
-wrong** (P94). Writing the derivation out splits it: the *convention* is right by
-construction and needed a derivation rather than a measurement, and what is actually
-missing is a second term that has nowhere to go in the present assembly. So this belongs
-with §1 rather than beside it, and the sizing is a phase rather than the afternoon this
-file first claimed.
+**This is the first entry in this file whose sizing survived reading the code**, and the
+reason is that the reading had already been done: P94 built the model that makes the exact
+curvature free, measured the omission at 18 per cent, and pinned the shape -- the two
+factors take *different* blocks. What was left was what this entry said was left, the
+matrix-element form, and it came out shorter than the entry expected because the object is
+`adddvepsi_us`'s own term: `K^a_{nm}` is `-i` times the matrix element of what
+`ultrasoft_position` adds to `P_c r_a|psi>`, so
+`VelocityOperator.augmentation_connection` calls that function with a **zero position** and
+inherits the spin-orbit branch with it.
 
-The term is the off-diagonal `<psi_n| dS/dk_a |psi_m>`, which enters the velocity of a
-generalised eigenproblem as `-e_n dS/dk_a` and is **identically zero for a
-norm-conserving dataset**. It is written -- `VelocityOperator.apply_s`, one `jvp` of
-`s_psi`, the second tangent of the same `jvp` that gives `dH/dk`. What has never been
-checked is its convention, because no norm-conserving validation can see a term that
-vanishes.
+**The one thing the entry did not foresee is where the check would have to be.** It
+prescribed "zero the dipole on AlAs-US and read the shift, and only run the AlAs comparison
+if the two terms together exceed its 4.4 per cent floor". The terms do not: the connection
+is worth **0.34 per cent** of the curvature where Kubo and FHS sit **50 per cent** apart
+pointwise at 18x18. So the curvature comparison could not have resolved it at any mesh, and
+what does is the **connection** rather than the curvature -- a central difference of the FHS
+overlap primitive itself, which has no mesh in it. At a step small enough that all three
+k-points hold the same plane-wave sphere the connection comes out at 1.668e-4 (ultrasoft)
+and 1.669e-4 (PAW) of a norm-conserving control's own 1.698e-4, against 1.57e-2 with the
+term dropped -- 94 times larger and not moving as the step shrinks.
 
-**The obvious test was run and it cannot discriminate** (P94). Kubo against FHS on
-ultrasoft AlAs agrees to 8.5 per cent at 18x18, beside 7.0 on a norm-conserving AlAs run
-(not a matched control -- the functional and the cutoff move with the dataset), which
-reads as a pass. But zeroing `dS/dk` moves `Omega` by only **2.5 per cent**, five times
-less than the gap between the two methods at 12x12 and half of it at 24x24, so the term
-is below the test's own resolution at every mesh and deleting it entirely would leave the
-comparison looking the same.
+**Neither reference code has the augmented case**, so the row is an extension:
+`PP/src/epsilon.f90:65` refuses ultrasoft outright with the comment "dipole matrix elements
+are not trivial at all", which is this term, and Elk is all-electron.
 
-- **The Kubo Berry curvature**, `topology/kubo.py:236`. `method='fhs'` is the default,
-  carries both this term and `q^a_ij(b)` correctly, and is exact on any mesh, so nothing
-  is unreachable.
-- **The optical conductivity**, `response/conductivity.py:388`.
-- **The shift current**, `response/photocurrent.py:523`, which needs the same term one
-  order further out: the dipole carries `dS/dk` and its derivative carries
-  `d^2 S/dk_a dk_b`.
-
-**The convention is settled, on paper.** Differentiating `H c = e S c` and projecting on
-`c_n` for `n != m` gives `<n|S|d_a m> = <n|d_a H - e_m d_a S|m> / (e_m - e_n)`, the
-**ket** band's energy; the curvature `-2 Im <d_1 n|S|d_2 n>` with the identity resolved as
-`sum_m c_m c_m^dagger S = 1` then has `n` as the ket in both factors, so `e_n` multiplies
-`dS/dk` in each. That is exactly what `kubo_from_matrices` builds.
-
-**What is missing is the augmentation dipole, and it has nowhere to go.** With
-`S = T^dagger T`, the true states are `T c` and
-`<Psi_n|d Psi_m> = c_n^dagger S d c_m + c_n^dagger T^dagger (d T) c_m`. The first piece is
-the formula above; the second is `adddvepsi_us`'s `dpqq`, the position operator acting on
-the augmentation charge, and `kubo_from_matrices` sees only `dH` and `dS` so there is no
-slot for it. FHS has it, because `q^a_ij(b)` **is** `T^dagger(k) T(k')` to first order in
-`b`. `response/efield.py:336` builds
-`-i (dH/dk_a - eps_v dS/dk_a)|psi_v>` from `VelocityOperator.both`, solves it into the
-empty space with `P_c`, and adds the dipole separately as `_ultrasoft_position` -- and its
-ultrasoft dielectric constant is 8e-6 from `ph.x`, so the object exists and is pinned. It
-is the *Kubo* assembly that does not carry it.
-
-**The term is measured, on a model with no mesh floor at all** (P94,
-`tests/unit/test_topology_curvature.py::test_a_moving_overlap_needs_more_than_dh_and_ds`).
-Haldane's `H_0(k)` with `H = A^dagger H_0 A` and `S = A^dagger A` has the generalised
-problem's physical curvature equal to `H_0`'s exactly, so the reference is free. Feeding
-`dH` and `dS` to `kubo_from_matrices` is wrong by **18 per cent** of the curvature's scale
-and moves the Chern number by 0.010, so the term does not integrate away either; putting
-the two `A^dagger dA` blocks in recovers it to **4.5e-16**.
-
-**What that pins is the shape.** The two factors need *different* blocks and neither is
-`dS`: `(e_m - e_n) L` on the first and `-(e_m - e_n) K` on the second, with
-`L = c^dagger (dA)^dagger A c`, `K = c^dagger A^dagger (dA) c` and `L + K = dS` to
-1.8e-15. So no arrangement of `dS/dk` can supply it, which is the same statement as the
-correction depending on `A` rather than on `S = A^dagger A` -- `U(k) A` leaves `S`
-unchanged and moves the physical states.
-
-**Size:** a phase, and the model check is done. What is left is the dipole in
-matrix-element form inside `velocity_matrices`, from `efield.py`'s machinery, and then an
-**assembly** check on plane waves, because a sum of separately validated pieces is this
-repository's most convincing wrong answer. That check is the one P94 used for `dS/dk`:
-zero the dipole on AlAs-US and read the shift, and only run the AlAs comparison if the two
-terms together exceed its 4.4 per cent floor.
+**What is left, and it is genuinely one order further out.** The shift current
+(`response/photocurrent.py:523`) needs `dK/dk_b` beside `K`, and that is built from
+`<beta|psi>` and `d(beta)/dk_a`, so it wants `d^2(beta)/dk_a dk_b`. `apply_second`
+differentiates `H` rather than a bare projector, so the object does not exist yet. **Size:**
+part of a phase; the derivation is written above and what is missing is one more tangent.
 
 ---
 
@@ -693,13 +654,15 @@ The first two entries of this list were run in P94 and neither lifted a refusal;
 third, PAW Born charges, was run on 2026-09-16 and **lifted its refusal by finding that
 the term it named did not exist** (`PLAN.md` P39a); the fourth and fifth, the noncollinear
 augmented response and its multipliers, were run on 2026-09-17 and lifted theirs the same
-way -- `set_int3_nc` did not have to be written either (P98). What is left:
+way -- `set_int3_nc` did not have to be written either (P98). The sixth, the moving overlap
+in a Kubo sum, was run the same day and is the **first one whose term really was missing**
+and really was where the entry said (P99), which is what a sizing looks like when the
+reading behind it was done in advance. What is left:
 
-1. **The moving overlap in a Kubo sum** (§2). The missing term's shape is pinned exactly
-   on a model, so what is left is writing it in matrix-element form from `efield.py`'s
-   machinery and checking the *assembly*.
-2. **The `chi_0` gap** (§1a), now not a truncation and about 1 per cent rather than an
+1. **The `chi_0` gap** (§1a), now not a truncation and about 1 per cent rather than an
    unknown.
+2. **The shift current's `d^2(beta)/dk_a dk_b`** (§2's remainder), which is the only piece
+   of §2 left and has a written derivation above it.
 3. **Site angular momenta on a relativistic augmented dataset** (§1i), which moved *down*
    this list on 2026-09-17: the code route the entry named over-counts the basis by a
    factor of two on the datasets it is for, so the first step is a design decision and not

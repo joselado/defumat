@@ -4047,6 +4047,52 @@ three `jvp` calls rather than the frequency sum.
 **The whole regression file is 6 tests in 559 s**, of which the nickel pair is
 about 250: one spinor SCF at `ecutwfc = 60` and four conductivities off it.
 
+**The pair against `epsilon.x`, and where the reference stops (P99).** Two-atom
+silicon on the whole 4x4x4 grid at `ecutwfc = 12` with `nbnd = 24`, one core
+each (`taskset -c 0`, `OMP_NUM_THREADS=1`), both sides starting from the input
+file and ending with `sigma(w)` on 500 frequencies from 0 to 10 eV:
+
+| | norm-conserving | ultrasoft |
+|---|---|---|
+| `pw.x` + `epsilon.x` | 2.84 s + 0.11 s = **2.95 s** | 0.78 s + **refuses** |
+| here (SCF + NSCF + `optical_conductivity`) | **8.9 s** | 4.1 s |
+
+**3.0x on the case both codes run**, and the reference's own share of it is
+almost nothing: `epsilon.x` is 0.11 s against `pw.x`'s 2.84, because it reads
+the wavefunctions off disk and contracts them, so what the ratio measures is
+the SCF and the NSCF rather than the conductivity. The ultrasoft column is not
+a ratio and is not comparable to the column beside it either -- that cell is a
+2x2x2 grid, eight k-points against sixty-four -- it is there because
+`epsilon.x` stops on it: `Error in routine grid_build (1): USPP are not
+implemented`, `PP/src/epsilon.f90:65`, whose comment reads "dipole matrix
+elements are not trivial at all". That is exactly the augmentation dipole P99
+wrote, so on an augmented dataset there is no reference wall clock to put
+beside ours, and Elk has none either -- it is all-electron and has no
+augmentation charge to have a dipole.
+
+**What is not comparable even on the norm-conserving row.** `epsilon.x` builds
+its dipole from momentum matrix elements, which is not `[H, r]` when the
+pseudopotential is nonlocal, so the two codes are not computing the same
+number: at the same three frequencies it gives 27.81, 33.29 and -38.59 where
+this gives 23.63, 28.17 and -24.98. The operator here is the one that reaches
+`ph.x` to 8e-6 through the Sternheimer route (P24b), so the gap is the
+reference's approximation rather than a disagreement to chase. The timing pair
+stands; the value pair does not.
+
+**What the augmentation connection costs, and it is not free.** On the
+ultrasoft cell above, the `optical_conductivity` call alone is **1.981 s** with
+the term and **1.194 s** without -- medians of three warm samples each
+(1.958/2.152/1.981 against 1.202/1.190/1.194), so 66 per cent on that call and
+0.79 s of the 4.1 s chain. The reason is one line: the term needs
+`d(beta)/dk_a` on its own, and `VelocityOperator.projectors` gets it from a
+**second** `jvp` of `vkb(k)` per cartesian direction, beside the one
+`VelocityOperator.both` already takes for `dH/dk` and `dS/dk`. Rebuilding
+`vkb(k)` differentiably is the whole cost of either, so the count doubles from
+three to six. Feeding `both`'s own tangent through instead is the obvious
+saving and is not taken: the two return different things (an applied operator
+against a bare projector derivative) and merging them would put the projector
+tangent in the signature of a method every velocity in the package calls.
+
 **Where the k-grid has to be spent, and it is not where a total energy spends
 it.** Three quantities here converge at three different rates on the same cell.
 Aluminium's plasma frequency moves 13.78 → 12.98 eV between 4x4x4 and 8x8x8, 6

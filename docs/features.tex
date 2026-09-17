@@ -3000,14 +3000,15 @@ removing Fermi surface, and its tensor is isotropic to \textbf{1.7e-4} eV with
 nothing imposing that.
 
 \begin{refuses}
-\textbf{Refuses.} \textbf{Ultrasoft and PAW}, for the Kubo curvature's reason,
-and a \emph{term} is missing rather than unchecked. With $\hat S = T^\dagger T$
-the states a current is about are $T|\psi\rangle$, so the operator carries
-$\langle\psi_n|T^\dagger\partial_k T|\psi_m\rangle$ --- the augmentation
-dipole --- beside the $\epsilon_n\,\partial S/\partial k$ this assembly does
-have, and there is nowhere in a formula written in $\partial H/\partial k$ and
-$\partial S/\partial k$ to put it. Measured on a model where the exact answer
-is free: \textbf{18\,\%} of a curvature and 0.010 of a Chern number. A \textbf{spin spiral}, whose two spinor
+\textbf{Refuses.} \textbf{Ultrasoft and PAW run}, and did not until P99: the
+current operator of a generalised eigenproblem is $\langle n|\partial_a H -
+\varepsilon_m \partial_a S|m\rangle + (\varepsilon_m-\varepsilon_n)K^a_{nm}$
+and the last piece --- the augmentation dipole --- is neither tangent of the
+\code{jvp} that gives the first two. It is the Kubo curvature's own term and
+its numbers are there; what this module adds is that the two assemblies are the
+\emph{same} object, agreeing to \textbf{5.1e-15} on norm-conserving and on
+ultrasoft AlAs, which is what says an index order transposed in either would
+have shown. A \textbf{spin spiral}, whose two spinor
 components live on different spheres. A \textbf{symmetry-reduced $k$-set},
 because the antisymmetric part is an axial vector --- the escape is the whole
 unshifted grid, which is closed under the point group. And
@@ -3129,13 +3130,15 @@ physics, so a comparison against a paper that does not state its normalisation
 is worth nothing to better than a factor of two.
 
 \begin{refuses}
-\textbf{Refuses.} \textbf{Ultrasoft and PAW}, for the Kubo curvature's reason
-one order further out. The dipole carries $\partial S/\partial k$ and its
-derivative carries $\partial^2 S/\partial k_a\partial k_b$, and both are here;
-what is not here is the augmentation dipole
-$\langle\psi_n|T^\dagger\partial_k T|\psi_m\rangle$ that belongs with them, nor
-its own derivative beside that. It is a missing term rather than an unchecked
-convention, measured at 18\,\% of a curvature on a model. A
+\textbf{Refuses.} \textbf{Ultrasoft and PAW}, one order further out than the
+Kubo curvature and the optical conductivity, which no longer refuse them. The
+dipole carries $\partial S/\partial k$, its derivative carries
+$\partial^2 S/\partial k_a\partial k_b$, and the augmentation dipole
+$\langle\psi_n|T^\dagger\partial_k T|\psi_m\rangle$ that belongs with them is
+here too. What is not here is \emph{that term's own $k$-derivative}, which is
+built from $\langle\beta|\psi\rangle$ and $\partial\beta/\partial k_a$ and so
+wants $\partial^2\beta/\partial k_a\partial k_b$ --- a second derivative of a
+bare projector, which nothing in this package forms. A
 \textbf{spin spiral}. A \textbf{symmetry-reduced $k$-set}, because
 $\sigma^{abc}$ is a polar rank-3 tensor and a wedge sum is not the cell's until
 it is averaged over the point group; the escape is the whole unshifted grid. A
@@ -3332,14 +3335,46 @@ Two constructions of the same quantity, chosen by name:
   \sum_{m \neq n}
   \frac{A^{1}_{nm} A^{2}_{mn}}{(\varepsilon_n - \varepsilon_m)^2},
   \qquad
-  A^{a}_{nm} = \langle \psi_n |\, \partial_{k_a} H - \varepsilon_n\,
+  A^{a}_{nm} = \langle \psi_n |\, \partial_{k_a} H - \varepsilon_m\,
   \partial_{k_a} S \,| \psi_m \rangle
+  + (\varepsilon_m - \varepsilon_n) K^{a}_{nm}
 \end{equation*}
 with \code{method="kubo"}, against the lattice field strength of Fukui,
 Hatsugai and Suzuki with \code{method="fhs"} (the default). The velocity
 operator is one \code{jvp} of $H(\mathbf k)$ at a frozen plane-wave sphere ---
 no dense $H(\mathbf k)$ is ever formed --- and the tangent for a crystal
 direction $d$ is the reciprocal lattice vector $\mathbf b_d$.
+
+The last term is the one a dataset with an augmentation charge needs, and it is
+zero for every other. With $\hat S = T^\dagger T$ the states a Berry phase is
+about are $T|\psi\rangle$ rather than $|\psi\rangle$, so the connection splits
+as $\langle\Psi_n|\partial_a\Psi_m\rangle = \langle\psi_n|\hat S|\partial_a
+\psi_m\rangle + K^a_{nm}$ with
+\begin{equation*}
+  K^{a}_{nm} = \sum_{ij}\langle\psi_n|\beta_i\rangle\,q_{ij}\,
+  \langle\partial_{k_a}\beta_j|\psi_m\rangle
+  - i\sum_{ij}\langle\psi_n|\beta_i\rangle\,
+  d^{a}_{ij}\,\langle\beta_j|\psi_m\rangle,
+  \qquad
+  d^{a}_{ij} = \int r_a\,Q_{ij}(\mathbf r)\,\mathrm d\mathbf r,
+\end{equation*}
+the augmentation dipole \code{adddvepsi\_us} adds to an electric field's
+position operator. Only $\partial_{k_a}H$ and $\partial_{k_a}S$ can be got from
+the two tangents of one \code{jvp}, and $K$ is neither: $K^\dagger + K$ is
+\emph{exactly} $\langle\psi_n|\partial_{k_a}S|\psi_m\rangle$, the dipole
+cancelling between the two and the rest adding, so the two factors of the sum
+take different blocks and no rearrangement of $\partial S/\partial k$ supplies
+it. That identity holds to $1.2\times10^{-16}$ on ultrasoft silicon,
+$2.1\times10^{-16}$ on PAW silicon and $2.9\times10^{-16}$ on
+fully-relativistic ultrasoft AlAs --- where the blocks are $q^{SO}_{ij}$ and
+$d^{SO}$ and carry a spin index each --- which pins the index order and says
+nothing about the dipole; the dipole is pinned against a central difference of the FHS
+overlap itself, where at a step small enough that all three $k$-points hold the
+same plane-wave sphere the connection comes out at
+$1.67\times10^{-4}$ (ultrasoft) and $1.67\times10^{-4}$ (PAW) of a
+norm-conserving control's own $1.70\times10^{-4}$, while dropping $K$ leaves
+$1.57\times10^{-2}$ --- 94 times larger, and \emph{not moving} as the difference
+shrinks.
 
 \begin{pycode}
 from defumat.workflows.topology import run_berry_curvature
@@ -3365,17 +3400,13 @@ silicon the curvature vanishes \emph{pointwise} to $3.5\times10^{-5}$.
 its denominator $(\varepsilon_n-\varepsilon_m)^{-2}$ is singular at a degeneracy
 and its Brillouin-zone sum is an ordinary Riemann sum, which converges to an
 integer without ever being one --- \code{method="fhs"} is the default and is
-exact on any mesh. \textbf{Ultrasoft and PAW are refused by name}, and for a
-missing term rather than an unchecked convention. The $\varepsilon_n\partial_k
-S$ piece is right by derivation; what a moving $\hat S = T^\dagger T$ needs
-beside it is $\langle\psi_n|T^\dagger\partial_k T|\psi_m\rangle$, the
-augmentation dipole, and a formula written in $\partial H/\partial k$ and
-$\partial S/\partial k$ has nowhere to put it. On a model built so the exact
-curvature is known, leaving it out costs \textbf{18\,\%} of $\Omega$ and
-\textbf{0.010} of the Chern number, and the two factors of the sum need
-\emph{different} blocks --- so no rearrangement of $\partial S/\partial k$
-supplies it. \code{method="fhs"} carries the whole thing as $q_{ij}(\mathbf b)$
-on all three dataset kinds. The sum over empty states is
+exact on any mesh. \textbf{Ultrasoft and PAW run}, and what the
+\code{method="kubo"} comparison against \code{method="fhs"} cannot tell you is
+whether the augmentation dipole is there: on ultrasoft AlAs it is worth
+\textbf{0.34\,\%} of $\Omega$ where the two methods sit \textbf{50\,\%} apart
+pointwise at $18\times18$, so that comparison would read the same with the term
+deleted, and the numbers that carry it are the overlap's own finite difference
+above. The sum over empty states is
 truncated at \code{nbnd} and the truncation is \emph{reported} rather than
 hidden --- read \code{BerryCurvature.truncation}, or \code{truncation\_abs}
 wherever symmetry forces the curvature to vanish, since the ratio is then noise

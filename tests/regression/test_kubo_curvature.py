@@ -46,7 +46,11 @@ from defumat.pseudo.upf import read_upf
 from defumat.scf.driver import run_scf
 from defumat.system.builder import build_system
 from defumat.topology.berry import berry_curvature
-from defumat.topology.kubo import kubo_from_matrices, velocity_matrices
+from defumat.topology.kubo import (
+    augmentation_connection,
+    kubo_from_matrices,
+    velocity_matrices,
+)
 from defumat.topology.links import berry_phase, link_phase
 from defumat.topology.mesh import plane_mesh
 from defumat.workflows.topology import DFTSource, run_berry_curvature
@@ -77,7 +81,7 @@ def source(name: str, nocc: int, nbnd: int | None = None,
     system, pseudos, result = converged(name)
     return DFTSource(
         system=system, pseudos=pseudos, density=result.density, nocc=nocc,
-        nbnd=nbnd, conv_thr=conv_thr,
+        nbnd=nbnd, conv_thr=conv_thr, becsum=result.becsum,
     )
 
 
@@ -157,11 +161,12 @@ def test_the_velocity_matrix_is_hermitian_and_the_overlap_does_not_move():
     operator that a wrong contraction (a missing conjugate, a transposed
     einsum) would break; measured at 3.8e-15.
 
-    The second is why an ultrasoft or PAW dataset is refused rather than
-    trusted. ``S`` is the identity for a norm-conserving pseudopotential and has
-    no ``k`` in it at all, so the ``- e_n dS/dk_a`` term of the generalised
-    velocity is *exactly* zero -- not small, zero -- and no norm-conserving
-    validation anywhere in this file can see whether its convention is right.
+    The second is why an augmented dataset needs its own checks. ``S`` is the
+    identity for a norm-conserving pseudopotential and has no ``k`` in it at
+    all, so the ``- e_n dS/dk_a`` term of the generalised velocity is *exactly*
+    zero -- not small, zero -- and no norm-conserving validation anywhere in
+    this file can see whether its convention is right. The two tests below it
+    are the ones that can.
     """
     states = source("alas-raman.in", 4, nbnd=10).states(
         GENERIC_K.reshape(1, 3), keep_velocity=True
@@ -386,39 +391,177 @@ def test_the_truncation_is_reported_and_the_sum_moves_with_nbnd():
 
 
 @pytest.mark.slow
-def test_an_ultrasoft_kubo_curvature_is_refused_by_name():
-    """``dS/dk`` is zero for every case validated here, so US/PAW is refused.
+@pytest.mark.parametrize(
+    "name,nocc", [("si2-us.in", 4), ("si2-paw.in", 4),
+                  ("alas-epsilon-us-soc.in", 8)]
+)
+def test_the_connection_and_its_adjoint_add_up_to_the_overlap_s_velocity(name, nocc):
+    """``K^dag + K = dS/dk`` in the band basis, which pins the index order.
 
-    The refusal is the honest state of it rather than a gap: the term *is*
-    written (``VelocityOperator.apply_s``, the second tangent of the same
-    ``jvp``), and it is identically zero on a norm-conserving dataset, so
-    nothing in this file measures whether its convention -- ``e_n`` in both
-    factors, the outer band's energy and not the inner one's -- is right. An
-    off-diagonal element with a moving ``S`` is exactly the thing that comes out
-    plausible when it is wrong.
+    The augmentation connection is built from the projections, ``qq`` and the
+    augmentation dipole; ``dS/dk`` comes from a ``jvp`` of ``s_psi``. The two
+    share the projectors and nothing else, so an index order transposed
+    anywhere in the first would show here -- and index order in a transposed
+    pair is the thing that reads as a sign and otherwise gives a result that is
+    real, correctly symmetric and wrong.
+
+    What the identity **cannot** see is the augmentation dipole: it enters
+    ``K`` and ``K^dag`` with opposite signs and cancels exactly, which is the
+    same statement as the correction not being any rearrangement of ``dS/dk``.
+    That half is what the finite difference below is for.
+
+    The third cell is the one that checks the spin-orbit branch: a
+    fully-relativistic dataset puts ``qq_so`` and ``dpqq_so`` in place of the
+    scalar pair, and the whole contraction gains a spin index on both. It is
+    the same identity, and nothing in a scalar cell can see the spin blocks.
+
+    Measured: 1.2e-16 on ultrasoft silicon, 2.1e-16 on PAW silicon and 2.9e-16
+    on fully-relativistic ultrasoft AlAs, against a ``dS/dk`` whose largest
+    element is 2.65e-2, 2.65e-2 and 8.3e-3.
     """
-    system, pseudos, result = converged("si2-us.in")
-    with pytest.raises(NotImplementedError, match="dS/dk"):
-        run_berry_curvature(
-            system, pseudos, result.density, shape=(2, 2), nocc=4, nbnd=8,
-            method="kubo",
-        )
+    points = np.array([[0.1875, 0.3125, 0.0], [0.13, 0.21, 0.07]])
+    states = source(name, nocc, nbnd=2 * nocc).states(points, keep_velocity=True)
+    bg = np.asarray(states.bg)
+    _, ds = velocity_matrices(states, bg[0])
+    block = augmentation_connection(states, bg[0])
+    assert block is not None
+
+    block, ds = np.asarray(block), np.asarray(ds)
+    total = np.conj(np.swapaxes(block, -1, -2)) + block
+    assert np.max(np.abs(ds)) > 1.0e-3               # the test can fail at all
+    assert np.max(np.abs(block)) > 1.0e-3
+    assert np.max(np.abs(total - ds)) < 1.0e-12
 
 
 @pytest.mark.slow
-def test_a_paw_kubo_curvature_is_refused_by_the_same_name():
-    """And with ``becsum`` supplied, so the refusal reached is this one.
+@pytest.mark.parametrize(
+    "name,augmented", [("si2-nc-pbe.in", False), ("si2-us.in", True),
+                       ("si2-paw.in", True)]
+)
+def test_the_augmented_connection_is_the_overlap_s_own_derivative(name, augmented):
+    """``<Psi_n|d_a Psi_m>`` two ways, and only one of them knows about ``T``.
 
-    Without it a PAW source stops earlier, on ``DFTSource``'s own missing-
-    ``becsum`` refusal, and the test would pass while establishing nothing
-    about the curvature.
+    The connection of a generalised eigenproblem is
+    ``<n|dH_a - e_m dS_a|m>/(e_m - e_n)`` **plus** ``K^a_{nm}``, and the second
+    piece is exactly what a dataset with an augmentation charge adds. The
+    reference is the FHS overlap primitive -- ``<u_n(k)|S(k,k')|u_m(k')>`` with
+    the tabulated ``q_ij(b)`` and the Miller-index alignment, the object every
+    invariant in this package is built from -- differenced centrally in ``k'``
+    and gauge-fixed by making each diagonal element real and positive. The two
+    routes share ``u(k)`` and nothing else: one carries ``q_ij(b)`` on a radial
+    table, the other ``dpqq`` and ``d(beta)/dk``.
+
+    **The plane-wave sphere is what sets the floor**, and it is reported rather
+    than tuned around: a plane wave crossing the cutoff between ``k`` and
+    ``k +- eps b`` is a variational jump the difference inherits whole, so the
+    step is taken small enough that all three k-points hold the same sphere and
+    the test says so. On AlAs no step reached that -- 616 against 615 at every
+    ``eps`` down to 2.5e-4 -- which is why silicon is the cell here.
+
+    Measured at ``eps = 5e-4``, on a connection whose largest element is 7.5::
+
+        norm-conserving control            1.698e-4
+        ultrasoft     with K   1.668e-4    without K   1.573e-2
+        PAW           with K   1.669e-4    without K   1.567e-2
+
+    With the term the augmented connection reaches the norm-conserving
+    control's own floor to 2 per cent and falls as ``eps^2`` with it; without
+    it the residual is 94 times larger and does **not** move as the difference
+    shrinks, which is what a missing term looks like and a tolerance does not.
     """
-    system, pseudos, result = converged("si2-paw.in")
-    with pytest.raises(NotImplementedError, match="dS/dk"):
-        run_berry_curvature(
-            system, pseudos, result.density, shape=(2, 2), nocc=4, nbnd=8,
-            method="kubo", becsum=result.becsum,
-        )
+    point = np.array([0.13, 0.21, 0.07])
+    nocc = 4
+    states = source(name, nocc, nbnd=8).states(
+        point.reshape(1, 3), keep_velocity=True
+    )
+    direction = np.asarray(states.bg)[0]
+    dh, ds = (np.asarray(x)[0] for x in velocity_matrices(states, direction))
+    energies = np.asarray(states.energies)[0]
+    gap = energies[None, :] - energies[:, None]      # [n, m] = e_m - e_n
+    with np.errstate(divide="ignore", invalid="ignore"):
+        metric = np.where(np.abs(gap) > 1.0e-8, (dh - energies[None, :] * ds) / gap, 0.0)
+    block = augmentation_connection(states, direction)
+    assert (block is None) is not augmented
+    block = np.zeros_like(dh) if block is None else np.asarray(block)[0]
+    analytic = (metric + block)[:nocc, :nocc]
+    block, gap = block[:nocc, :nocc], gap[:nocc, :nocc]
+    off = (~np.eye(nocc, dtype=bool)) & (np.abs(gap) > 1.0e-2)
+
+    source_set = source(name, nocc, nbnd=8)
+    eps = 5.0e-4
+    sides, counts = [], []
+    for sign in (+1.0, -1.0):
+        pair = np.stack([point, point + sign * eps * np.array([1.0, 0.0, 0.0])])
+        two = source_set.states(pair)
+        counts.append(int(np.sum(np.asarray(two.valid[1]))))
+        matrix = np.asarray(two.overlap(0, 1))       # [n, m] = <u_n(k)|S|u_m(k')>
+        phase = np.diagonal(matrix).copy()
+        sides.append(matrix / (phase / np.abs(phase))[None, :])
+        base = int(np.sum(np.asarray(two.valid[0])))
+    assert counts[0] == counts[1] == base            # one sphere, so no jump
+    difference = (sides[0] - sides[1]) / (2.0 * eps)
+
+    residual = float(np.max(np.abs(difference - analytic)[off]))
+    assert residual < 2.0e-4                          # the control's own floor
+    if not augmented:
+        return
+    dropped = float(np.max(np.abs(difference - (analytic - block))[off]))
+    assert dropped > 50.0 * residual
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("name", ["alas-raman.in", "alas-epsilon-us.in"])
+def test_the_curvature_and_the_conductivity_contract_the_same_velocity(name):
+    """``kubo_from_matrices`` *is* the generalised velocity matrix, contracted.
+
+    Two modules build this sum from the same three objects and arrange them
+    differently. :func:`~defumat.topology.kubo.kubo_from_matrices` keeps
+    ``dH``, ``dS`` and the connection apart and carries the outer band's energy
+    into both factors; :meth:`~defumat.response.velocity.VelocityOperator.
+    generalised_matrix_elements` assembles one Hermitian matrix
+    ``<n|dH_a - e_m dS_a|m> + (e_m - e_n)K^a_{nm}`` with the *ket* band's
+    energy, which is what :mod:`defumat.response.conductivity` contracts. The
+    two are the same object -- the ``dS`` term's asymmetry under ``n <-> m`` is
+    exactly ``K^dag + K`` -- and that is worth asserting rather than deriving,
+    because an index order transposed in either arrangement reads as a sign and
+    leaves a curvature that is real, smooth and wrong.
+
+    Measured: 5.1e-15 on a curvature of 1.0, on norm-conserving **and**
+    ultrasoft AlAs. The second is what says the conductivity inherits the
+    connection with the sign the finite difference above pinned.
+    """
+    import jax.numpy as jnp
+
+    points = np.array([[0.13, 0.21, 0.07], GENERIC_K])
+    nocc, nbnd = 4, 12
+    states = source(name, nocc, nbnd=nbnd).states(points, keep_velocity=True)
+    bg = np.asarray(states.bg)
+    dh1, ds1 = velocity_matrices(states, bg[0])
+    dh2, ds2 = velocity_matrices(states, bg[1])
+    k1 = augmentation_connection(states, bg[0])
+    k2 = augmentation_connection(states, bg[1])
+    energies = np.asarray(states.energies)
+    total, _ = kubo_from_matrices(
+        dh1, ds1, dh2, ds2, energies, nocc, k1=k1, k2=k2
+    )
+
+    psi = jnp.asarray(states.all_coefficients)[None]
+    elements = np.asarray(states.velocity.generalised_matrix_elements(
+        psi, jnp.asarray(energies)[None]
+    ))[:, 0]                                       # (3, nk, nbnd, nbnd)
+    first, second = (np.einsum("a,ak...->k...", bg[d], elements) for d in (0, 1))
+    gap = energies[:, :, None] - energies[:, None, :]      # [n, m] = e_n - e_m
+    finite = np.abs(gap) > 1.0e-6
+    weight = np.where(finite, 1.0 / np.where(finite, gap, 1.0) ** 2, 0.0)
+    terms = -2.0 * np.imag(first * np.swapaxes(second, -1, -2)) * weight
+    occupied = np.arange(energies.shape[1]) < nocc
+    direct = np.sum(
+        np.where(occupied[:, None] & ~occupied[None, :], terms, 0.0), axis=(1, 2)
+    )
+
+    total = np.asarray(total)
+    assert np.max(np.abs(total)) > 0.5             # the test can fail at all
+    assert np.max(np.abs(total - direct)) < 1.0e-12
 
 
 def test_a_state_set_without_the_velocity_operator_is_refused():

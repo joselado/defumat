@@ -235,15 +235,13 @@ because that is what decides whether it is a session or a phase.
 - **The force on an atom of a spin spiral** — the two components live on different
   plane-wave spheres, so the nonlocal term needs the projectors of both. `dE/dq` (P21) is
   what a spiral has instead.
-- **The Kubo Berry curvature of an ultrasoft or PAW dataset**, and with it the **optical
-  conductivity** and the **shift current** (P47, P94). The missing term is the
-  **augmentation dipole** `<psi_n|T^dagger d_k T|psi_m>`, `adddvepsi_us`'s `dpqq`, which a
-  formula written in `dH/dk` and `dS/dk` has nowhere to put; the `e_n dS/dk` piece beside
-  it is right by derivation. P94 measured the omission at 18 per cent of `Omega` and 0.010
-  of a Chern number on a model whose exact answer is free, and pinned its shape: the two
-  factors need *different* blocks. `efield.py` computes the object already
-  (`_ultrasoft_position`); what is missing is its matrix-element form in
-  `velocity_matrices`, and then an **assembly** check on plane waves.
+- **The shift current of an ultrasoft or PAW dataset** (P47, P94, P99). The Kubo Berry
+  curvature and the optical conductivity were refused with it and are not any more: P99
+  wrote the **augmentation dipole** `<psi_n|T^dagger d_k T|psi_m>` in matrix-element form
+  (`VelocityOperator.augmentation_connection`). What this one needs beyond it is that
+  term's own **k-derivative**, which is built from `<beta|psi>` and `d(beta)/dk_a` and so
+  wants `d^2(beta)/dk_a dk_b` -- a second derivative of a bare projector, which nothing
+  here forms. `apply_second` differentiates `H`, not a projector on its own.
 - **The sum-over-states `chi_0` of an ultrasoft dataset** (P40, P94). Two routes to
   `Q_ij(G)` at `G != 0` disagree -- 57.200 with a residual of +0.540 through
   `augmentation_at_q` against P40's 55.5 and -1.20 through the dense table -- and the
@@ -18258,3 +18256,110 @@ they were found in an afternoon.
   one about datasets. That edge moved rather than went.
 - The phonons, the Raman tensor and the strain response stay refused for a spinor, for
   `symmetrize_displacement`'s reason rather than this one.
+
+### P99 -- The augmentation dipole a moving overlap needs, and the two refusals it lifts. ✅ DONE for the Kubo curvature and the optical conductivity; the shift current stays refused, one derivative further out.
+
+**What was refused, and for once the refusal named the right term.** `AUGMENTATION-NEXT.md`
+§2 held three entries -- the Kubo Berry curvature (`topology/kubo.py`), the optical
+conductivity (`response/conductivity.py`) and the shift current
+(`response/photocurrent.py`) -- and all three said the same sentence: with `S = T^dagger T`
+the states a Berry phase or a current is about are `T|psi>` rather than `|psi>`, so the
+connection carries `<psi_n|T^dagger d_k T|psi_m>` beside `<psi_n|S d_k psi_m>`, and a
+formula written in `dH/dk` and `dS/dk` has nowhere to put it. That is exactly what was
+missing. It is the first entry in that file whose sizing survived reading the code around
+the guard, and the reason is that P94 had already done the reading: it built the model that
+makes the exact curvature free, measured the omission at 18 per cent of `Omega` and 0.010 of
+a Chern number, and **pinned the shape** -- the two factors of the sum take different
+blocks, `L = K^dagger` in the first and `K` in the second, with `L + K = dS`.
+
+**The term, and why it is `adddvepsi_us` rather than something new.** Expanding the FHS
+overlap `M_{nm}(k, k') = <u_n|u_m'> + sum_ij <u_n|beta_i> q_ij(b) <beta_j'|u_m'>` to first
+order in `b = k' - k` gives
+
+    <Psi_n|d_a Psi_m> = <psi_n|S|d_a psi_m> + K^a_{nm},
+    K^a_{nm} = sum_ij <psi_n|beta_i> q_ij <d_a beta_j|psi_m>
+             - i sum_ij <psi_n|beta_i> dpqq^a_ij <beta_j|psi_m>,
+
+and `i K` is precisely the term `adddvepsi_us` adds to `P_c r_a|psi>`. So the whole of it
+is `response/efield.ultrasoft_position` called with a **zero position**, which is how it
+inherits the spin-orbit branch (`qq_so`, `dpqq_so`) at no cost --
+`VelocityOperator.augmentation_connection`.
+
+**The `tau` bookkeeping is the one place it could have gone wrong quietly, and it cancels.**
+`q_ij(b)` carries the atom's structure factor `e^{-i b . tau}`, so its derivative is
+`-i(tau_a q_ij + dpqq^a_ij)` -- measured, and the `tau q` piece is the larger of the two by
+an order of magnitude (`|dq/db| = 1.089` against `|dpqq| = 0.080` on PAW silicon). The
+projector derivative beside it is the **full** one, whose own `-i tau_a` term cancels it
+exactly, leaving the two *atom-centred* objects `VelocityOperator.projectors` and `dpqq`
+already agree on. Putting the `tau` term in would have been wrong and would have looked like
+a correction.
+
+**Four numbers, and the order they were taken in matters.**
+
+1. **`K^dagger + K = dS` in the band basis**: 1.2e-16 on ultrasoft silicon, 2.1e-16 on PAW
+   silicon, 2.9e-16 on fully-relativistic ultrasoft AlAs, against a `dS/dk` whose largest
+   element is 2.65e-2, 2.65e-2 and 8.3e-3. `dS` comes from a `jvp` of `s_psi` and `K` from
+   the projections, so this pins the index order -- and it **cannot see the dipole at all**,
+   which enters the two with opposite signs and cancels. That is the same statement as the
+   correction not being any rearrangement of `dS/dk`, and it is why the check below was
+   needed rather than optional.
+2. **The connection against a central difference of the FHS overlap**, which is the number.
+   `<Psi_n(k)|Psi_m(k+eps b)>` from the validated overlap primitive, gauge-fixed by making
+   each diagonal element real and positive, differenced and compared with
+   `<n|dH_a - e_m dS_a|m>/(e_m - e_n) + K^a_{nm}`. At `eps = 5e-4`, on a connection whose
+   largest off-diagonal element is 7.5:
+
+   | | with `K` | without `K` |
+   |---|---|---|
+   | norm-conserving control | 1.698e-4 | -- |
+   | ultrasoft | 1.668e-4 | 1.573e-2 |
+   | PAW | 1.669e-4 | 1.567e-2 |
+
+   With the term the augmented connection reaches the norm-conserving control's own floor
+   to 2 per cent and falls as `eps^2` with it (1.668e-4 at 5e-4 against 6.671e-4 at 1e-3);
+   without it the residual is 94 times larger and **does not move** as the difference
+   shrinks. The two routes share `u(k)` and nothing else -- one carries `q_ij(b)` on a
+   radial table, the other `dpqq` and `d(beta)/dk`.
+3. **The two assemblies are the same object**: `kubo_from_matrices` with the connection
+   blocks against a direct contraction of `generalised_matrix_elements`, agreeing to
+   **5.1e-15** on norm-conserving and on ultrasoft AlAs. That is what carries the term into
+   `response/conductivity.py`, whose velocity matrix element is written with the *ket*
+   band's energy where the curvature uses the outer band's; they differ by exactly
+   `K^dagger + K - dS`, which is zero.
+4. **The A/B, because an identity that closes is not evidence.** Deleting the connection
+   moves the optical conductivity's static dielectric constant by **0.38 on 64.81**
+   (ultrasoft silicon) and **0.38 on 64.85** (PAW), 0.47 per cent either way, and moves the
+   Kubo curvature of ultrasoft AlAs by **0.34 per cent** of its largest value.
+
+**What the obvious assembly check cannot do, said before it is read as a pass.** Kubo
+against FHS on ultrasoft AlAs is **61.7 per cent** apart pointwise at 12x12 and **49.9 per
+cent** at 18x18 (largest difference over the mesh, relative to the largest `|Omega_fhs|`,
+`nbnd = 25`), while the term itself is worth 0.34 per cent at both meshes. So that
+comparison would read the same with the term deleted, exactly as P94 found for `dS/dk`, and
+it is recorded here rather than quoted as agreement. What resolves the term is the
+*connection*, where the reference has no mesh in it.
+
+**The plane-wave sphere is what sets that check's floor, and it is reported rather than
+tuned around.** A plane wave crossing the cutoff between `k` and `k +- eps b` is a
+variational jump the difference inherits whole, so the step has to be small enough that all
+three k-points hold the same sphere -- 392 on silicon at `eps <= 1e-3`. On AlAs no step
+reached it: 616 against 615 at every `eps` down to 2.5e-4, and the residual there *rises*
+as the step shrinks, which is the tell. Silicon is the cell in the test for that reason and
+for no other.
+
+**Neither reference code computes this at all**, which is worth stating because it makes the
+row an extension rather than a reimplementation. `PP/src/epsilon.f90:65` refuses outright --
+`IF (okvan) CALL errore('grid_build', 'USPP are not implemented', 1)`, with the comment
+"dipole matrix elements are not trivial at all", which is this term. Elk is all-electron and
+has no augmentation charge to have a dipole. And QE has no Kubo Berry curvature on any
+dataset.
+
+**What is outstanding.**
+
+- The **shift current** stays refused, and its message now names what is actually missing
+  rather than the dipole: `dK/dk_b`, which needs `d^2(beta)/dk_a dk_b`. `apply_second`
+  differentiates `H`, not a bare projector.
+- The curvature A/B above is a **floor rather than a measurement**: nothing yet measures the
+  term inside a *zone-integrated* quantity where the answer is independently known. The
+  Chern number would do it and needs a magnetic ultrasoft insulator, which no committed
+  cell is.

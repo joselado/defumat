@@ -303,6 +303,99 @@ class VelocityOperator:
             for axis in _CARTESIAN
         ])
 
+    def augmentation_connection(self, psi: jnp.ndarray, direction):
+        """``K^a_{nm} = <psi_n|T^dag dT/dk_a|psi_m>``, or ``None`` with no ``T``.
+
+        ``psi`` is ``(nspin, nk, nbnd, ndim)`` and the result is
+        ``(nspin, nk, nbnd, nbnd)``. ``None`` for a norm-conserving dataset,
+        where ``T`` is the identity and the whole object is zero.
+
+        **This is the term a moving overlap needs beyond its two tangents.**
+        With ``S = T^dag T`` the states a Berry phase or a Kubo sum is about
+        are ``T|psi>`` rather than ``|psi>``, so the connection is
+
+            <Psi_n|d_a Psi_m> = <psi_n|S|d_a psi_m> + K^a_{nm},
+
+        and only the first piece is a rearrangement of ``dH/dk`` and ``dS/dk``.
+        Writing the second out gives
+
+            K^a_{nm} = sum_ij <psi_n|beta_i> q_ij <d_a beta_j|psi_m>
+                     - i sum_ij <psi_n|beta_i> dpqq^a_ij <beta_j|psi_m>,
+
+        which is ``-i`` times the matrix element of the term ``adddvepsi_us``
+        adds to ``P_c r_a|psi>``. So it is
+        :func:`~defumat.response.efield.ultrasoft_position` called with a zero
+        position, and it inherits that function's spin-orbit branch (``qq_so``
+        and ``dpqq_so``) along with the rest.
+
+        **Both halves are about the atom's own centre and the ``tau`` cancels.**
+        ``q_ij(b)`` carries the structure factor ``e^{-i b . tau}``, so its
+        derivative is ``-i (tau_a q_ij + dpqq^a_ij)`` -- but the projector
+        derivative that rides beside it is the full one, whose own ``tau`` term
+        cancels it exactly, leaving the two atom-centred objects
+        :meth:`projectors` and ``dpqq`` already agree on.
+
+        ``K^dag + K`` is exactly ``<psi_n|dS/dk_a|psi_m>``: the ``dpqq`` term
+        enters the two with opposite signs and cancels, and the rest adds. That
+        is what says no rearrangement of ``dS/dk`` can supply this -- and it is
+        also why an identity check on ``K^dag + K`` cannot see the dipole at
+        all, which is what the finite difference of the overlap is for
+        (``tests/regression/test_kubo_curvature.py``).
+        """
+        from defumat.response.efield import _augmentation_dipole, ultrasoft_position
+
+        calculation = self.calculation
+        if getattr(calculation, "augmentation", None) is None:
+            return None
+        psi = jnp.asarray(psi)
+        direction = jnp.asarray(direction)
+        dipole = _augmentation_dipole(calculation)
+        along = jnp.einsum("a,a...->...", direction.astype(dipole.dtype), dipole)
+        hubbard = (
+            None if self.ns is None
+            else calculation.hubbard_terms(self.ns)[2]
+        )
+        hamiltonians = calculation.hamiltonian(self.v_scf, self.ddd_paw, hubbard)
+        added = ultrasoft_position(
+            calculation, hamiltonians, psi, jnp.zeros_like(psi), along,
+            self.projectors(direction),
+        )
+        return -1j * jnp.einsum("skmg,skng->skmn", psi.conj(), added)
+
+    def generalised_matrix_elements(self, psi: jnp.ndarray, energies) -> jnp.ndarray:
+        """``<Psi_n|v_a|Psi_m>`` of a **generalised** eigenproblem, ``(3, nspin, nk, nb, nb)``.
+
+        :meth:`matrix_elements` is ``<n|dH/dk_a|m>``, which is the velocity only
+        when ``S`` is the identity. With a moving overlap the same object is
+
+            v^a_{nm} = <n|dH_a - e_m dS_a|m> + (e_m - e_n) K^a_{nm},
+
+        the ket band's energy multiplying ``dS`` -- which is what
+        differentiating ``H|m> = e_m S|m>`` and projecting on ``<n|`` gives --
+        and :meth:`augmentation_connection` supplying the piece neither tangent
+        contains. The matrix stays Hermitian: the ``dS`` term's asymmetry under
+        ``n <-> m`` is exactly cancelled by ``K^dag + K = dS``.
+
+        On the **diagonal** the correction is the generalised Hellmann-Feynman
+        band velocity, ``<n|dH_a - e_n dS_a|n>``, since ``e_m - e_n`` kills the
+        connection there. A norm-conserving dataset gets :meth:`matrix_elements`
+        back unchanged.
+        """
+        psi = jnp.asarray(psi)
+        energies = jnp.asarray(energies)
+        gap = energies[..., None, :] - energies[..., :, None]   # [n, m] = e_m - e_n
+        blocks = []
+        for axis in _CARTESIAN:
+            derivative, overlap = self.both(psi, axis)
+            element = jnp.einsum("skmg,skng->skmn", psi.conj(), derivative)
+            moving = jnp.einsum("skmg,skng->skmn", psi.conj(), overlap)
+            element = element - energies[..., None, :] * moving
+            connection = self.augmentation_connection(psi, axis)
+            if connection is not None:
+                element = element + gap * connection
+            blocks.append(element)
+        return jnp.stack(blocks)
+
     def apply_second(self, psi: jnp.ndarray, first, second) -> jnp.ndarray:
         """``d^2H/dk_a dk_b |psi>``, one ``jvp`` differentiated by another.
 

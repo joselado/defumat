@@ -33,10 +33,22 @@ from differentiating ``H|m> = e_m S|m>`` and projecting on ``<n|``, which gives
 through the curvature leaves ``e_n`` -- the band whose curvature is being
 computed -- in **both** factors, not ``e_n`` in one and ``e_m`` in the other.
 It vanishes identically for a norm-conserving dataset, where ``S`` is the
-identity and has no ``k`` in it at all, which is why an ultrasoft or PAW run is
-refused here rather than trusted: nothing in a norm-conserving validation can
-see the term, and an off-diagonal element with a moving ``S`` is easy to get
-wrong in a way no symmetry check catches.
+identity and has no ``k`` in it at all -- so nothing in a norm-conserving
+validation can see it, and an off-diagonal element with a moving ``S`` is easy
+to get wrong in a way no symmetry check catches.
+
+**A moving overlap needs one more term than ``dH/dk`` and ``dS/dk``, and that
+is what an ultrasoft or PAW run was refused for until P99.** The states a Berry
+phase is about are ``T|psi>`` rather than ``|psi>``, with ``S = T^dag T``, so
+the connection is ``<psi_n|S|d_a psi_m> + <psi_n|T^dag d_a T|psi_m>`` and only
+the first piece is a rearrangement of the two tangents.
+:func:`augmentation_connection` is the second, ``adddvepsi_us``'s augmentation
+dipole in band-matrix-element form, and the two factors of the curvature take
+**different** blocks of it: ``K^dag`` in the first and ``K`` in the second,
+where ``K^dag + K`` is exactly ``dS/dk``. That asymmetry is the reason no
+arrangement of ``dS/dk`` could have supplied the term, and it is what
+``tests/unit/test_topology_curvature.py`` pins on a model whose exact answer is
+free.
 
 **Two honest numbers come out with the curvature**, because both are ways this
 answer can be quietly wrong.
@@ -106,9 +118,24 @@ def velocity_matrices(states, direction):
     return dh_mat, ds_mat
 
 
+def augmentation_connection(states, direction):
+    """``K^a_{nm} = <psi_n|T^dag dT/dk_a|psi_m>``, ``(nk, nb, nb)``, or ``None``.
+
+    The state set's adaptor onto :meth:`~defumat.response.velocity.
+    VelocityOperator.augmentation_connection`, which is where the term is
+    written and where what it is gets explained. ``None`` for a
+    norm-conserving dataset, where ``T`` is the identity.
+    """
+    calculation = getattr(states, "calculation", None)
+    if calculation is None or getattr(calculation, "augmentation", None) is None:
+        return None
+    psi = jnp.asarray(states.all_coefficients)[None]   # (1, nk, nband, ndim)
+    return states.velocity.augmentation_connection(psi, direction)[0]
+
+
 def kubo_from_matrices(
     dh1, ds1, dh2, ds2, energies, nocc: int, nbnd: int | None = None,
-    degeneracy_tol: float = DEGENERACY_TOL,
+    degeneracy_tol: float = DEGENERACY_TOL, k1=None, k2=None,
 ):
     """``(Omega(k), Omega_n(k))`` from the two directions' velocity blocks.
 
@@ -127,6 +154,8 @@ def kubo_from_matrices(
     if nbnd is not None:
         dh1, ds1 = dh1[:, :nbnd, :nbnd], ds1[:, :nbnd, :nbnd]
         dh2, ds2 = dh2[:, :nbnd, :nbnd], ds2[:, :nbnd, :nbnd]
+        k1 = None if k1 is None else k1[:, :nbnd, :nbnd]
+        k2 = None if k2 is None else k2[:, :nbnd, :nbnd]
         energies = energies[:, :nbnd]
     e = energies
     # A^1_{nm} = <n|dH_1 - e_n dS_1|m>; A^2_{mn} = <m|dH_2 - e_n dS_2|n>, the
@@ -135,6 +164,16 @@ def kubo_from_matrices(
     a1 = dh1 - e[:, :, None] * ds1
     a2 = jnp.swapaxes(dh2, -1, -2) - e[:, :, None] * jnp.swapaxes(ds2, -1, -2)
     gap = e[:, :, None] - e[:, None, :]
+    # The augmentation connection, when the dataset has one. Both factors are
+    # ``(e_n - e_m)`` times a connection, so the block enters multiplied by the
+    # gap -- and the *two factors take different blocks*, ``L = K^dag`` in the
+    # first and ``K`` in the second, which is what says no rearrangement of
+    # ``dS/dk`` could have supplied it. The arrangement is pinned on a model
+    # with no mesh error at all (``tests/unit/test_topology_curvature.py``).
+    if k1 is not None:
+        a1 = a1 + gap * jnp.conj(jnp.swapaxes(k1, -1, -2))
+    if k2 is not None:
+        a2 = a2 + gap * jnp.swapaxes(k2, -1, -2)
     finite = jnp.abs(gap) > degeneracy_tol
     weight = jnp.where(finite, 1.0 / jnp.where(finite, gap, 1.0) ** 2, 0.0)
     terms = -2.0 * jnp.imag(a1 * a2) * weight
@@ -162,7 +201,6 @@ def plane_wave_kubo(
     from defumat.topology.berry import BerryCurvature
 
     _require_velocity(states)
-    _refuse_augmented(states)
 
     nocc = states.nbnd if nocc is None else int(nocc)
     energies = jnp.asarray(states.energies)
@@ -186,13 +224,17 @@ def plane_wave_kubo(
     bg = np.asarray(states.bg)
     dh1, ds1 = velocity_matrices(states, bg[d1])
     dh2, ds2 = velocity_matrices(states, bg[d2])
+    # ``None`` on a norm-conserving dataset, where ``T`` is the identity.
+    k1 = augmentation_connection(states, bg[d1])
+    k2 = augmentation_connection(states, bg[d2])
 
     total, by_band = kubo_from_matrices(
-        dh1, ds1, dh2, ds2, energies, nocc, degeneracy_tol=degeneracy_tol
+        dh1, ds1, dh2, ds2, energies, nocc, degeneracy_tol=degeneracy_tol,
+        k1=k1, k2=k2,
     )
     dropped, _ = kubo_from_matrices(
         dh1, ds1, dh2, ds2, energies, nocc, nbnd=nband - 1,
-        degeneracy_tol=degeneracy_tol,
+        degeneracy_tol=degeneracy_tol, k1=k1, k2=k2,
     )
     total = np.asarray(total)
     dropped = np.asarray(dropped)
@@ -226,23 +268,3 @@ def _require_velocity(states) -> None:
             "run_berry_curvature(method='kubo') does. The occupied manifold "
             "alone is enough for 'fhs' and not for a sum over empty states"
         )
-
-
-def _refuse_augmented(states) -> None:
-    """Ultrasoft and PAW, refused by name with the unvalidated term said out loud."""
-    calculation = states.calculation
-    if calculation is None or getattr(calculation, "augmentation", None) is None:
-        return
-    raise NotImplementedError(
-        "the Kubo Berry curvature with an ultrasoft or PAW pseudopotential is "
-        "not implemented: a term is missing rather than unchecked. With "
-        "S = T^dag T the states a Berry phase is about are T|psi>, so the "
-        "connection carries <psi_n|T^dag dT/dk|psi_m> beside <psi_n|S d/dk "
-        "psi_m> -- the augmentation dipole, adddvepsi_us's dpqq -- and this "
-        "assembly sees only dH/dk and dS/dk and has nowhere to put it. "
-        "Measured on a model where the exact answer is free (PLAN.md P94): "
-        "18 per cent of the curvature and 0.010 of the Chern number, with the "
-        "two factors needing different blocks. The e_n dS/dk piece itself is "
-        "right by derivation, not by luck. Use method='fhs', which carries the "
-        "whole thing as q_ij(b) and is what an invariant needs anyway"
-    )
