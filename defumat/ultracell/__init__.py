@@ -14,6 +14,11 @@ from defumat.ultracell.driver import (
 from defumat.ultracell.grid import Ultracell, folded_kpoints
 from defumat.ultracell.hamiltonian import multiplet_cut, ultracell_matrix
 from defumat.ultracell.states import UltracellStates, ultracell_band_density
+from defumat.ultracell.seed import (
+    reference_axis,
+    seeded_becsum,
+    seeded_density,
+)
 from defumat.ultracell.potential import (
     delta_potential,
     ultracell_potential,
@@ -36,4 +41,7 @@ __all__ = [
     "with_external_potential",
     "multiplet_cut",
     "require_an_ultracell_regime",
+    "seeded_density",
+    "seeded_becsum",
+    "reference_axis",
 ]

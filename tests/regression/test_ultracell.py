@@ -911,6 +911,143 @@ def test_the_magnetic_ultracell_converges_to_the_supercell(tmp_path, pseudo_dir)
     assert charge_errors[-1] < 5e-4 and moment_errors[-1] < 5e-4
 
 
+#: The same lattice as a two-cell supercell with its two moments **opposite**,
+#: which is what a seeded antiferromagnet is: two species pointing at the same
+#: UPF, because ``starting_magnetization`` is per species and there is no other
+#: way to make two atoms of one element start differently.
+ANTIFERROMAGNET = """&control
+ calculation='scf'
+/
+&system
+ ibrav=0, celldm(1)=5.5, nat=2, ntyp=2, ecutwfc=15.0,
+ nosym=.true., noinv=.true.,
+ nspin=2, starting_magnetization(1)=0.8, starting_magnetization(2)={m2},
+ occupations='smearing', smearing='gaussian', degauss=0.02
+/
+&electrons
+ conv_thr=1.0d-11
+ mixing_beta=0.3
+/
+CELL_PARAMETERS alat
+ 2.0 0.0 0.0
+ 0.0 1.0 0.0
+ 0.0 0.0 1.0
+ATOMIC_SPECIES
+ H1 1.008 H.pz-vbc.UPF
+ H2 1.008 H.pz-vbc.UPF
+ATOMIC_POSITIONS crystal
+ H1 0.0 0.0 0.0
+ H2 0.5 0.0 0.0
+K_POINTS automatic
+ {k0} {k1} {k2} 0 0 0
+"""
+
+
+def _hydrogen_pair(tmp_path, pseudo_dir, kgrid, m2) -> Calculator:
+    """The two-cell supercell, ferromagnetic at ``m2 = 0.8`` and staggered at -0.8."""
+    path = tmp_path / f"h_pair{m2:+.1f}.in"
+    path.write_text(ANTIFERROMAGNET.format(
+        m2=m2, k0=kgrid[0], k1=kgrid[1], k2=kgrid[2]))
+    return Calculator.from_file(path, pseudo_dir=pseudo_dir)
+
+
+@pytest.mark.slow
+def test_a_collinear_seed_reaches_the_state_the_tiled_loop_cannot(
+        tmp_path, pseudo_dir):
+    """The seed's whole claim, as two numbers: it moves, and it moves to the
+    right place.
+
+    The tiled state is an **exact fixed point** of this loop -- nothing in a
+    self-consistent iteration breaks spin symmetry on its own -- so a run with
+    no seed and nothing applied converges in one iteration and stays
+    ferromagnetic however many cells it has. Here the same cell is seeded with
+    ``cos(pi x)``, one period over two cells, and what it converges to is the
+    antiferromagnet: **3.085 mRy per cell below** the tiled ferromagnet, which
+    is a state the method could not previously reach at all.
+
+    The reference is the same two atoms as a real supercell, seeded the same way
+    through ``starting_magnetization`` on two species, and what is compared is
+    the ``(1, 0, 0)`` Fourier component of the magnetization -- the amplitude of
+    the wave itself, and the one quantity here that needs no partition of space.
+    Measured against that supercell's 0.36546537 mu_B per cell:
+
+    | ``nbnd`` | ``|m_Q|`` error | ``E`` above the supercell, Ry |
+    |---|---|---|
+    | 16 | 1.51e-03 | +1.53e-04 |
+    | 24 | 5.04e-04 | +6.80e-05 |
+    | 40 | 1.74e-04 | +2.32e-05 |
+    | 64 | 3.10e-05 | +5.57e-06 |
+
+    so the seeded state converges to the supercell's own in the one knob the
+    method has, and the energy falls towards it **from above** at every rung,
+    which is the nested-basis property the total energy is the only quantity
+    here to have. ``nbnd = 64`` is left out of the test and quoted: three rungs
+    say the same thing and the fourth costs a minute.
+
+    **Why a smooth seed rather than a per-cell sign.** ``cos(pi x)`` changes
+    sign halfway through each cell, so the *cell* moments it leaves are small
+    (0.0739 against the atoms' 0.365) while the *atoms* are cleanly opposite --
+    and the supercell agreement is what says that is the physical state rather
+    than a weak wave. It is why the number checked here is the Fourier amplitude
+    and not
+    :meth:`~defumat.ultracell.driver.UltracellResult.cell_moments`.
+    """
+    shape, kgrid = (2, 1, 1), (2, 2, 2)
+    folded = tuple(n * m for n, m in zip(shape, kgrid))
+    calculator = _hydrogen(tmp_path, pseudo_dir, folded)
+    scf = calculator.get_scf(conv_thr=1e-11, nbnd=8)
+    assert scf.converged
+
+    miller = np.array([[1, 0, 0]])
+    # ``_fourier`` is the *mean* of the field against a plane wave, so it is
+    # already comparable across two different boxes; the unit cell's volume
+    # turns it into Bohr magnetons per cell, which is what the numbers above
+    # are quoted in.
+    volume = float(calculator.system.cell.volume)
+    staggered = _hydrogen_pair(tmp_path, pseudo_dir, kgrid, -0.8)
+    reference = staggered.get_scf(conv_thr=1e-11, nbnd=16, max_iterations=200)
+    assert reference.converged
+    their_grid = tuple(np.asarray(reference.density).shape[1:])
+    theirs = np.asarray(reference.density)
+    their_moment = float(np.abs(_fourier(
+        theirs[0] - theirs[1], their_grid, miller))[0]) * volume
+    their_energy = float(reference.total_energy) / 2.0
+    assert their_moment > 0.1, their_moment
+
+    # The tiled arm: no seed, nothing applied, and it does not move.
+    tiled = run_ultracell(
+        calculator.system, calculator.pseudos, scf, shape, kgrid, nbnd=16,
+        conv_thr=1e-10, states_conv_thr=1e-8,
+    )
+    assert tiled.converged and tiled.iterations == 1
+    assert np.abs(np.asarray(tiled.cell_moments())
+                  - float(scf.magnetization)).max() < 1e-5
+    assert float(tiled.total_energy) > their_energy + 2.5e-3
+
+    seed = lambda x: np.cos(np.pi * x[..., 0])
+    moments, energies = [], []
+    for nbnd in (16, 24, 40):
+        result = run_ultracell(
+            calculator.system, calculator.pseudos, scf, shape, kgrid,
+            nbnd=nbnd, seed_magnetization=seed, conv_thr=1e-10,
+            states_conv_thr=1e-8, max_iterations=200,
+            david=None if nbnd < 40 else 2,
+        )
+        assert result.converged
+        box = tuple(result.ultracell.grid)
+        ours = np.asarray(result.density)
+        moments.append(abs(float(np.abs(_fourier(
+            ours[0] - ours[1], box, miller))[0]) * volume - their_moment)
+            / their_moment)
+        energies.append(float(result.total_energy) - their_energy)
+        jax.clear_caches()
+
+    assert moments == sorted(moments, reverse=True), moments
+    assert energies == sorted(energies, reverse=True), energies
+    assert all(e > 0.0 for e in energies), energies
+    assert moments[-1] < 3e-4 and energies[-1] < 4e-5, (moments, energies)
+
+
 class _Overridden:
     """A system with one attribute replaced, for firing one refusal at a time.
 

@@ -1174,13 +1174,21 @@ class Calculator:
         depends on -- it is the size of the variational basis per folded
         k-point, and the answer converges to the real ``N``-cell supercell as it
         grows -- so pass it. ``external`` is an applied potential in Ry over the
-        ultracell and ``magnetic_field`` an applied ``B(r)``, which is what a
-        spin density wave is driven with, since nothing in an SCF breaks spin
-        symmetry on its own. Both spin regimes are in: ``nspin = 2`` takes a
-        scalar field and gives a modulation of the moment's *length*, and
-        ``nspin = 4`` takes a vector one and gives a modulation of its
-        *direction* -- a helix or a cycloid -- with spin-orbit coupling along
-        for free, since that lives entirely in the frozen states.
+        ultracell and ``magnetic_field`` an applied ``B(r)``. Both spin regimes
+        are in: ``nspin = 2`` takes a scalar field and gives a modulation of the
+        moment's *length*, and ``nspin = 4`` takes a vector one and gives a
+        modulation of its *direction* -- a helix or a cycloid -- with spin-orbit
+        coupling along for free, since that lives entirely in the frozen states.
+
+        **A magnetic modulation comes from one of two places and they are
+        different quantities**, because nothing in an SCF breaks spin symmetry
+        on its own and the tiled state is an exact fixed point. A
+        ``magnetic_field`` *drives* one, and what comes back is the Q-resolved
+        susceptibility -- a response. ``seed_magnetization`` hands the loop the
+        texture as its *initial condition* and the loop keeps it, which is the
+        ordered state itself: a factor ``s(r)`` on the converged cell's own
+        moment, scalar for ``nspin = 2`` and a vector that turns it for
+        ``nspin = 4``, with ``|s| <= 1``.
 
         The atoms do not move and the local band structure cannot relax: this
         computes what a modulation does to a fixed crystal, not a different

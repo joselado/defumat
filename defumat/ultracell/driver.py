@@ -67,12 +67,21 @@ The density has four components, the states hold **one** electron each rather
 than two, and there is one Fermi level over all ``N nbnd`` of them.
 
 **Nothing breaks spin symmetry on its own**, so an unpolarized unit cell put in
-an ultracell stays unpolarized however many cells it has. A modulated
-magnetization has to be driven, and ``magnetic_field`` is what drives it: what
-comes back is then the ``Q``-resolved response rather than an initial
-condition. Elk's other route -- a random seed field (``rndbfcu``) faded away by
-``reducebf``, which lets a *spontaneous* wave find its own period -- is not
-written here.
+an ultracell stays unpolarized however many cells it has, and a *tiled* magnetic
+one stays tiled -- the tiled state is an exact fixed point of this loop. A
+modulation therefore comes from one of two places, and they are different
+quantities. ``magnetic_field`` **drives** one, and what comes back is the
+``Q``-resolved spin susceptibility, a response rather than an ordered state.
+``seed_magnetization`` **hands one over** as the initial condition and the loop
+keeps it, which is the ordered state itself (:mod:`defumat.ultracell.seed`).
+Elk's route is the second with a fade in it -- a random field (``rndbfcu``)
+taken away geometrically (``reducebf``) -- because Elk's self-consistency runs
+on the potential, where a seed is a term in the functional and has to leave;
+here the mixed quantity is the density, so a seed is an initial condition,
+nothing is faded and the convergence test is untouched. A *random* seed is an
+ordinary argument here, so letting a spontaneous wave find its own period is
+available and is **not measured**; what is measured is a seed whose period was
+handed over.
 
 **What the peak costs.** Two objects grow with ``N`` and nothing else does.
 
@@ -141,6 +150,12 @@ from defumat.ultracell.mixing import box_kerker
 from defumat.ultracell.states import (
     UltracellStates,
     ultracell_band_density,
+)
+from defumat.scf.continuation import spin_components
+from defumat.ultracell.seed import (
+    reference_axis,
+    seeded_becsum,
+    seeded_density,
 )
 from defumat.ultracell.potential import (
     delta_potential,
@@ -313,8 +328,9 @@ class UltracellResult:
         at all.
 
         The envelope a spin density wave lives in, and the reason the phase has
-        a stage 3 at all: it is what a modulated field induces, what Elk's
-        ``rndbfcu`` seed is looking for, and what ``magnetic_accuracy`` bounds.
+        a stage 3 at all: it is what a modulated field induces, what
+        ``seed_magnetization`` hands the loop and the loop keeps, and what
+        ``magnetic_accuracy`` bounds.
         """
         components = self.density.shape[0]
         if components == 1:
@@ -709,6 +725,7 @@ def run_ultracell(
     nbnd: int | None = None,
     external=None,
     magnetic_field=None,
+    seed_magnetization=None,
     conv_thr: float = 1.0e-8,
     states_conv_thr: float | None = None,
     david: int | None = None,
@@ -769,6 +786,22 @@ def run_ultracell(
             three per point. The noncollinear form is the one that can *turn* --
             a field whose direction rotates from cell to cell drives a helical
             spin density wave, which a collinear run cannot express at all.
+        seed_magnetization: the texture the loop **starts** in, as a factor
+            ``s(r)`` multiplying the converged unit cell's own magnetization --
+            ``starting_magnetization``'s role, one level up, and ``|s| <= 1``
+            for the same reason. A scalar for ``nspin = 2`` and a vector for
+            ``nspin = 4``, in the shapes ``magnetic_field`` takes, so a helix of
+            pitch ``n`` cells is
+            ``lambda x: stack([cos(2 pi x[..., 0] / n), sin(...), zeros], -1)``.
+            **This is the other way to get a modulated magnetization and the two
+            are different quantities**: a field drives one and measures the
+            ``Q``-resolved susceptibility, where a seed hands the loop an
+            initial condition and lets it keep it, which is the ordered state
+            itself. Nothing is faded -- the mixed quantity here is the density,
+            so a seed is not a term in the functional and the convergence test
+            is untouched, where Elk seeds its *potential* and has to take the
+            seed away again with ``reducebf``. See
+            :mod:`defumat.ultracell.seed`.
         keep_states: keep the frozen states and the envelope amplitudes on the
             result, as :class:`~defumat.ultracell.states.UltracellStates`. They
             are what an ultracell *wavefunction* is made of, so an STM image
@@ -1020,6 +1053,24 @@ def run_ultracell(
         f"the reference density has {density.shape[0]} components where "
         f"nspin_mag is {nspin_mag}"
     )
+    # **The tiled state is an exact fixed point, so a modulation has to be put
+    # in by hand or driven.** This is the first of the two doors: the loop
+    # starts in the texture and keeps it, because the seed is an initial
+    # condition rather than a term in the functional -- the whole of
+    # :mod:`defumat.ultracell.seed`, including why nothing is faded.
+    seed_field = _seed_field(seed_magnetization, ultracell, nspin, nspin_mag)
+    seed_axis = None
+    if seed_field is not None:
+        _warn_if_a_constraint_fights_the_seed(system, seed_field, nspin_mag)
+        moment = spin_components(density, nspin_mag)[1]
+        if nspin_mag == 4:
+            # Read off the density being seeded rather than off the system's
+            # ``angle1``/``angle2``: what the frozen states carry is the
+            # direction the SCF *ended* at, and those two differ by whatever
+            # the unit cell's own relaxation did.
+            seed_axis = reference_axis(moment, float(cell.volume))
+        density = seeded_density(density, seed_field, nspin_mag,
+                                 float(cell.volume), axis=seed_axis)
     # ``get_mixer`` drops a ``None`` keyword, so an unset history leaves the
     # mixer its own default and ``mixing_mode = "linear"``, which has no
     # history at all, is not a TypeError.
@@ -1043,6 +1094,18 @@ def run_ultracell(
     becsum_state = ()
     if augmentation is not None:
         becsum_state = _tiled_becsum(reference.becsum, cells)
+        if seed_field is not None:
+            # **Most of a transition metal's moment is inside the projector
+            # spheres**, so a seed that reached the grid alone would seed almost
+            # nothing on a PAW magnet and would leave the first iteration's
+            # one-centre potential disagreeing with its density. Same field,
+            # read at each atom's own grid point.
+            becsum_state = seeded_becsum(
+                becsum_state, seed_field, ultracell,
+                np.asarray(system.structure.positions_crystal(cell)),
+                augmentation.tables[0].species_atoms, nspin_mag,
+                axis=seed_axis,
+            )
 
     result = None
     history = []
@@ -1517,10 +1580,11 @@ def _as_field(external, magnetic_field, ultracell: Ultracell, nspin: int,
     for stage 1.** Nothing in an SCF breaks spin symmetry on its own, so an
     unpolarized unit cell put in an ultracell stays unpolarized however many
     cells it has -- the modulated magnetization has to be *driven*, either by a
-    modulated field (this) or by a seed the loop is allowed to keep (which is
-    Elk's ``rndbfcu`` with ``reducebf``, and is not written). A field is the
-    honest half: what it induces is the ``Q``-resolved spin susceptibility, a
-    quantity rather than an initial condition.
+    modulated field (this) or by a seed the loop is allowed to keep
+    (``seed_magnetization``, :mod:`defumat.ultracell.seed`). The two are
+    different quantities rather than two routes to one: what a field induces is
+    the ``Q``-resolved spin susceptibility, a response, and what a seed keeps is
+    an ordered state.
     """
     if magnetic_field is not None and nspin_mag == 1:
         # **Two different cells land here and the advice is different.** An
@@ -1561,6 +1625,73 @@ def _as_field(external, magnetic_field, ultracell: Ultracell, nspin: int,
     if magnetic is not None:
         field = field + magnetic
     return field
+
+
+def _seed_field(seed, ultracell: Ultracell, nspin: int, nspin_mag: int):
+    """The magnetization seed as one array on the box, in the field's shapes.
+
+    ``(*box)`` for a collinear run and ``(3, *box)`` for a noncollinear one,
+    through the *same* two evaluators an applied field goes through, so the
+    coordinate convention cannot come apart between a run driven by a field and
+    one started from a seed. What the array means is
+    :mod:`defumat.ultracell.seed`'s subject and not this function's.
+
+    The refusal is the field's, for the field's two reasons: at ``nspin_mag = 1``
+    there is one density component and no magnetization for a seed to scale --
+    which is an ``nspin = 1`` run, or a spin-orbit run on a cell that carries no
+    moment.
+    """
+    if seed is None:
+        return None
+    if nspin_mag == 1:
+        if nspin == 4:
+            raise ValueError(
+                "a magnetization seed scales the unit cell's own moment, and "
+                "this run has nspin_mag = 1 (a spin-orbit calculation with no "
+                "magnetization): there is no moment to scale and no "
+                "magnetization component of the density to put one in. Give "
+                "the unit cell a small starting_magnetization so that domag is "
+                "true, converge it, and seed the modulation on top of that"
+            )
+        raise ValueError(
+            "a magnetization seed needs two spin channels: this run is "
+            "nspin = 1, where there is one density and no magnetization at "
+            "all. Set nspin = 2 in the unit cell, or noncolin for a texture "
+            "whose direction turns"
+        )
+    if nspin_mag == 4:
+        return _on_the_vector_box(seed, ultracell)
+    return _on_the_box(seed, ultracell, "magnetization seed")
+
+
+def _warn_if_a_constraint_fights_the_seed(system, seed, nspin_mag: int) -> None:
+    """A constrained moment holds ``Q = 0`` and the seed generally moves it.
+
+    ``tot_magnetization`` gives each channel its own Fermi level, which pins
+    ``N_up - N_dw`` at the target every iteration -- so what a seed can deliver
+    under it is the modulation at ``Q != 0`` and not its own net, and an
+    amplitude wave's net is zero where the constraint's is not. The two are
+    consistent and the loop resolves them by keeping the constraint, which is
+    worth saying once rather than leaving to be noticed in the moments.
+    """
+    if getattr(system, "tot_magnetization", None) is None:
+        return
+    values = np.asarray(seed, dtype=float)
+    mean = float(np.mean(values)) if nspin_mag == 2 else float(
+        np.linalg.norm(np.mean(values.reshape(3, -1), axis=1))
+    )
+    if abs(mean - 1.0) < 1.0e-6:
+        return
+    warnings.warn(
+        f"this run constrains the moment (tot_magnetization = "
+        f"{float(system.tot_magnetization):g}), so each channel has its own "
+        f"Fermi level and N_up - N_dw is pinned at that target at every "
+        f"iteration. The seed's own net is {mean:.3f} of the reference's, so "
+        f"what it can deliver here is the modulation at Q != 0 and not the net "
+        f"moment -- the constraint wins that one, by construction. Drop "
+        f"tot_magnetization to let the seed's net stand",
+        stacklevel=3,
+    )
 
 
 def _magnetic_potential(magnetic_field, ultracell: Ultracell, nspin_mag: int):
