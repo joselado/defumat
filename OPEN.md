@@ -3665,3 +3665,34 @@ whether the product or one factor is the bound. If it is the product, the fix is
 batched shape in `batching.py` for the folded-set solve rather than to leave a user to find
 it; if it is one factor, the cap belongs there. **Do not size it from the card's memory**,
 which is the reading this failure already rules out.
+
+# Part XII -- from the augmented spinor response, 2026-09-17 (P98)
+
+## 1. Bismuthene's ground-state energy sits 3.5e-5 Ry from `pw.x` where AlAs sits at 2e-9 **[opened 2026-09-17]**
+
+`bismuthene-epsilon-us-soc.in`, the cell P98 added so that a heavier element could resolve
+the `fcoef` dressing of the augmentation terms: two bismuth atoms in a honeycomb with
+vacuum, `Bi.rel-pbe-dn-rrkjus_psl.1.0.0.UPF`, `noncolin` and `lspinorb`, `ecutwfc = 20`,
+`ecutrho = 160`, `occupations = 'fixed'`, a 4x4x1 grid.
+
+**The two totals.** `pw.x` gives **-295.59282302 Ry** and this code **-295.592858395 Ry**,
+which is **3.5e-5 Ry**. On the fully-relativistic AlAs run of the same phase the two codes
+agree to **2e-9 Ry**, so this is four orders worse in absolute terms and about a thousand
+times worse relative to the total.
+
+**What is already excluded, by reading rather than by argument.** Both codes are converged:
+`pw.x`'s last `estimated scf accuracy` is 2.3e-13 Ry and this run asks for `conv_thr =
+1e-12`. Both chose the **same grids**: dense `(45, 45, 81)` with 60543 G-vectors and smooth
+`(30, 30, 60)`, read off `pw.x`'s output and off `Calculation.basis`. So it is neither a
+stopping point nor a box.
+
+**No explanation is offered here**, deliberately: the candidates are the radial
+interpolation floor amplified by ten beta functions and a nonlinear core correction on a
+heavy atom, the `dn` semicore channels, and the vacuum, and each of them *fits* -- which is
+the reason to write the number down and not a story around it. What would discriminate is
+the eigenvalues rather than the total, since the three candidates put their error in
+different places, and a second heavy relativistic ultrasoft cell without vacuum.
+
+**It does not touch P98's claims.** The dielectric comparisons of that phase are on AlAs,
+where the ground states agree to the printed digit; bismuthene enters it only as the cell
+whose A/B says how much the spin dressing of the augmentation terms is worth.
