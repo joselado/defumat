@@ -16499,7 +16499,19 @@ on a PAW magnet and would leave the first iteration's one-centre potential disag
 its own density -- `becsum` therefore reads the *same* evaluated field at each atom's own
 grid point of the box. That half is checked on constructed occupations rather than in a
 converged run, because no tiled null can see it: a tiled seed is the same on every copy,
-and the copy index is a lattice translation in C-order over the triple.
+and the copy index is a lattice translation in C-order over the triple. **And it is checked
+on a real PAW magnet as well**, by another session and reported here: a seeded `N = 3`
+NiBr2 helix's one-iteration texture carries the seed's ordering to **0.03 degrees** (steps
+of 119.96 and 120.03 against 120), which excludes a permuted ordering on a cell where the
+spheres hold most of the moment, and the one-centre energy moves **5.023e-03 Ry** between a
+seeded and a tiled run. The same run measures something the hydrogen cell did not: the three
+cells come back rotated **rigidly by 53.77 +- 0.018 degrees**, half a right angle traversed
+along the flat manifold *in one iteration*, with `lspinorb` on -- so a seeded run's
+directions are only ever comparable to its seed modulo a rigid rotation, from the first
+iteration onwards, and a check that compares them absolutely reads a rotation as a
+permutation. That is the third instance of one trap in a day (`AUGMENTATION-NEXT.md` 1k
+carries the set) and the rule is rule D4's one object up: the gauge here is a rigid spin
+rotation, so assert on differences and never on directions.
 
 **The collinear number: a state the loop could not reach.** The tiled state is an exact
 fixed point, so an unseeded magnetic ultracell converges in **one** iteration and stays as

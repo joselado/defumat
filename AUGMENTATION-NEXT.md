@@ -424,10 +424,46 @@ magnitude, which is why it carries more than the two numbers above.
 failure is silent: a permuted copy ordering seeds the spheres in a scrambled order while the
 grid is seeded correctly, and the loop can still converge to a texture of the right period
 because the grid drives it. The agreement above argues against a permutation and does not
-exclude one. The direct check is a short seeded run at a small `N`
-reading `cell_moments()` back against the seed **in order**, which a permutation cannot
-survive at 120 degrees per cell; that session has offered it at `N = 3` and it is the number
-this entry is waiting for.
+exclude one. **The copy index is checked and is right** (2026-09-17, same session, reported here). A
+seeded `N = 3` PAW NiBr2 helix, one iteration, against a seed asking for 0, +120 and -120
+degrees:
+
+| cell | got | seed | offset |
+|---|---|---|---|
+| 0 | 53.78 | 0.00 | 53.78 |
+| 1 | 173.74 | 120.00 | 53.74 |
+| 2 | -66.23 | -120.00 | 53.77 |
+
+so the **steps** are 119.96 and 120.03 degrees against the seed's 120 and 120, and the whole
+texture is rotated rigidly by 53.77 +- 0.018 degrees. **What that excludes**, and the
+condition it excludes it under: a permuted copy ordering scrambles the *sphere* half while
+the grid half stays in order, so the composite's steps would be uneven -- they are even to
+0.03 degrees, and on this cell the sphere half is most of the moment, so there is enough of
+it in the composite for a permutation to have shown. This half of the entry is closed.
+
+**The rigid 53.77 degrees is not a defect and it is worth its own line.** There is no
+restoring force on the `Q = 0` transverse magnetization, so a one-iteration blend has
+already traversed part of that manifold: the first iteration's Hamiltonian is built from the
+seeded density and its states come back turned towards the frame the basis prefers, half a
+right angle of it here, **in one iteration and with `lspinorb` on**. Any comparison of
+directions between a seeded run and its own seed is therefore modulo a rigid rotation from
+the first iteration onwards.
+
+**And that is what the first version of the check got wrong**, which is the third instance
+of one trap in a day and so is written down as a pattern rather than as an incident. It
+compared **absolute** directions against the seed with a 25 degree threshold and printed
+`PERMUTED`; a rigid rotation trips that and a rotation is a gauge. A permutation breaks the
+*ordering*, so the invariant to compare is the **step**, which survives any rotation. The
+siblings: a projected pitch read as a bent texture when the plane had tilted
+(`PLAN.md` P88 stage 8), and "three self-consistent solutions" counted on the same flat
+manifold without aligning them (`MAGNETISM-NEXT.md`). The rule is rule D4's, one object up:
+the gauge here is a rigid spin rotation rather than a multiplet's basis, so **assert on
+differences and never on directions**.
+
+**What the one-centre energy is worth on a real magnet**, under the corrected reading that
+it says which term the seed reached and not which half: -419.684898567428 Ry seeded against
+-419.689921778552 tiled on that cell, a difference of **5.023e-03 Ry**. A term the seed
+moves by five milliRydberg is not a term to leave unseeded.
 
 **Two result fields that look like they would settle the sphere half and do not.**
 `energy_terms["one_center_paw"]` is taken at the **output** `becsum` and the input one
