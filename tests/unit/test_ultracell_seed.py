@@ -259,9 +259,17 @@ def test_a_seed_that_leaves_the_closed_sector_says_so(ultracell):
     magnetization, so a seed whose directions sit on a cone about that axis
     stays where it was put and one that does not has to traverse a flat
     manifold to get to the frame the basis prefers. Both halves are checked
-    here, because a warning that fires on everything says nothing: the helix
-    about ``z`` with the reference along ``z`` is silent, and the same helix
-    against a reference 54.7 degrees away is not.
+    here, because a warning that fires on everything says nothing, and there are
+    **two** silent cases rather than one.
+
+    The second of them is the one that nearly got this wrong. What the closed
+    sector preserves is the cone's *half-angle*, ``arccos|s-hat . e_0|``, so a
+    **staggered** seed of ``+e_0`` and ``-e_0`` in alternate cells belongs to it:
+    that state is collinear along ``e_0``, it lies in the up/down span with no
+    rotation at all, and its collinear counterpart converges in seven
+    iterations. Measured on the *signed* cosine its spread is 1.0 and it would
+    warn -- a guard firing on an antiferromagnet, which is the first thing
+    anyone tries after a helix.
     """
     pitch = ultracell.shape[0]
     helix = _on_the_box(ultracell, lambda x: np.stack([
@@ -269,16 +277,21 @@ def test_a_seed_that_leaves_the_closed_sector_says_so(ultracell):
         np.sin(2 * np.pi * x[..., 0] / pitch),
         np.zeros(x.shape[:-1]),
     ], axis=-1), components=3)
+    staggered = _on_the_box(ultracell, lambda x: (
+        np.where(np.floor(x[..., 0]) % 2 == 0, 1.0, -1.0)[..., None] * AXIS
+    ), components=3)
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        spread = warn_if_the_seed_leaves_the_closed_sector(
-            helix, np.array([0.0, 0.0, 1.0]))
-    assert spread < 1.0e-15
+        assert warn_if_the_seed_leaves_the_closed_sector(
+            helix, np.array([0.0, 0.0, 1.0])) < 1.0e-15
+        assert warn_if_the_seed_leaves_the_closed_sector(staggered, AXIS) == 0.0
 
     with pytest.warns(UserWarning, match="290 iterations against 14"):
         spread = warn_if_the_seed_leaves_the_closed_sector(helix, AXIS)
-    assert spread > 0.4
+    # About 0.25, and how nearly is the sampling: three points per cell here
+    # against fifteen on the cell the iteration counts were measured on.
+    assert 0.23 < spread < 0.26
 
 
 @pytest.mark.parametrize("nspin_mag", [2, 4])

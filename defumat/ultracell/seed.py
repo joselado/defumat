@@ -124,10 +124,20 @@ __all__ = [
 SEED_NET_TOL = 1.0e-2
 
 #: How far a seed's directions may drift off a cone about ``e_0`` before the
-#: warning below fires, measured as the spread of ``s-hat . e_0`` over the box.
+#: warning below fires, measured as the spread of ``|s-hat . e_0|`` over the box.
 #: Zero for a texture that turns about the reference's own direction, which is
-#: the case the truncated basis closes; 0.41 for a 90 degree helix seeded about
-#: an axis 54.7 degrees away from it, which took 290 iterations against 14.
+#: the case the truncated basis closes; about 0.25 for a 90 degree helix seeded
+#: about an axis 54.7 degrees away from it, which took 290 iterations against 14.
+#:
+#: **The absolute value is the whole of the invariant and it was nearly left
+#: out.** The cone's *half-angle* is what a rotation about ``e_0`` preserves, and
+#: it is ``arccos|s-hat . e_0|`` rather than ``arccos(s-hat . e_0)``: a staggered
+#: seed of ``+e_0`` and ``-e_0`` in alternate cells has cosines of ``+1`` and
+#: ``-1``, so the signed spread is **1.0** and would warn -- on a state that is
+#: collinear along ``e_0``, lies inside the up/down span with no rotation at all,
+#: and converges in seven iterations (the collinear ladder is that same physics
+#: one regime down). A guard that fires on an antiferromagnet is worse than no
+#: guard, because the first thing anyone tries after a helix is a staggered seed.
 SEED_CONE_TOL = 1.0e-3
 
 #: Where the minimal rotation from ``e_0`` to ``s`` stops being defined:
@@ -210,7 +220,9 @@ def warn_if_the_seed_leaves_the_closed_sector(seed, axis: np.ndarray) -> float:
     **one** closed sector and its axis is ``e_0``.
 
     A seed lies in it exactly when its directions sit on a cone about ``e_0``,
-    which is ``s-hat . e_0`` being the same at every point -- what this measures.
+    which is ``|s-hat . e_0|`` being the same at every point -- what this
+    measures, the absolute value being the cone's half-angle and the reason a
+    staggered ``+-e_0`` seed is silent (see :data:`SEED_CONE_TOL`).
     A run outside it is not wrong: a global spin rotation costs nothing without
     spin-orbit coupling, so what it does is traverse that flat manifold to reach
     the frame its own basis prefers. What it costs was measured on four cells of
@@ -232,13 +244,13 @@ def warn_if_the_seed_leaves_the_closed_sector(seed, axis: np.ndarray) -> float:
         return 0.0
     projection = np.tensordot(np.asarray(axis, dtype=float), values,
                               axes=(0, 0))[live] / length[live]
-    spread = float(np.std(projection))
+    spread = float(np.std(np.abs(projection)))
     if spread > SEED_CONE_TOL:
         warnings.warn(
             f"this seed does not turn about the reference's own magnetization: "
-            f"the cosine between the seed and that direction varies by "
-            f"{spread:.3f} over the box, where a texture turning about it is "
-            f"constant. The run is not wrong -- a global spin rotation costs "
+            f"the angle between the seed and that direction varies by "
+            f"{spread:.3f} in |cos| over the box, where a texture turning about "
+            f"it holds it constant. The run is not wrong -- a global spin rotation costs "
             f"nothing without spin-orbit coupling -- but the truncated basis "
             f"closes only the sector whose axis is the reference's direction, "
             f"so the loop has to traverse a flat manifold to the frame that "

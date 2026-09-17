@@ -5847,8 +5847,8 @@ Two cells of the partly-polarized hydrogen lattice at `a = 5.5`
 (`tests/data/qe/h-mag-ultracell.in`), both arms started from the *same* staggered
 moments: the ultracell through `seed_magnetization=cos(pi x)` at `nbnd = 24`, the
 supercell through `starting_magnetization` of opposite sign on two species. Both
-converge to the same antiferromagnet (4e-5 relative on the wave's own Fourier
-component). One core with the affinity mask set before JAX is imported, first call
+converge to the same antiferromagnet, to **5.0e-4** relative on the wave's own
+Fourier component, which is the `nbnd = 24` rung of stage 8's ladder. One core with the affinity mask set before JAX is imported, first call
 discarded, median of three:
 
 | route | s | samples | its | total energy, Ry/cell |

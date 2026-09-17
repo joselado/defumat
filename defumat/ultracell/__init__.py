@@ -18,6 +18,7 @@ from defumat.ultracell.seed import (
     reference_axis,
     seeded_becsum,
     seeded_density,
+    warn_if_the_seed_leaves_the_closed_sector,
 )
 from defumat.ultracell.potential import (
     delta_potential,
@@ -44,4 +45,5 @@ __all__ = [
     "seeded_density",
     "seeded_becsum",
     "reference_axis",
+    "warn_if_the_seed_leaves_the_closed_sector",
 ]

@@ -390,6 +390,21 @@ the tiled smooth sphere for the smooth half of the matrix element, keep the dens
 `newd`'s integral, which is QE's own split -- and was deliberately kept out of the same
 measurement rather than folded into it.
 
+**One augmented path is written and is exercised only on constructed arrays** (P88 stage 8,
+2026-09-17). The magnetization **seed** touches `becsum` as well as the density, and it has
+to: most of a transition metal's moment is inside the projector spheres, so a seed reaching
+the grid alone would seed almost nothing on a PAW magnet and would leave the first
+iteration's one-centre potential disagreeing with its own density. Both halves read the same
+evaluated field, `becsum` at each atom's own grid point of the box, and the copy index is a
+lattice translation in C-order over the triple. **What is missing is a converged run**: no
+*magnetic* ultrasoft or PAW cell is committed here -- PAW silicon converges to no moment, so
+the seed refuses it by name -- so the check is `tests/unit/test_ultracell_seed.py`, which
+reads a deliberately non-uniform seed back copy by copy on constructed occupations. A tiled
+null cannot stand in for it, a tiled seed being the same on every copy. The first-iteration
+tell on a real cell is that `cell_moments()` already shows the texture and the one-centre
+energy differs from the tiled run's, and the cell to do it on is the NiBr2 helix another
+session runs.
+
 ## 2. A term that is half written, and the half that is missing is a term
 
 Three refusals, one term. All three say the same sentence in `docs/features.tex` and all
