@@ -304,11 +304,14 @@ def _generalised_blocks(points, h, s, a, h0):
             out["dh"][d].append(vector.conj().T @ derivative["h"] @ vector)
             out["ds"][d].append(ds)
             out["dh0"][d].append(vector0.conj().T @ derivative["h0"] @ vector0)
-            # The first factor is used as it stands; the second is transposed
-            # inside ``kubo_from_matrices``, so its correction is transposed and
-            # conjugated here -- which is why ``K`` appears and not ``L`` again.
-            out["first"][d].append(gap * left)
-            out["second"][d].append(-gap * right)
+            # ``K = c^dag A^dag (dA) c``, which is what
+            # :func:`~defumat.topology.kubo.augmentation_connection` builds on
+            # plane waves; ``L`` is its conjugate transpose, and
+            # ``kubo_from_matrices`` forms that itself and multiplies both by
+            # the gap. ``left`` is kept so ``L = K^dag`` is asserted rather
+            # than assumed.
+            out["first"][d].append(left)
+            out["second"][d].append(right)
     stacked = {name: {d: np.array(v) for d, v in block.items()}
                for name, block in out.items()}
     return stacked, np.array(energies), np.array(reference), residual, directions
@@ -357,6 +360,11 @@ def test_a_moving_overlap_needs_more_than_dh_and_ds():
     )
     assert residual < 1.0e-12  # L + K = dS, so the pair is a split of one object
 
+    for d in (d1, d2):  # L = K^dagger, which is what lets one block serve both
+        assert np.max(np.abs(
+            blocks["first"][d] - np.conj(np.swapaxes(blocks["second"][d], -1, -2))
+        )) < 1.0e-13
+
     zero = {d: np.zeros_like(blocks["ds"][d]) for d in (d1, d2)}
     exact, _ = kubo_from_matrices(
         blocks["dh0"][d1], zero[d1], blocks["dh0"][d2], zero[d2], reference, 1
@@ -366,8 +374,9 @@ def test_a_moving_overlap_needs_more_than_dh_and_ds():
         blocks["dh"][d2], blocks["ds"][d2], energies, 1,
     )
     corrected, _ = kubo_from_matrices(
-        blocks["dh"][d1] - blocks["first"][d1], blocks["ds"][d1],
-        blocks["dh"][d2] - blocks["second"][d2], blocks["ds"][d2], energies, 1,
+        blocks["dh"][d1], blocks["ds"][d1],
+        blocks["dh"][d2], blocks["ds"][d2], energies, 1,
+        k1=blocks["second"][d1], k2=blocks["second"][d2],
     )
     exact, plain, corrected = (np.asarray(x) for x in (exact, plain, corrected))
     scale = np.max(np.abs(exact))

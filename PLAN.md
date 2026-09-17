@@ -235,15 +235,18 @@ because that is what decides whether it is a session or a phase.
 - **The force on an atom of a spin spiral** — the two components live on different
   plane-wave spheres, so the nonlocal term needs the projectors of both. `dE/dq` (P21) is
   what a spiral has instead.
-- **The Kubo Berry curvature of an ultrasoft or PAW dataset**, and with it the **optical
-  conductivity** and the **shift current** (P47, P94). The missing term is the
-  **augmentation dipole** `<psi_n|T^dagger d_k T|psi_m>`, `adddvepsi_us`'s `dpqq`, which a
-  formula written in `dH/dk` and `dS/dk` has nowhere to put; the `e_n dS/dk` piece beside
-  it is right by derivation. P94 measured the omission at 18 per cent of `Omega` and 0.010
-  of a Chern number on a model whose exact answer is free, and pinned its shape: the two
-  factors need *different* blocks. `efield.py` computes the object already
-  (`_ultrasoft_position`); what is missing is its matrix-element form in
-  `velocity_matrices`, and then an **assembly** check on plane waves.
+- **The Kubo Berry curvature of an ultrasoft or PAW dataset is done** (P47, P94, P98).
+  The missing term was the **augmentation dipole** `<psi_n|T^dagger d_k T|psi_m>`, and it
+  is `topology/kubo.py:augmentation_connection`, validated as the k-derivative of the
+  two-point overlap at frozen coefficients -- 8.5e-10 against a `max|K|` of 2.09e-2,
+  falling as `eps^2` -- and worth 0.57 per cent of `Omega` on ultrasoft AlAs. What is
+  outstanding is the two assemblies that share the matrix element. The **optical
+  conductivity** is now missing the assembly rather than the term: `_resolvent_sum` builds
+  `z = <n|v_i|m><m|v_j|n>` out of one array and the two corrected factors are not
+  transposes of each other, so it needs a second array; `_drude` is already right, because
+  the correction carries `e_n - e_m` and vanishes on the diagonal. The **shift current**
+  needs `d(T^dag dT)/dk` as well and is unsized. A **spinor** augmented run is refused in
+  all three, for `qq_so` and the `fcoef` transform of `dpqq`.
 - **The sum-over-states `chi_0` of an ultrasoft dataset** (P40, P94). Two routes to
   `Q_ij(G)` at `G != 0` disagree -- 57.200 with a residual of +0.540 through
   `augmentation_at_q` against P40's 55.5 and -1.20 through the dense table -- and the
@@ -17515,3 +17518,122 @@ the three had been written from the raise's message. Two of them had then been c
 into `PLAN.md`'s index, where they read as settled. The rule that catches it is the one
 `AUGMENTATION-NEXT.md` states for its own sizings and does not apply to the rest of the
 record: **a refusal's message is a claim about the code and ages like one**.
+
+### P98 -- The Kubo curvature of an augmented dataset: the connection's second piece. ✅ DONE for a scalar run.
+
+**What it is.** P94 left three refusals resting on one missing object, the augmentation
+dipole `<psi_n|T^dagger d_k T|psi_m>`, and pinned its shape on a model without writing it
+on plane waves. This writes it: `topology/kubo.py:augmentation_connection`, and the Kubo
+Berry curvature of an ultrasoft or PAW dataset runs.
+
+**The expression, and where it comes from.** The object was already in the code as a
+function of two k-points -- `augmentation_at_q`, the overlap Fukui-Hatsugai-Suzuki takes
+determinants of,
+
+    S(k, k') = 1 + sum_ij e^{-i b.tau} Q_ij(b) |beta^k_i><beta^k'_j|,   b = k' - k
+
+-- so the connection is its derivative at `b = 0` rather than a new derivation. Expanding
+`Q_ij(b) = q_ij - i b_a dpqq^a_ij` and the ket projector's own motion, and noting that the
+structure factor's `-i b_a tau_a` cancels against the `-i tau_a` inside the full
+`d(vkb)/dk_a`, leaves
+
+    T^dag d_a T = sum_ij q_ij |beta_i><d_a beta_j| - i sum_ij dpqq^a_ij |beta_i><beta_j|
+
+with the projector derivative the one **about the atom's own centre**. That is the same
+convention pair `adddvepsi_us` runs on, which is why
+`VelocityOperator.projectors` and `augmentation_dipole_blocks` are the two ingredients and
+neither is the full derivative. The assembly takes one block per direction:
+`kubo_from_matrices(..., k1, k2)` builds `L = K^dagger` itself and multiplies both by the
+gap it already has, `a1 += gap * L` and `a2 += gap * K^T`, which is P94's asymmetric pair
+in the signature the model test now goes through.
+
+**The number, and it is an identity rather than a reference value.** No norm-conserving
+run can see a term that vanishes there, and `ph.x` has no Kubo curvature to compare
+against, so the anchor is the two-point overlap itself, differenced at **frozen
+coefficients** so the plane-wave part cannot move and only the augmentation term survives.
+Ultrasoft silicon, `max|K| = 2.09e-2`:
+
+=================  ===================
+`eps`               `max|fd - K|`
+=================  ===================
+1.00e-3             1.36e-8
+5.00e-4             3.40e-9
+2.50e-4             8.48e-10
+=================  ===================
+
+a clean factor of four per halving, which is a central difference's `eps^2` and not a
+plateau at some other number, and 4e-8 relative at the finest step. The same on PAW.
+Beside it, `K + K^dagger = dS/dk` to **1.4e-16** against `max|dS| = 2.65e-2`, where the two
+sides share nothing -- `dS` is the second tangent of the `jvp` of `S(k)` through the whole
+Hamiltonian and `K` is a contraction of `vkb` against `qq`.
+
+**Both checks are kept, and the reason is this project's own trap.** `K + K^dag = dS` is
+blind to the dipole: it enters as `-i D` with `D` Hermitian, so it cancels with **any**
+sign and any magnitude. Taken alone it is a check whose null result cannot be told from a
+pass, on exactly the term one is least sure of. The finite difference is what discriminates
+it, because `augmentation_at_q` carries `e^{-i b.tau} Q_ij(b)` and gets the relative sign
+of the two pieces wrong if either the dipole or the `tau` convention is wrong.
+
+**What the term is worth.** Ultrasoft AlAs (`alas-epsilon-us.in`) at
+`k = (0.1875, 0.3125, 0)`, with the sum over states carried to `nbnd = 130`, where the
+value has stopped moving in the fourth decimal (1.007746 at 60, 1.006746 at 90, 1.006370
+at 130):
+
+==============================  ============  ==========
+what went into the formula        `Omega`       shift
+==============================  ============  ==========
+everything                        1.006370      --
+no moving-overlap term            1.012063      0.57 %
+`dS/dk` zeroed as well            1.029952      2.34 %
+==============================  ============  ==========
+
+so P94's 2.5 per cent for `dS/dk` alone is confirmed at 1.78 per cent here and the new term
+is the smaller half of what an augmented overlap does. **Inside it the two pieces very
+nearly cancel**: the projector-motion piece alone moves `Omega` by 0.59 per cent and the
+dipole alone by 0.24, against 0.57 for the two together, because the curvature is bilinear
+in the blocks and carries a cross term. The consequence is worth stating, since it is what
+decides which check is the validation: **dropping the dipole while keeping the projector
+motion moves `Omega` by 0.03 per cent**, so the curvature cannot discriminate the dipole at
+all on this cell and the finite-difference identity is not a convenience.
+
+**The corroboration, and it is honest about its own floor.** A centred FHS plaquette shrunk
+around the same k-point of ultrasoft AlAs gives 0.978065, 0.997989, 1.001577 and 1.002618 at
+`h` = 0.08, 0.04, 0.02 and 0.01, extrapolating to about 1.0030. Against that, the corrected
+Kubo value is 0.32 per cent high and the uncorrected one 0.90 per cent, so the term closes
+roughly two thirds of the gap and moves the comparison in the right direction. It does not
+*establish* the term: the same comparison on norm-conserving AlAs, where there is nothing to
+correct, has the converged Kubo value at 0.95983 against an FHS `h = 0.02` of 0.96784 and an
+`h = 0.01` of 0.97956 -- non-monotonic, so the plaquette route's own floor at this k-point
+is around 0.8 per cent, above the size of the term. This is P94's prediction confirmed
+rather than escaped, which is why the finite difference above is the number this phase
+rests on.
+
+**What is outstanding.**
+
+- **A spinor augmented run**, refused by name rather than left to run. Its overlap carries
+  `qq_so`, the `fcoef` transform of `qq` into a 2x2 matrix in spin space, and the
+  connection's dipole is that same transform applied to `dpqq`, which
+  `augmentation_dipole_blocks` does not build. `method='fhs'` carries the whole thing at
+  every `npol` and is untouched.
+- **The optical conductivity** (`response/conductivity.py`), which is the same matrix
+  element contracted differently and is now missing the *assembly* rather than the term.
+  `_resolvent_sum` builds `z = <n|v_i|m><m|v_j|n>` out of **one** `element` array, and the
+  corrected factors are not transposes of each other -- the first takes `K^dagger` and the
+  second `K`, both times the gap -- so the sum needs a second array rather than a second
+  index. `_drude` is unaffected: the correction carries `e_n - e_m` and vanishes on the
+  diagonal, so a plasma frequency is already right. Sized as an afternoon for the plumbing
+  and a phase for its validation, since the f-sum rule of a generalised eigenproblem is not
+  the norm-conserving one.
+- **The shift current**, which needs `d(T^dag dT)/dk` as well -- a second projector
+  derivative against `dpqq` and `dpqq`'s own first moment. Neither is written and neither
+  is sized.
+- **No timing was taken against a reference code**, because neither `pw.x` nor Elk computes
+  a Kubo Berry curvature map with an augmented dataset, so there is nothing to time against.
+  What is recorded in `PERFORMANCE.md` instead is the cost of the term against the
+  curvature it is added to, which is the only comparison that exists.
+
+**One thing moved.** `_augmentation_dipole` left `response/efield.py` for
+`pseudo/augmentation.py:augmentation_dipole_blocks`, because three response assemblies and
+now a topology one read it and the convention it is on -- the atom's own centre -- is shared
+with `VelocityOperator.projectors` and only cancels against it. A second assembler would be
+a second convention.

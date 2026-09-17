@@ -388,15 +388,20 @@ def require_a_conductivity_regime(calculation) -> None:
     if calculation.is_ultrasoft or calculation.is_paw:
         raise NotImplementedError(
             "the optical conductivity with an ultrasoft or PAW "
-            "pseudopotential is not implemented, and a term is missing rather "
-            "than unchecked. The current operator of a generalised "
-            "eigenproblem carries <psi_n|dS/dk_a|psi_m> beside dH/dk, which "
-            "is here and is right by derivation; what is not here is the "
-            "augmentation dipole <psi_n|T^dag dT/dk|psi_m> that goes with it, "
-            "measured at 18 per cent of the answer on a model where the exact "
-            "one is free (PLAN.md P94). It is the refusal "
-            "defumat.topology.kubo makes for the same matrix element. Use a "
-            "norm-conserving dataset"
+            "pseudopotential is not implemented, and what is missing is now "
+            "the assembly rather than the term. The term -- the augmentation "
+            "dipole <psi_n|T^dag dT/dk|psi_m>, which goes with the dS/dk piece "
+            "already here -- is written and validated as "
+            "defumat.topology.kubo.augmentation_connection (PLAN.md P98). "
+            "What this module cannot yet do with it is hold the two slots "
+            "apart: _resolvent_sum contracts z = <n|v_i|m><m|v_j|n> out of one "
+            "`element` array, and the corrected factors are not transposes of "
+            "each other -- the first takes K^dag and the second K, both "
+            "multiplied by the same gap -- so the sum needs a second array "
+            "rather than a second index. The Drude term is unaffected, since "
+            "the correction vanishes on the diagonal. Use a norm-conserving "
+            "dataset, or defumat.topology.kubo for the static limit, which "
+            "does carry it"
         )
     if getattr(calculation, "spiral", False):
         raise NotImplementedError(

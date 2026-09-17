@@ -2987,14 +2987,18 @@ removing Fermi surface, and its tensor is isotropic to \textbf{1.7e-4} eV with
 nothing imposing that.
 
 \begin{refuses}
-\textbf{Refuses.} \textbf{Ultrasoft and PAW}, for the Kubo curvature's reason,
-and a \emph{term} is missing rather than unchecked. With $\hat S = T^\dagger T$
-the states a current is about are $T|\psi\rangle$, so the operator carries
-$\langle\psi_n|T^\dagger\partial_k T|\psi_m\rangle$ --- the augmentation
-dipole --- beside the $\epsilon_n\,\partial S/\partial k$ this assembly does
-have, and there is nowhere in a formula written in $\partial H/\partial k$ and
-$\partial S/\partial k$ to put it. Measured on a model where the exact answer
-is free: \textbf{18\,\%} of a curvature and 0.010 of a Chern number. A \textbf{spin spiral}, whose two spinor
+\textbf{Refuses.} \textbf{Ultrasoft and PAW}, and what is missing is now the
+\emph{assembly} rather than the term. The term --- the augmentation dipole
+$\langle\psi_n|T^\dagger\partial_k T|\psi_m\rangle$, which belongs beside the
+$\epsilon_n\,\partial S/\partial k$ this assembly already has --- is written
+and validated as \code{topology.kubo.augmentation\_connection}. What this
+module cannot yet do with it is hold the two slots apart: it contracts
+$z = \langle n|v_i|m\rangle\langle m|v_j|n\rangle$ out of one array, and the
+corrected factors are not transposes of each other, the first taking
+$K^\dagger$ and the second $K$. The Drude term is unaffected, since the
+correction carries $\varepsilon_n - \varepsilon_m$ and vanishes on the
+diagonal. For the static limit alone, \code{topology.kubo} does carry it. A
+\textbf{spin spiral}, whose two spinor
 components live on different spheres. A \textbf{symmetry-reduced $k$-set},
 because the antisymmetric part is an axial vector --- the escape is the whole
 unshifted grid, which is closed under the point group. And
@@ -3117,12 +3121,15 @@ is worth nothing to better than a factor of two.
 
 \begin{refuses}
 \textbf{Refuses.} \textbf{Ultrasoft and PAW}, for the Kubo curvature's reason
-one order further out. The dipole carries $\partial S/\partial k$ and its
-derivative carries $\partial^2 S/\partial k_a\partial k_b$, and both are here;
-what is not here is the augmentation dipole
-$\langle\psi_n|T^\dagger\partial_k T|\psi_m\rangle$ that belongs with them, nor
-its own derivative beside that. It is a missing term rather than an unchecked
-convention, measured at 18\,\% of a curvature on a model. A
+one order further out, and one of the two terms is now written. The dipole
+carries $\partial S/\partial k$ and its derivative carries
+$\partial^2 S/\partial k_a\partial k_b$, and both are here; the augmentation
+dipole $\langle\psi_n|T^\dagger\partial_k T|\psi_m\rangle$ that belongs with
+them is here too, as \code{topology.kubo.augmentation\_connection}. What is
+still missing is its own derivative, $\partial_k(T^\dagger\partial_k T)$ ---
+a second projector derivative against $\mathrm{dpqq}$ and $\mathrm{dpqq}$'s own
+first moment --- which this module needs because it is that matrix element one
+order further along. A
 \textbf{spin spiral}. A \textbf{symmetry-reduced $k$-set}, because
 $\sigma^{abc}$ is a polar rank-3 tensor and a wedge sum is not the cell's until
 it is averaged over the point group; the escape is the whole unshifted grid. A
@@ -3321,12 +3328,27 @@ Two constructions of the same quantity, chosen by name:
   \qquad
   A^{a}_{nm} = \langle \psi_n |\, \partial_{k_a} H - \varepsilon_n\,
   \partial_{k_a} S \,| \psi_m \rangle
+  + (\varepsilon_n - \varepsilon_m)\, L^{a}_{nm}
 \end{equation*}
 with \code{method="kubo"}, against the lattice field strength of Fukui,
 Hatsugai and Suzuki with \code{method="fhs"} (the default). The velocity
 operator is one \code{jvp} of $H(\mathbf k)$ at a frozen plane-wave sphere ---
 no dense $H(\mathbf k)$ is ever formed --- and the tangent for a crystal
 direction $d$ is the reciprocal lattice vector $\mathbf b_d$.
+
+The last term is what an \textbf{ultrasoft or PAW} dataset adds, and it is zero
+for a norm-conserving one. With $\hat S = T^\dagger T$ the states a Berry phase
+is about are $T|\psi\rangle$, so the connection carries
+$K^{a}_{nm} = \langle\psi_n|T^\dagger \partial_{k_a} T|\psi_m\rangle$ beside
+$\langle\psi_n|\hat S\,\partial_{k_a}\psi_m\rangle$, and that piece is a
+function of $T$ rather than of $\hat S$: replacing $T$ by $U(\mathbf k)T$
+leaves $\hat S$ alone and moves the physical states, so no arrangement of
+$\partial S/\partial k$ can supply it. The two factors take \emph{different}
+blocks --- $L = K^\dagger$ in the first and $K$ in the second, with
+$L + K = \partial S/\partial k$ exactly --- and
+\code{augmentation\_connection} builds $K$ from the projectors' derivative
+about the atom's own centre and $\mathrm{dpqq}$, the augmentation charge's
+dipole.
 
 \begin{pycode}
 from defumat.workflows.topology import run_berry_curvature
@@ -3347,22 +3369,36 @@ sixfold refinement. The velocity matrix elements themselves reproduce a central
 finite difference of $H(\mathbf k)$ to $1.8\times10^{-9}$, and on centrosymmetric
 silicon the curvature vanishes \emph{pointwise} to $3.5\times10^{-5}$.
 
+The augmented term has its own anchor, and it is an identity rather than a
+reference value, because nothing in a norm-conserving run can see a term that
+vanishes there. The same $K^{a}$ is the $\mathbf k$-derivative of the
+\emph{two-point} overlap $S(\mathbf k, \mathbf k')$ at frozen coefficients ---
+Fukui-Hatsugai-Suzuki's own matrix, which shares no eigenvalue, gap or
+\code{jvp} with the sum --- and a central difference of it reproduces
+\code{augmentation\_connection} to $8.5\times10^{-10}$ against a
+$\max|K| = 2.1\times10^{-2}$, falling by a clean factor of four per halving of
+the step. Independently, $K + K^\dagger$ is $\partial S/\partial k$ to
+$1.4\times10^{-16}$. The two checks are both kept because the second cannot see
+the dipole at all: $\mathrm{dpqq}$ enters as $-iD$ with $D$ Hermitian, so it
+cancels out of $K + K^\dagger$ with any sign and any size. On ultrasoft AlAs at
+a generic $k$-point, with the band sum converged at \code{nbnd = 130}, the term
+is worth \textbf{0.57\,\%} of $\Omega$ and the whole of what an augmented
+overlap does is worth 2.34\,\%. Ultrasoft and PAW silicon still vanish
+pointwise, at $3.9\times10^{-5}$ and $1.4\times10^{-4}$.
+
 \begin{refuses}
 \textbf{Refuses.} \code{method="kubo"} is for the map, never for the integer:
 its denominator $(\varepsilon_n-\varepsilon_m)^{-2}$ is singular at a degeneracy
 and its Brillouin-zone sum is an ordinary Riemann sum, which converges to an
 integer without ever being one --- \code{method="fhs"} is the default and is
-exact on any mesh. \textbf{Ultrasoft and PAW are refused by name}, and for a
-missing term rather than an unchecked convention. The $\varepsilon_n\partial_k
-S$ piece is right by derivation; what a moving $\hat S = T^\dagger T$ needs
-beside it is $\langle\psi_n|T^\dagger\partial_k T|\psi_m\rangle$, the
-augmentation dipole, and a formula written in $\partial H/\partial k$ and
-$\partial S/\partial k$ has nowhere to put it. On a model built so the exact
-curvature is known, leaving it out costs \textbf{18\,\%} of $\Omega$ and
-\textbf{0.010} of the Chern number, and the two factors of the sum need
-\emph{different} blocks --- so no rearrangement of $\partial S/\partial k$
-supplies it. \code{method="fhs"} carries the whole thing as $q_{ij}(\mathbf b)$
-on all three dataset kinds. The sum over empty states is
+exact on any mesh. A \textbf{spinor} ultrasoft or PAW run is refused by name,
+and by a term: its overlap carries $q^{\mathrm{so}}_{ij}$, the \code{fcoef}
+transform of $q_{ij}$ into a $2\times2$ matrix in spin space, and the
+connection's dipole is that same transform applied to $\mathrm{dpqq}$, which is
+not written. A \emph{scalar} ultrasoft or PAW run is supported and tested; that
+refusal is gone. \code{method="fhs"} carries the whole thing as
+$q_{ij}(\mathbf b)$ at every \code{npol} and remains the route an invariant is
+read from. The sum over empty states is
 truncated at \code{nbnd} and the truncation is \emph{reported} rather than
 hidden --- read \code{BerryCurvature.truncation}, or \code{truncation\_abs}
 wherever symmetry forces the curvature to vanish, since the ratio is then noise

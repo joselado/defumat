@@ -63,7 +63,8 @@ from defumat.system.structure import Structure
 from defumat.units import FPI
 
 __all__ = ["AugmentationCharge", "TabulatedAugmentation", "augmentation_dipole",
-           "build_augmentation", "radial_augmentation_transforms"]
+           "augmentation_dipole_blocks", "build_augmentation",
+           "radial_augmentation_transforms"]
 
 
 class AugmentationCharge(eqx.Module):
@@ -397,6 +398,41 @@ def _qrad_kernel(q, r, weights, functions, prefactor, l):
     return prefactor * jnp.einsum("fm,qm,m->fq", functions, bessel, weights)
 
 
+
+
+def augmentation_dipole_blocks(calculation):
+    """``dpqq`` as the ``(3, nkb, nkb)`` block matrix a projection contracts against.
+
+    :func:`augmentation_dipole` is one species' ``(3, nh, nh)``; this is every
+    atom's copy of it laid on the diagonal of the projector index, which is the
+    form every consumer wants. ``None`` for a norm-conserving run, where the
+    augmentation charge -- and so its dipole -- does not exist.
+
+    Three assemblies read it and they must read the *same* one, because the
+    convention it is on is shared with
+    :meth:`~defumat.response.velocity.VelocityOperator.projectors`: both are
+    about the atom's **own centre**, and the ``tau`` terms the two of them drop
+    cancel only against each other. The electric field's position operator
+    (``adddvepsi_us``), the third derivative in the displacement coordinate, and
+    the Kubo connection of a moving overlap all take it from here.
+    """
+    if not calculation.is_ultrasoft:
+        return None
+    per_species = [augmentation_dipole(pseudo) for pseudo in calculation.pseudos]
+    blocks = []
+    for values, atoms in zip(per_species, calculation.augmentation.species_atoms):
+        nh = values.shape[-1]
+        blocks.append(jnp.asarray(np.broadcast_to(
+            values[None], (len(atoms), 3, nh, nh)
+        )))
+    # ``block_matrix`` puts one atom's channels on the diagonal; the three
+    # cartesian components ride along as a leading axis of each block.
+    return jnp.stack([
+        calculation.augmentation.block_matrix(
+            tuple(None if b.shape[0] == 0 else b[:, axis] for b in blocks)
+        )
+        for axis in range(3)
+    ])
 
 #: QE's interpolation step in ``|q|`` (``upflib/qrad_mod.f90:22``). ``q`` is in
 #: sqrt(Ry), since ``q^2`` is an energy in Rydberg atomic units.

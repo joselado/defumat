@@ -527,7 +527,7 @@ def _position_operator(calculation, projector_velocities):
     for it building ``adddvepsi_us``' position operator, so it is handed in
     rather than recomputed.
     """
-    from defumat.response.efield import _augmentation_dipole
+    from defumat.pseudo.augmentation import augmentation_dipole_blocks
 
     if not calculation.is_ultrasoft:
         return None
@@ -539,7 +539,7 @@ def _position_operator(calculation, projector_velocities):
         )
     projectors = calculation.projectors
     vkb = projectors.vkb
-    dipole = _augmentation_dipole(calculation)
+    dipole = augmentation_dipole_blocks(calculation)
     return (
         jnp.asarray(calculation.projector_core.kg),
         jnp.asarray(np.asarray(list(projectors.atom_of_channel))),

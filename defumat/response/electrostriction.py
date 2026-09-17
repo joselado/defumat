@@ -136,9 +136,9 @@ import numpy as np
 
 from defumat.basis.interpolate import to_dense
 from defumat.batching import map_k
+from defumat.pseudo.augmentation import augmentation_dipole_blocks
 from defumat.response.elastic import elastic_constants
 from defumat.response.efield import (
-    _augmentation_dipole,
     _solve_stored,
     dielectric_tensor,
     require_a_symmetrisable_response,
@@ -676,13 +676,13 @@ def _position_response(calculation, solver, rho, b, tangent, dpsi, drho,
     # side that is already an array and applies ``orthogonalize``'s sign, which
     # is the projection onto the conduction space the derivation above needs.
     solution = jnp.stack([_solve_stored(solver, rhs[axis]) for axis in range(3)])
-    if _augmentation_dipole(calculation) is None:
+    if augmentation_dipole_blocks(calculation) is None:
         return solution
 
     def tail(geometry, states, density, position):
         """``adddvepsi_us`` as a function of everything that moves."""
         moved, velocity, hamiltonians = operators(geometry, states, density)
-        dipoles = _augmentation_dipole(moved)
+        dipoles = augmentation_dipole_blocks(moved)
         return jnp.stack([
             ultrasoft_position(
                 moved, hamiltonians, states, position[axis], dipoles[axis],

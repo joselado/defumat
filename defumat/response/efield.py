@@ -91,7 +91,8 @@ ultrasoft state's charge is not all in ``|psi|^2``, and the part inside the
 augmentation spheres has a dipole of its own and moves with ``k``. That is
 ``adddvepsi_us.f90``, transcribed in :func:`_ultrasoft_position`, and the
 augmentation dipole it needs is
-:func:`~defumat.pseudo.augmentation.augmentation_dipole`. Two traps come with
+:func:`~defumat.pseudo.augmentation.augmentation_dipole_blocks`. Two traps
+come with
 it and both are measured there and in ``PLAN.md`` P24a: the projector derivative
 is the one about the atom's *own centre* (worth 2%), and ``dbecsum`` on a wedge
 is a polar vector like everything else here (worth 1.6e-2 on PAW).
@@ -131,7 +132,7 @@ import numpy as np
 
 from defumat.basis.fft import g_to_r, r_to_g
 from defumat.batching import map_k
-from defumat.pseudo.augmentation import augmentation_dipole
+from defumat.pseudo.augmentation import augmentation_dipole_blocks
 from defumat.response.born import born_effective_charges, require_born_charges
 from defumat.response.mixing import DEFAULT_RESPONSE_MIXING, ResponseMixer
 from defumat.response.sternheimer import (
@@ -316,7 +317,7 @@ def dielectric_tensor(
     velocity = VelocityOperator(calculation, potential.v_scf, solver.ddd_paw)
     occupied = solver.psi
     occupied_eigenvalues = solver.eigenvalues
-    dipole = _augmentation_dipole(calculation)
+    dipole = augmentation_dipole_blocks(calculation)
     # ``bare`` drives the loop below and is always kept. The other two are read
     # *after* it and by nothing inside it, so retaining them unconditionally
     # carries them through every iteration of the most expensive loop in the
@@ -622,31 +623,6 @@ def _solve_stored(solver, rhs):
 
         blocks.append(map_k(one_k, jnp.arange(rhs.shape[1]), batch=batch))
     return jnp.stack(blocks)
-
-
-def _augmentation_dipole(calculation):
-    """``dpqq`` as the ``(3, nkb, nkb)`` block matrix a projection contracts against.
-
-    ``None`` for a norm-conserving run, where the augmentation charge -- and so
-    its dipole -- does not exist.
-    """
-    if not calculation.is_ultrasoft:
-        return None
-    per_species = [augmentation_dipole(pseudo) for pseudo in calculation.pseudos]
-    blocks = []
-    for values, atoms in zip(per_species, calculation.augmentation.species_atoms):
-        nh = values.shape[-1]
-        blocks.append(jnp.asarray(np.broadcast_to(
-            values[None], (len(atoms), 3, nh, nh)
-        )))
-    # ``block_matrix`` puts one atom's channels on the diagonal; the three
-    # cartesian components ride along as a leading axis of each block.
-    return jnp.stack([
-        calculation.augmentation.block_matrix(
-            tuple(None if b.shape[0] == 0 else b[:, axis] for b in blocks)
-        )
-        for axis in range(3)
-    ])
 
 
 def ultrasoft_position(calculation, hamiltonians, states, position, dipole,

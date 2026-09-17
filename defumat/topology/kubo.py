@@ -32,11 +32,25 @@ from differentiating ``H|m> = e_m S|m>`` and projecting on ``<n|``, which gives
 ``<n|S|d_a m> = <n|(dH/dk_a - e_m dS/dk_a)|m> / (e_m - e_n)``. Carrying that
 through the curvature leaves ``e_n`` -- the band whose curvature is being
 computed -- in **both** factors, not ``e_n`` in one and ``e_m`` in the other.
-It vanishes identically for a norm-conserving dataset, where ``S`` is the
-identity and has no ``k`` in it at all, which is why an ultrasoft or PAW run is
-refused here rather than trusted: nothing in a norm-conserving validation can
-see the term, and an off-diagonal element with a moving ``S`` is easy to get
-wrong in a way no symmetry check catches.
+
+**And it is not the whole of what a moving overlap does**, which is the one
+thing an ultrasoft or PAW dataset adds here and the reason this was refused
+until P98. With ``S = T^dagger T`` the states a Berry phase is about are
+``T|psi>``, so the connection carries ``<psi_n|T^dag dT/dk_a|psi_m>`` beside
+``<psi_n|S d_a psi_m>``, and that piece is a function of ``T`` rather than of
+``S``: ``U(k) T`` leaves ``S`` alone and moves the physical states, so no
+arrangement of ``dS/dk`` can supply it. :func:`augmentation_connection` builds
+it, ``kubo_from_matrices`` takes it as ``k1`` and ``k2``, and the two factors
+take **different** blocks -- ``L = K^dagger`` in the first and ``K`` in the
+second, with ``L + K = dS``. A norm-conserving dataset has ``T = 1``, so
+everything in this paragraph is identically zero there and no norm-conserving
+validation can see any of it; what pins it instead is an exact identity, the
+``k``-derivative of the two-point overlap ``S(k, k')`` at frozen coefficients,
+which is Fukui-Hatsugai-Suzuki's own object and shares nothing with this sum.
+
+A **spinor** augmented run is still refused, and by a term rather than by
+caution: its overlap carries ``qq_so`` and its dipole the same ``fcoef``
+transform, which is not written.
 
 **Two honest numbers come out with the curvature**, because both are ways this
 answer can be quietly wrong.
@@ -69,10 +83,14 @@ from __future__ import annotations
 import jax.numpy as jnp
 import numpy as np
 
+from defumat.batching import map_k
+from defumat.pseudo.augmentation import augmentation_dipole_blocks
+
 __all__ = [
     "DEGENERACY_TOL",
     "plane_wave_kubo",
     "velocity_matrices",
+    "augmentation_connection",
     "kubo_from_matrices",
 ]
 
@@ -106,9 +124,82 @@ def velocity_matrices(states, direction):
     return dh_mat, ds_mat
 
 
+def augmentation_connection(states, direction):
+    """``<psi_n| T^dagger dT/dk_a |psi_m>``, ``(nk, nb, nb)``, or ``None``.
+
+    The piece of the Berry connection that a moving overlap adds and that
+    ``dH/dk`` and ``dS/dk`` between them cannot supply. With
+    ``S = T^dagger T`` the states a Berry phase is about are ``T|psi>``, so
+
+        <Psi_n|d_a Psi_m> = <psi_n|S|d_a psi_m> + <psi_n|T^dag d_a T|psi_m>,
+
+    and only the first term is a function of ``S``. The second is what this
+    builds. ``U(k) T`` leaves ``S`` unchanged and moves the physical states, so
+    no arrangement of ``dS/dk`` can stand in for it; ``PLAN.md`` P94 measures
+    the omission at 18 per cent of the curvature on a model where the exact
+    answer is free.
+
+    **Where the expression comes from.** Expand the overlap between two
+    neighbouring k-points, which is the object Fukui-Hatsugai-Suzuki already
+    uses (:func:`~defumat.topology.augmentation.augmentation_at_q`),
+
+        S(k, k') = 1 + sum_ij e^{-i b.tau} Q_ij(b) |beta^k_i><beta^k'_j|,
+        b = k' - k,
+
+    to first order in ``b``. Two objects appear: ``Q_ij(b) = q_ij - i b_a
+    dpqq^a_ij``, the augmentation dipole, and the ket projector's own motion.
+    Their ``tau`` terms cancel **exactly** -- the structure factor of
+    ``e^{-i b.tau}`` against the ``-i tau_a`` inside ``d(vkb)/dk_a`` -- and what
+    is left is
+
+        T^dag d_a T = sum_ij q_ij |beta_i><d_a beta_j| - i sum_ij dpqq^a_ij
+                      |beta_i><beta_j|,
+
+    with the projector derivative the one about the atom's **own centre**. That
+    is the same convention pair ``adddvepsi_us`` runs on
+    (:func:`~defumat.response.efield.ultrasoft_position`), and it is why
+    :meth:`~defumat.response.velocity.VelocityOperator.projectors` and
+    :func:`~defumat.pseudo.augmentation.augmentation_dipole_blocks` are the two
+    ingredients rather than the full ``d(vkb)/dk``.
+
+    ``direction`` is the same cartesian tangent :func:`velocity_matrices` takes,
+    so the dipole is contracted with it and the result is a derivative with
+    respect to the crystal coordinate the mesh is spanned by.
+
+    Returns ``None`` for a norm-conserving dataset, where ``T`` is the identity
+    and there is nothing to add.
+    """
+    calculation = getattr(states, "calculation", None)
+    if calculation is None or getattr(calculation, "augmentation", None) is None:
+        return None
+    projectors = calculation.projectors
+    if projectors.nkb == 0 or projectors.qq is None:
+        return None
+
+    direction = jnp.asarray(direction)
+    dipole = augmentation_dipole_blocks(calculation)  # (3, nkb, nkb), bohr
+    psi = jnp.asarray(states.all_coefficients)  # (nk, nb, ndim)
+    vkb = projectors.vkb                        # (nk, npwx, nkb)
+    dvkb = states.velocity.projectors(direction)
+    qq = projectors.qq.astype(vkb.dtype)
+    along = jnp.einsum(
+        "a,aij->ij", direction.astype(dipole.dtype), dipole
+    ).astype(vkb.dtype)
+
+    def one_k(ik):
+        # becp[n, i] = <beta_i|psi_n>; dbecp[m, j] = <d_a beta_j|psi_m>.
+        becp = jnp.einsum("gi,ng->ni", vkb[ik].conj(), psi[ik])
+        dbecp = jnp.einsum("gj,ng->nj", dvkb[ik].conj(), psi[ik])
+        moving = jnp.einsum("ni,ij,mj->nm", becp.conj(), qq, dbecp)
+        static = jnp.einsum("ni,ij,mj->nm", becp.conj(), along, becp)
+        return moving - 1j * static
+
+    return map_k(one_k, jnp.arange(psi.shape[0]), batch=calculation.k_batch)
+
+
 def kubo_from_matrices(
     dh1, ds1, dh2, ds2, energies, nocc: int, nbnd: int | None = None,
-    degeneracy_tol: float = DEGENERACY_TOL,
+    degeneracy_tol: float = DEGENERACY_TOL, k1=None, k2=None,
 ):
     """``(Omega(k), Omega_n(k))`` from the two directions' velocity blocks.
 
@@ -122,12 +213,22 @@ def kubo_from_matrices(
 
     ``nbnd`` truncates the sum, which is how the truncation diagnostic is
     computed without a second ``jvp``.
+
+    ``k1`` and ``k2`` are :func:`augmentation_connection`'s blocks for the two
+    directions, and they are ``None`` for a norm-conserving dataset. They do
+    **not** enter the two factors the same way, which is the whole content of
+    the term: the first takes ``L = K^dagger`` and the second takes ``K``, each
+    multiplied by the gap, so no single object of the form ``dS/dk`` can stand
+    for the pair. ``L + K = dS`` exactly, and that identity is what a
+    plane-wave implementation is checked against.
     """
     energies = jnp.asarray(energies)
     if nbnd is not None:
         dh1, ds1 = dh1[:, :nbnd, :nbnd], ds1[:, :nbnd, :nbnd]
         dh2, ds2 = dh2[:, :nbnd, :nbnd], ds2[:, :nbnd, :nbnd]
         energies = energies[:, :nbnd]
+        k1 = None if k1 is None else k1[:, :nbnd, :nbnd]
+        k2 = None if k2 is None else k2[:, :nbnd, :nbnd]
     e = energies
     # A^1_{nm} = <n|dH_1 - e_n dS_1|m>; A^2_{mn} = <m|dH_2 - e_n dS_2|n>, the
     # transpose taken *before* the e_n subtraction so that the multiplier is
@@ -135,6 +236,14 @@ def kubo_from_matrices(
     a1 = dh1 - e[:, :, None] * ds1
     a2 = jnp.swapaxes(dh2, -1, -2) - e[:, :, None] * jnp.swapaxes(ds2, -1, -2)
     gap = e[:, :, None] - e[:, None, :]
+    # The moving overlap. ``gap[n, m] = e_n - e_m`` here, and the second factor
+    # is transposed above, so the same ``+ gap *`` reaches ``L`` in the first
+    # and ``K^T`` in the second -- which is the asymmetry the model check in
+    # ``tests/unit/test_topology_curvature.py`` pins to 4.5e-16.
+    if k1 is not None:
+        a1 = a1 + gap * jnp.conj(jnp.swapaxes(k1, -1, -2))
+    if k2 is not None:
+        a2 = a2 + gap * jnp.swapaxes(k2, -1, -2)
     finite = jnp.abs(gap) > degeneracy_tol
     weight = jnp.where(finite, 1.0 / jnp.where(finite, gap, 1.0) ** 2, 0.0)
     terms = -2.0 * jnp.imag(a1 * a2) * weight
@@ -186,13 +295,17 @@ def plane_wave_kubo(
     bg = np.asarray(states.bg)
     dh1, ds1 = velocity_matrices(states, bg[d1])
     dh2, ds2 = velocity_matrices(states, bg[d2])
+    # ``None`` for a norm-conserving dataset, where ``T`` is the identity.
+    k1 = augmentation_connection(states, bg[d1])
+    k2 = augmentation_connection(states, bg[d2])
 
     total, by_band = kubo_from_matrices(
-        dh1, ds1, dh2, ds2, energies, nocc, degeneracy_tol=degeneracy_tol
+        dh1, ds1, dh2, ds2, energies, nocc, degeneracy_tol=degeneracy_tol,
+        k1=k1, k2=k2,
     )
     dropped, _ = kubo_from_matrices(
         dh1, ds1, dh2, ds2, energies, nocc, nbnd=nband - 1,
-        degeneracy_tol=degeneracy_tol,
+        degeneracy_tol=degeneracy_tol, k1=k1, k2=k2,
     )
     total = np.asarray(total)
     dropped = np.asarray(dropped)
@@ -229,20 +342,27 @@ def _require_velocity(states) -> None:
 
 
 def _refuse_augmented(states) -> None:
-    """Ultrasoft and PAW, refused by name with the unvalidated term said out loud."""
+    """An augmented **spinor**, refused by name; the scalar case runs (P98).
+
+    The scalar ultrasoft and PAW refusal is gone: what it named as missing is
+    :func:`augmentation_connection`. What is left is the spin structure, and it
+    is a term rather than plumbing -- a fully-relativistic dataset's overlap
+    carries ``qq_so``, a 2x2 matrix in spin space built through ``fcoef``, and
+    its dipole is the same transform applied to ``dpqq``, which
+    :func:`~defumat.pseudo.augmentation.augmentation_dipole_blocks` does not do.
+    """
     calculation = states.calculation
     if calculation is None or getattr(calculation, "augmentation", None) is None:
         return
+    if int(getattr(calculation, "npol", 1)) == 1:
+        return
     raise NotImplementedError(
-        "the Kubo Berry curvature with an ultrasoft or PAW pseudopotential is "
-        "not implemented: a term is missing rather than unchecked. With "
-        "S = T^dag T the states a Berry phase is about are T|psi>, so the "
-        "connection carries <psi_n|T^dag dT/dk|psi_m> beside <psi_n|S d/dk "
-        "psi_m> -- the augmentation dipole, adddvepsi_us's dpqq -- and this "
-        "assembly sees only dH/dk and dS/dk and has nowhere to put it. "
-        "Measured on a model where the exact answer is free (PLAN.md P94): "
-        "18 per cent of the curvature and 0.010 of the Chern number, with the "
-        "two factors needing different blocks. The e_n dS/dk piece itself is "
-        "right by derivation, not by luck. Use method='fhs', which carries the "
-        "whole thing as q_ij(b) and is what an invariant needs anyway"
+        "the Kubo Berry curvature of a *spinor* ultrasoft or PAW run is not "
+        "implemented: the scalar case is (PLAN.md P98), and what the spinor "
+        "one needs beyond it is the spin structure of the overlap. S carries "
+        "qq_so, the fcoef transform of qq into a 2x2 matrix in spin space "
+        "(transform_qq_so), and the connection's augmentation dipole is that "
+        "same transform applied to dpqq -- which augmentation_dipole_blocks "
+        "does not build. Use method='fhs', which carries the whole thing as "
+        "q_ij(b) at every npol and is what an invariant needs anyway"
     )

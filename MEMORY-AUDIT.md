@@ -598,7 +598,7 @@ lists are built before the loop at `:323` and next read at `:408-412` (Born char
 
 **When `commutators` is free and when it is not.** For a norm-conserving run `position` is never
 rebound between `:326` and `:333`, so `commutators[a] is bare[a]` and the list costs nothing. The
-split happens only when `_augmentation_dipole` (`:589-596`) is non-None, i.e.
+split happens only when `augmentation_dipole_blocks` is non-None, i.e.
 `calculation.is_ultrasoft`, which driver.py:2713-2714 defines as `self.augmentation is not None` —
 **true for PAW as well as ultrasoft**.
 

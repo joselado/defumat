@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from defumat.topology.berry import BerryCurvature, berry_curvature
 from defumat.topology.kubo import (
+    augmentation_connection,
     kubo_from_matrices,
     plane_wave_kubo,
     velocity_matrices,
@@ -93,6 +94,7 @@ __all__ = [
     "get_curvature_method",
     "get_z2_method",
     "inversion_centre",
+    "augmentation_connection",
     "kubo_from_matrices",
     "parity_z2",
     "plane_mesh",

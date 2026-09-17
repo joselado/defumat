@@ -46,7 +46,9 @@ from defumat.pseudo.upf import read_upf
 from defumat.scf.driver import run_scf
 from defumat.system.builder import build_system
 from defumat.topology.berry import berry_curvature
-from defumat.topology.kubo import kubo_from_matrices, velocity_matrices
+from defumat.topology.augmentation import augmentation_at_q
+from defumat.topology.kubo import (augmentation_connection, kubo_from_matrices,
+                                   velocity_matrices)
 from defumat.topology.links import berry_phase, link_phase
 from defumat.topology.mesh import plane_mesh
 from defumat.workflows.topology import DFTSource, run_berry_curvature
@@ -385,40 +387,223 @@ def test_the_truncation_is_reported_and_the_sum_moves_with_nbnd():
     assert reported.truncation_abs is not None
 
 
-@pytest.mark.slow
-def test_an_ultrasoft_kubo_curvature_is_refused_by_name():
-    """``dS/dk`` is zero for every case validated here, so US/PAW is refused.
+# --- the moving overlap (P98) ------------------------------------------------
+#
+# What an augmented dataset adds is the connection's second piece,
+# <psi_n|T^dag dT/dk|psi_m>, and nothing in a norm-conserving run can see it.
+# The anchor here is therefore an identity rather than a reference value: the
+# same object is the k-derivative of the *two-point* overlap S(k, k') at frozen
+# coefficients, which is Fukui-Hatsugai-Suzuki's own matrix and shares no
+# machinery with the sum -- no eigenvalues, no gaps, no jvp of H.
 
-    The refusal is the honest state of it rather than a gap: the term *is*
-    written (``VelocityOperator.apply_s``, the second tangent of the same
-    ``jvp``), and it is identically zero on a norm-conserving dataset, so
-    nothing in this file measures whether its convention -- ``e_n`` in both
-    factors, the outer band's energy and not the inner one's -- is right. An
-    off-diagonal element with a moving ``S`` is exactly the thing that comes out
-    plausible when it is wrong.
+
+def _frozen_two_point(states, direction, eps):
+    """``sum_ij <psi_n|beta^k_i> q_ij(b) <beta^{k+b}_j|psi_m>`` at ``b = eps d``.
+
+    The plane-wave part of the overlap is held frozen -- the *same* coefficient
+    vector on both sides -- so it does not move with ``b`` and drops out of a
+    central difference, leaving the augmentation term alone. That is what makes
+    this the connection's second piece and not the whole connection.
+    """
+    calculation = states.calculation
+    kcart = np.asarray(
+        calculation.system.kpoints.cartesian(calculation.system.cell)
+    )
+    moved = calculation.at_kcart(kcart + eps * np.asarray(direction)[None, :])
+    here = np.asarray(calculation.projectors.vkb)
+    there = np.asarray(moved.projectors.vkb)
+    block = np.asarray(augmentation_at_q(calculation, eps * np.asarray(direction)))
+    psi = np.asarray(states.all_coefficients)
+    return np.array([
+        np.einsum(
+            "ni,ij,mj->nm",
+            np.einsum("gi,ng->ni", here[ik].conj(), psi[ik]).conj(),
+            block,
+            np.einsum("gj,ng->nj", there[ik].conj(), psi[ik]),
+        )
+        for ik in range(psi.shape[0])
+    ])
+
+
+def _connection_against_finite_difference(name, becsum=False):
+    """``(errors by eps, |K|, |K + K^dag - dS|, |dS|)`` for one augmented cell."""
+    system, pseudos, result = converged(name)
+    extra = {"becsum": result.becsum} if becsum else {}
+    states = DFTSource(
+        system=system, pseudos=pseudos, density=result.density, nocc=4,
+        nbnd=8, conv_thr=1.0e-12, **extra,
+    ).states(np.array([GENERIC_K, [0.125, 0.25, 0.375]]), keep_velocity=True)
+
+    direction = np.asarray(states.bg)[0]
+    connection = np.asarray(augmentation_connection(states, direction))
+    errors = {}
+    for eps in (1.0e-3, 5.0e-4, 2.5e-4):
+        difference = (_frozen_two_point(states, direction, eps)
+                      - _frozen_two_point(states, direction, -eps)) / (2 * eps)
+        errors[eps] = float(np.max(np.abs(difference - connection)))
+    _, ds = velocity_matrices(states, direction)
+    ds = np.asarray(ds)
+    residual = float(np.max(np.abs(
+        connection + np.conj(np.swapaxes(connection, -1, -2)) - ds
+    )))
+    return (errors, float(np.max(np.abs(connection))), residual,
+            float(np.max(np.abs(ds))))
+
+
+@pytest.mark.slow
+def test_the_moving_overlap_is_the_derivative_of_the_two_point_overlap():
+    """``<psi_n|T^dag dT/dk_a|psi_m>`` against a finite difference of ``S(k, k')``.
+
+    Ultrasoft silicon. The connection is built from two objects that no
+    norm-conserving number touches -- the projectors' derivative about the
+    atom's own centre and ``dpqq``, the augmentation charge's dipole -- and
+    their *relative* sign is what a plausible wrong answer comes out of, because
+    each is separately validated elsewhere and a sum of separately validated
+    pieces is this repository's most convincing wrong answer.
+
+    The finite difference settles it, and settles the ``tau`` convention with
+    it: ``q_ij(b)`` carries ``e^{-i b.tau}`` and the centred projector
+    derivative does not carry ``-i tau``, so the two cancel exactly and either
+    one alone would fail here. Measured, ``max|fd - K|`` against
+    ``max|K| = 2.09e-2``::
+
+        eps = 1.00e-3   1.36e-8
+        eps = 5.00e-4   3.40e-9
+        eps = 2.50e-4   8.48e-10
+
+    -- a clean factor of four per halving, which is the ``eps^2`` of a central
+    difference and not a plateau at some other number.
+    """
+    errors, scale, _, _ = _connection_against_finite_difference("si2-us.in")
+    assert scale > 1.0e-3  # a vanishing connection would make this vacuous
+    assert errors[2.5e-4] / scale < 1.0e-6
+    for coarse, fine in ((1.0e-3, 5.0e-4), (5.0e-4, 2.5e-4)):
+        assert errors[fine] == pytest.approx(errors[coarse] / 4.0, rel=0.1)
+
+
+@pytest.mark.slow
+def test_the_paw_moving_overlap_is_the_same_derivative():
+    """The same identity on a PAW dataset, which reaches it through ``becsum``.
+
+    PAW shares the ultrasoft augmentation charge and therefore the whole of
+    this term; what it adds is elsewhere, in the one-centre coefficients that
+    ``dH/dk`` carries. So this is a check that nothing in the PAW path perturbs
+    the connection, not a second physical statement.
+    """
+    errors, scale, _, _ = _connection_against_finite_difference(
+        "si2-paw.in", becsum=True
+    )
+    assert scale > 1.0e-3
+    assert errors[2.5e-4] / scale < 1.0e-6
+
+
+@pytest.mark.slow
+def test_the_connection_and_its_adjoint_are_the_overlap_velocity():
+    """``K + K^dagger = dS/dk``, which is what makes one block serve both factors.
+
+    ``S = T^dag T`` gives ``dS = (T^dag dT)^dag + T^dag dT`` identically, and
+    the two sides here are built by machinery with nothing in common: ``dS`` is
+    the second tangent of the ``jvp`` of ``S(k)`` through the whole Hamiltonian,
+    and ``K`` is a contraction of ``vkb`` and its derivative against ``qq``.
+    Measured at 1.4e-16 against ``max|dS| = 2.65e-2``.
+
+    **What it cannot see is the dipole**, and that is why the finite-difference
+    test stays beside it: ``dpqq`` enters ``K`` as ``-i D`` with ``D``
+    Hermitian, so it cancels out of ``K + K^dag`` with any sign and any
+    magnitude. A check that cannot fail on the term one is least sure of is not
+    a check of it.
+    """
+    _, _, residual, scale = _connection_against_finite_difference("si2-us.in")
+    assert residual / scale < 1.0e-12
+
+
+@pytest.mark.slow
+def test_an_ultrasoft_kubo_curvature_runs_and_symmetry_still_holds():
+    """What was refused until P98, on the control that can still catch it.
+
+    Silicon is centrosymmetric, so ``Omega(k)`` is zero *pointwise* -- and that
+    is a statement about the whole assembly including the added block, since
+    nothing forces the block to respect inversion on its own.
+
+    Measured: ``max|Omega| = 3.9e-5`` on a 2x2 mesh with ``nbnd = 8``, beside
+    the norm-conserving control's own 3.5e-5 on the same crystal -- so the
+    added block does not break the cancellation, which it could, since nothing
+    forces it to respect inversion separately.
+
+    That the block is *live* on this cell is not asserted here, because a zero
+    one would pass: it is
+    :func:`test_the_moving_overlap_is_the_derivative_of_the_two_point_overlap`,
+    on the same ``si2-us.in``, which pins ``max|K| = 2.09e-2``.
+
+    The size of the term is measured where the curvature is not zero, on
+    ultrasoft AlAs at a generic k-point with the sum over states taken to
+    convergence (``nbnd = 130``, the value having stopped moving in the fourth
+    decimal)::
+
+        everything                  1.006370
+        no moving-overlap term      1.012063     0.57 %
+        dS/dk zeroed as well        1.029952     2.34 %
     """
     system, pseudos, result = converged("si2-us.in")
-    with pytest.raises(NotImplementedError, match="dS/dk"):
-        run_berry_curvature(
-            system, pseudos, result.density, shape=(2, 2), nocc=4, nbnd=8,
-            method="kubo",
-        )
+    reported = run_berry_curvature(
+        system, pseudos, result.density, shape=(2, 2), nocc=4, nbnd=8,
+        method="kubo",
+    )
+    assert reported.method == "kubo"
+    assert np.all(np.isfinite(np.asarray(reported.curvature)))
+    assert np.max(np.abs(np.asarray(reported.curvature))) < 1.0e-3
+    assert abs(reported.chern_number) < 1.0e-5
 
 
 @pytest.mark.slow
-def test_a_paw_kubo_curvature_is_refused_by_the_same_name():
-    """And with ``becsum`` supplied, so the refusal reached is this one.
+def test_a_paw_kubo_curvature_runs_too():
+    """And with ``becsum`` supplied, which is what a PAW velocity operator needs.
 
     Without it a PAW source stops earlier, on ``DFTSource``'s own missing-
     ``becsum`` refusal, and the test would pass while establishing nothing
-    about the curvature.
+    about the curvature. Measured: ``max|Omega| = 1.4e-4`` on the same 2x2
+    mesh, four times the ultrasoft cell's and the same order.
     """
     system, pseudos, result = converged("si2-paw.in")
-    with pytest.raises(NotImplementedError, match="dS/dk"):
+    reported = run_berry_curvature(
+        system, pseudos, result.density, shape=(2, 2), nocc=4, nbnd=8,
+        method="kubo", becsum=result.becsum,
+    )
+    assert np.max(np.abs(np.asarray(reported.curvature))) < 1.0e-3
+    assert abs(reported.chern_number) < 1.0e-5
+
+
+@pytest.mark.slow
+def test_a_spinor_augmented_kubo_curvature_is_still_refused_by_name():
+    """The scalar case runs; the spinor one is a term rather than plumbing.
+
+    A fully-relativistic dataset's overlap carries ``qq_so``, the ``fcoef``
+    transform of ``qq`` into a 2x2 matrix in spin space, and the connection's
+    dipole is that same transform applied to ``dpqq`` --
+    :func:`~defumat.pseudo.augmentation.augmentation_dipole_blocks` builds the
+    scalar one only.
+    """
+    system, pseudos, result = converged("alas-magnetoelectric.in")
+    with pytest.raises(NotImplementedError, match="qq_so"):
         run_berry_curvature(
-            system, pseudos, result.density, shape=(2, 2), nocc=4, nbnd=8,
-            method="kubo", becsum=result.becsum,
+            system, pseudos, result.density, shape=(2, 2), nocc=8, nbnd=16,
+            method="kubo", field=result.magnetic_field,
+            field_scale=result.field_scale,
         )
+
+
+def test_a_norm_conserving_connection_is_absent_rather_than_zero():
+    """``T = 1``, so there is no block to build and ``None`` says so.
+
+    Returning a zero array instead would put an ``(nk, nb, nb)`` allocation and
+    two contractions on every norm-conserving Kubo call for a result that is
+    identically zero, and would hide a dataset mix-up behind an array of the
+    right shape.
+    """
+    states = source("alas-raman.in", 4, nbnd=8).states(
+        GENERIC_K.reshape(1, 3), keep_velocity=True
+    )
+    assert augmentation_connection(states, np.asarray(states.bg)[0]) is None
 
 
 def test_a_state_set_without_the_velocity_operator_is_refused():
