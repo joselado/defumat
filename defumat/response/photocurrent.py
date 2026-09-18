@@ -132,6 +132,7 @@ import numpy as np
 from defumat.batching import resolve_k_batch, sum_k
 from defumat.response.velocity import VelocityOperator
 from defumat.scf.occupations import w0gauss
+from defumat.system.kpoints import is_reduced
 
 __all__ = [
     "ShiftCurrent",
@@ -599,11 +600,11 @@ def require_a_velocity_sum_regime(calculation) -> None:
 def _kpoints_are_reduced(calculation) -> bool:
     """Whether the k-set is a wedge rather than the whole grid.
 
-    The same test :func:`~defumat.response.conductivity._kpoints_are_reduced`
-    makes and for its reason: an unreduced grid gives every k-point the same
-    weight and a reduction is exactly what makes them differ.
+    Reads :attr:`~defumat.system.kpoints.KPoints.reduced`, which
+    :meth:`KPoints.automatic` records, with the weight spread underneath as a
+    fallback for a set built by another route. Six copies of the spread test
+    alone were here and all six missed the ordinary case: a symmetry-reduced
+    **shifted** Monkhorst-Pack grid has exactly uniform weights whenever the
+    group acts freely on it, which is what a shift arranges.
     """
-    weights = np.asarray(calculation.system.kpoints.weights)
-    if weights.size <= 1:
-        return False
-    return bool(np.ptp(weights) > 1.0e-8 * np.abs(weights).max())
+    return is_reduced(calculation.system.kpoints)

@@ -324,3 +324,57 @@ def test_the_two_halves_of_the_tensor_partition_the_pairs_at_the_tolerance():
     # ... and therefore inside the multiplet block, which is ``<=``.
     off = ~np.eye(2, dtype=bool)
     assert bool(np.all(np.abs(np.asarray(gap))[off] <= tol))
+
+
+def test_the_ordinary_shifted_grid_is_seen_as_the_wedge_it_is():
+    """The behaviour, where ``test_kpoints.py`` checks the flag underneath it.
+
+    ``require_a_conductivity_regime`` refuses a symmetry-reduced k-set because
+    the antisymmetric part of ``sigma_ab`` is a Berry-curvature sum, odd under
+    ``k -> -k``, so a half-zone sum at weight 2 returns a spurious anomalous
+    Hall conductivity and Kerr angle on a crystal that forces both to zero.
+    The guard never fired on the most ordinary grid QE writes: a shifted
+    Monkhorst-Pack reduced by time reversal alone keeps 32 of 64 points with
+    ``ptp(weights) = 0`` **exactly**, because a shift is what makes the group
+    act freely, and every one of the six copies of that guard tested for a
+    spread in the weights.
+
+    ``nosym = .true.`` is the escape the message names, and it is a real one:
+    it sets ``rotations = None``, which ``KPoints.automatic`` reads as "the
+    whole grid" and which skips time reversal with it, so the same cell comes
+    back at 64 of 64.
+    """
+    from defumat.io.pwin import parse_pw_input
+    from defumat.response.conductivity import require_a_conductivity_regime
+    from defumat.scf.driver import Calculation
+    from defumat.system.builder import build_system
+    from defumat.pseudo import read_upf
+
+    text = """
+&control
+  calculation = 'scf'
+/
+&system
+  ibrav = 2, celldm(1) = 10.20, nat = 2, ntyp = 1, ecutwfc = 12.0{extra}
+/
+&electrons
+/
+ATOMIC_SPECIES
+ Si 28.086 Si.pz-vbc.UPF
+ATOMIC_POSITIONS alat
+ Si 0.01 0.00 0.00
+ Si 0.26 0.24 0.25
+K_POINTS automatic
+ 4 4 4 1 1 1
+"""
+    pseudo = (read_upf("tests/data/pseudo/Si.pz-vbc.UPF"),)
+
+    reduced = build_system(parse_pw_input(text.format(extra="")))
+    assert reduced.kpoints.nk == 32
+    assert float(np.ptp(np.asarray(reduced.kpoints.weights))) == 0.0
+    with pytest.raises(NotImplementedError, match="wedge"):
+        require_a_conductivity_regime(Calculation(reduced, pseudo))
+
+    whole = build_system(parse_pw_input(text.format(extra=",\n  nosym = .true.")))
+    assert whole.kpoints.nk == 64
+    require_a_conductivity_regime(Calculation(whole, pseudo))

@@ -56,6 +56,7 @@ from defumat.stm.spectrum import (
 )
 from defumat.stm.plane import PlotPlane, plot_plane
 from defumat.workflows.nscf import denser_grid, fixed_density_states
+from defumat.system.kpoints import is_reduced
 
 __all__ = ["run_stm", "run_sts", "sample_spectrum",
            "refuse_an_ultracell_result"]
@@ -584,16 +585,26 @@ def _refuse_a_reduced_k_set(system):
     escape it is for a scalar: unfolding a *wavefunction* means rotating it,
     which is :func:`~defumat.workflows.transport.whole_grid`'s own argument.
 
-    The test is the k-weights, exactly as
+    The test is :func:`~defumat.system.kpoints.is_reduced`, exactly as
     :func:`~defumat.workflows.transport._refuse_a_k_set_this_cannot_sum` tests
-    them, and it is a sufficient condition rather than a necessary one: a
-    reduced set whose orbits all happen to have the same size would pass it.
-    What makes that acceptable is that it is the *reduction* that varies the
-    weights on every real k-set, and a run meaning to do this passes
-    ``nosym = .true.`` or ``grid=``, both of which are complete by construction.
+    it, and it is the flag :meth:`KPoints.automatic` records with the weight
+    spread underneath as a fallback.
+
+    **This paragraph used to say the test was the weight spread alone, and that
+    a run meaning to do this "passes ``nosym = .true.`` or ``grid=``, both of
+    which are complete by construction". Both halves were wrong.** The spread
+    is exactly zero on a symmetry-reduced *shifted* Monkhorst-Pack grid whenever
+    the group acts freely on it, which is what a shift arranges -- 32 of 64
+    points at ``ptp(weights) = 0`` on the ordinary ``4 4 4 1 1 1``. And
+    ``grid=`` goes through :func:`~defumat.workflows.nscf.denser_grid`, which
+    reduces with ``grid_symmetry(system)``, so it is complete only for a system
+    that already carries ``nosym``, where it adds nothing. ``nosym = .true.``
+    **is** a complete escape and remains the one named in the message: it sets
+    ``rotations = None`` (``system/builder.py``), which
+    :meth:`KPoints.automatic` reads as "return the whole grid" without applying
+    time reversal either, so ``noinv`` is not needed beside it here.
     """
-    weights = np.asarray(system.kpoints.weights, dtype=float)
-    if weights.size > 1 and np.ptp(weights) > 1.0e-8 * np.abs(weights).max():
+    if is_reduced(system.kpoints):
         raise NotImplementedError(
             "a tunnelling spectrum on a symmetry-reduced k-set is refused: "
             "psi(r) is sampled and squared point by point, so the sum is over "

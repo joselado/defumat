@@ -497,6 +497,16 @@ plausible wrong answer rather than an error. `PLAN.md` has the phase that found 
   symmetrised as one**, and the obvious escape does not work: a **shifted** Monkhorst-Pack
   grid is *not* closed under the point group, so running the whole grid instead of the
   wedge is unsound there and is refused by name (P24).
+- **A guard that detects a wedge cannot be a spread in the k-weights**, and six copies
+  of that test were here. A symmetry-reduced **shifted** Monkhorst-Pack grid has exactly
+  uniform weights whenever the group acts freely on it, which is what a shift arranges:
+  on `pw_scf/scf.in`'s fcc cell at the ordinary `4 4 4 1 1 1`, time reversal alone keeps
+  **32 of 64** points at `ptp(weights) = 0` exactly and `{E, C2z}` keeps 16 of 64, also
+  0, against 36 and 30 points at `ptp` of 0.031 and 0.094 on the same grid *unshifted*.
+  The identity is always in the group and time reversal is on by default, so even a P1
+  cell halves. The answer is to record the fact on the set (`KPoints.reduced`, set by
+  `KPoints.automatic`) and read it through one predicate (`is_reduced`), keeping the
+  spread underneath as a fallback for a hand-built set the flag cannot see (P37).
 - **A wedge sum completes only for a quantity *linear* in a covariant per-k object.**
   Where a functional is quadratic in one, the *value* inside it must be the full-zone
   object while its *derivative* stays the raw wedge sum. Getting it wrong is worth 2.5%,

@@ -119,6 +119,7 @@ from defumat.basis.gvectors import refuse_gamma_storage
 from defumat.batching import map_axis, resolve_band_batch, resolve_k_batch, sum_k
 from defumat.response.velocity import VelocityOperator
 from defumat.units import E2, FPI
+from defumat.system.kpoints import is_reduced
 
 __all__ = [
     "ResponseSphere",
@@ -374,10 +375,7 @@ def _kpoints_are_reduced(calculation) -> bool:
     survives an explicit ``K_POINTS`` list -- which is how the closed-grid cases
     in ``tests/data/qe`` are written.
     """
-    weights = np.asarray(calculation.system.kpoints.weights)
-    if weights.size <= 1:
-        return False
-    return bool(np.ptp(weights) > 1e-8 * np.abs(weights).max())
+    return is_reduced(calculation.system.kpoints)
 
 
 def independent_response(

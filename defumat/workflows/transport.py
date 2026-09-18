@@ -67,7 +67,7 @@ from defumat.transport.substrate import (
     surface_area,
     volume_overlap,
 )
-from defumat.system.kpoints import KPoints
+from defumat.system.kpoints import KPoints, is_reduced
 from defumat.system.kpoints import for_spin as kpoints_for_spin
 from defumat.workflows.nscf import fixed_density_states
 from defumat.workflows.stm import _plane, _refuse_what_has_no_fermi_level
@@ -1181,8 +1181,7 @@ def _refuse_a_k_set_this_cannot_sum(system, exit_axis):
             "lateral cells changes with them. A two-dimensional material is a "
             "slab with one k-point along its normal"
         )
-    weights = np.asarray(system.kpoints.weights, dtype=float)
-    if weights.size > 1 and np.ptp(weights) > 1.0e-8 * np.abs(weights).max():
+    if is_reduced(system.kpoints):
         raise NotImplementedError(
             "a symmetry-reduced k-set is refused: the wedge sum returns the "
             "map symmetrised over the *whole* point group, and only the "

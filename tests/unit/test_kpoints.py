@@ -120,3 +120,79 @@ def test_cartesian_conversion_uses_tpiba():
 def test_zero_total_weight_is_rejected():
     with pytest.raises(ValueError, match="positive"):
         KPoints.from_cartesian([[0, 0, 0]], [0.0])
+
+
+# --- whether a set is a wedge is recorded, not guessed from the weights ---------
+
+FCC = Cell.from_ibrav(2, [10.20, 0, 0, 0, 0, 0])
+_E = np.eye(3)[None]
+_E_C2Z = np.array([np.eye(3), np.diag([-1.0, -1.0, 1.0])])
+
+
+@pytest.mark.parametrize("rotations,shift,nk,spread", [
+    (_E,     (1, 1, 1), 32, 0.0),
+    (_E,     (0, 0, 0), 36, 0.03125),
+    (_E_C2Z, (1, 1, 1), 16, 0.0),
+    (_E_C2Z, (0, 0, 0), 30, 0.09375),
+])
+def test_a_shifted_wedge_has_uniform_weights(rotations, shift, nk, spread):
+    """The measurement six guards in this package were written against.
+
+    Every "is this k-set a wedge" test read a *spread* in the weights, and a
+    symmetry-reduced **shifted** Monkhorst-Pack grid has exactly uniform ones
+    whenever the group acts freely on it -- which is what a shift arranges. So
+    the guard returned False on half or a quarter of the zone and the refusal
+    that protects an axial or rank-3 polar wedge sum never fired, on the most
+    ordinary grid QE writes.
+
+    The table is the evidence: the heuristic works unshifted, where it was
+    written, and fails shifted. The identity is always in the group and time
+    reversal is on by default, so even a P1 cell halves.
+
+    The unshifted spreads are twice what a raw ``irreducible_wedge`` returns,
+    because ``KPoints.automatic`` goes through ``_normalise``, which applies
+    ``DEGSPIN``. The zeros are zero in either normalisation, which is the whole
+    point -- no scaling rescues a spread that is exactly nothing.
+    """
+    points = KPoints.automatic((4, 4, 4), shift, FCC, rotations=rotations)
+    weights = np.asarray(points.weights)
+    assert points.nk == nk
+    assert np.ptp(weights) == pytest.approx(spread, abs=1e-12)
+
+
+@pytest.mark.parametrize("rotations,shift,expected", [
+    (_E,     (1, 1, 1), True),    # 32 of 64, and the weights do not say so
+    (_E,     (0, 0, 0), True),
+    (None,   (1, 1, 1), False),   # the whole grid
+    (None,   (0, 0, 0), False),
+])
+def test_the_reduced_flag_says_what_the_weights_cannot(rotations, shift, expected):
+    from defumat.system.kpoints import is_reduced
+
+    points = KPoints.automatic((4, 4, 4), shift, FCC, rotations=rotations)
+    assert points.reduced is expected
+    assert is_reduced(points) is expected
+
+
+def test_the_weight_spread_survives_as_a_fallback():
+    """A hand-built wedge has no flag, and the old test still has to catch it.
+
+    That is why the spread stays *underneath* rather than being replaced: an
+    explicit ``K_POINTS`` list with unequal weights is how the closed-grid
+    cases in ``tests/data/qe`` are written, and a flag set by
+    ``KPoints.automatic`` cannot see one.
+    """
+    from defumat.system.kpoints import is_reduced
+
+    points = KPoints.from_crystal(
+        np.array([[0.0, 0.0, 0.0], [0.25, 0.0, 0.0]]), np.array([1.0, 3.0]), FCC)
+    assert points.reduced is False
+    assert is_reduced(points) is True
+
+
+def test_the_flag_survives_for_spin():
+    """It has to reach a polarized run, which is where the guards live."""
+    from defumat.system.kpoints import for_spin, is_reduced
+
+    points = KPoints.automatic((4, 4, 4), (1, 1, 1), FCC, rotations=_E)
+    assert is_reduced(for_spin(points, 2)) is True

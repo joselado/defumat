@@ -28,7 +28,7 @@ from defumat.system.cell import Cell
 _GRID_EPS = 1.0e-5
 
 __all__ = ["KPoints", "monkhorst_pack", "irreducible_wedge", "grid_equivalence",
-           "expand_to_subgroup", "expand_band_path", "for_spin"]
+           "expand_to_subgroup", "expand_band_path", "for_spin", "is_reduced"]
 
 #: Spin degeneracy factor applied to weights for an unpolarised calculation.
 DEGSPIN = 2.0
@@ -386,6 +386,25 @@ class KPoints(eqx.Module):
     #: Fermi level moves and the run integrates to the right electron count at
     #: the wrong energy.
     spin_normalized: bool = eqx.field(static=True, default=False)
+    #: Whether this set is a symmetry-reduced **wedge** rather than a set that
+    #: covers the zone. Recorded rather than detected, because every detector in
+    #: the package used to look for a *spread* in the weights and a shifted
+    #: Monkhorst-Pack grid reduces to uniform ones whenever the group acts
+    #: freely on it -- which is what a shift arranges. Measured on the fcc cell
+    #: of ``pw_scf/scf.in`` at ``4 4 4 1 1 1``: time reversal alone keeps 32 of
+    #: 64 points with ``ptp(weights) = 0`` exactly, and ``{E, C2z}`` with time
+    #: reversal keeps 16 of 64, also 0. The same grid **unshifted** gives 36 and
+    #: 30 points at ``ptp`` of 0.0156 and 0.0469, so the heuristic worked on the
+    #: cases it was written against and failed on the ordinary one.
+    #:
+    #: What that costs is a response summed over half or a quarter of the zone
+    #: with nothing symmetrising it and no refusal, since a response on a
+    #: reduced set is a polar or axial vector field
+    #: (``CLAUDE.md``'s "a response on a reduced k-set"). The archetype is an
+    #: anomalous Hall conductivity on a nonmagnetic crystal: the summand is odd
+    #: under ``k -> -k``, so the full-zone value is zero by time reversal while
+    #: the half-zone sum at weight 2 comes out at full size.
+    reduced: bool = eqx.field(static=True, default=False)
 
     @property
     def nk(self) -> int:
@@ -457,10 +476,17 @@ class KPoints(eqx.Module):
         ``time_reversal`` and ``t_rev`` are the magnetic case; see
         :func:`irreducible_wedge`.
         """
-        if rotations is not None and len(rotations):
+        reduced = bool(rotations is not None and len(rotations))
+        if reduced:
             points, weights = irreducible_wedge(
                 grid, shift, rotations, time_reversal=time_reversal, t_rev=t_rev
             )
+            # The identity is always in the group and time reversal is on by
+            # default, so a k-set that came through the wedge is a wedge even
+            # when nothing but ``{E}`` and ``T`` reduced it -- that is already
+            # half the zone. What decides the flag is whether the reduction ran,
+            # not how much of the zone it removed.
+            reduced = len(points) < int(np.prod(grid))
         else:
             points, weights = monkhorst_pack(grid, shift)
         return cls.from_crystal(
@@ -470,6 +496,7 @@ class KPoints(eqx.Module):
             precision=precision,
             grid=tuple(int(n) for n in grid),
             shift=tuple(int(s) for s in shift),
+            reduced=reduced,
         )
 
     @classmethod
@@ -504,6 +531,37 @@ class KPoints(eqx.Module):
             path_length=precision.as_real(lengths),
             precision=precision,
         )
+
+
+def is_reduced(kpoints: "KPoints") -> bool:
+    """Whether ``kpoints`` covers less than the whole zone.
+
+    **The one predicate**, because six consumers each carried their own and all
+    six were the same wrong test: a spread in the weights. A symmetry-reduced
+    *shifted* Monkhorst-Pack grid has exactly uniform weights whenever the group
+    acts freely on it, which is what a shift arranges -- so the guard returned
+    False on a k-set that is half or a quarter of the zone, and the refusal that
+    protects an axial or rank-3 polar wedge sum never fired. On the fcc cell of
+    ``pw_scf/scf.in`` at the ordinary ``K_POINTS automatic 4 4 4 1 1 1``, time
+    reversal alone keeps 32 of 64 points at ``ptp(weights) = 0`` exactly, and
+    ``{E, C2z}`` with time reversal keeps 16 of 64, also 0.
+
+    So the answer is **recorded** on the set by :meth:`KPoints.automatic`
+    (:attr:`KPoints.reduced`) rather than inferred from it. The weight spread
+    stays underneath as a fallback, for a set that reached here by another route
+    -- an explicit ``K_POINTS`` list with unequal weights, which is how the
+    closed-grid cases in ``tests/data/qe`` are written, and which the flag
+    cannot see. A fallback is right here and a *replacement* would not be: the
+    flag catches what the spread misses and the spread catches what the flag
+    misses, and being wrong in the safe direction means refusing a run that
+    would have been fine.
+    """
+    if getattr(kpoints, "reduced", False):
+        return True
+    weights = np.asarray(kpoints.weights, dtype=float)
+    if weights.size <= 1:
+        return False
+    return bool(np.ptp(weights) > 1.0e-8 * np.abs(weights).max())
 
 
 def for_spin(kpoints: "KPoints", nspin: int) -> "KPoints":

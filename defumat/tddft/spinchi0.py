@@ -79,6 +79,7 @@ import numpy as np
 from defumat.basis.fft import g_to_r, r_to_g
 from defumat.batching import resolve_k_batch, sum_bands, sum_k
 from defumat.scf.occupations import smearing_order, w0gauss
+from defumat.system.kpoints import is_reduced
 
 __all__ = [
     "SpinSphere",
@@ -286,8 +287,7 @@ def require_a_transverse_regime(calculation) -> None:
             "source-free projection is precisely what breaks that -- the "
             "quotient is still finite and the magnon it gives is meaningless"
         )
-    weights = np.asarray(calculation.system.kpoints.weights)
-    if weights.size > 1 and np.ptp(weights) > 1e-8 * np.abs(weights).max():
+    if is_reduced(calculation.system.kpoints):
         raise NotImplementedError(
             "the transverse spin susceptibility needs the full k-grid, not a "
             "symmetry-reduced wedge: X_0(G, G') is a matrix in two G indices, "

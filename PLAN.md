@@ -5790,6 +5790,64 @@ give. **What this does not bound** is the `(nw, 2 npairs, nm)` assembly above it
 the stated trade the docstring already carried and is two hundred times smaller.
 
 
+**The wedge detector was the wrong test in six places, found and closed 2026-09-18.**
+Every "is this k-set a wedge" guard in the package decided by looking for a *spread* in
+the k-weights -- `tddft/chi0.py`, `response/conductivity.py`, `response/photocurrent.py`
+(reached by `shg.py`), `tddft/spinchi0.py`, `workflows/transport.py` and `workflows/stm.py`,
+six copies of `np.ptp(weights) > 1e-8 * max` and nothing else. A symmetry-reduced
+**shifted** Monkhorst-Pack grid has exactly uniform weights whenever the group acts
+freely on it, which is what a shift arranges, so the guard returned **False** on a k-set
+that is half or a quarter of the zone and the refusal that protects an axial or rank-3
+polar wedge sum never fired.
+
+**Measured on the fcc cell of `pw_scf/scf.in`**, the ordinary `K_POINTS automatic
+4 4 4 1 1 1`:
+
+| group | shift | nk of 64 | `ptp(weights)` |
+|---|---|---|---|
+| `{E}` + time reversal | (1,1,1) | 32 | **0** exactly |
+| `{E}` + time reversal | (0,0,0) | 36 | 0.0312 |
+| `{E, C2z}` + time reversal | (1,1,1) | 16 | **0** exactly |
+| `{E, C2z}` + time reversal | (0,0,0) | 30 | 0.0938 |
+
+The nonzero figures are as `KPoints.automatic` returns them, twice what a raw
+`irreducible_wedge` gives because `_normalise` applies `DEGSPIN`; the zeros are zero in
+either normalisation, which is the point -- no scaling rescues a spread that is exactly
+nothing. So the heuristic worked on the unshifted cases it was written against and failed
+on the shifted one, which is the one QE's own inputs write. The identity is always in the group
+and time reversal is on by default, so **even a P1 cell reduces by time reversal**: half
+the zone, uniform weights, guard silent. The archetype of what that costs is an anomalous
+Hall conductivity on a nonmagnetic crystal -- the summand is odd under `k -> -k`, so the
+full-zone value is zero by time reversal while the half-zone sum at weight 2 comes out at
+full size, a spurious Kerr angle on a crystal that forces one to zero.
+
+**The answer is to record it rather than infer it.** `KPoints.reduced` is set by
+`KPoints.automatic` when the reduction actually removed points, and
+`system/kpoints.py:is_reduced` is the one predicate all six now call. The weight spread
+stays **underneath as a fallback** rather than being replaced: it catches an explicit
+`K_POINTS` list with unequal weights, which is how the closed-grid cases in
+`tests/data/qe` are written and which a flag cannot see, and the flag catches what the
+spread misses. Being wrong in the safe direction here means refusing a run that would
+have been fine, which is the right way round for a guard.
+
+**The documented escape was checked rather than assumed, because "the escape does not
+escape" would have been the more serious finding.** Five of the six messages name
+`nosym = .true.`, and in QE `nosym` leaves time reversal on unless `noinv` is set too --
+which is exactly what took the P1 cell above to 32 of 64. Here it does not: `nosym` sets
+`rotations = None` (`system/builder.py`), and `KPoints.automatic` reads that as "return
+the whole grid" through `monkhorst_pack`, which never applies time reversal either.
+Measured on the same displaced cell at `4 4 4 1 1 1`: **64 of 64 with `nosym` alone**, with
+or without `noinv`, against 32 of 64 with neither. So the messages are right and
+`noinv` is not needed beside `nosym` in this code.
+
+**The other half of that sentence was wrong and is now fixed.** `workflows/stm.py`'s
+guard docstring said a run meaning to sum a whole zone "passes `nosym = .true.` or
+`grid=`, both of which are complete by construction" -- and `grid=` goes through
+`denser_grid`, which reduces with `grid_symmetry(system)`, so it is complete only for a
+system that already carries `nosym`, where it adds nothing. That was already false before
+this change.
+
+
 ### P38 — The calculator: one object, bound methods. ✅ DONE.
 
 **What.** `defumat/calculator.py`. A `Calculator` is a `System` together with its
