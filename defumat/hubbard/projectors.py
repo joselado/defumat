@@ -59,6 +59,63 @@ __all__ = [
 ]
 
 
+@jax.custom_jvp
+def _inverse_sqrt(overlap: jnp.ndarray) -> jnp.ndarray:
+    """``O^{-1/2}`` of a Hermitian positive-definite ``O``, differentiably.
+
+    **The eigendecomposition is the primal and not the derivative.** Reverse
+    mode through :func:`jnp.linalg.eigh` carries a ``1/(w_i - w_j)`` over every
+    pair of eigenvalues, and the overlap of the atomic orbitals of a crystal is
+    degenerate wherever site symmetry says it is: on two-atom silicon with
+    ``ortho-atomic`` projectors the eight eigenvalues at ``Gamma`` hold two
+    threefold blocks, with gaps of 0.0 and 2.8e-16, and the (1/8,1/8,1/8) point
+    that an ordinary shifted ``4 4 4 1 1 1`` grid contains holds a bit-exact
+    pair. ``_eigh_jvp_rule`` builds ``1/(1 + w_j - w_i) - 1`` rather than
+    dividing outright, so what comes back is a wrong number rather than a NaN:
+    measured against a central difference of ``fractional_matrix_power(O, -0.5)``
+    on those very overlaps, the tangent of this function was out by **41.7 per
+    cent** of its largest element at ``Gamma`` and by **197 per cent** at
+    (1/8,1/8,1/8), against 3.5e-8 at a generic k-point, which is the finite
+    difference's own floor.
+
+    The matrix function is perfectly smooth at a degeneracy, so what is singular
+    is the route rather than the physics. For ``f(w) = w^{-1/2}`` the Frechet
+    derivative of ``f(O)`` is
+
+        ``dX = V [ f1(w_i, w_j) (V^H dO V)_ij ] V^H``,
+
+    with the divided difference ``f1(w_i, w_j) = (f(w_i) - f(w_j))/(w_i - w_j)``,
+    which for this ``f`` is ``-1/(s_i s_j (s_i + s_j))`` with ``s = sqrt(w)``.
+    The denominator is a *sum* of positive numbers where ``eigh``'s is a
+    difference, so it is finite at an exact degeneracy and is ``f'(w_i) =
+    -1/(2 w_i^{3/2})`` on the diagonal; away from one it is what ``eigh`` would
+    have given, which is why no primal and no converged number moves. The same
+    expression is the Sylvester solve ``Y dY + dY Y = dO`` followed by
+    ``dX = -X dY X``, written in the eigenbasis.
+
+    This is ``PLAN.md``'s rule D4 -- do not differentiate through a
+    diagonalization, because the derivative is singular at the degeneracies
+    crystals have everywhere by symmetry -- met in the one place the package
+    still did. It reaches a user through the DFT+U force and stress, which are
+    ``jax.grad`` through :meth:`Calculation.at_positions` and
+    :meth:`Calculation.at_strain` and so through this function.
+    """
+    values, vectors = jnp.linalg.eigh(overlap)
+    return (vectors * jax.lax.rsqrt(values)) @ vectors.conj().T
+
+
+@_inverse_sqrt.defjvp
+def _inverse_sqrt_jvp(primals, tangents):
+    """The divided difference above, evaluated in the eigenbasis."""
+    (overlap,), (d_overlap,) = primals, tangents
+    values, vectors = jnp.linalg.eigh(overlap)
+    roots = jnp.sqrt(values)
+    primal = (vectors * jax.lax.rsqrt(values)) @ vectors.conj().T
+    weights = -1.0 / (roots[:, None] * roots[None, :] * (roots[:, None] + roots[None, :]))
+    inner = vectors.conj().T @ d_overlap @ vectors
+    return primal, vectors @ (weights * inner) @ vectors.conj().T
+
+
 def lowdin_transform(overlap: jnp.ndarray, normalize_only: bool = False) -> jnp.ndarray:
     """``O^{-1/2}`` transposed, as ``ortho_swfc`` builds it.
 
@@ -66,12 +123,13 @@ def lowdin_transform(overlap: jnp.ndarray, normalize_only: bool = False) -> jnp.
     inverse square root is an eigendecomposition. The result is stored with its
     indices swapped relative to the usual convention, matching the Fortran, and
     :func:`_apply_transform` consumes it in the matching order.
+
+    The derivative does not go through that eigendecomposition; see
+    :func:`_inverse_sqrt` for why it cannot.
     """
     if normalize_only:
         overlap = jnp.diag(jnp.diag(overlap))
-    values, vectors = jnp.linalg.eigh(overlap)
-    inverse_sqrt = (vectors * jax.lax.rsqrt(values)) @ vectors.conj().T
-    return inverse_sqrt.T
+    return _inverse_sqrt(overlap).T
 
 
 def _apply_transform(transform: jnp.ndarray, wfc: jnp.ndarray) -> jnp.ndarray:

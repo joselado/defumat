@@ -11,6 +11,7 @@ import copy
 import numpy as np
 import pytest
 
+import jax
 import jax.numpy as jnp
 
 from defumat.hubbard.energy import (
@@ -287,6 +288,78 @@ def test_lowdin_transform_orthonormalises():
     # The same contraction ``ortho_swfc`` performs, transposition included.
     rotated = np.asarray(jnp.asarray(basis) @ transform.T)
     assert rotated.conj().T @ rotated == pytest.approx(np.eye(6), abs=1e-10)
+
+
+def test_the_transform_is_differentiable_at_a_degeneracy():
+    """``O^{-1/2}`` is smooth where ``eigh``'s derivative is not, and crystals sit there.
+
+    The overlap of the atomic orbitals of a crystal is degenerate wherever site
+    symmetry says it is. On two-atom silicon with ``ortho-atomic`` projectors
+    the eight eigenvalues at ``Gamma`` hold two threefold blocks, with gaps of
+    0.0 and 2.8e-16, and two of the ten k-points of the ordinary shifted
+    ``4 4 4 1 1 1`` wedge carry pairs equal to within 2e-16. Reverse mode
+    through ``jnp.linalg.eigh`` carries a ``1/(w_i - w_j)`` over every pair, so
+    it is wrong there by tens or hundreds of per cent -- 4.043 against 7.286 at
+    one of those two k-points and 5.405 against 1.418 at the other -- and is
+    NaN where the pair is bit-exact, which is what ``Calculator.get_stress()``
+    returned in every component on that cell before this rule existed.
+
+    The reference is a central difference of
+    ``scipy.linalg.fractional_matrix_power(O, -0.5)``, a primal-only instrument
+    that shares no machinery with either route. The last assertion is the guard
+    firing: the eigendecomposition's own derivative is put back here, so the
+    test is known to tell the two apart rather than to pass on anything.
+    """
+    import scipy.linalg
+
+    rng = np.random.default_rng(17)
+    n = 6
+    vectors, _ = np.linalg.qr(rng.normal(size=(n, n)) + 1j * rng.normal(size=(n, n)))
+    overlap = vectors @ np.diag([0.4, 0.4, 0.4, 1.1, 1.1, 2.3]) @ vectors.conj().T
+    overlap = 0.5 * (overlap + overlap.conj().T)
+    assert np.diff(np.sort(np.linalg.eigvalsh(overlap))).min() < 1e-15
+
+    tangent = rng.normal(size=(n, n)) + 1j * rng.normal(size=(n, n))
+    tangent = 0.5 * (tangent + tangent.conj().T)
+
+    step = 1e-5
+    reference = (
+        scipy.linalg.fractional_matrix_power(overlap + step * tangent, -0.5)
+        - scipy.linalg.fractional_matrix_power(overlap - step * tangent, -0.5)
+    ) / (2.0 * step)
+
+    def transform(matrix):
+        """``lowdin_transform`` with the Fortran's transposition undone."""
+        return lowdin_transform(matrix).T
+
+    _, forward = jax.jvp(
+        transform, (jnp.asarray(overlap),), (jnp.asarray(tangent),)
+    )
+    assert np.asarray(forward) == pytest.approx(reference, abs=1e-6)
+
+    # Reverse mode is what a force and a stress actually take, and it is a
+    # different code path: the same directional derivative, contracted.
+    coefficients = rng.normal(size=(n, n)) + 1j * rng.normal(size=(n, n))
+    coefficients = 0.5 * (coefficients + coefficients.conj().T)
+
+    def scalar(matrix):
+        return jnp.real(jnp.trace(jnp.asarray(coefficients) @ transform(matrix)))
+
+    gradient = np.asarray(jax.grad(scalar)(jnp.asarray(overlap)))
+    assert float(np.real(np.vdot(gradient.conj(), tangent))) == pytest.approx(
+        float(np.real(np.trace(coefficients @ reference))), rel=1e-6
+    )
+
+    def through_the_eigendecomposition(matrix):
+        values, eigenvectors = jnp.linalg.eigh(matrix)
+        return (eigenvectors * jax.lax.rsqrt(values)) @ eigenvectors.conj().T
+
+    _, wrong = jax.jvp(
+        through_the_eigendecomposition,
+        (jnp.asarray(overlap),),
+        (jnp.asarray(tangent),),
+    )
+    assert np.abs(np.asarray(wrong) - reference).max() > 0.1 * np.abs(reference).max()
 
 
 def test_ns_ddot_is_the_mixing_metric(feo):

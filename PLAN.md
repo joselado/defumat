@@ -2231,6 +2231,64 @@ other). Also not done: `hub_pot_fix`, QE's protocol of freezing `v_hub` when
 `Hubbard_alpha` is nonzero for a linear-response U — the `alpha` energy term is implemented
 and the protocol around it is not.
 
+**The Lowdin transform's derivative, found by the 2026-09-18 audit and closed.**
+`lowdin_transform` built `O^{-1/2}` with `jnp.linalg.eigh` **and differentiated through
+it**, and `_eigh_jvp_rule` carries a `1/(w_i - w_j)` over every pair of eigenvalues. The
+atomic-orbital overlap of a crystal is degenerate wherever site symmetry says it is, so
+this is rule D4 broken in the one place the package still broke it -- and it is on the
+force and the stress tape, since `at_positions` and `at_strain` rebuild `wfcU` through
+this function.
+
+*Where the degeneracies are, measured rather than argued.* On two-atom silicon with
+`HUBBARD ortho-atomic` on Si-3p the 8x8 overlap at `Gamma` holds two threefold blocks,
+with gaps of **0.0 and 2.8e-16**, and two of the ten k-points of the ordinary shifted
+`4 4 4 1 1 1` wedge -- `(-0.125, 0.125, 0.125)` and `(-0.375, 0.375, 0.375)`, both on the
+`Lambda` axis -- carry pairs at **1.7e-16 and 2.2e-16**. The audit's own cell,
+`ni-ldau-ortho.in`, has the same two at 5.6e-16 and 3.3e-16, so this is a property of the
+little group rather than of the element.
+
+*What the derivative was worth there.* Against a central difference of
+`scipy.linalg.fractional_matrix_power(O, -0.5)` -- a primal-only instrument that shares
+no machinery with either route -- the tangent of this function was out by **41.7 per
+cent** of its largest element at `Gamma` and by **197 per cent** at `(1/8, 1/8, 1/8)`,
+against **3.5e-8** at a generic k-point, which is the finite difference's own floor and
+is unchanged by the fix. On nickel's two degenerate k-points the reverse mode read 0.708
+and 4.805 against a reference of 0.385 and 4.993.
+
+*What a user saw.* On the silicon cell, **`get_stress()` and `get_forces()` returned NaN
+in every component**: the strained rebuild puts a *bit-exact* pair in the block, where
+`1/(eye + w_j - w_i) - eye` is `inf` rather than large. With the rule the stress is
+`-2.2069426479e-04` Ry/bohr^3 (**-32.465247 kbar**) and the force is 3e-36, zero as the
+ideal geometry requires. **The same cell displaced by 0.01 crystal units is bit-identical
+under both routes** -- the displacement lifts the degeneracy physically -- which is the
+statement that the defect lives exactly where site symmetry holds.
+
+*Nickel is the case that was silent, and it is not the one the audit predicted.* The
+**reported** stress does not move at all, `-8.75691689` kbar both ways, because it is one
+reverse pass and the erroneous entries multiply a cotangent that vanishes in the
+degenerate block. What moved is `Stress.terms`, the forward-mode decomposition the
+term-by-term comparison against `stress.f90` reads: **-9.45753452 kbar** against
+-8.75691689, **0.70 kbar and 8 per cent** out, so the defect showed as a total
+disagreeing with its own terms by **2.5e-5 Ry/bohr^3**. With the rule the two agree to
+**2.7e-14**. The audit predicted a silently wrong reported stress on cubic nickel and an
+escape on silicon; both cells do the opposite, and the entry is corrected rather than
+confirmed.
+
+*The fix is a `custom_jvp` and not a reformulation.* `f(w) = w^{-1/2}` applied to a
+Hermitian matrix has the Frechet derivative `dX = V [f1(w_i, w_j) (V^H dO V)_ij] V^H`
+with the divided difference `f1(w_i, w_j) = -1/(s_i s_j (s_i + s_j))`, `s = sqrt(w)` -- a
+*sum* of positive numbers where `eigh`'s denominator is a difference, so it is finite at
+an exact degeneracy and is `f'(w_i)` on the diagonal. Away from a degeneracy it is
+numerically what `eigh` gave, so **no primal and no converged number moves**: the SCF
+total on both cells is identical to every digit, and the two other callers
+(`projwfc/projections.py`, `workflows/anisotropy.py`) are primal-only. The check is
+`tests/unit/test_hubbard.py::test_the_transform_is_differentiable_at_a_degeneracy`, which
+puts the old route back and asserts it disagrees with the finite difference, so the test
+is known to tell the two apart. The frozen-state identity is the other half:
+`jax.grad(strained_energy)` against a central difference of the same function on the
+ortho-atomic silicon cell agrees to **1.3e-9, 3.7e-10 and 1.3e-10** on the `(0,0)`,
+`(0,1)` and `(1,2)` components, where the old route was NaN.
+
 *Notebook 13.*
 
 **P21 — Relaxing the spin spiral: `dE/dq`. ✅ DONE.** P19 made `q` a coordinate of the
