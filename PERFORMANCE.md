@@ -6902,6 +6902,23 @@ feature taken from QE or Elk is timed against the code it was taken from has no
 counterpart to apply here, and a ratio quoted anyway would be a ratio against a broken
 branch.
 
+**What the new term costs: nothing that can be measured.** One `einsum` replaces a
+broadcast multiply inside a residual that was already being differentiated, so the
+expected change is zero and the rule for a quantity expected not to move applies: a
+**median of five**, warm, one core, `OMP_NUM_THREADS=1`, with the first call discarded
+because it times whether the kernel cache held the executable rather than the work.
+
+| `db` for one mode, `si-us-nosym` | median | range |
+|---|---|---|
+| the frozen scalar | 3.948 s | [3.857, 4.803] |
+| the multiplier matrix | **3.921 s** | [3.900, 4.965] |
+
+0.7 per cent apart, with the matrix form nominally the *faster* of the two and the two
+ranges overlapping through most of their length, so what this says is that the change is
+below the measurement's own spread and not that it is an improvement. For scale, the whole
+Raman tensor on that cell is **100.33 s** on one core (median of three, [98.21, 104.28]),
+of which the six `db` solves are about a quarter.
+
 **What the public path costs**, on the two-atom `nosym` cells the phase was measured on,
 through `electrostriction(calculation, result, elastic=False)`:
 

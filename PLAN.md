@@ -18427,8 +18427,8 @@ the same order the project has measured for it elsewhere (P39a's carbon, 2.3e-4)
 `AUGMENTATION-NEXT.md` 3b, the item that file called the hardest on its list, and the
 quantity is the elastic constants, electrostriction and the elasto-optic tensor of an
 ultrasoft or PAW dataset. Nothing new was derived. What closed it is that **P44's
-reference was off by the size of the term P44 was testing**, in both of the two
-instruments it used, and in opposite ways.
+reference was off by the size of the term P44 was testing**, and both of the two
+instruments it used are wrong in a way worth writing down, for two different reasons.
 
 **The term, from the equation rather than from a search.** `b_a = P_c r_a|psi>` is defined
 by a linear equation and the band's own eigenvalue stands on both of its sides,
@@ -18471,11 +18471,13 @@ The displacement coordinate first, because it is where P44's exclusion came from
 so against the extrapolated reference the frozen scalar is **1.26e-3** (ultrasoft) and
 1.25e-3 (PAW), the traced diagonal 1.5e-4 and 1.4e-4, and the multiplier matrix agrees to
 within the extrapolation's own spread, which is **4.4e-6** and 3.2e-6. The
-norm-conserving control reaches its exact answer at **1.8e-6**, so the instrument
-resolves the limit an order below the diagonal-only form and two below the scalar one.
-**The reference moves by 0.059 between the two coarsest steps**, which is the whole of
-the story: at `h = 0.02` its truncation error is +0.079 and the missing term is -0.087,
-so the two nearly cancelled. That is P43's 1.2e-4 for the incomplete form and P44's
+norm-conserving control reaches its exact answer at **1.8e-6**, so the instrument resolves
+the limit two orders below the diagonal-only form and nearly three below the scalar one.
+**The reference moves by 0.059 between the two coarsest steps**, which is the whole of the
+story, and the cancellation is not that two errors have opposite signs but that they have
+nearly the *same* one: from the extrapolated limit the reference at `h = 0.02` is
+**-0.0786** and the committed analytic is **-0.0869**, both in the same direction, so what
+the comparison sees is the difference of the two, -0.0084, or 1.2e-4 of the answer. That is P43's 1.2e-4 for the incomplete form and P44's
 1.14e-3 for the complete one, both against a reference that was itself 1.1e-3 from its
 limit. **The 6.8e-4 norm-conserving control quoted in P43's own table was that floor**,
 sitting beside the number it invalidates.
@@ -18492,8 +18494,8 @@ Then the strain coordinate, `d(eps_00)/dx_00` at `h = 3e-3`, `1.5e-3` and `7.5e-
 | PAW, traced diagonal 127.978990 | " | 1.33e-3 |
 | **PAW, multiplier matrix 128.147090** | " | **2.2e-5** |
 
-reproducing P44's 1.30e-2 for the committed form and closing the coordinate at the
-reference's own floor. **The finest rung is noise-limited here and is not used**, which
+reproducing P44's figure for the committed form -- 1.32e-2 here against its 1.30e-2 --
+and closing the coordinate at the reference's own floor. **The finest rung is noise-limited here and is not used**, which
 the control is what says: `7.5e-4` puts the norm-conserving pair 3.5e-4 *away* from an
 answer the coarse pair reaches at 2.5e-5, so it is off the `h^2` curve rather than
 further along it. That is consistent with the dielectric response's own convergence, about 1e-6 in
