@@ -69,50 +69,75 @@ def shear(magnitude: float) -> np.ndarray:
     return strain
 
 
-def polarization_vector(calculator, strain, nppstr, transverse, conv_thr):
+def _polarization_child(payload, queue):
+    """One strained geometry, in a process of its own. See :func:`polarization_vector`."""
+    import numpy as np
+
+    from defumat.calculator import Calculator
+
+    calculator = Calculator.from_file(payload["input"],
+                                      pseudo_dir=payload["pseudo_dir"],
+                                      announce=False)
+    at = np.asarray(calculator.system.cell.at)
+    strain = np.asarray(payload["strain"])
+    strained = calculator.with_cell(at @ (np.eye(3) + strain).T)
+    scf = strained.get_scf(conv_thr=payload["conv_thr"])
+    cell = strained.system.cell
+    # **``Cell.at`` is in bohr**, not in units of ``alat``: ``Cell.volume`` is
+    # documented as bohr^3 of exactly this array and ``from_vectors`` takes
+    # bohr. Multiplying by ``alat`` here, which is what a QE ``at`` would need,
+    # put a factor of 10.575 on the first run of this script and made the
+    # finite difference read -6.998 C/m^2 against the response route's -0.764.
+    vectors = np.asarray(cell.at)  # bohr; row i is a_i
+    phases = []
+    for gdir in range(3):
+        polarization = strained.get_polarization(
+            gdir=gdir, nppstr=payload["nppstr"],
+            transverse=tuple(payload["transverse"]),
+        )
+        phases.append(float(polarization.total_phase))
+    queue.put({
+        "phases": phases,
+        "quantum": float(polarization.quantum),
+        "energy": float(scf.total_energy),
+        "volume": float(cell.volume),
+        "vectors": vectors.tolist(),
+    })
+
+
+def polarization_vector(payload):
     """``P`` in e/bohr^2, cartesian, at clamped ions in the deformed cell.
 
     Clamped ions is what the tensor is: the atoms keep their **crystal**
     coordinates, which is what ``with_cell`` does when it is given no positions,
     so they follow the cell affinely and nothing relaxes.
-    """
-    import jax
 
-    at = np.asarray(calculator.system.cell.at)
-    strained = calculator.with_cell(at @ (np.eye(3) + strain).T)
-    scf = strained.get_scf(conv_thr=conv_thr)
-    cell = strained.system.cell
-    # **``Cell.at`` is in bohr**, not in units of ``alat``: ``Cell.volume`` is
-    # documented as bohr^3 of exactly this array and ``from_vectors`` takes
-    # bohr. Multiplying by ``alat`` here, which is what a QE ``at`` would need,
-    # put a factor of 10.575 on the first run of this script and made the finite
-    # difference read -6.998 C/m^2 against the response route's -0.764. The
-    # norm-conserving cell exists to catch that rather than to be believed.
-    vectors = np.asarray(cell.at)  # bohr; row i is a_i
-    phases, total = [], np.zeros(3)
-    for gdir in range(3):
-        polarization = strained.get_polarization(
-            gdir=gdir, nppstr=nppstr, transverse=transverse
-        )
-        phases.append(float(polarization.total_phase))
-        total += float(polarization.total_phase) * vectors[gdir]
-    out = {
-        "polarization": total / float(cell.volume),
-        "phases": phases,
-        "quantum": float(polarization.quantum),
-        "energy": float(scf.total_energy),
-        "volume": float(cell.volume),
-        "vectors": vectors,
-    }
-    # **Every strained geometry is a new set of shapes and XLA keeps every
-    # executable for the life of the process.** That is the accumulation
-    # `CLAUDE.md` names for a test file that sweeps many cells, met inside one
-    # script: the first run of this one died in the compiler, "LLVM compilation
-    # error: Cannot allocate memory", on a two-atom cell with 120 GB. The
-    # results stay; only the compiled code is dropped.
-    del strained, scf
-    jax.clear_caches()
-    return out
+    **Each geometry runs in its own process**, and that is not tidiness. XLA's
+    CPU backend gives every jitted function its own ORC dylib and mmaps its
+    sections; ``vm.max_map_count`` is the ordinary 65530, so a script that
+    converges half a dozen distinct cells and runs three Berry-phase meshes on
+    each exhausts **mappings** rather than bytes and dies with
+    ``Failed to materialize symbols`` or ``LLVM compilation error: Cannot
+    allocate memory`` -- the latter on a 118-byte request, with 120 GB
+    allocated and three resident. ``jax.clear_caches()`` does not help: it drops
+    JAX's own caches and not the loaded modules. A child process does, by
+    exiting.
+    """
+    import multiprocessing
+
+    context = multiprocessing.get_context("spawn")
+    queue = context.Queue()
+    child = context.Process(target=_polarization_child, args=(payload, queue))
+    child.start()
+    result = queue.get()
+    child.join()
+    if child.exitcode != 0:
+        raise RuntimeError(f"the polarization child exited {child.exitcode}")
+    result["vectors"] = np.asarray(result["vectors"])
+    result["polarization"] = sum(
+        result["phases"][gdir] * result["vectors"][gdir] for gdir in range(3)
+    ) / result["volume"]
+    return result
 
 
 def wrapped(difference: float) -> float:
@@ -125,15 +150,19 @@ def wrapped(difference: float) -> float:
     return float(np.angle(np.exp(2j * np.pi * difference)) / (2.0 * np.pi))
 
 
-def finite_difference(calculator, magnitude, nppstr, transverse, conv_thr):
+def finite_difference(base, magnitude, nppstr, transverse, conv_thr):
     """``e_14`` by Elk's route: one ground state per strain, differenced."""
     from defumat.units import BOHR_RADIUS_SI, ELECTRON_SI
 
     factor = ELECTRON_SI / BOHR_RADIUS_SI**2  # e/bohr^2 -> C/m^2
-    plus = polarization_vector(calculator, shear(+magnitude), nppstr,
-                               transverse, conv_thr)
-    minus = polarization_vector(calculator, shear(-magnitude), nppstr,
-                                transverse, conv_thr)
+
+    def payload(sign):
+        return {**base, "strain": shear(sign * magnitude).tolist(),
+                "nppstr": nppstr, "transverse": list(transverse),
+                "conv_thr": conv_thr}
+
+    plus = polarization_vector(payload(+1))
+    minus = polarization_vector(payload(-1))
 
     # Through the phases rather than through the assembled vectors, so that the
     # wrap above applies before anything is multiplied by a lattice vector.
@@ -216,8 +245,10 @@ def main() -> None:
     results["finite_difference"] = []
     for magnitude in arguments.shears:
         start = time.time()
-        one = finite_difference(calculator, magnitude, nppstr,
-                                transverse, arguments.conv_thr)
+        one = finite_difference(
+            {"input": str(ROOT / case["input"]), "pseudo_dir": arguments.pseudo_dir},
+            magnitude, nppstr, transverse, arguments.conv_thr,
+        )
         one["seconds"] = time.time() - start
         results["finite_difference"].append(one)
         gap = one["e14"] - float(tensor.e14)
