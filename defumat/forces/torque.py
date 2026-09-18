@@ -127,16 +127,89 @@ def band_energy_at_angle(calculation, states, weights, density, plane, angle):
     return total
 
 
-def torque_at_angle(calculation, states, weights, density, plane, angle):
+def _chunked_energy_and_slope(calculation, states, weights, density, plane,
+                              angle, k_batch: int):
+    """``(E, dE/dtheta)`` accumulated over ``k_batch`` k-points at a time.
+
+    A Python loop of per-chunk ``value_and_grad`` calls, **not** one
+    ``value_and_grad`` around a ``lax.map``, for the reason
+    :func:`defumat.forces.spiral._chunked_energy_and_gradient` states: reverse
+    mode through a scan stacks every chunk's residuals for the backward pass, so
+    the mapped form holds the peak the single pass does. The loop discards each
+    chunk's tape before the next one starts.
+
+    **It is exact rather than an approximation**, and what makes it so is that
+    the potential comes from the ``density`` argument rather than from the
+    states: ``E(theta) = sum_k w_k <psi_k|H(theta)|psi_k>`` has no term
+    coupling two k-points, so the chunk sums add and so do their derivatives.
+    Every chunk is padded to exactly ``k_batch`` with a repeat of its own first
+    k-point at **zero weight**, so all chunks share one shape and therefore one
+    compilation, and the padding contributes nothing to either number.
+    """
+    psi = jnp.asarray(states)[0]
+    occupation = jnp.asarray(weights)[0]
+    nk = int(psi.shape[0])
+
+    def chunk(value, indices, live):
+        direction = _direction(value, plane[0], plane[1])
+        rotated = rotated_density(density, direction)
+        potential = calculation.potential(rotated, 1.0, None)
+        hamiltonian = calculation.hamiltonian(potential.v_scf)[0]
+        total = 0.0
+        for slot in range(k_batch):
+            ik = indices[slot]
+            applied = hamiltonian.apply(psi[ik], ik)
+            bands = jnp.real(jnp.sum(jnp.conj(psi[ik]) * applied, axis=-1))
+            total = total + live[slot] * jnp.sum(occupation[ik] * bands)
+        return total
+
+    compiled = jax.jit(jax.value_and_grad(chunk))
+    energy, slope = 0.0, 0.0
+    for start in range(0, nk, k_batch):
+        ks = np.arange(start, min(start + k_batch, nk))
+        pad = k_batch - len(ks)
+        indices = jnp.asarray(np.concatenate([ks, np.full(pad, ks[0], dtype=int)]))
+        live = jnp.asarray(np.concatenate([np.ones(len(ks)), np.zeros(pad)]))
+        value, derivative = compiled(jnp.asarray(float(angle)), indices, live)
+        energy = energy + float(value)
+        slope = slope + float(derivative)
+    return energy, slope
+
+
+def torque_at_angle(calculation, states, weights, density, plane, angle,
+                    k_batch: int | None | str = "default"):
     """``-dE/dtheta``: the torque on the moment, in Ry per radian.
 
     The sign is the mechanical one -- a positive torque turns the moment
     towards larger ``theta`` -- so for ``E = K1 sin^2(theta)`` this returns
     ``-K1 sin(2 theta)`` and a measurement at ``pi/4`` gives ``-K1``.
-    """
-    def energy(value):
-        return band_energy_at_angle(
-            calculation, states, weights, density, plane, value
-        )
 
-    return -float(jax.grad(energy)(jnp.asarray(float(angle))))
+    ``k_batch`` bounds the backward pass. The energy above walks the k axis with
+    a Python loop, which is right for evaluating it and wrong for
+    differentiating it: the tape then holds, **simultaneously for every
+    k-point**, the real-space block ``SpinorHamiltonian._local_block`` builds,
+    which its own docstring sizes at ``nbnd x 2 x N_smooth`` -- 33 GB for one
+    k-point of the P74 cell. No dial reached it. ``k_batch`` stops at the NSCF
+    that produced the states and ``DEFUMAT_BAND_BATCH`` reaches ``map_bands``
+    inside the operator, where a scan stacks its residuals under ``jax.grad``
+    just the same, so a run that was given ``k_batch = 1`` to fit inside a
+    machine reached this function and asked for the whole axis anyway.
+    ``None`` is that behaviour, kept as the default of the *whole-axis* path and
+    reachable on purpose; an integer, or the dial's own ``"default"``, chunks.
+    """
+    from defumat.batching import resolve_k_batch
+
+    resolved = resolve_k_batch(k_batch)
+    nk = int(jnp.asarray(states).shape[1])
+    if resolved is None or resolved >= nk:
+        def energy(value):
+            return band_energy_at_angle(
+                calculation, states, weights, density, plane, value
+            )
+
+        return -float(jax.grad(energy)(jnp.asarray(float(angle))))
+
+    _, slope = _chunked_energy_and_slope(
+        calculation, states, weights, density, plane, angle, int(resolved)
+    )
+    return -float(slope)

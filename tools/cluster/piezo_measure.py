@@ -139,7 +139,9 @@ def main() -> None:
     parser.add_argument("--shears", type=float, nargs="+", default=[0.0025, 0.005],
                         help="E[1,2] = E[2,1]; the Voigt shear is twice each")
     parser.add_argument("--nppstr", type=int, default=7)
-    parser.add_argument("--transverse", type=int, default=4)
+    # A *pair*: ``string_mesh`` takes how many strings run along each of the
+    # two crystal directions that are not ``gdir``.
+    parser.add_argument("--transverse", type=int, nargs=2, default=(4, 4))
     parser.add_argument("--conv-thr", type=float, default=1.0e-10)
     parser.add_argument("--pseudo-dir", default=str(ROOT / "tests" / "data" / "pseudo"))
     arguments = parser.parse_args()
@@ -189,7 +191,7 @@ def main() -> None:
     for magnitude in arguments.shears:
         start = time.time()
         one = finite_difference(calculator, magnitude, arguments.nppstr,
-                                arguments.transverse, arguments.conv_thr)
+                                tuple(arguments.transverse), arguments.conv_thr)
         one["seconds"] = time.time() - start
         results["finite_difference"].append(one)
         gap = one["e14"] - float(tensor.e14)

@@ -723,6 +723,49 @@ def test_the_torque_is_the_gradient_of_the_energy_it_claims_to_be():
     assert analytic == pytest.approx(difference, rel=1.0e-5)
 
 
+@pytest.mark.slow
+def test_the_torque_is_the_same_chunked_as_taken_whole():
+    """The dial must not be visible in the answer, only in the working set.
+
+    ``E(theta) = sum_k w_k <psi_k|H(theta)|psi_k>`` has no term coupling two
+    k-points -- the potential comes from the ``density`` argument rather than
+    from the states -- so chunking the k axis is exact rather than an
+    approximation, and the two routes must agree to round-off. That is what
+    makes it safe to bound the backward pass, whose tape otherwise holds one
+    real-space block per k-point *simultaneously*, at
+    ``nbnd x 2 x N_smooth`` each.
+
+    The states are held fixed across the two calls, so what is compared is the
+    gradient and not a second NSCF.
+    """
+    import jax.numpy as jnp
+    from defumat.forces.torque import torque_at_angle
+
+    from defumat.scf.continuation import nc_magnetization_from_lsda
+    from defumat.workflows.anisotropy import _with_quantization_axis
+    from defumat.workflows.nscf import fixed_density_states
+
+    scalar, spinor = _tetragonal()
+    scf = scalar.get_scf()
+
+    angle = np.pi / 4.0
+    plane = ((0.0, 0.0, 1.0), (1.0, 0.0, 0.0))
+    direction = (np.cos(angle) * np.asarray(plane[0])
+                 + np.sin(angle) * np.asarray(plane[1]))
+    system = _with_quantization_axis(spinor.system, tuple(direction))
+    rotated = nc_magnetization_from_lsda(scf.density, tuple(direction))
+    calculation, system, eigenvalues, states = fixed_density_states(
+        system, spinor.pseudos, rotated, conv_thr=1.0e-10)
+    weights, _ = calculation.occupations(jnp.asarray(eigenvalues))
+
+    whole = torque_at_angle(calculation, states, weights, scf.density, plane,
+                            angle, k_batch=None)
+    for chunk in (1, 3):
+        chunked = torque_at_angle(calculation, states, weights, scf.density,
+                                  plane, angle, k_batch=chunk)
+        assert chunked == pytest.approx(whole, rel=1.0e-9, abs=1.0e-12), chunk
+
+
 def test_the_rotation_plane_must_be_orthogonal():
     scalar, spinor = _tetragonal()
     with pytest.raises(ValueError, match="orthogonal"):

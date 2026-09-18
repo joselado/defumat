@@ -1023,8 +1023,12 @@ def run_torque(
     check = float(band_energy_at_angle(
         calculation, wavefunctions, wg, density, plane_pair, angle
     ))
+    # ``k_batch`` reaches the *derivative* too, not only the NSCF above it: the
+    # backward pass holds one real-space block per k-point in flight, which is
+    # where this costs more than the run that produced the states.
     value = torque_at_angle(
-        calculation, wavefunctions, wg, density, plane_pair, angle
+        calculation, wavefunctions, wg, density, plane_pair, angle,
+        k_batch=k_batch,
     )
     return MagneticTorque(
         angle=angle,
