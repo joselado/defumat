@@ -2430,18 +2430,36 @@ $S$ is the identity. One of them is worth stating on its own, because it is a
 distinction rather than a term: a \emph{state} is projected with
 $1 - \sum|\psi\rangle\langle\psi|S$ and a \emph{right-hand side} with
 $1 - \sum S|\psi\rangle\langle\psi|$, and collapsing the two --- which is exact
-at $S = 1$ --- costs a factor of fourteen. The third derivative in this
-\emph{strain} coordinate is what stays norm-conserving, and how far off it is
-has been measured rather than left unknown: both of the tangents that closed
-the Raman tensor transfer, and take it from \textbf{4.6e-2} to
-\textbf{1.3e-2} against a central difference over re-converged strained cells,
-where the norm-conserving control on the same script is \textbf{2.3e-4}. What
-is left is entirely the $db$ term --- the same $-1.72$ of $112$ on ultrasoft
-and on PAW, which is what says it is structural. One candidate for it is
-excluded by measurement: writing the commutator that sources $db$ with the
-multiplier matrix rather than the frozen scalar eigenvalue closes this
-coordinate (1.7e-4) and breaks the \emph{displacement} one, taking the Raman
-tensor from 1.2e-4 to 1.14e-3.
+at $S = 1$ --- costs a factor of fourteen. \textbf{The third derivative in this \emph{strain} coordinate runs on all three
+pseudopotential kinds too}, and what had it refused was a reference rather than
+a term. Three tangents are what it takes: the two that closed the Raman tensor,
+and the commutator that sources $db$ written with the multiplier \emph{matrix}
+rather than the frozen scalar eigenvalue, which is the right form for a reason
+that needs no measurement: the equation defining $b$ carries that eigenvalue on
+both of its sides, so differentiating it produces
+$\mathrm{d}\varepsilon_n$ twice, in the operator and in the source. Against a
+central difference of $\epsilon$ over re-converged strained cells,
+extrapolated in the step: \textbf{7.2e-6} (ultrasoft) and \textbf{2.2e-5}
+(PAW), on a floor of \textbf{2.5e-5} measured by running the norm-conserving
+control through the identical script, where the analytic answer is exact.
+The frozen scalar reads 1.3e-2 there and the source written with the traced
+diagonal alone 1.4e-3.
+
+That term had been excluded by measurement, and the measurement was a step
+size: it read the \emph{displacement} coordinate's Raman tensor going from
+1.2e-4 to 1.14e-3 against a central difference at $h = 0.02$, and that
+difference is itself 1.1e-3 from its own limit, reading $-69.1942$, $-69.1350$
+and $-69.1205$ at $0.02$, $0.01$ and $0.005$ on ultrasoft silicon, so its
+truncation error had been cancelling the missing term. Extrapolated, the
+two forms swap places. \textbf{The elastic constants are the one thing here
+that stays refused on an augmented dataset}, and for terms of their own:
+$C_{ijkl}$ is a second derivative with no electric-field solution in it, so
+none of the above reaches it, and measured against a five-point second
+difference of the total energy it is \textbf{22 per cent} out on $C_{1111}$ and
+2.9 per cent on $C_{1212}$, the same on ultrasoft and PAW where the
+norm-conserving control is exact to 6.2e-08. Ask
+\code{electrostriction(elastic=False)} for everything else; $M$ and $Q$ need
+the compliance and go with them.
 \code{strain\_response} solves the first-order problem for a strain --- Abinit's
 metric-tensor formulation, obtained for nothing here because the cell was
 already written in reduced coordinates --- and two things follow from it:
@@ -2477,14 +2495,20 @@ re-converged strained cells to \textbf{2e-4}, which is that difference's own
 floor, and the rank-4 tensor is cubic to 3e-14 with nothing imposing it.
 
 \begin{refuses}
-\textbf{Refuses.} Both are norm-conserving, \code{nspin = 1}, insulators and
-\textbf{clamped-ion}. A diverged first-order solution is refused rather than
-consumed in silence (\code{require\_converged\_responses}) --- at QE's
-\code{alpha\_mix = 0.7} the strain response of a \emph{slab} diverges, and
-consuming it gave a $C_{ijkl}$ that was not even symmetric under
-$C_{ijkl} = C_{klij}$. The elastic constants additionally need the whole
-$k$-grid rather than a wedge, because their functional builds its own density
-and symmetrises it as a scalar inside the chain rule.
+\textbf{Refuses.} Both are \code{nspin = 1}, insulators and
+\textbf{clamped-ion}. \code{d(chi)/d(strain)} and the elasto-optic tensor run
+on norm-conserving, ultrasoft and PAW datasets; \textbf{the elastic constants
+are norm-conserving only} (\code{require\_a\_measured\_elastic\_regime}), with
+22 per cent on $C_{1111}$ measured on the augmented pair rather than assumed,
+and $M$ and $Q$ go with them because they need the compliance, so ask for
+\code{elastic=False} to get the rest. A diverged first-order solution is
+refused rather than consumed in silence
+(\code{require\_converged\_responses}): at QE's \code{alpha\_mix = 0.7} the
+strain response of a \emph{slab} diverges, and consuming it gave a $C_{ijkl}$
+that was not even symmetric under $C_{ijkl} = C_{klij}$. The elastic constants
+additionally need the whole $k$-grid rather than a wedge, because their
+functional builds its own density and symmetrises it as a scalar inside the
+chain rule.
 \end{refuses}
 
 \subsection{The piezoelectric tensor}

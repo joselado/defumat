@@ -209,9 +209,16 @@ because that is what decides whether it is a session or a phase.
 - **The dynamical matrix of an ultrasoft or PAW *metal*** (P39: `addusdynmat`, the
   density's cross derivative, needs both tangents in one `jvp` where P28's weight split
   puts them in two).
-- **The strain coordinate's third derivatives on ultrasoft and PAW** — the elastic
-  constants, electrostriction, the elasto-optic tensor. P44 localised what is missing to
-  the `b` partial and measured it; the refusal stays.
+- **The elastic constants of an ultrasoft or PAW dataset** (P100). The *third*
+  derivatives in the strain coordinate are no longer refused on any dataset: `C_ijkl` is
+  what is left, and it is a second derivative that shares no electric-field solution with
+  them, so the refusal it used to inherit could never have been about it. Measured on its
+  own it is **22 per cent** from a five-point second difference of the total energy on
+  `C_1111` and 2.9 per cent on `C_1212`, the same on both datasets against a
+  norm-conserving control of 6.2e-08, and two terms are missing: `ort`, the occupied block
+  of the first-order state, which is written and not wired, and the multipliers' own
+  tangent, which needs a strain-coordinate `multiplier_response` that is not written at
+  all.
 - **The second derivatives of a spin-polarized system** — the dynamical matrix's, the
   strain response's and the two third derivatives' *assembly*, which is what is missing
   rather than the solve or the kernel. P45 put the solve in and P70 the screened response
@@ -272,8 +279,11 @@ because that is what decides whether it is a session or a phase.
   `d^2E/du d(eps)`, whose two legs are *both* coordinates of the energy and therefore need
   a two-coordinate frozen functional).
 - **The piezoelectric tensor of an ultrasoft or PAW dataset** (P50). It stands on the
-  strain leg, which is the third derivative `require_norm_conserving` guards. **This entry
-  has now been wrong twice, in the same direction both times.** It first said the blocker
+  strain leg, and **both of the things this entry named as the blocker are now gone**: the
+  third derivative it pointed at is implemented on all three dataset kinds (P100) and the
+  `Q_ij` strain term it named before that was never missing (P97). What is left is to run
+  it on `alas-piezo.in` and see what the number is, which is a measurement rather than a
+  term. **This entry has now been wrong twice, in the same direction both times.** It first said the blocker
   was a *case*, when the soft zincblende datasets were already committed
   (`tests/data/qe/alas-piezo.in` is the nonmagnetic cell). It then said the missing term
   was the strain derivative of `Q_ij(r)`, which `at_strain` has been rebuilding all along
@@ -18410,3 +18420,153 @@ the same order the project has measured for it elsewhere (P39a's carbon, 2.3e-4)
   residual -- below the floor. The finite difference is what would settle it and no
   committed spinor cell holds the same plane-wave sphere across the step: AlAs does not,
   and it is the only relativistic insulator here.
+
+
+### P100 -- The strain coordinate's third derivative: the term P44 excluded was right, and what excluded it was a step size. ✅ DONE
+
+`AUGMENTATION-NEXT.md` 3b, the item that file called the hardest on its list, and the
+quantity is the elastic constants, electrostriction and the elasto-optic tensor of an
+ultrasoft or PAW dataset. Nothing new was derived. What closed it is that **P44's
+reference was off by the size of the term P44 was testing**, in both of the two
+instruments it used, and in opposite ways.
+
+**The term, from the equation rather than from a search.** `b_a = P_c r_a|psi>` is defined
+by a linear equation and the band's own eigenvalue stands on both of its sides,
+
+    (H - eps_n S) b_n = P_c (-i) (dH/dk_a - eps_n dS/dk_a) |psi_n>,
+
+so differentiating it along a coordinate produces `d(eps_n)` **twice**: once in the
+operator, as `-d(eps_n) S b_n`, and once in the source, as `+i d(eps_n) dS/dk_a|psi_n>`.
+`_position_response`'s residual carried the first, because its operator is written with
+the multiplier matrix `Lambda_mn` and `lambdas` is differentiated, and dropped the second,
+because `eigenvalues` there was a frozen closure constant. It was therefore not the exact
+differential of anything. Both terms are identically zero when `S` does not move with
+`k`, which is why no norm-conserving result ever saw either. Writing the source with the
+same matrix is the covariant completion  -- `sum_m dS/dk|psi_m> Lambda_mn` transforms under
+a rotation of the occupied manifold exactly as the operator's `sum_m S b_m Lambda_mn`
+does  -- and it is P44's own excluded candidate, unchanged.
+
+**The measurement, and it is the reference that had to change.** The instrument is a
+central difference of `epsilon` itself over re-converged cells at three step sizes,
+Richardson-extrapolated, with the **norm-conserving control through the identical script
+as the floor**: at `S = 1` all three source forms are bit-identical and the analytic
+answer is exact, so what the control measures is the finite difference's own truncation
+error and nothing else.
+
+The displacement coordinate first, because it is where P44's exclusion came from --
+`d(eps_yz)/d(tau_0x)` on `si-us-nosym` and `si-paw-nosym`:
+
+| | h = 0.02 | h = 0.01 | h = 0.005 | 0.02/0.01 | 0.01/0.005 |
+|---|---|---|---|---|---|
+| norm-conserving | -13.713225 | -13.706263 | -13.704528 | -13.703943 | -13.703950 |
+| ultrasoft | -69.194160 | -69.135016 | -69.120457 | -69.115302 | -69.115604 |
+| PAW | -69.190346 | -69.131376 | -69.116800 | -69.111720 | -69.111942 |
+
+| analytic | norm-conserving | ultrasoft | PAW |
+|---|---|---|---|
+| frozen scalar (committed) | -13.703926 | -69.202536 | -69.198327 |
+| traced diagonal | -13.703926 | -69.126010 | -69.121288 |
+| **multiplier matrix** | -13.703926 | **-69.115602** | **-69.111940** |
+
+so against the extrapolated reference the frozen scalar is **1.26e-3** (ultrasoft) and
+1.25e-3 (PAW), the traced diagonal 1.5e-4 and 1.4e-4, and the multiplier matrix agrees to
+within the extrapolation's own spread, which is **4.4e-6** and 3.2e-6. The
+norm-conserving control reaches its exact answer at **1.8e-6**, so the instrument
+resolves the limit an order below the diagonal-only form and two below the scalar one.
+**The reference moves by 0.059 between the two coarsest steps**, which is the whole of
+the story: at `h = 0.02` its truncation error is +0.079 and the missing term is -0.087,
+so the two nearly cancelled. That is P43's 1.2e-4 for the incomplete form and P44's
+1.14e-3 for the complete one, both against a reference that was itself 1.1e-3 from its
+limit. **The 6.8e-4 norm-conserving control quoted in P43's own table was that floor**,
+sitting beside the number it invalidates.
+
+Then the strain coordinate, `d(eps_00)/dx_00` at `h = 3e-3`, `1.5e-3` and `7.5e-4`:
+
+| analytic | reference (3e-3 / 1.5e-3) | error |
+|---|---|---|
+| norm-conserving, exact at 22.429908 | 22.430463 | **2.5e-5** (the floor) |
+| ultrasoft, frozen scalar 126.713240 | 128.402008 | 1.32e-2 |
+| ultrasoft, traced diagonal 128.225641 | " | 1.37e-3 |
+| **ultrasoft, multiplier matrix 128.401085** | " | **7.2e-6** |
+| PAW, frozen scalar 126.460059 | 128.149882 | 1.32e-2 |
+| PAW, traced diagonal 127.978990 | " | 1.33e-3 |
+| **PAW, multiplier matrix 128.147090** | " | **2.2e-5** |
+
+reproducing P44's 1.30e-2 for the committed form and closing the coordinate at the
+reference's own floor. **The finest rung is noise-limited here and is not used**, which
+the control is what says: `7.5e-4` puts the norm-conserving pair 3.5e-4 *away* from an
+answer the coarse pair reaches at 2.5e-5, so it is off the `h^2` curve rather than
+further along it. That is consistent with the dielectric response's own convergence, about 1e-6 in
+`epsilon`, divided by a step half as large, and the size is right for it; it was not
+measured separately, and nothing here rests on it, because what says the coarse pair is
+sound is the control reaching the exact answer through it.
+
+**And P44's other instrument cannot arbitrate at all, which is the finding worth carrying
+further than this phase.** The five-partial decomposition measures the `b` partial by
+swapping in `b(±h)` from a re-converged run with `psi` and `rho` held at the undisplaced
+cell  -- and `b` there is the **post-tail** object, `S` applied and the augmentation dipole
+added, so its `P_c` and its alignment rotation belong to a different cell from everything
+it is contracted against. That reference **converges**: its own two extrapolations agree
+to 2e-4. It converges to a different quantity: -47.967237 where the frozen scalar gives
+-48.012292, the diagonal -47.935766 and the matrix -47.925358, so it sits 0.03 to 0.05
+from every candidate and orders none of them. A reference that converges is not therefore
+a reference to the thing being measured, and this one is the reason P44 localised the
+residue to `b` correctly and then read the fix as a regression.
+
+**Two checks that are not the finite difference.** `tr(dLambda)` from the residual's own
+`jvp` against `d(sum_n eps_n)` from the re-converged runs agrees to **1e-8** on all three
+datasets, with the worst degenerate-block sum at 1.4e-7, so the first-order eigenvalue the
+new term is built from is the right object under `at_positions` and under `at_strain`. And
+on a norm-conserving dataset the three source forms are bit-identical in every digit
+printed -- -13.703926 for the derivative and -8.672707 for the `b` partial -- which is the
+check that the plumbing is right, since `dS/dk` is zero there.
+
+**What lifts, and it is not everything the old guard covered.** `require_norm_conserving`
+**splits** rather than going away. What lifts is the third derivative in the strain
+coordinate -- `d(chi)/d(strain)`, the elasto-optic (photoelastic) tensor and the `m` and
+`q` electrostriction families -- on ultrasoft and PAW. The Raman tensor of P43 moves with
+it, from 1.26e-3 against the extrapolated reference to inside the reference's floor, and
+its committed test changes with it: a **single-step** finite difference at `h = 0.02`
+cannot see a term of this size, so the reference there is now two steps and an
+extrapolation.
+
+**What does not lift is the elastic constants, and the reason is that the old guard was
+right by accident.** `elastic_constants` is `d(sigma)/d(strain)` with the tangent
+`(strain, dpsi)` and no electric-field solution anywhere in it, so the `b` partial P44
+localised the residue to *cannot reach it* -- the guard was placed there, by P44's own
+account, because the `Calculator` path had no check rather than because `C_ijkl` had been
+measured. Measuring it says it is wrong anyway, and for two different terms. Against the
+five-point second difference of the self-consistent total energy the suite already uses
+for the norm-conserving case:
+
+| | ultrasoft | PAW | norm-conserving |
+|---|---|---|---|
+| `C_1111` | **22.1%** | **22.2%** | 6.2e-08 |
+| `C_1212` | 2.9% | 2.9% | 1.2e-09 |
+
+the *same* numbers on the two augmented datasets, which is what says they are
+structural, beside a control that is exact, which is what says the instrument is not the
+problem. The reference is the suite's own for the norm-conserving case, where it reads
+209.38 GPa against 209.38. The two
+terms are named and both are already written for the *displacement* coordinate, where
+P39's dynamical matrix uses them, and neither is wired here: the state tangent is
+`response.dpsi` with no `ort` occupied block, and the constraint is carried with the
+frozen diagonal multiplier rather than through `multipliers=`, so `dLambda` -- which
+`_constraint_energy`'s own docstring says is exactly what a second derivative with moving
+multipliers needs -- is absent. So `elastic_constants` keeps a guard of its own, carrying
+these numbers and naming those two terms, and `electrostriction` on an augmented dataset
+runs with `elastic=False`, where the `M` and `Q` families that need the compliance stay
+`None` and the photoelastic tensor and the `m` and `q` families do not.
+
+**The lesson is the trap's own sibling.** `CLAUDE.md` says to inherit a refusal only
+after checking which machine it belongs to; here the refusal was inherited from the wrong
+machine and happened to protect something real. So the next session must not delete the
+elastic constants' guard on the strength of this phase: what P100 measured is the third
+derivative, and the second derivative beside it is a separate gap that this phase found
+rather than closed.
+
+**What is not lifted, and what it needs.** A spinor run and a spin-polarized one refuse
+these third derivatives for reasons of their own, which are P46's and P45's and are
+untouched. The piezoelectric tensor's own refusal names a blocker that does not exist --
+it says `response/strain.py` refuses ultrasoft, which P97 already found to be untrue --
+and it is the next thing to measure rather than the next thing to write.

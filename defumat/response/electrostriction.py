@@ -146,7 +146,9 @@ import numpy as np
 
 from defumat.basis.interpolate import to_dense
 from defumat.batching import map_k
-from defumat.response.elastic import elastic_constants
+from defumat.response.elastic import (
+    elastic_constants, require_a_measured_elastic_regime,
+)
 from defumat.response.efield import (
     _augmentation_dipole,
     _solve_stored,
@@ -154,7 +156,6 @@ from defumat.response.efield import (
     require_a_symmetrisable_response,
     ultrasoft_position,
 )
-from defumat.response.phonon import require_norm_conserving
 from defumat.response.sternheimer import (
     paw_response,
     require_a_sternheimer_regime,
@@ -754,7 +755,7 @@ def susceptibility_strain_derivative(
     +14.25 where both give -1.72. Both are identically zero when ``S`` is the
     identity, so the norm-conserving answer does not move by a digit. **They
     are not enough**, which is why an ultrasoft or PAW run does not reach this
-    function at all (:func:`~defumat.response.phonon.require_norm_conserving`):
+    function at all:
     the norm-conserving control on the same script is 2.3e-4, and the whole of
     the difference is the ``b`` partial's remaining -1.72.
     """
@@ -874,7 +875,6 @@ def electrostriction(
     """
     require_a_symmetrisable_response(calculation)
     require_a_sternheimer_regime(calculation)
-    require_norm_conserving(calculation)
     if elastic:
         # **The two halves of this function are refused for different reasons,
         # and only one of them has been lifted.** The elasto-optic tensor needed
@@ -886,6 +886,12 @@ def electrostriction(
         # average of the assembled tensor repairs that, so a wedge run has to
         # ask for ``elastic=False``.
         _require_closed_for_elastic(calculation)
+        # The same for an augmented dataset, and checked **here** rather than
+        # where the constants are built so that the refusal does not cost two
+        # self-consistent responses first: the third derivative this function
+        # is about runs on all three dataset kinds (``PLAN.md`` P100) and
+        # ``C_ijkl`` does not.
+        require_a_measured_elastic_regime(calculation)
 
     eigenvalues, psi = refined_states(calculation, result)
     density = jnp.asarray(result.density)

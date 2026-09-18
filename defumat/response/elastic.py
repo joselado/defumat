@@ -51,11 +51,12 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.forces.energy import FrozenState, energy_at
-from defumat.response.phonon import require_norm_conserving
+
 from defumat.response.strain import StrainResponse, strain_tangent
 from defumat.units import RY_TO_KBAR
 
-__all__ = ["ElasticConstants", "elastic_constants", "VOIGT"]
+__all__ = ["ElasticConstants", "elastic_constants",
+           "require_a_measured_elastic_regime", "VOIGT"]
 
 #: The six independent components of a symmetric strain, in Voigt order.
 VOIGT = ((0, 0), (1, 1), (2, 2), (1, 2), (0, 2), (0, 1))
@@ -154,19 +155,12 @@ def elastic_constants(
             "(defumat.response.mixing); otherwise raise max_iterations or "
             "lower alpha_mix"
         )
-    # **The refusal this function documented and did not make.**
-    # :func:`~defumat.response.phonon.require_norm_conserving`'s own docstring
-    # says it guards "the elastic constants, electrostriction and the
-    # elasto-optic tensor", and
-    # :mod:`~defumat.response.electrostriction` calls it before reaching here
-    # -- but :meth:`defumat.calculator.Calculator.get_elastic_constants` calls
-    # this function directly, and that path had no check at all. P44 measured
-    # what comes back without one: the strain coordinate's third derivative is
-    # 1.3e-2 against a finite difference on ultrasoft and PAW where the
-    # norm-conserving control on the same script is 2.3e-4, and the residue is
-    # structural rather than a dataset's physics. A ``C_ijkl`` built on it is
-    # plausible, symmetric, and wrong.
-    require_norm_conserving(calculation)
+    # The refusal this function documented and did not make, now measured on
+    # the quantity it is about rather than inherited from a different
+    # derivative. :meth:`defumat.calculator.Calculator.get_elastic_constants`
+    # calls this function directly, so the check has to be here and not only in
+    # :mod:`~defumat.response.electrostriction`.
+    require_a_measured_elastic_regime(calculation)
     psi = jnp.asarray(wavefunctions)
     eigenvalues = jnp.asarray(eigenvalues)
     if eigenvalues.ndim == 2:
@@ -210,6 +204,80 @@ def elastic_constants(
         [tensor[i][j][k][l] for (k, l) in VOIGT] for (i, j) in VOIGT
     ]) * RY_TO_GPA
     return ElasticConstants(tensor=tensor, voigt=voigt)
+
+
+def require_a_measured_elastic_regime(calculation) -> None:
+    """Ultrasoft and PAW: ``C_ijkl`` is missing two terms and they are measured.
+
+    **This is not the refusal P44 left here and it is not for P44's reason**
+    (``PLAN.md`` P100). What it replaces is ``require_norm_conserving``, placed
+    on the strength of a measurement of the *third* derivative in the strain
+    coordinate -- and ``C_ijkl`` is a second derivative with the tangent
+    ``(strain, dpsi)`` and no electric-field solution anywhere in it, so the
+    ``b`` partial that residue was localised to cannot reach this function.
+    That third derivative runs on all three dataset kinds now; this one is
+    refused because measuring it says it is wrong, for two different terms.
+
+    Against a five-point second difference of the self-consistent total energy
+    -- the reference ``tests/regression/test_electrostriction.py`` validates
+    the norm-conserving case against, 209.38 GPa against 209.38, and a
+    reference with no response machinery in it at all -- on ``si-us-nosym`` and
+    ``si-paw-nosym``:
+
+    ============  ==========  =======  ================
+    component      ultrasoft      PAW    norm-conserving
+    ============  ==========  =======  ================
+    ``C_1111``        22.1 %   22.2 %            6.2e-08
+    ``C_1212``         2.9 %    2.9 %            1.2e-09
+    ============  ==========  =======  ================
+
+    the *same* numbers on the two augmented datasets, which is what says they
+    are structural rather than a dataset's physics, and a control that is
+    exact, which is what says the instrument is not the problem. Both missing terms are written already, for the
+    *displacement* coordinate, where P39's dynamical matrix uses them:
+
+    * **the occupied block of the first-order state.** The tangent above is
+      ``response.dpsi`` alone, and with ``S`` moving the orthonormality
+      constraint fixes a piece of the first-order state that the Sternheimer
+      solve does not produce --
+      :attr:`~defumat.response.strain.StrainResponse.ort`, the same object the
+      third derivative beside it needs and does use.
+    * **the multipliers' own tangent.** The constraint is carried here with the
+      frozen diagonal ``w_n eps_n``, so ``dLambda`` is absent. A second
+      derivative in which the multipliers move needs the matrix form instead,
+      which is what :func:`defumat.forces.energy._constraint_energy` exists for
+      and what :func:`~defumat.response.phonon.multiplier_response` supplies in
+      the displacement coordinate. There is no strain-coordinate counterpart of
+      that function, and :mod:`defumat.response.strain`'s own
+      ``_require_one_spin_channel`` already records that this coordinate's
+      multiplier matrix has never been run.
+
+    Both are identically zero for a norm-conserving dataset: ``ort`` because
+    ``S`` does not deform, and ``dLambda`` because it multiplies
+    ``<psi|dS/d(eps)|psi>``.
+
+    **Size, as a hypothesis** -- and this file's history says to read it as
+    one: the first is wiring and the second is an object that does not exist,
+    and how the 22.2 % splits between them is not measured.
+    """
+    if calculation.is_ultrasoft:
+        raise NotImplementedError(
+            "the elastic constants are not implemented for an ultrasoft or "
+            "PAW dataset: C_ijkl comes out 22 per cent from a five-point "
+            "second difference of the total energy on C_1111 and 2.9 per cent "
+            "on C_1212, the same on both datasets, where the norm-conserving "
+            "control through the identical script is 6.2e-08 (PLAN.md P100). "
+            "Two terms "
+            "are missing and both exist for the displacement coordinate -- the "
+            "occupied block of the first-order state (StrainResponse.ort, "
+            "which the third derivative beside this one does use) and the "
+            "multipliers' own tangent, which needs the matrix constraint and a "
+            "strain-coordinate multiplier_response that is not written. The "
+            "strain response, the elasto-optic tensor and d(chi)/d(strain) run "
+            "on all three kinds; ask electrostriction() for elastic=False to "
+            "get those without this, at the cost of the M and Q families, "
+            "which need the compliance"
+        )
 
 
 def _require_a_closed_grid(calculation) -> None:

@@ -353,12 +353,15 @@ a non-trivial metric.
 
 `response/piezo.py:273`. Both.
 
-**What is missing.** Nothing in the piezoelectric assembly itself is norm-conserving: it
-is one `jvp` of the stress along the field's response. What it stands on is the strain
-response, which is item 3b below; the Born charge it also stands on was the other half
-and is no longer refused on any dataset (`PLAN.md` P39a). So this is a **consequence**
-rather than a term, and one of its two halves has already gone. **Size:** free, once 3b
-lands.
+**What is missing: nothing that has been identified.** Nothing in the piezoelectric
+assembly itself is norm-conserving -- it is one `jvp` of the stress along the field's
+response -- and **both** of the things it stands on have gone: the Born charge (`PLAN.md`
+P39a) and the strain leg's third derivative (P100, item 3b). The refusal's own message
+names `response/strain.py` refusing ultrasoft, which P97 measured to be untrue. So what
+is in front of this is a **measurement** rather than a term: run it on
+`tests/data/qe/alas-piezo.in`, the committed non-centrosymmetric zincblende cell, and see
+what the number is. **Size:** an afternoon if it agrees and a phase if it does not, and
+this file's history says not to promise the first.
 
 ### 1i. Site-resolved angular momenta on a fully-relativistic augmented dataset
 
@@ -615,52 +618,52 @@ augmented path works and something else about the run makes it not work.
 occupations respond to the perturbation as well. **Size:** a phase, and the derivation is
 the work rather than the code.
 
-### 3b. Third derivatives in the **strain** coordinate
+### 3b. Third derivatives in the **strain** coordinate. ✅ DONE; the *elastic constants* are what is left.
 
-`response/phonon.require_norm_conserving`, reached from `response/elastic.py:169` and
-`response/electrostriction.py:860`. The elastic constants, electrostriction and the
-elasto-optic tensor. Both datasets.
+**Closed 2026-09-18 for the elastic and elasto-optic constants, electrostriction and
+`d(chi)/d(strain)`**; `PLAN.md` P100 has the numbers. What was left was one term and the
+term was the one this entry recorded as *excluded*.
 
-**This is the best-measured item on the list, and P44 is why.** Against a central
-difference of the strain over re-converged cells, on the `(0,0)` strain of the `nosym`
-cells:
+**This entry was right about where the residue was and wrong about the fix, and the
+mechanism is new to this file.** Every earlier correction here came from writing a sizing
+off a refusal's message; this one came from a *reference*. P44 localised the residue to the
+`b` partial correctly, named the candidate correctly, and then excluded it because adopting
+it moved the displacement coordinate's Raman tensor from 1.2e-4 to 1.14e-3 against a
+central difference at one step. That reference is itself 1.1e-3 from its own limit: the
+same difference reads -69.1942, -69.1350 and -69.1205 at `h` of 0.02, 0.01 and 0.005 on
+`si-us-nosym`, so its truncation error had been cancelling the missing term. Extrapolated,
+the two forms swap places. **The floor was in P43's own table** as the norm-conserving
+control of 6.8e-4, beside the 1.2e-4 it invalidates.
 
-| tangents | ultrasoft | PAW |
-|---|---|---|
-| neither | 4.58e-2 | 5.53e-2 |
-| both | 1.30e-2 | 1.30e-2 |
+**The term, and it needs no search.** The equation that defines `b` carries the band's own
+eigenvalue on both sides, so differentiating it gives `d(eps_n)` twice: in the operator as
+`-d(eps_n) S b` and in the source as `+i d(eps_n) dS/dk|psi>`. The code carried the first
+and dropped the second. Both are identically zero when `S` does not move with `k`.
 
-against a norm-conserving control of 2.3e-4 that does not move at all. Two of the three
-ingredients transfer and are already wired in behind the refusal: the state tangent is
-`dpsi + ort`, and `_position_response` is handed `internals["commutators"]`. A thirtyfold
-improvement and still fifty times the control, which is what says the third ingredient is
-a term rather than a tolerance.
+| | ultrasoft | PAW | norm-conserving |
+|---|---|---|---|
+| `d(eps_00)/dx_00`, frozen scalar | 1.32e-2 | 1.32e-2 | the control |
+| the traced diagonal alone | 1.37e-3 | 1.33e-3 | " |
+| **the multiplier matrix** | **7.2e-6** | **2.2e-5** | " |
+| the reference's own floor | | | **2.5e-5** |
 
-**What is missing is not the strain derivative of the augmentation charge, and this
-entry said it was** (corrected 2026-09-16). `Calculation.at_strain` rebuilds
-`build_augmentation` whole -- the table is sampled on a moving `G` set, so it has to be --
-and every link of the strain response is a `jvp` through that call: the bare perturbation,
-`dS/deps`, the frozen `drho` and `dbecsum`, and `_position_response`'s operators. The one
-object held at the unstrained cell is `projectors.qq`, and that is correct rather than an
-omission, `int Q_ij(r) dr` carrying no cell at all. The strain *response* itself runs on
-both datasets and is pinned against a central difference of the converged density at
-4.6e-4 (ultrasoft) and 4.7e-4 (PAW) against a norm-conserving 1.9e-4, which is P41.
+**What is left, and it is not this derivative.** `elastic_constants` is `d(sigma)/d(strain)`
+with the tangent `(strain, dpsi)` and no electric-field solution in it, so the `b` partial
+could never have reached it, and the guard it inherited was right by accident. Measured on
+its own against a five-point second difference of the total energy it is **22 per cent** on
+`C_1111` and 2.9 per cent on `C_1212`, the same on both datasets, against a norm-conserving
+control of 6.2e-08. Two terms, both written for the *displacement* coordinate and neither
+wired here: `ort`, the occupied block of the first-order state, which the third derivative
+beside it does use; and the multipliers' own tangent, which needs the matrix constraint and
+a strain-coordinate `multiplier_response` that does not exist. `require_a_measured_elastic_regime`
+in `response/elastic.py` carries the numbers. **Size:** the first is wiring and the second
+is an object nobody has written, and how the 22 per cent splits between them is not
+measured.
 
-**What is missing is what P44's own measurement says**, and `require_norm_conserving`'s
-docstring is where it is written rather than here: the residue is **entirely the `b`
-partial**, -1.72 on 112, the *same* number on ultrasoft and on PAW, which is what says it
-is structural rather than a dataset's physics. One candidate for it is excluded by
-measurement: writing `_position_response`'s commutator source with the multiplier matrix
-rather than the frozen scalar eigenvalue takes the strain coordinate to 1.7e-4 on both
-datasets **and breaks the displacement one**, in every pairing tried. So one of the two
-coordinates carries a further term that compensates it, and finding that is what closes
-this. **Size:** a phase, and the hardest one on the list -- but the hard part is a term in
-the position response, not an augmentation table nobody wrote. Note that the
-**displacement** coordinate of the same third derivative is *not* refused and is validated
-at 1.2e-4 on both datasets (the Raman tensor, P43), so what is wrong is specific to
-strain.
-
-**The piezoelectric tensor (item 1h) lifts with this.**
+**The piezoelectric tensor (item 1h) has nothing left in front of it.** Both blockers its
+own refusal names are gone: the `Q_ij` strain term was never missing (P97) and the strain
+leg's third derivative is implemented now. Running it on `alas-piezo.in` is the next step
+and it is a measurement rather than a term.
 
 ### 3c. Orthonormality multipliers for an ultrasoft or PAW **spinor** force. ✅ DONE.
 
@@ -704,7 +707,11 @@ augmented response and its multipliers, were run on 2026-09-17 and lifted theirs
 way -- `set_int3_nc` did not have to be written either (P98). The sixth, the moving overlap
 in a Kubo sum, was run the same day and is the **first one whose term really was missing**
 and really was where the entry said (P99), which is what a sizing looks like when the
-reading behind it was done in advance. What is left:
+reading behind it was done in advance. The seventh, the strain coordinate's third
+derivative, was run on 2026-09-18 and is the first whose **reference** was the thing at
+fault: the entry had the residue and the candidate both right, and excluded the candidate
+against a finite difference that was off by the candidate's own size (P100). What is
+left:
 
 1. **The `chi_0` gap** (§1a), now not a truncation and about 1 per cent rather than an
    unknown.
@@ -714,7 +721,10 @@ reading behind it was done in advance. What is left:
    this list on 2026-09-17: the code route the entry named over-counts the basis by a
    factor of two on the datasets it is for, so the first step is a design decision and not
    an afternoon, and the open question about the reference is unchanged.
-4. Everything else, in whatever order the physics wants.
+4. **The piezoelectric tensor** (§1h), which is now a measurement with nothing named in
+   front of it, and the **elastic constants** (§3b's remainder), which are two named terms
+   of which one is wiring.
+5. Everything else, in whatever order the physics wants.
 
 **And one thing to do to the whole list rather than to an item in it.** What closed P39a
 was not a term, it was a *cell*: silicon is centrosymmetric, so every `Z*` this project

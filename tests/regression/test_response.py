@@ -547,13 +547,11 @@ def test_the_dynamical_matrix_of_a_metal_is_not_refused_any_more():
     refused and are covered by
     :func:`test_the_regimes_without_a_response_here_are_refused_by_name`.
     """
-    from defumat.response.phonon import require_norm_conserving
     from defumat.response.sternheimer import require_a_sternheimer_regime
 
     _, calculation, _ = _metal()
     assert calculation.system.occupations != "fixed", "this cell must be a metal"
     require_a_sternheimer_regime(calculation, metals=True)
-    require_norm_conserving(calculation)
 
 
 def test_the_exact_jacobian_agrees_with_the_finite_difference_one():

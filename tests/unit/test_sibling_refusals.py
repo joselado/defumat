@@ -6,11 +6,11 @@ refused *somewhere* -- in the functional, in the stress, in an upstream driver,
 in a docstring -- and a second path reaching the same physics had no check at
 all and returned a plausible number. None of them raised; each answered.
 
-* the elastic constants refuse ultrasoft and PAW through
-  :func:`~defumat.response.phonon.require_norm_conserving`, whose own docstring
-  names them -- and :func:`~defumat.response.elastic.elastic_constants`, which
+* the elastic constants refuse ultrasoft and PAW
+  (:func:`~defumat.response.elastic.require_a_measured_elastic_regime`) -- and
+  :func:`~defumat.response.elastic.elastic_constants`, which
   :meth:`defumat.calculator.Calculator.get_elastic_constants` calls directly,
-  never called it;
+  never called the guard that then existed;
 * a potential-only functional has no energy to differentiate, and
   ``method='analytic'`` did not go through the functional that says so;
 * a magnetic field's energy is outside the reported total, so the stress refuses
@@ -220,23 +220,28 @@ def test_chi2_is_refused_on_the_public_path_and_not_only_by_name():
 
 
 def test_the_elastic_constants_call_the_refusal_that_names_them():
-    """``require_norm_conserving`` guards the strain coordinate's third
-    derivative, its docstring says so, and this entry point did not call it.
+    """``C_ijkl`` refuses an augmented dataset on its own account, not the third
+    derivative's, and this entry point has to make the check itself.
 
-    :mod:`defumat.response.electrostriction` calls it before reaching
-    :func:`~defumat.response.elastic.elastic_constants`, so the hole was only
-    on the direct path --
+    :mod:`defumat.response.electrostriction` refuses the elastic half early, so
+    the hole this test was written for was on the direct path --
     :meth:`defumat.calculator.Calculator.get_elastic_constants`, which is the
-    one a user takes. P44 measured what comes back without it: 1.3e-2 against a
-    finite difference on ultrasoft and PAW, where the norm-conserving control on
-    the same script is 2.3e-4.
+    one a user takes. **The reason changed with P100 and the test did not.** The
+    guard used to be ``require_norm_conserving``, inherited from a measurement
+    of the *third* derivative in the strain coordinate -- which runs on all
+    three dataset kinds now, and which ``C_ijkl`` shares no electric-field
+    solution with, so that measurement could never have been about it. What is
+    guarded now is ``C_ijkl`` measured on its own: 22.2 per cent from a
+    five-point second difference of the total energy on ``C_1111`` and 2.9 per
+    cent on ``C_1212``, the same on ultrasoft and PAW, where the
+    norm-conserving control through the identical script is 6.2e-8.
     """
     import inspect
 
     from defumat.response import elastic
 
     body = inspect.getsource(elastic.elastic_constants)
-    assert "require_norm_conserving(calculation)" in body
+    assert "require_a_measured_elastic_regime(calculation)" in body
 
 
 @pytest.mark.parametrize(

@@ -443,15 +443,11 @@ def raman_tensors(
     require_a_sternheimer_regime(calculation)
     # **Ultrasoft and PAW are in as of P43**, so what is checked here is the
     # same *combination* the dynamical matrix refuses -- a metal with a moving
-    # overlap -- and not the dataset. The strain-coordinate third derivatives
-    # (elastic constants, electrostriction, the elasto-optic tensor) still
-    # carry ``require_norm_conserving``, and P44 measured why rather than
-    # leaving it unknown: both of this coordinate's tangents transfer and are
-    # wired in there, taking that derivative from 4.6e-2 to 1.3e-2 against its
-    # own finite difference, and what is left is localised to ``db``. The
-    # candidate for *that* is excluded by this very test -- it closes the
-    # strain coordinate and moves the ultrasoft number here from 1.2e-4 to
-    # 1.14e-3.
+    # overlap -- and not the dataset. The strain coordinate's own third
+    # derivatives are in as of P100, which is the same ``db`` this function
+    # builds: the term P44 excluded on the strength of *this* test is the term
+    # that closes both coordinates, and what excluded it was that the test's
+    # reference was a single step. It is two steps and an extrapolation now.
     _require_a_moving_overlap_regime(calculation)
 
     eigenvalues, psi = refined_states(calculation, result)

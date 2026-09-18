@@ -28,6 +28,7 @@ name rather than by tolerance.
 from functools import lru_cache
 from pathlib import Path
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -72,6 +73,20 @@ SUM_RULE_TOLERANCE = 1e-3
 
 #: The displacement for the finite difference, in bohr.
 FD_STEP = 0.02
+
+
+@pytest.fixture(autouse=True)
+def _drop_compiled_code():
+    """``jax.clear_caches()`` between tests, for ``CLAUDE.md``'s reason.
+
+    This file runs several cells and, since P100, four re-converged geometries
+    per moving-overlap case rather than two. The results stay cached and only
+    the compiled executables are dropped, which trades recompilation for a peak
+    the machine can afford: the PAW case tripped the RSS watchdog at **10641M**
+    against ``run_regression.sh``'s 12G cap without this.
+    """
+    yield
+    jax.clear_caches()
 
 
 @lru_cache(maxsize=None)
@@ -236,6 +251,11 @@ def test_the_raman_tensor_matches_a_finite_difference_with_a_moving_overlap(case
     tensors = raman_tensors(calculation, result)
     coarse = (_epsilon_displaced(case, 0, 0, FD_STEP)
               - _epsilon_displaced(case, 0, 0, -FD_STEP)) / (2 * FD_STEP)
+    # Between the two step sizes as well as between tests: the four geometries
+    # share every shape, so what accumulates is the allocator's high-water mark
+    # rather than new executables, and dropping the compiled code here is what
+    # keeps this test inside the per-file cap.
+    jax.clear_caches()
     fine = (_epsilon_displaced(case, 0, 0, FD_STEP / 2)
             - _epsilon_displaced(case, 0, 0, -FD_STEP / 2)) / FD_STEP
     # ``D(h) = f' + c h^2``, so this is the limit and not a tighter step: the

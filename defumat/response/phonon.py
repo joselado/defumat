@@ -84,9 +84,10 @@ For an ultrasoft or PAW one it does not vanish, and there is a second gap beside
 it: the augmentation charge ``Q_ij(r - tau)`` moves at frozen ``becsum``, which
 ``addusdynmat`` and ``drhodvus`` account for. Both are written now (P39); the
 measurement that stood behind refusing them is kept in
-:func:`require_norm_conserving`, which guards the *elastic constants* today,
-and it is the same shape as ``zstar_eu_us``'s: with the guard lifted and the
-terms unwritten, ultrasoft silicon's
+:func:`~defumat.response.elastic.require_a_measured_elastic_regime`, which
+guards the *elastic constants* today for reasons of their own (``PLAN.md``
+P100), and it is the same shape as ``zstar_eu_us``'s: with the guard lifted and
+the terms unwritten, ultrasoft silicon's
 optical mode comes out at **-504.3 cm^-1** against ``ph.x``'s **+513.3** --
 imaginary where the crystal is stable -- from a run that converges and gives a
 cubic, symmetric matrix.
@@ -145,7 +146,7 @@ from defumat.system.symmetry import atom_mapping, cartesian_rotations
 from defumat.units import AMU_TO_RY, RY_TO_CMM1, RY_TO_THZ
 
 __all__ = ["Phonons", "DisplacementResponse", "dynamical_matrix",
-           "require_norm_conserving", "self_consistent_response",
+           "self_consistent_response",
            "orthogonality_states", "non_variational_response",
            "multiplier_response", "overlap_derivatives",
            "symmetrize_becsum_modes"]
@@ -1624,82 +1625,4 @@ def _require_a_moving_overlap_regime(calculation) -> None:
             "tangents (dpsi^ort, becsumort, dLambda) whose weight an insulator "
             "cannot distinguish. Insulators are implemented on all three "
             "pseudopotential kinds; a norm-conserving metal is too"
-        )
-
-
-def require_norm_conserving(calculation) -> None:
-    """Norm-conserving only, for the responses in the **strain** coordinate.
-
-    **This no longer guards the dynamical matrix.** P39 lifted that: with ``S``
-    moving there are four further tangents and all four are written, and what
-    :func:`dynamical_matrix` checks now is
-    :func:`_require_a_moving_overlap_regime`, which refuses one *combination*
-    -- an ultrasoft or PAW metal -- rather than a dataset. **And it no longer
-    guards the Raman tensor either** (``PLAN.md`` P43): the second-order energy
-    ``F`` these phases differentiate is exact on all three pseudopotential
-    kinds, reproducing ``dielec.f90``'s dielectric constant to 3.4e-10
-    (ultrasoft) and 6.9e-11 (PAW) against a norm-conserving 8.4e-10, and the
-    ``jvp`` of it in the *displacement* coordinate is right too, at 1.2e-4 on
-    both against a finite difference.
-
-    What is left is the same third derivative in the **strain** coordinate --
-    the elastic constants, electrostriction and the elasto-optic tensor.
-
-    **P44 measured how far off it is instead of leaving it unknown**, and two
-    of P43's three ingredients transfer and are wired in
-    (:func:`~defumat.response.electrostriction.susceptibility_strain_derivative`):
-    the state tangent is ``dpsi + ort`` and ``db`` is the tangent of a
-    composition, so :func:`~defumat.response.electrostriction._position_response`
-    is handed ``internals["commutators"]``. Against a central difference of
-    ``epsilon`` over re-converged strained cells, on the ``nosym`` cells and the
-    ``(0, 0)`` strain:
-
-    ==================  ==========  ==========
-    tangents                    US         PAW
-    ==================  ==========  ==========
-    neither                4.58e-2     5.53e-2
-    both                   1.30e-2     1.30e-2
-    ==================  ==========  ==========
-
-    against a norm-conserving control of 2.3e-4 that does not move at all. A
-    thirty-fold improvement and still fifty times the control, which is why the
-    refusal stays and why the tangents are wired in behind it: they are
-    established -- the ``psi`` partial's error against its own finite difference
-    goes from +5.94 to +0.032 with ``ort`` -- and whatever closes this will need
-    them.
-
-    **What is left is entirely in the ``b`` partial**, at -1.72 of 112, and the
-    *same* number on ultrasoft and on PAW, which is what says it is structural.
-    **One candidate for it is excluded by measurement** and the exclusion is the
-    finding worth carrying: writing
-    :func:`~defumat.response.electrostriction._position_response`'s commutator
-    *source* with the multiplier matrix rather than the frozen scalar
-    eigenvalue -- which removes a real asymmetry, since the operator beside it
-    has carried ``dLambda`` since P26 -- takes the strain coordinate to 1.7e-4
-    on both datasets **and breaks the displacement one**, where the Raman
-    tensor goes from 1.2e-4 to 1.14e-3 (US) and 5.5e-4 (PAW). It does so in
-    every pairing tried: the operator's half as a matrix or as a traced
-    diagonal, this one as either. So one of the two coordinates carries a
-    further term that compensates it, and finding *that* is what closes this.
-
-    The measurement behind the original refusal is kept, because it is what
-    makes the case for refusing rather than warning: with the guard lifted and
-    none of the terms written, the norm-conserving expression gave ultrasoft
-    silicon an optical mode of **-504.3 cm^-1** against ``ph.x``'s **+513.3**
-    -- imaginary where the crystal is stable -- from a run that converged and
-    gave a cubic, symmetric matrix. Nothing but the numbers looked wrong.
-    """
-    if calculation.is_ultrasoft:
-        raise NotImplementedError(
-            "this third derivative in the *strain* coordinate with an "
-            "ultrasoft or PAW pseudopotential is not implemented: two of the "
-            "three ingredients the displacement coordinate needed are in "
-            "(PLAN.md P43's occupied block and adddvepsi_us's tail on db, "
-            "which take it from 4.6e-2 to 1.3e-2 against a finite difference), "
-            "but a norm-conserving control on the same script reaches 2.3e-4 "
-            "and the rest is localised to db (PLAN.md P44). The strain "
-            "*response*, the dynamical matrix and the Raman tensor are "
-            "implemented on all three kinds (P39, P41, P43); it is the elastic "
-            "constants, electrostriction and the elasto-optic tensor that are "
-            "refused here"
         )

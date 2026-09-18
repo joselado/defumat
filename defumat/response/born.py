@@ -29,8 +29,9 @@ multipliers' own response. For a *phonon* both legs of the second derivative
 move ``S``, and ``dLambda`` is then a response that has to be solved for. For a
 Born charge only the ``u`` leg moves ``S``; the ``E`` leg's ``dLambda`` is a
 matrix element of objects the field response has already built. That asymmetry
-is the whole reason ultrasoft Born charges are in and ultrasoft phonons are
-still refused (:func:`~defumat.response.phonon.require_norm_conserving`).
+is the whole reason ultrasoft Born charges landed before ultrasoft phonons
+did: the phonon needed P39's four terms and the Born charge needed none of
+them.
 
 Four things had to be supplied to the tangent, and each is a term QE writes a
 routine for:
