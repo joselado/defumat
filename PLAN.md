@@ -5840,6 +5840,17 @@ Measured on the same displaced cell at `4 4 4 1 1 1`: **64 of 64 with `nosym` al
 or without `noinv`, against 32 of 64 with neither. So the messages are right and
 `noinv` is not needed beside `nosym` in this code.
 
+**Nothing the suite exercises changes, and that is checked rather than hoped for.** Two
+scans, both through the real parser and the real constructors. Every `.in` under
+`tests/data/qe/` and `benchmarks/` whose k-set comes from a grid: **not one** is reduced
+while its weights are uniform, so the old guard and the new one agree on every committed
+input. And the `grid=` path, which builds its own set through `denser_grid` and is
+therefore invisible to the first scan: on all four STM cells, at both an unshifted and a
+shifted denser grid, the two guards agree again -- `al-metal` and `graphene-bilayer`
+carry no `nosym` and were already refused, `h-chain-90deg` and `h-chain-afm` carry it and
+pass both. So this is a wall in front of a defect rather than a change to anything that
+runs here, which is the same shape as the 1194-input scan behind the input refusals.
+
 **The other half of that sentence was wrong and is now fixed.** `workflows/stm.py`'s
 guard docstring said a run meaning to sum a whole zone "passes `nosym = .true.` or
 `grid=`, both of which are complete by construction" -- and `grid=` goes through
