@@ -3743,15 +3743,44 @@ runs out of mappings. Which processes do that is exactly the set
 of which compiles the whole SCF stack afresh while XLA keeps every executable
 for the life of the process.
 
-**So the cure is the one already prescribed there**, `jax.clear_caches()` in an
-autouse fixture after the `yield`, and the interesting part is which files have
-it. Ten regression files do. `test_electrostriction.py` and `test_spectra.py`
-did not and now do. **These are still to do**, ranked by how many inputs they
-name, which is a proxy for how many distinct cells they compile:
-`test_input_sweep.py` (40), `test_lsda.py` (22), `test_stress.py` (17),
-`test_spinorbit.py` (17), `test_noncollinear_magnetism.py` (16),
-`test_scf.py` (14), `test_magnetic_constraints.py` (13), `test_uspp.py` (11),
-`test_topology.py` (11), `test_ldau.py` (11), `test_response.py` (8).
+**The prescribed cure is `jax.clear_caches()` in an autouse fixture after the
+`yield`, and it has not been shown to work on a cluster node.** Ten regression
+files have it; `test_electrostriction.py` and `test_spectra.py` did not and now
+do. That is where the honesty has to be, because two statements written the same
+day pull against each other: this item says clearing the caches is the cure,
+and commit `40d8fe2`'s own message says **"clearing caches does not unmap"** --
+which is what the piezoelectric job measured, since `jax.clear_caches()` drops
+JAX's caches and not the dylibs XLA has already loaded. What fixed that job was a
+child process per geometry, which cures it by exiting. The array that produced
+the failures below ran at `abee9c21`, *before* the two fixtures landed, so the
+fixture has never run on a node at all. **Do not add it to eleven more files
+until one job shows it curing the two that have it**; if it does not, the cure is
+a process boundary per test (`pytest --forked`) and the eleven edits are wasted.
+
+**The whole `slow` set was then run on a node, and the measured offenders are
+not the ones the input-count proxy named.** Eight array tasks, 22 files each
+(job `20336106`, all eight `COMPLETED`), counting
+`Failed to materialize symbols` and `Cannot allocate memory` per file:
+`test_nonlinear.py` (84), `test_spinor_dielectric.py` (70),
+`test_dispersion.py` (60), `test_electrostriction.py` (55),
+`test_response.py` (47), `test_lsda_response.py` (26), plus
+`test_spectra.py` and `test_gamma_only.py`, which do not appear in that count at
+all because they **abort** rather than raise -- `Fatal Python error: Aborted`
+with the faulthandler stack inside `backend_compile_and_load` in both, which is
+the same exhaustion reaching `abort()` inside LLVM instead of returning an
+error. Of the 37 individual failures in the six raising files, **33 are
+`jax.errors.JaxRuntimeError` and 4 are assertions**, so the classification is
+nearly clean: one number per file separates the environment from the physics.
+Ranked by measurement, the list to fix is those eight, and `test_stress.py`,
+`test_input_sweep.py`, `test_lsda.py`, `test_spinorbit.py`,
+`test_noncollinear_magnetism.py`, `test_scf.py`, `test_magnetic_constraints.py`,
+`test_uspp.py`, `test_topology.py` and `test_ldau.py` are *candidates* that this
+run did not convict -- several of them passed outright.
+
+**One file fails on the node for a reason that is not this and not the code**:
+`tests/unit/test_result_plots.py` cannot be collected because the cluster venv
+has no `matplotlib`. Worth knowing before reading a cluster summary as a verdict
+on the repository.
 
 **Two things not to conclude.** The workstation does not show this, so nothing
 here says those files are wrong; and `test_ldau.py`'s and
@@ -3759,3 +3788,76 @@ here says those files are wrong; and `test_ldau.py`'s and
 problem rather than this one, measured in bytes on a machine with no cgroup
 surprises. What the two share is the cause, which is accumulation, and therefore
 the fix.
+
+## 3. The piezoelectric tensor and a Berry-phase finite difference disagree by 13 per cent on the cell where the response route is the validated one **[opened 2026-09-19]**
+
+Measured on Triton (jobs `20336374` and `20336476`,
+`tools/cluster/piezo_measure.py`), and the full numbers are in
+`AUDIT-2026-09-18.md` `drift.3` and `PLAN.md` P50. The short form: the
+implementation's `e_14` on norm-conserving AlAs is **-0.763786 C/m^2** and a
+finite difference of the Berry-phase polarization over one converged ground
+state per strain -- Elk's route, `piezoelt.f90`, no response solver in it --
+reads **-0.661386** at `eps_4 = 0.005` and **-0.659319** at 0.010.
+
+**Why this is not obviously the finite difference's fault.** The step is not the
+cause: doubling it moves the answer by 0.3 per cent and *away* from the response
+route, so the difference is converged in the step. And P50's three existing
+routes are not independent of each other -- all three contract the same field
+response with the same strain derivative -- while the `Z*` anchor against `ph.x`
+is the same assembly in the *position* coordinate and therefore blind to the
+strain leg. So this is the first measurement of the strain leg by machinery that
+shares nothing with it.
+
+**What has been ruled out.** The sign difference between the two committed AlAs
+cells (`-0.764` against `+0.816`) is the **enantiomorph**, not a defect: one file
+writes the As position in `alat` and the other in `crystal`, and for `ibrav = 2`
+the crystal triple `(1/4, 1/4, 1/4)` is `a(-1/4, 1/4, 1/4)`. And the harness's
+contraction of both strained cells' phases with one cell's lattice vectors is
+exact for `e_14` rather than sloppy, because `(S a_g)_x = 0` for a pure `y`-`z`
+shear -- the same statement that makes `e_14` free of the
+proper-against-improper correction and of the polarization branch.
+
+**What separates the readings.** The two routes sample `k` differently: the
+response integrates the SCF's `4 4 4 0 0 0`, 64 points, and the Berry phase runs
+`nppstr x transverse` strings, 396 on this cell. So the ladder is two-sided --
+the response `e_14` at several SCF meshes and the difference at several Berry
+meshes -- and whichever moves toward the other is the unconverged one. Until it
+runs, "the harness is 13 per cent low" is an explanation that fits, which is
+exactly what this file's own trap list says not to accept.
+
+**What it blocks.** The piezoelectric tensor's ultrasoft and PAW refusal stays,
+because what would have to be attributed to the missing strain-leg term is the
+*difference* of the two cells' deficits, 2.3 points, at two different Berry
+meshes.
+
+## 4. Seven cluster test failures are assertions rather than the mapping exhaustion, and none has been attributed yet **[opened 2026-09-19]**
+
+The whole `slow` set on a node (job `20336106`) failed in thirteen files, and
+item 2 above accounts for eight of them. **These are the rest, and they are
+numbers rather than crashes:**
+
+| file and test | what it says |
+|---|---|
+| `test_relaxed_anisotropy.py::test_without_spin_orbit_coupling_every_direction_has_the_same_energy` | two directions differ by **2.545e-02 meV**, bound 1e-3 |
+| `test_magnetic_constraints.py::test_constrained_total_energy[noncolin-constrain_atomic.in-atomic]` and `::test_constraint_energy_matches_qe` | `-55.690556438787105` against `-55.69055687` ± 3.0e-07 |
+| `test_lsda_response.py` (one of three; the other two are mapping errors) | `2.708606672285896e-07 < 1e-08` |
+| `test_spinor_dielectric.py` (one of four) | `13.80661565177345` against `13.806615651772065` ± 1.0e-12 |
+| `test_ten_site.py::test_dft_plus_u_at_ten_sites` | the SCF did not converge in 200 iterations, accuracy 6.9e-06 |
+| `test_stm.py::test_an_antiferromagnet_is_flat_in_charge_and_alternates_in_spin` | a number against `0.02952503643369007` ± 3.0e-07 |
+| `test_stress.py::test_an_input_asking_for_an_impossible_stress_warns_rather_than_raising` | `DID NOT WARN`, no `RuntimeWarning` emitted |
+
+**One of the seven is already explained and is a tolerance rather than a
+defect**: `test_spinor_dielectric`'s 1.4e-12 on 13.8 is a **relative 1e-13**
+against an *absolute* 1e-12 assertion, which is what a different JAX reordering
+a reduction looks like. The node runs JAX 0.11.1 and NumPy 2.5.2 where the
+workstation runs 0.11.0 and 2.4.6, and every one of these tests passes on the
+workstation, so the environment is a live hypothesis for the tight ones and not
+for `test_ten_site`'s 200 iterations or `test_stress`'s missing warning.
+
+**What settles it is the same files at the commit the session started from**,
+which is what `tools/cluster/control.sbatch` exists for: it takes
+`DEFUMAT_REPO` and `DEFUMAT_FILES` so one script runs both halves, and a clone
+at `b247662` is what it needs. Reading the diff cannot settle it -- the
+anisotropy identity calls the functional entry point directly rather than the
+facade that changed. **Until that runs, none of these seven is attributed**, and
+saying they predate the session would be a guess.

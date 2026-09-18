@@ -25,10 +25,42 @@ validated one, says what the finite-difference harness itself is worth -- the
 strain step, the polarization mesh, the branch of the quantum -- and the
 ultrasoft comparison is then read against that floor.
 
+**What it found, 2026-09-19, and why the script now has a mesh ladder.** The
+calibration disagreed: the response route reads -0.763786 C/m^2 on the
+norm-conserving cell and the finite difference -0.661386, **13.4 per cent** low,
+against 15.7 per cent on the ultrasoft one. Doubling the strain moves the
+difference by 0.3 per cent and away from the response route, so the step is not
+it. The untested difference between the two routes is how they sample ``k`` --
+the response integrates the SCF's ``4 4 4 0 0 0``, 64 points, and the Berry
+phase runs ``nppstr x transverse`` strings, 396 on that cell -- so ``--kmesh``
+moves the response's mesh and ``--nppstr``/``--transverse`` the difference's,
+and whichever number moves toward the other is the unconverged one.
+
+**Two traps, both checked, so that neither is chased again.** The two committed
+AlAs cells are **enantiomorphs** and their ``e_14`` therefore have opposite
+signs: ``alas-raman.in`` writes ``ATOMIC_POSITIONS (alat)`` and puts As at
+``a(1/4, 1/4, 1/4)``, ``alas-piezo.in`` writes ``crystal``, and for
+``ibrav = 2`` that triple is ``0.25 (a1 + a2 + a3) = a(-1/4, 1/4, 1/4)``, which
+differs from the first by ``a(1/2, 0, 0)`` and is not a lattice vector. So the
+two cells are compared against *their own* response route and never against each
+other. And the contraction in :func:`finite_difference` uses the ``+s`` cell's
+lattice vectors and volume for both strains, which is exact for this component
+rather than a dropped term: for a pure ``y``-``z`` shear ``(S a_g)_x = 0`` for
+all three vectors, so the ``x`` components of ``a_g(+s)`` and ``a_g(-s)`` are
+identical and the volumes are equal at ``1 - s^2``. The same statement is why
+``e_14`` carries no proper-against-improper correction and no dependence on the
+polarization branch, both corrections pairing two different Cartesian labels.
+
 Run one case per invocation (the cells cost very different amounts):
 
     python3 tools/cluster/piezo_measure.py nc   --out results-nc.json
     python3 tools/cluster/piezo_measure.py us   --out results-us.json
+
+and one rung of the ladder per invocation too:
+
+    python3 tools/cluster/piezo_measure.py nc --kmesh 6 --skip-difference
+    python3 tools/cluster/piezo_measure.py nc --nppstr 15 --transverse 6 6 \
+            --shears 0.005 --skip-response
 """
 
 from __future__ import annotations
@@ -69,6 +101,27 @@ def shear(magnitude: float) -> np.ndarray:
     return strain
 
 
+def _with_full_grid(calculator, mesh):
+    """The **whole** ``mesh x mesh x mesh`` grid, unshifted, no symmetry.
+
+    Only the calibration cell is laddered, and it is ``nosym``/``noinv`` for
+    P24's reason: a response on a reduced set is a polar vector field and must be
+    symmetrised as one, and a *shifted* Monkhorst-Pack grid is not closed under
+    the point group at all. So this builds the complete grid, and refuses a cell
+    whose own set is reduced rather than quietly changing what is being compared.
+    """
+    from defumat.system.kpoints import KPoints
+
+    if calculator.system.kpoints.reduced:
+        raise SystemExit("--kmesh refuses a symmetry-reduced cell: the response "
+                         "would be compared on a different k-set from the one "
+                         "the tensor was symmetrised on")
+    grid = (int(mesh),) * 3
+    return calculator.with_kpoints(
+        KPoints.automatic(grid, (0, 0, 0), calculator.system.cell)
+    )
+
+
 def _polarization_child(payload, queue):
     """One strained geometry, in a process of its own. See :func:`polarization_vector`."""
     import numpy as np
@@ -78,6 +131,8 @@ def _polarization_child(payload, queue):
     calculator = Calculator.from_file(payload["input"],
                                       pseudo_dir=payload["pseudo_dir"],
                                       announce=False)
+    if payload.get("kmesh"):
+        calculator = _with_full_grid(calculator, payload["kmesh"])
     at = np.asarray(calculator.system.cell.at)
     strain = np.asarray(payload["strain"])
     strained = calculator.with_cell(at @ (np.eye(3) + strain).T)
@@ -161,6 +216,7 @@ def finite_difference(base, magnitude, nppstr, transverse, conv_thr):
                 "nppstr": nppstr, "transverse": list(transverse),
                 "conv_thr": conv_thr}
 
+
     plus = polarization_vector(payload(+1))
     minus = polarization_vector(payload(-1))
 
@@ -194,6 +250,15 @@ def main() -> None:
     # two crystal directions that are not ``gdir``.
     parser.add_argument("--transverse", type=int, nargs=2, default=None)
     parser.add_argument("--conv-thr", type=float, default=1.0e-10)
+    # The response route's own convergence parameter, and the one thing that
+    # differs between the two routes that has never been varied.
+    parser.add_argument("--kmesh", type=int, default=None,
+                        help="run on the whole N x N x N unshifted grid instead "
+                             "of the input's; refuses a reduced cell")
+    parser.add_argument("--skip-response", action="store_true",
+                        help="the finite difference alone")
+    parser.add_argument("--skip-difference", action="store_true",
+                        help="the response route alone, for the k-mesh ladder")
     parser.add_argument("--pseudo-dir", default=str(ROOT / "tests" / "data" / "pseudo"))
     arguments = parser.parse_args()
 
@@ -218,9 +283,14 @@ def main() -> None:
     calculator = Calculator.from_file(ROOT / case["input"],
                                       pseudo_dir=arguments.pseudo_dir,
                                       announce=False)
+    if arguments.kmesh:
+        calculator = _with_full_grid(calculator, arguments.kmesh)
+        print(f"    the whole {arguments.kmesh}^3 grid, "
+              f"{calculator.system.kpoints.nk} k-points", flush=True)
     results = {"case": arguments.case, "input": case["input"],
                "what": case["what"], "nppstr": nppstr,
-               "transverse": list(transverse)}
+               "transverse": list(transverse), "kmesh": arguments.kmesh,
+               "nk": int(calculator.system.kpoints.nk)}
 
     start = time.time()
     scf = calculator.get_scf(conv_thr=arguments.conv_thr)
@@ -230,31 +300,38 @@ def main() -> None:
     print(f"    SCF {scf.total_energy:.10f} Ry in {scf.iterations} iterations, "
           f"{results['scf']['seconds']:.1f} s", flush=True)
 
-    start = time.time()
-    tensor = calculator.get_piezoelectric_tensor()
-    results["response"] = {
-        "e14": float(tensor.e14),
-        "voigt": np.asarray(tensor.voigt).tolist(),
-        "converged": bool(tensor.converged),
-        "seconds": time.time() - start,
-    }
-    print(f"    response route: e_14 = {tensor.e14: .6f} C/m^2 "
-          f"(converged {tensor.converged}, {results['response']['seconds']:.1f} s)",
-          flush=True)
+    reference = None
+    if not arguments.skip_response:
+        start = time.time()
+        tensor = calculator.get_piezoelectric_tensor()
+        reference = float(tensor.e14)
+        results["response"] = {
+            "e14": reference,
+            "voigt": np.asarray(tensor.voigt).tolist(),
+            "converged": bool(tensor.converged),
+            "seconds": time.time() - start,
+        }
+        print(f"    response route: e_14 = {reference: .6f} C/m^2 "
+              f"(converged {tensor.converged}, "
+              f"{results['response']['seconds']:.1f} s)", flush=True)
 
     results["finite_difference"] = []
-    for magnitude in arguments.shears:
+    for magnitude in ([] if arguments.skip_difference else arguments.shears):
         start = time.time()
         one = finite_difference(
-            {"input": str(ROOT / case["input"]), "pseudo_dir": arguments.pseudo_dir},
+            {"input": str(ROOT / case["input"]), "pseudo_dir": arguments.pseudo_dir,
+             "kmesh": arguments.kmesh},
             magnitude, nppstr, transverse, arguments.conv_thr,
         )
         one["seconds"] = time.time() - start
         results["finite_difference"].append(one)
-        gap = one["e14"] - float(tensor.e14)
+        against = ""
+        if reference is not None:
+            gap = one["e14"] - reference
+            against = (f", difference {gap: .2e} "
+                       f"({abs(gap / reference) * 100:.2f} per cent)")
         print(f"    Berry phase at eps_4 = {2 * magnitude:.4f}: "
-              f"e_14 = {one['e14']: .6f} C/m^2, "
-              f"difference {gap: .2e} ({abs(gap / tensor.e14) * 100:.2f} per cent), "
+              f"e_14 = {one['e14']: .6f} C/m^2{against}, "
               f"{one['seconds']:.1f} s", flush=True)
         print(f"      phases +/-: {np.array2string(np.asarray(one['phases_plus']), precision=6)}"
               f" {np.array2string(np.asarray(one['phases_minus']), precision=6)}"

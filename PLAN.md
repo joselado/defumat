@@ -8165,6 +8165,52 @@ response solver's floor, against AlAs's 0.764 from the same code); AlAs is
 completion because this assembly is *linear* in the response, where P35's
 screening term is quadratic; and the three routes above.
 
+**A fourth route, which shares no machinery with the other three, and it
+disagrees by 13 per cent** (measured on Triton 2026-09-19, jobs `20336374` and
+`20336476`; `tools/cluster/piezo_measure.py`). The three routes above all
+contract the same field response `dpsi^E` with the same strain derivative, so
+none of them sees an error in either leg, and the `Z*` anchor is the same
+assembly in the *position* coordinate, so it is blind to the strain leg
+specifically. Elk's route is not: one converged ground state per strain and a
+finite difference of the Berry-phase polarization, with no response solver
+anywhere in it. On this cell, with strings of 11 points over a 6x6 transverse
+mesh and `eps_4 = 2 s` from a shear `E[1,2] = E[2,1] = s`:
+
+| route | AlAs `e_14`, C/m^2 |
+|---|---|
+| the implementation, `jvp` of the stress | **-0.763786** |
+| Berry phase, `eps_4 = 0.005` | -0.661386 |
+| Berry phase, `eps_4 = 0.010` | -0.659319 |
+
+The finite difference is **13.4 per cent** low in magnitude and the step is not
+the cause: doubling it moves the answer by 0.3 per cent, and *away* from the
+response route. The same comparison on the ultrasoft cell (`alas-piezo.in`,
+strings of 7 over 4x4) reads +0.815929 against +0.687757, 15.7 per cent, in the
+same direction, so whatever this is, it is not the augmented dataset -- which is
+why the piezoelectric tensor's dataset refusal **stays**, and now stays for a
+measured reason rather than the stale one `AUDIT-2026-09-18.md` `drift.3` found.
+The untested difference between the two routes is how they sample `k`: the
+response integrates the SCF's `4 4 4 0 0 0`, 64 points, while the Berry phase
+runs 396 string points. The ladder that separates them is two-sided -- the
+response at several SCF meshes and the difference at several Berry meshes -- and
+it has not been run.
+
+**Two traps in that comparison, both checked rather than argued.** The two
+committed AlAs cells are **enantiomorphs**, so their `e_14` have opposite signs
+and that is correct: `alas-raman.in` writes `ATOMIC_POSITIONS (alat)` and puts
+As at `a(1/4, 1/4, 1/4)`, `alas-piezo.in` writes `crystal`, and for `ibrav = 2`
+that triple is `0.25 (a_1 + a_2 + a_3) = a(-1/4, 1/4, 1/4)`, which differs from
+the first by `a(1/2, 0, 0)` and is therefore a different structure, related by
+an improper operation that a rank-three tensor changes sign under. Anyone
+comparing the two datasets' tensors directly will read that as a catastrophe.
+And the finite difference contracts both strained cells' phases with **one**
+cell's lattice vectors and volume, which is exact for this component rather than
+sloppy: for a pure `y`-`z` shear `(S a_g)_x = 0` for all three vectors, so the
+`x` components of `a_g(+s)` and `a_g(-s)` are identical and the volumes are
+equal at `1 - s^2`. The same statement is why `e_14` carries no
+proper-against-improper ambiguity and no polarization-branch dependence, both
+corrections pairing two different Cartesian labels.
+
 **Where it lives.** `defumat/response/piezo.py`, reached by
 `Calculator.get_piezoelectric_tensor()`; `tests/regression/test_piezoelectric.py`
 (8 tests, 103 s: the three routes, the two symmetry statements, the wedge, and
@@ -9966,6 +10012,22 @@ which catches a wrong contraction, a lost weight or a mis-shaped spinor at once;
 the analytic gradient reproduces a central difference of its own functional to
 six digits (0.552310 both); and the torque's `K1` reproduces the free-energy
 difference's to **2.4e-5 meV** on a route that shares almost no code with it.
+
+**The k dial reaches the torque, measured 2026-09-19** (`AUDIT-2026-09-18.md`
+`hole.1`, Triton job `20336159`, one route per process with the kernel cache off
+on both sides, `tools/cluster/torque_batching.py`). The band energy walked the k
+axis with a Python loop inside the function `jax.grad` differentiates, so the
+backward pass held every k-point's real-space block at once and no dial reached
+it; `torque_at_angle` now takes `k_batch` and chunks that walk. The answer is
+untouched -- `-4.059378978382e-05` whole against `-4.059378978374e-05` chunked
+on the tetragonal cobalt cell, `8.225093764524e-06` against `8.225093764542e-06`
+on the cobalt slab, twelve digits either way, which is what a chunk size must
+never be visible in. What it buys is **0.77 GiB of a 3.16 GiB backward pass, 24
+per cent, on the slab** (7.19 GiB peak against 6.42), and on the one-atom bulk
+cell it *costs* 0.28 GiB while halving the time, 20.0 s to 11.2. Neither cell
+reaches the 33 GB the audit sized structurally for a P74-sized slab, and neither
+refutes it: the largest committed spinor cell is three atoms with vacuum at
+sixteen k-points. These are the first torque memory figures in the record.
 
 ### P61 — X-ray and magnetic structure factors. ✅ DONE.
 

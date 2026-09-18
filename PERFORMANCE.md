@@ -6949,3 +6949,49 @@ is `jax.clear_caches()` in an autouse fixture plus one call between the two step
 What that halving cost is recompilation rather than paging, which is the opposite of the
 case `CLAUDE.md` records for P28b: there clearing the caches got *faster* as well as
 smaller, and here it did not, so this process was not paging at 10.6 GB.
+
+## What the torque's k dial is worth, and on which cell (AUDIT `hole.1`)
+
+`forces/torque.py`'s band energy walked the k axis with a Python loop inside the
+function `jax.grad` differentiates, so the backward pass held every k-point's
+real-space block simultaneously and neither `k_batch` nor `DEFUMAT_BAND_BATCH`
+reached it. The audit sized that structurally, from the shapes the tape must
+hold, and said in as many words that no torque memory figure existed anywhere.
+This is the figure, measured on Triton (`batch-milan`, 4 cores, job `20336159`,
+`tools/cluster/torque_batching.py`).
+
+**One route per process, and the kernel cache off on both sides.** A peak is a
+high-water mark, so two routes in one process report the larger of the two
+twice; and a cache *miss* is cheaper in memory and dearer in time, which would
+flatter whichever side was the miss by up to the 6.3 GB `CLAUDE.md` records. So
+four array tasks, `DEFUMAT_CACHE_DIR=off` throughout.
+
+| cell | route | torque, Ry/rad | before | peak | the gradient's own | time |
+|---|---|---|---|---|---|---|
+| Co tetragonal, 1 atom, 18 k | whole axis | -4.059378978382e-05 | 1.23 GiB | 1.76 GiB | **0.52 GiB** | 20.0 s |
+| Co tetragonal, 1 atom, 18 k | `k_batch = 1` | -4.059378978374e-05 | 1.20 GiB | 2.00 GiB | 0.80 GiB | **11.2 s** |
+| Co slab, 3 atoms + vacuum, 16 k | whole axis | 8.225093764524e-06 | 4.03 GiB | 7.19 GiB | 3.16 GiB | **19.6 s** |
+| Co slab, 3 atoms + vacuum, 16 k | `k_batch = 1` | 8.225093764542e-06 | 4.03 GiB | 6.42 GiB | **2.39 GiB** | 27.2 s |
+
+"before" is the resident high-water mark after the band energy has been
+evaluated and before the gradient is taken, so the last column is what the
+backward pass itself adds -- which is the quantity the dial is about, and it is
+smaller than the peak in both directions.
+
+**The answer is the same to twelve digits either way**, which is what a chunk
+size must never be visible in beyond round-off, and it is the statement the dial
+exists to allow. On the slab the backward pass costs **2.39 GiB chunked against
+3.16 GiB whole, a saving of 0.77 GiB or 24 per cent**, and the peak falls from
+7.19 to 6.42. On the one-atom bulk cell it goes the other way -- 0.80 GiB
+against 0.52, so chunking *costs* 0.28 -- while running at half the time, 11.2 s
+against 20.0.
+
+**What this does not measure, and it is the case the audit is about.** The
+largest committed spinor cell is three cobalt atoms with vacuum at eight
+k-points, where `_local_block` is a tenth of a GiB rather than the 33 GB the
+entry sizes for a P74-sized slab. So these four rows say the dial works and is
+close to free in either direction at this size; they do not say what it is worth
+where it was claimed to matter, and a slab that large has never been run here.
+The trend across the two cells is the only forward-looking thing in them, and it
+is the expected one: the saving appears where the real-space block is a slab's,
+and the cell with more vacuum is the one that gains.
