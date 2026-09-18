@@ -9,6 +9,7 @@ approximating them, and that :meth:`System.with_spin` rebuilds the k-points
 instead of merely relabelling them.
 """
 
+import pathlib
 from functools import lru_cache
 
 import numpy as np
@@ -981,3 +982,85 @@ def test_a_checkpoint_left_behind_does_not_cost_the_cache(monkeypatch, tmp_path)
     (tmp_path / SCF_CHECKPOINT).write_bytes(b"")
     assert calculator.get_scf(checkpoint_dir=tmp_path) is first
     assert len(calls) == 1
+
+
+# --- the Hubbard occupation matrix follows the density's decision ---------------
+
+
+LDAU = "tests/data/qe/ni-ldau-j0.in"
+LDAU_PSEUDO = "tests/data/pseudo/Ni.pz-nd-rrkjus.UPF"
+
+
+def _hubbard_ns(calculation, source_split: float):
+    """A ``(2, nslot, ldmx, ldmx)`` matrix with a known spin splitting."""
+    hubbard = calculation.hubbard
+    shape = (hubbard.nslot, hubbard.ldmx, hubbard.ldmx)
+    up = np.broadcast_to(np.eye(hubbard.ldmx) * 0.9, shape)
+    down = np.broadcast_to(np.eye(hubbard.ldmx) * (0.9 - source_split), shape)
+    return np.stack([up, down])
+
+
+@lru_cache(maxsize=1)
+def _ldau_calculation() -> Calculation:
+    """A real ``nspin = 2`` DFT+U calculation -- built, never converged."""
+    if not pathlib.Path(LDAU_PSEUDO).is_file():
+        pytest.skip("the Ni ultrasoft dataset is not present")
+    system = build_system(read_pw_input(pathlib.Path(LDAU)))
+    return Calculation(system, (read_upf(LDAU_PSEUDO),))
+
+
+def _result_with_ns(ns) -> SCFResult:
+    """An :class:`SCFResult` carrying an ``ns`` and the shape beside it."""
+    return _result(np.zeros((2, 2, 2, 2)), 2, ns=np.asarray(ns))
+
+
+@pytest.mark.parametrize("mode,expected", [
+    ("carry", "kept"), ("none", "flat"), ("seed", None),
+])
+def test_ns_follows_the_magnetization_decision(mode, expected):
+    """It was the one member of the mixed triple not handed the transfer.
+
+    ``promote_density`` and ``promote_becsum`` both take the ``_SpinTransfer``
+    and ``promote_ns`` did not, so ``magnetization='none'`` and
+    ``magnetization='seed'`` reseeded or zeroed the density and left ``ns``
+    carrying the source's full spin polarization. Iteration 1 then
+    diagonalised a Hamiltonian with a Hubbard splitting of order ``U`` on a
+    density that was exactly spin-degenerate or the new texture's, and
+    ``mixing_fixed_ns`` freezes ``ns_state`` there for as many iterations as it
+    is set to. Measured on ``ni-ldau-j0.in`` (``U = 3.0`` eV, converged
+    ferromagnetic at 0.69 mu_B): the matrix that crossed had
+    ``max|ns_up - ns_dn| = 0.129291``, worth **28.5 mRy** of splitting in the
+    Hubbard potential, against zero after.
+
+    ``'seed'`` returns ``None`` rather than an average, because there is no way
+    to lay a density texture onto per-site occupations here that ``init_ns``
+    does not do better from the *target's* own ``starting_magnetization`` --
+    which is exactly what ``run_scf`` does with a ``None``.
+    """
+    from defumat.scf.continuation import _SpinTransfer
+
+    calculation = _ldau_calculation()
+    ns = _hubbard_ns(calculation, 0.4)
+    transfer = _SpinTransfer(source=2, target=2, mode=mode)
+    out = promote_ns(_result_with_ns(ns), calculation, transfer)
+
+    if expected is None:
+        assert out is None
+        return
+    out = np.asarray(out)
+    splitting = np.abs(out[0] - out[1]).max()
+    if expected == "kept":
+        assert splitting == pytest.approx(0.4)
+    else:
+        assert splitting == pytest.approx(0.0, abs=1e-14)
+        # the converged *charge* is what is worth carrying, and it survives
+        assert np.trace(out[0, 0]) + np.trace(out[1, 0]) == pytest.approx(
+            np.trace(ns[0, 0]) + np.trace(ns[1, 0]))
+
+
+def test_ns_with_no_transfer_is_unchanged():
+    """``transfer=None`` is the old signature and must still mean 'carry'."""
+    calculation = _ldau_calculation()
+    ns = _hubbard_ns(calculation, 0.4)
+    out = np.asarray(promote_ns(_result_with_ns(ns), calculation))
+    np.testing.assert_allclose(out, ns)

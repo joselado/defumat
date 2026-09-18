@@ -647,8 +647,57 @@ def promote_becsum(result, calculation, transfer: _SpinTransfer) -> tuple:
     return tuple(out)
 
 
-def promote_ns(result, calculation):
+def _depolarize_ns(ns):
+    """The same occupation matrix with no spin splitting left in it.
+
+    ``(up, down) -> (avg, avg)`` for a collinear pair, and for a spinor
+    ``(uu, ud, du, dd) -> (avg, 0, 0, avg)``: the converged *charge* occupation
+    is kept, which is the part worth carrying, and the magnetization goes.
+    """
+    if ns.shape[0] == 1:
+        return ns
+    if ns.shape[0] == 2:
+        average = jnp.mean(ns, axis=0, keepdims=True)
+        return jnp.concatenate([average, average])
+    average = 0.5 * (ns[0] + ns[3])
+    zero = jnp.zeros_like(average)
+    return jnp.stack([average, zero, zero, average])
+
+
+def promote_ns(result, calculation, transfer=None):
     """The Hubbard occupation matrix, ``(nspin, nslot, ldmx, ldmx)``.
+
+    **``transfer`` is what says whether the source's magnetization crosses**,
+    and this was the one member of the mixed triple not given it: the density
+    and ``becsum`` were reseeded or zeroed while ``ns`` came over carrying the
+    source's full spin polarization. A DFT+U cell converged ferromagnetic and
+    then continued with ``magnetization='none'``, or handed a new texture by
+    ``Calculator.with_moments`` (whose default is ``'seed'``), entered
+    iteration 1 with a Hubbard potential split by order ``U`` --
+    ``qe_hubbard_potential`` is ``alpha + U/2 delta - U n^s``, so 0.3 Ry for a
+    typical Ni ``U`` -- on a density that was exactly spin-degenerate or the
+    new texture's. The run can then relax back onto the source's magnetic
+    configuration and report its energy as the answer for the one that was
+    asked for, which is the failure the ``'seed'`` default exists to prevent
+    for the density. ``mixing_fixed_ns`` makes it worse rather than better: it
+    freezes ``ns_state`` for as many iterations as it is set to.
+
+    The three modes, and each is the density's own decision applied here:
+
+    * ``'carry'`` -- the magnetization crosses, so the matrix does too. This is
+      the checkpoint resume and every continuation that does not change regime.
+    * ``'none'`` -- the magnetization is dropped, so the matrix is
+      de-polarized (:func:`_depolarize_ns`) and its converged charge kept.
+    * ``'seed'`` -- the magnetization is *replaced*, and there is no way to lay
+      a density texture onto per-site occupations here that ``init_ns`` does
+      not already do better from the target's own ``starting_magnetization``.
+      So this returns ``None``, and ``run_scf`` builds the matrix the way a
+      fresh run with that magnetization would (``Calculation.starting_ns``).
+      Returning the source's would be the defect; averaging it would drop the
+      polarization without installing the one that was asked for.
+
+    ``transfer=None`` keeps the old behaviour and is what a caller with no
+    spin decision to make passes.
 
     ``ns`` is per *channel* for every ``nspin`` -- ``new_ns`` halves it in the
     unpolarized case -- so 1 -> 2 is the same matrix in both channels and 2 -> 1
@@ -676,6 +725,8 @@ def promote_ns(result, calculation):
     ns = getattr(result, "ns", None)
     if ns is None:
         return None
+    if transfer is not None and transfer.mode == "seed":
+        return None
     ns = jnp.asarray(ns)
     source, target = ns.shape[0], ns_components(
         calculation.hubbard, calculation.nspin)
@@ -689,6 +740,23 @@ def promote_ns(result, calculation):
             stacklevel=3,
         )
         return None
+    # **One place, after the conversion**: the reshape between regimes and the
+    # decision about the magnetization are separate steps, so the mode is
+    # applied to whatever the conversion produced rather than being written
+    # into each of its five branches. A target with one channel has nowhere to
+    # put a magnetization in any case, and ``_depolarize_ns`` is the identity
+    # there.
+    drop = transfer is not None and transfer.mode == "none"
+    converted = _convert_ns(ns, source, target, calculation)
+    if converted is None:
+        return None
+    return _depolarize_ns(converted) if drop else converted
+
+
+def _convert_ns(ns, source, target, calculation):
+    """``ns`` reshaped from ``source`` channels to ``target``, magnetization and
+    all. :func:`promote_ns` decides separately whether that magnetization stays.
+    """
     if source == target:
         return ns
     if source == 1 and target == 2:
@@ -915,7 +983,7 @@ def continued_state(
     return ContinuedState(
         density=promote_density(result, calculation, transfer),
         becsum=promote_becsum(result, calculation, transfer),
-        ns=promote_ns(result, calculation),
+        ns=promote_ns(result, calculation, transfer),
         wavefunctions=span,
         regimes=(transfer.source, transfer.target),
         magnetization=transfer.mode,

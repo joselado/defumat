@@ -786,7 +786,28 @@ class Calculator:
             phonons = calc.relaxed().get_phonons()
 
         A relaxation already converged an SCF at its final geometry, so that
-        result is carried across rather than recomputed.
+        result is carried across rather than recomputed -- **when it is a
+        result in the relaxed geometry's own basis**, which is not the same
+        thing and was not checked.
+
+        A variable-cell relaxation with ``final_scf=False`` and the default
+        ``treinit_gvectors=False`` leaves ``VCRelaxResult.scf`` as the last SCF
+        *of the relaxation*, and that ran through ``Calculation.at_cell``,
+        which freezes the FFT grid and the sphere's Miller indices at the
+        starting cell, ``scale_h.f90`` fashion. Carrying it here put those
+        wavefunctions in front of a ``Calculation`` enumerated on the relaxed
+        cell: a shape error where ``npwx`` differs, and a silently wrong force,
+        stress, phonon or dielectric tensor where the two counts happen to
+        coincide, since the Miller indices still differ. With
+        ``treinit_gvectors=True`` there is no such gap -- every ionic step
+        built its own ``Calculation`` at its own cell -- which is why the test
+        is :attr:`~defumat.workflows.vc_relax.VCRelaxResult.scf_in_relaxed_basis`
+        and not ``final_scf`` alone.
+
+        Where it does not hold the derived calculator simply starts with an
+        empty cache and converges its own SCF, which is what it would have done
+        had the relaxation never run. Nothing is lost but the reuse, and the
+        alternative was a wrong number.
         """
         if self._relax is None or self._relax_variable_cell != variable_cell:
             self.get_relax(variable_cell=variable_cell, **options)
@@ -797,7 +818,9 @@ class Calculator:
                 "geometry to build a calculator on. Read get_relax()'s own "
                 "result to see how far it got"
             )
-        return self._derived(result.system, scf=result.scf)
+        in_basis = getattr(result, "scf_in_relaxed_basis", True)
+        return self._derived(result.system,
+                             scf=result.scf if in_basis else None)
 
     # ------------------------------------------------------------------
     # linear response

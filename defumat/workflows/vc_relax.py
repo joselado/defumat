@@ -114,6 +114,25 @@ class VCRelaxResult:
     optimizer_failed: bool = False
     #: Whether the final SCF ran at all.
     final_scf: bool = True
+    #: Whether the G-vectors were re-enumerated at every ionic step
+    #: (``reset_gvectors``). Recorded because it, together with
+    #: :attr:`final_scf`, is what says whether :attr:`scf` is in a basis built
+    #: on :attr:`system`: the final SCF is, and so is the *last relaxation* SCF
+    #: when the grids were rebuilt at each step, but the last relaxation SCF of
+    #: a frozen-basis run is **not** -- it carries the starting cell's Miller
+    #: indices. :meth:`~defumat.calculator.Calculator.relaxed` is the consumer,
+    #: and without this it handed those wavefunctions to a ``Calculation``
+    #: enumerated on the relaxed cell.
+    treinit_gvectors: bool = False
+
+    @property
+    def scf_in_relaxed_basis(self) -> bool:
+        """Whether :attr:`scf` and :attr:`system` share a plane-wave sphere.
+
+        The one question a consumer of both actually has, so it is answered
+        here rather than reassembled from two flags at each call site.
+        """
+        return bool(self.final_scf or self.treinit_gvectors)
 
     @property
     def cell(self) -> np.ndarray:
@@ -371,6 +390,7 @@ def run_vc_relax(
         steps=steps,
         optimizer_failed=bool(optimizer.failed),
         final_scf=bool(final_scf and not treinit_gvectors),
+        treinit_gvectors=bool(treinit_gvectors),
     )
 
 

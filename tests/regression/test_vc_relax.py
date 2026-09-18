@@ -327,3 +327,60 @@ def test_the_displaced_atom_goes_back_while_the_cell_compresses(pseudo_dir):
     moved = np.abs(result.positions_crystal - start_crystal).max()
     assert moved > 1e-3, "no atom moved; only the cell relaxed"
     assert result.volume < float(system.cell.volume), "100 kbar has to compress"
+
+
+def test_relaxed_does_not_carry_an_scf_from_the_starting_basis(pseudo_dir):
+    """``final_scf=False`` leaves a ground state in the *starting* cell's sphere.
+
+    A vc-relax without the final SCF leaves ``VCRelaxResult.scf`` as the last
+    SCF of the relaxation, and that ran through ``Calculation.at_cell``, which
+    freezes the FFT grid and the sphere's Miller indices at the starting cell,
+    ``scale_h.f90`` fashion. ``Calculator.relaxed()`` carried it into a
+    calculator whose ``Calculation`` is enumerated on the *relaxed* cell.
+
+    Measured on ``si8-vc-relax.in``: the relaxation's states hold
+    **npwx = 2176** and a calculation on the relaxed cell holds **1956**, an 11
+    per cent shrink, so ``relaxed(variable_cell=True, final_scf=False)
+    .get_forces()`` raised ``Incompatible types for broadcasting:
+    complex128[2176] and complex128[1956]``. **The dangerous case is the one
+    that does not raise**: where a smaller volume change leaves the two counts
+    equal the Miller indices still differ, and the force, stress, phonon or
+    dielectric tensor comes back silently wrong, with ``pulay_error`` returning
+    0.0 on that branch so the reported error bar says nothing.
+
+    ``treinit_gvectors=True`` has no such gap -- every ionic step builds its own
+    ``Calculation`` at its own cell -- which is why the test is
+    ``scf_in_relaxed_basis`` and not ``final_scf`` alone.
+    """
+    from defumat.calculator import Calculator
+
+    calculator = Calculator.from_file(CASES / "si8-vc-relax.in",
+                                      pseudo_dir=pseudo_dir, announce=False)
+    result = calculator.get_relax(variable_cell=True, final_scf=False)
+    assert result.converged
+    assert result.final_scf is False
+    assert result.treinit_gvectors is False
+    assert result.scf_in_relaxed_basis is False
+
+    derived = calculator.relaxed(variable_cell=True, final_scf=False)
+    relaxed_npwx = derived.calculation.basis.planewaves.npwx
+    assert np.asarray(result.scf.wavefunctions).shape[-1] != relaxed_npwx, (
+        "this cell must change npwx, or the test proves nothing")
+    assert derived._scf is None, "a state in the wrong basis must not be cached"
+
+    # ...and the derived calculator converges its own, which is the point: a
+    # relaxed geometry has no force left.
+    forces = np.asarray(derived.get_forces().forces)
+    assert np.abs(forces).max() < 1e-4
+
+
+def test_relaxed_still_carries_the_final_scf_it_is_entitled_to(pseudo_dir):
+    """The default path must keep the reuse the method exists for."""
+    from defumat.calculator import Calculator
+
+    calculator = Calculator.from_file(CASES / "si8-vc-relax.in",
+                                      pseudo_dir=pseudo_dir, announce=False)
+    result = calculator.get_relax(variable_cell=True)
+    assert result.final_scf is True and result.scf_in_relaxed_basis is True
+    derived = calculator.relaxed(variable_cell=True)
+    assert derived._scf is result.scf

@@ -690,6 +690,27 @@ $-3.801738$ Ry at $(\pm 0.589)$ alternating, the antiferromagnet, in one
 iteration fewer. Neither run says anything: both report
 \code{converged = True}.
 
+\textbf{Under a Hubbard $U$ the occupation matrix follows the same decision},
+and until 2026-09-18 it did not: $n_\sigma$ was the one member of the mixed
+triple crossing a continuation unchanged whatever \code{magnetization} said,
+while the density and \code{becsum} were reseeded or zeroed beside it. A DFT+U
+cell converged ferromagnetic and then continued with
+\code{magnetization='none'}, or handed a new texture by \code{with\_moments},
+entered iteration~1 with a Hubbard potential split by order $U$ ---
+$v = \alpha + \tfrac{U}{2}\delta - U n^\sigma$, so 0.3~Ry for a typical Ni
+$U$ --- on a density that was exactly spin-degenerate or the new texture's, and
+\code{mixing\_fixed\_ns} freezes it there for as many iterations as it is set
+to. The run can relax back onto the source's magnetic configuration and report
+its energy as the answer for the one that was asked for, which is the failure
+\code{with\_moments}'s \code{'seed'} default exists to prevent for the
+density. Now: \code{'carry'} takes the matrix over, \code{'none'} takes its
+spin splitting out and keeps its converged charge, and \code{'seed'} drops it
+so that \code{init\_ns} builds it from the \emph{target's} own
+\code{starting\_magnetization} --- which is what a fresh run with that
+magnetization would do, and is better than any mapping of a density texture
+onto per-site occupations available here. A checkpoint resume is untouched:
+\code{magnetization} other than \code{'auto'} is refused outright on one.
+
 \begin{refuses}
 \textbf{A spin spiral is a change of frame and not only of regime.} A spiral
 keeps its density in the \emph{rotated} frame, the one that turns with

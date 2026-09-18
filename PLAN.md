@@ -3012,6 +3012,40 @@ printed: `E = -15.830647095` Ry and `epsilon = 23.608844285` from both, with ani
 where silicon's gap is smallest and the response largest, and 4^3 points do not average it
 away. It is a property of the k-sample, not of the method.)
 
+**The Hubbard occupation matrix did not follow the density's decision, found and closed
+2026-09-18.** `promote_ns` was the one member of the mixed triple not handed the
+`_SpinTransfer`: `promote_density` and `promote_becsum` both take it and reseed or zero
+the magnetization accordingly, while `ns` crossed unchanged whatever `magnetization`
+said. So `run_scf(starting_from=result, magnetization='none')`, or
+`Calculator.with_moments(texture)` whose default is `'seed'`, entered iteration 1 with a
+Hubbard potential split by order `U` -- `qe_hubbard_potential` is
+`alpha + U/2 delta - U n^s` -- on a density that was exactly spin-degenerate or the new
+texture's. The run can relax back onto the *source's* magnetic configuration and report
+its energy as the answer for the one that was asked for, which is exactly the failure the
+`'seed'` default exists to prevent for the density, and `mixing_fixed_ns` freezes
+`ns_state` for as many iterations as it is set to, so the bias is not confined to one
+Hamiltonian.
+
+**Measured on `ni-ldau-j0.in`**, fcc nickel at `U = 3.0 eV` and `J0 = 1.0 eV`, converged
+ferromagnetic at **0.6936 mu_B**: the matrix that crossed carried
+`max|ns_up - ns_dn| = 0.129291`, worth **28.5 mRy** of splitting in the Hubbard potential
+(`max|v_up - v_dn|`), against **zero** after. On a NiO-scale `U` it is three times that.
+
+**What each mode now does, and why `seed` is not an average.** `'carry'` takes the matrix
+over, which is the checkpoint resume and every continuation that does not change regime.
+`'none'` de-polarizes it -- `(up, down) -> (avg, avg)`, and for a spinor
+`(uu, ud, du, dd) -> (avg, 0, 0, avg)` -- which keeps the converged *charge* occupation,
+the part worth carrying, and drops the magnetization. `'seed'` returns **None**, so
+`run_scf` builds the matrix from `Calculation.starting_ns`, which is `init_ns` on the
+*target's* own `starting_magnetization`: there is no mapping of a density texture onto
+per-site occupations available here that `init_ns` does not do better, and averaging
+would drop the polarization without installing the one that was asked for. The reshape
+between regimes and the decision about the magnetization are now separate steps
+(`_convert_ns` and `_depolarize_ns`), so the mode is applied once rather than written
+into each of the five conversion branches. A checkpoint resume is untouched:
+`magnetization` other than `'auto'` is refused outright on one.
+
+
 ### P24a — Ultrasoft and PAW linear response. ✅ DONE.
 
 **Almost none of what they add is transcribed**, because the density and the Hamiltonian
@@ -4542,6 +4576,34 @@ the rhombohedral-to-simple-cubic transition — so the cell and the atoms are bo
 doing something and doing it at once.
 
 *Notebook 23.*
+
+
+**The state `relaxed()` carried was in the wrong basis, found and closed 2026-09-18.**
+A vc-relax is two runs and the second is optional, so with `final_scf=False`
+`VCRelaxResult.scf` is the last SCF *of the relaxation* -- and that ran through
+`Calculation.at_cell`, which freezes the FFT grid and the sphere's Miller indices at the
+**starting** cell, `scale_h.f90` fashion. `Calculator.relaxed()` carried it into a
+calculator whose `Calculation` is enumerated on the **relaxed** cell.
+
+Measured on `si8-vc-relax.in`: the relaxation's states hold **npwx = 2176** and a
+calculation on the relaxed cell holds **1956**, an 11 per cent shrink, so
+`relaxed(variable_cell=True, final_scf=False).get_forces()` raised `Incompatible types
+for broadcasting: complex128[2176] and complex128[1956]`. **The dangerous subset is the
+one that does not raise:** a smaller volume change can leave the two counts equal while
+the Miller indices still differ, and then the force, stress, phonon or dielectric tensor
+comes back silently wrong -- with `pulay_error` returning 0.0 on that branch, so the
+reported error bar says nothing about it either.
+
+**The fix is at the condition rather than at the symptom, and `final_scf` alone is not
+it.** The result stores `final_scf = final_scf and not treinit_gvectors`, so it reads
+False on the `treinit_gvectors = True` path too -- and that path is *safe*, because
+`_advance` builds a fresh `Calculation` at each new cell rather than going through
+`at_cell`. `VCRelaxResult` therefore records `treinit_gvectors` as well and exposes
+`scf_in_relaxed_basis`, which is the one question a consumer of both `scf` and `system`
+actually has, answered once rather than reassembled from two flags at each call site.
+Where it does not hold, the derived calculator starts with an empty cache and converges
+its own, which is what it would have done had the relaxation never run: the force on the
+relaxed geometry comes out **1.41e-07 Ry/bohr**. `tests/regression/test_vc_relax.py`.
 
 
 ### P30 — The Tran-Blaha potential: a functional that is not a derivative. ✅ DONE.
