@@ -287,8 +287,13 @@ def _parse_namelist_body(body: str) -> dict[str, Any]:
     return entries
 
 
-_LOGICAL_TRUE = {".true.", ".t.", "true", ".TRUE."}
-_LOGICAL_FALSE = {".false.", ".f.", "false", ".FALSE."}
+#: Fortran's list-directed logical input is more permissive than ``.true.``:
+#: the standard reads an optional leading ``.``, then a ``T`` or an ``F``, then
+#: anything, so a namelist written ``lberry = F`` is legal and is false. Leaving
+#: the bare spellings out let ``F`` survive :func:`_convert` as the *string*
+#: ``'F'``, which every truth test in the package then read as true.
+_LOGICAL_TRUE = {".true.", ".t.", "true", "t", ".t"}
+_LOGICAL_FALSE = {".false.", ".f.", "false", "f", ".f"}
 
 
 def fortran_float(token: str) -> float:

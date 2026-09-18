@@ -712,6 +712,7 @@ def system_from_file(path, precision: Precision = DEFAULT_PRECISION) -> System:
 
 def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> System:
     _refuse_unimplemented_switches(pwin)
+    _refuse_obsolete_hubbard(pwin)
     _check_calculation(pwin)
     _check_occupations(pwin)
     cell = _build_cell(pwin, precision)
@@ -1425,7 +1426,7 @@ def _check_occupations(pwin: PwInput) -> None:
     # and the total charge must be integers, since a channel fills a whole
     # number of bands. Checked here rather than at the first diagonalisation so
     # that the message names the input variable.
-    lsda = int(pwin.get("system", "nspin", 1)) == 2 and not bool(
+    lsda = int(pwin.get("system", "nspin", 1)) == 2 and not _logical(
         pwin.get("system", "noncolin", False)
     )
     # ``.AND. lscf``, which is the third conjunct of QE's own condition and not
@@ -1486,6 +1487,82 @@ def _check_calculation(pwin: PwInput) -> None:
             "run as a plain SCF, which is what happened before: the requested "
             "calculation never took place and the run reported success"
         )
+
+
+#: The DFT+Hubbard variables the ``&system`` namelist carried before QE 7.1,
+#: each with the ``HUBBARD`` card entry that replaces it. This code reads the
+#: card and nothing else, so an input written the old way used to be accepted
+#: and run as plain LSDA or PBE with no Hubbard term and no message: the size of
+#: what was dropped is the U-on against U-off gap, which ``PLAN.md`` P20 puts at
+#: 0.0658 Ry between two DFT+U solutions of the same FeO cell.
+#:
+#: ``pw.x`` 7.5 stops on exactly this set (``Modules/read_namelists.f90``, the
+#: obsolete-parameter block ending in ``errore(..., 'DFT+Hubbard input syntax
+#: has changed since v7.1', 1)``), and the test there is on the *value* rather
+#: than on the name: ``lda_plus_u = .false.`` and ``Hubbard_U = 0.0`` are what
+#: an input that never asked for a U looks like, so both pass in both codes.
+_OBSOLETE_HUBBARD = (
+    ("lda_plus_u", "logical", "a HUBBARD card"),
+    ("lda_plus_u_kind", "nonnegative", "the card's header, `HUBBARD (atomic)`"),
+    ("u_projection_type", "string", "the card's header, `HUBBARD (ortho-atomic)`"),
+    ("hubbard_parameters", "string", "the card itself"),
+    ("hubbard_u", "positive", "`U <atom>-<manifold> <value>` in the card"),
+    ("hubbard_u_back", "positive", "`U <atom>-<manifold> <value>` in the card"),
+    ("hubbard_j0", "positive", "`J0 <atom>-<manifold> <value>` in the card"),
+    ("hubbard_j", "positive", "`J <atom>-<manifold> <value>` in the card"),
+    ("hubbard_v", "positive", "`V <atom1> <atom2> <n> <value>` in the card"),
+    ("backall", "logical", "a second manifold on the card's atom label"),
+)
+
+
+def _asked_for(value, kind: str) -> bool:
+    """Whether an obsolete Hubbard variable was set to something that matters.
+
+    An indexed variable such as ``Hubbard_U(1)`` parses to a dict keyed by its
+    index tuple, so the test runs over the values either way -- which is what
+    makes ``ANY(Hubbard_U(:) > eps24)`` translate directly.
+    """
+    if value is None:
+        return False
+    values = list(value.values()) if isinstance(value, dict) else [value]
+    for item in values:
+        if item is None:
+            continue
+        if kind == "logical" and _logical(item):
+            return True
+        if kind == "string" and str(item).strip().strip("'\"") != "":
+            return True
+        try:
+            number = float(item)
+        except (TypeError, ValueError):
+            continue
+        if kind == "positive" and number > 1.0e-24:
+            return True
+        if kind == "nonnegative" and number > -1:
+            return True
+    return False
+
+
+def _refuse_obsolete_hubbard(pwin: PwInput) -> None:
+    """Stop on the pre-7.1 DFT+Hubbard spelling in the ``&system`` namelist.
+
+    See :data:`_OBSOLETE_HUBBARD`. DFT+U *is* implemented here, so this is not a
+    missing feature: it is an input this code reads a different way, and the
+    refusal names the card entry that replaces each variable.
+    """
+    found = [(name, replacement) for name, kind, replacement in _OBSOLETE_HUBBARD
+             if _asked_for(pwin.get("system", name), kind)]
+    if not found:
+        return
+    listed = "; ".join(f"{name} -> {replacement}" for name, replacement in found)
+    raise NotImplementedError(
+        f"{pwin.path or 'input'}: the DFT+Hubbard input syntax changed in QE "
+        f"7.1 and this code reads only the new one, the HUBBARD card. "
+        f"Rewrite {listed}. pw.x 7.5 stops on the same variables "
+        f"(Modules/read_namelists.f90). They are refused rather than ignored "
+        f"because the namelist spelling parses here and reaches nothing, so a "
+        f"run asking for a U would converge without one and report success"
+    )
 
 
 def _refuse_unimplemented_switches(pwin: PwInput) -> None:
@@ -1579,6 +1656,23 @@ def _build_cell(pwin: PwInput, precision: Precision) -> Cell:
         )
 
     if ibrav != 0:
+        # The card is *redundant* rather than ignorable here, and both codes
+        # treat it that way: ``Modules/cell_base.f90``'s
+        # ``ELSE IF (ibrav_ /= 0 .and. trd_ht)`` stops with 'redundant data for
+        # cell parameters'. Returning first, as this did, discarded the vectors
+        # in silence -- and with ``ATOMIC_POSITIONS alat`` scaled by the ibrav
+        # cell's own alat the positions went with them, so pasting a relaxed
+        # cell back under an input that still carries its ibrav ran the
+        # pre-relaxation geometry and reported a total energy for it.
+        if pwin.card("CELL_PARAMETERS") is not None:
+            raise ValueError(
+                f"{pwin.path or 'input'}: redundant data for cell parameters "
+                f"-- ibrav = {ibrav} and a CELL_PARAMETERS card both describe "
+                "the lattice, and which one is meant is not recoverable. Set "
+                "ibrav = 0 to use the card, or drop the card to use ibrav and "
+                "celldm. pw.x stops on the same combination "
+                "(Modules/cell_base.f90)"
+            )
         return Cell.from_ibrav(ibrav, celldm, precision=precision)
 
     card = pwin.require_card("CELL_PARAMETERS")
@@ -1716,7 +1810,7 @@ def _berry(pwin: PwInput) -> tuple | None:
     exists for: an input asking for a polarization would have run an ordinary
     SCF and reported success.
     """
-    if not bool(pwin.get("control", "lberry", False)):
+    if not _logical(pwin.get("control", "lberry", False)):
         return None
     gdir = pwin.get("control", "gdir")
     nppstr = pwin.get("control", "nppstr")

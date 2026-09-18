@@ -232,3 +232,97 @@ def test_the_four_symmetry_switches_are_silent_at_their_defaults():
         system=("no_t_rev = .false., force_symmorphic = .false., "
                 "use_all_frac = .false., nosym_evc = .false."),
     )))
+
+
+# ----------------------------------------------------------------------
+# The bare Fortran logical, and the two refusals pw.x has and this had not
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "token,expected",
+    [
+        ("F", False), ("f", False), (".F.", False), (".f", False),
+        (".false.", False), (".FALSE.", False), ("false", False),
+        ("T", True), ("t", True), (".T.", True), (".t", True),
+        (".true.", True), (".TRUE.", True), ("true", True),
+    ],
+)
+def test_every_fortran_logical_spelling(token, expected):
+    """List-directed logical input reads ``F`` as false, and so must this.
+
+    A bare ``F`` used to survive ``_convert`` as the *string* ``'F'``, which
+    every ``bool()`` in the package then read as true.
+    """
+    assert parse_pw_input(f"&control\n lberry = {token}\n/\n").get(
+        "control", "lberry") is expected
+
+
+def test_lberry_false_written_bare_does_not_ask_for_a_berry_run():
+    """The end of that path: ``lberry = F`` asked for gdir and nppstr."""
+    from defumat.system.builder import build_system
+
+    build_system(parse_pw_input(_MINIMAL.format(control="lberry = F", system="")))
+
+
+@pytest.mark.parametrize(
+    "system",
+    [
+        "lda_plus_u = .true.",
+        "lda_plus_u_kind = 0",
+        "Hubbard_U(1) = 4.3",
+        "Hubbard_U_back(1) = 1.0",
+        "Hubbard_J0(1) = 0.5",
+        "Hubbard_J(1,1) = 0.5",
+        "Hubbard_V(1,2,1) = 0.5",
+        "U_projection_type = 'ortho-atomic'",
+        "Hubbard_parameters = 'input'",
+        "backall(1) = .true.",
+    ],
+)
+def test_the_pre_7_1_hubbard_spelling_is_refused(system):
+    """It parses and reaches nothing, so a run asking for a U had none.
+
+    ``pw.x`` 7.5 stops on the same set (``Modules/read_namelists.f90``).
+    """
+    from defumat.system.builder import build_system
+
+    with pytest.raises(NotImplementedError, match="HUBBARD card"):
+        build_system(parse_pw_input(_MINIMAL.format(control="", system=system)))
+
+
+@pytest.mark.parametrize(
+    "system",
+    ["lda_plus_u = .false.", "lda_plus_u = F", "Hubbard_U(1) = 0.0", ""],
+)
+def test_an_input_that_never_asked_for_a_u_is_silent(system):
+    """QE's test is on the *value*, so writing the default longhand passes."""
+    from defumat.system.builder import build_system
+
+    build_system(parse_pw_input(_MINIMAL.format(control="", system=system)))
+
+
+def test_ibrav_and_cell_parameters_together_are_refused():
+    """The card used to be discarded in silence, ibrav winning.
+
+    That is how a relaxed cell pasted back under an input that still carries
+    its ``ibrav`` ran the pre-relaxation geometry.
+    """
+    from defumat.system.builder import build_system
+
+    text = _MINIMAL.format(control="", system="") + (
+        "CELL_PARAMETERS bohr\n 6.0 0.0 0.0\n 0.0 6.0 0.0\n 0.0 0.0 6.0\n"
+    )
+    with pytest.raises(ValueError, match="redundant data for cell parameters"):
+        build_system(parse_pw_input(text))
+
+
+def test_ibrav_zero_still_reads_the_card():
+    """The refusal must not reach the only way to give vectors explicitly."""
+    from defumat.system.builder import build_system
+
+    text = _MINIMAL.format(control="", system="").replace("ibrav=2", "ibrav=0") + (
+        "CELL_PARAMETERS bohr\n 6.0 0.0 0.0\n 0.0 6.0 0.0\n 0.0 0.0 6.0\n"
+    )
+    system = build_system(parse_pw_input(text))
+    assert float(system.cell.volume) == pytest.approx(216.0)

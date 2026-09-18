@@ -199,6 +199,34 @@ ignoring one left the k-mesh reduced with operations the input had excluded and
 \code{sym\_rho} averaging over them --- a total energy that will not match a
 benchmark generated from the same file, with nothing saying why. Anything QE
 defaults to is silent, so an ordinary input never reaches the refusal.
+
+\textbf{Two more are refused because they are \emph{redundant} rather than
+unimplemented}, and both used to be dropped in silence. The first is the
+DFT+Hubbard spelling the \code{\&system} namelist carried before QE 7.1 ---
+\code{lda\_plus\_u}, \code{lda\_plus\_u\_kind}, \code{Hubbard\_U},
+\code{Hubbard\_U\_back}, \code{Hubbard\_J0}, \code{Hubbard\_J},
+\code{Hubbard\_V}, \code{U\_projection\_type},
+\code{Hubbard\_parameters} and \code{backall}. DFT+U is implemented here and
+is read from the \code{HUBBARD} card, so the old names parsed and reached
+nothing: an input asking for a $U$ converged as plain LSDA or PBE and reported
+success, and what was dropped is the whole $U$-on against $U$-off gap.
+\code{pw.x} 7.5 stops on the same set, and on the \emph{value} rather than the
+name, so \code{lda\_plus\_u = .false.} and \code{Hubbard\_U = 0.0} pass in
+both codes. The second is \code{ibrav} $\neq 0$ together with a
+\code{CELL\_PARAMETERS} card: the card was never looked at, and because
+\code{ATOMIC\_POSITIONS alat} is scaled by the \code{ibrav} cell's own
+\code{alat} the positions went with it, so pasting a relaxed cell back under an
+input that still carries its \code{ibrav} --- the ordinary way a vc-relax is
+restarted by hand --- ran the pre-relaxation geometry and reported a total
+energy, a force and a stress for it. Set \code{ibrav = 0} to use the card.
+Neither refusal is reached by any of the 1194 inputs in this repository, in
+\code{benchmarks/} or in QE's own vendored test-suite.
+
+One parsing trap sits under all of this and is worth stating once: Fortran's
+list-directed logical input accepts an optional \code{.}, then a \code{T} or
+an \code{F}, then anything, so \code{lberry = F} is legal and is false. The
+bare spellings were missing from the converter, so \code{F} survived as the
+\emph{string} \code{'F'} and every truth test read it as true.
 \end{refuses}
 
 \subsection*{One object, bound methods}
