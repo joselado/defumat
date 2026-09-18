@@ -462,3 +462,99 @@ def test_at_kpoints_re_derives_the_three_sphere_fields(pseudo_dir):
     assert moved.fft_index_minus is None
     assert moved.kplusg is None            # not a meta-GGA run
     assert moved.fft_index.shape[0] == 3
+
+
+@pytest.mark.slow
+def test_tau_is_the_whole_sphere_s_tau_under_a_meta_gga(pseudo_dir):
+    """``i(k+G) c_G`` is odd in ``G``, so the density's conjugate fill is wrong.
+
+    ``band_kinetic_density`` used the whole-sphere transform on half-sphere
+    states with no fill and no refusal anywhere on the path -- a
+    norm-conserving ``nosym`` gamma run with ``input_dft = 'tb09'`` passes both
+    ``gamma_storage_is_consumable`` and ``_require_meta_supported``, neither of
+    which mentions the other, so the run completed and returned a plausible
+    ``tau``.
+
+    What it returned was ``|h|^2 = (Re h)^2 + (Im h)^2`` where the physics is
+    ``4 (Re h)^2``, so it is **not wrong by a factor**: pointwise it loses the
+    oscillation, and only the integral is a clean half because the stored set
+    holds no ``(G, -G)`` pair. Measured before the fix on this cell: the
+    integrals in the ratio **0.506**, a pointwise disagreement of **7.7e-2 on a
+    tau whose maximum is 1.2e-1**, and the two total energies **16.9 mRy**
+    apart -- which matters more than it looks, because ``tb09`` is
+    potential-only and ``tau`` enters ``v_x`` directly rather than through an
+    energy.
+
+    **The threshold is loosened here on purpose and it is not slack.** At the
+    file's usual ``conv_thr = 1e-12`` these two separate at ``1.6e-8`` in
+    ``tau``, while at ``1e-8`` and ``1e-10`` they agree to ``3.5e-15`` and
+    ``1.3e-15`` with their reported ``accuracy`` identical digit for digit --
+    the two runs track each other exactly while they take the same path, and
+    at the tighter threshold they take a different last step. That is a
+    property of a **potential-only** functional rather than of the storage:
+    ``tb09`` is not the derivative of anything, so its fixed point is not a
+    minimum and a last-step difference in the density is not quadratically
+    suppressed in ``tau``. The LDA, PBE and LSDA cases above run at ``1e-12``
+    and do not do it. Either way both numbers are six orders below the
+    ``7.7e-2`` this test was written for.
+    """
+    def scf(kpoints):
+        # Not ``_run``: that takes a force, and a potential-only meta-GGA
+        # refuses every derivative by name, which is the point of P30-P32.
+        text = _TEMPLATE.format(extra=", input_dft = 'tb09'", kpoints=kpoints,
+                                pseudo="Si.pz-vbc.UPF")
+        text = text.replace("conv_thr = 1.0d-12", "conv_thr = 1.0d-10")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            calculator = Calculator.from_text(text, pseudo_dir, announce=False)
+            return calculator, calculator.get_scf()
+
+    whole, full = scf("crystal\n 1\n 0.0 0.0 0.0 1.0")
+    half, gamma = scf("gamma")
+    assert whole.calculation.gamma_only is False
+    assert half.calculation.gamma_only is True
+    assert full.converged and gamma.converged
+
+    a, b = np.asarray(gamma.tau), np.asarray(full.tau)
+    assert np.abs(b).max() > 1e-3, "the cell must carry a kinetic energy density"
+    np.testing.assert_allclose(a, b, atol=1e-12)
+    assert gamma.total_energy == pytest.approx(full.total_energy, abs=1e-10)
+
+
+@pytest.mark.slow
+def test_the_velocity_operator_refuses_gamma_storage(pseudo_dir):
+    """A real state at ``Gamma`` does not move, and the half-sum said it did.
+
+    ``dH/dk`` is **odd** in ``G``, so unlike a density the stored half does not
+    cancel where the whole sphere does: the full-sphere sum is
+    ``2i Im(sum_half)`` and the diagonal of a real state is exactly zero by
+    time reversal. Measured on this cell: ``max|v| = 0.863 Ry bohr`` under
+    gamma storage against ``1.8e-15`` at an explicit ``k = 0``. That is the
+    whole error rather than half of it, so ``2 Re(sum)`` minus ``G = 0`` is not
+    even the right repair, which is why this refuses rather than correcting.
+
+    ``Calculation.at_kcart`` is the one chokepoint: every consumer of the
+    operator -- the optical conductivity, the Kerr angle, second-harmonic
+    generation, the shift current, the nesting function and
+    ``band_velocities`` -- reaches it through ``VelocityOperator``, which is
+    its only caller. A topological invariant is **not** affected, because
+    ``at_kpoints`` rebuilds the sphere whole, and that is asserted here so the
+    refusal cannot quietly widen.
+    """
+    from defumat.response.velocity import band_velocities
+    from defumat.workflows.topology import run_berry_curvature
+
+    whole, full, _ = _run(pseudo_dir, "", "crystal\n 1\n 0.0 0.0 0.0 1.0")
+    velocities = np.asarray(
+        band_velocities(whole.calculation, full).velocities)
+    assert np.abs(velocities).max() < 1e-10, "a real state at Gamma does not move"
+
+    half, gamma, _ = _run(pseudo_dir, "", "gamma")
+    with pytest.raises(NotImplementedError, match="velocity operator"):
+        band_velocities(half.calculation, gamma)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        curvature = run_berry_curvature(
+            half.system, half.pseudos, gamma.density, shape=(4, 4))
+    assert np.asarray(curvature.curvature).shape == (4, 4)

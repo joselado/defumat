@@ -118,12 +118,17 @@ def sum_band(psi, fft_index, grid, weights, cell: Cell,
     return jax.vmap(channel)(psi, weights)
 
 
-def band_kinetic_density(psi, fft_index, grid, weights, cell: Cell, kplusg):
+def band_kinetic_density(psi, fft_index, grid, weights, cell: Cell, kplusg,
+                         gamma_only: bool = False):
     """One k-point's contribution to ``tau``, in **Rydberg**.
 
     Args:
         psi: ``(nbnd, npwx)``.
         kplusg: ``(npwx, 3)`` in 1/bohr, zero on padding.
+        gamma_only: whether ``psi`` is stored on the half sphere. See the
+            paragraph on it below -- the transform is the same one either way
+            and it is the *combination* afterwards that differs, which is why
+            this takes a flag rather than an ``fft_index_minus``.
 
     ``tau(r) = sum_i w_i |grad psi_i(r)|^2`` -- three more transforms per band
     than the density costs, since ``grad psi`` has to be built one cartesian
@@ -142,18 +147,47 @@ def band_kinetic_density(psi, fft_index, grid, weights, cell: Cell, kplusg):
     not ``abs(z)**2``, for :func:`band_density`'s reason and with more of an
     edge: a *derivative* of a state has nodes wherever the state has extrema,
     which on a symmetric cell is a great many grid points exactly.
+
+    **Under gamma storage the transform is the same and the combination is
+    not**, which is the one place this departs from :func:`band_density`. There
+    the stored half is refilled by its conjugate and :func:`g_to_r_gamma` does
+    it inside the transform; here the object being transformed is ``i(k+G)
+    c_G``, which is **odd** in ``G`` where ``c_G`` is Hermitian, so a conjugate
+    fill would be the wrong fill. Writing ``h(r) = sum_{G in half} i G c_G
+    e^{iGr}`` and pairing each ``G`` with its ``-G``, the ``c_{-G} =
+    conj(c_G)`` of a real state gives
+
+        grad psi = 2 Re h,
+
+    with the ``G = 0`` term dropping out on its own because it carries a factor
+    ``G``. So the half-sphere ``tau`` is ``4 (Re h)^2`` summed over the three
+    directions, where the whole-sphere one is ``|grad psi|^2``, and ``h`` is
+    what the plain :func:`g_to_r` over the stored list already returns.
+
+    Taking ``|h|^2`` there instead -- which is what this did -- is
+    ``(Re h)^2 + (Im h)^2`` where the physics is ``4 (Re h)^2``, so it is not
+    wrong by a factor: **pointwise it loses the oscillation altogether**, and
+    only the *integral* is a clean half, since the stored set holds no
+    ``(G, -G)`` pair. Measured on two-atom silicon under ``tb09``, gamma
+    against an explicit ``k = 0``: the integrals were in the ratio 0.506 and
+    the pointwise disagreement was 7.7e-2 on a ``tau`` whose maximum is
+    1.2e-1, i.e. 63 per cent, with the two total energies 16.9 mRy apart.
     """
     def one_band(arrays):
         state, weight = arrays
         components = 1j * kplusg.T * state[None, :]  # (3, npwx)
         field = g_to_r(components, fft_index, grid)  # (3, n1, n2, n3)
+        if gamma_only:
+            real = jnp.real(field)
+            return weight * jnp.sum(4.0 * real * real, axis=0)
         return weight * jnp.sum(jnp.real(jnp.conj(field) * field), axis=0)
 
     return sum_bands(one_band, (psi, weights)) / cell.volume
 
 
 def kinetic_energy_density(psi, fft_index, grid, weights, cell: Cell, kplusg,
-                           k_batch: int | None | str = "default") -> jnp.ndarray:
+                           k_batch: int | None | str = "default",
+                           gamma_only: bool = False) -> jnp.ndarray:
     """``tau`` from every k-point, ``(nspin, n1, n2, n3)`` and real, Ry.
 
     Args:
@@ -173,7 +207,8 @@ def kinetic_energy_density(psi, fft_index, grid, weights, cell: Cell, kplusg,
     def channel(states, occupations):
         def one_k(arrays):
             state, index, vectors, occupation = arrays
-            return band_kinetic_density(state, index, grid, occupation, cell, vectors)
+            return band_kinetic_density(state, index, grid, occupation, cell,
+                                        vectors, gamma_only)
 
         return sum_k(one_k, (states, fft_index, kplusg, occupations), batch=batch)
 

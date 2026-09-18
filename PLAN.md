@@ -11387,6 +11387,51 @@ way out), and a spinor or spiral run. `Calculation.gamma_only` is the switch and
 because sizing the substitution where the run consumes the half sphere
 overstates every band-sized array by two.
 
+**Two more consumers, found 2026-09-18: one was a fix and one is a refusal.**
+
+The **kinetic energy density** was built with the whole-sphere transform on half-sphere
+states, with no fill and no refusal anywhere on the path -- a norm-conserving `nosym`
+gamma run with `input_dft = 'tb09'` passes both `gamma_storage_is_consumable` and
+`_require_meta_supported`, neither of which mentions the other. This is the one consumer
+where **the usual rule is not the repair**: `i(k+G) c_G` is *odd* in `G` where `c_G` is
+Hermitian, so the density's conjugate fill is the wrong fill and `2 Re(sum) - (G = 0)` is
+not the right sum either. Pairing each `G` with `-G` gives `grad psi = 2 Re h` with
+`h = sum_half i G c_G e^{iGr}`, the `G = 0` term dropping out on its own because it
+carries a factor `G`, so the half-sphere `tau` is `4 (Re h)^2` where the whole-sphere one
+is `|grad psi|^2` -- and `h` is what the plain `g_to_r` over the stored list already
+returns, so the transform is unchanged and only the combination after it moves.
+
+**What it was worth, on two-atom silicon under `tb09`:** the integrals in the ratio
+**0.506**, a pointwise disagreement of **7.7e-2 on a tau whose maximum is 1.2e-1** (63
+per cent), and the two total energies **16.9 mRy** apart. The pointwise figure is the one
+that matters -- `|h|^2` is `(Re h)^2 + (Im h)^2` where the physics is `4 (Re h)^2`, so it
+loses the oscillation altogether and is a clean half only in the integral, since the
+stored set holds no `(G, -G)` pair. Corrected, the two storages agree to **1.3e-15**
+pointwise with the totals identical to every printed digit.
+
+**One thing measured while setting that test's tolerance, and it is about `tb09` rather
+than about gamma.** At `conv_thr = 1e-8` and `1e-10` the two runs agree to 3.5e-15 and
+1.3e-15 with their reported `accuracy` identical digit for digit -- they track each other
+exactly while they take the same path -- and at `1e-12` and `1e-14` they separate to
+**1.6e-8**. The LDA, PBE and LSDA cases in the same file run at `1e-12` and do not do it.
+A potential-only functional is not the derivative of anything, so its fixed point is not
+a minimum and a last-step difference in the density is not quadratically suppressed in
+`tau`. The test runs at `1e-10` and says so.
+
+The **velocity operator** is the same oddness one step further out and is **refused**
+rather than fixed. `dH/dk` is odd in `G`, so the full-sphere sum is `2i Im(sum_half)` and
+the diagonal of a real state is *exactly zero* -- time reversal saying a real state at
+`Gamma` does not move. The half-sum returns an O(1) number instead: **0.863 Ry bohr
+against 1.8e-15** at an explicit `k = 0`, same cell. That is the whole error rather than
+half of it, so `2 Re(sum) - (G = 0)` would not even be the right repair, and
+`refuse_gamma_storage`'s generic "wrong by about a factor of two" would be the wrong
+thing to say. `Calculation.at_kcart` carries the refusal because it is the **one
+chokepoint**: every consumer -- the optical conductivity, the Kerr angle,
+second-harmonic generation, the shift current, the nesting function and
+`band_velocities` -- reaches the operator through `VelocityOperator`, which is
+`at_kcart`'s only caller. A topological invariant is **not** caught, and the test asserts
+that so the refusal cannot quietly widen: `at_kpoints` rebuilds the sphere whole.
+
 **What `at_kpoints` did not carry, found 2026-09-18.** Three fields describe the
 plane-wave *set* rather than the system -- `gamma_only`, `fft_index_minus` and `kplusg` --
 and `copy.copy` carried all three across a rebuild, so a calculation whose sphere had just

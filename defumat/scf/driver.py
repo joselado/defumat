@@ -365,10 +365,12 @@ def _density_of_bands(psi, fft_index, grid, weights, cell, k_batch,
                     fft_index_minus=fft_index_minus)
 
 
-@partial(jax.jit, static_argnames=("grid", "k_batch"))
-def _kinetic_of_bands(psi, fft_index, grid, weights, cell, kplusg, k_batch):
+@partial(jax.jit, static_argnames=("grid", "k_batch", "gamma_only"))
+def _kinetic_of_bands(psi, fft_index, grid, weights, cell, kplusg, k_batch,
+                      gamma_only=False):
     """``sum_band``'s meta-GGA branch on the smooth grid, in one kernel."""
-    return kinetic_energy_density(psi, fft_index, grid, weights, cell, kplusg, k_batch)
+    return kinetic_energy_density(psi, fft_index, grid, weights, cell, kplusg,
+                                  k_batch, gamma_only)
 
 
 @partial(jax.jit, static_argnames=("grid", "nspin_mag", "k_batch"))
@@ -2843,6 +2845,43 @@ class Calculation:
                 "built at k +- q/2, so moving k means moving both halves "
                 "(see at_spiral_q)"
             )
+        if self.gamma_only:
+            # **This is the one chokepoint for the velocity operator**, which
+            # is what makes a refusal here worth more than five: every
+            # consumer of ``dH/dk`` -- the optical conductivity, the Kerr
+            # angle, second-harmonic generation, the shift current, the
+            # nesting function and ``band_velocities`` itself -- reaches it
+            # through :class:`~defumat.response.velocity.VelocityOperator`,
+            # and that is the only caller of this method.
+            #
+            # **The usual half-sphere rule is not the fix here**, which is why
+            # this does not go through
+            # :func:`~defumat.basis.gvectors.refuse_gamma_storage` and its
+            # "wrong by about a factor of two". The velocity operator is *odd*
+            # in ``G``, so ``f(-G) = -f(G)`` rather than ``conj(f(G))``: the
+            # full-sphere sum is ``2i Im(sum_half)`` and the diagonal of a real
+            # state is **exactly zero**, which is time reversal saying a real
+            # state at ``Gamma`` does not move. The half-sum is therefore the
+            # whole error rather than half of it. Measured on a displaced
+            # two-atom silicon cell, same physics both ways: **0.863 Ry bohr**
+            # under gamma storage against **1.8e-15** at an explicit ``k = 0``.
+            #
+            # The Sternheimer stack refuses the same operator by name
+            # (``response/sternheimer.py``, quoting silicon's dielectric
+            # constant at 501.7/213.1/253.1 against an isotropic 190.8); this
+            # is the sum-over-states side of the same wall.
+            raise NotImplementedError(
+                "the velocity operator dH/dk is not implemented for gamma-only "
+                "storage (K_POINTS gamma): only half of each (G, -G) pair is "
+                "stored and dH/dk is odd in G, so the stored half does not "
+                "cancel where the whole sphere does -- a real state's band "
+                "velocity at Gamma is exactly zero by time reversal and the "
+                "half-sum returns an O(1) number instead (0.863 Ry bohr "
+                "against 1.8e-15 on two-atom silicon). Unlike a density, this "
+                "is not recoverable by 2 Re(sum) minus the G = 0 term. Run the "
+                "same cell with an explicit k = 0 (K_POINTS automatic, "
+                "1 1 1 0 0 0), which is the same physics on the whole sphere"
+            )
         smooth, cell = self.basis.smooth, self.system.cell
         planewaves = self.basis.planewaves
         moved = copy.copy(self)
@@ -3680,6 +3719,12 @@ class Calculation:
             tau = _kinetic_of_bands(
                 wavefunctions, self.fft_index, smooth.grid, weights,
                 self.system.cell, self.kplusg, self.k_batch,
+                # The half sphere needs ``4 (Re h)^2`` where the whole one
+                # needs ``|grad psi|^2``: ``i(k+G) c_G`` is *odd* in ``G``, so
+                # unlike the density this is not a conjugate fill inside the
+                # transform but a different combination after it
+                # (:func:`~defumat.scf.density.band_kinetic_density`).
+                self.gamma_only,
             )
         tau = to_dense(tau, smooth, dense)
         return self.symmetrize(tau) if symmetrize else tau

@@ -558,6 +558,39 @@ with the acoustic residue identical; a partial matrix to \textbf{5.9e-11}. And
 $\chi_0$ against a central difference of the density --- which shares no
 machinery with either storage --- to \textbf{7.0e-6}.
 
+\textbf{A potential-only meta-GGA works under gamma storage and did not until
+2026-09-18.} $\tau$ is built from $i(\mathbf k+\mathbf G)c_{\mathbf G}$, which is
+\emph{odd} in $\mathbf G$ where $c_{\mathbf G}$ is Hermitian, so the density's
+conjugate fill is the wrong fill and the corrected form is not
+$2\,\mathrm{Re}(\sum)-(G{=}0)$ either. Pairing each $\mathbf G$ with $-\mathbf G$
+gives $\nabla\psi = 2\,\mathrm{Re}\,h$ with $h=\sum_{\mathbf G\in\mathrm{half}}
+i\mathbf G\,c_{\mathbf G}e^{i\mathbf G\cdot\mathbf r}$, the $G=0$ term dropping out
+on its own because it carries a factor $\mathbf G$, so the half-sphere $\tau$ is
+$4(\mathrm{Re}\,h)^2$ where the whole-sphere one is $|\nabla\psi|^2$. Taking
+$|h|^2$ there, which is what this did, \textbf{loses the oscillation pointwise}
+and is a clean factor of two only in the \emph{integral}: on two-atom silicon
+under \code{tb09} the integrals were in the ratio \textbf{0.506}, the pointwise
+disagreement was \textbf{7.7e-2} on a $\tau$ whose maximum is 1.2e-1, and the two
+total energies were \textbf{16.9~mRy} apart --- in a functional where $\tau$ enters
+$v_x$ directly rather than through an energy. Corrected, the two storages agree to
+\textbf{1.3e-15} pointwise with the totals identical to every printed digit.
+
+\textbf{The velocity operator refuses}, and it is the same oddness one step
+further out. $\partial\hat H/\partial\mathbf k$ is odd in $\mathbf G$, so the
+full-sphere sum is $2i\,\mathrm{Im}(\sum_{\mathrm{half}})$ and the diagonal of a
+real state is \emph{exactly zero} --- time reversal saying a real state at
+$\Gamma$ does not move. The half-sum returns an $O(1)$ number instead:
+\textbf{0.863}~Ry\,bohr against \textbf{1.8e-15} at an explicit $k=0$, on the same
+cell. That is the whole error rather than half of it, so unlike a density it is
+not recoverable by the usual rule, which is why this refuses.
+\code{Calculation.at\_kcart} is the one place it is said, because every consumer
+--- the optical conductivity, the Kerr angle, second-harmonic generation, the
+shift current, the nesting function and \code{band\_velocities} --- reaches the
+operator through \code{VelocityOperator}, its only caller. A \textbf{topological
+invariant is unaffected}: \code{at\_kpoints} rebuilds the sphere whole, so a
+Chern number or a $Z_2$ index on a gamma ground state runs, and agrees with the
+whole-sphere curvature to \textbf{7.4e-12} on a curvature of 2.2e-4.
+
 A \textbf{field} response is still refused, and the distinction is the reason: a
 field enters through the commutator $[H,\mathbf r]$, which builds plane-wave
 sums of its own. The dielectric tensor, the Raman tensor, the strain response
