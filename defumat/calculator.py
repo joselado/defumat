@@ -353,12 +353,14 @@ class Calculator:
         self._scf: SCFResult | None = None
         self._scf_options: dict | None = None
         self._relax = None
+        self._relax_options = None
         self._relax_variable_cell = False
         #: The last ultracell, and the options that filled it. One slot, for
         #: :meth:`get_scf`'s reason: what it holds is the frozen states.
         self._ultracell = None
         self._ultracell_options: dict | None = None
         self._strain_response = None
+        self._strain_response_options = None
         #: A converged state from another calculator, handed to the first SCF
         #: as ``starting_from``. Not a cache -- a starting point (P23).
         self._seed = None
@@ -441,7 +443,15 @@ class Calculator:
         path = Path(path)
         pwin = read_pw_input(path)
         if pseudo_dir is None:
-            pseudo_dir = path.parent
+            # The input's own ``&control pseudo_dir`` first, resolved relative
+            # to the input file as ``pw.x`` resolves a relative one, and this
+            # code's own default -- the input file's directory -- behind it.
+            # An explicit argument still wins over both.
+            named = pwin.get("control", "pseudo_dir")
+            pseudo_dir = (
+                (path.parent / str(named).strip(), path.parent)
+                if named else path.parent
+            )
         return cls(build_system(pwin),
                    pseudo_dir=pseudo_dir,
                    **{**electrons_defaults(pwin), **defaults})
@@ -503,7 +513,7 @@ class Calculator:
         if changed:
             self.defaults.update(changed)
             self._calculation = None
-            self._strain_response = None
+            self._strain_response = self._strain_response_options = None
 
     # ------------------------------------------------------------------
     # the ground state, and the cache in front of it
@@ -595,7 +605,7 @@ class Calculator:
         self._adopt(options)
         # Before the call rather than after it -- see the docstring. An SCF
         # makes every response built on the previous one stale in any case.
-        self._scf = self._strain_response = None
+        self._scf = self._strain_response = self._strain_response_options = None
         self._ultracell = self._ultracell_options = None
         self._scf = run_scf(self.system, self.pseudos,
                             calculation=self.calculation, **self._seeded(merged))
@@ -767,16 +777,15 @@ class Calculator:
         reason :meth:`get_scf` gives: it holds every ionic step's converged
         wavefunctions, and a rebind releases nothing until the call returns.
         """
-        if variable_cell:
-            from defumat.workflows.vc_relax import run_vc_relax as run
-        else:
-            from defumat.workflows.relax import run_relax as run
-
-        self._relax = None
+        run = _relax_entry_point(variable_cell)
+        merged = self._defaults_for(run, options)
+        self._relax = self._relax_options = None
         self._relax = run(self.system, self.pseudos,
-                          calculation=self.calculation,
-                          **self._defaults_for(run, options))
+                          calculation=self.calculation, **merged)
         self._relax_variable_cell = variable_cell
+        # The key, for :meth:`relaxed`'s cache test. ``get_relax`` itself always
+        # reruns, so this is the only thing that reads it.
+        self._relax_options = merged
         return self._relax
 
     def relaxed(self, variable_cell: bool = False, **options) -> "Calculator":
@@ -811,7 +820,18 @@ class Calculator:
         had the relaxation never run. Nothing is lost but the reuse, and the
         alternative was a wrong number.
         """
-        if self._relax is None or self._relax_variable_cell != variable_cell:
+        # **Keyed by the options, like every other slot on this facade.** A
+        # second ``relaxed(forc_conv_thr=1e-5, nstep=100)`` after a plain
+        # ``relaxed()`` used to return the calculator built on the *loose*
+        # relaxation and never pass either option to ``run_relax``, with nothing
+        # on the result saying which relaxation it came from -- and what is
+        # computed next, a dynamical matrix above all, then sits at a geometry
+        # carrying the default relaxation's residual forces, where the acoustic
+        # sum rule is an atom-sum identity and blind to exactly that.
+        merged = self._defaults_for(_relax_entry_point(variable_cell), options)
+        if (self._relax is None
+                or self._relax_variable_cell != variable_cell
+                or not _same_options(merged, self._relax_options)):
             self.get_relax(variable_cell=variable_cell, **options)
         result = self._relax
         if not result.converged:
@@ -975,18 +995,31 @@ class Calculator:
         six distinct ``(nk, nocc, npwx)`` blocks -- the ``(3, 3)`` array of
         ``dpsi`` after symmetrisation -- so holding it while its replacement is
         built doubles the largest thing this calculator owns.
+
+        **The slot is keyed by the options that filled it**, which is the
+        facade's rule for its one cache and what ``_scf`` and ``_ultracell``
+        already do. Testing ``or options`` instead let a *later* call with no
+        options reuse whatever an earlier call with them had produced: a slot
+        filled at ``tr2 = 1e-6`` came straight back out of
+        :meth:`get_elastic_constants`, which asks for the response with no
+        options at all, and nothing on the result said which tolerance it had
+        been built at.
         """
         from defumat.response.strain import strain_response
 
         result = self._ground_state("the strain response")
-        if self._strain_response is None or options:
-            self._strain_response = None
-            self._strain_response = strain_response(
-                self.calculation, result.wavefunctions, result.eigenvalues,
-                result.density, result.becsum,
-                **self._defaults_for(strain_response, options,
-                                     exclude=SCF_ONLY_OPTIONS),
-            )
+        merged = self._defaults_for(strain_response, options,
+                                    exclude=SCF_ONLY_OPTIONS)
+        if self._strain_response is not None and _same_options(
+            merged, self._strain_response_options
+        ):
+            return self._strain_response
+        self._strain_response = self._strain_response_options = None
+        self._strain_response = strain_response(
+            self.calculation, result.wavefunctions, result.eigenvalues,
+            result.density, result.becsum, **merged,
+        )
+        self._strain_response_options = merged
         return self._strain_response
 
     def get_elastic_constants(self, **options):
@@ -1640,7 +1673,9 @@ class Calculator:
 
         return run_relaxed_anisotropy(
             self.system, self.pseudos, directions=directions,
-            **self._defaults_for(run_relaxed_anisotropy, options),
+            **{**self._shared_scf_options(withheld=("conv_thr",)),
+               **self._defaults_for(run_relaxed_anisotropy, options),
+               **options},
         )
 
     def get_exchange_torque(self):
@@ -1723,11 +1758,8 @@ class Calculator:
         """One SCF per spiral wavevector, sharing what does not depend on ``q``."""
         from defumat.workflows.spiral import run_spiral_scan
 
-        # ``run_spiral_scan`` takes its SCF options through a ``**kwargs`` that
-        # forwards to ``run_scf``; the strict filter cannot see that, so the
-        # shared ones are matched against ``run_scf``'s own signature instead.
         return run_spiral_scan(self.system, self.pseudos, wavevectors,
-                               **{**self._defaults_for(run_scf), **options})
+                               **{**self._shared_scf_options(), **options})
 
     def get_spiral_relaxation(self, **options):
         """Relax the spiral wavevector itself: ``dE/dq`` downhill by BFGS."""
@@ -1929,6 +1961,31 @@ class Calculator:
     # plumbing
     # ------------------------------------------------------------------
 
+    def _shared_scf_options(self, withheld: tuple[str, ...] = ()) -> dict:
+        """The shared options, for an entry point that hides them in ``**kwargs``.
+
+        :meth:`_defaults_for` matches against a signature, and a ``**kwargs``
+        is deliberately not read as permission to forward everything. Two
+        workflows nonetheless take their SCF options that way and pass them
+        straight to :func:`~defumat.scf.driver.run_scf`, so for those the match
+        is against ``run_scf``'s own signature instead:
+        :meth:`get_spiral_scan` and :meth:`get_relaxed_anisotropy`. Without it
+        the forwarding was not strict but empty -- an input whose
+        ``&electrons`` sets ``mixing_beta = 0.2`` because the magnetic cell
+        diverges at 0.7 ran its noncollinear SCFs at the library default, and a
+        ``k_batch = 1`` set to keep a slab inside RAM was dropped the same way.
+
+        ``withheld`` is for an option the workflow sets deliberately:
+        ``run_relaxed_direction`` tightens ``conv_thr`` to 1e-10 because an
+        anisotropy is a difference of total energies at the micro-Rydberg
+        level, so a calculator's 1e-6 must not undo it. Naming it in the call
+        still reaches it, which is the difference between a default and a
+        refusal.
+        """
+        return {name: value
+                for name, value in self._defaults_for(run_scf).items()
+                if name not in withheld}
+
     def _defaults_for(self, func, options=None, exclude=frozenset()) -> dict:
         """This calculator's shared options that ``func`` actually names.
 
@@ -2029,17 +2086,32 @@ def _resolve_pseudos(system: System, pseudos, pseudo_dir) -> tuple:
             "it from the input file's own directory"
         )
 
-    directory = Path(pseudo_dir)
+    # **A sequence of directories, tried in order, because the input file names
+    # one too.** ``pw.x`` reads ``&control``'s ``pseudo_dir`` and nothing here
+    # did: an input whose pseudopotentials live only there -- which is how QE's
+    # own test-suite is arranged, ``pseudo_dir = '../../pseudo'`` -- raised on a
+    # file ``pw.x`` runs, and the message pointed at this function's keyword
+    # rather than at the input variable that already answers it. The resolution
+    # is per *file* rather than per directory, so a ``pseudo_dir`` that exists
+    # but does not hold this species still falls back rather than failing, and
+    # the error names every place that was looked in.
+    directories = [Path(one) for one in (
+        (pseudo_dir,) if isinstance(pseudo_dir, (str, Path)) else tuple(pseudo_dir)
+    )]
     loaded = []
     for species in system.structure.species:
-        path = directory / species.pseudo_file
-        if not path.is_file():
+        for directory in directories:
+            path = directory / species.pseudo_file
+            if path.is_file():
+                loaded.append(read_upf(path))
+                break
+        else:
+            looked = ", ".join(str(one / species.pseudo_file) for one in directories)
             raise FileNotFoundError(
-                f"{species.name}: {path} does not exist. The ATOMIC_SPECIES "
+                f"{species.name}: {looked} does not exist. The ATOMIC_SPECIES "
                 f"card names {species.pseudo_file!r}; point pseudo_dir at the "
                 "directory holding it"
             )
-        loaded.append(read_upf(path))
     return tuple(loaded)
 
 
@@ -2052,6 +2124,15 @@ def _has_checkpoint(checkpoint_dir) -> bool:
     """
     return (checkpoint_dir is not None
             and (Path(checkpoint_dir) / SCF_CHECKPOINT).exists())
+
+
+def _relax_entry_point(variable_cell: bool):
+    """``run_vc_relax`` or ``run_relax``, which decides the option signature."""
+    if variable_cell:
+        from defumat.workflows.vc_relax import run_vc_relax as run
+    else:
+        from defumat.workflows.relax import run_relax as run
+    return run
 
 
 def _same_options(new: dict, old: dict | None) -> bool:

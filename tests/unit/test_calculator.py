@@ -78,6 +78,148 @@ def test_from_file_defaults_pseudo_dir_to_the_inputs_own_directory(tmp_path,
     assert calc.pseudos[0].element.strip() == "Si"
 
 
+def test_from_file_reads_the_inputs_own_pseudo_dir(tmp_path, pseudo_dir):
+    """``&control``'s ``pseudo_dir`` is what ``pw.x`` resolves the card against.
+
+    It was parsed and read by nothing, so an input whose pseudopotentials live
+    only where it says -- which is how QE's own test-suite is arranged,
+    ``pseudo_dir = '../../pseudo'`` -- raised on a file ``pw.x`` runs.
+    """
+    (tmp_path / "held").mkdir()
+    (tmp_path / "held" / "Si.pz-vbc.UPF").write_bytes(
+        (pseudo_dir / "Si.pz-vbc.UPF").read_bytes()
+    )
+    (tmp_path / "scf.in").write_text(
+        SILICON.replace("&control", "&control\n  pseudo_dir = 'held'")
+    )
+    calc = Calculator.from_file(tmp_path / "scf.in", announce=False)
+    assert calc.pseudos[0].element.strip() == "Si"
+
+
+def test_a_pseudo_dir_that_does_not_hold_the_file_falls_back(tmp_path, pseudo_dir):
+    """The resolution is per *file*, so this code's own default stays behind it.
+
+    A relative ``pseudo_dir`` written on someone else's machine is the ordinary
+    case in a committed input, and refusing to look beside the input file would
+    break every one of them for no gain. A file missing from both places names
+    both.
+    """
+    (tmp_path / "elsewhere").mkdir()
+    (tmp_path / "Si.pz-vbc.UPF").write_bytes(
+        (pseudo_dir / "Si.pz-vbc.UPF").read_bytes()
+    )
+    (tmp_path / "scf.in").write_text(
+        SILICON.replace("&control", "&control\n  pseudo_dir = 'elsewhere'")
+    )
+    assert Calculator.from_file(
+        tmp_path / "scf.in", announce=False
+    ).pseudos[0].element.strip() == "Si"
+
+    (tmp_path / "Si.pz-vbc.UPF").unlink()
+    with pytest.raises(FileNotFoundError, match="elsewhere.*Si.pz-vbc.UPF"):
+        Calculator.from_file(tmp_path / "scf.in", announce=False)
+
+
+def test_relaxed_reruns_when_its_options_change(pseudo_dir):
+    """The one cached quantity that had no options key at all.
+
+    ``relaxed()`` then ``relaxed(forc_conv_thr=1e-5)`` returned the calculator
+    built on the *loose* relaxation and never passed the threshold to
+    ``run_relax``, with nothing on the result saying which relaxation it came
+    from -- and a dynamical matrix computed next sits at a geometry carrying the
+    first one's residual forces, where the acoustic sum rule is an atom sum and
+    blind to exactly that.
+    """
+    from types import SimpleNamespace
+
+    from defumat.calculator import _relax_entry_point
+
+    calc = Calculator.from_text(SILICON, pseudo_dir, announce=False)
+    calls = []
+
+    def fake_get_relax(variable_cell=False, **options):
+        calls.append(options)
+        calc._relax = SimpleNamespace(converged=True, system=calc.system,
+                                      scf=None, scf_in_relaxed_basis=True)
+        calc._relax_variable_cell = variable_cell
+        calc._relax_options = calc._defaults_for(
+            _relax_entry_point(variable_cell), options
+        )
+        return calc._relax
+
+    calc.get_relax = fake_get_relax
+    calc.relaxed()
+    calc.relaxed()
+    assert len(calls) == 1, "the same options must not rerun"
+    calc.relaxed(forc_conv_thr=1.0e-5)
+    assert len(calls) == 2 and calls[-1]["forc_conv_thr"] == 1.0e-5
+    calc.relaxed(variable_cell=True)
+    assert len(calls) == 3, "and neither does the other kind of relaxation"
+
+
+def test_the_strain_response_is_keyed_by_the_options_that_filled_it(pseudo_dir,
+                                                                   monkeypatch):
+    """``or options`` is not a key: it lets a later call reuse an earlier one's.
+
+    A slot filled at ``tr2 = 1e-6`` came straight back out of
+    ``get_elastic_constants``, which asks for the response with no options at
+    all, and nothing on the result recorded which tolerance it was built from.
+    """
+    from types import SimpleNamespace
+
+    import defumat.response.strain as strain_module
+
+    calls = []
+
+    def fake(calculation, psi, eigenvalues, density, becsum, **options):
+        calls.append(options)
+        return f"response {len(calls)}"
+
+    monkeypatch.setattr(strain_module, "strain_response", fake)
+    calc = Calculator.from_text(SILICON, pseudo_dir, announce=False)
+    monkeypatch.setattr(
+        calc, "_ground_state",
+        lambda *args, **kwargs: SimpleNamespace(
+            wavefunctions=None, eigenvalues=None, density=None, becsum=(),
+        ),
+    )
+
+    first = calc.get_strain_response(tr2=1.0e-6)
+    assert len(calls) == 1 and calls[0]["tr2"] == 1.0e-6
+    plain = calc.get_strain_response()
+    assert plain is not first, "a call with no options is not that call"
+    assert len(calls) == 2 and "tr2" not in calls[1]
+    assert calc.get_strain_response() is plain, "and its own repeat is cached"
+    assert len(calls) == 2
+
+
+def test_the_relaxed_anisotropy_gets_the_shared_scf_options(pseudo_dir,
+                                                            monkeypatch):
+    """A ``**kwargs`` signature is not permission to forward everything.
+
+    It is also not a reason to forward *nothing*, which is what the strict
+    filter did here: an input whose ``&electrons`` sets ``mixing_beta = 0.2``
+    because the magnetic cell diverges at 0.7 ran its noncollinear SCFs at the
+    library default. ``conv_thr`` is the one held back, because
+    ``run_relaxed_direction`` tightens it to 1e-10 on purpose.
+    """
+    import defumat.workflows.anisotropy as anisotropy
+
+    seen = {}
+
+    def fake(system, pseudos, directions=None, **options):
+        seen.update(options)
+        return "anisotropy"
+
+    monkeypatch.setattr(anisotropy, "run_relaxed_anisotropy", fake)
+    calc = Calculator.from_text(SILICON, pseudo_dir, announce=False,
+                                mixing_beta=0.2, k_batch=1, conv_thr=1.0e-6)
+    assert calc.get_relaxed_anisotropy(directions="xz") == "anisotropy"
+    assert seen["mixing_beta"] == 0.2
+    assert seen["k_batch"] == 1
+    assert "conv_thr" not in seen
+
+
 def test_a_missing_file_names_the_species_that_asked_for_it(tmp_path):
     (tmp_path / "scf.in").write_text(SILICON)
     with pytest.raises(FileNotFoundError, match="Si.*Si.pz-vbc.UPF"):
