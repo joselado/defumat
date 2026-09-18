@@ -664,6 +664,29 @@ def _depolarize_ns(ns):
     return jnp.stack([average, zero, zero, average])
 
 
+def depolarize_tau(tau):
+    """``tau`` with no spin splitting left in it, in **its own** storage.
+
+    The kinetic energy density is *not* stored the way the density is, and that
+    is the whole reason this is written out rather than sent through
+    :meth:`_SpinTransfer.apply`: at ``nspin_mag = 2`` it is ``(up, down)`` --
+    ``sum_band.f90`` converts ``rho`` to ``(total, magnetization)`` at the end
+    and leaves ``kin_r`` alone, and ``potinit.f90`` says so in a comment -- while
+    at ``nspin_mag = 4`` it *is* on the Pauli basis,
+    ``(tau, tau_x, tau_y, tau_z)``. So one channel is untouched, two are
+    averaged, and four keep the trace and lose the axial vector.
+    """
+    import jax.numpy as _jnp
+
+    if tau.shape[0] == 1:
+        return tau
+    if tau.shape[0] == 2:
+        average = _jnp.mean(tau, axis=0, keepdims=True)
+        return _jnp.concatenate([average, average])
+    zero = _jnp.zeros_like(tau[0])
+    return _jnp.stack([tau[0], zero, zero, zero])
+
+
 def promote_ns(result, calculation, transfer=None):
     """The Hubbard occupation matrix, ``(nspin, nslot, ldmx, ldmx)``.
 

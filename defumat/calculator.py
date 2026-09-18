@@ -1748,7 +1748,58 @@ class Calculator:
         steps of a relaxation and is worth several SCF iterations.
         """
         system = self.system.with_cell(self.system.cell.at, positions)
-        return self._derived(system, seed=True)
+        return self._derived(system, seed=True, basis=self._frozen_basis(system))
+
+    def _frozen_basis(self, system: System):
+        """This calculator's plane-wave setup, to be reused at a new geometry.
+
+        **The FFT grid is a function of the symmetry, not only of the cutoffs**,
+        and moving an atom changes the symmetry. ``symm_base.f90``'s rule that
+        the grid dimensions be a multiple of the fractional translations'
+        denominators is implemented here as ``fft_factors``, so on the
+        canonical silicon cell a displacement of **0.02 bohr** takes ``nsym``
+        from 48 to 4, ``fft_factors`` from ``(4, 4, 4)`` to ``(1, 1, 1)``, and
+        the dense grid from ``(16, 16, 16)`` to ``(15, 15, 15)``.
+
+        Rebuilding, which is what this used to do, was wrong in both of its
+        branches. With a converged parent the seed this method promises to
+        carry was then refused by ``_check_grid`` -- *"the source density is on
+        a (16, 16, 16) grid and this run uses (15, 15, 15)"*, for a displacement
+        that changed neither the cell nor either cutoff. Without one it ran
+        silently at the displaced grid, so a finite difference built through the
+        front door differenced two different grids.
+
+        Freezing is not a workaround but the same thing the rest of the package
+        does: :meth:`~defumat.scf.driver.Calculation.at_positions` freezes the
+        grid for exactly this reason, ``run_relax`` goes through it, and this
+        method's own docstring calls itself the ``update_pot.f90`` step between
+        relaxation steps. What it costs is that a *large* displacement keeps a
+        grid chosen for the original symmetry, which is denser than the new
+        geometry needs rather than sparser -- the safe direction. A genuinely
+        fresh setup at a new geometry is ``Calculator.from_file`` with the new
+        positions, which is what it always was.
+
+        **Freezing is conditional, and the condition is the rule that made the
+        grid move in the first place.** ``symm_base.f90`` requires the grid
+        dimensions to be a multiple of the fractional translations'
+        denominators, and this package's answer is to choose the grid to fit
+        the translations rather than filter the translations to fit the grid.
+        So a frozen grid is only usable where the *target's* group is still
+        commensurate with it -- and it is not, in the one direction this
+        method's own purpose does not cover: moving an atom **onto** a more
+        symmetric site. Measured, a calculator built directly on a displaced
+        silicon (``nsym = 4``, grid ``(15, 15, 15)``) moved to the ideal site
+        (``nsym = 48``, ``fft_factors = (4, 4, 4)``): 15 is not a multiple of 4,
+        so freezing there would hand ``sym_rho`` operations whose fractional
+        translations the grid cannot represent. That case rebuilds, and the
+        seed check then raises honestly, because the grid really did change.
+        """
+        basis = self.calculation.basis
+        grid = basis.dense.grid
+        factors = system.symmetry_group(system.nosym).fft_factors()
+        if any(n % int(f) for n, f in zip(grid, factors)):
+            return None
+        return basis
 
     def with_cell(self, at, positions=None) -> "Calculator":
         """A calculator on a deformed cell, with an empty cache.
@@ -1847,10 +1898,15 @@ class Calculator:
                              magnetization=magnetization)
 
     def _derived(self, system: System, *, seed: bool = False, scf=None,
-                 magnetization: str = "auto") -> "Calculator":
-        """A calculator on ``system``, sharing this one's pseudos and options."""
+                 magnetization: str = "auto", basis=None) -> "Calculator":
+        """A calculator on ``system``, sharing this one's pseudos and options.
+
+        ``basis`` freezes the plane-wave setup at the parent's rather than
+        letting the child enumerate its own. Only :meth:`with_positions` passes
+        it, and :meth:`_frozen_basis` is where the reason is.
+        """
         derived = Calculator(system, self.pseudos, announce=self.announce,
-                             **self.defaults)
+                             basis=basis, **self.defaults)
         if scf is not None:
             derived._scf = scf
             # **Deliberately no options**, so that any explicit ``get_scf``

@@ -171,7 +171,12 @@ def torque_of_result(calculation, result, density=None) -> ExchangeTorque:
     from defumat.scf.potential import v_of_rho
 
     if density is None:
-        density = result.density if result.nspin != 1 else result.density[None]
+        # ``SCFResult.density`` keeps its ``(nspin_mag, ...)`` axis at one
+        # channel -- it is the *eigenvalue-shaped* quantities and the DOS that
+        # are squeezed. Reinstating it here gave a five-dimensional array that
+        # rode through ``v_of_rho`` and the transforms without complaint,
+        # because both broadcast over leading axes.
+        density = result.density
     density = jnp.asarray(density)
     if calculation.functional.is_meta:
         raise NotImplementedError(

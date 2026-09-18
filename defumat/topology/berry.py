@@ -50,10 +50,15 @@ that is piecewise constant in ``k``. The sum is written as band matrix elements
 between the states an NSCF already produced -- ``H`` is never formed as a
 matrix, which for a plane-wave basis would be the ``npw^2`` a dense solve is a
 test fixture for. It carries the ``e_n dS/dk`` term of the generalised
-eigenproblem, and an ultrasoft or PAW dataset is nonetheless **refused by
-name**, because that term is identically zero for a norm-conserving one and so
-no norm-conserving validation can see it. The truncation of the sum over empty
-states is reported rather than tuned away.
+eigenproblem, and **P99 wired that term and removed the refusal that stood in
+front of it**: an ultrasoft or PAW dataset runs here. This paragraph said the
+opposite until 2026-09-18, and there is no such refusal anywhere on the path --
+the only ``NotImplementedError`` below is about the *states* type, a bare
+coefficient array carrying nothing that says how the states depend on ``k``.
+The reason the refusal existed is still worth knowing, because it is what made
+the term easy to get wrong: ``e_n dS/dk`` is identically zero for a
+norm-conserving dataset, so no norm-conserving validation can see it. The
+truncation of the sum over empty states is reported rather than tuned away.
 """
 
 from __future__ import annotations

@@ -25,11 +25,16 @@ with ``U_up``, ``U_dn`` lattice periodic. The stored coefficients *are* those
 periodic parts -- the plane-wave sphere carries the ``e^{i(k +- q/2).r}``
 factor -- so holding the coefficients fixed while ``q`` moves holds ``U`` fixed
 and lets the spiral turn, which is precisely the variational parameter the SCF
-minimised over. The orthonormality constraint ``<U|U> = 1`` has no ``q`` in it
-(``S`` is the identity: ultrasoft and PAW spirals are refused *here*, though
-their ground state runs), so unlike the
-ultrasoft force there is no Pulay term to carry, and the total derivative is the
-partial one at frozen state.
+minimised over. The orthonormality constraint is where the two dataset kinds part, and this
+paragraph described only the first until 2026-09-18. On a **norm-conserving**
+dataset ``S`` is the identity, ``<U|U> = 1`` has no ``q`` in it, and unlike the
+ultrasoft force there is no Pulay term to carry, so the total derivative is the
+partial one at frozen state. On an **ultrasoft or PAW** one, which P96 made
+work rather than refuse, the constraint is ``<U|S|U> = 1`` and therefore *does*
+move with ``q``, so the Pulay term is back and is carried -- together with the
+displaced table ``Q_ij(G - q)`` and PAW's one-centre energy, which is what
+``compute_spiral_gradient`` below means by rebuilding the sphere at a traced
+``q`` rather than differentiating at a frozen one.
 
 **What actually depends on ``q``, and what visibly does not.** In the rotated
 frame the density is lattice periodic and is built from the same coefficients on

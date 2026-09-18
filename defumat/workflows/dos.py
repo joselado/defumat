@@ -80,8 +80,14 @@ class DensityOfStates:
     :mod:`defumat.io.output`.
 
     With two spin channels ``dos`` and ``integrated`` are ``(2, nE)``; with one
-    the axis is squeezed away, the same convention
-    :class:`~defumat.scf.driver.SCFResult` uses for the density. The summed
+    the axis is squeezed away and :attr:`dos_by_spin` always has it. That is the
+    convention for a quantity read **per energy or per band**, which is
+    :attr:`~defumat.scf.driver.SCFResult.eigenvalues` and
+    :attr:`~defumat.scf.driver.SCFResult.occupations` as well -- and *not* the
+    one a real-space field follows: ``SCFResult.density`` and ``.potential``
+    keep their ``(1, ...)`` axis at one channel. This sentence claimed the
+    density as its precedent until 2026-09-18, and a consumer written against
+    it reinstates an axis that is already there. The summed
     quantities are :attr:`total_dos` and :attr:`total_integrated`, and it is the
     *total* that satisfies the sum rule -- which is why ``dos.x`` prints two
     ``dos`` columns and only one ``Int dos``.

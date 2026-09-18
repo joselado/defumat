@@ -3046,6 +3046,64 @@ into each of the five conversion branches. A checkpoint resume is untouched:
 `magnetization` other than `'auto'` is refused outright on one.
 
 
+**Two more things that crossed a continuation without being asked, found and closed
+2026-09-18.**
+
+**The kinetic energy density.** `tau` was carried on a *shape* test alone, with no
+reference to the magnetization the continuation had just resolved, so a
+`magnetization='none'` or `'seed'` continuation started a meta-GGA run from a
+spin-polarized `tau` on a density whose magnetization was deliberately thrown away --
+and same shape is exactly the case where it silently could, an `nspin = 2` to `nspin = 2`
+`'none'`. It is `promote_ns`'s defect one array over, and it bites harder for the same
+reason the meta-GGA phases give: a **potential-only** functional reads `tau` straight
+into `v_x` rather than through an energy, so the first Hamiltonian is split by a
+magnetization the density does not have. Measured on `h-fcc-magnon.in` under
+`input_dft = 'tb09'` at the input's own mixing, on the 0.53 mu_B state:
+`max|tau_up - tau_dn| = 0.0223` against a `tau` whose maximum is `0.0340`, **65 per
+cent**. (That cell does not fully converge under `tb09` at the default iteration count,
+which does not change the size of the splitting.)
+
+**`tau` is not stored the way the density is, and that is the trap in fixing it.** At
+`nspin_mag = 2` it is `(up, down)` -- `sum_band.f90` converts `rho` to
+`(total, magnetization)` at the end and leaves `kin_r` alone, and `potinit.f90` says so
+in a comment -- while at `nspin_mag = 4` it *is* on the Pauli basis,
+`(tau, tau_x, tau_y, tau_z)`. So sending it through `_SpinTransfer.apply`, which reads
+the density's convention, would have been right at four channels and wrong at two.
+`depolarize_tau` is written out for that reason.
+
+**The FFT grid under `with_positions`.** The grid is a function of the **symmetry**, not
+only of the cutoffs: `symm_base.f90` requires its dimensions to be a multiple of the
+fractional translations' denominators. On the canonical silicon cell a displacement of
+**0.02 bohr** takes `nsym` from 48 to 4, `fft_factors` from `(4, 4, 4)` to `(1, 1, 1)`,
+and the dense grid from `(16, 16, 16)` to `(15, 15, 15)` -- so the seed
+`with_positions` promises to carry was refused by `_check_grid` with a converged parent,
+and without one the run went ahead silently at a grid the undisplaced reference did not
+use. It now freezes the parent's basis, which is what `Calculation.at_positions` and
+`run_relax` already do and what the method's own docstring calls itself.
+
+**Freezing had to be made conditional, and the case that forces it was found by looking
+for it.** Unconditional freezing is unsound in the one direction this method is not for:
+moving an atom **onto** a more symmetric site. A calculator built directly on a displaced
+silicon has `nsym = 4` and a `(15, 15, 15)` grid, and the ideal site needs
+`fft_factors = (4, 4, 4)`, which 15 is not a multiple of -- `sym_rho` would then carry
+operations whose fractional translations the grid cannot represent. That direction
+rebuilds, and the seed check raises honestly, because the grid really did change.
+
+**What this does not buy, and it was nearly written down as if it did.** A finite
+difference whose centre is a *symmetric* geometry is **still not sound through this front
+door**. The grid is only one of the things that change between a symmetric centre and a
+displaced arm; the symmetry group `sym_rho` uses is rebuilt as well and is not frozen
+with it. Measured after the fix, all four points on `(16, 16, 16)`: the one-sided ratio
+`-(E(d) - E(0))/d` from the ideal geometry reads **-0.0116, -0.0212, -0.0452** at
+`d = 0.04, 0.02, 0.01`, growing as `d` shrinks where it must vanish -- about 4.5e-4 Ry of
+fixed offset still in the numerator, and with `nosym = .true.` on both ends, which takes
+the group out, it does not vanish either. A stencil lying **entirely** in the
+low-symmetry region is fine and always was: a central difference around `d = 0.05`
+matches the analytic force to **9.7e-07 Ry/bohr, 0.011 per cent** after the fix and
+1.9e-07 before it. That pair is the measurement which says this fix is about the grid and
+not about that agreement, and the remaining offset is the next thing to localise.
+
+
 ### P24a — Ultrasoft and PAW linear response. ✅ DONE.
 
 **Almost none of what they add is transcribed**, because the density and the Hamiltonian

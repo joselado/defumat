@@ -101,7 +101,9 @@ from defumat.batching import (
     fetch_wavefunctions, map_k, park_wavefunctions, resolve_band_batch,
     resolve_k_batch, resolve_projectors, resolve_wfc_store,
 )
-from defumat.scf.continuation import ContinuedState, continued_state
+from defumat.scf.continuation import (
+    ContinuedState, continued_state, depolarize_tau,
+)
 from defumat.scf.density import (
     becsum,
     kinetic_energy_density,
@@ -1192,7 +1194,7 @@ class SCFResult:
     nspin_mag: int = 1
     #: The converged Hubbard occupation matrix, ``(nspin, nslot, ldmx, ldmx)``
     #: with one slot per correlated atom, or ``None`` for a run without a U.
-    #: **The spin axis is kept even for** ``nspin = 1``, unlike the density's,
+    #: **The spin axis is kept even for** ``nspin = 1``, as the density's is,
     #: because ``ns`` is per channel by construction there (it is halved in
     #: ``new_ns``) and squeezing it would hide the factor of two that the energy
     #: carries. :attr:`hubbard_setup` says which atom each slot is.
@@ -5017,6 +5019,23 @@ def run_scf(
             expected = tuple(np.shape(calculation.starting_density()))
             if tuple(np.shape(source_tau)) == expected:
                 starting_tau = source_tau
+        # **...and the shape is only half the question.** The other half is the
+        # one ``promote_ns`` had to be taught as well: a continuation that
+        # reseeds or zeroes the magnetization must not hand the next run a
+        # ``tau`` still carrying the source's. Same shape is exactly the case
+        # where it silently could -- an ``nspin = 2`` to ``nspin = 2``
+        # ``magnetization='none'`` -- and a potential-only meta-GGA reads
+        # ``tau`` straight into ``v_x`` rather than through an energy, so the
+        # first Hamiltonian would be split by a magnetization the density does
+        # not have. ``'seed'`` drops it for ``promote_ns``'s reason: the
+        # Thomas-Fermi guess ``_starting_tau`` builds costs iterations and
+        # cannot be wrong, which is what the comment above already says about
+        # dropping it.
+        if starting_tau is not None and state.magnetization in ("none", "seed"):
+            if state.magnetization == "seed":
+                starting_tau = None
+            else:
+                starting_tau = depolarize_tau(jnp.asarray(starting_tau))
         if verbose:
             print(f"  continuing a previous run: {state.description}")
         # **Released here because a *parameter* is a reference too, and it is

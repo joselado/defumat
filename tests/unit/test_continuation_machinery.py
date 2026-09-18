@@ -1064,3 +1064,121 @@ def test_ns_with_no_transfer_is_unchanged():
     ns = _hubbard_ns(calculation, 0.4)
     out = np.asarray(promote_ns(_result_with_ns(ns), calculation))
     np.testing.assert_allclose(out, ns)
+
+
+# --- ...and so does the kinetic energy density -------------------------------
+
+
+@pytest.mark.parametrize("nspin_mag,expected", [(1, "kept"), (2, "flat"), (4, "trace")])
+def test_tau_is_depolarized_in_its_own_storage(nspin_mag, expected):
+    """``tau`` is **not** stored the way the density is, which is the trap here.
+
+    At ``nspin_mag = 2`` it is ``(up, down)`` -- ``sum_band.f90`` converts
+    ``rho`` to ``(total, magnetization)`` at the end and leaves ``kin_r`` alone,
+    and ``potinit.f90`` says so in a comment -- while at ``nspin_mag = 4`` it
+    *is* on the Pauli basis, ``(tau, tau_x, tau_y, tau_z)``. So sending it
+    through ``_SpinTransfer.apply``, which reads the density's convention,
+    would be wrong at two channels and right at four.
+
+    What it is worth: on ``h-fcc-magnon.in`` under ``input_dft = 'tb09'`` at
+    the input's own mixing, the converged-to-0.53-mu_B state carries
+    ``max|tau_up - tau_dn| = 0.0223`` against a ``tau`` whose maximum is
+    ``0.0340`` -- **65 per cent** -- and that used to cross a
+    ``magnetization='none'`` continuation onto a density made exactly
+    spin-degenerate. (That cell does not fully converge under ``tb09`` at the
+    default iteration count, which does not change the size of the splitting.)
+    A potential-only meta-GGA reads ``tau`` straight into ``v_x`` rather than
+    through an energy, so the first Hamiltonian is split by a magnetization the
+    density does not have.
+    """
+    from defumat.scf.continuation import depolarize_tau
+
+    grid = (4, 4, 4)
+    rng = np.random.default_rng(7)
+    tau = rng.uniform(0.1, 1.0, (nspin_mag,) + grid)
+    out = np.asarray(depolarize_tau(tau))
+    source = np.asarray(tau)
+
+    assert out.shape == source.shape
+    if expected == "kept":
+        np.testing.assert_array_equal(out, source)
+    elif expected == "flat":
+        np.testing.assert_allclose(out[0], out[1], atol=1e-15)
+        # the total is what survives, which is the part worth carrying
+        assert out.sum() == pytest.approx(source.sum(), rel=1e-12)
+    else:
+        np.testing.assert_allclose(out[0], source[0], atol=1e-15)  # the trace
+        assert np.abs(out[1:]).max() == 0.0                        # the vector
+
+
+def test_tau_crosses_untouched_when_the_magnetization_does():
+    """``'carry'`` must not lose the guess the shape test exists to keep."""
+    from defumat.scf.continuation import depolarize_tau
+
+    tau = np.random.default_rng(3).uniform(0.1, 1.0, (2, 4, 4, 4))
+    # the driver only calls it for 'none'; this pins that the identity branch
+    # is the one channel and not a silent flattening of two.
+    np.testing.assert_array_equal(
+        np.asarray(depolarize_tau(tau[:1])), np.asarray(tau[:1]))
+
+
+# --- with_positions and the FFT grid -------------------------------------------
+
+
+def _silicon_calculator(text=None):
+    from defumat.calculator import Calculator
+
+    if not SILICON.is_file():
+        pytest.skip("QE reference tree not present")
+    if text is None:
+        text = SILICON.read_text()
+    return Calculator.from_text(text, "tests/data/pseudo", announce=False)
+
+
+def test_with_positions_freezes_the_fft_grid():
+    """A 0.02 bohr displacement used to change the grid under the seed.
+
+    The grid is a function of the **symmetry**, not only of the cutoffs:
+    ``symm_base.f90`` requires its dimensions to be a multiple of the
+    fractional translations' denominators, implemented here as
+    ``fft_factors``. On the canonical silicon cell a displacement of 0.02 bohr
+    takes ``nsym`` from 48 to 4, ``fft_factors`` from ``(4, 4, 4)`` to
+    ``(1, 1, 1)`` and the dense grid from ``(16, 16, 16)`` to
+    ``(15, 15, 15)``.
+
+    Rebuilding was wrong in both branches. With a converged parent the seed
+    this method promises to carry was refused by ``_check_grid`` -- *"the
+    source density is on a (16, 16, 16) grid and this run uses (15, 15, 15)"*
+    -- for a displacement that changed neither the cell nor either cutoff.
+    Without one it ran silently at the displaced grid, so the undisplaced
+    reference and the displaced run were on different grids.
+    """
+    calculator = _silicon_calculator()
+    grid = calculator.calculation.basis.dense.grid
+    positions = np.asarray(calculator.system.structure.positions).copy()
+    positions[1, 0] += 0.02
+    moved = calculator.with_positions(positions)
+    assert len(moved.system.symmetry_group().rotation_array()) < 48
+    assert moved.calculation.basis.dense.grid == grid
+
+
+def test_with_positions_rebuilds_where_a_frozen_grid_would_be_unsound():
+    """...and freezing is conditional, in the direction the method is not for.
+
+    Moving an atom **onto** a more symmetric site gives the target a group
+    whose fractional translations the parent's grid may not be able to
+    represent -- a calculator built directly on a displaced silicon has
+    ``nsym = 4`` and a ``(15, 15, 15)`` grid, and the ideal site needs
+    ``fft_factors = (4, 4, 4)``, which 15 is not a multiple of. Freezing there
+    would hand ``sym_rho`` operations the grid cannot carry, so that case
+    rebuilds and the seed check then raises honestly.
+    """
+    text = SILICON.read_text().replace("Si 0.25 0.25 0.25", "Si 0.30 0.25 0.25")
+    calculator = _silicon_calculator(text)
+    assert calculator.calculation.basis.dense.grid == (15, 15, 15)
+
+    ideal = np.asarray(calculator.system.structure.positions).copy()
+    ideal[1] = np.array([0.25, 0.25, 0.25]) * float(calculator.system.cell.alat)
+    back = calculator.with_positions(ideal)
+    assert back.system.symmetry_group(back.system.nosym).fft_factors() == (4, 4, 4)
+    assert back.calculation.basis.dense.grid == (16, 16, 16)
