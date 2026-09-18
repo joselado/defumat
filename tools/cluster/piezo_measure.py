@@ -48,10 +48,16 @@ CASES = {
     "nc": {
         "input": "tests/data/qe/alas-raman.in",
         "what": "AlAs, norm-conserving LDA (Al.pz-vbc, As.pz-bhs), ecutwfc 10",
+        # Denser than the ultrasoft case's because this cell is cheap and it is
+        # the one whose job is to say what the harness itself is worth.
+        "nppstr": 11,
+        "transverse": (6, 6),
     },
     "us": {
         "input": "tests/data/qe/alas-piezo.in",
         "what": "AlAs, ultrasoft PBE (Al/As.pbe-n-rrkjus_psl.1.0.0), ecutwfc 25",
+        "nppstr": 7,
+        "transverse": (4, 4),
     },
 }
 
@@ -70,12 +76,19 @@ def polarization_vector(calculator, strain, nppstr, transverse, conv_thr):
     coordinates, which is what ``with_cell`` does when it is given no positions,
     so they follow the cell affinely and nothing relaxes.
     """
+    import jax
+
     at = np.asarray(calculator.system.cell.at)
-    alat = float(calculator.system.cell.alat)
     strained = calculator.with_cell(at @ (np.eye(3) + strain).T)
     scf = strained.get_scf(conv_thr=conv_thr)
     cell = strained.system.cell
-    vectors = np.asarray(cell.at) * alat  # bohr; row i is a_i
+    # **``Cell.at`` is in bohr**, not in units of ``alat``: ``Cell.volume`` is
+    # documented as bohr^3 of exactly this array and ``from_vectors`` takes
+    # bohr. Multiplying by ``alat`` here, which is what a QE ``at`` would need,
+    # put a factor of 10.575 on the first run of this script and made the finite
+    # difference read -6.998 C/m^2 against the response route's -0.764. The
+    # norm-conserving cell exists to catch that rather than to be believed.
+    vectors = np.asarray(cell.at)  # bohr; row i is a_i
     phases, total = [], np.zeros(3)
     for gdir in range(3):
         polarization = strained.get_polarization(
@@ -83,7 +96,7 @@ def polarization_vector(calculator, strain, nppstr, transverse, conv_thr):
         )
         phases.append(float(polarization.total_phase))
         total += float(polarization.total_phase) * vectors[gdir]
-    return {
+    out = {
         "polarization": total / float(cell.volume),
         "phases": phases,
         "quantum": float(polarization.quantum),
@@ -91,6 +104,15 @@ def polarization_vector(calculator, strain, nppstr, transverse, conv_thr):
         "volume": float(cell.volume),
         "vectors": vectors,
     }
+    # **Every strained geometry is a new set of shapes and XLA keeps every
+    # executable for the life of the process.** That is the accumulation
+    # `CLAUDE.md` names for a test file that sweeps many cells, met inside one
+    # script: the first run of this one died in the compiler, "LLVM compilation
+    # error: Cannot allocate memory", on a two-atom cell with 120 GB. The
+    # results stay; only the compiled code is dropped.
+    del strained, scf
+    jax.clear_caches()
+    return out
 
 
 def wrapped(difference: float) -> float:
@@ -138,10 +160,10 @@ def main() -> None:
     parser.add_argument("--out", default=None, help="write the numbers here as JSON")
     parser.add_argument("--shears", type=float, nargs="+", default=[0.0025, 0.005],
                         help="E[1,2] = E[2,1]; the Voigt shear is twice each")
-    parser.add_argument("--nppstr", type=int, default=7)
+    parser.add_argument("--nppstr", type=int, default=None)
     # A *pair*: ``string_mesh`` takes how many strings run along each of the
     # two crystal directions that are not ``gdir``.
-    parser.add_argument("--transverse", type=int, nargs=2, default=(4, 4))
+    parser.add_argument("--transverse", type=int, nargs=2, default=None)
     parser.add_argument("--conv-thr", type=float, default=1.0e-10)
     parser.add_argument("--pseudo-dir", default=str(ROOT / "tests" / "data" / "pseudo"))
     arguments = parser.parse_args()
@@ -150,8 +172,11 @@ def main() -> None:
     from defumat.calculator import Calculator
 
     case = CASES[arguments.case]
+    nppstr = arguments.nppstr or case["nppstr"]
+    transverse = tuple(arguments.transverse or case["transverse"])
     print(f"=== {arguments.case}: {case['what']}", flush=True)
-    print(f"    {case['input']}", flush=True)
+    print(f"    {case['input']}, strings of {nppstr} over a "
+          f"{transverse[0]}x{transverse[1]} transverse mesh", flush=True)
 
     # The dataset refusal is the thing being measured; every other guard stays.
     # It is patched here rather than removed in the package, so that the
@@ -165,7 +190,8 @@ def main() -> None:
                                       pseudo_dir=arguments.pseudo_dir,
                                       announce=False)
     results = {"case": arguments.case, "input": case["input"],
-               "what": case["what"]}
+               "what": case["what"], "nppstr": nppstr,
+               "transverse": list(transverse)}
 
     start = time.time()
     scf = calculator.get_scf(conv_thr=arguments.conv_thr)
@@ -190,8 +216,8 @@ def main() -> None:
     results["finite_difference"] = []
     for magnitude in arguments.shears:
         start = time.time()
-        one = finite_difference(calculator, magnitude, arguments.nppstr,
-                                tuple(arguments.transverse), arguments.conv_thr)
+        one = finite_difference(calculator, magnitude, nppstr,
+                                transverse, arguments.conv_thr)
         one["seconds"] = time.time() - start
         results["finite_difference"].append(one)
         gap = one["e14"] - float(tensor.e14)
