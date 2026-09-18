@@ -24,17 +24,20 @@
 # cpus-per-task 4. XLA takes every core it can see and Slurm's cgroup is what
 #               bounds it, so this *is* the thread count; MKL and OMP are pinned
 #               to 1 beside it.
-# mem           48G. The measured worst file is `test_ldau_flavours.py` at over
-#               16 GB on the workstation, where it is killed; 48 G leaves room
-#               for the accumulation that makes it expensive (every distinct
-#               cell compiles the whole stack afresh and XLA keeps every
-#               executable for the life of the process).
+# mem           32G. Most files need a few GB; the measured worst is
+#               `test_ldau_flavours.py`, killed at 16 G on the workstation and
+#               still climbing at 15.3 G under a 16 G cap, because every
+#               distinct cell compiles the whole stack afresh and XLA keeps
+#               every executable for the life of the process. 32 G is twice
+#               that and a smaller ask than the headroom would suggest: eight
+#               tasks at 48 G would hold 384 GB of a shared cluster for the
+#               sake of one file.
 #SBATCH --job-name=defumat-regression
 #SBATCH --partition=batch-milan
 #SBATCH --array=0-7
 #SBATCH --time=08:00:00
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=48G
+#SBATCH --mem=32G
 #SBATCH --output=/scratch/work/ladovj1/calculations/defumat-audit/out/reg-%A_%a.out
 #SBATCH --error=/scratch/work/ladovj1/calculations/defumat-audit/out/reg-%A_%a.err
 
@@ -63,8 +66,8 @@ export DEFUMAT_CACHE_DIR=off
 # so that subtree alone is mirrored to scratch and pointed at.
 export DEFUMAT_QE_ROOT=/scratch/work/ladovj1/apps/qe-7.5-reference
 # Under the Slurm cap, so the in-process watchdog names the test before the
-# kernel acts on the 48 G.
-export DEFUMAT_TEST_MEM_MAX=40G
+# kernel acts on the 32 G.
+export DEFUMAT_TEST_MEM_MAX=28G
 
 TASK=${SLURM_ARRAY_TASK_ID:-0}
 TASKS=${SLURM_ARRAY_TASK_COUNT:-8}
