@@ -7280,7 +7280,9 @@ two routes converge together at `O(h^2)`: their difference on `Gamma_1v` falls
 7.8e-4 → 1.9e-4 → 3.8e-5 → **8.6e-6** over the same four halvings. **The
 velocity route never had the problem** — its `jvp` freezes the sphere and its
 difference is between two *displaced* points holding the same 733 — which is one
-more reason it is the default.
+more reason it is the default. *That last sentence is a `Gamma` statement and
+was read as a general one for eleven months; both halves of it are corrected in
+"The stencil's own sphere" below.*
 
 **The truncation is removed and then reported.** Both routes are `O(h^2)`, and at
 Elk's own `deltaem = 0.025` that error is not small: silicon's `Gamma_2'`
@@ -7311,13 +7313,22 @@ is Elk's `d` matrix, which is in Hartree atomic units and is therefore
 | `Gamma_15c`, bands 5-7 (sum) | 7.7424153 | 7.5886921 | 7.5892084 | 1.99% |
 | `Gamma_2'c`, band 8 | 5.8460134 | 5.8671956 | 5.8682740 | 0.36% |
 
+**The two defumat columns are pre-2026-09-18**, taken before the stencil was
+built on one sphere ("The stencil's own sphere" below). Reproducing the cell at
+`ecutrho = 240` on a `4 4 4 0 0 0` grid gives `(0.8600936, 0.8600815)` for
+`Gamma_1v` on the old code, which is the table to 3e-6, and `(0.8601272,
+0.8601271)` on the new: every row still agrees with Elk to the percentage above,
+and the only digit that moves is the fifth.
+
 as masses, `Gamma_1v` is **1.16267** `m_e` against Elk's 1.16238 and
-`Gamma_2'c` **0.170439** against 0.171057. The two defumat routes agree with
+`Gamma_2'c` **0.170439** against 0.171057. The two defumat routes agreed with
 each other to **1.2e-5** on `Gamma_1v` and 1.1e-3 on `Gamma_2'c` — the same
 distance from Elk on every row, which is what says the residual is Elk's drift
 and the pseudopotential rather than either route's arithmetic — and the
 tensors are isotropic to **2.9e-8** with nothing imposing it — the cubic
-symmetry check, which neither route is told about.
+symmetry check, which neither route is told about. On one sphere that first
+number is **1e-7**: what separated the routes at `Gamma` was mostly their
+bases.
 
 **Elk's own number is not converged, and that is the finding the comparison
 produced.** Scanning `deltaem` at `Gamma`, Elk's `Gamma_1v` goes 0.8583470,
@@ -7337,6 +7348,89 @@ The residual 1-2% on the multiplet sums is not defumat's basis: `ecutwfc` 30 →
 40 → 50 moves `Gamma_1v` by 4.6e-5 and the `Gamma_25'` sum by 3.6e-3, so it is
 Elk's own drift plus the genuine pseudopotential-against-all-electron
 difference.
+
+**The stencil's own sphere, found by the 2026-09-18 audit and closed
+(`wrong-answer.5` and `hole.2`).** A centre-free stencil was half the cure. "Every
+point in both is displaced, so the basis-set offset is common to all of them and
+cancels" is true at `Gamma` and false at every other centre, because the points
+are not displaced by the *same* amount and a shell of `G` sits between `h` and
+`2h` as readily as between 0 and `h`. Measured at `L` on two-atom silicon,
+`alat = 10.2`, `ecutwfc = 30`, at the default `delta = 0.025`: the centre holds
+**754** plane waves, the near pair **752** and the far pair **744**.
+
+*What it was worth, on band 4 at `L` in 1/m_e, with the Richardson step on as it
+is by default.* The converged value is **5.293014**, which is what both routes
+reach from `delta = 0.00625` and 0.003125, with or without the freezing.
+
+| `delta` | eigenvalue, per-k spheres | eigenvalue, one sphere | velocity, per-k | velocity, one sphere |
+|---|---|---|---|---|
+| 0.025 | 5.26508 | **5.29182** | 5.29163 | **5.29032** |
+| 0.0125 | 5.29160 | **5.29294** | 5.29294 | **5.29284** |
+
+so at the default stencil the eigenvalue route was **2.79e-2** from the limit and
+is **1.2e-3**, and the two routes, which share no machinery, were 5.0e-3 apart
+relative and are 2.8e-4.
+
+*The signature is in the sequence rather than in any one number, and it is not
+the one the entry predicted.* With Richardson off, the raw stencil at `L` reads
+4.71710, 5.23190, 5.25679, 5.28290, 5.29049 as `delta` halves from 0.05, whose
+successive differences shrink by **20.7, 0.95, 3.4** where a second difference
+must give four; with one sphere the same sequence is 4.71256, 5.13566, 5.25278,
+5.28290, 5.29049, shrinking by **3.6, 3.9, 4.0**. The counts say why, and they
+also refute the "grows as `h` shrinks" reading: 754/744/740 at `delta = 0.05`,
+754/752/744 at 0.025, 754/754/752 at 0.0125 and 754/754/754 below, so the
+mismatch **disappears** at small `h` rather than growing. What it breaks is not
+the limit but the *order*: a quantity with a step in it is not `O(h^2)`, so the
+Richardson combination returns the error instead of removing it and
+`truncation` reads small.
+
+*`hole.2` is the same defect on the route that ships by default.* The velocity
+route differences `v(k + h)` and `v(k - h)`, and those hold the same basis only
+where symmetry says so: at a centre with none the `+-h` pair of this cell holds
+**737 and 738** plane waves, and at the audit's own (0.85, 0, 0) it holds 741
+and 749. Both stencils are now built on the centre's sphere. Isolating the
+velocity route's half of the change, with the eigenvalue route frozen in both,
+the two routes' disagreement on band 4 at `delta = 0.0125` goes **2.43e-4 to
+2.88e-5** at (0.425, 0, 0.425) and **2.17e-3 to 4.22e-4** at (0.31, 0.17, 0.43).
+The verifier said the size could not be priced from anything in this project;
+that is the price. Band 5 at the generic centre disagrees by 23 either way, and
+that is a band crossing inside the stencil rather than this defect.
+
+*What it costs, stated because it is a cost.* The freeze is at the **centre's**
+sphere, and a high-symmetry centre holds *fewer* plane waves than its displaced
+points (725 against 733 on the PAW cell above), so the velocity route now runs
+in a basis eight plane waves smaller there. On that cell at `Gamma` the pair
+`(velocity, eigenvalue)` moves from `(0.8600936, 0.8600815)` to
+`(0.8601272, 0.8601271)`, which is **3.4e-5 and 4.6e-5** against the **4.6e-5**
+that `ecutwfc` 30 → 40 is already recorded above to move the same number, so it
+is inside the basis convergence this section prices. At `L` the velocity route
+ends up about twice as far from the limit at a given `delta` (2.7e-3 against
+1.4e-3 at `delta = 0.025`), which is error cancellation the per-k scheme got for
+free at a *symmetric* centre and cannot be relied on: at an unsymmetric one the
+same cancellation is what makes it 8x worse. What the freeze buys is that at
+`Gamma` the two routes now agree on `Gamma_1v` to **1e-7** where they agreed to
+1.2e-5, so what separates them is their own truncation rather than their bases.
+The multiplet sums do not improve (2.5e-3 to 2.6e-3 on `Gamma_25'`, 5.2e-4 to
+1.4e-3 on `Gamma_15c`), because those are limited by each route's truncation on
+strongly non-parabolic bands.
+
+It is P53's "a stencil must not straddle a change of basis" one derivative up
+and at the same cutoff: that entry measured 158 plane waves at `k` and 157 at
+`k + delta` on a generic AlAs point and named freezing the sphere as the cure,
+and this routine is where the cure was not applied.
+
+*The machinery.* `fixed_density_states` takes a `kcart`: the spheres are built
+at the k-points it is given and the k-points are then moved onto `kcart` at a
+frozen sphere, which is `Calculation.at_kcart`, the method the velocity operator
+already differentiates through. `at_kcart` now records `_kcart` on what it
+returns, as `at_strain` always did, because a `VelocityOperator` built on a
+moved calculation otherwise falls back to `system.kpoints` and differentiates at
+the k-points the basis was *built* at rather than the ones it was diagonalised
+at. The check is
+`tests/unit/test_effective_mass.py::test_the_stencil_shares_one_sphere_away_from_gamma`,
+which asserts the 754/752/752/744/744 counts first, so that the case stays the
+discriminating one, and then both routes against each other and against the
+limit.
 
 **Timing**, one core each, same machine. Elk: 1.36 s for the ground state and
 **1.08 s** for task 25 (27 k-points, all states). defumat PAW: 4.3 s for the

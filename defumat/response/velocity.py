@@ -490,7 +490,8 @@ def over_kpoints(hamiltonian, states, batch, overlap: bool = False):
 
 
 def band_velocities(calculation, result, kpoints=None, nbnd=None,
-                    conv_thr: float = 1.0e-6, k_batch="default") -> BandVelocities:
+                    conv_thr: float = 1.0e-6, k_batch="default",
+                    kcart=None) -> BandVelocities:
     """``d(eps)/dk`` for a converged run, in one call.
 
     ``result`` is an :class:`~defumat.scf.driver.SCFResult`; the potential and
@@ -501,6 +502,15 @@ def band_velocities(calculation, result, kpoints=None, nbnd=None,
     bands than the ground state carried, so it is a parameter rather than the
     ground state's count; on the SCF's own k-points there is nothing to
     re-diagonalise and it does not apply.
+
+    ``kcart`` builds that diagonalisation's plane-wave spheres at ``kpoints``
+    and then moves the k-points onto these cartesian coordinates (1/bohr), so
+    that **every point of the set shares one basis**. Which plane waves satisfy
+    ``|k+G|^2 <= ecutwfc`` is a step function of ``k``, so two k-points a
+    stencil apart can hold different numbers of them; freezing the sphere makes
+    each velocity exact on its own basis and does nothing to make two bases the
+    same, which is what a difference over the set needs. The effective mass is
+    the caller (:mod:`defumat.response.effmass`).
 
     ``conv_thr`` is that diagonalisation's threshold, and it is worth setting
     rather than leaving at the default: a band velocity inside a **degenerate
@@ -513,6 +523,13 @@ def band_velocities(calculation, result, kpoints=None, nbnd=None,
     """
     from defumat.workflows.nscf import fixed_density_states
 
+    if kpoints is None and kcart is not None:
+        raise ValueError(
+            "kcart moves the k-points of the NSCF this does at new kpoints, "
+            "and none was asked for: on the ground state's own k-points the "
+            "velocities come off the states it converged, on the spheres it "
+            "converged them in"
+        )
     if kpoints is None and nbnd is not None:
         raise ValueError(
             "nbnd applies to the NSCF diagonalisation this does at new "
@@ -534,6 +551,7 @@ def band_velocities(calculation, result, kpoints=None, nbnd=None,
             ns=result.ns, tau=getattr(result, "tau", None),
             becsum=result.becsum or (),
             field=result.magnetic_field, field_scale=result.field_scale,
+            kcart=kcart,
         )
         eigenvalues = jnp.asarray(eigenvalues)
     else:

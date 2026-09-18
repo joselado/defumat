@@ -93,6 +93,7 @@ def fixed_density_states(
     field=None,
     field_scale: float | None = None,
     david: int | None = None,
+    kcart: np.ndarray | None = None,
 ):
     """Diagonalise once at every k-point of ``system`` with ``density`` fixed.
 
@@ -116,6 +117,25 @@ def fixed_density_states(
     size of the space: a run asking for many empty bands -- an ultracell basis
     (``PLAN.md`` P88) is the case that found this -- can reach
     ``4 nbnd > npw``, where the subspace is larger than the space it lives in.
+
+    ``kcart`` moves the k-points *after* the plane-wave spheres have been built,
+    ``(nk, 3)`` in 1/bohr, through
+    :meth:`~defumat.scf.driver.Calculation.at_kcart`. It is how a caller asks
+    for **one basis shared by the whole k-set** rather than one sphere per
+    k-point: build at ``kpoints`` and diagonalise at ``kcart``. Which plane
+    waves satisfy ``|k+G|^2 <= ecutwfc`` is a step function of ``k``, so two
+    k-points a stencil apart can hold different numbers of them and their
+    eigenvalues then carry different basis-set offsets; a difference over such a
+    set inherits that step divided by the step size. The effective mass's
+    eigenvalue route is the caller (:mod:`defumat.response.effmass`), and the
+    eigenvalues that come back are those of the frozen basis, which is the
+    variational statement the difference needs rather than the best energy at
+    each point separately. **The calculation that comes back then has a
+    ``system.kpoints`` that is not where its arrays are**, exactly as
+    :meth:`~defumat.scf.driver.Calculation.at_kcart` warns: occupying from those
+    weights, or reading those coordinates, gives the k-points the basis was
+    *built* at rather than the ones it was diagonalised at. Where the arrays are
+    is ``calculation._kcart``.
 
     ``field`` and ``field_scale`` are the pair ``SCFResult.magnetic_field`` and
     ``SCFResult.field_scale``, and they are state rather than input for the same
@@ -152,6 +172,8 @@ def fixed_density_states(
         )
 
     calculation = Calculation(system, pseudos, k_batch=k_batch, david=david)
+    if kcart is not None:
+        calculation = calculation.at_kcart(jnp.asarray(kcart))
     nbnd = nbnd or system.nbnd or default_nbnd(
         calculation.nelec,
         system.occupations,

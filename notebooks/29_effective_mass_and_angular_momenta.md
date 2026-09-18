@@ -77,7 +77,7 @@ print("\nper-band tensor of the threefold valence top:", mass.inverse_mass[1, 0]
     bands (4, 5, 6)    eps =  0.65429 Ry   (1/m*)_xx =   7.89143   degenerate, sum only
     bands (7,)         eps =  0.72820 Ry   (1/m*)_xx =   5.30190   band
     bands (8,)         eps =  1.03483 Ry   (1/m*)_xx =   3.90877   band
-    bands (9,)         eps =  1.05576 Ry   (1/m*)_xx =  -8.35590   band
+    bands (9,)         eps =  1.05576 Ry   (1/m*)_xx =  -8.35595   band
     
     per-band tensor of the threefold valence top: [nan nan nan]
 
@@ -137,10 +137,10 @@ $a = 10.26$ bohr:
 
 | at $\Gamma$ | Elk (LAPW) | velocity | eigenvalue | agrees |
 |---|---|---|---|---|
-| $\Gamma_{1v}$, band 1 | 0.8603044 | 0.8600902 | 0.8600781 | **0.02 %** |
-| $\Gamma_{25'v}$, bands 2-4 (sum) | -13.4317801 | -13.6015326 | -13.6040409 | 1.26 % |
-| $\Gamma_{15c}$, bands 5-7 (sum) | 7.7424153 | 7.5886921 | 7.5892084 | 1.99 % |
-| $\Gamma_{2'c}$, band 8 | 5.8460134 | 5.8671956 | 5.8682740 | 0.36 % |
+| $\Gamma_{1v}$, band 1 | 0.8603044 | 0.8601272 | 0.8601271 | **0.02 %** |
+| $\Gamma_{25'v}$, bands 2-4 (sum) | -13.4317801 | -13.6030751 | -13.6057182 | 1.28 % |
+| $\Gamma_{15c}$, bands 5-7 (sum) | 7.7424153 | 7.5928153 | 7.5942479 | 1.93 % |
+| $\Gamma_{2'c}$, band 8 | 5.8460134 | 5.8671674 | 5.8682457 | 0.36 % |
 
 **A stencil must not contain its own centre**, and that is the finding worth carrying out of
 this comparison. The plane-wave basis is rebuilt at every k-point, and a high-symmetry point
@@ -150,7 +150,12 @@ variationally high by a fixed amount, and a second difference that uses it inher
 proportional to $\delta/h^2$, which *grows* as the stencil shrinks. Elk has the same problem,
 and its own $\Gamma_1$ value drifts as its step is reduced -- 0.8583, 0.8595, 0.8603, 0.8642,
 0.8697 -- rising to a minimum-error point at its default and then diverging. The stencil here
-is centre-free, and the velocity route never touches the centre at all.
+is centre-free, and the whole of it is built on one plane-wave basis, the centre's, which
+is the other half of the same point: two k-points a stencil apart do not in general hold
+the same plane waves, so what is differenced has to be one band of one basis rather than
+the best band each point can manage separately. At $L$ on this cell the centre holds 754
+plane waves where the stencil's own points hold 752 and 744, and building them all on the
+754 is worth 0.5 % on the eigenvalue route.
 
 ## Where the orbital moment sits
 
@@ -177,15 +182,15 @@ print("\n|L|/|S| = %.4f   (measured about 0.1)" % (np.linalg.norm(atom.l)
 print("cos(L, S) = %.8f   (Hund's third rule, more than half filled)" % cosine)
 ```
 
-    silicon, no spin-orbit coupling:   largest |<L>| anywhere   2.6e-16
+    silicon, no spin-orbit coupling:   largest |<L>| anywhere   1.7e-16
     
     nickel, fully relativistic:
     Angular momenta on the ortho-atomic projectors (units of hbar)
     
-      Ni1  L = (-0.00000,-0.00000, 0.03648)  S = (-0.00000,-0.00000, 0.31270)  J = (-0.00000,-0.00000, 0.34917)
+      Ni1  L = ( 0.00000,-0.00000, 0.03648)  S = ( 0.00001,-0.00000, 0.31270)  J = ( 0.00001,-0.00000, 0.34917)
     
-      total L = (-0.00000,-0.00000, 0.03648)
-      total S = (-0.00000,-0.00000, 0.31270)
+      total L = ( 0.00000,-0.00000, 0.03648)
+      total S = ( 0.00001,-0.00000, 0.31270)
     
     |L|/|S| = 0.1166   (measured about 0.1)
     cos(L, S) = 1.00000000   (Hund's third rule, more than half filled)

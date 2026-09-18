@@ -384,6 +384,17 @@ def _by_velocity(calculation, result, centre, deltas, nbnd, conv_thr, k_batch):
     six axial points per stencil width carry the velocities. They all go through
     :func:`~defumat.response.velocity.band_velocities` in **one** call, so a
     Richardson pair is one NSCF over thirteen k-points rather than two runs.
+
+    **The ``jvp`` freezes the sphere at each point and that is not the same as
+    the two points sharing one.** Which plane waves are inside the cutoff is a
+    step function of ``k``, so the two ends of ``[v(k + h) - v(k - h)]/2h`` hold
+    the same basis only where symmetry says they do: at a centre with none, the
+    ``+-h`` pair of this cell at ``ecutwfc = 30`` holds 737 and 738 plane waves,
+    and what the difference then inherits is the *k-derivative* of the
+    truncation offset in two different spheres. So this stencil is built on one
+    sphere too, the centre's, and moved onto its points with
+    :meth:`~defumat.scf.driver.Calculation.at_kcart` -- the same thing
+    :func:`_by_eigenvalue` does, for the same reason.
     """
     from defumat.response.velocity import band_velocities
 
@@ -397,9 +408,13 @@ def _by_velocity(calculation, result, centre, deltas, nbnd, conv_thr, k_batch):
                 offsets.append(step)
 
     kpoints = _stencil_kpoints(calculation, centre, offsets)
+    at_centre = _stencil_kpoints(
+        calculation, centre, [np.zeros(3)] * len(offsets)
+    )
     velocities = band_velocities(
-        calculation, result, kpoints=kpoints, nbnd=nbnd, conv_thr=conv_thr,
+        calculation, result, kpoints=at_centre, nbnd=nbnd, conv_thr=conv_thr,
         k_batch=k_batch,
+        kcart=np.asarray(kpoints.cartesian(calculation.system.cell)),
     )
     # ``(nspin, nk, nbnd, 3)`` -> ``(nk, nspin, nbnd, 3)``: the stencil index
     # has to lead for the differences below, and the spin axis is kept whole.
@@ -450,8 +465,24 @@ def _by_eigenvalue(calculation, result, centre, deltas, nbnd, conv_thr, k_batch)
 
         d^2 eps/dk_a dk_b = [eps(++) - eps(+-) - eps(-+) + eps(--)] / 4h^2,
 
-    which was already centre-free. Every point in both is displaced, so the
-    basis-set offset is common to all of them and cancels.
+    which was already centre-free.
+
+    **Leaving the centre out is half of it, and the other half is freezing the
+    sphere.** "Every point is displaced, so the offset is common to all of them"
+    is a statement about ``Gamma`` and is false at any other centre: the
+    displaced points are not displaced by the *same* amount, and a shell can sit
+    between ``h`` and ``2h`` as easily as between 0 and ``h``. Measured at ``L``
+    on two-atom silicon at ``ecutwfc = 30``, ``alat = 10.2``: the centre holds
+    **754** plane waves, the near pair **752** and the far pair **744** at the
+    default ``delta``, so the far points are variationally high against the near
+    ones by a fixed offset and the numerator inherits it divided by ``3 h^2``.
+    The whole stencil is therefore built on **one** sphere, the centre's, and
+    moved onto its points with
+    :meth:`~defumat.scf.driver.Calculation.at_kcart` -- the cure ``PLAN.md``
+    P53 already names for a first difference of the same kind ("a stencil must
+    not straddle a change of basis", 158 plane waves at ``k`` against 157 at
+    ``k + delta``). What is differenced is then one band of one basis, which is
+    what a second difference needs.
 
     The centre is still diagonalised, because the eigenvalues the multiplet
     structure is read off are its own; it is simply never differenced.
@@ -486,12 +517,20 @@ def _by_eigenvalue(calculation, result, centre, deltas, nbnd, conv_thr, k_batch)
                         offsets.append(step)
 
     kpoints = _stencil_kpoints(calculation, centre, offsets)
+    # The basis is built at the centre, repeated, and the k-points are then
+    # moved onto the stencil at that frozen sphere: every eigenvalue below
+    # comes from the same set of plane waves, which is what makes the offset
+    # common and the difference a difference of the band alone.
+    at_centre = _stencil_kpoints(
+        calculation, centre, [np.zeros(3)] * len(offsets)
+    )
     _, _, eigenvalues = fixed_density_bands(
         result.system, calculation.pseudos, result.density,
-        kpoints=kpoints, nbnd=nbnd, conv_thr=conv_thr, k_batch=k_batch,
+        kpoints=at_centre, nbnd=nbnd, conv_thr=conv_thr, k_batch=k_batch,
         ns=result.ns, tau=getattr(result, "tau", None),
         becsum=result.becsum or (),
         field=result.magnetic_field, field_scale=result.field_scale,
+        kcart=np.asarray(kpoints.cartesian(calculation.system.cell)),
     )
     eps = _as_spin_first(np.asarray(eigenvalues), calculation.nspin)
     eps = np.moveaxis(eps, 1, 0)  # (npoint, nspin, nbnd)

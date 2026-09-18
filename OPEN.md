@@ -3696,3 +3696,29 @@ different places, and a second heavy relativistic ultrasoft cell without vacuum.
 **It does not touch P98's claims.** The dielectric comparisons of that phase are on AlAs,
 where the ground states agree to the printed digit; bismuthene enters it only as the cell
 whose A/B says how much the spin dressing of the augmentation terms is worth.
+
+# Part XIII -- from the 2026-09-18 audit fixes
+
+## 1. Two DFT+U regression files sit at or over the 12 GB per-file cap, and have for a fortnight
+
+`tools/run_regression.sh` on the DFT+U set, 2026-09-18, one capped process per file:
+`test_ldau.py` reaches **10,937 MB** of a 12 GB cap, so the in-process watchdog names
+`test_converged[pw_lda+U/lda+U_force.in]` and fails it at 85 per cent while all 73 of the
+file's own assertions pass, and `test_ldau_flavours.py` is **killed outright** at 12,423 MB.
+
+**Neither is new and neither is a physics failure.** A regression summary from
+**2026-09-04** already reads `test_ldau_flavours exit=137`, two weeks before anything in
+this session was written, and the named `test_ldau` case is a `HUBBARD {atomic}` run,
+which never reaches the code the same session changed. It is `CLAUDE.md`'s own
+"a test file that sweeps many cells is a memory liability": cells that share no shape each
+compile the whole SCF stack afresh and XLA keeps every executable for the life of the
+process, so the peak is accumulation over the file rather than any one test's working set.
+
+**What to do about it**, in the order the file's own rule gives: `jax.clear_caches()` in an
+autouse fixture after the `yield`, and `lru_cache(maxsize=2)` on the converged-state helper.
+**Raising the cap is not the workaround it looks like**: at `DEFUMAT_TEST_MEM_MAX=16G` the
+same file is killed again, at **15,316 MB**, in
+`test_a_spinor_occupation_matrix_matches_pw_x` -- three quarters of the way through rather
+than half, which is what accumulation does to a cap. Selecting a subset with `-k` bounds it
+where a larger number does not, because what is being bounded is how many distinct cells
+one process has compiled.

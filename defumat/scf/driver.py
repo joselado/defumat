@@ -2905,6 +2905,13 @@ class Calculation:
         )
         if self.hubbard is not None:
             moved.wfcU = moved._build_hubbard_projectors(kcart)
+        # Where the arrays actually are, since ``system.kpoints`` is not. It is
+        # what :class:`~defumat.response.velocity.VelocityOperator` reads to
+        # decide the point it differentiates around, the same way ``at_strain``
+        # records the k-points that followed the strained reciprocal cell: a
+        # velocity taken on a moved calculation without it would fall back to
+        # ``system.kpoints`` and differentiate at the wrong k.
+        moved._kcart = kcart
         return moved
 
     def at_spiral_q(self, q_crystal, rebuild_basis: bool = True) -> "Calculation":

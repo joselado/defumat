@@ -55,6 +55,94 @@ def silicon(pseudo_dir):
     return calculator, calculator.get_scf()
 
 
+#: The same cell at a cutoff where the stencil at ``L`` straddles a shell of
+#: ``G``. At ``ecutwfc = 12`` every stencil point holds the same number of plane
+#: waves at every centre, so that cell cannot see this at all.
+_SILICON_AT_A_SHELL = """
+&control
+  calculation = 'scf'
+/
+&system
+  ibrav = 2, celldm(1) = 10.2, nat = 2, ntyp = 1, ecutwfc = 30.0, nbnd = 10
+/
+&electrons
+  conv_thr = 1e-10
+/
+ATOMIC_SPECIES
+ Si 28.086 Si.pz-vbc.UPF
+ATOMIC_POSITIONS crystal
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS automatic
+ 4 4 4 1 1 1
+"""
+
+
+@pytest.fixture(scope="module")
+def silicon_at_a_shell(pseudo_dir):
+    calculator = Calculator.from_text(_SILICON_AT_A_SHELL, pseudo_dir, announce=False)
+    return calculator, calculator.get_scf()
+
+
+@pytest.mark.slow
+def test_the_stencil_shares_one_sphere_away_from_gamma(silicon_at_a_shell):
+    """A centre-free stencil is half the cure, and freezing the sphere is the rest.
+
+    "Every point is displaced, so the basis-set offset is common to all of them"
+    is true at ``Gamma`` and false anywhere else: the points are not displaced by
+    the *same* amount, and a shell of ``G`` can sit between ``h`` and ``2h`` as
+    easily as between 0 and ``h``. This cell at ``L`` is that case, which the
+    first assertion is here to keep it: the centre holds 754 plane waves, the
+    near pair 752 and the far pair 744, so a per-k sphere makes the far points
+    variationally high against the near ones by a fixed offset that the
+    numerator divides by ``3 h^2``.
+
+    The two routes then disagree by **5.0e-3** relative on band 4 at the default
+    stencil, 5.26508 against 5.29163, where the converged value is **5.29301**
+    (the Richardson limit both routes reach from ``delta = 0.00625`` and
+    0.003125, and it is the same limit with or without the freezing). That is
+    the error the Richardson step cannot remove, because a quantity with a step
+    in it is not ``O(h^2)`` in the first place: the raw stencil's successive
+    differences shrink by 20.7, 0.95 and 3.4 as ``delta`` halves where a second
+    difference must give four, and with one sphere they shrink by 3.6, 3.9, 4.0.
+
+    With the whole stencil on the centre's sphere the two routes give 5.29182
+    and 5.29032, **2.8e-4** relative apart and both within 3e-3 of the limit;
+    the eigenvalue route alone moves from 2.79e-2 out to 1.2e-3 out.
+    """
+    from defumat.basis.planewaves import build_plane_wave_basis
+    from defumat.response.effmass import _stencil_kpoints
+
+    calculator, scf = silicon_at_a_shell
+    calculation = calculator.calculation
+
+    offsets = [np.zeros(3)]
+    for scale in (1, 2):
+        for sign in (+1, -1):
+            step = np.zeros(3)
+            step[0] = sign * scale * 0.0125
+            offsets.append(step)
+    basis = build_plane_wave_basis(
+        calculation.basis.smooth,
+        _stencil_kpoints(calculation, np.array([0.5, 0.5, 0.5]), offsets),
+        calculator.system.cell, calculator.system.ecutwfc,
+    )
+    assert tuple(basis.npw) == (754, 752, 752, 744, 744)
+
+    routes = {
+        method: effective_mass(
+            calculation, scf, (0.5, 0.5, 0.5), method=method, nbnd=10
+        ).inverse_mass
+        for method in ("velocity", "eigenvalue")
+    }
+    assert np.allclose(routes["velocity"][4], routes["eigenvalue"][4],
+                       rtol=5.0e-4, atol=1.0e-6)
+    # ...and each of them against the limit the stencil converges to, which is
+    # the assertion a route cannot pass by agreeing with a wrong one.
+    for method, inverse_mass in routes.items():
+        assert np.diag(inverse_mass[4]) == pytest.approx(5.293014, abs=5.0e-3), method
+
+
 @pytest.fixture(scope="module")
 def masses(silicon):
     calculator, scf = silicon

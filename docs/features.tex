@@ -3738,6 +3738,17 @@ six stencil points against Elk's twenty-seven, and no polynomial fit. Elk's
 route, differencing eigenvalues, is kept beside it as \code{method="eigenvalue"}
 because it shares nothing with the velocity operator.
 
+\textbf{The whole stencil is built on one plane-wave sphere}, the centre's, and
+its points are then moved onto it. Which plane waves satisfy
+$|\mathbf k + \mathbf G|^2 \le \code{ecutwfc}$ is a step function of
+$\mathbf k$, so two points a stencil apart can hold different numbers of them:
+at $L$ on two-atom silicon at \code{ecutwfc = 30} the centre holds 754, the
+$\pm h$ pair 752 and the $\pm 2h$ pair 744. A difference taken across that step
+carries it divided by $h^2$, which is not $O(h^2)$ and which the Richardson step
+therefore returns rather than removes; on one sphere what is differenced is one
+band of one basis. It is worth \textbf{0.5\,\%} on the eigenvalue route at $L$
+at the default stencil.
+
 \begin{pycode}
 from defumat import Calculator
 
@@ -3753,11 +3764,11 @@ mass.multiplets            # per multiplet, including the degenerate ones
 
 On two-atom silicon at $\Gamma$ against the vendored \textbf{Elk} binary
 (all-electron LAPW, PBE, $a = 10.26$~bohr) with a PAW dataset here: the
-non-degenerate $\Gamma_{1v}$ agrees to \textbf{0.02\%} ($0.8600902$ against
-$0.8603044$, i.e.\ $m^* = 1.16267\,m_e$ against $1.16238$) and $\Gamma_{2'c}$ to
-0.36\% ($m^* = 0.170439\,m_e$). The two routes here agree with each other to
-$1.2\times10^{-5}$, and the tensors come out isotropic to $2.9\times10^{-8}$
-with nothing imposing cubic symmetry.
+non-degenerate $\Gamma_{1v}$ agrees to \textbf{0.02\%} ($0.8601272$ against
+$0.8603044$, i.e.\ $m^* = 1.16262\,m_e$ against $1.16238$) and $\Gamma_{2'c}$ to
+0.36\% ($m^* = 0.170440\,m_e$). The two routes here agree with each other to
+$1\times10^{-7}$ on $\Gamma_{1v}$, and the tensors come out isotropic to
+$2.9\times10^{-8}$ with nothing imposing cubic symmetry.
 
 \begin{refuses}
 \textbf{Refuses.} A band inside a \textbf{degenerate multiplet} has no tensor of
