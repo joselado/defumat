@@ -20,14 +20,21 @@
 #               Berry-phase string meshes each. The ultrasoft one carries the
 #               augmentation charge through all of it.
 # cpus-per-task 4, with MKL and OMP pinned to 1: XLA sees the cgroup's cores.
-# mem           32G. These are two-atom cells; the response holds six
-#               `(nk, nocc, npwx)` blocks and nothing here is a slab.
+# mem           120G, and the first attempt is why. At 32 G the ultrasoft task
+#               was **OOM-killed inside the response**, after an SCF that took
+#               19 s -- on a two-atom cell with eight k-points, where the states
+#               themselves are megabytes. What is large is not the states but
+#               the augmentation table the backward pass carries, `nh^2 x ngm`
+#               per atom on the **dense** grid that `ecutrho = 200` sets, which
+#               is `CLAUDE.md`'s own account of where an ultrasoft derivative's
+#               peak lives. The norm-conserving task shares the allocation and
+#               will not use it.
 #SBATCH --job-name=defumat-piezo
 #SBATCH --partition=batch-milan
 #SBATCH --array=0-1
 #SBATCH --time=12:00:00
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=32G
+#SBATCH --mem=120G
 #SBATCH --output=/scratch/work/ladovj1/calculations/defumat-audit/out/piezo-%A_%a.out
 #SBATCH --error=/scratch/work/ladovj1/calculations/defumat-audit/out/piezo-%A_%a.err
 
