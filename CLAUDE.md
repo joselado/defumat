@@ -660,11 +660,17 @@ plausible wrong answer rather than an error. `PLAN.md` has the phase that found 
   apart at 4, where `npol = 2` and `nspin_mag` is 4 only if the run actually carries a
   magnetization. All three are static; `System` exposes them as properties so no call site
   recomputes the rule.
-- **The spin channel is the leading axis, and it is squeezed on the way out.** Densities,
-  potentials and `becsum` are `(nspin, ...)` internally with no special case for one
-  channel; the result objects (`SCFResult`, `NSCFResult`, `DensityOfStates`,
-  `BandStructure`) drop that axis when `nspin = 1` and expose a `*_by_spin` property that
-  always has it. `k` stays the leading *independent* axis inside each channel, which is
+- **The spin channel is the leading axis, and what is squeezed on the way out is what a
+  reader indexes per band or per energy, not a real-space field.** Densities, potentials
+  and `becsum` are `(nspin, ...)` internally with no special case for one channel, **and
+  they stay that way on the result objects**: measured on the canonical silicon cell at
+  `nspin = 1`, `SCFResult.density` and `.potential` are `(1, 16, 16, 16)` with no
+  `*_by_spin` property, while `SCFResult.eigenvalues` and `.occupations` are `(nk, nbnd)`
+  and `DensityOfStates.dos` is `(nE)`, each with a `*_by_spin` beside it. This rule used
+  to say the result objects drop the axis for everything, which is false for the two
+  fields and is the statement `scf/spin_torque.py` was written against -- a consumer that
+  reinstates the axis itself then gets a second one. A new consumer of
+  `SCFResult.density` takes it as `(nspin_mag, ...)` always. `k` stays the leading *independent* axis inside each channel, which is
   what the batching and the eventual sharding rest on. `nspin` is static
   (`eqx.field(static=True)`) because it is an array rank, not a value.
 
