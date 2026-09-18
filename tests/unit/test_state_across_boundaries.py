@@ -117,6 +117,44 @@ def test_an_unpolarized_k_set_is_not_marked_normalized():
     )
 
 
+def test_the_substituted_gamma_set_keeps_the_spin_flag():
+    """The third route into that boundary, and the one the two above miss.
+
+    ``K_POINTS gamma`` at ``nspin = 2`` or 4 is substituted by an explicit
+    ``k = 0`` whenever the run cannot consume the half-sphere storage, which is
+    most of them: any symmetric run, any Hubbard U, any ultrasoft or PAW
+    dataset, and every ``nspin = 4``. The substitution rebuilt the set field by
+    field and dropped ``spin_normalized`` -- on the one set whose weights have
+    *already* been halved -- and that set leaves the run on
+    ``SCFResult.system``, so handing it back through ``with_kpoints`` or
+    ``run_nscf(kpoints=...)`` halved them again. Nothing fails when it does: the
+    electron count is still met and the Fermi level lands somewhere else.
+    """
+    import warnings
+
+    from defumat.scf.driver import _without_gamma_storage
+
+    text = _SILICON.replace(
+        "K_POINTS automatic\n 2 2 2 0 0 0", "K_POINTS gamma"
+    ).format(extra=", nspin = 2, starting_magnetization(1) = 0.1"
+                   ", tot_magnetization = 0")
+    system = build_system(parse_pw_input(text))
+    assert system.kpoints.gamma_only and system.kpoints.spin_normalized
+    assert float(np.asarray(system.kpoints.weights).sum()) == pytest.approx(1.0)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        substituted = _without_gamma_storage(system).kpoints
+
+    assert not substituted.gamma_only
+    assert substituted.spin_normalized
+    # ...which is what makes the boundary idempotent, the assertion that fails
+    # on the dropped flag: the weights would come back at 0.5.
+    assert float(
+        np.asarray(for_spin(substituted, 2).weights).sum()
+    ) == pytest.approx(1.0)
+
+
 def test_with_kpoints_normalizes_a_raw_k_set_and_leaves_a_normalized_one(pseudo_dir):
     """The comparison ``with_kpoints``' own docstring recommends.
 

@@ -987,12 +987,16 @@ def _without_gamma_storage(system: System) -> System:
         "result is the same and the cost is twice the plane waves",
         stacklevel=3,
     )
-    replacement = KPoints(
-        coords=kpoints.coords,
-        weights=kpoints.weights,
-        gamma_only=False,
-        precision=kpoints.precision,
-    )
+    # ``replace`` rather than a fresh ``KPoints``, because listing the fields
+    # here means forgetting one: this rebuilt five of nine and dropped
+    # ``spin_normalized``, the flag :func:`~defumat.system.kpoints.for_spin`
+    # keys its idempotence on -- on the one set whose weights have *already*
+    # been divided by ``degspin``. The set leaves the run on
+    # ``SCFResult.system``, so a caller handing it back through a boundary that
+    # normalises (``Calculator.with_kpoints``, ``run_nscf(kpoints=...)``) halved
+    # them a second time, and nothing fails: the electron count is still met and
+    # the Fermi level simply lands somewhere else.
+    replacement = dataclasses.replace(kpoints, gamma_only=False)
     return eqx.tree_at(lambda s: s.kpoints, system, replacement)
 
 

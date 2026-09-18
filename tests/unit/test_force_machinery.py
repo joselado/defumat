@@ -69,10 +69,43 @@ def test_the_frozen_energy_reproduces_the_scf_total(silicon):
 
 @pytest.mark.parametrize("method", ["autodiff", "analytic"])
 def test_the_force_on_a_perfect_crystal_vanishes(silicon, method):
-    """Symmetry, not convergence: diamond's atoms are at a fixed point of it."""
+    """Symmetry, not convergence: diamond's atoms are at a fixed point of it.
+
+    **The first assertion is what makes the second one a statement about the
+    force.** ``compute_forces`` symmetrises before it returns, and diamond's
+    allowed subspace is ``{0}``, so ``forces.forces`` is zero for *any* finite
+    array either assembly can return: the test below used to be satisfied by the
+    projector and could be failed only by a NaN. The falsifier is the
+    unsymmetrised array, and here it is large: **8.95e-2 Ry/bohr** along ``y``,
+    the residue a symmetry-reduced k-set leaves. So a sign or factor error in
+    either assembly moves the first number and the second stays zero, which is
+    exactly the pair this asserts. It is
+    ``tests/regression/test_spinor_forces.py``'s pattern, and that file says the
+    same thing in one line: without it the next assertion is a tautology.
+    """
     _, calculation, result = silicon
     forces = compute_forces(calculation, result, method=method)
+    assert np.abs(np.asarray(forces.unsymmetrized)).max() > 1.0e-2
     assert np.abs(forces.forces).max() < 1e-10
+
+
+def test_the_two_assemblies_agree_before_the_projection(silicon):
+    """And they share no machinery, which is what makes the agreement evidence.
+
+    One differentiates the total energy at frozen wavefunctions and the other
+    evaluates QE's hand-derived expressions term by term. On the symmetrised
+    force they agree at zero whatever they compute; on the *wedge residue* they
+    agree at 8.9501750e-02 Ry/bohr, which is a number neither of them is told.
+    """
+    _, calculation, result = silicon
+    raw = {
+        method: np.asarray(
+            compute_forces(calculation, result, method=method).unsymmetrized
+        )
+        for method in ("autodiff", "analytic")
+    }
+    assert raw["autodiff"] == pytest.approx(raw["analytic"], abs=1e-12)
+    assert np.abs(raw["autodiff"]).max() == pytest.approx(8.950175e-02, rel=1e-6)
 
 
 def test_symmetrize_vector_projects_onto_the_allowed_directions(silicon):
