@@ -356,8 +356,23 @@ def build_atomic_projectors(
         transform = lowdin_transform(overlap, normalize_only)
         return _apply_transform(transform, jnp.transpose(sphi, (1, 0)))[:, columns]
 
-    # A Python loop over k rather than a ``vmap``: this runs once per geometry,
-    # the eigendecomposition inside is ``natomwfc`` cubed and tiny, and batching
-    # it would hold every k-point's ``natomwfc x natomwfc`` overlap at once for
-    # no gain.
+    # A Python loop over k rather than a ``vmap``: this runs once per geometry
+    # and the eigendecomposition inside is ``natomwfc`` cubed, which is tiny
+    # beside the ``(nk, npwx, ncols)`` this returns.
+    #
+    # **"Batching it would hold every overlap at once for no gain" was the old
+    # reason and it is wrong on the one path where it matters.** The arrays it
+    # names are a per cent of the ones already resident -- ``natomwfc`` is in
+    # the hundreds where ``npwx`` is in the tens of thousands -- and ``atomic``
+    # and ``sphi`` are this function's own input and output, resident under any
+    # batching form. What the loop really costs is **compile size on the
+    # differentiated path**: a DFT+U force or stress is ``jax.grad`` through
+    # :meth:`~defumat.scf.driver.Calculation.at_positions` or
+    # :meth:`~defumat.scf.driver.Calculation.at_strain`, both of which rebuild
+    # ``wfcU`` here, so ``nk`` unrolled copies of ``one_kpoint`` and their VJPs
+    # go into one jaxpr where a ``map_k`` body would be traced once. It is not a
+    # memory cost even there: reverse mode through a scan stacks every chunk's
+    # residuals anyway (:mod:`defumat.forces.spiral` says so), so batching would
+    # buy compile time rather than peak. Unmeasured, which is why it is a
+    # comment and not a change.
     return jnp.stack([one_kpoint(ik) for ik in range(nk)])

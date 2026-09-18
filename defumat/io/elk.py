@@ -83,7 +83,14 @@ class ElkGeometry:
     species: tuple[str, ...]
     natoms: tuple[int, ...]
     positions: np.ndarray       # (natmtot, 3), lattice coordinates
-    magnetic_fields: np.ndarray  # (natmtot, 3), Elk's per-atom bfcmt
+    #: ``(natmtot, 3)``: Elk's per-atom ``bfcmt``, **converted to Ry** like every
+    #: other field this module reads, so that it is already in the unit
+    #: ``System.atomic_b_field`` and the ``LOCAL_MAGNETIC_FIELDS`` card are
+    #: documented in. Elk writes it in its own Hartree units, and storing it raw
+    #: under a module comment promising the conversion is how a future consumer
+    #: would have applied half of Elk's field on a symmetry-breaking seed and a
+    #: factor of two on a constrained one.
+    magnetic_fields: np.ndarray
 
     @property
     def natmtot(self) -> int:
@@ -140,7 +147,9 @@ def read_elk_geometry(path) -> ElkGeometry:
         species=tuple(species),
         natoms=tuple(natoms),
         positions=np.array(positions, dtype=float).reshape(-1, 3),
-        magnetic_fields=np.array(fields, dtype=float).reshape(-1, 3),
+        magnetic_fields=(
+            np.array(fields, dtype=float).reshape(-1, 3) * HARTREE_TO_RY
+        ),
     )
 
 

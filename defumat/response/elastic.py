@@ -168,7 +168,16 @@ def elastic_constants(
     _require_a_closed_grid(calculation)
     weights, _ = calculation.occupations(eigenvalues)
     weights = jnp.asarray(weights)
-    nocc = np.asarray(response.dpsi[0, 0]).shape[2]
+    # ``.shape`` off the device array, not ``np.asarray(...).shape``: the entry
+    # is the solver's ``(nspin, nk, nocc, npwx)`` block, so materialising it to
+    # read one integer pulls a wavefunction-sized array to the host -- 1.02 GB
+    # of complex128 on a 16 k-point slab at ``nbnd_occ = 100`` and
+    # ``npwx = 40000`` -- and JAX caches that host copy on the array for its
+    # lifetime, which here is the calculator's cached strain response. On this
+    # CPU backend it aliases the device buffer and costs nothing, which is why
+    # the committed cells never showed it; on the GPU this code is meant to run
+    # on unchanged, it is a transfer and a retained copy.
+    nocc = response.dpsi[0, 0].shape[2]
     zero = jnp.zeros((3, 3))
 
     def energy(strain, states):

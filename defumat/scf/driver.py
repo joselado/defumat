@@ -2771,6 +2771,13 @@ class Calculation:
         # ``at_positions`` legitimately -- but it closes over this k-set and its
         # weights, which is what changes here.
         moved.__dict__.pop("_energy_gradient", None)
+        # Where the arrays are, recorded by :meth:`at_kcart` and
+        # :meth:`at_strain`, is the k-set that is being replaced: a velocity
+        # operator built on the result would otherwise differentiate around the
+        # *old* points while its arrays sit at the new ones. It is not popped in
+        # ``at_positions``, where it stays true -- the atoms move and the
+        # k-points do not.
+        moved.__dict__.pop("_kcart", None)
         moved.system = system
         # The list everything with a ``k`` index is built on. Without a spiral it
         # *is* the system's, and it has to move with it: leaving it stale gives
@@ -2891,7 +2898,11 @@ class Calculation:
         # were built with, so neither can follow this.
         moved.__dict__.pop("_spiral_gradient", None)
         moved.__dict__.pop("_spiral_gradient_chunk", None)
-        moved.__dict__.pop("_velocity", None)
+        # ``_velocity`` used to be popped here and **nothing has ever written
+        # it**: the name appears once in the whole history, in the commit that
+        # added this method, as this pop. It read as documentation of a cache
+        # that exists, in a list whose every other member guards one that a
+        # named module writes, so it is gone rather than kept as a placeholder.
         moved.__dict__.pop("_tetrahedra", None)
         moved.__dict__.pop("_energy_gradient", None)
 

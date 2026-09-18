@@ -547,12 +547,24 @@ class SternheimerSolver:
         dpsi = jnp.zeros_like(rhs)
         gradient = operator(dpsi) - rhs
 
+        # **The two real slots take their dtype from the data, not from a
+        # literal.** A bare ``jnp.zeros`` is float64 under x64 whatever
+        # ``config.Precision`` says, while the body returns ``rho`` as
+        # ``jnp.real`` of a complex einsum, which follows the policy. Under a
+        # ``SINGLE`` run the two disagree and ``lax.while_loop``, which requires
+        # the body's output to carry exactly the input's types, raises before a
+        # single CG iteration -- and ``rhoold`` poisons four of the seven slots
+        # on the way, since ``gamma = rho/rhoold`` then promotes ``direction``,
+        # ``applied`` and the three complex slots as well. Deriving it here
+        # keeps the convention that dtypes come from the policy object without
+        # threading the policy into the solver.
+        real_dtype = jnp.finfo(rhs.dtype).dtype  # complex128 -> float64, complex64 -> float32
         state = (
             dpsi,
             gradient,
             jnp.zeros_like(rhs),                      # hold: the previous step
-            jnp.zeros(rhs.shape[0]),                  # rhoold
-            jnp.zeros(rhs.shape[0]),                  # rho, for the report
+            jnp.zeros(rhs.shape[0], dtype=real_dtype),  # rhoold
+            jnp.zeros(rhs.shape[0], dtype=real_dtype),  # rho, for the report
             jnp.array(0),
             jnp.zeros(rhs.shape[0], dtype=bool),      # conv
         )
