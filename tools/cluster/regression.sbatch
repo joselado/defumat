@@ -56,6 +56,12 @@ export PYTHONPATH="$REPO"
 # compilation per file; what it buys is that nothing is shared between tasks and
 # that a cache *miss* is the cheaper state in memory (`CLAUDE.md`).
 export DEFUMAT_CACHE_DIR=off
+# **The vendored QE tree is gitignored**, so the checkout here does not have it
+# and every test that reads a committed QE input or benchmark out of
+# ``test-suite/`` would skip -- silently, and skipping is what this run exists
+# to avoid. Only ``test-suite/`` is read (``tests/conftest.py``), 59 MB of it,
+# so that subtree alone is mirrored to scratch and pointed at.
+export DEFUMAT_QE_ROOT=/scratch/work/ladovj1/apps/qe-7.5-reference
 # Under the Slurm cap, so the in-process watchdog names the test before the
 # kernel acts on the 48 G.
 export DEFUMAT_TEST_MEM_MAX=40G

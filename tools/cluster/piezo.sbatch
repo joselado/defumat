@@ -46,6 +46,7 @@ export PYTHONPATH="$REPO"
 # *jobs*; it is off for the regression array's reasons (scratch at 89 per cent,
 # concurrent writers unmeasured) and costs this job almost nothing.
 export DEFUMAT_CACHE_DIR=off
+export DEFUMAT_QE_ROOT=/scratch/work/ladovj1/apps/qe-7.5-reference
 
 CASES=(nc us)
 CASE=${CASES[${SLURM_ARRAY_TASK_ID:-0}]}
