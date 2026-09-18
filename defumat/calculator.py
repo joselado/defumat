@@ -125,6 +125,21 @@ SHARED_OPTIONS = frozenset({
     "verbose",
 })
 
+#: The options a :class:`Calculator` accepts at construction and adopts from a
+#: call, but which are **not** :data:`SHARED_OPTIONS` and are never forwarded to
+#: an entry point: they configure the :class:`~defumat.scf.driver.Calculation`
+#: itself, which :attr:`Calculator.calculation` builds from them.
+#:
+#: There is one, and the reason it is not simply shared is the same collision
+#: :data:`SCF_ONLY_OPTIONS` documents, one step worse. ``projectors`` is this
+#: code's **memory** dial -- ``'default'`` keeps the projectors resident,
+#: ``'rebuild'`` recomputes them per k-point -- and
+#: :func:`~defumat.workflows.pdos.run_pdos` has a parameter of the same name
+#: meaning the **Hubbard projector scheme**, ``'ortho-atomic'`` against
+#: ``'atomic'``. Sharing the name would forward a memory setting into a physics
+#: one, so it is accepted, adopted and consumed here, and stops here.
+SETUP_ONLY_OPTIONS = frozenset({"projectors"})
+
 #: The subset of :data:`SHARED_OPTIONS` that describes the **SCF loop** and
 #: nothing else, and is therefore *not* forwarded past it.
 #:
@@ -317,13 +332,13 @@ class Calculator:
         announce: bool = True,
         **defaults,
     ):
-        unknown = set(defaults) - SHARED_OPTIONS
+        unknown = set(defaults) - SHARED_OPTIONS - SETUP_ONLY_OPTIONS
         if unknown:
             raise TypeError(
                 f"unknown calculator option(s) {sorted(unknown)}. A keyword given "
                 "here applies to every method that takes it, so only the run-wide "
-                f"ones are accepted: {sorted(SHARED_OPTIONS)}. Anything else "
-                "belongs on the method it configures"
+                f"ones are accepted: {sorted(SHARED_OPTIONS | SETUP_ONLY_OPTIONS)}. "
+                "Anything else belongs on the method it configures"
             )
 
         self.system = system
@@ -1839,7 +1854,8 @@ class Calculator:
         """
         parameters = inspect.signature(func).parameters
         shared = {name: value for name, value in self.defaults.items()
-                  if name in parameters and name not in exclude}
+                  if name in parameters and name not in exclude
+                  and name not in SETUP_ONLY_OPTIONS}
         return {**shared, **(options or {})}
 
     def _call_options(self, func, result: SCFResult, options,

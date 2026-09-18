@@ -135,6 +135,53 @@ def test_the_dial_reaches_the_calculation_through_the_facade():
         assert calculator.calculation.projectors.is_lazy
 
 
+def test_the_dial_survives_into_a_derived_calculator():
+    """It did not: adopting it wrote a key the constructor then rejected.
+
+    ``projectors`` is a ``SETUP_OPTIONS`` member and was in no set
+    ``Calculator.__init__`` accepts, so ``get_scf(projectors='rebuild')``
+    succeeded and left ``defaults['projectors']``, and the next
+    ``with_positions``, ``with_cell``, ``with_spin``, ``with_moments`` or
+    ``relaxed`` raised ``TypeError`` out of ``_derived`` -- worst in
+    ``relaxed()``, where the whole relaxation is paid for first and the
+    calculator can then never produce a derived one at all.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        calculator = Calculator.from_file(
+            CELL, pseudo_dir="tests/data/pseudo", announce=False)
+        calculator.get_scf(projectors="rebuild", max_iterations=1)
+        derived = calculator.with_positions(calculator.system.structure.positions)
+    assert derived.defaults["projectors"] == "rebuild"
+    assert derived.calculation.projector_storage == "rebuild"
+
+
+def test_the_dial_can_be_set_for_a_calculator_s_whole_life():
+    """The other face of the same hole: the constructor refused it."""
+    calculator = Calculator.from_file(
+        CELL, pseudo_dir="tests/data/pseudo", announce=False, projectors="rebuild")
+    assert calculator.calculation.projector_storage == "rebuild"
+
+
+def test_the_dial_does_not_reach_the_pdos_projector_scheme():
+    """Same word, different meaning, and forwarding it crossed the two.
+
+    ``run_pdos``'s ``projectors`` is ``'ortho-atomic'`` against ``'atomic'``
+    -- a physics choice -- where this one is where ``vkb`` lives. With the
+    memory dial in ``defaults`` and ``_defaults_for`` filtering by named
+    parameter alone, ``get_pdos`` was handed ``projectors='rebuild'`` as the
+    scheme, and ``atomic_projections`` raised ``unknown projector set``.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        calculator = Calculator.from_file(
+            CELL, pseudo_dir="tests/data/pseudo", announce=False)
+        calculator.get_scf(projectors="rebuild", max_iterations=1)
+    from defumat.workflows.pdos import run_pdos
+    forwarded = calculator._defaults_for(run_pdos, {})
+    assert "projectors" not in forwarded
+
+
 def _scf(path, which, **kw):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
