@@ -194,10 +194,17 @@ def test_the_raman_tensor_matches_a_finite_difference(atom):
 #: different grids are not comparable point by point.
 MOVING_OVERLAP_CASES = ["si-us-nosym", "si-paw-nosym"]
 
-#: Measured 1.2e-4 (ultrasoft) and 1.2e-4 (PAW) against a norm-conserving
-#: control of 6.8e-4 on the same script, so the tolerance is the same one the
-#: norm-conserving cases carry -- deliberately, because the point of P43 is that
-#: a moving overlap is no longer the loose case.
+#: **The reference here is two steps and an extrapolation, and that is the
+#: point of P100.** A central difference of ``epsilon`` at ``h = 0.02`` alone is
+#: itself 1.1e-3 from its own limit on these cells -- it reads -69.1942,
+#: -69.1350 and -69.1205 at 0.02, 0.01 and 0.005 on ``si-us-nosym`` -- which is
+#: larger than the term that distinguishes a right ``db`` from a wrong one. P43
+#: measured 1.2e-4 against the coarse step and P44 excluded the missing term
+#: because it read 1.14e-3 there; extrapolated, the two swap places. The
+#: norm-conserving control of 6.8e-4 quoted in P43's table was that floor, and
+#: it was in the same table as the number it invalidates. Richardson on the pair
+#: costs two more re-converged runs per case and is what lets this test see the
+#: term at all.
 
 
 @pytest.mark.slow
@@ -216,15 +223,25 @@ def test_the_raman_tensor_matches_a_finite_difference_with_a_moving_overlap(case
       solution of its own linear equation once ``adddvepsi_us`` has applied
       ``S`` to it and added the augmentation dipole.
 
-    Both are identically zero for a norm-conserving dataset, and the check that
-    the plumbing is right is that the norm-conserving answers above did not move
-    by a single digit.
+    * and the commutator that sources ``db`` carries the multiplier *matrix*
+      rather than the frozen scalar eigenvalue, because the equation ``b``
+      solves has that eigenvalue on both of its sides and differentiating it
+      therefore produces ``d(eps_n)`` twice (``PLAN.md`` P100).
+
+    All three are identically zero for a norm-conserving dataset, and the check
+    that the plumbing is right is that the norm-conserving answers above did not
+    move by a single digit.
     """
     _, _, calculation, result = _converged(case)
     tensors = raman_tensors(calculation, result)
-    plus = _epsilon_displaced(case, 0, 0, FD_STEP)
-    minus = _epsilon_displaced(case, 0, 0, -FD_STEP)
-    reference = (plus - minus) / (2 * FD_STEP)
+    coarse = (_epsilon_displaced(case, 0, 0, FD_STEP)
+              - _epsilon_displaced(case, 0, 0, -FD_STEP)) / (2 * FD_STEP)
+    fine = (_epsilon_displaced(case, 0, 0, FD_STEP / 2)
+            - _epsilon_displaced(case, 0, 0, -FD_STEP / 2)) / FD_STEP
+    # ``D(h) = f' + c h^2``, so this is the limit and not a tighter step: the
+    # coarse difference on its own is 1.1e-3 from it, which is the size of the
+    # term under test.
+    reference = (4 * fine - coarse) / 3
 
     analytic = np.asarray(tensors.raman)[0, 0]
     scale = np.abs(analytic).max()

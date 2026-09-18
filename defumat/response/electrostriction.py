@@ -108,22 +108,32 @@ clamped-ion ones and say so.
 :func:`~defumat.response.sternheimer.require_a_sternheimer_regime` refuse is
 refused here too.
 
-**Ultrasoft and PAW are refused, and P44 measured how far off they are rather
-than leaving it unknown.** Two of P43's tangents transfer and are wired in
-here: the state tangent is ``dpsi + ort``, the strain response's occupied
-block, and ``db`` is the tangent of a *composition*, so
+**Ultrasoft and PAW run here, and what had them refused was a reference rather
+than a term** (``PLAN.md`` P100). Three tangents are what it takes and all
+three are wired in: the state tangent is ``dpsi + ort``, the strain response's
+occupied block; ``db`` is the tangent of a *composition*, so
 :func:`_position_response` is given ``internals["commutators"]`` rather than
-``b``. Together they take ``d(eps)/d(strain)`` on ultrasoft silicon from 4.6e-2
-to 1.3e-2 against a central difference of ``epsilon`` over re-converged
-strained cells (PAW: 5.5e-2 to 1.3e-2), where the norm-conserving control on
-the same script is 2.3e-4 -- a large improvement and still fifty times the
-control, so the refusal stays. **The five-partial decomposition says where the
-rest is**: the ``geometry``, ``rho`` and ``u`` partials agree to 1.4e-3, ``ort``
-takes the ``psi`` partial's error from +5.94 to +0.032, and what is left is
-``b``, at -1.72 of 112 -- the *same* number on ultrasoft and on PAW, which is
-what says it is structural rather than a dataset's physics. One candidate for
-it is excluded by measurement and is recorded at
-:func:`_position_response`'s commutator.
+``b``; and the commutator that sources ``db`` carries the multiplier *matrix*
+where P44 held a frozen scalar eigenvalue. Against a central difference of
+``epsilon`` over re-converged strained cells, extrapolated in the step, with
+the norm-conserving control through the identical script as the floor:
+**7.2e-6** (ultrasoft) and **2.2e-5** (PAW) on a floor of 2.5e-5, where the
+frozen scalar is 1.3e-2 and the same source written with the traced diagonal
+alone is 1.4e-3. All three are identically zero when ``S`` is the identity, so
+the norm-conserving answer does not move by a digit.
+
+**The refusal rested on a floor, and both of P44's instruments are worth
+recording as the reason.** The third term was excluded because adopting it took
+the *displacement* coordinate's Raman tensor from 1.2e-4 to 1.14e-3 against a
+central difference at one step -- and that reference is itself 1.1e-3 from its
+own limit, so its truncation error had been cancelling the missing term.
+P44's other instrument, the five-partial decomposition, cannot arbitrate at
+all: the ``b`` partial's reference swaps in the *post-tail* ``b`` from a
+displaced run while the states it is contracted against stay at the undisplaced
+cell, so it converges cleanly -- its own two extrapolations agree to 2e-4 --
+and converges to a different quantity, sitting 0.04 away from every candidate
+form. A reference that converges is not therefore a reference to the thing
+being measured.
 """
 
 from __future__ import annotations
@@ -560,11 +570,14 @@ def _position_response(calculation, solver, rho, b, tangent, dpsi, drho,
     how this was found. In the matrix form the off-diagonal ``dLambda_mn b_m``
     terms are there and the tensor comes out cubic to 1e-4.
 
-    **The source term is written with the scalar and that is measured, not
-    overlooked** -- see where it is built, and ``PLAN.md`` P44: making it
-    consistent with this rule closes the strain coordinate and breaks the
-    displacement one, so it is an excluded candidate rather than a missing
-    term.
+    **And the source is written with the same matrix**, which is what makes
+    this the differential of the equation ``b`` actually solves rather than of
+    something near it. ``d(eps_n)`` enters that equation twice, once on each
+    side, and the two are identically zero together when ``S`` is the identity.
+    P44 held the source as a frozen scalar and measured the omission to be
+    right, against a single-step finite difference that was itself off by the
+    term's own size; ``PLAN.md`` P100 has the extrapolated numbers and the
+    reason the partial reference it used cannot arbitrate at all.
 
     ``c_a`` is the direction-``a`` cartesian velocity at the strained cell, and
     the strained ``kcart`` is the trap there: ``KPoints.coords`` do not move
@@ -599,7 +612,6 @@ def _position_response(calculation, solver, rho, b, tangent, dpsi, drho,
     directions = np.eye(3)
 
     weights = solver.weights
-    eigenvalues = solver.eigenvalues
 
     def operators(geometry, states, density):
         """The moved cell and the two operators both halves are built from."""
@@ -638,27 +650,32 @@ def _position_response(calculation, solver, rho, b, tangent, dpsi, drho,
             # :mod:`defumat.response.efield` builds, and its second half is
             # zero only when ``S`` does not move with ``k``.
             #
-            # **``eps_n`` is a frozen scalar here and that is a measurement,
-            # not an oversight** (``PLAN.md`` P44). The operator below carries
-            # the multiplier *matrix*, so its tangent contains ``dLambda``
-            # while this source's contains no ``d(eps_n)`` at all -- an
-            # asymmetry, and writing the source as
-            # ``sum_m dS/dk|psi_m> Lambda_mn`` removes it at no change of
-            # value. That is the single largest term left in the *strain*
-            # coordinate: it takes ``d(eps)/d(strain)`` on ultrasoft silicon
-            # from 1.3e-2 against a finite difference to **1.7e-4**, and PAW
-            # from 1.3e-2 to 1.7e-4. It also **breaks the displacement
-            # coordinate**, where the Raman tensor goes from 1.2e-4 to 1.14e-3
-            # (ultrasoft) and 5.5e-4 (PAW) against its own finite difference --
-            # and it does so in all three pairings tried, with the operator's
-            # half written as a matrix or as a traced diagonal and this one as
-            # either. So the term is *excluded* rather than adopted: one of the
-            # two coordinates has a further term that compensates it, and until
-            # that one is found this stays as it is and the strain-coordinate
-            # third derivative stays refused
-            # (:func:`~defumat.response.phonon.require_norm_conserving`).
+            # **The eigenvalue is the multiplier matrix here too**, the same
+            # rule as the operator below and for the same reason. The equation
+            # that defines ``b`` carries the band's own eigenvalue on *both*
+            # sides, so differentiating it produces ``d(eps_n)`` twice -- as
+            # ``-dLambda S b`` in the operator and as
+            # ``+i dLambda dS/dk|psi>`` here -- and both are identically zero
+            # when ``S`` does not move with ``k``. Writing this one as a frozen
+            # scalar carried the first and dropped the second, which is not the
+            # exact differential of anything (``PLAN.md`` P100).
+            #
+            # **P44 excluded this term, and what excluded it was a step size.**
+            # The exclusion rested on the *displacement* coordinate going from
+            # 1.2e-4 to 1.14e-3 against a central difference of ``epsilon`` at
+            # ``h = 0.02``, and that reference is itself 1.1e-3 from its own
+            # limit: the same difference reads -69.1942, -69.1350 and -69.1205
+            # at 0.02, 0.01 and 0.005 on ultrasoft silicon. Its truncation
+            # error very nearly cancelled the missing term, which is what made
+            # the incomplete form look like the tighter one. Extrapolated, the
+            # form below is **3e-8** relative where the frozen scalar is
+            # 1.26e-3, on a reference whose own floor -- the norm-conserving
+            # control through the identical script, where the analytic answer
+            # is exact -- is 1.8e-6.
             derivative, overlap = velocity.both(states, directions[axis])
-            commutator = -1j * (derivative - eigenvalues[..., None] * overlap)
+            commutator = -1j * (
+                derivative - jnp.einsum("skmn,skmg->skng", lambdas, overlap)
+            )
             overlaps = jnp.einsum("skmg,skng->skmn", jnp.conj(states), commutator)
             projected = commutator - jnp.einsum(
                 "skmn,skmg->skng", overlaps, s_states
