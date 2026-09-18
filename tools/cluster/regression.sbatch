@@ -42,7 +42,9 @@
 #SBATCH --error=/scratch/work/ladovj1/calculations/defumat-audit/out/reg-%A_%a.err
 
 WORK=/scratch/work/ladovj1/calculations/defumat-audit
-REPO=/scratch/work/ladovj1/apps/defumat
+# The checkout to run, overridable so that a run never has to modify the
+# working tree someone else is using: this defaults to a clone of it.
+REPO=${DEFUMAT_REPO:-/scratch/work/ladovj1/apps/defumat-audit}
 VENV=/scratch/work/ladovj1/calculations/pypresso-gpu/venv
 
 mkdir -p "$WORK/out" || exit 1
