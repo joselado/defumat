@@ -49,6 +49,7 @@ missing, are indexed at the head of `PLAN.md` §3.
 | what is not here and what term is missing | `PLAN.md` §3, "What is outstanding" |
 | a survey of Elk's tasks against QE 7.5 | `ELK-FEATURES.md` |
 | what is known to be broken, and what to do about it | `OPEN.md` |
+| what a read-only audit suspects but has not measured | `AUDIT-2026-09-18.md` |
 | where the peak working set goes, sized and ranked | `MEMORY-AUDIT.md` |
 | what is left to do about magnetism, sized, and what each piece needs first | `MAGNETISM-NEXT.md` |
 | what is left to do about continuing one run from another, sized | `CONTINUATION-NEXT.md` |
