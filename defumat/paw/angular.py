@@ -76,6 +76,12 @@ class AngularGrid(eqx.Module):
     dylmp: jnp.ndarray
     sin_theta: jnp.ndarray
     cos_theta: jnp.ndarray
+    #: ``(nx, 3)`` cartesian unit vectors, one per quadrature direction --
+    #: ``rad(nt)%sin_th*cos_phi`` and its two partners in ``paw_init.f90``.
+    #: Always built: the small component's magnetization term needs the
+    #: direction itself rather than a derivative along it, so it is there for a
+    #: local functional as well as a gradient-corrected one.
+    directions: jnp.ndarray = eqx.field(default=None)
 
     @property
     def nx(self) -> int:
@@ -132,6 +138,7 @@ def build_angular_grid(lmax_rho: int, nlm: int, gradient: bool = False) -> Angul
         dylmp=jnp.asarray(dylmp),
         sin_theta=jnp.asarray(radius),
         cos_theta=jnp.asarray(z),
+        directions=jnp.asarray(directions),
     )
 
 

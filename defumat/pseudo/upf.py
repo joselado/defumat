@@ -118,12 +118,13 @@ class PawData:
     augmentation_shape: str  # 'PSQ', 'GAUSS', ... -- how Q was pseudized
     cutoff_index: int  # iraug: the augmentation sphere's mesh index
     #: ``PP_AEWFC_REL``: the *small* component of the Dirac partial waves, which
-    #: only a fully-relativistic dataset carries. QE uses it in one place --
-    #: ``PAW_potential``'s ``with_small_so`` branch, which is entered only when
-    #: ``nspin_mag == 4``, i.e. for a noncollinear run with a magnetization. It
-    #: is read here so that the file is parsed completely and so that the tag
-    #: cannot be confused with ``PP_AEWFC`` again; nothing consumes it yet, and
-    #: :mod:`defumat.scf.potential` refuses that combination anyway.
+    #: only a fully-relativistic dataset carries. It is used in two places, and
+    #: they are QE's two. Its **charge** goes into ``pfunc`` for every
+    #: calculation (``read_upf_new``), and its **magnetization** enters the
+    #: one-centre exchange-correlation when the density has magnetization
+    #: channels to correct -- ``PAW_potential``'s ``with_small_so``, which is
+    #: ``has_so .AND. nspin_mag == 4``. :func:`defumat.paw.onecenter.
+    #: _build_species` builds both from it.
     ae_wfc_rel: np.ndarray | None = None
 
 

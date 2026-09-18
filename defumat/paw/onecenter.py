@@ -103,6 +103,12 @@ class PawSpecies(eqx.Module):
     #: have PAW at all.
     kinetic_ae: jnp.ndarray | None = None
     kinetic_ps: jnp.ndarray | None = None
+    #: ``pfunc_rel``'s tensor, laid out like :attr:`density_ae` and ``None``
+    #: unless the dataset is fully relativistic. The *small* component of the
+    #: Dirac partial waves carries magnetization of its own, and it enters the
+    #: all-electron sphere alone -- there is no pseudo counterpart, because
+    #: there is no small component to pseudize.
+    density_rel: jnp.ndarray | None = None
 
 
 #: How many atoms of one PAW species have their one-centre spheres in flight at
@@ -256,15 +262,29 @@ def onecenter_species(paw: PawSpecies, becsum: jnp.ndarray, meta_c=None, axis=No
     energy = jnp.asarray(0.0)
     ddd = jnp.zeros((nspin, paw.nh, paw.nh))
 
-    for tensor, kinetic, core, sign in (
-        (paw.density_ae, paw.kinetic_ae, paw.core_ae, 1.0),
-        (paw.density_ps, paw.kinetic_ps, paw.core_ps, -1.0),
+    # ``with_small_so`` in ``PAW_potential``: the small component's
+    # magnetization, which exists only for a fully-relativistic dataset and only
+    # where the density has magnetization channels to correct.
+    small = paw.density_rel if nspin == 4 else None
+
+    for tensor, kinetic, core, sign, rel in (
+        (paw.density_ae, paw.kinetic_ae, paw.core_ae, 1.0, small),
+        # No pseudo counterpart, and this is not an omission: the small
+        # component is a property of the Dirac solution, so there is nothing on
+        # the pseudo sphere for it to cancel against. ``PAW_potential`` sets
+        # ``with_small_so = .FALSE.`` on its ``PS`` pass for the same reason.
+        (paw.density_ps, paw.kinetic_ps, paw.core_ps, -1.0, None),
     ):
         # (nspin, nlm, mesh), holding r^2 rho_lm per channel
         rho_lm = jnp.einsum("sij,ijlr->slr", becsum, tensor)
+        msmall_lm = (
+            None if rel is None else jnp.einsum("sij,ijlr->slr", becsum, rel)
+        )
 
         v_hartree, e_hartree = _hartree(_charge_channel(rho_lm), paw)
-        v_xc, e_xc = _exchange_correlation(rho_lm, core, paw, axis)
+        v_xc, e_xc, g_lm = _exchange_correlation(
+            rho_lm, core, paw, axis, msmall_lm
+        )
         if kinetic is not None:
             # The one-centre Tran-Blaha potential. It adds to ``v_xc`` and
             # **nothing to the energy**: the potential is not the derivative of
@@ -289,8 +309,39 @@ def onecenter_species(paw: PawSpecies, becsum: jnp.ndarray, meta_c=None, axis=No
         ddd = ddd + sign * jnp.einsum(
             "ijlr,slr->sij", tensor, potential * paw.weights_core[None, None, :]
         )
+        if g_lm is not None:
+            # The second half of the same derivative: the energy is a function
+            # of ``becsum`` through ``msmall_lm`` as well as through ``rho_lm``,
+            # and both are linear in it, so the chain rule is one more
+            # contraction rather than a second machinery. Its charge component
+            # is identically zero, which is QE's ``is > 1``.
+            ddd = ddd + sign * jnp.einsum(
+                "ijlr,slr->sij", rel, g_lm * paw.weights_core[None, None, :]
+            )
 
     return energy, ddd
+
+
+def small_component_coupling(vector_rad, directions):
+    """``-2 (v . r-hat) r-hat``, the form both small-component terms take.
+
+    A fully-relativistic dataset's all-electron partial waves solve the Dirac
+    equation, so each carries a *small* component beside the large one. The
+    small component's spin density is not isotropic in spin space: its
+    magnetization points along ``-r-hat`` of whatever the large component gives,
+    which is what makes the correction a projector onto the radial direction
+    rather than a number. QE writes the same loop twice, once on the density
+    (``add_small_mag``) and once on the potential (``compute_g``), and they are
+    the same bilinear form because the second is the first one's chain rule:
+    with ``m_eff = m - 2 (m_small . r-hat) r-hat`` the derivative of the energy
+    with respect to ``m_small`` is ``-2 (dE/dm_eff . r-hat) r-hat``.
+
+    Args:
+        vector_rad: ``(3, nx, mesh)`` on the angular quadrature.
+        directions: ``(nx, 3)`` unit vectors, :attr:`AngularGrid.directions`.
+    """
+    projected = jnp.einsum("xc,cxr->xr", directions, vector_rad)
+    return -2.0 * jnp.einsum("xc,xr->cxr", directions, projected)
 
 
 def _charge_channel(rho_lm: jnp.ndarray) -> jnp.ndarray:
@@ -346,13 +397,20 @@ def _hartree(rho_lm, paw: PawSpecies):
     return potential, energy
 
 
-def _exchange_correlation(rho_lm, core, paw: PawSpecies, axis=None):
+def _exchange_correlation(rho_lm, core, paw: PawSpecies, axis=None, msmall_lm=None):
     """``PAW_xc_potential``: onto the sphere, evaluate, and project back.
 
     The two asymmetries here are QE's and are the same ones the plane-wave
     ``v_xc`` has: the functional sees the **total** density, valence plus core,
     while the potential that comes back out is integrated against the valence
     density alone downstream.
+
+    ``msmall_lm`` is the small component's multipoles for a fully-relativistic
+    dataset at ``nspin = 4`` (QE's ``with_small_so``), and it changes two
+    things: the magnetization the functional is evaluated at, and the extra
+    derivative the caller needs to build ``ddd``. Returns
+    ``(potential, energy, g)``, with ``g`` the derivative of the energy with
+    respect to ``msmall_lm`` -- ``None`` when there is no small component.
     """
     nspin = rho_lm.shape[0]
     # ... onto the angular grid. rho_lm holds r^2 rho, so dividing by r^2 gives
@@ -371,6 +429,17 @@ def _exchange_correlation(rho_lm, core, paw: PawSpecies, axis=None):
         jnp.array([1.0, 0.0, 0.0, 0.0]) if nspin == 4
         else jnp.full((nspin,), 1.0 / nspin)
     )
+    if msmall_lm is not None:
+        # ``add_small_mag``, on the same ``r^2 rho`` scale everything here is
+        # on, so no factor moves. The charge component is untouched: the small
+        # component's *charge* is already inside ``pfunc``, put there by
+        # :func:`_build_species` because ``read_upf_new`` puts it there.
+        msmall_rad = jnp.einsum(
+            "xl,slr->sxr", paw.angular.ylm[:, : paw.nlm], msmall_lm
+        )
+        rho_rad = rho_rad.at[1:].add(
+            small_component_coupling(msmall_rad[1:], paw.angular.directions)
+        )
     density = rho_rad / paw.r2 + core_weights[:, None, None] * core
 
     if nspin == 1:
@@ -406,14 +475,35 @@ def _exchange_correlation(rho_lm, core, paw: PawSpecies, axis=None):
     # this time needing the density's gradient there (``PAW_gcxc_potential``).
     # Its ``nspin = 4`` branch resolves each direction onto the local spin axis
     # first (``compute_rho_spin_lm``) -- see :func:`_noncollinear_gradient`.
+    # ``compute_g``: the small component's share of what was just built. The
+    # local part and the gradient part each contribute one, and QE accumulates
+    # them into the same ``g_lm``.
+    g = None
+    if msmall_lm is not None:
+        g_rad = small_component_coupling(
+            potential_rad[1:], paw.angular.directions
+        )
+        g = jnp.concatenate([jnp.zeros_like(g_rad[:1]), g_rad])
+
     if paw.functional.is_gradient:
-        v_gradient, e_gradient = onecenter_gradient_correction(
-            rho_lm, rho_rad, core, paw, axis
+        v_gradient, e_gradient, vector_gradient = onecenter_gradient_correction(
+            rho_lm, rho_rad, core, paw, axis, msmall_lm is not None
         )
         potential = potential + v_gradient
         energy = energy + e_gradient
+        if vector_gradient is not None:
+            # The gradient correction's own share of the same derivative. It
+            # hands back its radial vector potential rather than a ``g`` of its
+            # own so that the form above is written once.
+            g = g.at[1:].add(
+                small_component_coupling(vector_gradient, paw.angular.directions)
+            )
+    if g is not None:
+        g = jnp.einsum(
+            "xl,sxr->slr", paw.angular.weighted_ylm[:, : paw.nlm], g
+        )
 
-    return potential, energy
+    return potential, energy, g
 
 
 
@@ -703,7 +793,9 @@ def _build_species(pseudo: Pseudopotential, functional: Functional) -> PawSpecie
         # on platinum: small enough to look like a convergence difference, large
         # enough to be wrong.
         small = np.asarray(paw.ae_wfc_rel)
-        pfunc[:, :, :iraug] += np.einsum("nr,mr->nmr", small, small)[:, :, :iraug]
+        pfunc_rel = np.einsum("nr,mr->nmr", small, small)
+        pfunc_rel[:, :, iraug:] = 0.0
+        pfunc[:, :, :iraug] += pfunc_rel[:, :, :iraug]
     pfunc[:, :, iraug:] = 0.0
     ptfunc[:, :, iraug:] = 0.0
 
@@ -712,6 +804,12 @@ def _build_species(pseudo: Pseudopotential, functional: Functional) -> PawSpecie
     coefficients = ap[:nlm, lm_of[:, None], lm_of[None, :]]  # (nlm, nh, nh)
 
     density_ae = np.einsum("lij,ijr->ijlr", coefficients, pfunc[beta_of][:, beta_of])
+    density_rel = (
+        None if paw.ae_wfc_rel is None
+        else jnp.asarray(np.einsum(
+            "lij,ijr->ijlr", coefficients, pfunc_rel[beta_of][:, beta_of]
+        ))
+    )
     pseudo_density = ptfunc[beta_of][:, beta_of].copy()
     density_ps = np.einsum("lij,ijr->ijlr", coefficients, pseudo_density)
 
@@ -756,6 +854,7 @@ def _build_species(pseudo: Pseudopotential, functional: Functional) -> PawSpecie
         kinetic_ps=None if not functional.is_meta else _kinetic_tensor(
             ps[beta_of], coefficients, angular_grid, lm_of, pseudo.r, iraug, nlm
         ),
+        density_rel=density_rel,
     )
 
 

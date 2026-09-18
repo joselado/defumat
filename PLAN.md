@@ -4978,19 +4978,27 @@ grid, with `PAW_rad2lm` where the grid version takes an FFT:
 3. Rotate back on the radial grid, where `m-hat` lives — `compute_pot_nonc`.
 
 **Validated against the collinear branch as algebra.** Fed `(n, 0, 0, m)` and
-`(up, down)` — the same physical state — it returns a **bit-identical energy**, a
-potential agreeing to **5.5e-11 relative** (the residue is the multipole
-round-trip the noncollinear branch does and the collinear one does not), and
-transverse components that are exactly zero. End to end, a magnetic oxygen atom
+`(up, down)` — the same physical state — it returns an energy agreeing to
+**1.2e-16 relative, one ulp**, a potential agreeing to **5.5e-11 relative** (the
+residue is the multipole round-trip the noncollinear branch does and the
+collinear one does not), and transverse components that are exactly zero.
+
+*This entry said "bit-identical energy" until 2026-09-18, and the test asserted
+it with `==` until the assertion started failing by one ulp.* Bit-identity was
+never a property of the code: the two branches do not evaluate the functional at
+the same floating-point numbers, because the noncollinear one rebuilds the
+channels as `(n ± |m|)/2` from `n = up + down` and `|m| = sqrt(m.m)`. The square
+root is exact — `sqrt(m^2)` equals `|m|` at every one of 200000 random points —
+and the **reconstruction** is not: `(a + b ± (a - b))/2` differs from `a` at 8.8
+per cent of random points, by up to 2 ulp. It held for that one smooth profile
+until it did not. The assertion is now a few ulp, which is what the algebra
+supports and still catches a real error in the rotation, since that shows at
+1e-11 or worse. End to end, a magnetic oxygen atom
 polarises to 2 mu_B either way and the two totals agree to 2.8e-6 Ry — which is
 *not* this branch's error, since the same comparison under LDA, which never
 enters it, differs by 3.1e-6.
 
-**Not reproduced: `add_small_mag`.** A fully-relativistic dataset's small
-component carries magnetization of its own and QE folds it in here. The *local*
-part of this package's one-centre XC does not fold it in either, so leaving it
-out of both keeps them consistent; putting it in one and not the other would be
-worse than in neither.
+**`add_small_mag` is now reproduced (2026-09-18), in both branches.** See P101.
 
 ### P34 — Running on a cluster: a submit/fetch harness for sweeps. 🚧 PART DONE.
 
@@ -18591,3 +18599,116 @@ these third derivatives for reasons of their own, which are P46's and P45's and 
 untouched. The piezoelectric tensor's own refusal names a blocker that does not exist --
 it says `response/strain.py` refuses ultrasoft, which P97 already found to be untrue --
 and it is the next thing to measure rather than the next thing to write.
+
+### P101 -- The small component's magnetization on a relativistic PAW sphere: the term QE has, sized, and a reference check that cannot see it. 🚧 IMPLEMENTED AND SIZED; the `pw.x` check is a null.
+
+`defumat/paw/onecenter.py` (`small_component_coupling`, `PawSpecies.density_rel`),
+`defumat/paw/gradient.py`, `defumat/paw/angular.py` (`AngularGrid.directions`).
+
+**What was missing.** `PAW_potential` sets `with_small_so = upf%has_so .AND.
+nspin_mag == 4` (`paw_onecenter.f90:166`) and that flag reaches the one-centre
+terms twice: `add_small_mag` folds the small Dirac component's magnetization
+into the density before exchange and correlation are evaluated (`:505` local,
+`:2316` and `:2418` in the gradient branch), and `compute_g` turns `B_xc` into
+the extra derivative that goes back out (`:580`, `:2444`) and reaches `ddd_paw`.
+This package read `PP_AEWFC_REL`, put its **charge** into `pfunc` as
+`read_upf_new` does, and dropped its **magnetization** in both branches.
+
+**It was not refused, which is the part that broke the project's own rule.**
+`pseudo/upf.py` claimed "`defumat.scf.potential` refuses that combination
+anyway", and P33 had lifted that refusal when it wrote the noncollinear
+one-centre gradient correction. Built for `ni-tetragonal-relaxed-mae-paw.in`
+(`Ni.rel-pbe-spn-kjpaw`, `noncolin`, `lspinorb`, a moment): `has_so=True`,
+`is_paw=True`, `nspin_mag=4`, `ae_wfc_rel` present, and nothing raised and
+nothing warned. **No committed reference could have caught it either**: the two
+relativistic PAW benchmarks, `reference.out.pt-soc-paw-nosym` and
+`reference.out.pt2-soc-paw-force`, both have `starting_magnetization = 0`, so
+`with_small_so` is false on QE's side of them too.
+
+**The physics, in one line.** The small component's spin density is not
+isotropic in spin space, so the correction is a projector onto the radial
+direction rather than a number: the magnetization the functional sees becomes
+`m - 2 (m_small . r-hat) r-hat`. `compute_g` is that expression's chain rule,
+`dE/dm_small = -2 (dE/dm . r-hat) r-hat`, so the two are one bilinear form and
+are written once here (`small_component_coupling`) where QE writes the loop out
+five times. `ddd` needs no new machinery either: the energy depends on `becsum`
+through `m_small` as well as through `rho`, both linearly, so it is one more
+contraction against `density_rel`. There is no pseudo counterpart, and that is
+not an omission -- `PAW_potential` sets the flag false on its `PS` pass because
+there is no small component to pseudize.
+
+**Sized, and the size is why everything else here is hedged.** On a magnetic
+iodine atom (`tests/data/qe/i-atom-soc-paw.in`, the cell this phase adds,
+`I.rel-pbe-n-kjpaw`, the heaviest relativistic PAW dataset committed here):
+
+| quantity | with the term | without it | difference |
+|---|---|---|---|
+| total energy | -379.9098876363 Ry | -379.9098877257 Ry | **8.9e-8 Ry** |
+| one-centre energy | -347.6265951525 Ry | -347.6265952536 Ry | 1.0e-7 Ry |
+| `ddd` | | | **5.4e-7 Ry** |
+
+The `ddd` figure is the one that matters more, being the half that reaches the
+Hamiltonian rather than only the total. The dataset says the size is right: the
+small component's norm inside the augmentation sphere is 1.0e-4 to 3.6e-4 of the
+large one's, channel by channel.
+
+**Live rather than silently zero, which is a separate claim and is measured.**
+Scaling `density_rel` by 1 and 10 gives `dE` of +8.93e-8 and +8.50e-7 Ry and
+`d ddd` of 5.35e-7 and 4.23e-6 Ry -- linear, as a term linear in the small
+component must be. At 100 the energy turns over, the correction no longer being
+small.
+
+**The `pw.x` check is a null, and it is the scatter that says so.** Three cells
+through both codes, defumat minus `pw.x` in Ry:
+
+| cell | the term | with | without |
+|---|---|---|---|
+| 9 bohr, 25/200 | +8.94e-8 | +1.94e-7 | +1.04e-7 |
+| 10 bohr, 25/200 | +8.58e-8 | +7.74e-8 | **-8.40e-9** |
+| 9 bohr, 35/350 | +8.91e-8 | +4.66e-7 | +3.77e-7 |
+
+The baseline disagreement between the two codes moves by 4e-7 across cells in
+the total and by 8e-6 in the one-centre piece, two to sixty times the term, so a
+total-energy comparison cannot see it. The second cell is the one that settles
+it: defumat **without** the term sits 8.4e-9 Ry from `pw.x` on a run where
+`pw.x` **has** it, which is smaller than the term itself. Platinum, the next
+heaviest relativistic PAW dataset here, would only take the term to about 2e-7
+and would not change this.
+
+***A sign error was read off the first cell alone and was wrong.*** On `9 bohr,
+25/200` the errors are 1.04e-7 without and 1.94e-7 with, a 1:2 ratio, which is
+exactly what applying a term with the wrong sign produces; flipping it would
+have put the total 1.5e-8 from `pw.x`, seventy times closer. A derivation
+agreed: `Omega(-kappa) = -(sigma . r-hat) Omega(kappa)` and
+`(sigma.r-hat) sigma_i (sigma.r-hat) = 2 r-hat_i (sigma.r-hat) - sigma_i` give a
+correction of the opposite sign to `add_small_mag`'s. **Both were wrong, and the
+second cell is what says so** -- flipping the sign makes it seven times worse
+there. The baseline error is simply positive on average and the term is
+positive, so "with is worse" is that offset and not a statement about the sign.
+The habit this is an instance of is `CLAUDE.md`'s "an explanation that *fits* a
+number and is accepted because it fits", and the reason the derivation did not
+rescue it is the other one: a derivation of one's own that disagrees with a
+working reference implementation is the more likely of the two to be wrong,
+conventions for `Omega(-kappa)` and for what `aewfc_rel` stores being exactly
+where a sign hides.
+
+**The obvious check does not discriminate, and that is worth knowing before
+someone writes it again.** `ddd` against `jax.grad` of the one-centre energy is
+the natural check, since the whole new term is a chain rule -- and it reads
+**2.88e-5 relative with the term and 2.88e-5 without**, identical to three
+figures. That identity is not exact in this code to begin with: the
+gradient-corrected potential is a transcription with a divergence on a
+quadrature rather than the literal derivative of the transcribed energy, and its
+own residual is 1.4e-5 where the term is 8.9e-8. A check whose baseline is 150
+times the thing it is meant to see returns a clean number and says nothing. The
+scaling test above replaced it.
+
+**What is outstanding.** No `docs/features.tex` entry, no README row, no
+notebook and no timing, so this is not a finished phase by the standard in
+`CLAUDE.md`. And the term is *implemented* to QE's expression, *live* and
+*sized*, but it is **not confirmed by a reference number**, because no cell
+reachable here puts it above the floor at which the two codes agree. What would
+confirm it is a quantity where the term is not a 2e-10 relative correction to a
+total: the anisotropy is the candidate, the correction being a projector on
+`r-hat` and therefore not cancelling between two moment directions, and it is
+the next thing to measure.

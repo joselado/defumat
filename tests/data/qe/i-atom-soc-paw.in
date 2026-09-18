@@ -1,0 +1,45 @@
+! A magnetic iodine atom in a box, with spin-orbit coupling and a
+! fully-relativistic PAW dataset: the cell that reaches `PAW_potential`'s
+! `with_small_so` branch.
+!
+! The all-electron partial waves of a Dirac solution carry a small component
+! beside the large one, and the small component's magnetization points along the
+! radial direction, so it enters the one-centre exchange-correlation as a
+! projector on `r-hat` rather than as a number. QE enters that branch when the
+! dataset is fully relativistic and the density has magnetization channels,
+! which is `has_so .AND. nspin_mag == 4`, and no other cell committed here is
+! both. Iodine is the heaviest element with a relativistic PAW dataset here, and
+! the small component's norm inside the augmentation sphere is 1e-4 of the large
+! one's, so this is where the term is largest.
+!
+! A neutral iodine atom is 5s2 5p5, one hole in the p shell, so it carries a
+! moment of one Bohr magneton, and `occupations = 'fixed'` with nbnd = 8 keeps
+! seven filled spinor bands and one empty -- the same construction as
+! `i-atom-soc.in`, whose header explains why a smearing wide enough to converge
+! an isolated atom would destroy the manifold.
+!
+! The box is 9 bohr and the cutoffs are 25/200 rather than `i-atom-soc.in`'s 12
+! bohr and 45, and `conv_thr` is 1e-8 rather than 1e-10. That is deliberate and
+! it is about the *reference*: at 1e-10 in a 12 bohr box `pw.x` is still at
+! 3e-9 after 80 iterations on this cell, because an isolated magnetic atom with
+! fixed occupations is a soft surface, and a comparison whose reference did not
+! converge is worth nothing. At these settings both codes converge.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 1, celldm(1) = 9.0, nat = 1, ntyp = 1,
+    ecutwfc = 25.0, ecutrho = 200.0,
+    occupations = 'fixed', nbnd = 8, nosym = .true., noinv = .true.,
+    noncolin = .true., lspinorb = .true.,
+    starting_magnetization(1) = 0.5, angle1(1) = 0.0
+ /
+ &electrons
+    conv_thr = 1.0d-8, mixing_beta = 0.3
+ /
+ATOMIC_SPECIES
+ I 126.9 I.rel-pbe-n-kjpaw_psl.1.0.0.UPF
+ATOMIC_POSITIONS crystal
+ I 0.00 0.00 0.00
+K_POINTS (automatic)
+ 1 1 1 0 0 0

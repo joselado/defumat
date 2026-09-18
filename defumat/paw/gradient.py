@@ -74,8 +74,18 @@ def radial_derivative(f: jnp.ndarray, r: jnp.ndarray) -> jnp.ndarray:
     return jnp.concatenate([first, interior, outer], axis=-1)
 
 
-def onecenter_gradient_correction(rho_lm, rho_rad, core, paw, axis=None):
-    """``(v_lm, energy)``: what a GGA adds to one on-site potential and energy.
+def onecenter_gradient_correction(
+    rho_lm, rho_rad, core, paw, axis=None, with_small=False
+):
+    """``(v_lm, energy, vector_rad)``: what a GGA adds to one on-site sphere.
+
+    ``vector_rad`` is the magnetization part of the radial potential, ``(3, nx,
+    mesh)``, and is returned only when ``with_small`` asks for it -- the caller
+    needs it to build the small component's share of ``ddd``, and handing it
+    back is what keeps that expression written in one place
+    (:func:`defumat.paw.onecenter.small_component_coupling`). ``None``
+    otherwise, and always ``None`` for a collinear density, which has no small
+    component term.
 
     Args:
         rho_lm: ``(nspin, nlm, mesh)``, holding ``r^2 rho_lm`` as everything in
@@ -98,7 +108,7 @@ def onecenter_gradient_correction(rho_lm, rho_rad, core, paw, axis=None):
     weighted = paw.angular.weighted_ylm
 
     if nspin == 4:
-        return _noncollinear_gradient(rho_lm, rho_rad, core, paw, axis)
+        return _noncollinear_gradient(rho_lm, rho_rad, core, paw, axis, with_small)
 
     if nspin == 1:
         # ``rho_full(ixk,1) = ABS(...)``: QE takes the absolute value in the
@@ -147,10 +157,10 @@ def onecenter_gradient_correction(rho_lm, rho_rad, core, paw, axis=None):
     energy = jnp.sum(
         paw.angular.weights[:, None] * energy_density * (r2 * paw.weights_full)[None, :]
     )
-    return potential, energy
+    return potential, energy, None
 
 
-def _noncollinear_gradient(rho_lm, rho_rad, core, paw, axis):
+def _noncollinear_gradient(rho_lm, rho_rad, core, paw, axis, with_small=False):
     """``PAW_gcxc_potential``'s ``nspin = 4`` branch, on the radial sphere.
 
     ``compute_rho_spin_lm`` in, ``compute_pot_nonc`` out, and between them the
@@ -230,7 +240,7 @@ def _noncollinear_gradient(rho_lm, rho_rad, core, paw, axis):
     energy = jnp.sum(
         paw.angular.weights[:, None] * energy_density * (r2 * paw.weights_full)[None, :]
     )
-    return potential, energy
+    return potential, energy, (potential_rad[1:] if with_small else None)
 
 
 #: ``eps12`` in ``compute_rho_spin_lm``: below this magnetization the local axis

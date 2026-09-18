@@ -70,12 +70,25 @@ def test_the_two_branches_agree_as_algebra(tmp_path, pseudo_dir):
     """``(n, 0, 0, m)`` through the ``nspin = 4`` branch is ``(up, down)``.
 
     Fed the same physical state, the one-centre gradient correction must return
-    the same energy and the same potential whichever representation it is handed.
-    It returns a **bit-identical** energy, a potential agreeing to 5.5e-11
-    relative -- the residue is the multipole round-trip the noncollinear branch
-    does and the collinear one does not -- and transverse components that are
-    exactly zero, which is the statement that a functional of ``|m|`` cannot
-    produce a torque.
+    the same energy and the same potential whichever representation it is
+    handed: the energy to **1.2e-16 relative, which is one ulp**, the potential
+    to 5.5e-11 -- the residue there is the multipole round-trip the
+    noncollinear branch does and the collinear one does not -- and transverse
+    components that are exactly zero, which is the statement that a functional
+    of ``|m|`` cannot produce a torque.
+
+    **The energy assertion used to read ``==`` and that was over-tight rather
+    than a property of the code.** The two branches do not evaluate the
+    functional at the same floating-point numbers: the collinear one is handed
+    ``(up, down)`` and the noncollinear one rebuilds them as
+    ``(n +- |m|)/2`` from ``n = up + down`` and ``|m| = sqrt(m . m)``. The
+    square root is exact here -- ``sqrt(m^2)`` equals ``|m|`` at every one of
+    200000 random points -- but the reconstruction is not: ``(a + b +- (a -
+    b))/2`` differs from ``a`` at **8.8 per cent** of random points, by up to
+    2 ulp. Bit-identity held for this particular profile until it did not, and
+    a tolerance of a few ulp is what the algebra actually supports. It is still
+    a real assertion: a genuine error in the rotation shows at 1e-11 or worse,
+    which is where the potential's own residue sits.
     """
     system, pseudos = _oxygen(tmp_path, pseudo_dir)
     paw = build_paw(pseudos, system.structure, get_functional("PBE")).species[0]
@@ -93,16 +106,20 @@ def test_the_two_branches_agree_as_algebra(tmp_path, pseudo_dir):
     up, down = jnp.asarray(channels[0]), jnp.asarray(channels[1])
 
     collinear_lm = jnp.stack([up, down])
-    v2, e2 = onecenter_gradient_correction(
+    v2, e2, _ = onecenter_gradient_correction(
         collinear_lm, jnp.einsum("xl,slr->sxr", ylm, collinear_lm), core, paw
     )
     noncollinear_lm = jnp.stack([up + down, 0 * up, 0 * up, up - down])
-    v4, e4 = onecenter_gradient_correction(
+    v4, e4, _ = onecenter_gradient_correction(
         noncollinear_lm, jnp.einsum("xl,slr->sxr", ylm, noncollinear_lm), core, paw,
         axis=np.array([0.0, 0.0, 1.0]),
     )
 
-    assert float(e4) == float(e2)
+    assert abs(float(e4) - float(e2)) <= 1.0e-13 * abs(float(e2)), (
+        f"the two representations disagree by "
+        f"{abs(float(e4) - float(e2)) / abs(float(e2)):.2e} relative, which is "
+        f"past the round-off of the (n +- |m|)/2 reconstruction"
+    )
     scale = float(jnp.abs(v2[0]).max())
     assert float(jnp.abs(v4[0] - 0.5 * (v2[0] + v2[1])).max()) < 1.0e-9 * scale
     assert float(jnp.abs(v4[3] - 0.5 * (v2[0] - v2[1])).max()) < 1.0e-9 * scale
