@@ -6890,3 +6890,45 @@ reference's cumulative clock at the end of its eighth and last field iteration
 (`av.it.` 8.2 to 15.2), so the ratio there is at least an order worse than AlAs's 4.4x
 and is where a heavy-element run would be paid. It is not a new regression -- the same two backlog items scale with `nbnd` -- but it
 is the first cell on which they are the difference between a coffee and an afternoon.
+
+## What the strain coordinate's third derivative costs, and why there is no ratio here (P100)
+
+**There is no reference implementation to time this against, and saying so is the
+measurement.** `ph.x` has no strain perturbation at all, `pw.x` computes no elastic
+constants, and the one QE branch that reaches an elasto-optic tensor is the
+`lraman`/`elop` one the record keeps as *evidence* rather than as a reference, because the
+vendored 7.5 build does not reproduce its own committed example. So the rule that every
+feature taken from QE or Elk is timed against the code it was taken from has no
+counterpart to apply here, and a ratio quoted anyway would be a ratio against a broken
+branch.
+
+**What the public path costs**, on the two-atom `nosym` cells the phase was measured on,
+through `electrostriction(calculation, result, elastic=False)`:
+
+| | ultrasoft | PAW |
+|---|---|---|
+| `d(chi)/d(strain)`, the elasto-optic tensor and the `m`/`q` families | **139.4 s** | **159.5 s** |
+| the `elastic=True` refusal | **0.00 s** | 0.00 s |
+
+and the second row is the reason the guard sits before the two self-consistent responses
+rather than beside the constants it is about: a refusal that costs two response solves
+first is a refusal a user pays for.
+
+**What the extrapolated reference costs the test suite.** P100's reference is two steps
+and a Richardson rather than one step, so
+`test_the_raman_tensor_matches_a_finite_difference_with_a_moving_overlap` re-converges
+**four** geometries per case where it used to re-converge two. Measured:
+
+| | wall clock | peak RSS |
+|---|---|---|
+| the two cases, one step (before) | 488.67 s | **10641 M**, which tripped the watchdog |
+| the two cases, two steps, bounded | **537.89 s** | **5640 M** |
+
+per case, 306.98 s (PAW) and 224.35 s (ultrasoft). **The wall clocks are not a delta and
+the peaks are**: the 488.67 s run shared the machine with three other jobs, where the
+537.89 s one had it to itself, so the time column compares two machine states as much as
+two code states. Peak RSS does not move with contention, so the halving is real, and it
+is `jax.clear_caches()` in an autouse fixture plus one call between the two step sizes.
+What that halving cost is recompilation rather than paging, which is the opposite of the
+case `CLAUDE.md` records for P28b: there clearing the caches got *faster* as well as
+smaller, and here it did not, so this process was not paging at 10.6 GB.

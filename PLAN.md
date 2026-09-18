@@ -18547,7 +18547,17 @@ for the norm-conserving case:
 the *same* numbers on the two augmented datasets, which is what says they are
 structural, beside a control that is exact, which is what says the instrument is not the
 problem. The reference is the suite's own for the norm-conserving case, where it reads
-209.38 GPa against 209.38. The two
+209.38 GPa against 209.38.
+
+**Both terms had already been named, by an audit that could not measure them.**
+`HOLES.local.md`'s 2026-08-29 pass has them, found independently by two agents on the same
+day: "the orthogonality block `dpsi^ort` (`StrainResponse.ort`) and the matrix Lagrange
+multiplier `Lambda` (`_constraint_energy`)", with the note that the strain response already
+carries both and `elastic.py` reads neither. What that pass could not do is say what they
+are worth, and it was read afterwards as a *documentation* finding -- the entry point
+walking past a guard -- which is how the guard got added and the terms did not. The 22 per
+cent is the half that was missing, and it is the half that decides whether this is wiring
+or a phase. The two
 terms are named and both are already written for the *displacement* coordinate, where
 P39's dynamical matrix uses them, and neither is wired here: the state tangent is
 `response.dpsi` with no `ort` occupied block, and the constraint is carried with the
@@ -18557,6 +18567,15 @@ multipliers needs -- is absent. So `elastic_constants` keeps a guard of its own,
 these numbers and naming those two terms, and `electrostriction` on an augmented dataset
 runs with `elastic=False`, where the `M` and `Q` families that need the compliance stay
 `None` and the photoelastic tensor and the `m` and `q` families do not.
+
+**The public path was run rather than read**, because every number above came from
+`_position_response` and `_epsilon_at` called directly. `electrostriction(calculation,
+result, elastic=False)` returns `d(eps_00)/dx_00 = +128.401085` on `si-us-nosym` and
+`+128.147090` on `si-paw-nosym`, which are the harness's own digits, with the elasto-optic
+tensor and the `m` and `q` families beside them and `M`, `Q` and `hydrostatic_Mq` absent as
+the compliance's consumers should be. `Calculator.get_electrostriction(elastic=False)`
+agrees with the entry point to 1e-8. And `elastic=True` refuses in **0.00 s**, which is
+what putting the guard above the two self-consistent responses buys.
 
 **The lesson is the trap's own sibling.** `CLAUDE.md` says to inherit a refusal only
 after checking which machine it belongs to; here the refusal was inherited from the wrong

@@ -131,8 +131,12 @@ independently here. **Size:** an afternoon for the code and a phase for the numb
 
 ## 7. The dynamical matrix of an augmented metal
 
-**What was read.** `_require_a_moving_overlap_regime` and `require_norm_conserving` in
-`response/phonon.py`, and the call site in `response/nonlinear.py`.
+**What was read.** `_require_a_moving_overlap_regime` and, at the time, the
+`require_norm_conserving` beside it in `response/phonon.py`, and the call site in
+`response/nonlinear.py`. **That second guard no longer exists** (`PLAN.md` P100): the
+third derivative it covered runs on all three dataset kinds now and the elastic constants
+carry `response/elastic.require_a_measured_elastic_regime` instead. Nothing below depends
+on it, because this item is about a *metal* and that one was about a dataset.
 
 **What the guard is.** `calculation.is_ultrasoft and calculation.system.occupations !=
 "fixed"`, so it catches PAW and it catches only metals. Insulators are implemented on all
@@ -147,9 +151,10 @@ failure mode if it is guessed is an acoustic sum rule violated by a plausible am
 
 **What reading the code added.** The same guard is called from `response/nonlinear.py`,
 so it is not the dynamical matrix alone: the **Raman tensor** of an augmented metal
-refuses here too, where the augmented insulator is in as of P43. One inconsistency is
-left unresolved here: `_require_a_moving_overlap_regime`'s docstring says three further
-tangents and `require_norm_conserving`'s, in the same file, says four.
+refuses here too, where the augmented insulator is in as of P43. One inconsistency this entry
+recorded is now moot: it noted that `_require_a_moving_overlap_regime`'s docstring said
+three further tangents where the guard beside it said four, and that second guard has
+since gone.
 
 **Size, as a hypothesis.** A phase, and the work is the derivation rather than the code.
 The caution that applies to this entry more than to any other here is

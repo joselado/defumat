@@ -2486,6 +2486,11 @@ print(es.elastic.voigt)                     # C_ij in Voigt notation, GPa
 C = elastic_constants(calculation, scf.wavefunctions, scf.eigenvalues,
                       scf.density, es.strain)
 print(C.tensor.shape, C.voigt)
+
+# on an ultrasoft or PAW dataset, everything but the elastic constants and
+# the two families built on them: es.M and es.Q come back as None
+es = electrostriction(calculation, scf, elastic=False)
+print(es.depsilon_dstrain, es.photoelastic, es.m, es.q)
 \end{pycode}
 
 Converged silicon gives $C_{11}$ = 198.5 GPa and $C_{12}$ = 68.9, against a

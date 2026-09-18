@@ -36,6 +36,17 @@ from reading the refusal's *message* and not the code around it. So **a size in 
 guard's surroundings have been read**, and the corrected entries say what reading them
 changed.
 
+**And then §3b was wrong a second time, for a reason none of the others shares**, so it
+does not belong on that tally. The code around the guard had been read, the residue was
+localised correctly and the missing term was named correctly; what was wrong was the
+*reference* the term had been tested against, a single-step finite difference whose own
+truncation error was larger than the term (P100). The habit that follows is not "read the
+code" but **"extrapolate the reference, and get its floor from a case where the analytic
+answer is exact"** -- which here means running the norm-conserving control through the
+identical script, since every term at issue vanishes when `S` is the identity. Two of
+this file's other sizings rest on single-step finite differences and have not been
+re-read in that light.
+
 **The fourth was the worst, because it was the entry this file ranked first.** PAW Born
 charges were called "the only item here whose target, method and reference are all already
 written down". The target was `int3_paw` against `becsumort`, a term that turned out not
@@ -55,8 +66,9 @@ Two sweeps, because one of them cannot surprise you. The first was a scan for ev
 which dataset it is about and misses one that names only the quantity. The second was a
 scan for every `if` on `is_ultrasoft`, `is_paw` or `augmentation is (not) None` within
 eight lines of a `raise` or a `warn`, plus the callers of
-`response.phonon.require_norm_conserving`, which is how three of the third derivatives
-refuse without the word appearing anywhere near the raise. The amber boxes of
+the shared guards, which is how three of the third derivatives used to refuse without the
+word appearing anywhere near the raise (`response.phonon.require_norm_conserving`, gone
+as of P100). The amber boxes of
 `docs/features.tex` were taken as an independent third list and the set difference
 checked. The one thing neither sweep reaches is a path that runs on an augmented dataset
 and is quietly wrong, which is what `OPEN.md` is for.
