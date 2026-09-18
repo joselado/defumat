@@ -95,14 +95,14 @@ print(f"\nlargest component cubic symmetry forbids: "
 
     d(chi_ij)/dx_kl, Voigt rows x columns
                  11       22       33       23       13       12
-      11   108.1081   8.1021   8.1021  -0.0000   0.0000  -0.0000
-      22     8.1021 108.1081   8.1021  -0.0000  -0.0000  -0.0000
-      33     8.1021   8.1021 108.1081  -0.0000   0.0000  -0.0000
-      23     0.0000  -0.0000  -0.0000 197.0154  -0.0000   0.0000
-      13     0.0000  -0.0000  -0.0000  -0.0000 197.0154  -0.0000
-      12     0.0000   0.0000   0.0000  -0.0000   0.0000 197.0154
+      11   108.1081   8.1021   8.1021   0.0000  -0.0000   0.0000
+      22     8.1021 108.1081   8.1021  -0.0000  -0.0000   0.0000
+      33     8.1021   8.1021 108.1081  -0.0000  -0.0000   0.0000
+      23    -0.0000  -0.0000   0.0000 197.0154   0.0000  -0.0000
+      13     0.0000  -0.0000  -0.0000  -0.0000 197.0154   0.0000
+      12    -0.0000  -0.0000   0.0000  -0.0000   0.0000 197.0154
     
-    largest component cubic symmetry forbids: 2.6e-14 of the scale
+    largest component cubic symmetry forbids: 2.0e-14 of the scale
 
 
 ## 3. The derivative *is* the slope
@@ -184,7 +184,7 @@ for name, ours, measured in (
     print(f"{name:6}{ours:12.4f}{measured:13.4f}   {note}")
 ```
 
-              defumat   experiment   comparable?
+               defumat   experiment   comparable?
     p11        -0.0341      -0.0940   yes
     p12        -0.0026       0.0170   yes
     p44        -0.0622      -0.0510   no -- needs the ionic term
@@ -230,6 +230,25 @@ print(f"  M_h = {big_m_h:10.1f} pm^2/V^2      Q_h = {big_q_h:10.4f} m^4/C^2")
     hydrostatic electrostriction coefficients
       m_h =     -550.3 pN/V^2        q_h =     -2.296 GN m^2/C^2
       M_h =     1593.7 pm^2/V^2      Q_h =     0.0066 m^4/C^2
+
+
+## 5. How the core is described does not enter
+
+Everything above runs on a norm-conserving pseudopotential. The same derivative can be
+taken with an ultrasoft or a projector-augmented dataset, where the overlap between two
+states is no longer the identity and part of the charge lives on the atoms rather than on
+the plane-wave grid, and the point of checking that is that a response is a much more
+delicate object than an energy: it is exactly where an approximation to the core tends to
+show. It does not show here. On a smaller two-atom cell, measured separately, the whole
+$\partial\chi/\partial x$ tensor from an ultrasoft dataset and from a PAW one each
+reproduce a central difference over re-converged strained cells to better than that
+difference's own floor, so the tensor is a property of the crystal and not of how the core
+was pseudised.
+
+The one quantity of this notebook a soft dataset does not give you is the **elastic
+constants**, which take a term the derivative above does not. Ask for
+`get_electrostriction(elastic=False)` there, and the $M$ and $Q$ families go with them,
+since both are built from the elastic compliance.
 
 
 **The elastic constants are clamped-ion, and that is the caveat to read them with.** The

@@ -280,6 +280,14 @@ workstation core, slowest last:
 | `07` | 22 | `32` | 35 | `41` | 164 |  |  |
 | `46` | 61 |  |  |  |  |  |  |
 
+`21` gained a section on 2026-09-18 saying that the elasto-optic tensor does not depend
+on how the core is pseudised, and it re-executed in **93 s** against the 30 s in the table.
+**That pair is not a delta either**, and this one is easy to be sure of: what was added is
+a *prose* cell, which executes nothing at all, so the whole difference is that the 93 s was
+taken through `tools/export_notebooks.sh`, which does not pin the thread pool, where the 30 s
+was taken on one core. The table entry stays at 30 s because that is the single-core number
+the caption promises.
+
 `43` reads 173 s on 2026-09-15 with its starting-guess section in it, against the 240 s
 recorded before that section existed. **The pair is not a delta.** The new section is two
 SCF runs on the four-atom chain and cannot be worth a negative 67 s; what the two numbers
