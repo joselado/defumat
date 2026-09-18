@@ -528,3 +528,28 @@ def test_a_stress_through_the_table_matches_the_stored_path(pseudo_dir, monkeypa
     tabulated = np.asarray(compute_stress(calc_b, res_b).tensor)
     assert np.isfinite(tabulated).all()
     assert np.abs(tabulated - stored).max() < 1e-8
+
+
+@pytest.mark.slow
+def test_the_analytic_force_refuses_the_table_by_name(pseudo_dir, monkeypatch):
+    """It read ``qgm[0]`` off an empty tuple and raised a bare ``IndexError``.
+
+    ``addusforce`` needs the whole ``Q_ij(G)``, which is exactly what the
+    tabulated scheme does not hold -- it is chosen when that array would exceed
+    ``AUG_MAX_BYTES``, so materialising it to keep the term would undo the
+    class. The message therefore names the storage scheme and sends the caller
+    to the autodiff force, and the test above is what says that costs nothing:
+    the two schemes agree there to 1e-8 Ry/bohr.
+
+    What made the old failure hard to read is that it fired at *trace* time
+    inside ``jax.jit``, so it named neither the augmentation nor the method,
+    and in a relaxation with ``force_method='analytic'`` it arrived at the
+    first ionic step with the SCF already paid for.
+    """
+    from defumat.forces import compute_forces
+
+    (_, _), (calc_b, res_b) = _converged_both_schemes(
+        "si2-us-force", pseudo_dir, monkeypatch
+    )
+    with pytest.raises(NotImplementedError, match="tabulated form"):
+        compute_forces(calc_b, res_b, method="analytic")

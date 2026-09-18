@@ -1386,6 +1386,40 @@ def _is_traced(x) -> bool:
     return isinstance(x, jax.core.Tracer)
 
 
+def _adopt_rebuilt_sphere(moved, source, planewaves, smooth, kpoints, cell) -> None:
+    """Take the three fields that describe a *sphere* off a rebuilt one.
+
+    ``copy.copy`` carries ``gamma_only``, ``fft_index_minus`` and ``kplusg``
+    over, and all three describe the plane-wave set rather than the system --
+    so a method that rebuilds the set has to re-derive them, exactly as
+    ``Calculation.__init__`` does. Leaving them stale made the Hamiltonian
+    claim half-sphere storage over a whole-sphere basis: a gamma SCF followed
+    by any :mod:`defumat.workflows.topology` invariant reached
+    ``scatter_to_box_gamma`` with an ``fft_index`` of ``(3, 180)`` beside an
+    ``fft_index_minus`` of ``(1, 85)`` and raised ``Incompatible types for
+    broadcasting``, naming neither gamma storage nor the method that dropped
+    it. For ``ik >= 1`` the gather on that length-1 axis was additionally out
+    of bounds, which JAX clamps in silence.
+
+    ``build_plane_wave_basis`` is called without ``gamma_only`` at both sites,
+    so the rebuilt set is the whole sphere and all three come back to their
+    full-sphere values -- which is the honest outcome rather than a
+    substitution: a k-list that is not a single ``Gamma`` has no ``(G, -G)``
+    pairing to store one half of. The memory the trick bought is given back
+    for the sub-run that asked for other k-points, and only for it.
+    """
+    moved.gamma_only = bool(planewaves.gamma_only)
+    moved.fft_index_minus = (
+        planewaves.fft_index_minus(smooth) if planewaves.gamma_only else None
+    )
+    # As in the constructor: ``k + G`` itself is carried only where a meta-GGA
+    # reads it, and it is a function of the k-list, so it moves with the set.
+    moved.kplusg = (
+        planewaves.kplusg(smooth, kpoints, cell)
+        if source.functional.is_meta else None
+    )
+
+
 class Calculation:
     """Everything that stays fixed while the density changes.
 
@@ -2754,6 +2788,7 @@ class Calculation:
         moved.kinetic = planewaves.kinetic(smooth, kpoints, cell)
         moved.fft_index = planewaves.fft_index(smooth)
         moved.sticks = build_sticks(moved.fft_index, planewaves.mask, smooth.grid)
+        _adopt_rebuilt_sphere(moved, self, planewaves, smooth, kpoints, cell)
 
         # The projectors are rebuilt whole: their radial half is tabulated
         # against ``|k+G|``, so unlike a change of position this is not a matter
@@ -2959,6 +2994,9 @@ class Calculation:
         moved.kinetic = planewaves.kinetic(smooth, moved.basis_kpoints, cell)
         moved.fft_index = planewaves.fft_index(smooth)
         moved.sticks = build_sticks(moved.fft_index, planewaves.mask, smooth.grid)
+        _adopt_rebuilt_sphere(
+            moved, self, planewaves, smooth, moved.basis_kpoints, cell
+        )
         moved.projector_core = build_projector_core(
             self.pseudos, system.structure, cell, smooth, planewaves,
             moved.basis_kpoints,

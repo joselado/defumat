@@ -80,6 +80,7 @@ def analytic_forces(calculation, state):
     # The functional's own refusal, reached here too: these expressions do not
     # come through ``energy_at``, so nothing else in this module would make it.
     reject_potential_only(calculation)
+    _reject_tabulated_augmentation(calculation)
     if calculation.is_hubbard:
         # ``force_hub`` is 2552 lines of Fortran -- the derivative of ``ns``
         # with respect to a displacement, which for ortho-atomic projectors
@@ -380,6 +381,39 @@ def _projector_force(psi, vkb, gcart_of_pw, deeq, qq, weights, eigenvalues,
 
     onto_atoms = jnp.zeros((3, nat)).at[:, atom_of_channel].add(summed)
     return -2.0 * onto_atoms.T
+
+
+def _reject_tabulated_augmentation(calculation) -> None:
+    """``addusforce`` reads ``Q_ij(G)`` whole, and the tabulated route has none.
+
+    :class:`~defumat.pseudo.augmentation.TabulatedAugmentation` is chosen
+    exactly when the stored table would exceed ``AUG_MAX_BYTES``, so it carries
+    ``qgm = ()`` and rebuilds each chunk from the radial table instead --
+    which is the point of it, and is why materialising the array here to keep
+    this term would undo the thing the class exists for. Without this the term
+    evaluated ``augmentation.qgm[0]`` on an empty tuple and raised a bare
+    ``IndexError: tuple index out of range`` from inside a ``jax.jit`` trace,
+    naming neither the augmentation nor the storage scheme, and in a relaxation
+    it fired at the first ionic step with the SCF already paid for.
+
+    Nothing is lost but the cross-check: the default autodiff force runs on
+    this route and, on a displaced ``si2-us.in``, returns
+    ``3.92220321e-02 Ry/bohr`` on both storage schemes, agreeing with the
+    resident cell's transcribed force to ``1.4e-6 Ry/bohr``.
+    """
+    from defumat.pseudo.augmentation import TabulatedAugmentation
+
+    if isinstance(calculation.augmentation, TabulatedAugmentation):
+        raise NotImplementedError(
+            "the analytic force expressions need the whole Q_ij(G) table and "
+            "this cell stores it in the tabulated form, which holds a radial "
+            "table and rebuilds Q_ij(G) a chunk at a time -- the scheme chosen "
+            "when the stored array would exceed AUG_MAX_BYTES (2 GiB; "
+            "DEFUMAT_AUG_MAX_BYTES moves it). Use the default autodiff force, "
+            "which runs here and gives the same number: on a displaced "
+            "si2-us.in the two storage schemes agree to every printed digit "
+            "and the two force methods to 1.4e-6 Ry/bohr"
+        )
 
 
 def _addusforce(calculation, becsum_, total, gcart, phases, volume):

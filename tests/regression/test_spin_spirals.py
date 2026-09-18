@@ -232,10 +232,20 @@ def test_what_a_spiral_refuses(pseudo_dir, qe_testsuite):
 
     **Ultrasoft and PAW used to be the third and are not any more**: the
     augmentation charge between the two components is the resident table
-    displaced by ``-q``, and the ground state runs. What is still refused for
-    such a spiral is ``dE/dq``, because the displaced table is itself a
-    function of ``q``; that refusal is asserted below and the ground state is
-    validated in ``test_spin_spirals_augmented.py``.
+    displaced by ``-q``, the ground state runs (P95), and P96 took ``dE/dq``
+    with it -- the displaced table is a function of ``q`` and is rebuilt with a
+    traced one inside ``at_spiral_q`` rather than differentiated at a frozen
+    one. The ground state is validated in ``test_spin_spirals_augmented.py``.
+
+    **What this test asserted until P96 lifted it, and kept asserting for 42
+    commits afterwards**, is that ``dE/dq`` on such a dataset raises
+    ``dQ_ij``. Both of those refusals are gone; the one that survives is
+    narrower and is the last line here: a *tabulated* table reads ``|q|`` on
+    the host to set its radial extent, which a tracer does not have, so the
+    tabulated route alone cannot be differentiated. That this went unseen is
+    the slow set not being a push gate -- the failure is an
+    ``AttributeError`` from ``state_from_result(None)``, since the refusal
+    that used to fire first no longer does.
     """
     text = _spiral_input(0.25)
 
@@ -251,8 +261,7 @@ def test_what_a_spiral_refuses(pseudo_dir, qe_testsuite):
         build_system(parse_pw_input(text.replace("    noncolin = .true.", "")))
 
     # ... and an ultrasoft dataset now *builds*, carrying the displaced table
-    # beside the resident one, while its ``dE/dq`` is refused by name.
-    from defumat.forces.spiral import compute_spiral_gradient
+    # beside the resident one, and is differentiable with it.
     from defumat.scf.driver import Calculation
 
     ultrasoft = read_pw_input(qe_testsuite / "pw_noncolin" / "noncolin.in")
@@ -264,10 +273,21 @@ def test_what_a_spiral_refuses(pseudo_dir, qe_testsuite):
     assert calculation.cross_augmentation is not None
     assert calculation.cross_augmentation.shift is not None
 
-    with pytest.raises(NotImplementedError, match="dQ_ij"):
-        compute_spiral_gradient(calculation, None, None)
+    # The frozen-sphere path rebuilds the displaced table at the traced ``q``
+    # rather than refusing it, which is what P96 bought.
+    moved = calculation.at_spiral_q((0.0, 0.0, 0.4), rebuild_basis=False)
+    assert moved.cross_augmentation is not None
 
-    # The traced path is refused at its own level too, so no other caller can
-    # reach a table frozen at the old ``q``.
-    with pytest.raises(NotImplementedError, match="not rebuilt on this path"):
-        calculation.at_spiral_q((0.0, 0.0, 0.4), rebuild_basis=False)
+    # The one thing left: a *tabulated* table sets its radial extent from
+    # ``|q|`` on the host, and a tracer has no such value, so that route alone
+    # cannot be differentiated. It is chosen by size, so the budget picks it.
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setenv("DEFUMAT_AUG_MAX_BYTES", "1")
+        tabulated = Calculation(system, _pseudos(system, pseudo_dir))
+        from defumat.pseudo.augmentation import TabulatedAugmentation
+        assert isinstance(tabulated.cross_augmentation, TabulatedAugmentation)
+        with pytest.raises(NotImplementedError, match="tabulated"):
+            tabulated.at_spiral_q((0.0, 0.0, 0.4), rebuild_basis=False)
+    finally:
+        monkeypatch.undo()

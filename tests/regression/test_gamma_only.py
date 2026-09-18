@@ -404,3 +404,61 @@ def test_chi0_matches_a_finite_difference_under_gamma(pseudo_dir):
     reference = (density_at(step) - density_at(-step)) / (2.0 * step)
     relative = np.abs(drho - reference).max() / np.abs(drho).max()
     assert relative < 1.0e-4
+
+
+@pytest.mark.slow
+def test_a_topological_invariant_runs_on_a_gamma_ground_state(pseudo_dir):
+    """``at_kpoints`` rebuilds the sphere and used to keep the old one's flags.
+
+    Three fields describe the plane-wave *set* rather than the system --
+    ``gamma_only``, ``fft_index_minus`` and ``kplusg`` -- and ``copy.copy``
+    carried all three across a rebuild, so the Hamiltonian claimed half-sphere
+    storage over a whole-sphere basis: ``fft_index`` of ``(3, 180)`` beside an
+    ``fft_index_minus`` of ``(1, 85)``, raising ``Incompatible types for
+    broadcasting: complex128[1,193] and complex128[1,84]`` out of
+    ``scatter_to_box_gamma``, naming neither gamma storage nor the method.
+    That is exactly the run P68 exists for -- a cell too large to converge at
+    more than one k-point -- being asked for an invariant afterwards.
+
+    The check is the file's own: the gamma ground state and the whole-sphere
+    one at an explicit ``k = 0`` are the same physics, so the curvature built
+    on each must agree to round-off rather than to a tolerance.
+    """
+    from defumat.workflows.topology import run_berry_curvature
+
+    whole, full, _ = _run(pseudo_dir, "", "crystal\n 1\n 0.0 0.0 0.0 1.0")
+    half, gamma, _ = _run(pseudo_dir, "", "gamma")
+    assert whole.calculation.gamma_only is False
+    assert half.calculation.gamma_only is True
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        a = run_berry_curvature(half.system, half.pseudos, gamma.density, shape=(6, 6))
+        b = run_berry_curvature(whole.system, whole.pseudos, full.density, shape=(6, 6))
+    curvature = np.asarray(a.curvature)
+    assert np.abs(np.asarray(b.curvature)).max() > 1e-6, "the cell must carry a curvature"
+    np.testing.assert_allclose(curvature, np.asarray(b.curvature), atol=1e-10)
+
+
+@pytest.mark.slow
+def test_at_kpoints_re_derives_the_three_sphere_fields(pseudo_dir):
+    """The mechanism itself, without the workflow on top of it.
+
+    Cheaper than the test above and it fails for one reason rather than many,
+    which is what a guard on a stale field wants.
+    """
+    from defumat.system.kpoints import KPoints
+
+    half, _, _ = _run(pseudo_dir, "", "gamma")
+    calculation = half.calculation
+    assert calculation.gamma_only is True
+    assert calculation.fft_index_minus is not None
+
+    points = np.array([[0.0, 0.0, 0.0], [0.25, 0.0, 0.0], [0.5, 0.0, 0.0]])
+    moved = calculation.at_kpoints(
+        KPoints.from_crystal(points, np.full(3, 2.0 / 3.0), half.system.cell)
+    )
+    assert moved.gamma_only is False
+    assert moved.fft_index_minus is None
+    assert moved.kplusg is None            # not a meta-GGA run
+    assert moved.fft_index.shape[0] == 3
