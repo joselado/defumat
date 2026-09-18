@@ -24,6 +24,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import jax.numpy as jnp
+import jax
 import numpy as np
 import pytest
 
@@ -38,6 +39,26 @@ from defumat.scf import Calculation, run_scf
 from defumat.system import build_system
 
 pytestmark = [pytest.mark.regression, pytest.mark.slow]
+
+@pytest.fixture(autouse=True)
+def _drop_compiled_code():
+    """Every cell here compiles the whole SCF stack afresh and XLA keeps it.
+
+    ``CLAUDE.md``'s memory rule, applied because this file sweeps several cells
+    -- and on a cluster node it turned out to bind for a second reason. XLA's
+    CPU backend gives each jitted function its own ORC dylib and mmaps its
+    sections, and ``vm.max_map_count`` is 65530 on an ordinary Linux host, so a
+    process that compiles thousands of distinct executables exhausts
+    **mappings** rather than bytes: LLVM then fails an allocation of 118 bytes
+    and the run dies with ``Failed to materialize symbols`` or
+    ``LLVM compilation error: Cannot allocate memory``, at a resident set of a
+    few GB with the machine idle. That is what 15 of this file's 20 tests did
+    on Triton at a commit where every one of them passes on the workstation.
+    The results stay cached below; only the executables are dropped.
+    """
+    yield
+    jax.clear_caches()
+
 
 CASES = Path(__file__).resolve().parents[1] / "data" / "qe"
 PSEUDO = Path(__file__).resolve().parents[1] / "data" / "pseudo"

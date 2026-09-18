@@ -3722,3 +3722,40 @@ same file is killed again, at **15,316 MB**, in
 than half, which is what accumulation does to a cap. Selecting a subset with `-k` bounds it
 where a larger number does not, because what is being bounded is how many distinct cells
 one process has compiled.
+
+## 2. The suite exhausts *mappings* rather than memory on a cluster node
+
+Found by running the whole `slow` set on Triton, 2026-09-19, at a commit where
+every one of these tests passes on the workstation. Fifteen of
+`test_electrostriction.py`'s twenty failed, all with the same
+`jax.errors.JaxRuntimeError: INTERNAL: Failed to materialize symbols`, and
+`test_spectra.py` aborted outright; the piezoelectric measurement job died the
+same way with `LLVM compilation error: Cannot allocate memory` and
+`Failed to satisfy suballocation request for **118**` bytes, on a two-atom cell
+with **120 GB** allocated and a resident set of three.
+
+**It is not memory.** A failed 118-byte request with 120 GB free is an
+*address-space* failure: XLA's CPU backend gives every jitted function its own
+ORC dylib and mmaps its sections, `vm.max_map_count` on these nodes is the
+ordinary 65530, and a process that compiles thousands of distinct executables
+runs out of mappings. Which processes do that is exactly the set
+`CLAUDE.md`'s memory section already names: the ones that sweep many cells, each
+of which compiles the whole SCF stack afresh while XLA keeps every executable
+for the life of the process.
+
+**So the cure is the one already prescribed there**, `jax.clear_caches()` in an
+autouse fixture after the `yield`, and the interesting part is which files have
+it. Ten regression files do. `test_electrostriction.py` and `test_spectra.py`
+did not and now do. **These are still to do**, ranked by how many inputs they
+name, which is a proxy for how many distinct cells they compile:
+`test_input_sweep.py` (40), `test_lsda.py` (22), `test_stress.py` (17),
+`test_spinorbit.py` (17), `test_noncollinear_magnetism.py` (16),
+`test_scf.py` (14), `test_magnetic_constraints.py` (13), `test_uspp.py` (11),
+`test_topology.py` (11), `test_ldau.py` (11), `test_response.py` (8).
+
+**Two things not to conclude.** The workstation does not show this, so nothing
+here says those files are wrong; and `test_ldau.py`'s and
+`test_ldau_flavours.py`'s appetite (Part XIII item 1) is a genuine *memory*
+problem rather than this one, measured in bytes on a machine with no cgroup
+surprises. What the two share is the cause, which is accumulation, and therefore
+the fix.
