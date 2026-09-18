@@ -310,3 +310,51 @@ def test_nickel_carries_a_magnon_below_its_stoner_continuum():
     )
     eigenvalue = np.linalg.eigvals(np.asarray(chi.x[0]) @ kernel).real.max()
     assert eigenvalue == pytest.approx(1.0, abs=0.02)
+
+
+# --- the k-set a caller builds itself -------------------------------------------
+
+
+def test_a_caller_built_k_set_carries_one_electron_per_band():
+    """``for_spin`` at the boundary, which both magnon entry points skipped.
+
+    Every ``KPoints`` constructor applies the unpolarized ``degspin``
+    unconditionally, since a set can be built long before it is known which
+    regime will use it, and a transverse susceptibility is by construction an
+    ``nspin = 2`` run where a band holds **one** electron. So a mesh from
+    ``KPoints.automatic`` arrived with weights summing to 2 where this needs 1,
+    and every k-integral in ``chi_0`` was wrong -- with nothing looking like an
+    error, because the electron count is still met and the Fermi level simply
+    lands elsewhere.
+
+    Measured on this cell at ``nbnd = 8``: the Goldstone residual read
+    **0.8486** and the enhancement **0.1908**, against **0.0274** and
+    **1.0587** once the weights are right. Note it is *not* the clean factor of
+    two the mechanism suggests: h-fcc is a smeared metal, so the doubled
+    weights move the Fermi solve as well as the prefactor, and the enhancement
+    is out by 5.5 rather than by 2. The identity that says which is honest is
+    the enhancement itself -- a Goldstone mode at ``q = 0`` is the statement
+    that ``1 - X_0 F`` is singular there, so it must be 1.
+
+    The assertion is the exact one rather than a tolerance, because the raw
+    ``4 4 4`` set **is** this input's own set: the two routes must give the
+    same array bit for bit, and they do.
+    """
+    from defumat.system.kpoints import KPoints
+    from defumat.workflows.magnons import run_spin_susceptibility
+
+    calculator, scf = _converged("h-fcc-magnon.in")
+    options = dict(nbnd=8, conv_thr=1.0e-9)
+    args = (calculator.system, calculator.pseudos, jnp.asarray(scf.density),
+            np.zeros(3), np.array([0.0]))
+
+    own = run_spin_susceptibility(*args, **options)
+    raw = KPoints.automatic((4, 4, 4), (0, 0, 0), calculator.system.cell,
+                            rotations=(), time_reversal=False)
+    assert float(np.asarray(raw.weights).sum()) == pytest.approx(2.0)
+    given = run_spin_susceptibility(*args, kpoints=raw, **options)
+
+    np.testing.assert_array_equal(np.asarray(given.chi0), np.asarray(own.chi0))
+    assert given.enhancement == pytest.approx(own.enhancement, rel=1e-12)
+    assert given.goldstone == pytest.approx(own.goldstone, rel=1e-12)
+    assert given.goldstone < 0.05

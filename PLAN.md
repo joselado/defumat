@@ -5879,6 +5879,38 @@ the k-point count.
 
 ---
 
+**The one setup option the facade could not carry, found and closed 2026-09-18.**
+`projectors` -- where `<k+G|beta>` lives, resident or rebuilt per k-point -- is a
+`SETUP_OPTIONS` member and was in no set `Calculator.__init__` accepts, so
+`get_scf(projectors='rebuild')` succeeded, left `defaults['projectors']`, and every
+calculator-deriving method then raised `TypeError: unknown calculator option(s)
+['projectors']` out of `_derived`. Worst in `relaxed()`, where the relaxation is paid for
+first and the calculator can never produce a derived one afterwards. The other face is
+that `Calculator.from_file(path, projectors='rebuild')` raised at construction, so the
+dial could not be set once for a run.
+
+**A third face the audit did not have**, and it is this section's own rule about
+forwarding by named parameter: `run_pdos` has a `projectors` of its own meaning the
+**Hubbard projector scheme**, so `get_pdos()` after that `get_scf` was handed a memory
+setting as a physics one. It is a crash rather than a wrong answer -- `atomic_projections`
+validates the name and raises `unknown projector set 'rebuild'` -- but only because of
+that guard; the branch it would otherwise have reached is
+`orthogonalize = kind in ('ortho-atomic', 'norm-atomic')`, which would have silently meant
+plain atomic projectors.
+
+Hence `SETUP_ONLY_OPTIONS` rather than moving the name into `SHARED_OPTIONS`: accepted at
+construction, adopted from a call, consumed by the `Calculation` that
+`Calculator.calculation` builds, and never forwarded. **One thing that repair broke and a
+second measurement caught:** with the name out of `_defaults_for` but still in the SCF
+cache key, a plain `get_scf()` after a `get_scf(projectors='rebuild')` missed its own
+cache and ran the whole SCF again -- counted, two `run_scf` calls against one. A setup
+option says which `Calculation` exists rather than which run was made over it, so it is
+stripped from the key as well, and `_adopt` is what drops the cache when one changes.
+**The number that says the dial touches memory and not physics:** silicon's Lowdin
+charges through the repaired path are **3.9673 on both atoms, identical to a calculator
+that never named it**. `tests/unit/test_projector_storage.py`.
+
+
 ### P39 — The dynamical matrix when `S` moves with the atoms. ✅ DONE.
 
 **What.** P25's norm-conserving restriction is lifted: `dynamical_matrix` runs on
@@ -10600,6 +10632,33 @@ is defined needs a much finer grid, which is a cost question and not a missing t
 `nm = 561`.
 
 
+**The k-set a caller builds is a `for_spin` boundary, and both entry points here
+skipped it. Found and closed 2026-09-18.** `run_spin_susceptibility` and
+`run_magnon_dispersion` put a caller's `kpoints=` straight onto the system with
+`eqx.tree_at` and then called `fixed_density_states` without passing it, so the `for_spin`
+boundary at `workflows/nscf.py` -- whose own comment claims it "covers every caller that
+builds its own set" -- never fired. Every `KPoints` constructor applies the unpolarized
+`degspin` unconditionally, and this workflow is by construction `nspin = 2`, where a band
+holds one electron. Measured on `h-fcc-magnon.in` at `nbnd = 8`: a
+`KPoints.automatic((4,4,4),(0,0,0),cell)` carries weights summing to **2.0000** against
+the run's own **1.0000**, and the Goldstone residual read **0.8486** with an enhancement
+of **0.1908**, against **0.0274** and **1.0587** once the weights are right. The
+enhancement is the identity that says which is honest -- a Goldstone mode at `q = 0` is
+the statement that `1 - X_0 F` is singular there, so it must be 1.
+
+**It is worse than the factor of two the mechanism suggests, and the reason is the
+smearing.** h-fcc is a metal, so the doubled weights move the Fermi solve as well as the
+prefactor and the enhancement is out by **5.5** rather than by 2. On
+`run_magnon_dispersion` the defect is additionally *self-concealing* with
+`goldstone_correction = True`: the factor is exactly q-independent, so
+`scale = 1/lambda_max(2 X_0 F)` halves, the product is invariant, and `omega(q)` comes
+back right while `kernel_scale` sits at half its honest value and `chi` is doubled.
+
+The regression test asserts the **exact** identity rather than a tolerance, because the
+raw `4 4 4` set *is* this input's own set: the two routes give `chi_0` bit for bit,
+`max |diff| = 0.000e+00`. `tests/regression/test_magnons.py`.
+
+
 ### P64 — The orbital magnetization of the cell, by the modern theory. ✅ DONE, norm-conserving.
 
 `defumat/topology/orbital_magnetization.py`, `defumat/topology/mesh.py`'s `VolumeMesh`,
@@ -11327,6 +11386,25 @@ way out), and a spinor or spiral run. `Calculation.gamma_only` is the switch and
 `gamma_storage_is_consumable` is the rule; `estimate_size` mirrors it exactly,
 because sizing the substitution where the run consumes the half sphere
 overstates every band-sized array by two.
+
+**What `at_kpoints` did not carry, found 2026-09-18.** Three fields describe the
+plane-wave *set* rather than the system -- `gamma_only`, `fft_index_minus` and `kplusg` --
+and `copy.copy` carried all three across a rebuild, so a calculation whose sphere had just
+been rebuilt whole still claimed half-sphere storage. Measured on gamma silicon:
+`at_kpoints` on a three-point crystal list returned `gamma_only = True` with `fft_index`
+of `(3, 180)` beside a stale `fft_index_minus` of `(1, 85)`, and `run_berry_curvature` on
+the gamma ground state raised `Incompatible types for broadcasting: complex128[1,193] and
+complex128[1,84]` out of `scatter_to_box_gamma` -- which is exactly the run this phase
+exists for, a cell too large to converge at more than one k-point, being asked for an
+invariant afterwards. For `ik >= 1` the gather on that length-1 axis was additionally out
+of bounds, which JAX clamps in silence. `_adopt_rebuilt_sphere` (`scf/driver.py`)
+re-derives the three wherever the sphere is rebuilt, which is `at_kpoints` and
+`at_spiral_q`'s rebuild branch; `at_kcart`, `at_cell` and `at_strain` freeze the sphere and
+were already right. **The number is not the absence of the crash.** Against the same cell
+converged at an explicit `k = 0` on the whole sphere, the repaired curvature agrees to
+**7.4e-12 on a curvature of 2.2e-04**, with the two total energies **1.8e-15 Ry** apart.
+`tests/regression/test_gamma_only.py`.
+
 
 ### P68b — A soft mode's `ecutrho` convergence, and why the two routes agreeing is weak evidence. 📓 RECORDED.
 
@@ -12446,6 +12524,21 @@ For scale, the same run's file peaks elsewhere are `test_stress` 6,317 MB, `test
 this number is **not measured** — the Aug 29 run predates the peak column, so there is no
 baseline to compare against, and the honest statement is that the peak is now known rather
 than that it is new.
+
+**A second consumer of the whole table, found 2026-09-18 and refused.** `addusforce`
+(`forces/analytic.py`) reads `augmentation.qgm[t]` directly, and `TabulatedAugmentation`
+carries `qgm = ()` by construction, so `compute_forces(..., method='analytic')` on a cell
+that takes the tabulated route raised a bare `IndexError: tuple index out of range` from
+inside a `jax.jit` trace, naming neither the augmentation nor the storage scheme -- and in
+a relaxation with `force_method='analytic'` it fired at the first ionic step with the SCF
+already paid for. Reproduced with `DEFUMAT_AUG_MAX_BYTES=1` on a displaced `si2-us.in`.
+Materialising the table here would undo the class, which is chosen exactly when that array
+is over 2 GiB, so it is refused by name (`_reject_tabulated_augmentation`). **The
+measurement that says the refusal costs the cross-check and nothing else:** the default
+autodiff force on that cell is **3.92220321e-02 Ry/bohr on both storage schemes, identical
+to every printed digit**, and on the resident one the transcribed force agrees with it to
+**1.4e-6 Ry/bohr**. `tests/regression/test_uspp.py`.
+
 
 ### P74 — The band dial reaches the spinor `h_psi`. ✅ DONE.
 

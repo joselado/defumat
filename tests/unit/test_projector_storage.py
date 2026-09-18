@@ -156,6 +156,40 @@ def test_the_dial_survives_into_a_derived_calculator():
     assert derived.calculation.projector_storage == "rebuild"
 
 
+def test_the_dial_is_not_part_of_the_scf_cache_key():
+    """It says which ``Calculation`` exists, not which run was made over it.
+
+    The first repair put ``projectors`` out of ``_defaults_for``'s forwarding,
+    which is right -- ``run_pdos`` has a parameter of that name meaning
+    something else -- and that alone made a plain ``get_scf()`` after a
+    ``get_scf(projectors='rebuild')`` miss its own cache and run the whole SCF
+    a second time: the first call's ``options`` carried the name and the second
+    call had nothing to supply it. Stripping it from the key is the fix rather
+    than restoring the forwarding, because ``_adopt`` already drops the cache
+    when a setup option changes.
+    """
+    import defumat.calculator as facade
+
+    calls = {"n": 0}
+    real = facade.run_scf
+
+    def counting(*args, **kwargs):
+        calls["n"] += 1
+        return real(*args, **kwargs)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        calculator = Calculator.from_file(
+            CELL, pseudo_dir="tests/data/pseudo", announce=False)
+        facade.run_scf = counting
+        try:
+            calculator.get_scf(projectors="rebuild", max_iterations=1)
+            calculator.get_scf(max_iterations=1)
+        finally:
+            facade.run_scf = real
+    assert calls["n"] == 1
+
+
 def test_the_dial_can_be_set_for_a_calculator_s_whole_life():
     """The other face of the same hole: the constructor refused it."""
     calculator = Calculator.from_file(

@@ -180,6 +180,42 @@ class MagnonDispersion(eqx.Module):
         return ax
 
 
+def _for_spin(kpoints, system):
+    """A caller's own k-set, with the spin degeneracy taken out of its weights.
+
+    **Every ``KPoints`` constructor applies the unpolarized ``degspin``
+    unconditionally**, because a set can be built long before it is known which
+    regime will use it, and a transverse susceptibility is by construction an
+    ``nspin = 2`` run, where a band holds one electron rather than two. So a
+    mesh built with ``KPoints.automatic`` and handed in here carried weights
+    summing to 2 where this needs 1, and the whole k-integral in ``chi_0`` came
+    out exactly doubled -- with nothing looking like an error, since the
+    electron count is still met and the Fermi level simply lands elsewhere.
+
+    The docstrings steer a caller straight into it: this workflow wants the
+    whole grid with ``nosym`` and ``noinv``, which is what a bare constructor
+    gives and what ``denser_grid`` or ``system.kpoints`` does not. What it cost
+    is stated rather than argued: ``goldstone_residual`` compares against a
+    target built from the SCF density, which is unchanged, so a doubled
+    ``chi_0`` reads |2m - m|/|m| ~ 1.0 against the 0.5 to 8 per cent a
+    converged run gives -- and in ``run_magnon_dispersion`` with
+    ``goldstone_correction = True`` the factor is exactly q-independent, so the
+    correction absorbs it and ``omega(q)`` comes back *right* while
+    ``kernel_scale`` sits at half its honest value and ``chi`` is doubled.
+
+    ``for_spin`` is idempotent through a flag on the set, so a set from
+    ``denser_grid`` or from ``system.kpoints`` passes through untouched. The
+    siblings that already do this at the identical point are
+    ``response/conductivity.py:107``, ``workflows/shg.py``,
+    ``workflows/photocurrent.py``, ``workflows/nesting.py``,
+    ``workflows/transport.py``, ``ultracell/driver.py`` and
+    ``Calculator.with_kpoints``.
+    """
+    from defumat.system.kpoints import for_spin
+
+    return for_spin(kpoints, system.nspin)
+
+
 def run_spin_susceptibility(
     system,
     pseudos,
@@ -216,6 +252,13 @@ def run_spin_susceptibility(
             optical spectrum wants. **The magnon energy comes from the
             eigenvalue crossing rather than from this grid**, so a dozen points
             are enough unless the spectral function itself is wanted.
+        kpoints: a denser mesh to read the states off, in place of the one the
+            SCF used. It has to meet ``system``'s own requirement -- the whole
+            grid, closed under translation by ``q`` -- and its weights are put
+            through :func:`defumat.system.kpoints.for_spin`, so a set from a
+            bare constructor and a set from ``denser_grid`` both arrive
+            carrying one electron per band. Leaving that out was worth a
+            Goldstone residual of 0.85 against 0.03 on ``h-fcc-magnon.in``.
         nbnd: how many bands the fixed-density run computes. Both channels need
             empty states -- the minority ones are where the majority electrons
             go.
@@ -256,7 +299,9 @@ def run_spin_susceptibility(
 
     if states is None:
         if kpoints is not None:
-            system = eqx.tree_at(lambda s: s.kpoints, system, kpoints)
+            system = eqx.tree_at(
+                lambda s: s.kpoints, system, _for_spin(kpoints, system)
+            )
         # The refusals are checked before the fixed-density run rather than
         # inside it: they are statements about the calculation, and a caller
         # asking for something this cannot do should not first pay for the
@@ -415,7 +460,9 @@ def run_magnon_dispersion(
     from defumat.scf.driver import Calculation
 
     if kpoints is not None:
-        system = eqx.tree_at(lambda s: s.kpoints, system, kpoints)
+        system = eqx.tree_at(
+            lambda s: s.kpoints, system, _for_spin(kpoints, system)
+        )
     require_a_transverse_regime(Calculation(system, pseudos, k_batch=k_batch))
     states = fixed_density_states(
         system, pseudos, density, nbnd=nbnd or _default_nbnd(system, pseudos),

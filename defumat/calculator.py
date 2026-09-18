@@ -572,7 +572,17 @@ class Calculator:
         refuses a ``magnetization`` argument -- there is nothing left for it to
         decide -- and ``with_moments`` sets one by default.
         """
-        merged = {**self._defaults_for(run_scf), **options}
+        # A :data:`SETUP_ONLY_OPTIONS` member is **not part of the key**, and
+        # leaving it in made a plain ``get_scf()`` after a
+        # ``get_scf(projectors='rebuild')`` miss its own cache and run the
+        # whole SCF a second time -- the first call's ``options`` carried it
+        # and the second's did not, while ``_defaults_for`` no longer supplies
+        # it from ``defaults``. It belongs out rather than back in: it says
+        # which ``Calculation`` exists, not which run was made over it, and
+        # :meth:`_adopt` below already drops the cache when one changes.
+        merged = {name: value for name, value in
+                  {**self._defaults_for(run_scf), **options}.items()
+                  if name not in SETUP_ONLY_OPTIONS}
         if self._scf is not None and _same_options(merged, self._scf_options):
             return self._scf
         # ``diagonalization`` and ``k_batch`` are *not* arguments of the SCF:

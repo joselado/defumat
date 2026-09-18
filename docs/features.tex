@@ -1998,6 +1998,22 @@ functional a third time, and while the Sternheimer solve their first-order
 wavefunctions come from now \emph{does} have a spinor form, no third derivative
 has been run with one. The refusal is about the assembly rather than the solve,
 which is the distinction that cost this project a whole quantity once before.
+
+\code{method='analytic'} is refused for one more reason, and this one is about
+\emph{storage} rather than about physics: \code{addusforce} needs the whole
+$Q_{ij}(\mathbf G)$ table, and a cell whose stored table would exceed
+\code{AUG\_MAX\_BYTES} (2~GiB; \code{DEFUMAT\_AUG\_MAX\_BYTES} moves it)
+keeps a radial table and rebuilds the array a chunk at a time instead, so there
+is no whole table to read. Materialising one to keep the term would undo the
+thing that scheme exists for, which is why this is a refusal. It costs the
+cross-check and nothing else: the default autodiff force runs on that route, and
+on a displaced \code{si2-us.in} it returns $3.92220321\times10^{-2}$~Ry/bohr on
+\emph{both} storage schemes, identical to every printed digit, agreeing with the
+resident cell's transcribed force to $1.4\times10^{-6}$~Ry/bohr. Before this the
+term read \code{qgm[0]} off an empty tuple and raised a bare \code{IndexError}
+from inside a \code{jax.jit} trace --- in a relaxation with
+\code{force\_method='analytic'}, at the first ionic step with the SCF already
+paid for.
 \end{refuses}
 
 % =====================================================================
