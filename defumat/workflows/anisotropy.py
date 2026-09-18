@@ -174,7 +174,10 @@ class ProjectedBandEnergy:
 
     #: ``(natomwfc,)`` in Ry.
     by_orbital: np.ndarray
-    #: One :class:`~defumat.projwfc.projections.OrbitalLabel`-alike per entry.
+    #: One ``(channel, spin)`` pair per entry, the channel being a
+    #: :class:`~defumat.projwfc.channels.AtomicChannel` and the spin the string
+    #: ``"up"`` or ``"down"``, so there are ``2 * len(channels)`` of them rather
+    #: than one per orbital.
     labels: tuple
     #: The reference level subtracted from every eigenvalue, in Ry.
     ef_0: float

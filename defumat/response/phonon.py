@@ -770,8 +770,10 @@ def _bare_displacements(calculation, solver, v_scf, positions, atoms=None) -> np
     one ``jvp`` through
     :meth:`~defumat.scf.driver.Calculation.at_positions` at frozen ``v_scf`` --
     the same method the force differentiates, and the same call
-    :func:`~defumat.response.efield._born_charges` already makes for ``Z*``,
-    which is why this is the one piece of the phase that was written before it.
+    :func:`~defumat.response.born.born_effective_charges` already makes for
+    ``Z*`` (``efield.py`` imports it and calls it; the shared frozen-potential
+    ``at_positions`` ``jvp`` is in ``born.py``), which is why this is the one
+    piece of the phase that was written before it.
 
     "Bare" is the whole point: the self-consistent part of the perturbation is
     the induced ``dV_scf`` that the loop above adds, so the potential handed to

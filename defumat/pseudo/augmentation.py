@@ -270,6 +270,34 @@ def _species_cross_integrals(qgm, potential_g, phases, volume):
     return volume * jnp.einsum("ijg,ag->aij", jnp.conj(qgm), shifted)
 
 
+def _no_augmentation_section(pseudo) -> ValueError:
+    """The one cause that reaches the two guards below, rather than the one they named.
+
+    Both of them used to blame "the pre-2.0 qfcoef form, which is not
+    implemented", and that is the one thing it cannot be. That form **is**
+    implemented -- :func:`defumat.pseudo.upf._expand_qij` reads ``PP_RINNER``
+    and ``PP_QFCOEF`` and applies ``setqfnew``'s polynomial inside
+    ``rinner(L)`` -- and ``qfuncl`` is never ``None`` on a parsed file, since
+    the only construction of :class:`~defumat.pseudo.upf.Augmentation` fills it
+    on both branches. A genuine UPF v1 file is refused by name much earlier, in
+    the reader. So the reachable cause is ``augmentation is None``, which the
+    reader returns when the file carries **no** ``PP_AUGMENTATION`` section or
+    when the dataset has no beta projectors, under a header that nonetheless
+    says ``US``, ``USPP`` or ``PAW``: ``is_ultrasoft`` reads that free-text
+    header alone and nothing cross-checks it against the sections. That is a
+    malformed dataset rather than an unimplemented feature, so it is a
+    ``ValueError``.
+    """
+    return ValueError(
+        f"{pseudo.element}: the header says this is an ultrasoft or PAW dataset "
+        "and the file carries no augmentation charge to go with it -- either "
+        "the PP_AUGMENTATION section is missing or the dataset has no beta "
+        "projectors. Every quantity an ultrasoft run builds (the augmentation "
+        "charge Q_ij, the overlap operator, D_ij) needs it, so this cannot be "
+        "run as ultrasoft; check the file, or use a norm-conserving dataset"
+    )
+
+
 def augmentation_dipole(pseudo: Pseudopotential) -> np.ndarray:
     """``dpqq``: the augmentation charge's dipole, ``(3, nh, nh)`` in bohr.
 
@@ -306,10 +334,7 @@ def augmentation_dipole(pseudo: Pseudopotential) -> np.ndarray:
         return dipole
     augmentation = pseudo.augmentation
     if augmentation is None or augmentation.qfuncl is None:
-        raise NotImplementedError(
-            f"{pseudo.element}: the augmentation charge is stored in the pre-2.0 "
-            "qfcoef form, which is not implemented"
-        )
+        raise _no_augmentation_section(pseudo)
     if augmentation.qfuncl.shape[2] <= 1:
         return dipole  # no L = 1 channel: every dipole vanishes by parity
 
@@ -351,10 +376,7 @@ def radial_augmentation_transforms(
     """
     augmentation = pseudo.augmentation
     if augmentation is None or augmentation.qfuncl is None:
-        raise NotImplementedError(
-            f"{pseudo.element}: this pseudopotential's augmentation charge is stored "
-            "in the pre-2.0 qfcoef form, which is not implemented"
-        )
+        raise _no_augmentation_section(pseudo)
 
     kkbeta = pseudo.kkbeta
     r = jnp.asarray(pseudo.r[:kkbeta])

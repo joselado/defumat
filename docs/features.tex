@@ -222,6 +222,19 @@ energy, a force and a stress for it. Set \code{ibrav = 0} to use the card.
 Neither refusal is reached by any of the 1194 inputs in this repository, in
 \code{benchmarks/} or in QE's own vendored test-suite.
 
+Two more say the lattice parameter twice, and \code{pw.x} stops on both. Giving
+\code{celldm} \emph{and} \code{A} is one lattice constant written in bohr and
+in angstrom, which is what a half-finished conversion leaves behind, and taking
+\code{celldm} silently converges a ground state for whichever of the two was
+not meant. Giving a \code{CELL\_PARAMETERS bohr} or \code{angstrom} card
+\emph{and} \code{celldm(1)} is the same thing one step along: the card already
+carries the lattice parameter, so \code{alat} became \code{celldm(1)} rather
+than the length the vectors set, and every \code{ATOMIC\_POSITIONS alat}
+coordinate was scaled by a parameter the cell does not come from. Write the card
+in \code{alat} units to keep \code{celldm(1)}, or drop \code{celldm(1)} to
+keep the card. No \code{pw.x} input in this repository or in the vendored
+test-suite carries either pair.
+
 One parsing trap sits under all of this and is worth stating once: Fortran's
 list-directed logical input accepts an optional \code{.}, then a \code{T} or
 an \code{F}, then anything, so \code{lberry = F} is legal and is false. The

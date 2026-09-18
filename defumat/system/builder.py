@@ -1643,6 +1643,23 @@ def _build_cell(pwin: PwInput, precision: Precision) -> Cell:
 
     celldm = np.array(pwin.indexed("system", "celldm", 6))
     a = pwin.get("system", "a")
+    if celldm[0] != 0.0 and a is not None and float(a) != 0.0:
+        # **Two spellings of the same lattice parameter, and they disagree by a
+        # factor of 1.8897 whenever the conversion was forgotten.** ``celldm``
+        # is in bohr and ``A`` in angstrom, so a leftover ``A = 5.43`` beside a
+        # complete ``celldm`` is the half-finished conversion of an input, and
+        # taking ``celldm`` silently -- which is what this did -- converges a
+        # ground state for whichever of the two lattice constants the user did
+        # not mean. ``pw.x`` stops on the pair.
+        raise ValueError(
+            f"{pwin.path or 'input'}: do not specify both celldm and a,b,c "
+            f"-- celldm(1) = {float(celldm[0])} bohr and A = {float(a)} "
+            "angstrom are two spellings of the same lattice parameter and "
+            "which is meant is not recoverable (they differ by the "
+            "bohr-per-angstrom factor unless the conversion was done). Drop "
+            "one. pw.x stops on the same pair "
+            "(Modules/cell_base.f90, 'do not specify both celldm and a,b,c!')"
+        )
     if celldm[0] == 0.0 and a is not None:
         # The crystallographic alternative to celldm: A,B,C in angstrom plus cosines.
         celldm = celldm_from_abc(
@@ -1690,11 +1707,30 @@ def _build_cell(pwin: PwInput, precision: Precision) -> Cell:
         if celldm[0] == 0.0:
             raise ValueError("CELL_PARAMETERS alat needs celldm(1) or A")
         return Cell.from_vectors(vectors * celldm[0], alat=float(celldm[0]), precision=precision)
-    if units == "bohr":
-        return Cell.from_vectors(vectors, alat=celldm[0] or None, precision=precision)
-    if units == "angstrom":
-        vectors = vectors * ANGSTROM_TO_BOHR
-        return Cell.from_vectors(vectors, alat=celldm[0] or None, precision=precision)
+    if units in ("bohr", "angstrom"):
+        # **The card already carries the lattice parameter, so a ``celldm(1)``
+        # beside it is a second one.** ``pw.x`` refuses the pair outright
+        # (``Modules/cell_base.f90``, 'lattice parameter specified twice', on
+        # ``celldm(1) /= 0 .OR. a /= 0`` -- one test here, because ``A`` has
+        # already been converted into ``celldm`` above). Accepting it is not
+        # merely redundant: ``alat`` is then ``celldm(1)`` rather than the
+        # length the vectors themselves set, and every ``ATOMIC_POSITIONS
+        # alat`` coordinate is scaled by a lattice parameter the cell does not
+        # come from.
+        if celldm[0] != 0.0:
+            raise ValueError(
+                f"{pwin.path or 'input'}: lattice parameter specified twice "
+                f"-- CELL_PARAMETERS {units} gives the vectors in absolute "
+                f"units and celldm(1) = {float(celldm[0])} (or A) gives a "
+                "lattice parameter as well. Drop celldm(1)/A, or write the "
+                "card in alat units. Keeping both is what makes "
+                "ATOMIC_POSITIONS alat scale by a length the cell does not "
+                "have. pw.x stops on the same combination "
+                "(Modules/cell_base.f90)"
+            )
+        if units == "angstrom":
+            vectors = vectors * ANGSTROM_TO_BOHR
+        return Cell.from_vectors(vectors, alat=None, precision=precision)
     raise ValueError(f"unknown CELL_PARAMETERS units {units!r}")
 
 

@@ -146,8 +146,10 @@ SETUP_ONLY_OPTIONS = frozenset({"projectors"})
 #: The name is the whole problem: ``max_iterations`` is the SCF's iteration
 #: count in :func:`~defumat.scf.driver.run_scf`, the **self-consistent
 #: response's** in :func:`~defumat.response.efield.dielectric_tensor`
-#: (``response/efield.py:322``, whose default comes from
-#: :mod:`defumat.response.mixing`) and the **Dyson fixed point's** in
+#: (whose default is that module's own ``MAX_ITERATIONS = 40``; what comes from
+#: :mod:`defumat.response.mixing` is the ``mixing_mode`` two lines below it in
+#: the same signature, which is how the misattribution read as checked) and the
+#: **Dyson fixed point's** in
 #: :func:`~defumat.workflows.run_absorption` (``tddft/dyson.py``'s 500). Three
 #: loops, one word. ``mixing_mode``/``mixing_beta`` collide the same way between
 #: the density mixer and the response mixer.

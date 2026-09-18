@@ -318,11 +318,64 @@ def test_ibrav_and_cell_parameters_together_are_refused():
 
 
 def test_ibrav_zero_still_reads_the_card():
-    """The refusal must not reach the only way to give vectors explicitly."""
+    """The refusal must not reach the only way to give vectors explicitly.
+
+    ``celldm(1)`` goes with ``ibrav`` and is dropped here along with it: a
+    ``bohr`` card carries the lattice parameter itself, and the two together are
+    what :func:`test_a_lattice_parameter_given_twice_is_refused` covers.
+    """
     from defumat.system.builder import build_system
 
-    text = _MINIMAL.format(control="", system="").replace("ibrav=2", "ibrav=0") + (
+    text = (
+        _MINIMAL.format(control="", system="")
+        .replace("ibrav=2", "ibrav=0")
+        .replace("celldm(1)=10.2, ", "")
+    ) + (
         "CELL_PARAMETERS bohr\n 6.0 0.0 0.0\n 0.0 6.0 0.0\n 0.0 0.0 6.0\n"
     )
     system = build_system(parse_pw_input(text))
     assert float(system.cell.volume) == pytest.approx(216.0)
+
+
+def test_celldm_and_the_crystallographic_a_together_are_refused():
+    """Two spellings of one lattice parameter, in units 1.8897 apart.
+
+    ``celldm`` is in bohr and ``A`` in angstrom, so the pair is what a
+    half-finished conversion leaves behind. Taking ``celldm`` silently, which is
+    what this did, converges a ground state for whichever of the two the user
+    did not mean. ``pw.x`` stops on it (``Modules/cell_base.f90``).
+    """
+    from defumat.system.builder import build_system
+
+    text = _MINIMAL.format(control="", system="A = 5.43")
+    with pytest.raises(ValueError, match="do not specify both celldm and a,b,c"):
+        build_system(parse_pw_input(text))
+
+
+@pytest.mark.parametrize("units", ["bohr", "angstrom"])
+def test_a_lattice_parameter_given_twice_is_refused(units):
+    """An absolute card plus ``celldm(1)``: ``pw.x``'s own second refusal.
+
+    It is not merely redundant. ``alat`` became ``celldm(1)`` rather than the
+    length the vectors set, so every ``ATOMIC_POSITIONS alat`` coordinate was
+    scaled by a lattice parameter the cell does not come from: in this input the
+    cell is a 6 bohr cube and the second silicon sat at 0.25 * 10.2 bohr.
+    """
+    from defumat.system.builder import build_system
+
+    text = _MINIMAL.format(control="", system="").replace("ibrav=2", "ibrav=0") + (
+        f"CELL_PARAMETERS {units}\n 6.0 0.0 0.0\n 0.0 6.0 0.0\n 0.0 0.0 6.0\n"
+    )
+    with pytest.raises(ValueError, match="lattice parameter specified twice"):
+        build_system(parse_pw_input(text))
+
+
+def test_an_alat_card_still_takes_its_lattice_parameter_from_celldm():
+    """The refusal is about *absolute* units, and ``alat`` units need celldm."""
+    from defumat.system.builder import build_system
+
+    text = _MINIMAL.format(control="", system="").replace("ibrav=2", "ibrav=0") + (
+        "CELL_PARAMETERS alat\n 1.0 0.0 0.0\n 0.0 1.0 0.0\n 0.0 0.0 1.0\n"
+    )
+    system = build_system(parse_pw_input(text))
+    assert float(system.cell.volume) == pytest.approx(10.2 ** 3)

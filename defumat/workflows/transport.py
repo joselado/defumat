@@ -544,9 +544,10 @@ def whole_grid(system, grid, shift=None) -> KPoints:
 
     So the whole grid is built instead -- ``KPoints.automatic`` with no
     rotations, which is what a ``nosym`` run gets -- and the spin degeneracy is
-    applied through :func:`~defumat.system.kpoints.kpoints_for_spin` for the
-    reason ``denser_grid`` documents at length: every constructor applies it
-    unconditionally, and a spinor band holds one electron.
+    applied through :func:`~defumat.system.kpoints.for_spin` (imported here as
+    ``kpoints_for_spin``) for the reason ``denser_grid`` documents at length:
+    every constructor applies it unconditionally, and a spinor band holds one
+    electron.
     """
     if shift is None:
         shift = system.kpoints.shift or (0, 0, 0)

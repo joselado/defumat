@@ -569,8 +569,9 @@ def estimate_size(
         "wavefunctions (nspin,nk,nbnd,ndim)": wf_spin * nk * nbnd * ndim * zc,
         # **The core is resident under BOTH routes**, and putting it inside the
         # conditional below was this model's second wrong turn about the same
-        # object. ``driver.py:1489`` assigns ``projector_core`` unconditionally,
-        # eight lines *before* the dial is resolved, so ``columns`` and ``kg``
+        # object. ``Calculation.__init__`` assigns ``projector_core``
+        # unconditionally, *before* it resolves the dial with
+        # ``resolve_projectors``, so ``columns`` and ``kg``
         # are a cost ``store`` pays too. Counting them as a cost of ``rebuild``
         # alone understates the stored floor and makes the modelled saving
         # ``vkb - columns - kg - chunk`` where the measured resident saving is

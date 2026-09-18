@@ -45,8 +45,9 @@ Zeeman energy is carried beside the total rather than inside it
 (``scf/fields.py``, ``SCFResult.field_energy``). The field is inside ``dV`` and
 therefore inside every eigenvalue, so what keeps it out is pairing it into
 ``deband`` as well -- which is exactly what ``run_scf`` does, ``v_field`` being
-part of the ``v_scf`` its own ``deband`` integrates against
-(``scf/driver.py:2812``).
+part of the ``v_scf`` its own ``deband`` integrates against (``scf/driver.py``,
+where ``_field_potential`` returns ``v_field`` and the next line forms
+``v_scf = potential.v_scf + v_field``).
 
 **And that convention takes the variational bound with it, which is the price of
 it and is not obvious.** What the calculation minimises is the *full* energy,
@@ -85,7 +86,9 @@ rung, by a tenth of the 1.08e-6 Ry the box difference is worth. And the frozen
 states must be **eigenstates**, since the matrix is ``delta eps + <psi|dV|psi>``
 and that is the Rayleigh-Ritz matrix only if they are. Davidson returns Ritz
 vectors by construction -- ``evc`` is a rotation of the trial set
-(``solvers/davidson.py:422``) -- so ``diag(eps)`` is the exact projected
+(``solvers/davidson.py``, the ``coefficients.T @ psi`` rotations that carry the
+subspace estimate back into the plane-wave basis) -- so ``diag(eps)`` is the
+exact projected
 ``H_cell`` at any ``states_conv_thr``, and a loose one only makes the span
 slightly worse, which the argument tolerates at second order.
 

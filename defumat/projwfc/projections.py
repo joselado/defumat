@@ -310,8 +310,8 @@ def atomic_projections(
         # longer vector: ``_spinor_overlap`` carries ``qq_so``, whose off-
         # diagonal spin blocks are exactly what tells the two ``j`` channels
         # apart, so contracting each component against the scalar ``qq`` would
-        # give the j-averaged overlap. ``_build_hubbard_projectors`` picks
-        # between them the same way (``scf/driver.py:1512``).
+        # give the j-averaged overlap. ``Calculation._build_hubbard_projectors``
+        # picks between them the same way, on ``self.noncolin``.
         calculation._spinor_overlap if noncolin else calculation._overlap,
         kind=kind,
         noncolin=noncolin,
