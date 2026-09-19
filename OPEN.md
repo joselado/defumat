@@ -4376,6 +4376,39 @@ file**: one cell and two tapes peak at 14.9 GB in one process against the
 runner's 12 GiB cap, with no accumulation to remove, so it joins the three in
 ``tools/cluster/piezo_regression.sbatch`` rather than being run here.
 
+**The ultrasoft ladder was taken, on this workstation, and it separates the
+1.65 points the entry above could not attribute** (2026-09-19). The contracted
+route costs 2.3 GiB where the taped one costs 139.6, and the rungs are the
+irreducible **wedge** of each unshifted grid rather than the whole of it, which
+is the same sample for this route at 1.6e-06 and is what turns 216 k-points into
+16. Three rungs, 3.3 GiB and six to ten minutes each, against the
+norm-conserving ladder already in the record:
+
+| ``e_14``, C/m^2 | ``4 4 4`` | ``6 6 6`` | ``8 8 8`` | ``10 10 10`` |
+|---|---|---|---|---|
+| ultrasoft, contracted route, wedge | **0.821332** (8 k) | **0.722701** (16 k) | **0.701828** (29 k) | |
+| norm-conserving, taped route, whole grid | 0.763786 | 0.687475 | 0.672897 | 0.669907 |
+| deficit against the Berry value, ultrasoft | 15.63 % | 4.11 % | 1.26 % | |
+| deficit against the Berry value, norm-conserving | 13.41 % | 3.71 % | 1.62 % | 1.19 % |
+
+**The difference of deficits collapses from 2.22 points to -0.36 and changes
+sign**, so the 1.65 points was a difference of *mesh errors* and not a dataset
+effect: at ``8 8 8`` the ultrasoft response sits **1.26 per cent** from its
+Berry value where the norm-conserving calibration, which is the validated route,
+sits at **1.62 per cent** on the same mesh. An augmented dataset is no further
+from an independent reference than the calibration is, which is the thing the
+entry wanted and could not get from one mesh.
+
+**Two things this does not say.** The Berry values themselves move 0.7 per cent
+over four string meshes, and both deficits at ``8 8 8`` are inside twice that,
+so what is established is that the two datasets converge alike rather than a
+number for either. And the two ladders are different routes on different k-sets
+-- the taped route on whole grids for the norm-conserving cell, the contracted
+one on wedges for the ultrasoft -- which is licensed by two measured identities
+(the routes agree to 1.9e-14 norm-conserving and 1.0e-07 ultrasoft, and the
+ultrasoft wedge reproduces its closed grid to 1.6e-06) and is stated rather than
+left to be noticed.
+
 ## 5. An **ultrasoft** dielectric constant does not reproduce its own closed grid from a symmetry-reduced k-set, by 1.6e-05 relative **[opened 2026-09-19, found in passing; attributed to the dataset under control the same day, six candidates excluded, term not found]**
 
 An unshifted Monkhorst-Pack grid is closed under the point group, so a
