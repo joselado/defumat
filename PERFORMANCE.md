@@ -4108,12 +4108,21 @@ derivative moves `S`, so the piezoelectric case is the Born charge's shape and
 not the phonon's, and what the transcribed route lacks is one contraction of two
 functions that already exist.
 
-**What the cheap route costs, which is the measurement that makes the gap
-worth closing.** On the ultrasoft cell, `--skip-difference`, same task list:
-**2.32 GiB at 64 k-points and 2.63 GiB at 216** (`20338722_0` and `_1`), where
-the taped route is 139.6 GiB at 64. A factor of **60**, and it barely grows with
-`nk`, which is what "no tape" looks like. That is the prize for whoever adds
-`zstar_eu_us.f90`'s missing term to it, or for the `lax.scan`.
+**What the cheap route costs, which is the measurement that makes the gap worth
+closing.** Three rungs on the ultrasoft cell, `--skip-difference`, one task list
+(`20338722`):
+
+| grid | k-points | peak RSS | seconds |
+|---|---|---|---|
+| `4 4 4` | 64 | **2.32 GiB** | 323 |
+| `6 6 6` | 216 | **2.63 GiB** | 761 |
+| `8 8 8` | 512 | **3.63 GiB** | 1691 |
+
+**2.6 MB a k-point against the taped route's 16 MB of tape alone**, and 3.63 GiB
+at 512 points against 139.6 GiB at 64 -- a factor of sixty on the only k-count
+where both have been run. The time is roughly linear in `nk`. That is the prize
+for adding the missing contraction, and it is why the gap is worth closing
+rather than routed around.
 
 **The Berry-phase route is the opposite shape: nothing in memory and everything
 in mappings.** Every rung of the same ladder peaked between **1.7 and 3.8 GiB**,
