@@ -38,6 +38,9 @@ from defumat.ultracell import run_ultracell, with_external_potential
 
 AMPLITUDE = 0.05
 
+#: Set by the probe arm below; see :func:`main`.
+HALF_CUTOFF = False
+
 SILICON = """&control
  calculation='scf'
 /
@@ -92,16 +95,24 @@ K_POINTS automatic
 #: same ``nbnd`` reads as a factor of two of missing convergence and looks
 #: exactly like a missing term (``PLAN.md`` P88 stage 6).
 CASES = [
+    # **The control, and it is first.** The same code path at the pair every
+    # committed augmented number was taken at, so that a rung at the dual is
+    # read against this rather than against a table in another file: the phase
+    # record has +1.07e-4, +4.46e-6 and +4.82e-7 Ry here at nbnd = 12, 24, 48.
+    ("si-us-collinear-dual4", "si", "Si.pz-n-rrkjus_psl.0.1.UPF", 16.0, 4.0,
+     False, (12, 24, 48, 96), 12),
+    ("si-paw-collinear-dual4", "si", "Si.pz-n-kjpaw_psl.0.1.UPF", 16.0, 4.0,
+     False, (12, 24, 48, 96), 12),
     ("si-us-collinear-dual8", "si", "Si.pz-n-rrkjus_psl.0.1.UPF", 16.0, 8.0,
-     False, (12, 24, 48), 12),
+     False, (12, 24, 48, 96), 12),
     ("si-paw-collinear-dual8", "si", "Si.pz-n-kjpaw_psl.0.1.UPF", 16.0, 8.0,
-     False, (12, 24, 48), 12),
+     False, (12, 24, 48, 96), 12),
     ("si-us-spinor-dual8", "si", "Si.pz-n-rrkjus_psl.0.1.UPF", 16.0, 8.0,
-     True, (24, 48, 96), 24),
+     True, (24, 48, 96, 192), 24),
     ("si-paw-spinor-dual8", "si", "Si.pz-n-kjpaw_psl.0.1.UPF", 16.0, 8.0,
-     True, (24, 48, 96), 24),
+     True, (24, 48, 96, 192), 24),
     ("si-paw-collinear-dual12", "si", "Si.pz-n-kjpaw_psl.0.1.UPF", 16.0, 12.0,
-     False, (12, 24, 48), 12),
+     False, (12, 24, 48, 96), 12),
     ("pt-soc-dual8", "pt", "Pt.rel-pz-n-rrkjus.UPF", 30.0, 8.0,
      True, (16, 24, 40), 20),
     ("pt-soc-dual4", "pt", "Pt.rel-pz-n-rrkjus.UPF", 30.0, 4.0,
@@ -210,7 +221,7 @@ def main(index: int, out: Path, pseudo_dir: Path) -> None:
     print(f"[{label}] doublegrid={basis.doublegrid} dense={basis.dense.grid} "
           f"smooth={basis.smooth.grid}", flush=True)
 
-    scf = calculator.get_scf(conv_thr=1e-11, nbnd=max(8, reference_nbnd // 2))
+    scf = calculator.get_scf(conv_thr=1e-12, nbnd=max(8, reference_nbnd // 2))
     record["unit_cell_energy"] = float(scf.total_energy)
     record["unit_cell_converged"] = bool(scf.converged)
     print(f"[{label}] unit cell {float(scf.total_energy):.10f} Ry", flush=True)
@@ -238,48 +249,138 @@ def main(index: int, out: Path, pseudo_dir: Path) -> None:
         jnp.asarray(AMPLITUDE * np.cos(2 * np.pi * coordinates[..., 0])),
     )
     reference = run_scf(reference_cell.system, reference_cell.pseudos,
-                        calculation=calculation, conv_thr=1e-10,
+                        calculation=calculation, conv_thr=1e-11,
                         nbnd=reference_nbnd)
     per_cell = float(reference.total_energy) / int(np.prod(shape))
+    # **The supercell's own null, and it is the first thing a supercell
+    # comparison should run** (``OPEN.md`` Part X item 2, which says it of a
+    # metal that breaks its own symmetry and is just as true of a grid). With
+    # nothing applied the supercell must reproduce its unit cell; at
+    # ``ecutrho = 4 ecutwfc`` it does, to 5e-13 Ry, because its FFT box is
+    # exactly the tiled one. At a dual it is not -- ``(54, 25, 25)`` against a
+    # tiled ``(50, 25, 25)`` on silicon -- and the supercell then sits 2.2e-6 Ry
+    # per cell *above* its own unit cell for the same state. Every raw gap
+    # below carries that offset, which is why the modulation energy is reported
+    # beside it: the offset cancels in a difference of differences.
+    reference_null = run_scf(reference_cell.system, reference_cell.pseudos,
+                             conv_thr=1e-11, nbnd=reference_nbnd)
+    null_per_cell = float(reference_null.total_energy) / int(np.prod(shape))
+    record["supercell_null_per_cell"] = null_per_cell
+    record["supercell_null_offset"] = null_per_cell - float(scf.total_energy)
+    record["supercell_null_converged"] = bool(reference_null.converged)
+    record["supercell_modulation_energy"] = per_cell - null_per_cell
+    print(f"[{label}] supercell null offset "
+          f"{record['supercell_null_offset']:+.4e} Ry per cell", flush=True)
     record["supercell_energy_per_cell"] = per_cell
     record["supercell_converged"] = bool(reference.converged)
+    # **The two sides do not discretise on the same set and that is the first
+    # thing to read when a gap comes out negative.** The ultracell keeps the
+    # unit cell's dense sphere at *every* Q (Elk's convention) while the
+    # supercell keeps a genuine sphere of its own, so the two truncations agree
+    # only where the box does.
+    record["supercell_grid"] = list(grid)
+    record["supercell_ngm"] = int(reference_basis.dense.ngm)
+    record["box_grid"] = list(null.ultracell.grid)
+    record["box_is_tiled_cell"] = [
+        int(n * m) for n, m in zip(shape, basis.dense.grid)
+    ] == list(grid)
     print(f"[{label}] supercell/N {per_cell:.10f} Ry "
           f"converged={reference.converged}", flush=True)
 
     miller = np.asarray(reference_basis.dense.miller)
     exact = fourier(np.asarray(reference.density)[0], grid, miller)
 
-    # -- the ladder ---------------------------------------------------------
+    # -- the ladder, in both cut-off conventions -----------------------------
+    #
+    # **Why there are two.** The supercell keeps a genuine sphere of radius
+    # ``sqrt(ecutrho)`` in its own reciprocal lattice; the ultracell keeps the
+    # unit cell's dense sphere at *every* ``Q``, which is Elk's choice and what
+    # makes the ``N = 1`` limit reduce to the unit cell exactly. Neither set
+    # contains the other -- ``{G + Q}`` holds points with ``|G + Q|`` past the
+    # cut-off and misses points inside it -- so the two sides do not discretise
+    # the same functional and the nested-basis bound, which is what the sign of
+    # a gap is read against, does not apply between them. The second arm masks
+    # the ultracell's own ``|G + Q|`` sphere instead, where the containment is
+    # exact, and the difference between the two arms is what the convention is
+    # worth (``OPEN.md`` Part X item 1, which asks the same question of the
+    # Hartree term alone).
     modulation = lambda r: AMPLITUDE * np.cos(2 * np.pi * r[..., 0] / shape[0])
-    ladder = {}
-    for nbnd in rungs:
-        result = run_ultracell(
-            calculator.system, calculator.pseudos, scf, shape, kgrid,
-            nbnd=nbnd, external=modulation, conv_thr=1e-10,
-            states_conv_thr=1e-10,
-        )
-        box = result.ultracell.grid
-        ours = fourier(np.asarray(result.density)[0], box, miller)
-        flat = fourier(
-            np.asarray(result.ultracell.tile(jnp.asarray(scf.density)))[0],
-            box, miller,
-        )
-        induced, induced_exact = ours - flat, exact - flat
-        ladder[str(nbnd)] = {
-            "energy": float(result.total_energy),
-            "gap": float(result.total_energy) - per_cell,
-            "density_error": float(
-                np.abs(induced - induced_exact).max()
-                / np.abs(induced_exact).max()
-            ),
-            "residual": float(result.augmentation_residual),
-            "converged": bool(result.converged),
-            "iterations": int(result.iterations),
-        }
-        print(f"[{label}] nbnd={nbnd:3d} gap={ladder[str(nbnd)]['gap']:+.4e} Ry "
-              f"error={ladder[str(nbnd)]['density_error']:.3e} "
-              f"residual={ladder[str(nbnd)]['residual']:.3e}", flush=True)
-    record["ladder"] = ladder
+    gcut = float(dual * ecutwfc)
+
+    def sphere_convention(self, cell_mask, _cell=calculator.system.cell,
+                          _gcut=gcut):
+        return self.g2(_cell) <= (0.25 * _gcut if HALF_CUTOFF else _gcut)
+
+    def ladder(arm, steps=None):
+        from defumat.ultracell.grid import Ultracell
+
+        original = Ultracell.reciprocal_mask
+        if arm in ("sphere", "half"):
+            Ultracell.reciprocal_mask = sphere_convention
+        rows = {}
+        try:
+            for nbnd in (steps or rungs):
+                result = run_ultracell(
+                    calculator.system, calculator.pseudos, scf, shape, kgrid,
+                    nbnd=nbnd, external=modulation, conv_thr=1e-10,
+                    states_conv_thr=1e-10,
+                )
+                box = result.ultracell.grid
+                ours = fourier(np.asarray(result.density)[0], box, miller)
+                flat = fourier(
+                    np.asarray(
+                        result.ultracell.tile(jnp.asarray(scf.density))
+                    )[0], box, miller,
+                )
+                induced, induced_exact = ours - flat, exact - flat
+                rows[str(nbnd)] = {
+                    "energy": float(result.total_energy),
+                    "gap": float(result.total_energy) - per_cell,
+                    # The quantity both sides measure the same way: each cell's
+                    # energy relative to its *own* unmodulated state, so the
+                    # grid offset above cancels and what is left is the physics.
+                    "modulation_gap": (
+                        (float(result.total_energy) - float(null.total_energy))
+                        - (per_cell - null_per_cell)
+                    ),
+                    "density_error": float(
+                        np.abs(induced - induced_exact).max()
+                        / np.abs(induced_exact).max()
+                    ),
+                    "residual": float(result.augmentation_residual),
+                    "converged": bool(result.converged),
+                    "iterations": int(result.iterations),
+                }
+                print(f"[{label}] {arm:6s} nbnd={nbnd:3d} "
+                      f"gap={rows[str(nbnd)]['gap']:+.4e} Ry "
+                      f"modulation={rows[str(nbnd)]['modulation_gap']:+.4e} "
+                      f"error={rows[str(nbnd)]['density_error']:.3e} "
+                      f"residual={rows[str(nbnd)]['residual']:.3e}", flush=True)
+        finally:
+            Ultracell.reciprocal_mask = original
+        return rows
+
+    kept = int(np.sum(np.asarray(sphere_convention(null.ultracell, None))))
+    record["sphere_kept"] = kept
+    record["tiled_kept"] = int(np.prod(shape)) * int(basis.dense.ngm)
+    print(f"[{label}] kept: sphere {kept}, tiled {record['tiled_kept']}, "
+          f"supercell {record['supercell_ngm']}", flush=True)
+
+    record["ladder"] = ladder("elk")
+    # The convention arm on silicon only: on platinum the ladder is the
+    # expensive half of the case and the convention is the cheap question.
+    if template == "si":
+        record["ladder_sphere"] = ladder("sphere")
+    # **The arm whose job is to move.** If the two above agree, that is either
+    # the convention being worth nothing or the patch point being dead, and the
+    # two read identically. A quarter of the cut-off -- below ``4 ecutwfc``,
+    # where the density is genuinely truncated -- has to move the total.
+    global HALF_CUTOFF
+    HALF_CUTOFF = True
+    try:
+        record["ladder_half"] = ladder("half", rungs[:1])
+    finally:
+        HALF_CUTOFF = False
     record["seconds"] = time.time() - started
 
     path = out / f"{label}.json"

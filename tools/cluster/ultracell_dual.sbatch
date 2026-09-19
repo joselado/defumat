@@ -15,8 +15,11 @@
 # partition     batch-milan, as `piezo_regression.sbatch` and `regression.sbatch`
 #               use: 128 cores and 510 GB a node, 5-day limit. Check rather than
 #               trust this line (`scontrol show partition batch-milan`).
-# array         0-8: seven measurement cases and two regression files. One array
-#               and not nine submissions, which is the cluster policy's own rule.
+# array         0-10: nine measurement cases (the two controls at
+#               ecutrho = 4 ecutwfc first, so that a rung at a dual is read
+#               against a committed number rather than against a table in
+#               another file) and two regression files. One array and not
+#               eleven submissions, which is the cluster policy's own rule.
 # time          04:00:00. The silicon collinear pair is about 10 minutes on the
 #               workstation at ecutrho = 4 ecutwfc and the dual roughly triples
 #               the dense box; the platinum pair is the unknown and is what the
@@ -30,7 +33,7 @@
 #               and leaves room for the run to be read afterwards with `seff`.
 #SBATCH --job-name=defumat-ulr-dual
 #SBATCH --partition=batch-milan
-#SBATCH --array=0-8
+#SBATCH --array=0-10
 #SBATCH --time=04:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
@@ -61,7 +64,7 @@ echo "commit: $(git -C "$REPO" rev-parse HEAD)"
 python3 -c "import jax; print('jax', jax.__version__, jax.devices())"
 python3 -c "import os; print('affinity:', len(os.sched_getaffinity(0)), 'cores')"
 
-if [ "$TASK" -le 6 ]; then
+if [ "$TASK" -le 8 ]; then
     echo "=== task $TASK: measurement case $TASK ==="
     python3 -u tools/cluster/ultracell_dual.py "$TASK" "$WORK/results"
 else
@@ -69,7 +72,7 @@ else
     # lift's own tests live and where a number that moved would show.
     FILES=(tests/regression/test_ultracell_augmented.py
            tests/regression/test_ultracell.py)
-    FILE=${FILES[$((TASK - 7))]}
+    FILE=${FILES[$((TASK - 9))]}
     echo "=== task $TASK: $FILE ==="
     tools/run_regression.sh "$WORK/out/regression-$TASK" slow "$FILE"
     echo "=== summary ==="; cat "$WORK/out/regression-$TASK/summary.txt"
