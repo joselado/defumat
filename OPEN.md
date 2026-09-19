@@ -3777,12 +3777,41 @@ boundary per test** (`pytest --forked`, or the per-geometry child
 `tools/cluster/piezo_measure.py` already uses), because a process cures this by
 exiting and nothing inside one does.
 
-**A second, non-test witness of the same exhaustion.** Rung 4 of the piezo
-ladder (`20337789_4`, strings of 15 over an 8x8 transverse mesh, 960 strings in
-one process) died with the same `Failed to materialize symbols` inside the
-Davidson eigensolver, in a script that already puts each strained geometry in
-its own child. The string loop within one geometry exhausts the mappings by
-itself, so the per-geometry boundary is not a general answer either.
+**Two non-test witnesses of the same exhaustion, and this time the cause is
+in our code rather than in the test suite's shape.** Rungs 4 and 6 of the piezo
+ladder both died with `Failed to materialize symbols` inside the Davidson
+eigensolver, in a script that already puts each strained geometry in its own
+child: rung 4 on the norm-conserving cell at 64 strings, rung 6 on the
+ultrasoft one at 36, where the same 36 strings on the norm-conserving cell
+(rung 3) completed in ten minutes. So the string loop inside one geometry
+exhausts the mappings by itself and the per-geometry boundary is not a general
+answer.
+
+**Why the string loop compiles more than once, measured host-side on
+`alas-raman.in` with no SCF.** `run_polarization` takes one string at a time and
+`_source.states()` diagonalises it, and each string gets its *own* `npwx`,
+because the sphere is rebuilt at every k and the strings sit at different
+transverse points. Counting the plane waves inside `ecutwfc` for every point of
+every string:
+
+| transverse x `nppstr` | strings | distinct `npwx` | range |
+|---|---|---|---|
+| 4x4, 7 | 16 | 8 | 750 to 765 |
+| 6x6, 11 | 36 | 10 | 755 to 766 |
+| 6x6, 15 | 36 | 9 | 755 to 763 |
+| 8x8, 15 | 64 | 11 | 747 to 763 |
+
+Every distinct `npwx` is a distinct static shape, so the whole Hamiltonian and
+Davidson stack is compiled again for each, ten or eleven times per geometry,
+and each compilation is its own set of ORC dylibs and mappings. **This is
+`CLAUDE.md`'s own JAX rule being broken**: "pad plane-wave arrays to `npwx`
+with a mask instead of using per-k shapes". The repair is to pad every string
+of a mesh to the mesh-wide maximum, which makes one executable serve all of
+them and is faster as well as smaller; it is not done, and it is the one fix
+here that would remove a cause rather than delay a symptom. What it does *not*
+explain is why ten shapes exhaust 65530 mappings at all, which means each
+compilation of that stack is thousands of them, and that number has not been
+measured.
 
 **The whole `slow` set was then run on a node, and the measured offenders are
 not the ones the input-count proxy named.** Eight array tasks, 22 files each
