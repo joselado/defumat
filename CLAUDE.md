@@ -606,6 +606,26 @@ plausible wrong answer rather than an error. `PLAN.md` has the phase that found 
   negative, ask what result would have **falsified** the thing being checked and whether the
   instrument could have produced it: a search that cannot surprise you is not a search.
   (2026-09-14, in passing, while both sessions were being careful about everything else.)
+- **And its positive form, which is easier to fall for: a measurement that returns a real
+  number the hypothesis did not need.** A cluster run kept dying with
+  `INTERNAL: Failed to materialize symbols`, address space rather than memory, and the
+  hypothesis was that the Berry-phase string loop recompiles because `npwx` is rebuilt at
+  every string. That was *checked*, host-side and with no SCF: `npwx` takes 8 to 11 distinct
+  values over these meshes, which is true, is against this project's own rule to pad to a
+  common `npwx`, and was written into three files as the cause. It is not the cause.
+  Counting `/proc/self/maps` after **each** string instead -- five minutes, the same cell --
+  the process gains about 480 mappings on *thirteen of sixteen* strings, including strings
+  whose phase takes 0.04 s and which therefore compiled nothing. Ten recompilations cannot
+  make 7700 mappings; the growth is per string. The first measurement could only ever report
+  how many distinct shapes there were, so it could not tell a per-shape cost from a
+  per-string one, and it was cited for a conclusion it had no power to reach. **Ask of a
+  confirming number what the alternative hypothesis would have made it read**: here the two
+  hypotheses predict the same distinct-`npwx` count and different per-string curves, so only
+  the per-string curve is evidence. The same run then overturned two more sentences that had
+  been believed on argument -- that `jax.clear_caches()` "does not unmap", when it released
+  8924 mappings where `gc.collect()` released none, and that the autouse fixture had failed
+  on `test_nonlinear.py`, whose progress line is `...FF........`, two failures with eight
+  passes after them. (`OPEN.md` Part XIII item 2, 2026-09-19.)
 - **The forecast sentence under a verified table is the one nobody checks.** Its two
   siblings above are about how a number was obtained; this is about *where the scrutiny
   went*. Every figure in the NiBr2 projector-dial entry was checked by two sessions --

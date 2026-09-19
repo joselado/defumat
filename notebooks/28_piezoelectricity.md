@@ -20,7 +20,7 @@ AlAs, which is the same structure with the two sublattices made inequivalent, is
 
 | | this notebook | reference |
 |---|---|---|
-| AlAs $e_{14}$, clamped-ion | **-0.764 C/m²** at this cell's mesh, **-0.670** converged | **-0.661**, a polarization difference |
+| AlAs $e_{14}$, clamped-ion | **-0.764 C/m²** at this cell's mesh, **-0.670** at $10^3$ | **-0.661**, a polarization difference |
 | silicon, every component | **< 10⁻⁵ C/m²** | zero, by inversion symmetry |
 | components $\bar{4}3m$ forbids | 2 × 10⁻¹⁴ of the scale | zero, and nothing imposes it |
 
@@ -33,9 +33,10 @@ converged ground states and the Berry phase of each.
 
 **Read the first row twice, because it is the useful thing in this notebook.** The $-0.764$
 is what the cell below prints, on the $4\times4\times4$ k-mesh the input file asks for, and
-it is thirteen per cent away from the answer. Going to $6^3$, $8^3$ and $10^3$ gives
-$-0.687$, $-0.673$ and $-0.670$, and the polarization difference sits at $-0.661$ throughout,
-moving by less than one per cent whatever it is asked to do. So the mesh that converges the
+it is thirteen per cent from the value the finer meshes are walking toward. Going to $6^3$,
+$8^3$ and $10^3$ gives $-0.687$, $-0.673$ and $-0.670$, still moving at the last step, while
+the polarization difference sits at $-0.661$ throughout and moves by less than one per cent
+whatever it is asked to do. So the mesh that converges the
 *energy* of this crystal does not converge its piezoelectric constant, and the reason is
 visible in the definition at the top: $e_{14}$ is a mixed derivative of an energy that is
 already stationary in the density, so the variational protection that makes a total energy
