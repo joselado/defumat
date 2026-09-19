@@ -431,10 +431,65 @@ def born_charges_from_stress_route(
     ], axis=1)
 
 
+def require_a_norm_conserving_transcription(calculation) -> None:
+    """:func:`piezoelectric_zstar_eu_style` is norm-conserving only, measured.
+
+    **This is a separate refusal from :func:`require_a_measured_dataset` and it
+    has to be**, because the two are about different things: that one says the
+    *quantity* has never been measured on an augmented dataset, and this one
+    says that if it is measured, this particular assembly is not the one to
+    measure it with. Lifting the first must not lift the second.
+
+    ``zstar_eu.f90`` line 90 is ``if (okvan) call zstar_eu_us``, three hundred
+    further lines that this transcription does not have, and the same hole is
+    already documented one coordinate over:
+    :func:`~defumat.response.efield.born_charges_zstar_eu` says in its own
+    docstring that on ultrasoft silicon it gives ``+0.1625`` where ``ph.x``
+    gives ``-0.07945``, wrong in sign as well as in size. Inheriting that
+    absence into the strain coordinate without inheriting the note is
+    ``CLAUDE.md``'s "inherit a refusal only after checking which machine it
+    belongs to", with a missing refusal in place of a stale one.
+
+    **Measured here rather than argued** (Triton `20338380_0` and `20338722_0`,
+    2026-09-19, ultrasoft AlAs on the whole ``4 4 4`` grid, 64 k-points, the
+    same converged ground state): this route gives ``e_14 = +0.830702`` C/m^2
+    where :func:`clamped_ion_piezoelectric` gives ``+0.815802``, **1.83 per
+    cent** apart, against ``6.2e-15`` between the same two on the
+    norm-conserving cell.
+
+    **Why the error is 1.8 per cent here and a wrong sign in the Born charge.**
+    :func:`~defumat.response.strain._bare_strains` already carries the piece
+    that matters most, subtracting ``eps dS|psi>`` when the Hamiltonian has an
+    overlap (P39) and rebuilding the potential inside the traced function so
+    that ``Q_ij(r)``'s own strain derivative is differentiated; the Born
+    charge's ``h_psi`` has no overlap subtraction at all. What is left is what
+    ``zstar_eu_us.f90`` adds on top, the ``int3``/``dbecsum`` terms in which the
+    *self-consistent* potential response reaches ``D_ij`` through the
+    augmentation charge. :func:`clamped_ion_piezoelectric` has them because it
+    differentiates the energy rather than an operator.
+    """
+    if calculation.is_ultrasoft:
+        raise NotImplementedError(
+            "method='zstar_eu' is the transcription of zstar_eu.f90 and is "
+            "norm-conserving only: QE's own routine delegates to "
+            "zstar_eu_us.f90 for an augmented dataset and this does not. "
+            "Measured on ultrasoft AlAs at 64 k-points it gives e_14 = "
+            "+0.830702 C/m^2 where method='autodiff' gives +0.815802, 1.8 per "
+            "cent apart, where the two agree to 6.2e-15 on a norm-conserving "
+            "cell. Use method='autodiff', which differentiates the energy and "
+            "therefore carries the augmentation terms"
+        )
+
+
 def piezoelectric_zstar_eu_style(
     calculation, solver, density, dpsi,
 ) -> np.ndarray:
     """``zstar_eu.f90``'s contraction with the strain in place of the atom.
+
+    **Norm-conserving only** --
+    :func:`require_a_norm_conserving_transcription` is the guard and carries
+    the measurement. On an augmented dataset this is 1.8 per cent out, because
+    ``zstar_eu.f90`` hands that case to ``zstar_eu_us.f90`` and this does not.
 
     **The transcribed expression put beside the differentiated one**, in this
     project's usual arrangement. QE writes a Born charge as a bare perturbation
@@ -573,6 +628,8 @@ def piezoelectric_tensor(
             f"unknown piezoelectric method {method!r}; expected one of "
             f"{', '.join(PIEZOELECTRIC_METHODS)}"
         )
+    if method == "zstar_eu":
+        require_a_norm_conserving_transcription(calculation)
 
     eigenvalues, psi = refined_states(calculation, result)
     density = jnp.asarray(result.density)

@@ -130,3 +130,34 @@ def test_an_unknown_route_is_refused_before_anything_is_solved():
     assert PIEZOELECTRIC_METHODS == ("autodiff", "zstar_eu")
     with pytest.raises(ValueError, match="unknown piezoelectric method"):
         piezoelectric_tensor(_calculation("alas-raman"), None, method="zstar-eu")
+
+
+def test_the_transcribed_route_refuses_an_augmented_dataset_on_its_own():
+    """``zstar_eu`` is norm-conserving only, and *separately* from the tensor.
+
+    The two refusals are about different things and the test is that lifting
+    one does not lift the other: :func:`require_a_measured_dataset` says the
+    quantity has never been measured on an augmented dataset, and
+    :func:`require_a_norm_conserving_transcription` says that if it is
+    measured, this assembly is not the one to measure it with, because
+    ``zstar_eu.f90`` hands an augmented dataset to ``zstar_eu_us.f90`` and the
+    transcription stops at the first file. Measured on ultrasoft AlAs at 64
+    k-points the gap is 1.8 per cent, where the two routes agree to 6.2e-15 on
+    a norm-conserving cell -- small enough to read as convergence, which is
+    exactly why it needs a name rather than a caveat.
+    """
+    from defumat.response.piezo import (
+        require_a_measured_dataset,
+        require_a_norm_conserving_transcription,
+    )
+
+    ultrasoft = _calculation("si2-us")
+    with pytest.raises(NotImplementedError, match="zstar_eu_us"):
+        require_a_norm_conserving_transcription(ultrasoft)
+    # ... and it is not the dataset refusal wearing another hat: patch that one
+    # away, as the cluster measurement script does, and this one still fires.
+    with pytest.raises(NotImplementedError, match="norm-conserving only"):
+        require_a_norm_conserving_transcription(ultrasoft)
+    require_a_norm_conserving_transcription(_calculation("alas-raman"))
+    with pytest.raises(NotImplementedError, match="ultrasoft"):
+        require_a_measured_dataset(ultrasoft)
