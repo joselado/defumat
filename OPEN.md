@@ -4386,18 +4386,27 @@ norm-conserving ladder already in the record:
 
 | ``e_14``, C/m^2 | ``4 4 4`` | ``6 6 6`` | ``8 8 8`` | ``10 10 10`` |
 |---|---|---|---|---|
-| ultrasoft, contracted route, wedge | **0.821332** (8 k) | **0.722701** (16 k) | **0.701828** (29 k) | |
+| ultrasoft, contracted route, wedge | **0.821332** (8 k) | **0.722701** (16 k) | **0.701828** (29 k) | **0.696932** (47 k) |
 | norm-conserving, taped route, whole grid | 0.763786 | 0.687475 | 0.672897 | 0.669907 |
-| deficit against the Berry value, ultrasoft | 15.63 % | 4.11 % | 1.26 % | |
-| deficit against the Berry value, norm-conserving | 13.41 % | 3.71 % | 1.62 % | 1.19 % |
+| deficit against the Berry value, ultrasoft | 15.63 % | 4.11 % | 1.26 % | **0.57 %** |
+| deficit against the Berry value, norm-conserving | 13.33 % | 3.71 % | 1.62 % | 1.19 % |
 
-**The difference of deficits collapses from 2.22 points to -0.36 and changes
+**The difference of deficits collapses from 2.30 points to -0.62 and changes
 sign**, so the 1.65 points was a difference of *mesh errors* and not a dataset
-effect: at ``8 8 8`` the ultrasoft response sits **1.26 per cent** from its
+effect: at ``10 10 10`` the ultrasoft response sits **0.57 per cent** from its
 Berry value where the norm-conserving calibration, which is the validated route,
-sits at **1.62 per cent** on the same mesh. An augmented dataset is no further
-from an independent reference than the calibration is, which is the thing the
-entry wanted and could not get from one mesh.
+sits at **1.19 per cent** on the same mesh. An augmented dataset is no further
+from an independent reference than the calibration is -- it is nearer -- which is
+the thing the entry wanted and could not get from one mesh. The four rungs cost
+370, 434, 599 and 643 s at 3.3, 3.3, 3.2 and 3.5 GiB, so the whole ladder is
+half an hour on a workstation where one rung of it was sized as a node.
+
+**That is the measurement ``require_a_measured_dataset`` names as the thing that
+would lift it**: "the ultrasoft tensor at a converged mesh against a Berry-phase
+value on the same cell, and the cell is committed". The 0.57 per cent is inside
+the Berry value's own 0.7 per cent spread over four string meshes, so what is
+established is agreement to the reference's own resolution rather than a tighter
+number.
 
 **Two things this does not say.** The Berry values themselves move 0.7 per cent
 over four string meshes, and both deficits at ``8 8 8`` are inside twice that,
