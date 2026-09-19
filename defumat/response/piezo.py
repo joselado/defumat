@@ -107,6 +107,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from defumat.batching import map_k
 from defumat.forces.energy import FrozenState, energy_at
 from defumat.response.born import _raw_mixed_state
 from defumat.response.efield import (
@@ -360,19 +361,20 @@ def _frozen_energy_of(calculation, psi, eigenvalues, weights, density, becsum):
         calculation, positions, psi, weights, density, becsum
     )
 
-    def energy(moved, states):
+    def energy(moved, states, multipliers=None):
         return energy_at(
             moved,
             FrozenState(
                 wavefunctions=states, weights=weights, eigenvalues=eigenvalues
             ),
-            density=density_of, becsum=becsum_of,
+            density=density_of, becsum=becsum_of, multipliers=multipliers,
         )
 
     return energy
 
 
-def _field_column(gradient, coordinate, psi, dpsi, nocc):
+def _field_column(gradient, coordinate, psi, dpsi, nocc,
+                  multipliers=None, ground=None):
     """One ``jvp`` of a coordinate gradient along one field response.
 
     The tangent is the field's first-order wavefunction in the occupied block
@@ -380,16 +382,103 @@ def _field_column(gradient, coordinate, psi, dpsi, nocc):
     ``d/dE_k [dE/d(coordinate)]`` and nothing else. JAX's ``jvp`` of a
     real-valued function of complex primals is the real-linear tangent map,
     which is where the ``+ c.c.`` of the hand-derived expression comes from.
+
+    **``multipliers`` switches on the second half of that derivative**, which an
+    augmented dataset needs and a norm-conserving one does not have at all:
+    ``Lambda`` moves to first order in the field, and the term it multiplies is
+    ``<psi|dS/d(coordinate)|psi>``, which is zero when ``S`` is the identity.
+    The primal is then ``ground``, the diagonal ``diag(w eps)`` the constraint
+    is already written at, so the *value* does not move and only the tangent
+    does. This is :mod:`defumat.response.born`'s construction, one coordinate
+    over.
     """
     states = jnp.zeros_like(psi).at[:, :, :nocc].set(dpsi)
+    if multipliers is None:
+        _, column = jax.jvp(
+            gradient, (coordinate, psi), (jnp.zeros_like(coordinate), states)
+        )
+        return np.asarray(column)
     _, column = jax.jvp(
-        gradient, (coordinate, psi), (jnp.zeros_like(coordinate), states)
+        gradient, (coordinate, psi, ground),
+        (jnp.zeros_like(coordinate), states, multipliers),
     )
     return np.asarray(column)
 
 
+def constraint_strain_term(calculation, solver, weights, commutator) -> np.ndarray:
+    """``sum_n w_n <psi_n| dS/d(eps_ab) | P_c r_k psi_n>`` -- ``(3, 3)`` complex.
+
+    :func:`~defumat.response.born.constraint_position_term`'s sandwich with
+    :meth:`~defumat.scf.driver.Calculation.at_strain` where it has
+    ``at_positions``, and it is here for the same reason it is there:
+    ``dLambda_mn = w_n <psi_m|X|psi_n>`` wants the occupied-occupied block of
+    the position operator, and ``<psi_m|r|psi_n>`` is the Berry connection,
+    gauge-dependent and not a matrix element of any operator in a periodic
+    cell. :func:`~defumat.response.born._multiplier_response` therefore reaches
+    only the part ``P_c^+ r|psi>`` carries; what is left is finite only in the
+    combination it appears in, contracted with ``<psi_n|dS/d(eps)|psi_m>``.
+    ``add_for_charges.f90`` is that combination and this is it in the strain
+    coordinate.
+
+    **It is worth 0.55 on ultrasoft silicon in the position coordinate**, the
+    difference between +0.47 and -0.079, so it is not a correction to be left
+    for later; and it is identically zero for a norm-conserving dataset, where
+    ``S = 1`` and does not deform.
+
+    ``commutator`` is ``P_c r|psi>`` **before** ``S`` and before
+    ``adddvepsi_us``, which is what ``dielectric_tensor`` keeps in
+    ``internals["commutators"]`` for exactly this use.
+    """
+    if not calculation.is_ultrasoft:
+        return np.zeros((3, 3))
+    from defumat.response.strain import strain_tangent
+
+    occupied = solver.psi
+    nocc = solver.nocc
+    batch = calculation.k_batch
+    noncolin = bool(calculation.noncolin)
+
+    def sandwich(strain):
+        moved = calculation.at_strain(strain)
+        vkb = moved.projectors.vkb
+        npwx = vkb.shape[1]
+        qq = jnp.asarray(
+            moved.qq_so if noncolin else moved.projectors.qq
+        ).astype(vkb.dtype)
+        total = jnp.zeros((), dtype=vkb.dtype)
+        for spin in range(occupied.shape[0]):
+            def one_k(ik, spin=spin):
+                if noncolin:
+                    shape = occupied[spin][ik].shape[:-1] + (2, npwx)
+                    left = jnp.einsum(
+                        "gc,nag->nac", vkb[ik].conj(),
+                        occupied[spin][ik].reshape(shape),
+                    )
+                    right = jnp.einsum(
+                        "gc,nag->nac", vkb[ik].conj(),
+                        commutator[spin][ik].reshape(shape),
+                    )
+                    return jnp.einsum("nai,abij,nbj->n", left.conj(), qq, right)
+                left = jnp.einsum("gc,ng->nc", vkb[ik].conj(), occupied[spin][ik])
+                right = jnp.einsum("gc,ng->nc", vkb[ik].conj(), commutator[spin][ik])
+                return jnp.einsum("ni,ij,nj->n", left.conj(), qq, right)
+
+            values = map_k(one_k, jnp.arange(occupied.shape[1]), batch=batch)
+            total = total + jnp.sum(weights[spin][:, :nocc] * values)
+        return total
+
+    zero = jnp.zeros((3, 3))
+    out = np.zeros((3, 3), dtype=complex)
+    for a in range(3):
+        for b in range(a, 3):
+            _, derivative = jax.jvp(sandwich, (zero,), (strain_tangent(a, b),))
+            out[a, b] = out[b, a] = complex(derivative)
+    return out
+
+
 def clamped_ion_piezoelectric(
     calculation, psi, eigenvalues, weights, density, becsum, dpsi, nocc,
+    solver=None, field_perturbations=None, commutators=None,
 ) -> np.ndarray:
     """``(3, 3, 3)`` in ``e/bohr^2``: ``e[k, i, j]``, symmetrised.
 
@@ -401,21 +490,84 @@ def clamped_ion_piezoelectric(
         dpsi: three ``(nspin, nk, nocc, ndim)`` field responses.
         nocc: how many bands they cover -- the solver's own ``nocc``, which is
             one number across the spin channels.
+        solver, field_perturbations, commutators: what an **augmented** dataset
+            needs and a norm-conserving one has no use for. Given all three,
+            the derivative gains the two terms that exist only when ``S``
+            deforms with the coordinate: the multipliers' own first-order
+            change, carried as a third tangent the way
+            :func:`~defumat.response.born.born_effective_charges` carries it,
+            and :func:`constraint_strain_term`, which is
+            ``add_for_charges.f90``. Omit them and the assembly is the
+            states-tangent-only one it has always been, which is complete for a
+            norm-conserving dataset and short of both terms otherwise.
+
+    **Why the augmented branch is skipped exactly and not approximately.** Both
+    extra terms are contracted with ``dS/d(eps)``, and ``S`` is the identity for
+    a norm-conserving dataset, so they are identically zero there rather than
+    small -- which is also why this assembly agreed with the transcribed one to
+    6.2e-15 on a norm-conserving cell while both were missing them. The cost of
+    switching them on is real: the matrix-multiplier constraint is an
+    ``nbnd x nbnd`` Gram per k-point where the diagonal form is a vector, which
+    is why :func:`~defumat.forces.energy._constraint_energy` exists separately
+    and why a force, a stress and a ``Gamma`` phonon do not pay for it.
     """
     energy = _frozen_energy_of(
         calculation, psi, eigenvalues, weights, density, becsum
     )
-    gradient = jax.grad(
-        lambda strain, states: energy(calculation.at_strain(strain), states),
-        argnums=0,
-    )
     zero = jnp.zeros((3, 3))
     volume = calculation.system.cell.volume
 
-    tensor = np.stack([
-        -_field_column(gradient, zero, psi, dpsi[axis], nocc) / volume
-        for axis in range(3)
-    ])
+    # **The augmented branch, and it is skipped exactly rather than
+    # approximately for a norm-conserving dataset.** Both extra terms are
+    # contracted with ``dS/d(eps)``, which is identically zero when ``S`` is the
+    # identity, so not paying for them there is a statement about the physics
+    # and not a tolerance -- and ``_constraint_energy``'s matrix form is an
+    # ``nbnd x nbnd`` Gram per k-point where the diagonal one is a vector.
+    augmented = (
+        calculation.is_ultrasoft
+        and solver is not None
+        and field_perturbations is not None
+        and commutators is not None
+    )
+    if not augmented:
+        gradient = jax.grad(
+            lambda strain, states: energy(calculation.at_strain(strain), states),
+            argnums=0,
+        )
+        tensor = np.stack([
+            -_field_column(gradient, zero, psi, dpsi[axis], nocc) / volume
+            for axis in range(3)
+        ])
+        return calculation.symmetrize_cartesian_tensor(tensor)
+
+    from defumat.response.born import (
+        _ground_state_multipliers, _multiplier_response,
+    )
+
+    gradient = jax.grad(
+        lambda strain, states, mult: energy(
+            calculation.at_strain(strain), states, mult
+        ),
+        argnums=0,
+    )
+    ground = _ground_state_multipliers(weights, eigenvalues, psi.dtype)
+    columns = []
+    for axis in range(3):
+        multipliers = _multiplier_response(
+            solver, field_perturbations[axis], weights, psi.shape[2], nocc
+        )
+        column = _field_column(
+            gradient, zero, psi, dpsi[axis], nocc,
+            multipliers=multipliers, ground=ground,
+        )
+        # ``born_effective_charges`` subtracts this beside its own column, for
+        # the reason :func:`constraint_strain_term` gives: it is the half of
+        # ``dLambda`` that the occupied-occupied block cannot carry.
+        column = column + np.real(
+            constraint_strain_term(calculation, solver, weights, commutators[axis])
+        )
+        columns.append(-column / volume)
+    tensor = np.stack(columns)
     # ``symmatrix3``: a wedge sum is exact for a scalar and not for a rank-3
     # tensor, and this one is *linear* in the response -- so unlike P36's
     # screening term there is no quadratic-in-a-wedge-sum trap here, and the
@@ -535,7 +687,7 @@ def require_a_norm_conserving_transcription(calculation) -> None:
 
 def piezoelectric_zstar_eu_style(
     calculation, solver, density, dpsi,
-    field_perturbations=None, band_weights=None, nocc=None,
+    field_perturbations=None, band_weights=None, nocc=None, commutators=None,
 ) -> np.ndarray:
     """``zstar_eu.f90``'s contraction with the strain in place of the atom.
 
@@ -597,6 +749,17 @@ def piezoelectric_zstar_eu_style(
     )
     if constraint is not None:
         tensor = tensor + constraint
+    # The other half of the same ``dLambda``, which the occupied-occupied block
+    # cannot carry -- ``add_for_charges.f90``. Zero for a norm-conserving
+    # dataset, and in the position coordinate it is the larger of the two by an
+    # order of magnitude, so a route with one and not the other is worse placed
+    # than a route with neither.
+    if commutators is not None and calculation.is_ultrasoft:
+        volume = calculation.system.cell.volume
+        for k in range(3):
+            tensor[k] = tensor[k] - np.real(constraint_strain_term(
+                calculation, solver, band_weights, commutators[k]
+            )) / volume
     return calculation.symmetrize_cartesian_tensor(tensor)
 
 
@@ -801,6 +964,23 @@ def piezoelectric_tensor(
         require_converged_responses(field, None)
 
     internals = field.internals
+    # The three callables the last Sternheimer solve was driven by, rebuilt at
+    # the converged ``dV_scf`` exactly as
+    # :func:`~defumat.response.efield.dielectric_tensor` rebuilds them for the
+    # Born charges. They are what the multipliers' own response is a matrix
+    # element of, so nothing new is solved -- only contracted differently. Both
+    # routes need them on an augmented dataset and neither uses them otherwise.
+    from defumat.response.efield import _bare_plus_induced as _perturbation_of
+
+    _onecentre = internals["onecentre"]
+    _perturbations = [
+        _perturbation_of(
+            internals["solver"], internals["bare"][axis],
+            internals["dvscf"][axis],
+            None if _onecentre is None else _onecentre[axis], True,
+        )
+        for axis in range(3)
+    ]
     if method == "zstar_eu":
         # The three callables the last Sternheimer solve was driven by, rebuilt
         # at the converged ``dV_scf`` exactly as
@@ -821,6 +1001,7 @@ def piezoelectric_tensor(
         ]
         e = piezoelectric_zstar_eu_style(
             calculation, internals["solver"], density, internals["dpsi"],
+            commutators=internals["commutators"],
             field_perturbations=perturbations,
             band_weights=jnp.asarray(internals["weights"]),
             # ``solver.nocc`` and *not* ``internals["nocc"]``: the latter is the
@@ -836,6 +1017,8 @@ def piezoelectric_tensor(
         e = clamped_ion_piezoelectric(
             calculation, psi, eigenvalues, jnp.asarray(internals["weights"]),
             density, result.becsum, internals["dpsi"], internals["solver"].nocc,
+            solver=internals["solver"], field_perturbations=_perturbations,
+            commutators=internals["commutators"],
         )
     return PiezoelectricTensor(
         e=e,

@@ -326,7 +326,19 @@ def test_the_ultrasoft_refusal_names_the_term_and_not_the_pseudopotentials(
     function of the cell, so ``dbecsum`` gains a strain term of its own.
 
     This builds the case, checks it really is what the old claim denied
-    existed, and checks the refusal now names the term.
+    existed, and checks the refusal names a real obstacle.
+
+    **The words it pins changed on 2026-09-19 and the reason is worth keeping.**
+    It used to require ``Q_ij`` and ``dbecsum``, because the refusal blamed a
+    missing strain term in ``response/strain.py``. P41 put that term there and
+    pins it at 4.6e-4, so the message was naming a blocker that did not exist
+    (``AUDIT-2026-09-18.md`` ``drift.3``). What the refusal names now is the
+    constraint terms that appear because ``S`` *does* deform under a strain --
+    through ``vkb``, whatever ``q_ij`` does -- and the measurement that has not
+    been made. So the assertion is on the obstacle being real rather than on a
+    particular spelling, plus the two things the old text got wrong: it must not
+    send a reader looking for a pseudopotential, and it must name the committed
+    case.
     """
     from defumat.response.piezo import require_a_measured_dataset
 
@@ -351,6 +363,9 @@ def test_the_ultrasoft_refusal_names_the_term_and_not_the_pseudopotentials(
     with pytest.raises(NotImplementedError) as raised:
         require_a_measured_dataset(calculation)
     message = str(raised.value)
-    assert "Q_ij" in message and "dbecsum" in message
+    # The committed case is named, and the reader is not sent to find a dataset.
     assert "alas-piezo.in" in message
     assert "centrosymmetric" not in message
+    # And the obstacle is the measurement rather than a term that already exists.
+    assert "measurement" in message
+    assert "response/strain.py refuses" not in message
