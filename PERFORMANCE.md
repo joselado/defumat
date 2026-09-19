@@ -4121,13 +4121,20 @@ memory at all. It is **norm-conserving only**: measured on that cell at 64
 points it reads +0.830702 C/m^2 against the differentiated route's +0.815802,
 1.8 per cent apart, because `zstar_eu.f90` hands an augmented dataset to
 `zstar_eu_us.f90` and the transcription stops at the first file
-(`require_a_norm_conserving_transcription`). **That is a missing term rather than a
-dead end, and one piece of it is now written**: `_multiplier_strain_term` takes
-the gap from 1.79 to 1.41 per cent, and `OPEN.md` Part XIII item 3 has the rest
-of it: only one leg of this
-derivative moves `S`, so the piezoelectric case is the Born charge's shape and
-not the phonon's, and what the transcribed route lacks is one contraction of two
-functions that already exist.
+(`require_a_norm_conserving_transcription`). **That was a missing term rather than a
+dead end, and as of 2026-09-19 the escape is an escape: the two routes agree to
+2.6e-09 C/m^2 on an augmented dataset.** Only one leg of this derivative moves
+`S`, so the case is the Born charge's shape and not the phonon's, and what those
+three hundred Fortran lines are worth here is two contractions of functions that
+already existed -- `_multiplier_strain_term`, which took the gap from 1.79 to
+1.41 per cent, and `_screened_strain_term`, which took the rest of it. **So the
+`6 6 6` ultrasoft rung no longer needs a cluster node**: it is 2.6 MB a k-point
+on the route that is now complete, against 1.6 GiB a point on the taped one, and
+PAW is what stays refused. The identity was closed on `alas-piezo-tiny.in`, 8
+k-points and **10.1 GiB in 2m44**, because two assemblies of the same mixed
+second derivative must agree at any cutoff and on any mesh -- which is worth
+saying here rather than only in `OPEN.md`, since it is the cheapest measurement
+this section records and it replaced a 139.6 GiB one.
 
 **What the cheap route costs, which is the measurement that makes the gap worth
 closing.** Three rungs on the ultrasoft cell, `--skip-difference`, one task list

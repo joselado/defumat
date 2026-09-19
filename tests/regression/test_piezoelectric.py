@@ -194,23 +194,30 @@ def test_the_transcribed_contraction_reproduces_the_differentiated_one():
 def test_the_constraint_term_is_wired_and_inert_on_this_dataset():
     """The three arguments the entry point now builds, exercised on this cell.
 
-    The transcribed route takes the field perturbations, the band weights and
-    ``nocc`` on top of what it used to, so that
-    :func:`~defumat.response.piezo._multiplier_strain_term` can add the
-    multipliers' own response -- the term ``zstar_eu.f90`` delegates to
+    The transcribed route takes the field perturbations, the band weights,
+    ``nocc`` and the field's converged induced potential on top of what it used
+    to, so that :func:`~defumat.response.piezo._multiplier_strain_term` can add
+    the multipliers' own response and
+    :func:`~defumat.response.piezo._screened_strain_term` the screening of the
+    frozen-state density response -- the two terms ``zstar_eu.f90`` delegates to
     ``zstar_eu_us.f90`` for. This builds them the way
     :func:`~defumat.response.piezo.piezoelectric_tensor` does and asserts the
     answer does not move.
 
-    **What this cell can and cannot say.** It cannot say the term is *right*:
+    **What this cell can and cannot say.** It cannot say the terms are *right*:
     ``overlap_derivatives`` returns ``None`` when ``S`` does not deform, so the
-    function returns before it touches any of the three, and a wrong argument
-    here is invisible -- which is exactly how ``internals['nocc']``, the
-    per-spin tuple, got passed where ``solver.nocc``, the number, was wanted.
-    What it says is that the construction runs and that adding the term has not
-    perturbed an agreement which was 6.2e-15 before it existed. The number that
-    checks the term is on an ultrasoft cell, and
-    ``require_a_norm_conserving_transcription`` carries it.
+    multiplier term returns before it touches any of the three, and a wrong
+    argument there is invisible -- which is exactly how ``internals['nocc']``,
+    the per-spin tuple, got passed where ``solver.nocc``, the number, was
+    wanted. The screened term is not skipped here at all and still changes
+    nothing, for a different and sharper reason: at frozen plane-wave
+    coefficients the smooth density in crystal coordinates does not move under a
+    **traceless** strain, so it is identically zero on the one component a
+    zincblende crystal has. What this says, then, is that the construction runs
+    and that adding both terms has not perturbed an agreement which was 6.2e-15
+    before either existed -- measured at 1.9e-14 after, with ``e_14`` itself
+    unchanged at -0.763786071 in every digit. The numbers that check the terms
+    are on an ultrasoft cell, in ``test_piezoelectric_augmented.py``.
     """
     from defumat.response.efield import _bare_plus_induced
 
@@ -230,6 +237,7 @@ def test_the_constraint_term_is_wired_and_inert_on_this_dataset():
         field_perturbations=perturbations,
         band_weights=jnp.asarray(internals["weights"]),
         nocc=internals["solver"].nocc,
+        field_dvscf=internals["dvscf"],
     )
     assert np.abs(wired - _piezo("alas-raman")).max() < 1e-12
 

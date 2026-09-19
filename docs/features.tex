@@ -2659,7 +2659,7 @@ print(piezo.dielectric.epsilon) # the field response is shared, not re-solved
 # The same number contracted rather than taped: no forward-over-reverse tape,
 # so it is the route for a dense mesh or a large cell.
 cheap = calc.get_piezoelectric_tensor(method="zstar_eu")
-print(abs(cheap.e14 - piezo.e14))   # 6.2e-15
+print(abs(cheap.e14 - piezo.e14))   # 3.4e-15
 \end{pycode}
 
 \code{pw.x} computes no piezoelectric tensor --- the word occurs once in the
@@ -2704,12 +2704,24 @@ radial and reciprocal-space intermediate a cell derivative rebuilds, where
 and holds nothing. Measured on ultrasoft AlAs, the first peaks at 139.6~GiB at
 64 $k$-points and grows by about 1.6~GiB a point, which puts a $6^3$ mesh on a
 whole cluster node. The default is the taped one because it is the route that
-extends to the next derivative; reach for the other, **on a norm-conserving
-dataset**, when the mesh is what you are converging. On an ultrasoft or PAW one
-it is refused by name, because \code{zstar\_eu.f90} hands that case to
-\code{zstar\_eu\_us.f90} and the transcription stops at the first file: measured
-on ultrasoft AlAs at 64 $k$-points it reads $+0.830702$ against the
-differentiated route's $+0.815802$, 1.8 per cent apart.
+extends to the next derivative; reach for the other when the mesh is what you
+are converging, which on an ultrasoft cell is the difference between a
+workstation and a cluster node.
+
+\code{zstar\_eu.f90} line~90 hands an augmented dataset to
+\code{zstar\_eu\_us.f90}, and this route was refused on one until what those
+three hundred further lines are worth in the strain coordinate had been found:
+it is two contractions, because only one leg of this derivative moves $S$. They
+are the multipliers' own first-order change together with the
+\code{add\_for\_charges} sandwich beside it, and the screening of the
+frozen-state density response --- the second of which is not about the
+constraint at all, but about what ``bare'' means when the coordinate is a
+strain, since freezing the density as an \emph{array} misses that the density
+is a function of the cell as well as of the states. With all of them in, the
+two routes read $1.473304405$ and $1.473304408$ on ultrasoft AlAs where they
+had been 1.6 per cent apart. \textbf{PAW is still refused by name}, because its
+one-centre energy is a function of \code{becsum} directly and the cross term
+that reaches is on no grid.
 
 The $-0.7638$ printed above is the \code{4 4 4} of the committed input, and it
 is thirteen per cent from where the calculation is going; the Berry-phase value
@@ -2751,7 +2763,11 @@ left refused is the \emph{strain} leg alone. The one run taken on an ultrasoft
 cell so far does not lift it: \code{alas-piezo.in} gave $+0.815929$ against a
 Berry-phase finite difference's $+0.687757$, but that is the same \code{4 4 4}
 mesh at which the norm-conserving calibration cell is itself thirteen per cent
-out, so it measures the $k$-convergence above rather than the dataset. Beyond that: insulators, \code{nspin = 1}, and
+out, so it measures the $k$-convergence above rather than the dataset. What has
+since been settled is the \emph{internal} half of that question: the two
+assemblies agree on an augmented dataset to $2.6\times10^{-9}$~C/m$^2$ where
+they had been 1.6 per cent apart, so what the refusal is waiting on is a
+comparison against something outside this code and not a missing term. Beyond that: insulators, \code{nspin = 1}, and
 everything the Sternheimer regime and the differentiable cell refuse (a metal, a
 spin spiral, a magnetic field, a shifted grid run with \code{nosym}).
 \end{refuses}

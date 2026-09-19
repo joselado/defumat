@@ -8396,6 +8396,60 @@ was localised only because it could be measured against a finite difference. So
 lifting this is the `Q_ij` strain term, and then the tests that already exist,
 on the cell that is now committed.
 
+**The two routes agree on an augmented dataset now, 2026-09-19, and the whole of
+it was done on this workstation.** The two assemblies of this mixed second
+derivative — `clamped_ion_piezoelectric`, one `jvp` of the stress along the field
+response, and `piezoelectric_zstar_eu_style`, the same derivative contracted term
+by term — agreed to 6.2e-15 on the norm-conserving cell while **both** were
+missing three terms, and were 1.8 per cent apart on ultrasoft AlAs at 64
+k-points. All three are in and the gap is **2.6e-09** C/m^2.
+
+*What made it cheap.* Two assemblies of the same mixed second derivative must
+agree at **any** cutoff and on **any** mesh, so their disagreement is an assembly
+defect rather than a convergence question and can be read on a cell chosen for
+cost. `tests/data/qe/alas-piezo-tiny.in` is that cell — the same zincblende AlAs
+and the same ultrasoft datasets at `ecutwfc = 10`, `ecutrho = 44`, `nosym` on an
+unshifted `2 2 2` grid — and it carries the defect at 1.6 per cent in 10.1 GiB
+where `alas-piezo.in` at 64 points wanted 139.6 GiB and a cluster node. The
+lesson generalises past this phase: **an identity between two of this
+repository's own routes is testable at whatever cutoff is affordable**, and the
+expensive cell is needed only for the physics.
+
+*The three terms, and only the third is new to the record.* The multipliers' own
+first-order change and the `add_for_charges` sandwich are P39's two objects in
+the strain coordinate and went into both routes on 2026-09-19 (worth -0.0055 on
+ultrasoft AlAs, the two independent implementations agreeing to 4.6e-07). The
+third is `piezo._screened_strain_term` and is not about the constraint at all:
+`strain._bare_strains` rebuilds the potential from the converged density
+**array**, so it differentiates `dH/d(eps)` at frozen `rho`, while the derivative
+the tensor is is taken at frozen *states* and the density is a function of the
+cell as well. The missing link is `K . (drho/d(eps))|_psi`, which contracted with
+the field response is `-(1/Omega) int dV_scf^(E_k) [drho/d(eps_ab)]_psi` — a mean
+over the grid, no factor of two, the volume cancelling against the quadrature.
+`StrainResponse.moved_drho` is the object and its docstring had named the trap.
+
+*Why a norm-conserving cell could not have seen any of the three.* Each is
+contracted either with `dS/d(eps)`, identically zero when `S` is the identity, or
+with the frozen-state density response, which at frozen plane-wave coefficients
+is `-delta_ab rho` exactly and therefore **zero for every traceless strain** —
+the exponentials are indexed by integers. A zincblende crystal's only independent
+component is the shear `e_14`. So the 6.2e-15 was a real agreement about a
+component on which all three terms vanish, which is the "a check whose null
+result cannot be told from a pass" trap wearing its other face. Measured after
+the fix on `alas-raman.in`: 1.9e-14 between the routes and `e_14` unchanged at
+-0.763786071 in every digit.
+
+*What this changes about the refusals.*
+`require_a_norm_conserving_transcription` refuses **PAW alone** now — PAW's
+one-centre energy is a function of `becsum` directly, so its cross term with the
+field's `dbecsum` is on no grid, where an ultrasoft dataset's `becsum` reaches
+the energy only through the augmentation charge that *is* on the dense grid.
+`require_a_measured_dataset` is untouched and the dataset refusal above stays:
+nothing here is a comparison against an independent reference. What it does buy
+is that the cheap route — 2.6 MB a k-point against 16 MB of tape alone — is
+complete on an ultrasoft dataset, so the k-ladder that separates this cell's mesh
+error from the dataset effect is a workstation job rather than a node.
+
 ### P51 — The optical conductivity tensor, the Kerr angle and the anomalous Hall conductivity. ✅ DONE.
 
 `defumat/response/conductivity.py` and `defumat/workflows/conductivity.py`.

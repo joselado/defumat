@@ -21,17 +21,28 @@ piezoelectric tensor is one ``jvp`` of the stress along the same field
 response, per field direction -- three of them and the tensor is complete, at
 the cost of the dielectric constant that was going to be solved anyway.
 
-**The strain leg has no orthonormality term, and that is what makes this
-cheaper than the Born charge it copies.** ``<psi|S|psi>`` is a sum over the
-plane-wave sphere of ``|c_G|^2`` and the sphere is a set of *integers*; the
-ultrasoft part ``qq_ij = int Q_ij(r) d3r`` is an atom-centred integral over all
-space with no cell in it either. So the constraint is strain-independent, its
+**For a norm-conserving dataset the strain leg has no orthonormality term, and
+that is what makes this cheaper than the Born charge it copies.**
+``<psi|S|psi>`` is then a sum over the plane-wave sphere of ``|c_G|^2`` and the
+sphere is a set of *integers*, so the constraint is strain-independent, its
 strain derivative vanishes identically as a function of the states too, and the
 multiplier response ``dLambda`` that :mod:`defumat.response.born` needs (QE's
-``psidspsi``, ``add_dkmds``, ``add_for_charges``) has nothing to contribute
-here. What is left is one term::
+``psidspsi``, ``add_dkmds``, ``add_for_charges``) has nothing to contribute.
+What is left is one term::
 
     Omega e_(k)ij = -d/dE_k [ dE/d(eps_ij) ] = -(d_psi d_eps E) . dpsi_k
+
+*This paragraph used to say that without its first three words, and it was
+false on an augmented dataset by* **-0.0055 C/m^2** *on ultrasoft AlAs.*
+``qq_ij = int Q_ij(r) d3r`` *has no cell in it, which is true, and the
+conclusion does not follow:* ``S = 1 + sum |beta> qq <beta|`` *also carries*
+``vkb``, *which is* ``beta(|k+G|)`` *and deforms with the cell like every other
+radial transform. So an augmented dataset has both halves of* ``dLambda``
+*after all, and* :func:`clamped_ion_piezoelectric` *carries them
+(*``solver``, ``field_perturbations`` *and* ``commutators`` *together switch
+them on) while a norm-conserving run skips them exactly rather than
+approximately, since both are contracted with a* ``dS/d(eps)`` *that is
+identically zero.*
 
 *Units.* The field response is the one :mod:`defumat.response.born` divides
 into the force to get a charge in units of ``e``, so the same tangent through a
@@ -608,93 +619,92 @@ def born_charges_from_stress_route(
 
 
 def require_a_norm_conserving_transcription(calculation) -> None:
-    """:func:`piezoelectric_zstar_eu_style` is norm-conserving only, measured.
+    """:func:`piezoelectric_zstar_eu_style` refuses **PAW**, and only PAW.
 
     **This is a separate refusal from :func:`require_a_measured_dataset` and it
     has to be**, because the two are about different things: that one says the
-    *quantity* has never been measured on an augmented dataset, and this one
-    says that if it is measured, this particular assembly is not the one to
-    measure it with. Lifting the first must not lift the second.
+    *quantity* has never been measured against an independent reference on an
+    augmented dataset, and this one says whether this particular assembly is the
+    one to measure it with. Lifting the first must not lift the second.
 
+    **Ultrasoft was refused here until 2026-09-19 and is not any more, because
+    the two terms it was missing were found and both are in.**
     ``zstar_eu.f90`` line 90 is ``if (okvan) call zstar_eu_us``, three hundred
-    further lines that this transcription does not have, and the same hole is
-    already documented one coordinate over:
-    :func:`~defumat.response.efield.born_charges_zstar_eu` says in its own
-    docstring that on ultrasoft silicon it gives ``+0.1625`` where ``ph.x``
-    gives ``-0.07945``, wrong in sign as well as in size. Inheriting that
-    absence into the strain coordinate without inheriting the note is
-    ``CLAUDE.md``'s "inherit a refusal only after checking which machine it
-    belongs to", with a missing refusal in place of a stale one.
+    further lines this transcription does not have, and what those lines are
+    worth here turned out to be two contractions rather than three hundred
+    lines, for the reason :mod:`defumat.response.born` gives one coordinate
+    over: **only one leg of this derivative moves ``S``**, so the case has the
+    Born charge's shape and not a phonon's. They are
+    :func:`_multiplier_strain_term`, the multipliers' own response against
+    ``<psi_m|dS/d(eps)|psi_n>`` together with the ``add_for_charges`` sandwich
+    beside it, and :func:`_screened_strain_term`, which is not about the
+    constraint at all but about what "bare" means when the coordinate is a
+    strain -- ``_bare_strains`` freezes the density *array*, and the density is
+    a function of the cell as well as of the states.
 
-    **Measured here rather than argued** (Triton `20338380_0` and `20338722_0`,
-    2026-09-19, ultrasoft AlAs on the whole ``4 4 4`` grid, 64 k-points, the
-    same converged ground state): this route gives ``e_14 = +0.830702`` C/m^2
-    where :func:`clamped_ion_piezoelectric` gives ``+0.815802``, **1.83 per
-    cent** apart, against ``6.2e-15`` between the same two on the
-    norm-conserving cell.
+    **The measurement, and the cell it was taken on is the point.** The two
+    routes are made to agree on ``tests/data/qe/alas-piezo-tiny.in``, ultrasoft
+    AlAs at ``ecutwfc = 12`` and 8 k-points -- a cell chosen for cost and not
+    for physics, which is legitimate because **two assemblies of the same mixed
+    second derivative must agree at any cutoff and on any mesh**, so their
+    disagreement is a defect and not a convergence question. Before the second
+    term the gap on ``e_14`` was **-0.023777619** C/m^2 on a value of 1.4733,
+    1.6 per cent; the term reads **-0.023777621**, and what is left is
+    **2.6e-09**, the Sternheimer solve's own threshold rather than round-off,
+    since the two routes contract differently-converged intermediates. The same
+    two terms were measured together on ``alas-piezo.in`` at 64 k-points
+    (Triton ``20339831``), where the gap was 1.8 per cent.
 
-    **Why the error is 1.8 per cent here and a wrong sign in the Born charge.**
-    :func:`~defumat.response.strain._bare_strains` already carries the piece
-    that matters most, subtracting ``eps dS|psi>`` when the Hamiltonian has an
-    overlap (P39) and rebuilding the potential inside the traced function so
-    that ``Q_ij(r)``'s own strain derivative is differentiated; the Born
-    charge's ``h_psi`` has no overlap subtraction at all. What is left is what
-    ``zstar_eu_us.f90`` adds on top, and in this project's own terms it is one
-    contraction rather than three hundred lines.
-    :func:`clamped_ion_piezoelectric` has it because it differentiates the
-    energy rather than an operator.
+    **What the norm-conserving agreement was worth, which is less than it
+    looked.** The two routes agree to ``6.2e-15`` on ``alas-raman.in`` and did
+    so while both were missing all of this, because every missing term is
+    contracted either with ``dS/d(eps)``, identically zero when ``S`` is the
+    identity, or with the frozen-state density response, which for a traceless
+    strain at frozen plane-wave coefficients is identically zero as well. A
+    zincblende crystal's only independent component is the shear ``e_14``, so
+    the calibration cell could not have seen any of it. That agreement is still
+    the check that the new terms cannot *break* a norm-conserving answer, and
+    it is nothing more.
 
-    **What it would take to lift this, since the template is already here.**
-    :mod:`defumat.response.born` explains that an ultrasoft Born charge costs
-    "one more tangent instead of ``zstar_eu_us.f90``'s five further stages",
-    and the reason is that **only one leg of that derivative moves ``S``**. The
-    piezoelectric constant has the same asymmetry, not a phonon's: the strain
-    leg moves ``S`` and :func:`~defumat.response.strain._bare_strains` carries
-    it, while the field leg does not, so its ``dLambda`` is a matrix element of
-    what the field response has already built. What is missing is therefore
-    ``-<psi_m|dS/d(eps_ab)|psi_n> . dLambda^E_mn``, and both factors are
-    functions that exist:
-    :func:`~defumat.response.strain.overlap_derivatives` for the first, which
-    returns ``None`` for a norm-conserving dataset, and
-    :func:`~defumat.response.born._multiplier_response` for the second, which
-    its own docstring calls "the whole of QE's first two ultrasoft stages at
-    once". **Both vanish identically for a norm-conserving dataset, which is
-    why the two routes agree to 6.2e-15 there and differ by 1.8 per cent
-    here.** ``add_dkmds``, the fourth entry of ``born.py``'s table, is
-    ``jax.grad`` of ``frozen_polarization`` and vanishes for the non-polar
-    crystals this route is allowed on at all.
-
-    It is a derivation rather than a copy and the index order is the trap --
-    ``_multiplier_response``'s docstring says the weight belongs to the
-    *column*, and transposing it costs 0.28 on ultrasoft silicon and nothing on
-    a norm-conserving cell, which is the kind of error no norm-conserving gate
-    can see. The validation is sharp and cheap: ``+0.815802`` on
-    ``alas-piezo.in`` at 64 k-points, ``6.2e-15`` on the calibration cell where
-    the new term must stay identically zero, and this route runs in 2.3 GiB.
+    **PAW is refused and is not an inherited refusal.**
+    :func:`_screened_strain_term` integrates the field's induced potential
+    against the frozen-state density response on the dense grid, and for an
+    ultrasoft dataset that is the whole coupling, because ``becsum`` reaches the
+    energy only through the augmentation charge that is on that grid. PAW adds a
+    one-centre energy that is a function of ``becsum`` directly, so its cross
+    term with the field's ``dbecsum`` is on no grid at all and is not in this
+    route. :func:`clamped_ion_piezoelectric` has it because it differentiates
+    the energy rather than an operator, which is why the default stays there.
     """
-    if calculation.is_ultrasoft:
+    if calculation.is_paw:
         raise NotImplementedError(
-            "method='zstar_eu' is the transcription of zstar_eu.f90 and is "
-            "norm-conserving only: QE's own routine delegates to "
-            "zstar_eu_us.f90 for an augmented dataset and this does not. "
-            "Measured on ultrasoft AlAs at 64 k-points it gives e_14 = "
-            "+0.830702 C/m^2 where method='autodiff' gives +0.815802, 1.8 per "
-            "cent apart, where the two agree to 6.2e-15 on a norm-conserving "
-            "cell. Use method='autodiff', which differentiates the energy and "
-            "therefore carries the augmentation terms"
+            "method='zstar_eu' refuses a PAW dataset: the term that screens "
+            "the frozen-state density response is integrated on the dense "
+            "grid, which is the whole coupling for ultrasoft and not for PAW, "
+            "whose one-centre energy is a function of becsum directly and "
+            "whose cross term with the field's dbecsum is on no grid. "
+            "Ultrasoft runs here and agrees with method='autodiff' to 2.6e-09 "
+            "C/m^2 on alas-piezo-tiny.in. Use method='autodiff', which "
+            "differentiates the energy and therefore carries the one-centre "
+            "term too"
         )
 
 
 def piezoelectric_zstar_eu_style(
     calculation, solver, density, dpsi,
     field_perturbations=None, band_weights=None, nocc=None, commutators=None,
+    field_dvscf=None,
 ) -> np.ndarray:
     """``zstar_eu.f90``'s contraction with the strain in place of the atom.
 
-    **Norm-conserving only** --
+    **Ultrasoft runs here and PAW is refused** --
     :func:`require_a_norm_conserving_transcription` is the guard and carries
-    the measurement. On an augmented dataset this is 1.8 per cent out, because
-    ``zstar_eu.f90`` hands that case to ``zstar_eu_us.f90`` and this does not.
+    the measurement. ``zstar_eu.f90`` line 90 is ``if (okvan) call
+    zstar_eu_us``, and what those three hundred further lines are worth in this
+    coordinate is the two contractions below, :func:`_multiplier_strain_term`
+    and :func:`_screened_strain_term`, because only one leg of this derivative
+    moves ``S``. With both in, the two routes agree to **2.6e-09** C/m^2 on
+    ultrasoft AlAs where they were 1.6 per cent apart.
 
     **The transcribed expression put beside the differentiated one**, in this
     project's usual arrangement. QE writes a Born charge as a bare perturbation
@@ -749,6 +759,14 @@ def piezoelectric_zstar_eu_style(
     )
     if constraint is not None:
         tensor = tensor + constraint
+    # The screening of the frozen-state density response, which is what
+    # ``_bare_strains``' frozen density *array* leaves out and the taped route
+    # generates through its density builder. Zero for a shear on a
+    # norm-conserving dataset, and it is the whole of the two routes' remaining
+    # disagreement on an augmented one (:func:`_screened_strain_term`).
+    screened = _screened_strain_term(calculation, solver, field_dvscf)
+    if screened is not None:
+        tensor = tensor + screened
     # The other half of the same ``dLambda``, which the occupied-occupied block
     # cannot carry -- ``add_for_charges.f90``. Zero for a norm-conserving
     # dataset, and in the position coordinate it is the larger of the two by an
@@ -761,6 +779,88 @@ def piezoelectric_zstar_eu_style(
                 calculation, solver, band_weights, commutators[k]
             )) / volume
     return calculation.symmetrize_cartesian_tensor(tensor)
+
+
+def _screened_strain_term(calculation, solver, field_dvscf) -> np.ndarray | None:
+    """``(3, 3, 3)``: the screening of the frozen-state density response.
+
+    **This is the second thing ``zstar_eu.f90`` hands to ``zstar_eu_us.f90``
+    for**, and unlike :func:`_multiplier_strain_term` it is not about the
+    constraint at all -- it is about what "bare" means when the coordinate is a
+    strain.
+
+    The transcribed route contracts the field response against
+    :func:`~defumat.response.strain._bare_strains`, which rebuilds the potential
+    from the converged density **array** at the deformed cell, so what it
+    differentiates is ``dH/d(eps)`` at frozen ``rho``. The derivative the tensor
+    is is taken at frozen *states*, and the density is a function of the states
+    **and** of the cell, so the chain rule has one more link::
+
+        dH/d(eps)|_psi = dH/d(eps)|_rho + K . (drho/d(eps))|_psi
+
+    with ``K = dV_Hxc/drho``. Contracted with the field response and using that
+    ``K`` is symmetric, the second link is
+
+        -(1/Omega) int dV_scf^(E_k)(r) [drho/d(eps_ab)]_psi (r) d3r
+
+    -- no factor of two, because the ``2 Re sum_n w_n`` of the main term is
+    exactly what turns ``<dpsi|K.x|psi>`` into ``int x drho^(E)``, and the
+    volume cancels against the ``Omega/N`` of the quadrature, leaving a mean
+    over the grid. :func:`clamped_ion_piezoelectric` needs none of this because
+    it hands the density to the energy as a *builder* that carries the strain,
+    so its ``jvp`` generates the link itself.
+
+    **Why a norm-conserving cell cannot see it, and that is a statement about
+    the cell rather than a tolerance.** At frozen plane-wave coefficients the
+    smooth density in crystal coordinates does not move under a strain at all --
+    the exponentials are indexed by integers -- so ``[drho/d(eps_ab)]_psi`` is
+    ``-delta_ab rho`` exactly, the volume's own ``1/Omega`` and nothing else,
+    and it **vanishes for every traceless strain**. A zincblende crystal's only
+    independent component is ``e_14``, a pure shear, so on the calibration cell
+    this term is zero to 1e-15 and the two routes agreed to 6.2e-15 while one of
+    them was missing it. An augmented dataset is where it exists: the
+    augmentation charge ``Q_ij(r)`` deforms with the cell, so a shear moves the
+    density even at frozen states.
+
+    **Measured, and it is the whole of what was left** (``alas-piezo-tiny.in``,
+    ultrasoft AlAs at 8 k-points): the two routes were **-0.023777619** C/m^2
+    apart on ``e_14`` and this term is **-0.023777621**, agreeing to
+    **2.6e-09**, which is the Sternheimer solve's own threshold rather than
+    round-off -- the two routes contract differently-converged intermediates.
+    Every other component of the term is 1e-15.
+
+    **PAW is refused above rather than approximated here**
+    (:func:`require_a_norm_conserving_transcription`). For an ultrasoft dataset
+    ``becsum`` reaches the energy only through the augmented density on the
+    dense grid, which ``moved`` below already carries, so the grid integral is
+    the whole coupling; PAW adds a one-centre energy that is a function of
+    ``becsum`` directly, and its cross term with the field's ``dbecsum`` is not
+    on any grid.
+
+    ``None`` when the field's converged induced potential was not handed over,
+    which is what the norm-conserving cross-check in ``test_piezoelectric.py``
+    passes and what keeps that comparison at 6.2e-15.
+    """
+    if field_dvscf is None:
+        return None
+    from defumat.response.strain import _frozen_density_response
+
+    # ``ort = None``: what is wanted is the derivative at frozen *states*, and
+    # the orthogonality block is a change of the states. The function returns
+    # the ``moved`` half separately for exactly this reason.
+    _, moved, _, _ = _frozen_density_response(
+        calculation, solver, solver.weights, None
+    )
+    points = int(np.prod(np.asarray(moved.shape[-3:])))
+    out = np.zeros((3, 3, 3))
+    for k in range(3):
+        for a in range(3):
+            for b in range(a, 3):
+                value = -float(
+                    jnp.sum(field_dvscf[k] * moved[a, b])
+                ) / points
+                out[k, a, b] = out[k, b, a] = value
+    return out
 
 
 def _multiplier_strain_term(
@@ -1012,6 +1112,10 @@ def piezoelectric_tensor(
             # on a norm-conserving cell, where
             # :func:`_multiplier_strain_term` returns before it is used.
             nocc=internals["solver"].nocc,
+            # The converged induced potential of the field response, which is
+            # the ``K . drho^(E)`` half of :func:`_screened_strain_term` and is
+            # already built -- nothing further is solved for it either.
+            field_dvscf=internals["dvscf"],
         )
     else:
         e = clamped_ion_piezoelectric(

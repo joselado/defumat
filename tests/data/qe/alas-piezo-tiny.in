@@ -1,0 +1,57 @@
+! AlAs, ultrasoft, zincblende, at a cutoff and a k-sample chosen for **cost**
+! rather than for physics: the cell on which the two piezoelectric routes are
+! made to agree.
+!
+! The two routes -- `clamped_ion_piezoelectric`, one `jvp` of the stress along
+! the field response, and `piezoelectric_zstar_eu_style`, the same mixed second
+! derivative contracted term by term -- compute the same mathematical object, so
+! **they must agree at any cutoff and on any mesh**. Their disagreement is an
+! assembly defect and not a convergence question, which is what makes it
+! measurable here instead of on `alas-piezo.in`, where the taped route peaks at
+! 139.6 GiB at 64 k-points and needs a whole node.
+!
+! Nothing about the *value* of `e_14` from this cell is physics: `ecutwfc = 10`
+! with `ecutrho = 44` is far below what `Al/As.pbe-n-rrkjus_psl.1.0.0` were made
+! for, and 8 k-points is not a converged sample. What it keeps is the only thing
+! the identity needs -- an augmented dataset, so that `S` deforms and the
+! augmentation charge is nonzero, on a non-centrosymmetric crystal, so that the
+! tensor does not vanish by symmetry.
+!
+! **The cutoff was chosen against the regression runner's memory cap and not by
+! eye.** The taped route holds a forward-over-reverse tape whose peak follows the
+! dense grid, and the three rungs measured here are `12/96` at 18.9 GiB in 3m41,
+! `10/60` at 13.7 GiB in 3m27 and `10/44` at **10.1 GiB in 2m44**, against
+! `tools/run_regression.sh`'s `MemoryMax=12G`. What the cutoff does not move is
+! the thing being measured: `e_14` reads 1.473304, 1.473447 and 1.474377 across
+! those three, and the defect the test exists for is -0.023778, -0.022727 at the
+! two ends, 1.61 and 1.54 per cent. So the cheapest rung keeps both the value and
+! the defect and is the one committed.
+!
+! `nosym` and `noinv` on an **unshifted** grid, which is what
+! `require_a_symmetrisable_response` accepts and what puts the whole grid in
+! front of both routes rather than a wedge: an identity between two assemblies
+! should not be read through a symmetrisation either of them applies afterwards.
+!
+! Geometry and datasets are `alas-piezo.in`'s, so the two cells differ in the
+! cutoff, the mesh and the group and in nothing else.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.6134, nat = 2, ntyp = 2,
+    ecutwfc = 10.0, ecutrho = 44.0
+    nosym = .true.
+    noinv = .true.
+ /
+ &electrons
+    conv_thr = 1.0d-10
+    mixing_beta = 0.7
+ /
+ATOMIC_SPECIES
+ Al 26.98 Al.pbe-n-rrkjus_psl.1.0.0.UPF
+ As 74.92 As.pbe-n-rrkjus_psl.1.0.0.UPF
+ATOMIC_POSITIONS crystal
+ Al 0.00 0.00 0.00
+ As 0.25 0.25 0.25
+K_POINTS (automatic)
+ 2 2 2 0 0 0

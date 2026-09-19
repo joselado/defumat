@@ -132,19 +132,25 @@ def test_an_unknown_route_is_refused_before_anything_is_solved():
         piezoelectric_tensor(_calculation("alas-raman"), None, method="zstar-eu")
 
 
-def test_the_transcribed_route_refuses_an_augmented_dataset_on_its_own():
-    """``zstar_eu`` is norm-conserving only, and *separately* from the tensor.
+def test_the_transcribed_route_refuses_paw_and_no_longer_refuses_ultrasoft():
+    """``zstar_eu`` refuses **PAW**, and *separately* from the tensor's own guard.
 
     The two refusals are about different things and the test is that lifting
     one does not lift the other: :func:`require_a_measured_dataset` says the
-    quantity has never been measured on an augmented dataset, and
-    :func:`require_a_norm_conserving_transcription` says that if it is
-    measured, this assembly is not the one to measure it with, because
-    ``zstar_eu.f90`` hands an augmented dataset to ``zstar_eu_us.f90`` and the
-    transcription stops at the first file. Measured on ultrasoft AlAs at 64
-    k-points the gap is 1.8 per cent, where the two routes agree to 6.2e-15 on
-    a norm-conserving cell -- small enough to read as convergence, which is
-    exactly why it needs a name rather than a caveat.
+    quantity has never been measured against an independent reference on an
+    augmented dataset, and
+    :func:`require_a_norm_conserving_transcription` says whether this assembly
+    is the one to measure it with.
+
+    **Ultrasoft used to be refused here and is not any more.**
+    ``zstar_eu.f90`` hands an augmented dataset to ``zstar_eu_us.f90``, and what
+    those three hundred lines are worth in the strain coordinate turned out to
+    be two contractions, because only one leg of this derivative moves ``S``.
+    With both in, the two routes agree to 2.6e-09 C/m^2 on ultrasoft AlAs where
+    they were 1.6 per cent apart, and that number is
+    ``test_piezoelectric.py``'s. What is still refused is PAW, whose one-centre
+    energy is a function of ``becsum`` directly, so the cross term the grid
+    integral misses is on no grid at all.
     """
     from defumat.response.piezo import (
         require_a_measured_dataset,
@@ -152,12 +158,13 @@ def test_the_transcribed_route_refuses_an_augmented_dataset_on_its_own():
     )
 
     ultrasoft = _calculation("si2-us")
-    with pytest.raises(NotImplementedError, match="zstar_eu_us"):
-        require_a_norm_conserving_transcription(ultrasoft)
-    # ... and it is not the dataset refusal wearing another hat: patch that one
-    # away, as the cluster measurement script does, and this one still fires.
-    with pytest.raises(NotImplementedError, match="norm-conserving only"):
-        require_a_norm_conserving_transcription(ultrasoft)
+    # Runs, where it used to raise.
+    require_a_norm_conserving_transcription(ultrasoft)
     require_a_norm_conserving_transcription(_calculation("alas-raman"))
+    with pytest.raises(NotImplementedError, match="PAW"):
+        require_a_norm_conserving_transcription(_calculation("o2-paw-afm"))
+    # ... and the dataset refusal is untouched by any of that: it still refuses
+    # the ultrasoft cell this route now accepts, which is the whole reason the
+    # two are separate functions.
     with pytest.raises(NotImplementedError, match="ultrasoft"):
         require_a_measured_dataset(ultrasoft)
