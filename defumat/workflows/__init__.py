@@ -25,6 +25,8 @@ from defumat.workflows.magnons import (MagnonDispersion, SpinSusceptibility,
                                        run_spin_susceptibility)
 from defumat.workflows.tddft import OpticalSpectrum, run_absorption
 from defumat.workflows.polarization import run_polarization
+from defumat.workflows.piezo_ladder import (PiezoelectricLadder,
+                                            piezoelectric_kmesh_ladder)
 from defumat.workflows.sfac import run_structure_factors
 from defumat.workflows.stm import run_stm, run_sts
 from defumat.workflows.topology import (
@@ -39,6 +41,8 @@ __all__ = [
     "OpticalSpectrum",
     "DFTSource",
     "run_polarization",
+    "PiezoelectricLadder",
+    "piezoelectric_kmesh_ladder",
     "run_orbital_magnetization",
     "DensityOfStates",
     "NSCFResult",

@@ -112,6 +112,7 @@ citation of Vanderbilt's paper in a comment in ``PW/src/bp_c_phase.f90``.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 import jax
@@ -141,6 +142,7 @@ __all__ = [
     "piezoelectric_zstar_eu_style",
     "piezoelectric_from_strain_response",
     "require_a_piezoelectric_tensor",
+    "KMESH_STEP",
     "require_a_measured_dataset",
     "require_a_nonpolar_crystal",
     "polar_direction",
@@ -170,12 +172,29 @@ class PiezoelectricTensor:
             it was asked for) the Born charges come back with it rather than
             costing a second solve.
         converged: whether that response converged.
+        nk: how many k-points the response was integrated over, and ``grid``
+            the Monkhorst-Pack divisions behind them when the set came from a
+            grid rather than from an explicit list. **This is on the result
+            because it is the one parameter of this quantity that nothing
+            inside it can see**: the three routes share one field response and
+            the ``Z*`` anchor is the same assembly in another coordinate, so
+            every internal check moves with the mesh instead of catching it.
+        kmesh_drift: the relative change of ``e`` across the last step of a
+            k-mesh ladder, when one was run
+            (:func:`~defumat.workflows.piezo_ladder.piezoelectric_kmesh_ladder`),
+            and ``None`` when the mesh was taken on trust. It is a *step* and
+            not an error: on the one cell where both are known the remaining
+            distance to the Berry-phase value was about three times the last
+            step.
     """
 
     e: np.ndarray
     voigt: np.ndarray
     dielectric: object = None
     converged: bool = True
+    nk: int | None = None
+    grid: tuple | None = None
+    kmesh_drift: float | None = None
 
     @property
     def e14(self) -> float:
@@ -195,6 +214,85 @@ def to_voigt(e: np.ndarray) -> np.ndarray:
     """
     e = np.asarray(e)
     return np.stack([e[:, i, j] for i, j in VOIGT], axis=1)
+
+
+#: The last ladder step below which :func:`piezoelectric_tensor` stops warning.
+#:
+#: **It is a threshold on the step and the error is larger than the step**, which
+#: is the one thing to know before reading a silent run as a converged one. On
+#: zincblende AlAs, where the ladder and an independent Berry-phase value are
+#: both known, ``e_14`` moves 10 per cent from ``4 4 4`` to ``6 6 6``, 2.1 per
+#: cent to ``8 8 8`` and 0.44 per cent to ``10 10 10``, while the ``10 10 10``
+#: rung is still **1.2 per cent** from the Berry value: the remaining distance
+#: runs about three times the last step, because the approach is a slow tail
+#: rather than a geometric one. So one per cent here means a few per cent of
+#: error on that cell, and it is a place to stop warning rather than a claim of
+#: convergence.
+KMESH_STEP = 0.01
+
+#: ``e_14`` in C/m^2 on zincblende AlAs at ``4 4 4``, ``6 6 6``, ``8 8 8`` and
+#: ``10 10 10``, against a Berry-phase finite difference of -0.6614 to -0.6620
+#: on the same cell (``PLAN.md`` P50, Triton ``20337789``). Quoted in the
+#: warning because a user with no ladder of their own still needs a number.
+KMESH_CURVE = (-0.763786, -0.687475, -0.672897, -0.669907)
+
+
+def _kmesh_of(calculation):
+    """``(nk, grid)`` of the set the response will be integrated over."""
+    kpoints = calculation.system.kpoints
+    grid = getattr(kpoints, "grid", None)
+    return int(kpoints.nk), (None if grid is None else tuple(int(n) for n in grid))
+
+
+def _warn_about_the_kmesh(calculation, drift) -> None:
+    """Say that nothing in this assembly can see its own Brillouin-zone sum.
+
+    **The one guard this quantity had no version of.** Every internal check it
+    carries -- the three routes against each other, the symmetry statements, the
+    wedge against the closed grid, the ``Z*`` anchor -- is insensitive to the
+    k-mesh, because the routes share the field response and the anchor is the
+    same assembly in the position coordinate. So a run on a mesh that would be
+    ample for a total energy returns a tensor that is thirteen per cent out and
+    announces nothing, which is what happened here on the committed ``4 4 4``
+    input (``OPEN.md`` Part XIII item 3). A warning is the honest answer rather
+    than a refusal: which mesh is enough is a property of the crystal, and the
+    ladder that measures it is one call away.
+    """
+    if drift is not None and drift < KMESH_STEP:
+        return
+    nk, grid = _kmesh_of(calculation)
+    where = f"{nk} k-points" + ("" if grid is None else f" ({grid[0]} {grid[1]} {grid[2]})")
+    if drift is None:
+        measured = (
+            "this run's own k-convergence has not been measured. On zincblende "
+            "AlAs, against a Berry-phase finite difference that shares no "
+            "machinery with it, e_14 reads "
+            + ", ".join(f"{value:.4f}" for value in KMESH_CURVE)
+            + " C/m^2 at 4 4 4, 6 6 6, 8 8 8 and 10 10 10 against the Berry "
+              "value's -0.6614 to -0.6620, so a committed-quality 4 4 4 mesh "
+              "is 13 per cent out there and 8 8 8 is 1.6"
+        )
+    else:
+        measured = (
+            f"the last step of the ladder that was run moved the tensor by "
+            f"{drift * 100:.1f} per cent, which is above the {KMESH_STEP * 100:.0f} "
+            "per cent this stops warning at, and the remaining error is larger "
+            "than the step rather than equal to it"
+        )
+    warnings.warn(
+        f"the piezoelectric tensor was integrated over {where} and {measured}. "
+        "Nothing inside this quantity can see that: the three routes share one "
+        "field response and the Z* anchor is the same assembly in the position "
+        "coordinate, so every internal check moves with the mesh instead of "
+        "catching it. Measure this crystal's own curve with "
+        "defumat.workflows.piezo_ladder.piezoelectric_kmesh_ladder "
+        "(Calculator.get_piezoelectric_kmesh_ladder), which reruns the ground "
+        "state and the response on a ladder of meshes and puts the last step on "
+        "the result; pass kmesh_warning=False to silence this once the mesh is "
+        "known to be enough",
+        RuntimeWarning,
+        stacklevel=3,
+    )
 
 
 # -- the refusals ------------------------------------------------------------
@@ -552,6 +650,7 @@ def constraint_strain_term(calculation, solver, weights, commutator) -> np.ndarr
 def clamped_ion_piezoelectric(
     calculation, psi, eigenvalues, weights, density, becsum, dpsi, nocc,
     solver=None, field_perturbations=None, commutators=None,
+    full_zone: bool = True,
 ) -> np.ndarray:
     """``(3, 3, 3)`` in ``e/bohr^2``: ``e[k, i, j]``, symmetrised.
 
@@ -577,6 +676,13 @@ def clamped_ion_piezoelectric(
             repair. Omit them and the assembly is the states-tangent-only one it
             has always been, which is complete for a norm-conserving dataset and
             short of all three otherwise.
+        full_zone: keep the third of those terms. **It exists to be switched
+            off in a test and for nothing else.** The completion is identically
+            zero on a run with no symmetry, so the only way to see that it is
+            doing anything is to run a wedge with it and without it, and a
+            wedge test that cannot fail is the trap ``CLAUDE.md`` calls a check
+            whose null result cannot be told from a pass. Off, the wedge and the
+            closed grid disagree by a thousand times more.
 
     **Why the augmented branch is skipped exactly and not approximately.** The
     first two extra terms are contracted with ``dS/d(eps)``, and ``S`` is the
@@ -652,6 +758,17 @@ def clamped_ion_piezoelectric(
         calculation, positions, psi, weights, density_of, becsum_of,
         states_by_axis,
     )
+    if not full_zone:
+        # The falsifier, and it is a *tangent* that is zeroed rather than a term
+        # deleted: everything else about the assembly, including the two
+        # constraint terms, stays exactly where it is, so what the pair measures
+        # is this completion and not a different calculation.
+        shifts = tuple(jnp.zeros_like(shift) for shift in shifts)
+        becsum_shifts = tuple(
+            tuple(None if offset is None else jnp.zeros_like(offset)
+                  for offset in per_axis)
+            for per_axis in becsum_shifts
+        )
 
     gradient = jax.grad(
         lambda strain, states, mult, shift, becsum_shift: energy(
@@ -1134,6 +1251,8 @@ def piezoelectric_tensor(
     verbose: bool = False,
     allow_unconverged: bool = False,
     method: str = "autodiff",
+    kmesh_warning: bool = True,
+    kmesh_drift: float | None = None,
     **response_options,
 ) -> PiezoelectricTensor:
     """The clamped-ion piezoelectric tensor of a converged insulator.
@@ -1162,9 +1281,21 @@ def piezoelectric_tensor(
             The default stays ``'autodiff'`` because it is the route that
             extends, and because the transcribed one is only as good as the
             transcription, which is why both run in the regression file.
+        kmesh_warning: warn that the Brillouin-zone sum is the one parameter
+            of this quantity no check inside it can see
+            (:func:`_warn_about_the_kmesh`). On by default, and the reason it
+            is a warning rather than a refusal is that which mesh is enough is
+            a property of the crystal.
+        kmesh_drift: the last step of a k-mesh ladder, when one was run, which
+            is what
+            :func:`~defumat.workflows.piezo_ladder.piezoelectric_kmesh_ladder`
+            passes. Below :data:`KMESH_STEP` it silences the warning; above it,
+            the warning quotes it instead of quoting AlAs.
         response_options: passed to the field response.
     """
     require_a_piezoelectric_tensor(calculation)
+    if kmesh_warning:
+        _warn_about_the_kmesh(calculation, kmesh_drift)
     if method not in PIEZOELECTRIC_METHODS:
         raise ValueError(
             f"unknown piezoelectric method {method!r}; expected one of "
@@ -1244,9 +1375,13 @@ def piezoelectric_tensor(
             solver=internals["solver"], field_perturbations=_perturbations,
             commutators=internals["commutators"],
         )
+    nk, grid = _kmesh_of(calculation)
     return PiezoelectricTensor(
         e=e,
         voigt=to_voigt(e) * E_BOHR2_TO_C_M2,
         dielectric=field,
         converged=bool(field.converged),
+        nk=nk,
+        grid=grid,
+        kmesh_drift=kmesh_drift,
     )

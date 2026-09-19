@@ -169,3 +169,78 @@ def test_the_transcribed_route_refuses_paw_and_no_longer_refuses_ultrasoft():
     # two are separate functions.
     with pytest.raises(NotImplementedError, match="ultrasoft"):
         require_a_measured_dataset(ultrasoft)
+
+
+def test_the_kmesh_guard_fires_and_says_what_the_mesh_was():
+    """The guard for the one parameter no check inside this quantity can see.
+
+    **Testing that it fires rather than that it is quiet**, which is
+    ``CLAUDE.md``'s rule and is what a guard of this kind needs: the whole
+    reason it exists is that a coarse mesh looks exactly like a converged one
+    from inside -- the three routes share a field response, the symmetry
+    statements hold on any mesh, and the ``Z*`` anchor is the same assembly in
+    another coordinate -- so nothing downstream could tell a silent guard from
+    a working one.
+
+    Three states, and the middle one is the one worth having: no ladder at all
+    warns and quotes AlAs's curve; a ladder whose last step is above
+    :data:`~defumat.response.piezo.KMESH_STEP` warns and quotes **that** number
+    instead; and a ladder below it says nothing.
+    """
+    from defumat.response.piezo import KMESH_STEP, _warn_about_the_kmesh
+
+    calculation = _calculation("alas-raman")
+    nk = calculation.system.kpoints.nk
+
+    with pytest.warns(RuntimeWarning, match="k-convergence has not been measured"):
+        _warn_about_the_kmesh(calculation, None)
+    with pytest.warns(RuntimeWarning, match=f"integrated over {nk} k-points"):
+        _warn_about_the_kmesh(calculation, None)
+    with pytest.warns(RuntimeWarning, match="moved the tensor by 5.0 per cent"):
+        _warn_about_the_kmesh(calculation, 0.05)
+
+    import warnings as _warnings
+
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("error")
+        _warn_about_the_kmesh(calculation, KMESH_STEP / 2)
+
+
+def test_the_kmesh_the_result_reports_is_the_one_that_was_integrated():
+    """``nk`` and ``grid`` come off the k-set rather than off the input file.
+
+    A run may be handed a set the input never mentioned -- a ladder rung, a
+    substituted grid, an explicit list -- and what the number was integrated
+    over is then the only honest thing to report. ``grid`` is ``None`` for a
+    list, which is not a failure: an explicit set has no divisions.
+    """
+    from defumat.response.piezo import _kmesh_of
+
+    calculation = _calculation("alas-raman")
+    nk, grid = _kmesh_of(calculation)
+    assert nk == calculation.system.kpoints.nk
+    assert grid is None or len(grid) == 3
+
+
+def test_the_ladder_refuses_an_order_that_would_read_as_a_drift():
+    """Coarsest first, because the last step *is* the result.
+
+    A ladder given its meshes the other way round would report the step from
+    the dense rung to the coarse one and call it the drift, which is a number
+    with the right magnitude and the wrong meaning -- the kind of thing nothing
+    downstream can catch. Refused at the door, with the repeats refused beside
+    it, since a repeated mesh makes a step of exactly zero and would read as
+    perfect convergence.
+    """
+    from defumat.workflows.piezo_ladder import piezoelectric_kmesh_ladder
+
+    system = build_system(read_pw_input(CASES / "alas-raman.in"))
+    pseudos = tuple(
+        read_upf(PSEUDO / sp.pseudo_file) for sp in system.structure.species
+    )
+    with pytest.raises(ValueError, match="coarsest first"):
+        piezoelectric_kmesh_ladder(system, pseudos, meshes=(6, 4))
+    with pytest.raises(ValueError, match="repeat"):
+        piezoelectric_kmesh_ladder(system, pseudos, meshes=(4, 4))
+    with pytest.raises(ValueError, match="at least one mesh"):
+        piezoelectric_kmesh_ladder(system, pseudos, meshes=())

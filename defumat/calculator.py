@@ -1046,6 +1046,25 @@ class Calculator:
                                  exclude=SCF_ONLY_OPTIONS),
         )
 
+    def get_piezoelectric_kmesh_ladder(self, **options):
+        """``e_(k)ij`` at a ladder of k-meshes, which is the check it has none of.
+
+        Every statement the piezoelectric tensor makes about itself is blind to
+        the Brillouin-zone sum -- the routes share one field response and the
+        ``Z*`` anchor is the same assembly in another coordinate -- so a
+        committed-quality mesh returned a number thirteen per cent out and said
+        nothing. This runs a fresh ground state and response per mesh and
+        reports what the last step moved. It is the whole calculation over again
+        per rung, so reach for ``method='zstar_eu'`` on an augmented dataset.
+        """
+        from defumat.workflows.piezo_ladder import piezoelectric_kmesh_ladder
+
+        return piezoelectric_kmesh_ladder(
+            self.system, self.pseudos,
+            **self._defaults_for(piezoelectric_kmesh_ladder, options,
+                                 exclude=SCF_ONLY_OPTIONS),
+        )
+
     def get_electrostriction(self, **options):
         """``d(chi)/d(strain)`` and the four electrostriction tensors."""
         from defumat.response.electrostriction import electrostriction
