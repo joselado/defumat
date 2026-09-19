@@ -3782,9 +3782,10 @@ so the *next* call at a shape already seen compiles again, and a compilation is
 a new ORC dylib with new mappings while the old ones stay loaded. That is
 `40d8fe2`'s "clearing caches does not unmap" stated the other way round: on a
 file that revisits shapes, the fixture trades a cache hit for a fresh set of
-mappings. The wall clock says that is what happened, since
-`test_electrostriction.py` went from 285 s to 1521 s, and recompilation is the
-only thing that buys. **The fixture is a memory tool** -- P28b measured it
+mappings. It stays a hypothesis: the 285 s to 1521 s is *not* evidence for it,
+because fifteen tests that fail fast on a mapping error take less wall clock
+than nineteen that run, so that comparison has no baseline either way.
+**The fixture is a memory tool** -- P28b measured it
 getting both smaller and faster on the workstation -- **being used on an
 address-space problem**, which is `CLAUDE.md`'s "inherit a refusal only after
 checking which machine it belongs to" with a cure in place of a refusal.
@@ -3950,7 +3951,7 @@ session's work:
 | `test_magnetic_constraints.py::test_constrained_total_energy[noncolin-constrain_atomic.in-atomic]` and `::test_constraint_energy_matches_qe` | `-55.690556438787105` against `-55.69055687` ± 3.0e-07, so 4.3e-7, a factor 1.4 over | 2 | 2 |
 | `test_ten_site.py::test_dft_plus_u_at_ten_sites` | the SCF stalls: **not converged after 200 iterations**, accuracy 6.9e-06 Ry, `E = -856.58298639`, `M = 5.9035 mu_B` | 1 | 1 |
 | `test_stm.py::test_an_antiferromagnet_is_flat_in_charge_and_alternates_in_spin` | `0.029525447994362755` against `0.02952503643369007` ± 3.0e-07, so 4.1e-7, a factor 1.4 over | 1 | 1 |
-| `test_stress.py::test_an_input_asking_for_an_impossible_stress_warns_rather_than_raising` | `DID NOT WARN`, `Emitted warnings: []` | 1 | 1 |
+| `test_stress.py::test_an_input_asking_for_an_impossible_stress_warns_rather_than_raising` | `DID NOT WARN`, `Emitted warnings: []` -- **repaired in `2dc42e1`** | 1 | 1 |
 | `test_lsda_response.py::test_the_polarized_dielectric_constant_reduces_to_the_unpolarized_one` | `2.708606672285896e-07 < 1e-08`, a factor 27 over | 1 | 1 |
 | `test_spinor_dielectric.py::test_a_spinor_with_no_magnetization_gives_the_scalar_dielectric_tensor` | `13.80661565177345` against `13.806615651772065` ± 1.0e-12, so 1.4e-12 on 13.8 | 1 | 1 |
 
@@ -3966,14 +3967,16 @@ autodiff path, and `forces/energy.py:229-238` says so in its own docstring, that
 the force and the stress run for `noncolin = .true.` with or without
 `lspinorb`. The node emitted **no warnings of any kind**, which is what a
 successful `compute_stress` looks like from outside. `PLAN.md` P74 recorded the
-same failure on a **workstation** worktree at `e22aa7d` (`1 failed in 16.71s`,
-same empty `Emitted warnings: []`) and concluded it was pre-existing and open;
-the part that was missing is the cause, and this is it. **So it is a stale test,
-not a cluster effect**, and the honest repair is to point it at a regime
-`require_a_differentiable_cell` still refuses, which is a spin spiral or a
-magnetic field, rather than at one P46 implemented. Until that is done, the
-statement that "every one of these tests passes on the workstation" is false for
-this one and was written without a measurement behind it.
+same failure on a **workstation** worktree at `e22aa7d`, same empty
+`Emitted warnings: []`, and concluded it was pre-existing and open; the part
+that was missing is the cause, and this is it. **Repaired in `2dc42e1`**: the
+test is about the switching-off rather than about the regime, so it now runs
+`h-chain-spiral.in`, which `require_a_differentiable_cell` still refuses by
+name, and the spinor stress stays covered by
+`test_spinor_forces.py::test_stress_matches_quantum_espresso` against `pw.x`.
+It also means the statement that "every one of these tests passes on the
+workstation" was false for this one and was written without a measurement
+behind it.
 
 **What the remaining seven look like, without naming a cause.** Five are
 tolerance misses and four of those are within a factor of 30 of their bound:

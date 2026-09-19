@@ -12934,6 +12934,16 @@ phase started, and **it fails there identically**: `1 failed in 16.71s`, same as
 same empty `Emitted warnings: []`. It is pre-existing and open, and the warning that has
 gone missing is P11's own refusal rather than anything here.
 
+**The cause was found on 2026-09-19 and the test is repaired (`2dc42e1`).** The refusal
+it was watching for is one **P46** lifted: `stress/autodiff.py:90` passes
+`spinors=True` unconditionally, so `reject_spinors` is never reached, `compute_stress`
+returns a tensor on a noncollinear cell, and the `NotImplementedError` that the warning
+branch in `scf/driver.py:6027` hangs on never fires -- which is why the emitted-warning
+list is empty rather than wrong. The test is about `tstress` switching itself off rather
+than about which regime cannot do it, so it now uses `h-chain-spiral.in`, a regime
+`require_a_differentiable_cell` still refuses by name, and the spinor stress stays
+covered by `test_spinor_forces.py::test_stress_matches_quantum_espresso` against `pw.x`.
+
 **The other two are `test_spinorbit.py::test_kramers_degeneracy_survives_spin_orbit`, and
 they are not a spin-orbit defect at all — they are the empty-band threshold of the P10
 continuation above (2026-09-08), seen from a test written before it existed.** The bound
