@@ -3958,13 +3958,24 @@ per cent** norm-conserving and **15.05 per cent** ultrasoft, a difference of
 yet, because essentially all of the 13.41 is k-convergence and two datasets at
 `ecutwfc` 10 and 25 need not converge at the same rate, so 1.65 is a dataset
 effect plus a difference of mesh errors with nothing separating them. Closing it
-needs the ultrasoft response at `6 6 6`, which is **385 GiB** on the measured
-scaling of 1.6 GiB a k-point (139.6 GiB at 64 points against 49.4 at 8, both
-whole-job `MaxRSS`), so it is a whole 510 G node. `k_batch = 1` is worth 11 per
-cent of the peak and nothing in the answer, which is bit-identical, so the dial
-is not the way out; the cheap route is
-`piezoelectric_zstar_eu_style`, the transcribed contraction that costs no extra
-memory, which `piezoelectric_tensor` currently offers no way to ask for. Third, the refusal *text* in `response/piezo.py:273` still
+needs the ultrasoft response at `6 6 6`, which is above the **139.6 GiB** the
+same route takes at 64 points by an amount nothing on record gives -- the only
+other ultrasoft peak, 49.4 GiB at 8 points, is from a job with a different task
+list and different symmetry, so the two do not make a slope. `k_batch = 1` is
+worth 11 per cent and nothing in the answer, and the reason is structural:
+`forces/energy.py:energy_at` does not go through `map_k` or `sum_k`, so the dial
+never reaches the function being differentiated and the eleven per cent is the
+SCF and the field response underneath.
+
+**The cheap route was tried and it is norm-conserving only.**
+`piezoelectric_zstar_eu_style` reads +0.830702 on that cell at those 64 points
+against +0.815802, 1.8 per cent, where the two agree to 6.2e-15 on the
+calibration cell, because `zstar_eu.f90:90` hands an augmented dataset to
+`zstar_eu_us.f90` and this transcription stops at the first file. It is refused
+by name now. **So what is left is a memory problem rather than a physics one**:
+make the taped route cheaper, and the untested lever is a `lax.scan` over k with
+a rematted body, which is P73's own fix for the augmentation table, measurable
+with `memory_analysis()` for nothing. Third, the refusal *text* in `response/piezo.py:273` still
 names `response/strain.py` as refusing the same datasets, which P41 measured to
 be untrue, and keeping the refusal is not a reason to keep the wrong cause in
 its message.

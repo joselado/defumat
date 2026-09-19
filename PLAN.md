@@ -8227,10 +8227,26 @@ attributable, because essentially all of the norm-conserving cell's 13.41 is
 k-convergence and two datasets at `ecutwfc` 10 and 25 need not converge at the
 same rate. So the dataset refusal **stays**, and it now stays for a narrow
 measured reason rather than the stale one `AUDIT-2026-09-18.md` `drift.3`
-found. What would settle it is the ultrasoft response at `6 6 6`, and that is
-**385 GiB** on the measured scaling of 1.6 GiB a k-point (139.6 GiB at 64
-points against 49.4 at 8), where `k_batch = 1` is worth 11 per cent of the peak,
-nothing in time and nothing in the answer.
+found. What would settle it is the ultrasoft response at `6 6 6`, and that is above
+the **139.6 GiB** the same route takes at 64 points by an amount nothing on
+record gives, since the only other ultrasoft peak was measured on a job with a
+different task list. `k_batch = 1` is worth 11 per cent of it, nothing in time
+and nothing in the answer, and the reason is structural: `energy_at` does not
+go through `map_k` or `sum_k`, so the dial never reaches the function being
+differentiated.
+
+**The cheap route cannot stand in, and finding that out is the other result of
+the day.** `piezoelectric_zstar_eu_style` reads **+0.830702** on that cell at
+those 64 points against **+0.815802**, **1.8 per cent**, where the two agree to
+6.2e-15 on the calibration cell. `zstar_eu.f90:90` is
+`if (okvan) call zstar_eu_us` and this transcription stops at the first file,
+which is the same hole `born_charges_zstar_eu` already documents one coordinate
+over (+0.1625 on ultrasoft silicon against `ph.x`'s -0.07945). Which of the two
+is right is measured rather than argued, since the differentiated assembly run
+in the *position* coordinate is the Born charge and that matches `ph.x` on
+ultrasoft AlAs to every printed digit. It is refused by name now
+(`require_a_norm_conserving_transcription`), kept separate from the dataset
+refusal so that lifting one does not lift the other.
 
 **Two traps in that comparison, both checked rather than argued.** The two
 committed AlAs cells are **enantiomorphs**, so their `e_14` have opposite signs

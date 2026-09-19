@@ -4054,24 +4054,36 @@ falls from 139.6 to 124.2 GiB, **11 per cent**. So the dial reaches about a
 tenth of this quantity's peak at eight times the k-count the original 4.2 GB
 measurement used, and nine tenths of it is something the k axis does not touch.
 
-**What the other nine tenths is has not been measured** and the arithmetic says
-it is per-k all the same: 90.2 GiB between 8 points and 64 is **1.6 GiB a
-k-point**, which is far too large for `f_l(|k+G|)` or for the states. The
-reading that fits both facts is that the *tape* grows with `nk` while the dial
-cannot shrink it, because a `lax.map` or `lax.scan` body **stacks its residuals
-under `jax.grad`** -- P73's own lesson about the augmentation table, and the
-reason both of its scan bodies are rematted. If that is right, `jax.remat` on
-the per-k body is the lever and `k_batch` never was. **It is a hypothesis and
-the instrument for it costs nothing**:
-`jit(...).lower(...).compile().memory_analysis()` at two k-counts allocates not
-one byte and says what the tape holds, which is what P73 used.
+**What the other nine tenths is has not been measured, and the subtraction I
+first reached for is not allowed.** Taking 139.6 GiB at 64 points against 49.4
+at 8 gives "1.6 GiB a k-point", and the two are not comparable: the 8-point job
+ran the Berry difference as well as the response and kept the crystal's
+symmetry, the 64-point one ran `--skip-difference` on a `nosym` grid. Different
+task lists and different symmetry, so the difference is not a slope. **There is
+no clean k-scaling for the ultrasoft response on record**, only the one point.
 
-**The practical consequence.** `6 6 6` on the ultrasoft cell projects to **385
-GiB**, a whole 510 G node, and `k_batch` takes it to about 345. The cheap way to
-the same number is the transcribed route, `piezoelectric_zstar_eu_style`, which
-the section above measures at 4.0 s and **no extra memory at all** -- and
-`piezoelectric_tensor` currently offers no argument that reaches it, which is a
-gap rather than a decision.
+What *is* clean is why `k_batch` cannot help, and it is structural rather than
+arithmetic: `forces/energy.py:energy_at`, which is the function being
+differentiated, does not go through `map_k` or `sum_k` at all, so the dial never
+reaches it and the eleven per cent that moved is the SCF and the field response
+underneath. The tape therefore holds the whole k axis by construction. Whether
+shrinking it is a `lax.scan` with a rematted body -- P73's lesson about the
+augmentation table, and the reason both of its scan bodies are rematted -- is
+untested, and the instrument for it costs nothing:
+`jit(...).lower(...).compile().memory_analysis()` allocates not one byte and
+says what the tape holds, which is what P73 used.
+
+**The practical consequence, and the escape that turned out not to be one.**
+`6 6 6` on the ultrasoft cell is somewhere above 139.6 GiB and nothing on record
+says how far, `k_batch` is worth eleven per cent, and the obvious cheap way out
+was the transcribed route, which this section measures at 4.0 s and no extra
+memory at all. It is **norm-conserving only**: measured on that cell at 64
+points it reads +0.830702 C/m^2 against the differentiated route's +0.815802,
+1.8 per cent apart, because `zstar_eu.f90` hands an augmented dataset to
+`zstar_eu_us.f90` and the transcription stops at the first file
+(`require_a_norm_conserving_transcription`). So the ultrasoft ladder needs the
+taped route made cheaper rather than a cheaper route, and that is the `lax.scan`
+question above.
 
 **The Berry-phase route is the opposite shape: nothing in memory and everything
 in mappings.** Every rung of the same ladder peaked between **1.7 and 3.8 GiB**,
