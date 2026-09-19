@@ -336,17 +336,18 @@ def test_the_ultrasoft_refusal_names_the_term_and_not_the_pseudopotentials(
     This builds the case, checks it really is what the old claim denied
     existed, and checks the refusal names a real obstacle.
 
-    **The words it pins changed on 2026-09-19 and the reason is worth keeping.**
-    It used to require ``Q_ij`` and ``dbecsum``, because the refusal blamed a
-    missing strain term in ``response/strain.py``. P41 put that term there and
-    pins it at 4.6e-4, so the message was naming a blocker that did not exist
-    (``AUDIT-2026-09-18.md`` ``drift.3``). What the refusal names now is the
-    constraint terms that appear because ``S`` *does* deform under a strain --
-    through ``vkb``, whatever ``q_ij`` does -- and the measurement that has not
-    been made. So the assertion is on the obstacle being real rather than on a
-    particular spelling, plus the two things the old text got wrong: it must not
-    send a reader looking for a pseudopotential, and it must name the committed
-    case.
+    **The words it pins changed twice and both reasons are worth keeping.** On
+    2026-09-19 it stopped blaming a missing strain term in
+    ``response/strain.py``, which P41 had written and ``test_electrostriction``
+    pins at 4.6e-4 (``AUDIT-2026-09-18.md`` ``drift.3``). On 2026-09-20 the
+    ultrasoft half of the refusal was **lifted**: the ladder put this quantity
+    0.57 per cent from a Berry-phase finite difference at ``10 10 10`` against
+    the norm-conserving calibration's 1.19 on the same mesh, so what is left is
+    a condition on the **mesh** and not on the dataset. This cell carries
+    ``4 4 4``, which is below it, so it still raises -- and what the message has
+    to do now is say which of the two it is, since a reader who reads "ultrasoft"
+    and stops will change their pseudopotentials when what they need is a denser
+    grid.
     """
     from defumat.response.piezo import require_a_measured_dataset
 
@@ -371,9 +372,26 @@ def test_the_ultrasoft_refusal_names_the_term_and_not_the_pseudopotentials(
     with pytest.raises(NotImplementedError) as raised:
         require_a_measured_dataset(calculation)
     message = str(raised.value)
-    # The committed case is named, and the reader is not sent to find a dataset.
-    assert "alas-piezo.in" in message
+    # The reader is not sent to find a pseudopotential, which is what the
+    # original text did, and not to write a term that already exists either.
     assert "centrosymmetric" not in message
-    # And the obstacle is the measurement rather than a term that already exists.
-    assert "measurement" in message
     assert "response/strain.py refuses" not in message
+    # What blocks *this* run is the mesh, and the message says so with the
+    # number that lifted the dataset half and the two ways past it.
+    assert "denser" in message and "k-mesh" in message
+    assert "8 divisions" in message or "8 8 8" in message
+    assert "piezoelectric_kmesh_ladder" in message
+
+    # And the same cell on a mesh where the dataset *was* measured is allowed,
+    # which is the half of this that a refusal test usually leaves out. The
+    # k-set is substituted rather than rebuilt, because what the guard reads is
+    # the grid.
+    import dataclasses
+
+    from defumat.system.kpoints import KPoints, for_spin
+
+    dense = dataclasses.replace(system, kpoints=for_spin(KPoints.automatic(
+        (8, 8, 8), (0, 0, 0), system.cell,
+        rotations=system.symmetry_group().rotation_array(),
+    ), system.nspin))
+    require_a_measured_dataset(Calculation(dense, pseudos))

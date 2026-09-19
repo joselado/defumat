@@ -383,8 +383,14 @@ def main() -> None:
     # repository still refuses until there is a number to lift it with.
     measured = arguments.case == "us"
     if measured:
-        piezo.require_a_measured_dataset = lambda calculation: None
-        print("    the dataset refusal is lifted for this run only", flush=True)
+        # ``*args, **kwargs``: the refusal grew a drift and a coarse-mesh
+        # exemption on 2026-09-20, when its ultrasoft half was lifted above
+        # eight divisions. What is still patched out is the *coarse* rungs of
+        # this ladder, which the package refuses precisely because nobody had
+        # measured them -- and measuring them is what this script is.
+        piezo.require_a_measured_dataset = lambda *args, **kwargs: None
+        print("    the dataset refusal is lifted for this run only, which now "
+              "matters for the rungs below 8 divisions alone", flush=True)
         if arguments.method == "zstar_eu":
             # **Nothing is lifted here any more, and the branch is kept to say
             # so.** That second refusal is now PAW's alone: this route was 1.8
