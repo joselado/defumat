@@ -4308,19 +4308,29 @@ and none failed**, 3 in `test_piezoelectric_augmented.py` at 335.97 s, 1 in
 (`/usr/bin/time`'s `ru_maxrss`, and `sacct` agrees at 10.6, 8.1 and 5.2). The
 JAX underneath is 0.11.1 and NumPy 2.5.2 against this workstation's 0.11.0 and
 2.4.6, which is the pair that moved eight other assertions by 1e-12 to 1e-7,
-and it moves none of these: the tightest thing asserted here is a relative
-1e-06 between two routes evaluated in the same process, and the only number
-quoted across machines is the closed-grid `e_14` of 1.474377366 at an absolute
-1e-04.
+and it moves none of these past a bound. Every tolerance tighter than 1e-07 in
+the three files compares two things computed in the **same** process, which an
+environment shifts together: 1e-12 between the transcribed and the
+differentiated tensor, a relative 1e-06 between the two routes on a wedge, and
+1e-10 on the components symmetry forbids. What is quoted across machines is
+quoted loosely, and there are four of them: the closed-grid `e_14` of
+1.474377366 at an absolute 1e-04, the screened term's -0.0227272 at a relative
+1e-03, `ph.x`'s `Z*` of (1.92461, -3.18098) at 5e-04 and `epsilon` of 12.9674 at
+1e-03. So what this array establishes is that the assertions hold on the node;
+it is **not** a digit-for-digit comparison of the two machines, which nothing
+here has taken.
 
 **The split into three files was not optional and the peaks say so.** The
 augmented file alone resides 10.5 GiB against `tools/run_regression.sh`'s 12 GiB
 cap, so a second augmented cell in the same process has 1.5 GiB to live in,
 which is the killed run the wedge file's own docstring describes. Cold, the
 three cost 5m36, 3m19 and 9m23 against the workstation's warm 5m24, 1m55 and
-5m00: the wedge file is 1.7 times and the third 1.9 times the warm figure, and
-that difference is the compilation the on-disk cache was serving, which is the
-reason a first call is never timed here. The in-process watchdog was off for the
+5m00, a pair of numbers and not a cache cost: the machine and the cache state
+both change between them and neither is isolated, and the shape of the three
+argues against compilation as the explanation, since the file with the most to
+compile is the one that barely moves, 5m36 against 5m24, while the two lighter
+ones read 1.7 and 1.9 times. Isolating it needs a warm rerun on `milan3`, which
+is one resubmission and has not been taken. The in-process watchdog was off for the
 whole array, because `psutil` is not importable in the cluster venv and
 `conftest.py` says so at collection time rather than silently, so the peaks
 above come from `/usr/bin/time` around pytest and not from the watchdog, and no

@@ -68,8 +68,12 @@ export DEFUMAT_CACHE_DIR=off
 # -- but it is set anyway, because a test that silently skips is what a cluster
 # run exists to avoid and the cost of pointing at a directory is nothing.
 export DEFUMAT_QE_ROOT=/scratch/work/ladovj1/apps/qe-7.5-reference
-# Under the Slurm cap, so the in-process watchdog names the test before the
-# kernel acts on the 32 G.
+# Under the Slurm cap, so that the in-process watchdog names the test before the
+# kernel acts on the 32 G. **It did not fire on `20345288` and it will not fire
+# here at all**: `psutil` is not importable in this venv, so `conftest.py` warns
+# at collection time and switches the watchdog off, and the `peak=` figure on
+# the summary line comes from `/usr/bin/time` around pytest instead, which is a
+# number for the file and not a name for the test that held it.
 export DEFUMAT_TEST_MEM_MAX=28G
 
 FILES=(tests/regression/test_piezoelectric_augmented.py
