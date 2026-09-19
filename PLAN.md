@@ -8165,35 +8165,54 @@ response solver's floor, against AlAs's 0.764 from the same code); AlAs is
 completion because this assembly is *linear* in the response, where P35's
 screening term is quadratic; and the three routes above.
 
-**A fourth route, which shares no machinery with the other three, and it
-disagrees by 13 per cent** (measured on Triton 2026-09-19, jobs `20336374` and
-`20336476`; `tools/cluster/piezo_measure.py`). The three routes above all
-contract the same field response `dpsi^E` with the same strain derivative, so
-none of them sees an error in either leg, and the `Z*` anchor is the same
-assembly in the *position* coordinate, so it is blind to the strain leg
-specifically. Elk's route is not: one converged ground state per strain and a
-finite difference of the Berry-phase polarization, with no response solver
-anywhere in it. On this cell, with strings of 11 points over a 6x6 transverse
-mesh and `eps_4 = 2 s` from a shear `E[1,2] = E[2,1] = s`:
+**A fourth route, which shares no machinery with the other three, and it says
+the `e_14` above is not converged in `k`** (measured on Triton 2026-09-19, jobs
+`20336374`, `20336476` and the ladder `20337789`;
+`tools/cluster/piezo_measure.py`). The three routes above all contract the same
+field response `dpsi^E` with the same strain derivative, so none of them sees an
+error in either leg, and the `Z*` anchor is the same assembly in the *position*
+coordinate, so it is blind to the strain leg specifically. Elk's route is not:
+one converged ground state per strain and a finite difference of the
+Berry-phase polarization, with no response solver anywhere in it. Run against
+each other on a two-sided ladder, at `eps_4 = 2 s` from a shear
+`E[1,2] = E[2,1] = s = 0.005`:
 
-| route | AlAs `e_14`, C/m^2 |
-|---|---|
-| the implementation, `jvp` of the stress | **-0.763786** |
-| Berry phase, `eps_4 = 0.005` | -0.661386 |
-| Berry phase, `eps_4 = 0.010` | -0.659319 |
+| route | dial | AlAs `e_14`, C/m^2 |
+|---|---|---|
+| the implementation, `jvp` of the stress | SCF `4 4 4`, 64 points, the committed mesh | **-0.763786** |
+| the implementation | SCF `6 6 6`, 216 points | **-0.687475** |
+| the implementation | SCF `8 8 8`, 512 points | **-0.672897** |
+| Berry phase, one ground state per strain | strings of 7 over 4x4 | -0.657498 |
+| Berry phase | strings of 11 over 6x6 | -0.661386 |
+| Berry phase | strings of 15 over 6x6 | -0.659792 |
+| Berry phase | strings of 11 over 6x6, ground state `6 6 6` | -0.661964 |
 
-The finite difference is **13.4 per cent** low in magnitude and the step is not
-the cause: doubling it moves the answer by 0.3 per cent, and *away* from the
-response route. The same comparison on the ultrasoft cell (`alas-piezo.in`,
-strings of 7 over 4x4) reads +0.815929 against +0.687757, 15.7 per cent, in the
-same direction, so whatever this is, it is not the augmented dataset -- which is
-why the piezoelectric tensor's dataset refusal **stays**, and now stays for a
-measured reason rather than the stale one `AUDIT-2026-09-18.md` `drift.3` found.
-The untested difference between the two routes is how they sample `k`: the
-response integrates the SCF's `4 4 4 0 0 0`, 64 points, while the Berry phase
-runs 396 string points. The ladder that separates them is two-sided -- the
-response at several SCF meshes and the difference at several Berry meshes -- and
-it has not been run.
+**The response route is the one that moves.** It travels 0.091 between the
+committed mesh and `8 8 8`, twelve per cent of itself and all of it toward the
+Berry value, taking the disagreement from 13.4 to 3.7 to 1.6 per cent, while
+the Berry value stays inside 0.0045, or 0.7 per cent, across every dial it has.
+The cleanest single comparison is the pair that shares a ground state: the
+`6 6 6` response rung and the `6 6 6` Berry rung ran the same SCF, to
+-16.89293132223534 Ry in every printed digit, and going from `4 4 4` to `6 6 6`
+moved the Berry `e_14` by 0.0006 and the response `e_14` by 0.076, a factor of
+130. **So the density is converged at the mesh the input asks for and the
+k-integration inside the response solve is not**, which is a statement about
+this quantity rather than about the Sternheimer stack in general: `e_14` is the
+mixed derivative of an energy that is already stationary in the density, so what
+survives is a Brillouin-zone sum with no variational protection at all. The step
+size is not involved: doubling the shear moves the Berry value by 0.3 per cent.
+No extrapolation of the remaining 1.6 per cent is offered, because three points
+on a moving series cannot say whether it reaches zero or stops near one per
+cent.
+
+The **ultrasoft** cell (`alas-piezo.in`, strings of 7 over 4x4) read +0.815929
+against +0.687757, 15.7 per cent, in the same direction, and it was taken at
+the same committed `4 4 4` mesh, so it measures the same k-error and says
+nothing yet about the augmented dataset. That is why the dataset refusal
+**stays**, and it now stays for a narrow measured reason rather than the stale
+one `AUDIT-2026-09-18.md` `drift.3` found: the comparison that would settle it
+is the ultrasoft response at a converged mesh, which costs 49.4 GiB at 64
+points and scales close to linearly in `nk`.
 
 **Two traps in that comparison, both checked rather than argued.** The two
 committed AlAs cells are **enantiomorphs**, so their `e_14` have opposite signs

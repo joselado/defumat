@@ -2672,6 +2672,39 @@ perturbation --- agree to \textbf{6.2e-15} and \textbf{1.3e-7}. What anchors
 the sign and the normalisation is that the \emph{same} assembly run in the
 position coordinate is the Born charge, and that is \code{ph.x}'s number.
 
+\textbf{All four of those statements are blind to the $k$-mesh, and the
+$k$-mesh is worth thirteen per cent.} The three routes contract the same field
+response, and the $Z^\ast$ anchor is the same assembly in the position
+coordinate, so none of them can see the Brillouin-zone sum this quantity is.
+Measured against Elk's route on the same AlAs cell, one converged ground state
+per strain and a finite difference of the Berry-phase polarization, which
+shares no machinery with any of the above:
+
+\begin{center}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+$e_{14}$, C/m$^2$ & \code{4 4 4} & \code{6 6 6} & \code{8 8 8} \\
+\midrule
+this code, a \code{jvp} of the stress & $-0.763786$ & $-0.687475$ & $-0.672897$ \\
+Berry-phase finite difference        & $-0.661386$ & $-0.661964$ & \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The $-0.7638$ printed above is the \code{4 4 4} of the committed input, and it
+is thirteen per cent from where the calculation is going; the Berry-phase value
+stays inside 0.7 per cent over four string meshes and two ground states, so it
+is the response route that is unconverged rather than the reference. The reason
+is that $e_{14}$ is a mixed derivative of an energy that is already stationary
+in the density, so what is left is a zone sum with no variational protection,
+and it needs a denser mesh than the ground state does: the \code{6 6 6} and
+\code{4 4 4} rows above share one SCF, to $-16.89293132223534$~Ry in every
+printed digit, and that same change of mesh moves the Berry value by $0.0006$
+and this code's value by $0.076$. \textbf{Converge the mesh on this quantity
+rather than on the total energy}, and note that nothing in the code warns when
+you have not.
+
+
 \begin{refuses}
 \textbf{Refuses.} \textbf{Clamped-ion} --- the atoms are carried by the strain
 and do not relax, which is also what Elk's task computes; the internal-strain
@@ -2688,7 +2721,11 @@ than a missing term: nothing in the assembly is norm-conserving and the
 displacement leg of it is the Born charge, which is now validated on a
 \emph{polar} ultrasoft crystal as well (\code{alas-epsilon-us.in}, $2.101065$
 and $-2.165827$ against \code{ph.x}'s $2.10106$ and $-2.16581$), so what is
-left refused is the \emph{strain} leg alone. Beyond that: insulators, \code{nspin = 1}, and
+left refused is the \emph{strain} leg alone. The one run taken on an ultrasoft
+cell so far does not lift it: \code{alas-piezo.in} gave $+0.815929$ against a
+Berry-phase finite difference's $+0.687757$, but that is the same \code{4 4 4}
+mesh at which the norm-conserving calibration cell is itself thirteen per cent
+out, so it measures the $k$-convergence above rather than the dataset. Beyond that: insulators, \code{nspin = 1}, and
 everything the Sternheimer regime and the differentiable cell refuse (a metal, a
 spin spiral, a magnetic field, a shifted grid run with \code{nosym}).
 \end{refuses}

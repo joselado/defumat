@@ -256,32 +256,52 @@ def require_a_measured_dataset(calculation) -> None:
     sentence would have gone looking for a pseudopotential; the case exists and
     ``tests/data/qe/alas-piezo.in`` is now the nonmagnetic version of it.
 
-    **What actually blocks it is one term.** The strain leg goes through
-    :func:`~defumat.response.strain.strain_response`, and that refuses ultrasoft
-    and PAW for a reason of its own: the augmentation charge ``Q_ij(r)`` is a
-    function of the *cell*, so ``dbecsum`` acquires a strain term beside the one
-    the ``jvp`` gives. The displacement leg (the Born charge) has no such term,
-    which is why it is validated on all three dataset kinds and this is not.
+    **What blocks it is a missing measurement, not a missing term.** An earlier
+    form of this docstring, and of the message below, said that the strain leg
+    goes through :func:`~defumat.response.strain.strain_response` and that
+    *that* refuses ultrasoft and PAW because ``Q_ij(r)`` is a function of the
+    cell. It does not: P41 lifted that refusal, ``overlap_derivatives`` and
+    ``density_of_strained_states`` are the term, and
+    ``test_electrostriction.py`` pins them against a central difference of the
+    converged density at 4.6e-4 (ultrasoft) and 4.7e-4 (PAW) beside a
+    norm-conserving control at 1.9e-4. Sending a reader to write a term that has
+    existed since P41 is wasted work, which is why the cause is corrected here
+    while the refusal stays.
 
-    And a plausible argument about the strain coordinate is exactly what P44
-    falsified by measurement on the third derivative: two of its ingredients
-    transferred, the residue did not, and it was localised only because it could
-    be measured. So this is refused by name rather than run, and lifting it is
-    the ``Q_ij`` strain term and then the tests that already exist, on the cell
-    that is now committed.
+    **What stays true is that the quantity has never been measured on an
+    augmented dataset.** Whether *this* assembly, a ``jvp`` of the stress rather
+    than of the density, needs anything beyond what ``strain_response`` already
+    carries is a separate question, and a plausible argument about the strain
+    coordinate is exactly what P44 falsified by measurement on the third
+    derivative: two of its ingredients transferred, the residue did not, and it
+    was localised only because it could be measured.
+
+    The one attempt so far does not count (Triton `20336374`, 2026-09-19):
+    ``tests/data/qe/alas-piezo.in`` gave ``e_14 = +0.815929`` against a
+    Berry-phase finite difference's ``+0.687757``, 15.7 per cent, but the same
+    comparison on the norm-conserving calibration cell is 13.4 per cent out at
+    the same ``4 4 4`` mesh and falls to 1.6 per cent at ``8 8 8``, so that
+    number measures this quantity's own k-convergence and not the dataset (see
+    ``PLAN.md`` P50). Lifting the refusal is the ultrasoft tensor at a converged
+    mesh against a Berry-phase value on the same cell, and the cell is
+    committed.
     """
     if calculation.is_ultrasoft:
         raise NotImplementedError(
             "the piezoelectric tensor is not implemented for an ultrasoft or "
-            "PAW dataset. Nothing in *this* assembly is norm-conserving and the "
+            "PAW dataset, and what is missing is the measurement rather than a "
+            "term. Nothing in this assembly is norm-conserving, the "
             "displacement leg of it (the Born charge) is validated on all three "
-            "dataset kinds; what is missing is one term in the strain leg, "
-            "which response/strain.py refuses for the same reason -- the "
-            "augmentation charge Q_ij(r) is a function of the cell, so dbecsum "
-            "acquires a strain term of its own beside the one the jvp gives. "
-            "The case to measure it on is committed "
-            "(tests/data/qe/alas-piezo.in, zincblende AlAs); it is the term "
-            "that is not. Use a norm-conserving dataset"
+            "dataset kinds, and response/strain.py carries the Q_ij(r) strain "
+            "term for ultrasoft and PAW since P41 -- so there is nothing to "
+            "write before running it. What is not known is whether this "
+            "assembly needs anything beyond that, and the one run so far was "
+            "taken at a k-mesh where the norm-conserving calibration cell is "
+            "itself 13 per cent from a Berry-phase finite difference, so it "
+            "says nothing. The case is committed "
+            "(tests/data/qe/alas-piezo.in, zincblende AlAs) and so is the "
+            "calibration (alas-raman.in); use a norm-conserving dataset until "
+            "the pair has been run at a converged mesh"
         )
 
 
