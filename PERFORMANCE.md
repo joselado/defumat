@@ -4030,6 +4030,8 @@ sizing of this quantity above one k-mesh:
 | `8 8 8` | 512 | **28.3 GiB** | 240 s | `20337789_1` |
 | `10 10 10` | 1000 | **46.6 GiB** | 393 s | `20338160_0` |
 | ultrasoft PBE, `ecutrho = 200`, the *reduced* `4 4 4` | 8 | **49.4 GiB** | 810 s | `20336374_1` |
+| the same, `nosym`, the **whole** `4 4 4` | 64 | **139.6 GiB** | 451 s | `20338380_0` |
+| the same again at `k_batch = 1` | 64 | **124.2 GiB** | 451 s | `20338380_1` |
 
 **The whole-job peak is close to affine in `nk`, with a slope of about 40 MB a
 k-point**: 14.5 GiB over 296 points from `6 6 6` to `8 8 8`, 18.3 GiB over 488
@@ -4043,22 +4045,33 @@ well. So the 40 MB a k-point is an upper bound on what the *tensor* costs per
 point, and the fact that 4.2 GB over 64 points is 65 MB a point is a coincidence
 of the same order rather than a measurement of the same thing.
 
-**With that said, there is a real question here and it is worth stating.** The
-paragraph above says the peak does not move with `k_batch` because "what the
-tape holds is not the k axis", and that was measured at one k-count. But
-`f_l(|k+G|)` *is* per-k and it is rebuilt inside the differentiated function, so
-a tape that grows with `nk` is the thing to expect; and `k_batch` would not
-shrink it in any case, because a `lax.map` or `lax.scan` body **stacks its
-residuals under `jax.grad`**, which is exactly P73's lesson about the
-augmentation table and the reason both of its scan bodies are rematted. If that
-is right the dial cannot help and `jax.remat` on the per-k body can. **It is a
-hypothesis.** `tools/cluster/piezo_us.sbatch` runs the ultrasoft cell at 64
-points with and without `k_batch = 1`, which will say whether the peak moves at
-all -- though it sets the dial on the *Calculator*, so it reaches the SCF and
-the field response too, and a peak that moves will need
-`jit(...).lower(...).compile().memory_analysis()` at the two shapes, P73's own
-instrument, to say which of the three it was. The docstring keeps its 64-point
-statement until then.
+**The `k_batch` question is now answered, and the docstring above was right.**
+The A/B is the last two rows: the same ultrasoft calculation at 64 points, once
+at the platform default and once at `k_batch = 1`, which is the smallest working
+set the dial offers. The answer is **bit-identical**
+(`+0.8158018945912577` both), the wall clock is **451 s both**, and the peak
+falls from 139.6 to 124.2 GiB, **11 per cent**. So the dial reaches about a
+tenth of this quantity's peak at eight times the k-count the original 4.2 GB
+measurement used, and nine tenths of it is something the k axis does not touch.
+
+**What the other nine tenths is has not been measured** and the arithmetic says
+it is per-k all the same: 90.2 GiB between 8 points and 64 is **1.6 GiB a
+k-point**, which is far too large for `f_l(|k+G|)` or for the states. The
+reading that fits both facts is that the *tape* grows with `nk` while the dial
+cannot shrink it, because a `lax.map` or `lax.scan` body **stacks its residuals
+under `jax.grad`** -- P73's own lesson about the augmentation table, and the
+reason both of its scan bodies are rematted. If that is right, `jax.remat` on
+the per-k body is the lever and `k_batch` never was. **It is a hypothesis and
+the instrument for it costs nothing**:
+`jit(...).lower(...).compile().memory_analysis()` at two k-counts allocates not
+one byte and says what the tape holds, which is what P73 used.
+
+**The practical consequence.** `6 6 6` on the ultrasoft cell projects to **385
+GiB**, a whole 510 G node, and `k_batch` takes it to about 345. The cheap way to
+the same number is the transcribed route, `piezoelectric_zstar_eu_style`, which
+the section above measures at 4.0 s and **no extra memory at all** -- and
+`piezoelectric_tensor` currently offers no argument that reaches it, which is a
+gap rather than a decision.
 
 **The Berry-phase route is the opposite shape: nothing in memory and everything
 in mappings.** Every rung of the same ladder peaked between **1.7 and 3.8 GiB**,

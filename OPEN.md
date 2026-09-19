@@ -3950,13 +3950,21 @@ the eight regression tests would catch a repeat.
 `e_14` is still 1.6 per cent from the Berry value at `8 8 8` and still moving,
 and nothing says whether that reaches zero; one rung, `nc --kmesh 10
 --skip-difference`, would say, and rung 1 of the ladder took four minutes.
-Second, the **ultrasoft and PAW refusal stays**, because the 15.7 per cent
-deficit measured on `alas-piezo.in` was taken at the same committed `4 4 4`
-mesh, so it measures this k-error and not the dataset; what closes it is the
-ultrasoft response at a converged mesh, and that costs 49.4 GiB at 64 points
-(`20336374_1`) and scales close to linearly in `nk`, so `6 6 6` needs either a
-bigger node than the 120 G already used or a `k_batch` that reaches the
-Sternheimer solve. Third, the refusal *text* in `response/piezo.py:273` still
+Second, the **ultrasoft and PAW refusal stays**. Both cells have now been
+measured at the *same* two meshes (`20338380`, `20338430`): at the committed
+`4 4 4` response mesh and 11 Berry strings over 6x6, the deficits are **13.41
+per cent** norm-conserving and **15.05 per cent** ultrasoft, a difference of
+**1.65 points**. That is the number the entry wanted and it is not attributable
+yet, because essentially all of the 13.41 is k-convergence and two datasets at
+`ecutwfc` 10 and 25 need not converge at the same rate, so 1.65 is a dataset
+effect plus a difference of mesh errors with nothing separating them. Closing it
+needs the ultrasoft response at `6 6 6`, which is **385 GiB** on the measured
+scaling of 1.6 GiB a k-point (139.6 GiB at 64 points against 49.4 at 8, both
+whole-job `MaxRSS`), so it is a whole 510 G node. `k_batch = 1` is worth 11 per
+cent of the peak and nothing in the answer, which is bit-identical, so the dial
+is not the way out; the cheap route is
+`piezoelectric_zstar_eu_style`, the transcribed contraction that costs no extra
+memory, which `piezoelectric_tensor` currently offers no way to ask for. Third, the refusal *text* in `response/piezo.py:273` still
 names `response/strain.py` as refusing the same datasets, which P41 measured to
 be untrue, and keeping the refusal is not a reason to keep the wrong cause in
 its message.

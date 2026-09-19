@@ -8211,14 +8211,26 @@ No extrapolation of the remaining 1.6 per cent is offered, because three points
 on a moving series cannot say whether it reaches zero or stops near one per
 cent.
 
-The **ultrasoft** cell (`alas-piezo.in`, strings of 7 over 4x4) read +0.815929
-against +0.687757, 15.7 per cent, in the same direction, and it was taken at
-the same committed `4 4 4` mesh, so it measures the same k-error and says
-nothing yet about the augmented dataset. That is why the dataset refusal
-**stays**, and it now stays for a narrow measured reason rather than the stale
-one `AUDIT-2026-09-18.md` `drift.3` found: the comparison that would settle it
-is the ultrasoft response at a converged mesh, which costs 49.4 GiB at 64
-points and scales close to linearly in `nk`.
+The **ultrasoft** cell was then put on the same footing, with the point group
+dropped so that its mesh could be moved at all (`20338380`, `20338430`). Its
+response route reads **+0.815802** on the whole 64-point grid against +0.815929
+on the input's reduced 8, so the symmetry reduction was sound to 0.016 per cent,
+and its Berry value is as stable as the other cell's: +0.687757, +0.690046,
++0.690961 and **+0.692986** at 7, 11 and 15 strings over 4x4 and 11 over 6x6,
+a spread of 0.8 per cent. At the *same* two meshes as the calibration cell, the
+committed `4 4 4` and 11 strings over 6x6, the deficits are **13.41 per cent**
+(norm-conserving) and **15.05 per cent** (ultrasoft), a difference of **1.65
+points**.
+
+That 1.65 is the number the whole exercise was after and it is still not
+attributable, because essentially all of the norm-conserving cell's 13.41 is
+k-convergence and two datasets at `ecutwfc` 10 and 25 need not converge at the
+same rate. So the dataset refusal **stays**, and it now stays for a narrow
+measured reason rather than the stale one `AUDIT-2026-09-18.md` `drift.3`
+found. What would settle it is the ultrasoft response at `6 6 6`, and that is
+**385 GiB** on the measured scaling of 1.6 GiB a k-point (139.6 GiB at 64
+points against 49.4 at 8), where `k_batch = 1` is worth 11 per cent of the peak,
+nothing in time and nothing in the answer.
 
 **Two traps in that comparison, both checked rather than argued.** The two
 committed AlAs cells are **enantiomorphs**, so their `e_14` have opposite signs
