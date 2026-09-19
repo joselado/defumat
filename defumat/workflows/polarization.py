@@ -10,12 +10,38 @@ The strings are walked **one at a time**. That is the memory decision
 more here, because a polarization mesh is the whole transverse plane rather
 than half a zone: the resident set is one string's occupied manifold,
 ``npoints * nbnd * npwx`` complex, and the number of strings never enters it.
+
+**What does enter it is the process's count of virtual-memory mappings, and
+that is what a long mesh runs out of rather than memory.** Each string is
+diagonalised at its own sphere, so XLA compiles for it and maps the code
+anonymously, and the mappings accumulate: measured on norm-conserving AlAs at
+``ecutwfc = 10`` over sixteen six-point strings, ``/proc/self/maps`` goes from
+2172 lines to 9873, roughly 480 per string, against a ``vm.max_map_count`` of
+65530 on an ordinary Linux box. The growth is per *string* and not per distinct
+shape -- thirteen of the sixteen add mappings, including strings whose phase
+takes 0.04 s and which therefore compiled nothing -- so it is not cured by
+compiling less, and a 396-string mesh dies with
+``INTERNAL: Failed to materialize symbols`` a third of the way in.
+
+``clear_caches`` is the dial for it. One ``jax.clear_caches()`` released 8924 of
+those mappings in the measurement above and ``gc.collect()`` released none on
+top of it, so the cure is to clear inside the loop rather than after it. On the
+36-string mesh (``nppstr = 11`` over ``6x6``, ten points a string) the count is
+**19036 without it and 3705 with it**, and every period from 8 to 32 gives the
+same 3705, because a clear drops whatever has accumulated since the last one.
+The phase is bit-identical in all of them, checked at periods of 1, 4, 8, 16
+and 32 against the unclamped run.
+
+The default is therefore the *longest* period that bounds the count, 32, since
+clearing more often costs recompilation and buys no mappings.
+``clear_caches=None`` turns it off for a short mesh that does not need it.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
+import jax
 import jax.numpy as jnp
 
 from defumat.system.builder import System
@@ -48,6 +74,7 @@ def run_polarization(
     ns: jnp.ndarray | None = None,
     field=None,
     field_scale: float | None = None,
+    clear_caches: int | None = 32,
 ) -> Polarization:
     """The Berry-phase polarization along reciprocal lattice vector ``gdir``.
 
@@ -62,6 +89,9 @@ def run_polarization(
         transverse: how many strings along the two crystal directions other
             than ``gdir``.
         shift: QE's ``k1, k2, k3`` half-step offsets of the transverse grid.
+        clear_caches: drop the compiled code every this many strings, which is
+            what keeps a long mesh inside the process's mapping limit; ``None``
+            never drops it. The module docstring carries the measurement.
         nocc: the occupied band count, defaulting to the electron count over
             one or two as a band is a spinor or not.
 
@@ -92,12 +122,18 @@ def run_polarization(
     nstring, npoints = mesh.shape
 
     # One string at a time: the states of the whole mesh are never resident.
+    # The mappings are the other resource and they are not freed by ``del``,
+    # so the compiled code goes with them every ``clear_caches`` strings --
+    # see the module docstring for the count and what it costs.
+    every = None if clear_caches is None else max(1, int(clear_caches))
     phases = np.empty(nstring)
     for index in range(nstring):
         states = source.states(mesh.points[index])
         phases[index] = string_phase(states, k_batch=k_batch,
                                      closing_shift=mesh.span2)
         del states
+        if every is not None and (index + 1) % every == 0:
+            jax.clear_caches()
 
     weights = np.full(nstring, 1.0 / nstring)
     strings = combine_string_phases(phases, weights, nspin=int(system.nspin))

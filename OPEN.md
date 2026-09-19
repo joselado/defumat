@@ -3755,60 +3755,67 @@ at `abee9c21`, before the fixtures landed:
 | `test_electrostriction.py` | 15 failed, 5 passed, 285 s | **1 failed, 19 passed**, 1521 s |
 | `test_spectra.py` | `exit=134`, aborted inside `backend_compile_and_load` | **8 passed, 6 skipped**, `exit=0`, 569 s |
 
-So the fixture is worth having and it is not the cure. `test_spectra.py` goes
-from an abort that takes the whole file to a clean pass, and
-`test_electrostriction.py` goes from fifteen failures to one, but that one is
-still `INTERNAL: Failed to materialize symbols`, in
-`test_the_wedge_reproduces_the_closed_grid`, which is the last test in the file
-and therefore the one with the most compiled executables behind it. **That is
-the falsifying result `40d8fe2` predicted**: clearing JAX's caches does not
-unmap the dylibs XLA has already loaded, so what the fixture buys is fewer
-*new* executables per test rather than fewer live mappings, and a long enough
-file still runs out. It is also not free: `test_electrostriction.py` went from
-285 s to 1521 s, which is the recompilation the trade buys the peak with, and
-on a file that was mostly failing fast before, so the honest comparison is
-against a passing baseline nobody has.
+**What the fixture does, measured directly rather than argued about, and it
+settles three things this item had wrong.** The measurement is a Berry-phase
+polarization on norm-conserving AlAs at `ecutwfc = 10`, 16 strings of 6 points,
+counting the lines of `/proc/self/maps` after each string:
 
-**And the worst file in the whole set already had the fixture.**
-`test_nonlinear.py` carried the autouse `jax.clear_caches()` at `abee9c21` (so
-did `test_stm.py` and `test_ten_site.py`, checked with `git show`), and it
-produced **84** mapping failures, more than any other file. So the fixture is
-not a mapping cure, on the evidence of the very run that was read as asking for
-it.
+| | mappings | wall clock |
+|---|---|---|
+| after the SCF, before the string loop | 2172 | |
+| after 16 strings, no intervention | **9873** | 13.0 s |
+| then `jax.clear_caches()` alone | **949** | |
+| then `gc.collect()` alone, after that | 949 | |
+| 16 strings with `jax.clear_caches()` after each | **976** | 36.6 s |
 
-**A mechanism that fits all three readings, and it is a reason for caution
-rather than a conclusion.** `jax.clear_caches()` drops JAX's compilation cache,
-so the *next* call at a shape already seen compiles again, and a compilation is
-a new ORC dylib with new mappings while the old ones stay loaded. That is
-`40d8fe2`'s "clearing caches does not unmap" stated the other way round: on a
-file that revisits shapes, the fixture trades a cache hit for a fresh set of
-mappings. It stays a hypothesis: the 285 s to 1521 s is *not* evidence for it,
-because fifteen tests that fail fast on a mapping error take less wall clock
-than nineteen that run, so that comparison has no baseline either way.
-**The fixture is a memory tool** -- P28b measured it
-getting both smaller and faster on the workstation -- **being used on an
-address-space problem**, which is `CLAUDE.md`'s "inherit a refusal only after
-checking which machine it belongs to" with a cure in place of a refusal.
+**So `jax.clear_caches()` does unmap.** It released 8924 mappings in one call,
+`gc.collect()` released none on top of it, and clearing inside the loop keeps
+the count flat for 2.8 times the wall clock. That is the opposite of
+`40d8fe2`'s "clearing caches does not unmap", and of the mechanism this item
+carried for a day, that clearing the cache forces a recompilation whose dylibs
+add mappings. Both are withdrawn. The growth is also entirely **anonymous**
+mappings, not file-backed ones: classifying every line of `/proc/self/maps`
+puts all 7700 of the increase in `[anon]`, which is where JIT-compiled code is
+mapped.
 
-**So do not add it to the remaining five on this evidence.** The measured
+**Then why did the fixture not save `test_nonlinear.py`, which had it?** Because
+an autouse fixture with a `yield` fires **between tests**, and these processes
+run out of mappings *inside* one. `test_nonlinear.py` has eleven tests and the
+run counted 84 occurrences of the error string, so an individual test is
+producing them rather than the file accumulating across tests. The same shape
+explains `test_electrostriction.py`: nineteen tests pass and the failure is
+`test_the_wedge_reproduces_the_closed_grid`, one test that exhausts by itself.
+**The fixture bounds accumulation across tests and can do nothing about a
+single test that compiles 65530 mappings' worth**, which is exactly what a
+396-string polarization or a many-cell sweep is. That is also why the piezo
+harness's per-geometry child did not help: the string loop is inside one
+geometry.
+
+**So the fixture is right and it is in the wrong place.** The measured
 offenders that do not have it are `test_spinor_dielectric.py`,
 `test_dispersion.py`, `test_response.py`, `test_lsda_response.py` and
-`test_gamma_only.py`. What separates a file the fixture rescues
-(`test_spectra.py`) from one it does not save (`test_nonlinear.py`) is not in
-the record, and adding it to five more files buys five more experiments with no
-hypothesis behind them.
+`test_gamma_only.py`, and adding it there is cheap and bounds what it can
+bound. What it will not fix is any single test that walks a long loop, and for
+those the clear has to go **inside the loop**, which is what
+`run_polarization` now does.
 
-**The cure is a process boundary per test, and it needs no plugin.** A process
-cures this by exiting and nothing inside one does. `pytest --forked` is not
-available -- the cluster venv has neither `pytest-forked` nor `xdist`, and no
+**One more thing in the same file, against the project's own rule.**
+`test_nonlinear.py:92` is `@lru_cache(maxsize=None)` on `_converged`, where
+`CLAUDE.md` says "`lru_cache(maxsize=2)` on the converged-state helper, never
+`maxsize=None` -- 2 is what a comparison between two cells needs and is the
+largest that is not a leak". That is a memory leak rather than a mapping one
+and it is not what failed here, but it is in the file the audit ranked worst.
+
+**A process boundary per test remains the blunt cure, and it needs no plugin.**
+`pytest --forked` is not available -- the cluster venv has neither `pytest-forked` nor `xdist`, and no
 `psutil` either, which is why every cluster log carries "the memory watchdog is
 off", and no `matplotlib`, which is why `tests/unit/test_result_plots.py`
 cannot be collected. **What is available is `tools/run_regression.sh` itself**,
 which invokes pytest once per entry of its file-glob argument and already
 accepts node IDs there: the attribution array passed seven of them. So a file
 that exhausts mappings can be run as a list of its own test IDs, one process
-each, today. The real repair is upstream of all of this and is in the next
-paragraph but one: compile fewer distinct shapes.
+each, today. It is the fallback rather than the answer, because clearing the
+caches in the right place is cheaper than paying process startup per test.
 
 **Two non-test witnesses of the same exhaustion, and this time the cause is
 in our code rather than in the test suite's shape.** Rungs 4 and 6 of the piezo
@@ -3835,16 +3842,25 @@ every string:
 | 8x8, 15 | 64 | 11 | 747 to 763 |
 
 Every distinct `npwx` is a distinct static shape, so the whole Hamiltonian and
-Davidson stack is compiled again for each, ten or eleven times per geometry,
-and each compilation is its own set of ORC dylibs and mappings. **This is
-`CLAUDE.md`'s own JAX rule being broken**: "pad plane-wave arrays to `npwx`
-with a mask instead of using per-k shapes". The repair is to pad every string
-of a mesh to the mesh-wide maximum, which makes one executable serve all of
-them and is faster as well as smaller; it is not done, and it is the one fix
-here that would remove a cause rather than delay a symptom. What it does *not*
-explain is why ten shapes exhaust 65530 mappings at all, which means each
-compilation of that stack is thousands of them, and that number has not been
-measured.
+Davidson stack is compiled again for each, ten or eleven times per geometry.
+**This is `CLAUDE.md`'s own JAX rule being broken** -- "pad plane-wave arrays
+to `npwx` with a mask instead of using per-k shapes" -- and it is worth fixing
+on its own, since padding a mesh's strings to the mesh-wide maximum makes one
+executable serve all of them.
+
+**It is not, however, what exhausts the mappings, and the measurement above
+says so.** Timing each string of the 16-string mesh beside its map count, the
+count grows by roughly 480 to 650 on *thirteen of sixteen* strings, including
+strings whose phase takes **0.04 s** and which therefore compiled nothing. So
+the growth is per string rather than per distinct shape, and eight
+recompilations cannot account for 7700 mappings. Extrapolated, 480 per string
+puts the ceiling near 115 six-point strings, and the growth scales with the
+points per string, which is what separates the rungs that ran from the rungs
+that died: 16 strings of 6 and 36 strings of 14 finished, 64 strings of 14 and
+36 ultrasoft strings of 10 did not. The fix is therefore to clear the caches
+inside the loop, measured above to hold the count at 976 across the whole mesh,
+and the padding is a separate improvement to the compile count and the wall
+clock rather than the cure.
 
 **The whole `slow` set was then run on a node, and the measured offenders are
 not the ones the input-count proxy named.** Eight array tasks, 22 files each

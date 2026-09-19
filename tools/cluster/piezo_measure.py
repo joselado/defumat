@@ -101,21 +101,52 @@ def shear(magnitude: float) -> np.ndarray:
     return strain
 
 
+def _without_symmetry(calculator):
+    """The same crystal with ``nosym`` set, so that ``--kmesh`` may ladder it.
+
+    ``alas-piezo.in`` keeps its symmetry and ``alas-raman.in`` does not, which is
+    why the first ladder could move the calibration cell's k-mesh and not the
+    ultrasoft one: :func:`_with_full_grid` refuses a reduced cell, and rightly,
+    because the tensor would then be symmetrised on a group the response was not
+    integrated over. Dropping the group removes the objection instead of
+    ignoring it, and it makes the two cells comparable in the one way that
+    matters here, since the calibration cell has no group either.
+
+    ``System`` is an ``eqx.Module`` and ``nosym`` is a *static* field, so
+    ``dataclasses.replace`` is the way in and ``eqx.tree_at`` is not: a static
+    field is not a leaf. Nothing downstream is stale, because the rotations are
+    read through ``None if self.nosym else ...`` every time they are asked for
+    (``system/builder.py:539`` and ``:583``) rather than cached at build time.
+    """
+    import dataclasses
+
+    from defumat.calculator import Calculator
+
+    if calculator.system.nosym:
+        return calculator
+    return Calculator(dataclasses.replace(calculator.system, nosym=True),
+                      calculator.pseudos, announce=False)
+
+
 def _with_full_grid(calculator, mesh):
     """The **whole** ``mesh x mesh x mesh`` grid, unshifted, no symmetry.
 
-    Only the calibration cell is laddered, and it is ``nosym``/``noinv`` for
-    P24's reason: a response on a reduced set is a polar vector field and must be
-    symmetrised as one, and a *shifted* Monkhorst-Pack grid is not closed under
-    the point group at all. So this builds the complete grid, and refuses a cell
-    whose own set is reduced rather than quietly changing what is being compared.
+    The calibration cell is ``nosym``/``noinv`` for P24's reason: a response on a
+    reduced set is a polar vector field and must be symmetrised as one, and a
+    *shifted* Monkhorst-Pack grid is not closed under the point group at all. So
+    this builds the complete grid, and refuses a cell whose own set is reduced
+    rather than quietly changing what is being compared -- unless the group has
+    been dropped first with :func:`_without_symmetry`, which is what ``--nosym``
+    does and is the only way the ultrasoft cell can be laddered at all.
     """
     from defumat.system.kpoints import KPoints
 
-    if calculator.system.kpoints.reduced:
+    if calculator.system.kpoints.reduced and not calculator.system.nosym:
         raise SystemExit("--kmesh refuses a symmetry-reduced cell: the response "
                          "would be compared on a different k-set from the one "
-                         "the tensor was symmetrised on")
+                         "the tensor was symmetrised on. Pass --nosym to drop "
+                         "the group first, which is what the calibration cell "
+                         "already does")
     grid = (int(mesh),) * 3
     return calculator.with_kpoints(
         KPoints.automatic(grid, (0, 0, 0), calculator.system.cell)
@@ -128,9 +159,13 @@ def _polarization_child(payload, queue):
 
     from defumat.calculator import Calculator
 
+    extra = ({} if payload.get("k_batch") is None
+             else {"k_batch": payload["k_batch"]})
     calculator = Calculator.from_file(payload["input"],
                                       pseudo_dir=payload["pseudo_dir"],
-                                      announce=False)
+                                      announce=False, **extra)
+    if payload.get("nosym"):
+        calculator = _without_symmetry(calculator)
     if payload.get("kmesh"):
         calculator = _with_full_grid(calculator, payload["kmesh"])
     at = np.asarray(calculator.system.cell.at)
@@ -254,7 +289,21 @@ def main() -> None:
     # differs between the two routes that has never been varied.
     parser.add_argument("--kmesh", type=int, default=None,
                         help="run on the whole N x N x N unshifted grid instead "
-                             "of the input's; refuses a reduced cell")
+                             "of the input's; refuses a reduced cell unless "
+                             "--nosym comes with it")
+    # `piezo.py`'s docstring says the tape "does not move with ``k_batch``,
+    # because what the tape holds is not the k axis", measured at 64 k on the
+    # small cell. The ladder's peaks are close to affine in ``nk`` (13.8 GiB at
+    # 216 points against 28.3 at 512), so the statement has never been checked
+    # where it would bite, and it decides how much memory the ultrasoft rungs
+    # need. This dial is how to check it.
+    parser.add_argument("--k-batch", type=int, default=None,
+                        help="how many k-points are in flight at once; 1 is "
+                             "QE's own loop and the smallest working set")
+    parser.add_argument("--nosym", action="store_true",
+                        help="drop the crystal's point group, which is what the "
+                             "calibration cell already does and what lets the "
+                             "ultrasoft cell be laddered in k")
     parser.add_argument("--skip-response", action="store_true",
                         help="the finite difference alone")
     parser.add_argument("--skip-difference", action="store_true",
@@ -280,9 +329,15 @@ def main() -> None:
         piezo.require_a_measured_dataset = lambda calculation: None
         print("    the dataset refusal is lifted for this run only", flush=True)
 
+    extra = {} if arguments.k_batch is None else {"k_batch": arguments.k_batch}
+    if extra:
+        print(f"    k_batch = {arguments.k_batch}", flush=True)
     calculator = Calculator.from_file(ROOT / case["input"],
                                       pseudo_dir=arguments.pseudo_dir,
-                                      announce=False)
+                                      announce=False, **extra)
+    if arguments.nosym:
+        calculator = _without_symmetry(calculator)
+        print("    the crystal's point group is dropped for this run", flush=True)
     if arguments.kmesh:
         calculator = _with_full_grid(calculator, arguments.kmesh)
         print(f"    the whole {arguments.kmesh}^3 grid, "
@@ -290,6 +345,7 @@ def main() -> None:
     results = {"case": arguments.case, "input": case["input"],
                "what": case["what"], "nppstr": nppstr,
                "transverse": list(transverse), "kmesh": arguments.kmesh,
+               "nosym": bool(arguments.nosym), "k_batch": arguments.k_batch,
                "nk": int(calculator.system.kpoints.nk)}
 
     start = time.time()
@@ -320,7 +376,8 @@ def main() -> None:
         start = time.time()
         one = finite_difference(
             {"input": str(ROOT / case["input"]), "pseudo_dir": arguments.pseudo_dir,
-             "kmesh": arguments.kmesh},
+             "kmesh": arguments.kmesh, "nosym": bool(arguments.nosym),
+             "k_batch": arguments.k_batch},
             magnitude, nppstr, transverse, arguments.conv_thr,
         )
         one["seconds"] = time.time() - start

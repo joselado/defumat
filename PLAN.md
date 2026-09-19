@@ -8182,6 +8182,7 @@ each other on a two-sided ladder, at `eps_4 = 2 s` from a shear
 | the implementation, `jvp` of the stress | SCF `4 4 4`, 64 points, the committed mesh | **-0.763786** |
 | the implementation | SCF `6 6 6`, 216 points | **-0.687475** |
 | the implementation | SCF `8 8 8`, 512 points | **-0.672897** |
+| the implementation | SCF `10 10 10`, 1000 points | **-0.669907** |
 | Berry phase, one ground state per strain | strings of 7 over 4x4 | -0.657498 |
 | Berry phase | strings of 11 over 6x6 | -0.661386 |
 | Berry phase | strings of 15 over 6x6 | -0.659792 |
@@ -8189,8 +8190,13 @@ each other on a two-sided ladder, at `eps_4 = 2 s` from a shear
 
 **The response route is the one that moves.** It travels 0.091 between the
 committed mesh and `8 8 8`, twelve per cent of itself and all of it toward the
-Berry value, taking the disagreement from 13.4 to 3.7 to 1.6 per cent, while
-the Berry value stays inside 0.0045, or 0.7 per cent, across every dial it has.
+Berry value, taking the disagreement from 13.4 to 3.7 to 1.6 to 1.2 per cent,
+while the Berry value stays inside 0.0045, or 0.7 per cent, across every dial
+it has. The successive differences, 0.0763, 0.0146 and 0.0030, shrink by 5.2
+and then 4.9, so about 0.0008 is left to travel and the converged response
+value is near **-0.6691**: the two routes agree to roughly **one per cent** and
+the last per cent is not the response mesh, since the Berry route's own spread
+is 0.7 per cent and closing further needs a tighter reference.
 The cleanest single comparison is the pair that shares a ground state: the
 `6 6 6` response rung and the `6 6 6` Berry rung ran the same SCF, to
 -16.89293132223534 Ry in every printed digit, and going from `4 4 4` to `6 6 6`
