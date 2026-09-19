@@ -8244,9 +8244,21 @@ which is the same hole `born_charges_zstar_eu` already documents one coordinate
 over (+0.1625 on ultrasoft silicon against `ph.x`'s -0.07945). Which of the two
 is right is measured rather than argued, since the differentiated assembly run
 in the *position* coordinate is the Born charge and that matches `ph.x` on
-ultrasoft AlAs to every printed digit. It is refused by name now
+ultrasoft AlAs to every printed digit. It is refused by name
 (`require_a_norm_conserving_transcription`), kept separate from the dataset
 refusal so that lifting one does not lift the other.
+
+**The missing term is written rather than only sized** (2026-09-19,
+`_multiplier_strain_term`). Only the strain leg of this derivative moves `S`,
+so the case is the Born charge's shape and not a phonon's, and what the
+contracted route lacked is
+`+(1/Omega) Re sum_mn dLambda^E_mn S'_nm` -- derived from the functional, whose
+constraint is `-Re Tr[Lambda (G - 1)]` entering the total as `-norm`, with no
+factor of two. Both factors already existed
+(`strain.overlap_derivatives`, `born._multiplier_response`) and both vanish
+identically for a norm-conserving dataset, which is why the two routes still
+agree there to **6.217e-15**, unchanged to the digit. The number that decides
+whether it is *right* is +0.815802 on `alas-piezo.in` at 64 k-points.
 
 **Two traps in that comparison, both checked rather than argued.** The two
 committed AlAs cells are **enantiomorphs**, so their `e_14` have opposite signs

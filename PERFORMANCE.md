@@ -4102,8 +4102,9 @@ memory at all. It is **norm-conserving only**: measured on that cell at 64
 points it reads +0.830702 C/m^2 against the differentiated route's +0.815802,
 1.8 per cent apart, because `zstar_eu.f90` hands an augmented dataset to
 `zstar_eu_us.f90` and the transcription stops at the first file
-(`require_a_norm_conserving_transcription`). **That is a missing term rather
-than a dead end**, and `OPEN.md` Part XIII item 3 sizes it: only one leg of this
+(`require_a_norm_conserving_transcription`). **That is a missing term rather than a
+dead end and it is now written** (`_multiplier_strain_term`, validating), and
+`OPEN.md` Part XIII item 3 has it: only one leg of this
 derivative moves `S`, so the piezoelectric case is the Born charge's shape and
 not the phonon's, and what the transcribed route lacks is one contraction of two
 functions that already exist.

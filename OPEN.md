@@ -3993,7 +3993,19 @@ norm-conserving dataset, **which is exactly why the two routes agree to
 table is `jax.grad` of `frozen_polarization` and vanishes for the non-polar
 crystals this route is allowed on at all.
 
-**It is a derivation and not a copy, so it is not taken here.** The index order
+**It is written, and the half of the check that this machine can do has
+passed** (`_multiplier_strain_term`, 2026-09-19): the two routes still agree to
+**6.217e-15** on the calibration cell, unchanged to the digit, because both
+factors are identically zero when `S` does not deform. That says the term
+cannot break a norm-conserving answer and nothing about whether it is right --
+the first validation run died on `internals["nocc"]` being the per-spin tuple
+where `solver.nocc`, the number, was wanted, which is a line no norm-conserving
+cell reaches. **The number that decides is +0.815802 at 64 k-points on
+`alas-piezo.in`, and it is running.** The package refusal stays until it lands;
+the measurement script lifts it for the run, separately from the dataset
+refusal, which is what keeping the two separate was for.
+
+**It was a derivation and not a copy.** The index order
 is the trap and is flagged in `_multiplier_response`'s own docstring: `Lambda_mn`
 pairs with `<psi_n|S|psi_m>`, the weight belongs to the *column*, and
 transposing it costs 0.28 on ultrasoft silicon while costing nothing at all on
