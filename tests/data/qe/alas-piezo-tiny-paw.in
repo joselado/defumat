@@ -1,0 +1,43 @@
+! AlAs, **PAW**, zincblende, at `alas-piezo-tiny.in`'s cutoff and mesh: the cell
+! that puts the one dataset kind whose paths were live and untested under a test.
+!
+! The wedge completion the piezoelectric tape gained on 2026-09-19 runs for PAW
+! as well as for ultrasoft -- `_full_zone_becsum_response` is the PAW half of it
+! -- and no non-centrosymmetric PAW crystal was committed, so the branch that
+! carries `becsum` through the completion had never executed. The datasets here
+! are the PAW counterparts of the ultrasoft pair beside it, so the two cells
+! differ in the dataset kind and in nothing else at all: same geometry, same
+! `celldm`, same cutoffs, same unshifted `2 2 2` grid.
+!
+! Nothing about the *value* of `e_14` here is physics, for the reason
+! `alas-piezo-tiny.in` gives at length: `ecutwfc = 10` with `ecutrho = 44` is far
+! below what `Al/As.pbe-n-kjpaw_psl.1.0.0` were made for. What the cell keeps is
+! what the identity needs -- an augmented dataset with one-centre terms, on a
+! crystal whose tensor does not vanish by symmetry. As a check that the cheap
+! cutoff has not made it a different problem, the dielectric constant reads
+! 42.05 here against the ultrasoft cell's 42.16.
+!
+! `nosym` and `noinv` on an unshifted grid, so this is the **closed grid**: eight
+! k-points and no symmetrisation, which is what `alas-piezo-tiny-paw-wedge.in` is
+! compared against.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.6134, nat = 2, ntyp = 2,
+    ecutwfc = 10.0, ecutrho = 44.0
+    nosym = .true.
+    noinv = .true.
+ /
+ &electrons
+    conv_thr = 1.0d-10
+    mixing_beta = 0.7
+ /
+ATOMIC_SPECIES
+ Al 26.98 Al.pbe-n-kjpaw_psl.1.0.0.UPF
+ As 74.92 As.pbe-n-kjpaw_psl.1.0.0.UPF
+ATOMIC_POSITIONS crystal
+ Al 0.00 0.00 0.00
+ As 0.25 0.25 0.25
+K_POINTS (automatic)
+ 2 2 2 0 0 0

@@ -2747,8 +2747,35 @@ and it needs a denser mesh than the ground state does: the \code{6 6 6} and
 \code{4 4 4} rows above share one SCF, to $-16.89293132223534$~Ry in every
 printed digit, and that same change of mesh moves the Berry value by $0.0006$
 and this code's value by $0.076$. \textbf{Converge the mesh on this quantity
-rather than on the total energy}, and note that nothing in the code warns when
-you have not.
+rather than on the total energy.}
+
+\textbf{The code says so now, and it can measure it.} Nothing inside this
+quantity can see its own zone sum --- the three routes share one field response
+and the $Z^\ast$ anchor is the same assembly in the position coordinate --- so
+\code{get\_piezoelectric\_tensor} warns with the curve above, and the result
+carries \code{nk} and \code{grid}, the sample it actually integrated. What
+replaces the warning with a number for \emph{your} crystal is a ladder: one
+ground state and one response per mesh, and the relative change across the last
+step.
+
+\begin{pycode}
+ladder = alas.get_piezoelectric_kmesh_ladder(meshes=(4, 6))
+
+print(ladder.nk)       # LADDER_NK
+print(ladder.e14)      # LADDER_E14
+print(ladder.drift)    # LADDER_DRIFT
+print(ladder.settled)  # LADDER_SETTLED
+\end{pycode}
+
+The rungs are the irreducible wedge of each unshifted grid by default, which is
+the same sample at a fraction of the cost --- on an ultrasoft cell the wedge and
+the closed grid gave the same tensor to $1.6\times10^{-6}$ --- and
+\code{wedge = False} runs the whole grid. \textbf{The last step is smaller than
+the error}: across this crystal's four rungs the steps are 10, 2.1 and 0.44 per
+cent while the densest is still 1.2 per cent from the Berry value, so the
+remaining distance runs about three times the last step and \code{settled}
+means the mesh has stopped being the largest thing wrong rather than that it is
+converged.
 
 
 \begin{refuses}

@@ -19,12 +19,13 @@
 # partition     batch-milan, as `regression.sbatch` uses: 128 cores and 510 GB a
 #               node, 5-day limit. Look it up rather than trust this line
 #               (`scontrol show partition batch-milan`).
-# array         0-2, one task per file. **One array and not three submissions**,
+# array         0-3, one task per file. **One array and not four submissions**,
 #               which is the cluster policy's own rule.
-# time          01:00:00. The three files are 5m24, 1m55 and 5m00 on the
-#               workstation with a warm kernel cache; the cache is off here, so
-#               every kernel is compiled once, and an hour is roughly four times
-#               the worst of them.
+# time          01:00:00. The first three are 5m24, 1m55 and 5m00 on the
+#               workstation with a warm kernel cache and ran cold here in 5m36,
+#               3m19 and 9m23 (job `20345288`); the PAW pair's two tapes are
+#               106 s and 43 s on top of a 15 s ground state and a 91 s field
+#               response. An hour is comfortably over the worst of them.
 # cpus-per-task 4, matching `regression.sbatch`. XLA takes every core it can see
 #               and Slurm's cgroup is what bounds it, so this *is* the thread
 #               count; MKL and OMP are pinned to 1 beside it.
@@ -34,7 +35,7 @@
 #               before the kernel acts.
 #SBATCH --job-name=defumat-piezo
 #SBATCH --partition=batch-milan
-#SBATCH --array=0-2
+#SBATCH --array=0-3
 #SBATCH --time=01:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
@@ -76,9 +77,15 @@ export DEFUMAT_QE_ROOT=/scratch/work/ladovj1/apps/qe-7.5-reference
 # number for the file and not a name for the test that held it.
 export DEFUMAT_TEST_MEM_MAX=28G
 
+# The fourth is the PAW pair, and it is the one that cannot run on the
+# workstation at all rather than merely being awkward there: one ground state
+# and the two tapes the falsifier needs peak at **14.9 GB** in a single process,
+# against a 12 GiB per-file cap, and there is no accumulation to remove because
+# the file runs one cell. Here it has 32 G to itself like the rest.
 FILES=(tests/regression/test_piezoelectric_augmented.py
        tests/regression/test_piezoelectric_wedge.py
-       tests/regression/test_piezoelectric.py)
+       tests/regression/test_piezoelectric.py
+       tests/regression/test_piezoelectric_paw.py)
 TASK=${SLURM_ARRAY_TASK_ID:-0}
 FILE=${FILES[$TASK]}
 

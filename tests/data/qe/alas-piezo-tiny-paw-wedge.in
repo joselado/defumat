@@ -1,0 +1,36 @@
+! `alas-piezo-tiny-paw.in` with the crystal's point group kept, so that the same
+! unshifted `2 2 2` sample reduces from eight k-points to **three**.
+!
+! The pair is the PAW counterpart of `alas-piezo-tiny.in` and its wedge, and it
+! exists because the wedge completion has a PAW half that nothing exercised.
+! On an augmented dataset the density moves with the strain at frozen states, so
+! the mixed second derivative carries a term quadratic in a per-k tangent, and a
+! wedge sum of a product is not the product of the full-zone objects: one factor
+! has to be made whole before it is contracted, which is
+! `_full_zone_field_response` on the grid and `_full_zone_becsum_response` in the
+! one-centre terms. Averaging the finished rank-3 tensor cannot repair it, which
+! is why agreeing with the closed grid is the check and why the test runs the
+! same wedge with the completion switched off as its falsifier.
+!
+! Three k-points is not a converged sample and is not meant to be: what is read
+! here is an identity between two k-sets of the same unshifted grid, which holds
+! at any cutoff and on any mesh, so the cell is chosen for cost.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.6134, nat = 2, ntyp = 2,
+    ecutwfc = 10.0, ecutrho = 44.0
+ /
+ &electrons
+    conv_thr = 1.0d-10
+    mixing_beta = 0.7
+ /
+ATOMIC_SPECIES
+ Al 26.98 Al.pbe-n-kjpaw_psl.1.0.0.UPF
+ As 74.92 As.pbe-n-kjpaw_psl.1.0.0.UPF
+ATOMIC_POSITIONS crystal
+ Al 0.00 0.00 0.00
+ As 0.25 0.25 0.25
+K_POINTS (automatic)
+ 2 2 2 0 0 0
