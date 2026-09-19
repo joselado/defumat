@@ -8257,8 +8257,17 @@ constraint is `-Re Tr[Lambda (G - 1)]` entering the total as `-norm`, with no
 factor of two. Both factors already existed
 (`strain.overlap_derivatives`, `born._multiplier_response`) and both vanish
 identically for a norm-conserving dataset, which is why the two routes still
-agree there to **6.217e-15**, unchanged to the digit. The number that decides
-whether it is *right* is +0.815802 on `alas-piezo.in` at 64 k-points.
+agree there to **6.217e-15**, unchanged to the digit.
+
+**It is right and it is not the whole term** (`20339308_0`): on ultrasoft AlAs
+at 64 k-points it moves the transcribed route from +0.830702 to **+0.827448**
+against the differentiated route's +0.815802, the right sign and **21.8 per
+cent** of the gap, so the disagreement falls from 1.79 to 1.41 per cent and the
+refusal stays. What is left is the channel `born.py` carries as its `shifts`
+and `becsum_shifts` tangents, the mixed state's own first-order change under
+the field, which a contracted route has no equivalent of and which on an
+augmented dataset reaches `D_ij` through the augmentation charge -- QE's
+`drhous x dvscf` and `int3 x dbecsum`.
 
 **Two traps in that comparison, both checked rather than argued.** The two
 committed AlAs cells are **enantiomorphs**, so their `e_14` have opposite signs

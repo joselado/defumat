@@ -4000,10 +4000,25 @@ factors are identically zero when `S` does not deform. That says the term
 cannot break a norm-conserving answer and nothing about whether it is right --
 the first validation run died on `internals["nocc"]` being the per-spin tuple
 where `solver.nocc`, the number, was wanted, which is a line no norm-conserving
-cell reaches. **The number that decides is +0.815802 at 64 k-points on
-`alas-piezo.in`, and it is running.** The package refusal stays until it lands;
-the measurement script lifts it for the run, separately from the dataset
-refusal, which is what keeping the two separate was for.
+cell reaches. **Measured, and the term is right and not sufficient** (`20339308_0`,
+2026-09-19). Adding it moves the transcribed route from **+0.830702** to
+**+0.827448** on ultrasoft AlAs at 64 k-points, where the differentiated route
+reads **+0.815802**: the right sign, **21.8 per cent** of the gap, and the
+disagreement falls from 1.79 to **1.41 per cent**. So it is one piece of what
+`zstar_eu_us.f90` adds and not all of it, and the refusal stays.
+
+**What the remaining 78 per cent most likely is, named by the same template.**
+`born_effective_charges` hands its `jvp` more than the states and the
+multipliers: it also passes `shifts` and `becsum_shifts`, which are the *mixed
+state's* own first-order change under the field
+(`_full_zone_field_response`, `_full_zone_becsum_response`). A contracted route
+has no equivalent, because `<dpsi^E|dH^eps_bare|psi>` carries the screening only
+through `dpsi`, and on an augmented dataset the field also moves `becsum`, which
+feeds the augmentation density and so `D_ij`. That is QE's `drhous x dvscf` and
+`int3 x dbecsum`. **It is the candidate the construction points at rather than a
+measured cause**, and the way to settle it is the one that settled this piece:
+write it, check it stays inert on the calibration cell, and run the 64-point
+rung, which is six minutes and 2.4 GiB.
 
 **It was a derivation and not a copy.** The index order
 is the trap and is flagged in `_multiplier_response`'s own docstring: `Lambda_mn`

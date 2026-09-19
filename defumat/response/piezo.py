@@ -613,6 +613,29 @@ def _multiplier_strain_term(
     was driven by, rebuilt at the converged ``dV_scf``; ``None`` skips the term,
     which is what the norm-conserving cross-check in
     ``test_piezoelectric.py`` passes.
+
+    **Measured, and it is right and not sufficient** (Triton `20339308_0`,
+    ultrasoft AlAs on the whole ``4 4 4`` grid, 64 k-points). Adding it moves
+    the transcribed route from ``+0.830702`` to ``+0.827448`` where
+    :func:`clamped_ion_piezoelectric` reads ``+0.815802``: the right sign,
+    ``21.8 per cent`` of the gap, and the disagreement falls from 1.79 to 1.41
+    per cent. So this is one piece of what ``zstar_eu_us.f90`` adds and not all
+    of it, and the refusal stays.
+
+    **What the remaining 78 per cent most likely is, named by the same
+    template.** :func:`~defumat.response.born.born_effective_charges` does not
+    hand its ``jvp`` only the states and the multipliers: it also passes
+    ``shifts`` and ``becsum_shifts``,
+    :func:`~defumat.response.born._full_zone_field_response` and
+    :func:`~defumat.response.born._full_zone_becsum_response`, which are the
+    *mixed state's* own first-order change under the field. A contracted route
+    has no equivalent, because ``<dpsi^E| dH^eps_bare |psi>`` carries the
+    screening only through ``dpsi``, and on an augmented dataset the field also
+    moves ``becsum``, which feeds the augmentation density and so ``D_ij``.
+    That is QE's ``drhous x dvscf`` and ``int3 x dbecsum``. It is the candidate
+    the construction points at rather than a measured cause, and the way to
+    settle it is the same one that settled this piece: write it, check it is
+    inert on the calibration cell, and run the 64-point rung.
     """
     if field_perturbations is None or band_weights is None:
         return None
