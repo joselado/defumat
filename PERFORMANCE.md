@@ -4077,6 +4077,25 @@ byte, so the `10^3` row costs the same as the `4^3` row:
 
 The slope between the last two is 15.5 MB a k-point, so the tape is per-k with
 almost no fixed part, and at `10^3` it is a third of the whole job's 46.6 GiB.
+
+**The same measurement on the ultrasoft cell, which is the one that matters,**
+`alas-piezo.in` with the point group dropped so the mesh can be moved:
+
+| grid | k-points | `npwx` | temporaries | per k-point |
+|---|---|---|---|---|
+| `4 4 4` | 64 | 648 | **31.52 GiB** | 504 MB |
+| `6 6 6` | 216 | 641 | **86.66 GiB** | 411 MB |
+| `8 8 8` | 512 | 648 | **191.97 GiB** | 384 MB |
+
+**About 380 MB a k-point, twenty-four times the norm-conserving cell's 16**,
+which is the augmentation on a 36^3 dense grid against a 15^3 one. Two things
+follow and both are useful. The tape at 64 points is 31.5 GiB where the whole
+job peaked at **139.6**, so **the tape is under a quarter of that peak** and the
+rest is the SCF and the field response at `ecutrho = 200` -- which means
+splitting the run across processes buys more here than shrinking the tape would.
+And `6 6 6` needs 86.7 GiB of tape alone, so it fits on a 510 G node with room
+rather than needing one to itself, which is the opposite of what the withdrawn
+"385 GiB" projection said.
 **`k_batch` cannot touch it, and the reason is structural rather than
 arithmetic**: `forces/energy.py:energy_at`, which is the function being
 differentiated, does not go through `map_k` or `sum_k` at all, so the dial never
