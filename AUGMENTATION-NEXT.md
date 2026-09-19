@@ -361,19 +361,30 @@ USPP/PAW"), so this is a gap shared with the reference rather than a deficit aga
 correctly on all three dataset kinds, so the missing half is the `zgefa`/`zgedi` dual in
 a non-trivial metric.
 
-### 1h. The piezoelectric tensor with an ultrasoft or PAW dataset
+### 1h. The piezoelectric tensor with an ultrasoft or PAW dataset **[ultrasoft done 2026-09-20; PAW open]**
 
-`response/piezo.py:273`. Both.
+`response/piezo.py`, `require_a_measured_dataset`. **PAW alone now**, plus a mesh
+condition on ultrasoft.
 
-**What is missing: nothing that has been identified.** Nothing in the piezoelectric
-assembly itself is norm-conserving -- it is one `jvp` of the stress along the field's
-response -- and **both** of the things it stands on have gone: the Born charge (`PLAN.md`
-P39a) and the strain leg's third derivative (P100, item 3b). The refusal's own message
-names `response/strain.py` refusing ultrasoft, which P97 measured to be untrue. So what
-is in front of this is a **measurement** rather than a term: run it on
-`tests/data/qe/alas-piezo.in`, the committed non-centrosymmetric zincblende cell, and see
-what the number is. **Size:** an afternoon if it agrees and a phase if it does not, and
-this file's history says not to promise the first.
+**The measurement this entry asked for was taken and it agreed.** The ladder on
+`tests/data/qe/alas-piezo.in` puts an ultrasoft `e_14` **0.57 per cent** from a
+Berry-phase finite difference at `10 10 10`, where the norm-conserving calibration is
+1.19 per cent from its own on the same mesh, so an augmented dataset is nearer an
+independent reference than the route this package validates against `ph.x`. Three terms
+had to be written first and none of them was the one this entry predicted would be
+missing, which is worth keeping: the multipliers' own response, the `add_for_charges`
+sandwich and the screened density shift, all three found by an identity between two
+assemblies rather than by the comparison above (`PLAN.md` P50). Ultrasoft runs at and
+above eight k-divisions, and is refused below them because there the dataset and the mesh
+are not separable.
+
+**What is left is PAW, and it is a reference rather than a term.** Everything measured
+for PAW here is internal -- the wedge completion's one-centre half against its own closed
+grid, 1.58e-06 against 6.96e-04 with the completion off -- and an identity between two
+k-sets of one calculation cannot say whether the calculation is right. **Size:** a
+Berry-phase ladder on a non-centrosymmetric PAW cell, which is now a committed cell
+(`alas-piezo-tiny-paw.in` and its wedge) and a script that already exists
+(`tools/cluster/piezo_measure.py`), so an afternoon of node time rather than a phase.
 
 ### 1i. Site-resolved angular momenta on a fully-relativistic augmented dataset
 
@@ -672,7 +683,10 @@ in `response/elastic.py` carries the numbers. **Size:** the first is wiring and 
 is an object nobody has written, and how the 22 per cent splits between them is not
 measured.
 
-**The piezoelectric tensor (item 1h) has nothing left in front of it.** Both blockers its
+**The piezoelectric tensor (item 1h) is done for ultrasoft as of 2026-09-20 and open for
+PAW alone.** What follows is the sizing that was written before the measurement, kept
+because its prediction about which term was missing was wrong in an instructive way.
+**Both blockers its
 own refusal names are gone: the `Q_ij` strain term was never missing (P97) and the strain
 leg's third derivative is implemented now. Running it on `alas-piezo.in` is the next step
 and it is a measurement rather than a term.
