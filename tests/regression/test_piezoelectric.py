@@ -191,6 +191,49 @@ def test_the_transcribed_contraction_reproduces_the_differentiated_one():
     assert np.abs(transcribed - differentiated).max() < 1e-12
 
 
+def test_the_constraint_term_is_wired_and_inert_on_this_dataset():
+    """The three arguments the entry point now builds, exercised on this cell.
+
+    The transcribed route takes the field perturbations, the band weights and
+    ``nocc`` on top of what it used to, so that
+    :func:`~defumat.response.piezo._multiplier_strain_term` can add the
+    multipliers' own response -- the term ``zstar_eu.f90`` delegates to
+    ``zstar_eu_us.f90`` for. This builds them the way
+    :func:`~defumat.response.piezo.piezoelectric_tensor` does and asserts the
+    answer does not move.
+
+    **What this cell can and cannot say.** It cannot say the term is *right*:
+    ``overlap_derivatives`` returns ``None`` when ``S`` does not deform, so the
+    function returns before it touches any of the three, and a wrong argument
+    here is invisible -- which is exactly how ``internals['nocc']``, the
+    per-spin tuple, got passed where ``solver.nocc``, the number, was wanted.
+    What it says is that the construction runs and that adding the term has not
+    perturbed an agreement which was 6.2e-15 before it existed. The number that
+    checks the term is on an ultrasoft cell, and
+    ``require_a_norm_conserving_transcription`` carries it.
+    """
+    from defumat.response.efield import _bare_plus_induced
+
+    calculation, _, _, _, density, field = _field("alas-raman")
+    internals = field.internals
+    onecentre = internals["onecentre"]
+    perturbations = [
+        _bare_plus_induced(
+            internals["solver"], internals["bare"][axis],
+            internals["dvscf"][axis],
+            None if onecentre is None else onecentre[axis], True,
+        )
+        for axis in range(3)
+    ]
+    wired = piezoelectric_zstar_eu_style(
+        calculation, internals["solver"], density, internals["dpsi"],
+        field_perturbations=perturbations,
+        band_weights=jnp.asarray(internals["weights"]),
+        nocc=internals["solver"].nocc,
+    )
+    assert np.abs(wired - _piezo("alas-raman")).max() < 1e-12
+
+
 def test_the_same_mixed_derivative_contracted_the_other_way_round():
     """The strain's *response* against the field's bare perturbation.
 
