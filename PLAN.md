@@ -8624,6 +8624,29 @@ one on wedges for the ultrasoft -- which is licensed by two measured identities
 ultrasoft wedge reproduces its closed grid to 1.6e-06) and is stated rather than
 left to be noticed.
 
+**The guard is in, and the instrument that replaces it with a number agrees
+with the one that found the problem** (2026-09-19). ``piezoelectric_tensor``
+carries ``nk``, ``grid`` and ``kmesh_drift`` on its result and warns that
+nothing inside this quantity can see its own zone sum, quoting the AlAs curve;
+``defumat/workflows/piezo_ladder.py`` measures the curve of whatever crystal is
+in front of it, one ground state and one response per rung, wedges by default.
+Run on the calibration cell at ``4 4 4`` and ``6 6 6`` it reads **-0.763786**
+and **-0.687475** C/m^2, which is ``tools/cluster/piezo_measure.py``'s ladder
+digit for digit and the same pair the guide's table quotes, so the new
+instrument is the old one's answer by a different route -- 73 s and 191 s, 14.4
+GB, the taped route's tape at 216 k-points being all of it.
+
+**What silences the warning is a step and not an error**, and the two are
+measured apart: the steps on this crystal are 10, 2.1 and 0.44 per cent while
+the densest rung is still 1.2 per cent from the Berry value, so the remaining
+distance runs about three times the last step and ``KMESH_STEP = 0.01`` is a
+place to stop warning rather than a claim of convergence. Both docstrings say
+so. The falsifier for the guard itself is in the fast set
+(``test_piezo_machinery.py``): the warning must fire with no ladder, must quote
+the measured drift when a ladder ran above the threshold, and must be silent
+below it, which is three states rather than the one a "does it warn" test would
+have checked.
+
 ### P51 — The optical conductivity tensor, the Kerr angle and the anomalous Hall conductivity. ✅ DONE.
 
 `defumat/response/conductivity.py` and `defumat/workflows/conductivity.py`.

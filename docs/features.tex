@@ -2759,18 +2759,23 @@ ground state and one response per mesh, and the relative change across the last
 step.
 
 \begin{pycode}
-ladder = alas.get_piezoelectric_kmesh_ladder(meshes=(4, 6))
+ladder = calc.get_piezoelectric_kmesh_ladder(meshes=(4, 6))
 
-print(ladder.nk)       # LADDER_NK
-print(ladder.e14)      # LADDER_E14
-print(ladder.drift)    # LADDER_DRIFT
-print(ladder.settled)  # LADDER_SETTLED
+print(ladder.nk)       # (64, 216): what each rung integrated
+print(ladder.e14)      # (-0.763786, -0.687475) C/m^2
+print(ladder.drift)    # 0.111: the last step moved the tensor 11 per cent
+print(ladder.settled)  # False, and the warning above says so with that number
+print(ladder.tensor)   # the densest rung, carrying kmesh_drift
 \end{pycode}
 
 The rungs are the irreducible wedge of each unshifted grid by default, which is
 the same sample at a fraction of the cost --- on an ultrasoft cell the wedge and
 the closed grid gave the same tensor to $1.6\times10^{-6}$ --- and
-\code{wedge = False} runs the whole grid. \textbf{The last step is smaller than
+\code{wedge = False} runs the whole grid. A rung is a whole calculation, so a
+ladder costs what its densest rung costs: those two rungs took 73~s and 191~s
+and peaked at 14.4~GB, all of it the taped route's tape at 216 $k$-points, which
+is the case for \code{method = 'zstar\_eu'} on anything larger.
+\textbf{The last step is smaller than
 the error}: across this crystal's four rungs the steps are 10, 2.1 and 0.44 per
 cent while the densest is still 1.2 per cent from the Berry value, so the
 remaining distance runs about three times the last step and \code{settled}
