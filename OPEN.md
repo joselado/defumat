@@ -4298,7 +4298,7 @@ phases with one cell's lattice vectors, which is exact for `e_14` because
 `(S a_g)_x = 0` for a pure `y`-`z` shear, the same statement that makes `e_14`
 free of the proper-against-improper correction and of the polarization branch.
 
-## 5. An **ultrasoft** dielectric constant does not reproduce its own closed grid from a symmetry-reduced k-set, by 1.6e-05 relative **[opened 2026-09-19, found in passing; attributed to the dataset the same day, term not found]**
+## 5. An **ultrasoft** dielectric constant does not reproduce its own closed grid from a symmetry-reduced k-set, by 1.6e-05 relative **[opened 2026-09-19, found in passing; attributed to the dataset under control the same day, six candidates excluded, term not found]**
 
 An unshifted Monkhorst-Pack grid is closed under the point group, so a
 symmetrised wedge and the whole grid are the same k-sample by two routes and
@@ -4346,21 +4346,56 @@ on the same wedge and sit 4.8e-06 from their own closed grid, which is this and
 not theirs. Anything aiming below 1e-05 on an augmented wedge should run
 `nosym` until this is understood.
 
-**It is the dataset and not the cell, measured.** The same comparison on
-`alas-raman.in` -- the *same crystal*, norm-conserving, its own unshifted grid
-run whole against its symmetrised wedge, 64 points against 8 -- gives
-**3.545e-10** relative in `epsilon` and 8.689e-10 in `drho`, against the
-ultrasoft cell's 1.573e-05 and 1.041e-05. That is a factor of **4.4e04** between
-the two dataset kinds on one crystal through one code path, which is what makes
-this an ultrasoft hole rather than a property of a cheap cell or a small mesh.
+**It is the dataset and not the mesh, and the first version of this sentence
+varied both at once.** It read "the same comparison on `alas-raman.in` gives
+3.545e-10 against the ultrasoft cell's 1.573e-05, a factor of 4.4e04" -- true,
+and taken from a norm-conserving cell on a `4 4 4` grid reducing 64 points to 8
+against an ultrasoft cell on a `2 2 2` reducing 8 to 3. Two variables, one
+conclusion. The controlled version is the same crystal at the **same** cutoff on
+the **same** `2 2 2` grid with the **same** 8-to-3 reduction, changing only the
+dataset, and it says the same thing more sharply: **3.625e-14** norm-conserving
+against **1.251e-05** ultrasoft, in the response density at the first pass.
 
-**So what is left to do is to find the term**, and the shape of the answer is
-already fixed by the three measurements above: it is inside the self-consistent
-iteration, it is in the augmentation, and it is not the solver's tolerance. The
-suspect discharged on an argument above -- `_symmetrize_becsum_response` being a
-no-op for a non-PAW dataset -- should be the first thing *tested* rather than
-read, since an argument is what this file least wants standing where a
-measurement is cheap.
+**It is also not the cutoff, which is the other thing the cheap cell invites.**
+`ecutrho = 44` on an ultrasoft dataset is far below what those datasets want, so
+the augmentation charge is under-resolved on purpose. Raising it does not make
+this go away: the split reads **1.251e-05** at `ecutrho = 44`, **5.323e-06** at
+80 and **7.825e-06** at 160, so it falls by a factor of two and then stops and
+turns round. A plateau at 5 to 8e-06 is not a discretisation artefact.
+
+**Six things it is not, each tested rather than argued.** The split is at the
+**first pass** of the response loop, 1.251e-05 with `dvscf = 0`, so everything
+below is about one Sternheimer solve and one symmetrised density sum with
+identical input:
+
+* not the **symmetriser**: applying the wedge cell's `symmetrize_directional` to
+  the closed-grid field, which is already full-zone and therefore invariant,
+  moves it by **1.772e-14**;
+* not the **ground state**: the two SCFs agree to 3.197e-14 Ry and their
+  densities to 8.6e-07, an order below the response split;
+* not the **solver's tolerance**: `tr2 = 1e-18` and `threshold = 1e-14`, six
+  orders tighter, leave `epsilon`'s split at 6.634e-04 to five digits;
+* not **`adddvepsi_us`**, the ultrasoft tail of the bare perturbation
+  (`_ultrasoft_position`): disabled, the split is 1.213e-05;
+* not **`dS/dk`** inside the commutator, the other ultrasoft term in the bare
+  perturbation: zeroed, 1.254e-05;
+* not the **augmentation charge inside `drho`**: dropped from the response
+  density altogether, 1.051e-05.
+
+**What that leaves**, and it is written as a suspect rather than a finding: the
+only ultrasoft-specific machinery still in the first pass once those are out is
+`S` itself -- inside the Sternheimer operator, inside the projector `P_c`, and
+inside `refined_states`' generalised diagonalisation. The symmetriser being
+exact means the *raw per-k* `drho` is not covariant, `drho_a(Rk) != R_ab
+drho_b(k)` as a real-space field, and the three terms above are not where the
+non-covariance is. `_symmetrize_becsum_response` being a no-op for a non-PAW
+dataset was the first suspect and is discharged twice over: `becsum_response` is
+collected only when PAW's one-centre potential exists, and the split survives
+with the augmentation removed from the density entirely.
+
+**Nothing above is a fix and this entry does not claim one.** What it claims is
+that the hypothesis space is much smaller than it was and that six of the
+obvious answers have been paid for.
 
 ## 4. Eight cluster test failures are assertions, none of them is this session's work, and one is a stale test rather than the environment **[opened 2026-09-19, attributed the same day]**
 
