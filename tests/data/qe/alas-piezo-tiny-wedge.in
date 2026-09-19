@@ -1,0 +1,44 @@
+! `alas-piezo-tiny.in` with the crystal's point group kept: the other half of the
+! pair that says the piezoelectric tensor's wedge sum has been completed.
+!
+! Same cell, same ultrasoft datasets, same cutoffs and the same unshifted `2 2 2`
+! grid; the only difference is that `nosym` and `noinv` are gone, so the eight
+! points reduce to **three** and every response is symmetrised on the way
+! through. An unshifted grid is closed under the point group, so the two files
+! are the same k-sample by two routes and agreeing is the only check the rank-3
+! symmetriser has at this order.
+!
+! **What the pair is for, and it is not the symmetriser alone.** On an augmented
+! dataset the density moves with the strain at frozen states, so the mixed
+! second derivative carries `int (drho/d(eps)) K (drho/dE)` -- a product of *two*
+! per-k tangents. A wedge sum of a product is not the product of the full-zone
+! objects, so averaging the finished tensor cannot repair it: one factor has to
+! be made whole before it is contracted. Without that, the taped route reads
+! 1.475427270 C/m^2 here against 1.474377366 on the whole grid, **1.05e-03**,
+! where the contracted route -- whose own screening factor is the field's
+! converged induced potential and therefore full-zone already -- splits by
+! 4.8e-06. Both effects are invisible on a norm-conserving dataset, where the
+! density does not move with the strain at all for a traceless one.
+!
+! Three k-points is deliberate and is not a converged sample, for
+! `alas-piezo-tiny.in`'s reason: what is being read is an identity between two
+! assemblies and between two k-sets, and neither needs the physics to be right.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.6134, nat = 2, ntyp = 2,
+    ecutwfc = 10.0, ecutrho = 44.0
+ /
+ &electrons
+    conv_thr = 1.0d-10
+    mixing_beta = 0.7
+ /
+ATOMIC_SPECIES
+ Al 26.98 Al.pbe-n-rrkjus_psl.1.0.0.UPF
+ As 74.92 As.pbe-n-rrkjus_psl.1.0.0.UPF
+ATOMIC_POSITIONS crystal
+ Al 0.00 0.00 0.00
+ As 0.25 0.25 0.25
+K_POINTS (automatic)
+ 2 2 2 0 0 0

@@ -8467,10 +8467,41 @@ the arrangement P36 asks for on a term linear in the derivative factor. Measured
 the contracted route's symmetrised **8-point wedge reproduces the whole 64-point
 grid to 1.6e-06** on a value of 0.82. The taped route's own recorded pair is
 +0.815929 against +0.815802, **1.3e-04**, 78 times larger — which is the third
-of the three terms `born_effective_charges` carries and this tape does not,
-`_full_zone_field_response`, and it is the one piece of this pair still open. **So
-on a reduced k-set the cheap route is the better-behaved one**, which is the
-opposite of what it is usually reached for.
+of the three terms `born_effective_charges` carries and this tape did not,
+`_full_zone_field_response`. **So on a reduced k-set the cheap route was the
+better-behaved one**, which is the opposite of what it is usually reached for,
+and the reason is an accident rather than a virtue of the transcription: its
+screening factor is the field's converged `dvscf`, which `dielectric_tensor`
+mixes from the *symmetrised* density response and which is therefore full-zone
+already.
+
+*That third term is in as well, and it took a second committed cell of three
+k-points.* `alas-piezo-tiny-wedge.in` is `alas-piezo-tiny.in` with the point
+group kept, so the same unshifted `2 2 2` sample reduces from 8 points to 3, and
+it separates the two routes where the closed grid cannot:
+
+| route | wedge, before | wedge, after | closed grid |
+|---|---|---|---|
+| taped | 1.475427270 | **1.474382133** | 1.474377366 |
+| contracted | 1.474382167 | 1.474382167 | 1.474377366 |
+
+The two were **1.05e-03** apart on the wedge and are **3.4e-08** now, and both
+sit 4.8e-06 from the closed grid, which is the residue the rank-3 average leaves
+on the factor that stays a raw wedge sum. **The closed-grid numbers did not move
+by a bit** — the shift is `symmetrize_directional(raw) - raw`, identically zero
+on a `nosym` run, so the two-route gap on `alas-piezo-tiny.in` reads
+1.7135834085024726e-07 before and after, digit for digit, and `alas-raman.in`
+reads -0.7637860707 and 1.93043553006969e-14. That bit-identity is the check the
+construction asks for and is why the two cells are a pair rather than a
+duplicate.
+
+*One branch went unreachable in the fixing and was removed.* `_field_column`'s
+`multipliers`/`ground` arguments were the augmented path until that path needed
+a third and a fourth argument, at which point the loop moved into
+`clamped_ion_piezoelectric` and the branch stayed behind, dead, with a docstring
+still calling it the augmented case. It is the doc-drift of the 2026-09-18 audit
+from the other direction: not a stale sentence beside live code, but live prose
+beside code that had stopped running.
 
 ### P51 — The optical conductivity tensor, the Kerr angle and the anomalous Hall conductivity. ✅ DONE.
 

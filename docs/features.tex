@@ -2670,7 +2670,10 @@ independent statements. Silicon is centrosymmetric and its whole tensor
 vanishes (2.4e-5 C/m$^2$ against AlAs's 0.764 from the same code, with nothing
 imposing it on a \code{nosym} run); AlAs is $\bar43m$ and only
 $e_{14} = e_{25} = e_{36}$ survive, to 1.7e-14; an eight-point wedge reproduces
-the sixty-four-point closed grid to \textbf{4.5e-9}; and the same mixed
+the sixty-four-point closed grid to \textbf{4.5e-9}, and on an ultrasoft cell,
+where one term of this derivative is quadratic in a per-$k$ tangent and no
+average of the finished tensor can repair it, a three-point wedge reproduces its
+own closed grid to \textbf{4.8e-6}; and the same mixed
 derivative contracted the other two ways --- \code{zstar\_eu.f90}'s expression
 with a strain label, and the strain response against the field's bare
 perturbation --- agree to \textbf{6.2e-15} and \textbf{1.3e-7}. What anchors

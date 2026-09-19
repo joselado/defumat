@@ -4143,6 +4143,56 @@ not. **So the cheap route is the better-behaved one on a reduced k-set**, which
 is the opposite of what it is usually reached for, and the taped route's wedge
 is the one open question left in this pair.
 
+**The taped route's wedge is closed too, and it was the third of the three
+terms.** The pair above left one thing open -- the taped route's own wedge, at
+1.3e-04 against its closed grid where the contracted route was at 1.6e-06 -- and
+it is `_full_zone_field_response`, the term
+`born_effective_charges` has carried since 2026-09-16 and this tape did not.
+**The same trap one coordinate over**: on an augmented dataset the density moves
+with the strain at frozen states, so the mixed derivative carries
+`int (drho/d(eps)) K (drho/dE)`, a product of *two* per-k tangents, and a wedge
+sum of a product is not the product of the full-zone objects -- so no average of
+the finished rank-3 tensor repairs it and one factor has to be made whole before
+it is contracted. P36's rule, and the same choice of factor: the field response,
+because an induced charge density is a polar vector field and `symdvscf`'s
+average is already written for it.
+
+A second committed cell was what it took to see it, and the cell is three
+k-points. `alas-piezo-tiny-wedge.in` is `alas-piezo-tiny.in` with the point
+group kept, so the same unshifted `2 2 2` sample reduces from 8 points to 3:
+
+| route | wedge, before | wedge, after | closed grid |
+|---|---|---|---|
+| taped | 1.475427270 | **1.474382133** | 1.474377366 |
+| contracted | 1.474382167 | 1.474382167 | 1.474377366 |
+
+The two were **1.05e-03** apart on the wedge and are now **3.4e-08**, and both
+now sit 4.8e-06 from the closed grid, which is the residue the rank-3 average
+leaves on the factor that stays a raw wedge sum. **The closed-grid numbers did
+not move by a bit**, which is the check the construction asks for: the shift is
+`symmetrize_directional(raw) - raw` and that is identically zero on a `nosym`
+run, so `alas-piezo-tiny.in` reads 1.474377366 and a two-route gap of
+1.7135834085024726e-07 before and after, digit for digit. The norm-conserving
+cell is likewise unmoved at -0.7637860707 and 1.93043553006969e-14.
+
+**Why the contracted route never needed it**, which is the part worth keeping:
+its screening factor is the field's converged `dvscf`, and `dielectric_tensor`
+mixes that from the *symmetrised* density response, so the value inside the term
+is full-zone already while the `moved_drho` it multiplies stays the raw wedge
+sum -- exactly the arrangement P36 asks for. That is not a virtue of the
+transcription, it is an accident of which object the response loop happens to
+hand back, and it is worth saying because the taped route looks like the safer
+one and on a reduced k-set it was not.
+
+**And one branch went unreachable in the fixing.** `_field_column`'s
+`multipliers`/`ground` arguments were the augmented path until the augmented
+path needed a third and a fourth argument; the loop moved into
+`clamped_ion_piezoelectric` and the branch stayed, dead, with a docstring still
+calling it the augmented case. It is removed, which is the same drift the eight
+doc-drift entries above were, arrived at from the other direction: not a
+sentence that went stale beside live code, but live prose beside code that had
+stopped running.
+
 **A correction, and it is the largest thing this entry found.** Earlier today
 this said "+0.815802 is the number and +0.830702 is the artefact", on the
 grounds that the differentiated assembly run in the *position* coordinate is

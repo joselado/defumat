@@ -384,8 +384,54 @@ def _frozen_energy_of(calculation, psi, eigenvalues, weights, density, becsum):
     return energy
 
 
-def _field_column(gradient, coordinate, psi, dpsi, nocc,
-                  multipliers=None, ground=None):
+def _shifted_frozen_energy_of(calculation, psi, eigenvalues, weights, density,
+                              becsum):
+    """:func:`_frozen_energy_of` with the wedge completion as two more arguments.
+
+    Returns ``(energy, density_of, becsum_of)``: the energy takes
+    ``(moved, states, multipliers, shift, becsum_shift)``, and the two shifts
+    are added to the builders' output. **Their primal is zero and only their
+    tangent is used**, so the value of the density is untouched and what moves
+    is the *derivative* -- which is the whole construction, since what has to be
+    the full-zone object is a factor inside a term quadratic in a per-k tangent
+    rather than the density itself.
+
+    The builders come back because
+    :func:`~defumat.response.born._full_zone_field_response` needs them to build
+    the shifts in the first place. This is
+    :func:`~defumat.response.born.born_effective_charges`' arrangement one
+    coordinate over, and the two are deliberately the same shape: the term being
+    completed is the same one.
+    """
+    positions = jnp.asarray(calculation.system.structure.positions)
+    density_of, becsum_of = _raw_mixed_state(
+        calculation, positions, psi, weights, density, becsum
+    )
+
+    def energy(moved, states, multipliers, shift, becsum_shift):
+        def shifted_becsum(inner, inner_states, occupations):
+            return tuple(
+                None if part is None else part + offset
+                for part, offset in zip(
+                    becsum_of(inner, inner_states, occupations), becsum_shift
+                )
+            )
+
+        return energy_at(
+            moved,
+            FrozenState(
+                wavefunctions=states, weights=weights, eigenvalues=eigenvalues
+            ),
+            density=lambda inner, inner_states, occupations, parts: (
+                density_of(inner, inner_states, occupations, parts) + shift
+            ),
+            becsum=shifted_becsum, multipliers=multipliers,
+        )
+
+    return energy, density_of, becsum_of
+
+
+def _field_column(gradient, coordinate, psi, dpsi, nocc):
     """One ``jvp`` of a coordinate gradient along one field response.
 
     The tangent is the field's first-order wavefunction in the occupied block
@@ -394,24 +440,18 @@ def _field_column(gradient, coordinate, psi, dpsi, nocc,
     real-valued function of complex primals is the real-linear tangent map,
     which is where the ``+ c.c.`` of the hand-derived expression comes from.
 
-    **``multipliers`` switches on the second half of that derivative**, which an
-    augmented dataset needs and a norm-conserving one does not have at all:
-    ``Lambda`` moves to first order in the field, and the term it multiplies is
-    ``<psi|dS/d(coordinate)|psi>``, which is zero when ``S`` is the identity.
-    The primal is then ``ground``, the diagonal ``diag(w eps)`` the constraint
-    is already written at, so the *value* does not move and only the tangent
-    does. This is :mod:`defumat.response.born`'s construction, one coordinate
-    over.
+    **This is the states tangent alone, and that is the whole derivative only
+    for a norm-conserving dataset.** An augmented one moves three more things
+    with the coordinate -- the multipliers, the constraint's own sandwich and
+    the wedge completion of the density -- and
+    :func:`clamped_ion_piezoelectric` carries its own loop for them rather than
+    growing three more optional arguments here. It used to grow two, and the
+    branch went unreachable the moment the third arrived, which is the reason it
+    is not four now.
     """
     states = jnp.zeros_like(psi).at[:, :, :nocc].set(dpsi)
-    if multipliers is None:
-        _, column = jax.jvp(
-            gradient, (coordinate, psi), (jnp.zeros_like(coordinate), states)
-        )
-        return np.asarray(column)
     _, column = jax.jvp(
-        gradient, (coordinate, psi, ground),
-        (jnp.zeros_like(coordinate), states, multipliers),
+        gradient, (coordinate, psi), (jnp.zeros_like(coordinate), states)
     )
     return np.asarray(column)
 
@@ -503,20 +543,27 @@ def clamped_ion_piezoelectric(
             one number across the spin channels.
         solver, field_perturbations, commutators: what an **augmented** dataset
             needs and a norm-conserving one has no use for. Given all three,
-            the derivative gains the two terms that exist only when ``S``
-            deforms with the coordinate: the multipliers' own first-order
-            change, carried as a third tangent the way
-            :func:`~defumat.response.born.born_effective_charges` carries it,
-            and :func:`constraint_strain_term`, which is
-            ``add_for_charges.f90``. Omit them and the assembly is the
-            states-tangent-only one it has always been, which is complete for a
-            norm-conserving dataset and short of both terms otherwise.
+            the derivative gains three terms that do not exist when ``S`` is the
+            identity and the density does not move with the cell at frozen
+            states: the multipliers' own first-order change, carried as a third
+            tangent the way
+            :func:`~defumat.response.born.born_effective_charges` carries it;
+            :func:`constraint_strain_term`, which is ``add_for_charges.f90``;
+            and :func:`~defumat.response.born._full_zone_field_response`, which
+            completes the one factor of this derivative that is **quadratic** in
+            a per-k tangent and which no average of the finished tensor can
+            repair. Omit them and the assembly is the states-tangent-only one it
+            has always been, which is complete for a norm-conserving dataset and
+            short of all three otherwise.
 
-    **Why the augmented branch is skipped exactly and not approximately.** Both
-    extra terms are contracted with ``dS/d(eps)``, and ``S`` is the identity for
-    a norm-conserving dataset, so they are identically zero there rather than
-    small -- which is also why this assembly agreed with the transcribed one to
-    6.2e-15 on a norm-conserving cell while both were missing them. The cost of
+    **Why the augmented branch is skipped exactly and not approximately.** The
+    first two extra terms are contracted with ``dS/d(eps)``, and ``S`` is the
+    identity for a norm-conserving dataset; the third multiplies the
+    frozen-state density response, which at frozen plane-wave coefficients is
+    ``-delta_ab rho`` and therefore zero for every traceless strain. All of them
+    are identically zero on a norm-conserving shear rather than small -- which
+    is why this assembly agreed with the transcribed one to 6.2e-15 on a
+    norm-conserving cell while both were missing all three. The cost of
     switching them on is real: the matrix-multiplier constraint is an
     ``nbnd x nbnd`` Gram per k-point where the diagonal form is a vector, which
     is why :func:`~defumat.forces.energy._constraint_energy` exists separately
@@ -552,25 +599,61 @@ def clamped_ion_piezoelectric(
         return calculation.symmetrize_cartesian_tensor(tensor)
 
     from defumat.response.born import (
-        _ground_state_multipliers, _multiplier_response,
+        _full_zone_field_response, _ground_state_multipliers,
+        _multiplier_response,
+    )
+
+    # ``_frozen_energy_of`` again, with the wedge completion as two further
+    # arguments whose primal is zero: see the comment on ``shifts`` below.
+    energy, density_of, becsum_of = _shifted_frozen_energy_of(
+        calculation, psi, eigenvalues, weights, density, becsum
+    )
+    positions = jnp.asarray(calculation.system.structure.positions)
+    states_by_axis = [
+        jnp.zeros_like(psi).at[:, :, :nocc].set(dpsi[axis]) for axis in range(3)
+    ]
+    # **The one term of this assembly that is quadratic in a per-k tangent**, and
+    # therefore the one a rank-3 average of the finished tensor cannot complete:
+    # on an augmented dataset the density moves with the coordinate at frozen
+    # states, so the mixed derivative carries ``int (drho/d(eps)) K (drho/dE)``
+    # and a wedge sum of a product is not the product of the full-zone objects.
+    # P36's rule is that *one* factor has to be made whole and the other left as
+    # the raw wedge sum; the field response is the one made whole, because an
+    # induced charge density is a polar vector field and ``symdvscf``'s average
+    # is already written for it. It is identically zero on a run with no
+    # symmetry, which is what makes the wedge and the closed grid a real check of
+    # each other. Measured on the committed tiny cell: without it the wedge gives
+    # 1.475427270 C/m^2 against the closed grid's 1.474377366, **1.05e-03**,
+    # where the contracted route -- which needs none of this, its own screening
+    # factor being full-zone already -- splits by 4.8e-06.
+    shifts, becsum_shifts = _full_zone_field_response(
+        calculation, positions, psi, weights, density_of, becsum_of,
+        states_by_axis,
     )
 
     gradient = jax.grad(
-        lambda strain, states, mult: energy(
-            calculation.at_strain(strain), states, mult
+        lambda strain, states, mult, shift, becsum_shift: energy(
+            calculation.at_strain(strain), states, mult, shift, becsum_shift
         ),
         argnums=0,
     )
     ground = _ground_state_multipliers(weights, eigenvalues, psi.dtype)
+    unshifted = jnp.zeros_like(shifts[0])
+    no_becsum_shift = tuple(
+        None if offset is None else jnp.zeros_like(offset)
+        for offset in becsum_shifts[0]
+    )
     columns = []
     for axis in range(3):
         multipliers = _multiplier_response(
             solver, field_perturbations[axis], weights, psi.shape[2], nocc
         )
-        column = _field_column(
-            gradient, zero, psi, dpsi[axis], nocc,
-            multipliers=multipliers, ground=ground,
+        _, column = jax.jvp(
+            gradient, (zero, psi, ground, unshifted, no_becsum_shift),
+            (jnp.zeros_like(zero), states_by_axis[axis], multipliers,
+             shifts[axis], becsum_shifts[axis]),
         )
+        column = np.asarray(column)
         # ``born_effective_charges`` subtracts this beside its own column, for
         # the reason :func:`constraint_strain_term` gives: it is the half of
         # ``dLambda`` that the occupied-occupied block cannot carry.
@@ -580,9 +663,10 @@ def clamped_ion_piezoelectric(
         columns.append(-column / volume)
     tensor = np.stack(columns)
     # ``symmatrix3``: a wedge sum is exact for a scalar and not for a rank-3
-    # tensor, and this one is *linear* in the response -- so unlike P36's
-    # screening term there is no quadratic-in-a-wedge-sum trap here, and the
-    # average of the assembled tensor is the whole of the completion.
+    # tensor. Everything left in this assembly by the time the average is taken
+    # *is* linear in the response, which is why the average is the whole of the
+    # completion -- the one term that was not is the shift above, and it is
+    # completed before it enters rather than after.
     return calculation.symmetrize_cartesian_tensor(tensor)
 
 

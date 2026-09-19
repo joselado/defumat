@@ -4149,9 +4149,14 @@ zstar_eu --skip-difference`):
 The first and third are **1.0e-07** apart, on different machines by different
 assemblies, where before the two missing terms they were 0.0149. The first two
 say the symmetrised wedge reproduces the closed grid to **1.6e-06**, against the
-taped route's recorded +0.815929 / +0.815802 pair at **1.3e-04** -- so on a
-reduced k-set the cheap route is the better-behaved one, which is the opposite
-of what it is usually reached for. **The `6 6 6` and `8 8 8` rungs that were
+taped route's recorded +0.815929 / +0.815802 pair at **1.3e-04**. That gap was
+the taped route's missing wedge completion and is closed since: on the committed
+three-point wedge cell the two routes were 1.05e-03 apart and are **3.4e-08**
+now, with the closed-grid numbers unmoved to the bit. The cheap route needed
+none of it, its screening factor being the field's symmetrised `dvscf` already,
+which is an accident of what the response loop hands back rather than a virtue
+of the transcription -- worth one line here because the taped route looks like
+the safer one and on a reduced k-set it was not. **The `6 6 6` and `8 8 8` rungs that were
 sized as a cluster node are now 2.6 and 3.6 GiB**, and they are the measurement
 `OPEN.md`'s drift.3 entry needs next.
 
