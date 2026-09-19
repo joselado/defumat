@@ -4345,6 +4345,37 @@ missing path in two tasks out of three and the third would have tested the code
 the session started from. Its sibling jobs that day all used `defumat-jobs` and
 that is the default now.
 
+**The PAW half of the completion had never run, and it does now**
+(2026-09-19, this workstation). ``_full_zone_becsum_response`` is the half of
+the wedge completion that lives in the one-centre terms, where ``becsum``
+reaches a PAW energy directly rather than through the augmentation charge on the
+dense grid, and it had been live in the strain coordinate since the completion
+went in with nothing to exercise it: the tensor refuses PAW at the door, every
+committed PAW crystal was centrosymmetric, and a centrosymmetric tensor is zero
+whatever the assembly does. So the case was built. ``Al.pbe-n-kjpaw_psl.1.0.0``
+and ``As.pbe-n-kjpaw_psl.1.0.0`` are committed beside the ultrasoft pair, and
+``alas-piezo-tiny-paw.in`` is the ultrasoft tiny cell with the dataset kind
+changed and nothing else -- same geometry, same ``celldm``, same ``10/44``, same
+unshifted ``2 2 2`` -- which converges to **-215.3977782953 Ry** with a
+dielectric constant of **42.051** against the ultrasoft cell's 42.160, so the
+cheap cutoff has not made it a different problem.
+
+| ``e_14``, C/m^2 | wedge, 3 points | closed grid, 8 points | apart |
+|---|---|---|---|
+| with the completion | **1.465023765** | 1.465022183 | **1.58e-06** |
+| without it | 1.465718152 | 1.465022183 | 6.96e-04 |
+
+**A factor of 440**, and the switch that produced the second row is the point:
+``clamped_ion_piezoelectric`` gained ``full_zone``, whose only purpose is to be
+turned off in a test, because a completion that is *identically zero* on a
+``nosym`` run cannot be told from a deleted one by any test that never runs
+without it. On the closed grid the two rows are equal digit for digit, which is
+the other half of that statement. The file is
+``tests/regression/test_piezoelectric_paw.py`` and it is the **fourth cluster
+file**: one cell and two tapes peak at 14.9 GB in one process against the
+runner's 12 GiB cap, with no accumulation to remove, so it joins the three in
+``tools/cluster/piezo_regression.sbatch`` rather than being run here.
+
 ## 5. An **ultrasoft** dielectric constant does not reproduce its own closed grid from a symmetry-reduced k-set, by 1.6e-05 relative **[opened 2026-09-19, found in passing; attributed to the dataset under control the same day, six candidates excluded, term not found]**
 
 An unshifted Monkhorst-Pack grid is closed under the point group, so a
