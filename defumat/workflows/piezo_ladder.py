@@ -199,7 +199,15 @@ def piezoelectric_kmesh_ladder(
                          conv_thr=conv_thr, max_iterations=max_iterations,
                          **(scf_options or {}))
         tensor = piezoelectric_tensor(
-            calculation, result, verbose=verbose, kmesh_warning=False, **options
+            calculation, result, verbose=verbose, kmesh_warning=False,
+            # The coarse rungs are the measurement, so they are exempt from the
+            # mesh half of the dataset refusal: an ultrasoft run below
+            # ``ULTRASOFT_MESH`` is refused precisely because nobody had
+            # measured the curve, and this is the thing that measures it. What
+            # comes back from such a rung is a point on that curve and the
+            # ladder says so -- it is ``e14[i]``, not ``tensor``.
+            allow_a_coarse_mesh=True,
+            **options
         )
         tensors.append(tensor)
         counts.append(int(sampled.kpoints.nk))

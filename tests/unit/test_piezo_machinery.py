@@ -105,10 +105,12 @@ def test_the_regimes_this_was_never_run_in_are_refused(case, message):
     The guard chain is deliberately made of the *bare* forms: the linear
     response solver runs for a metal and for two spin channels, and this
     assembly on top of it has been run with neither, so the flags that would
-    say otherwise are not passed. An ultrasoft dataset is the interesting one --
-    nothing in the assembly is norm-conserving, and what is missing is a
-    non-centrosymmetric ultrasoft crystal to measure it on, since a
-    centrosymmetric one agrees with zero whatever is wrong.
+    say otherwise are not passed. The ultrasoft case is no longer refused for
+    being ultrasoft -- that half was lifted once the ladder measured it against
+    a Berry-phase value -- and is refused here for its **mesh**, this cell
+    carrying a grid below :data:`~defumat.response.piezo.ULTRASOFT_MESH`;
+    :func:`test_an_ultrasoft_dataset_is_refused_by_its_mesh_and_paw_outright`
+    is where that distinction is asserted rather than incidental.
     """
     with pytest.raises(NotImplementedError, match=message):
         require_a_piezoelectric_tensor(_calculation(case))
@@ -244,3 +246,64 @@ def test_the_ladder_refuses_an_order_that_would_read_as_a_drift():
         piezoelectric_kmesh_ladder(system, pseudos, meshes=(4, 4))
     with pytest.raises(ValueError, match="at least one mesh"):
         piezoelectric_kmesh_ladder(system, pseudos, meshes=())
+
+
+def test_an_ultrasoft_dataset_is_refused_by_its_mesh_and_paw_outright():
+    """The refusal after the ladder: PAW always, ultrasoft below a measured mesh.
+
+    **What was measured and what it licenses.** The ladder on zincblende AlAs
+    puts an ultrasoft ``e_14`` 1.26 per cent from a Berry-phase finite
+    difference at ``8 8 8`` and 0.57 at ``10 10 10``, against the
+    norm-conserving calibration's 1.62 and 1.19 on the same meshes -- so from
+    eight divisions on, an augmented dataset is nearer an independent reference
+    than the route this package validates against ``ph.x``. Below that the
+    dataset and the mesh are not separable: the same cell reads 15.6 per cent
+    out at ``4 4 4``, almost all of it k-convergence, which is why a coarse
+    ultrasoft run is refused rather than warned about while a coarse
+    norm-conserving one is warned about rather than refused.
+
+    PAW keeps the whole refusal, and the difference is the kind of evidence
+    that exists for each: the PAW wedge completion is measured against **its own
+    closed grid**, which is an internal identity, and no PAW crystal has been
+    compared with anything outside this code.
+
+    The stand-in is a namespace rather than a ``Calculation`` because what the
+    guard reads is three flags and a grid, and building a real 8x8x8 calculation
+    to assert a refusal costs 512 k-points' worth of basis for nothing.
+    """
+    from defumat.response.piezo import (
+        KMESH_STEP,
+        ULTRASOFT_MESH,
+        require_a_measured_dataset,
+    )
+
+    def stand_in(grid, paw=False):
+        nk = 1 if grid is None else grid[0] * grid[1] * grid[2]
+        return SimpleNamespace(
+            is_ultrasoft=True, is_paw=paw,
+            system=SimpleNamespace(kpoints=SimpleNamespace(nk=nk, grid=grid)),
+        )
+
+    with pytest.raises(NotImplementedError, match="denser"):
+        require_a_measured_dataset(stand_in((4, 4, 4)))
+    with pytest.raises(NotImplementedError, match="explicit k-point list"):
+        require_a_measured_dataset(stand_in(None))
+    with pytest.raises(NotImplementedError, match="PAW"):
+        require_a_measured_dataset(stand_in((10, 10, 10), paw=True))
+
+    # And the three ways through: a dense enough grid, a measured ladder below
+    # the step threshold, and the ladder's own exemption for its coarse rungs.
+    require_a_measured_dataset(stand_in((ULTRASOFT_MESH,) * 3))
+    require_a_measured_dataset(stand_in((4, 4, 4)), KMESH_STEP / 2)
+    require_a_measured_dataset(stand_in((4, 4, 4)), allow_a_coarse_mesh=True)
+
+    # A drift *above* the threshold is not evidence and does not open the door.
+    with pytest.raises(NotImplementedError, match="denser"):
+        require_a_measured_dataset(stand_in((4, 4, 4)), 10 * KMESH_STEP)
+
+    # A norm-conserving dataset passes whatever its mesh, which is what makes
+    # this a dataset refusal with a mesh condition rather than a mesh refusal.
+    require_a_measured_dataset(SimpleNamespace(
+        is_ultrasoft=False, is_paw=False,
+        system=SimpleNamespace(kpoints=SimpleNamespace(nk=1, grid=(1, 1, 1))),
+    ))

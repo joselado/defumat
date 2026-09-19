@@ -2794,7 +2794,17 @@ $\delta_{ki}P_j - \delta_{ij}P_k$, which needs the spontaneous polarization
 itself. Those terms vanish identically whenever the two Cartesian labels they
 pair are different --- so $e_{14}$ of a zincblende crystal never carries the
 ambiguity --- and they vanish for every component of a class that admits no
-invariant vector, which is what is checked. \textbf{Ultrasoft and PAW}, and that one is a gap rather
+invariant vector, which is what is checked. \textbf{PAW}, and \textbf{an ultrasoft dataset below eight $k$-divisions in
+each direction} --- the ultrasoft half of what used to be one refusal was lifted
+on 2026-09-20 by the ladder, which puts $e_{14}$ 1.26 per cent from a
+Berry-phase finite difference at \code{8 8 8} and 0.57 at \code{10 10 10} on
+zincblende AlAs, against the norm-conserving calibration's 1.62 and 1.19 on the
+same meshes; below eight the dataset and the $k$-mesh are not separable, the
+same cell reading 15.6 per cent out at \code{4 4 4}, so a coarse ultrasoft run
+is refused where a coarse norm-conserving one is only warned about. A measured
+ladder overrides the threshold: \code{kmesh\_drift} under one per cent is
+evidence where a division count is a guess taken from one cubic crystal. What
+follows is the history of that refusal, and it is a gap rather
 than a missing term: nothing in the assembly is norm-conserving and the
 displacement leg of it is the Born charge, which is now validated on a
 \emph{polar} ultrasoft crystal as well (\code{alas-epsilon-us.in}, $2.101065$

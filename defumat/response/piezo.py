@@ -143,6 +143,7 @@ __all__ = [
     "piezoelectric_from_strain_response",
     "require_a_piezoelectric_tensor",
     "KMESH_STEP",
+    "ULTRASOFT_MESH",
     "require_a_measured_dataset",
     "require_a_nonpolar_crystal",
     "polar_direction",
@@ -344,8 +345,27 @@ def require_a_nonpolar_crystal(calculation) -> None:
         )
 
 
-def require_a_measured_dataset(calculation) -> None:
-    """Norm-conserving only, and it is a gap rather than a missing term.
+#: The Monkhorst-Pack division an **ultrasoft** run needs in each direction.
+#:
+#: **Where it comes from, and it is one crystal's curve.** The ladder on
+#: zincblende AlAs reads ``e_14`` at 15.63, 4.11, 1.26 and 0.57 per cent from an
+#: independent Berry-phase value at ``4 4 4``, ``6 6 6``, ``8 8 8`` and
+#: ``10 10 10``, against the norm-conserving calibration's 13.33, 3.71, 1.62 and
+#: 1.19 on the same meshes. Eight is where the ultrasoft deficit first falls
+#: *below* the calibration's, which is the statement that matters here: from
+#: there on the dataset is not the largest error, the mesh is, and the mesh has
+#: a warning of its own. Below it the two are not separable and the dataset has
+#: never been measured, so the run is refused rather than warned about.
+#:
+#: A division is a coarse instrument on a cell that is not cubic, which is why
+#: a **measured** ladder overrides it: ``kmesh_drift`` below :data:`KMESH_STEP`
+#: is evidence where a threshold is a guess generalized from one crystal.
+ULTRASOFT_MESH = 8
+
+
+def require_a_measured_dataset(calculation, drift=None,
+                               allow_a_coarse_mesh: bool = False) -> None:
+    """PAW always, and an ultrasoft dataset below a measured mesh.
 
     Nothing in the assembly is norm-conserving. The density and ``becsum`` are
     handed to the functional as builders that carry the strain, which is what
@@ -436,26 +456,50 @@ def require_a_measured_dataset(calculation) -> None:
     mesh against a Berry-phase value on the same cell, and the cell is
     committed.
     """
-    if calculation.is_ultrasoft:
+    if not calculation.is_ultrasoft:
+        return
+    if calculation.is_paw:
         raise NotImplementedError(
-            "the piezoelectric tensor is not implemented for an ultrasoft or "
-            "PAW dataset, and what is missing is the measurement rather than a "
-            "term. Nothing in this assembly is norm-conserving, the "
-            "displacement leg of it (the Born charge) is validated on all three "
-            "dataset kinds, and response/strain.py carries the Q_ij(r) strain "
-            "term for ultrasoft and PAW since P41 -- so there is nothing to "
-            "write before running it. What is not known is whether this "
-            "assembly needs anything beyond that, and the one run so far was "
-            "taken at a k-mesh where the norm-conserving calibration cell is "
-            "itself 13 per cent from a Berry-phase finite difference, so it "
-            "says nothing. The case is committed "
-            "(tests/data/qe/alas-piezo.in, zincblende AlAs) and so is the "
-            "calibration (alas-raman.in); use a norm-conserving dataset until "
-            "the pair has been run at a converged mesh"
+            "the piezoelectric tensor is not implemented for a PAW dataset. "
+            "The ultrasoft half of this refusal was lifted on 2026-09-20 by a "
+            "ladder against a Berry-phase finite difference on zincblende AlAs "
+            "-- 0.57 per cent at 10 10 10, against the norm-conserving "
+            "calibration's 1.19 on the same mesh -- and no such comparison "
+            "exists for PAW: no non-centrosymmetric PAW crystal has been run "
+            "against an independent reference at all. What is measured for PAW "
+            "is internal only, the wedge completion's one-centre half against "
+            "its own closed grid (1.58e-06, a factor of 440 over the same run "
+            "with the completion off, tests/regression/test_piezoelectric_paw.py). "
+            "An internal identity is not a reference. Use an ultrasoft or "
+            "norm-conserving dataset"
         )
+    if allow_a_coarse_mesh or (drift is not None and drift < KMESH_STEP):
+        return
+    _, grid = _kmesh_of(calculation)
+    if grid is not None and min(grid) >= ULTRASOFT_MESH:
+        return
+    where = "an explicit k-point list" if grid is None else (
+        f"a {grid[0]} {grid[1]} {grid[2]} grid"
+    )
+    raise NotImplementedError(
+        f"the piezoelectric tensor of an ultrasoft dataset needs a denser "
+        f"k-mesh than {where}: the dataset was measured against a Berry-phase "
+        f"finite difference only at and above {ULTRASOFT_MESH} divisions in "
+        "each direction, where its disagreement (1.26 per cent at 8 8 8, 0.57 "
+        "at 10 10 10 on zincblende AlAs) is smaller than the norm-conserving "
+        "calibration's own on the same mesh. Below that the two are not "
+        "separable: at 4 4 4 the same cell reads 15.6 per cent out, almost all "
+        "of it k-convergence, which is why a coarse ultrasoft run is refused "
+        "here rather than warned about. Raise the mesh, or measure this "
+        "crystal's own curve with "
+        "defumat.workflows.piezo_ladder.piezoelectric_kmesh_ladder and pass its "
+        "drift as kmesh_drift, which is evidence where the division count is a "
+        "threshold taken from one cubic crystal"
+    )
 
 
-def require_a_piezoelectric_tensor(calculation) -> None:
+def require_a_piezoelectric_tensor(calculation, drift=None,
+                                   allow_a_coarse_mesh: bool = False) -> None:
     """Everything that makes the mixed derivative above not be the answer."""
     require_a_symmetrisable_response(calculation)
     # Bare, not ``metals=True``/``spin_polarized=True``: the *solve* runs for a
@@ -463,7 +507,8 @@ def require_a_piezoelectric_tensor(calculation) -> None:
     # run with neither.
     require_a_sternheimer_regime(calculation)
     require_a_differentiable_cell(calculation)
-    require_a_measured_dataset(calculation)
+    require_a_measured_dataset(calculation, drift,
+                               allow_a_coarse_mesh=allow_a_coarse_mesh)
     require_a_nonpolar_crystal(calculation)
 
 
@@ -1253,6 +1298,7 @@ def piezoelectric_tensor(
     method: str = "autodiff",
     kmesh_warning: bool = True,
     kmesh_drift: float | None = None,
+    allow_a_coarse_mesh: bool = False,
     **response_options,
 ) -> PiezoelectricTensor:
     """The clamped-ion piezoelectric tensor of a converged insulator.
@@ -1291,9 +1337,18 @@ def piezoelectric_tensor(
             :func:`~defumat.workflows.piezo_ladder.piezoelectric_kmesh_ladder`
             passes. Below :data:`KMESH_STEP` it silences the warning; above it,
             the warning quotes it instead of quoting AlAs.
+        allow_a_coarse_mesh: run an **ultrasoft** dataset below
+            :data:`ULTRASOFT_MESH` divisions, which
+            :func:`require_a_measured_dataset` otherwise refuses. It exists for
+            :func:`~defumat.workflows.piezo_ladder.piezoelectric_kmesh_ladder`,
+            whose coarse rungs are how the mesh gets measured in the first
+            place, and the tensor a coarse rung returns is a point on a curve
+            rather than an answer.
         response_options: passed to the field response.
     """
-    require_a_piezoelectric_tensor(calculation)
+    require_a_piezoelectric_tensor(
+        calculation, kmesh_drift, allow_a_coarse_mesh=allow_a_coarse_mesh
+    )
     if kmesh_warning:
         _warn_about_the_kmesh(calculation, kmesh_drift)
     if method not in PIEZOELECTRIC_METHODS:
