@@ -511,6 +511,7 @@ def require_a_norm_conserving_transcription(calculation) -> None:
 
 def piezoelectric_zstar_eu_style(
     calculation, solver, density, dpsi,
+    field_perturbations=None, band_weights=None, nocc=None,
 ) -> np.ndarray:
     """``zstar_eu.f90``'s contraction with the strain in place of the atom.
 
@@ -567,7 +568,75 @@ def piezoelectric_zstar_eu_style(
                     jnp.sum(weights * jnp.real(overlap))
                 ) / volume
                 tensor[k, a, b] = tensor[k, b, a] = value
+    constraint = _multiplier_strain_term(
+        calculation, solver, field_perturbations, band_weights, nocc
+    )
+    if constraint is not None:
+        tensor = tensor + constraint
     return calculation.symmetrize_cartesian_tensor(tensor)
+
+
+def _multiplier_strain_term(
+    calculation, solver, field_perturbations, band_weights, nocc,
+) -> np.ndarray | None:
+    """``(3, 3, 3)``: what the multipliers' own response adds, or ``None``.
+
+    **This is the term ``zstar_eu.f90`` delegates to ``zstar_eu_us.f90`` for**,
+    and it is one contraction here rather than three hundred lines there,
+    because only *one* leg of this derivative moves ``S``. The reasoning is
+    :mod:`defumat.response.born`'s, one coordinate over: the stationary
+    functional carries the orthonormality constraint with matrix multipliers as
+    ``-Re Tr[Lambda (G - 1)]`` (``forces/energy.py:_constraint_energy``, entering
+    the total as ``-norm``), so the mixed second derivative picks up
+
+        (d_Lambda d_eps E) . dLambda^E = -Re sum_mn dLambda^E_mn S'_nm
+
+    with ``S'_nm = d<psi_n|S|psi_m>/d(eps_ab)``, and since
+    ``e_(k)ab = -(1/Omega) d^2E/d(eps_ab) d(E_k)`` the tensor gains
+    ``+(1/Omega) Re sum_mn dLambda^E_mn S'_nm``. **There is no factor of two**:
+    the ``+ c.c.`` that doubles the main term is what ``jvp`` of a real function
+    of complex primals produces for the *states* tangent, while ``Lambda``
+    enters ``_constraint_energy`` linearly under an explicit ``Re``.
+
+    Both factors already existed and both are ``None``/zero for a
+    norm-conserving dataset, which is why the two routes agree to 6.2e-15 there
+    and why this term cannot perturb that agreement:
+    :func:`~defumat.response.strain.overlap_derivatives` returns ``None`` when
+    ``S`` does not deform, and
+    :func:`~defumat.response.born._multiplier_response` multiplies exactly the
+    object that vanishes with it. The index order is the one trap and is not a
+    convention -- ``_multiplier_response``'s own docstring records that the
+    weight belongs to the *column* and that transposing it costs 0.28 on
+    ultrasoft silicon while costing nothing at all on a norm-conserving cell.
+
+    ``field_perturbations`` are the three callables the last Sternheimer solve
+    was driven by, rebuilt at the converged ``dV_scf``; ``None`` skips the term,
+    which is what the norm-conserving cross-check in
+    ``test_piezoelectric.py`` passes.
+    """
+    if field_perturbations is None or band_weights is None:
+        return None
+    from defumat.response.born import _multiplier_response
+    from defumat.response.strain import overlap_derivatives
+
+    derivatives = overlap_derivatives(calculation, solver)
+    if derivatives is None:
+        return None
+
+    volume = calculation.system.cell.volume
+    nbnd = derivatives[0, 0].shape[-1]
+    out = np.zeros((3, 3, 3))
+    for k in range(3):
+        dlambda = _multiplier_response(
+            solver, field_perturbations[k], band_weights, nbnd, nocc
+        )
+        for a in range(3):
+            for b in range(a, 3):
+                value = float(jnp.real(jnp.einsum(
+                    "skmn,sknm->", dlambda, derivatives[a, b]
+                ))) / volume
+                out[k, a, b] = out[k, b, a] = value
+    return out
 
 
 def piezoelectric_from_strain_response(calculation, solver, bare, strain) -> np.ndarray:
@@ -671,8 +740,28 @@ def piezoelectric_tensor(
 
     internals = field.internals
     if method == "zstar_eu":
+        # The three callables the last Sternheimer solve was driven by, rebuilt
+        # at the converged ``dV_scf`` exactly as
+        # :func:`~defumat.response.efield.dielectric_tensor` rebuilds them for
+        # the Born charges. They are what the multipliers' own response is a
+        # matrix element of, so nothing new is solved -- only contracted
+        # differently (:func:`_multiplier_strain_term`).
+        from defumat.response.efield import _bare_plus_induced
+
+        onecentre = internals["onecentre"]
+        perturbations = [
+            _bare_plus_induced(
+                internals["solver"], internals["bare"][axis],
+                internals["dvscf"][axis],
+                None if onecentre is None else onecentre[axis], True,
+            )
+            for axis in range(3)
+        ]
         e = piezoelectric_zstar_eu_style(
             calculation, internals["solver"], density, internals["dpsi"],
+            field_perturbations=perturbations,
+            band_weights=jnp.asarray(internals["weights"]),
+            nocc=internals["nocc"],
         )
     else:
         e = clamped_ion_piezoelectric(

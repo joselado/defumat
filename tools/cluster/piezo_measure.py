@@ -338,6 +338,14 @@ def main() -> None:
     if measured:
         piezo.require_a_measured_dataset = lambda calculation: None
         print("    the dataset refusal is lifted for this run only", flush=True)
+        if arguments.method == "zstar_eu":
+            # A *second* refusal and lifted separately, which is the whole
+            # point of its being separate: the transcribed route was 1.8 per
+            # cent out on this cell until the multipliers' own response was
+            # added to it, and this run is what says whether that term is right.
+            piezo.require_a_norm_conserving_transcription = lambda c: None
+            print("    the transcription refusal is lifted too, which is what "
+                  "this run measures", flush=True)
 
     extra = {} if arguments.k_batch is None else {"k_batch": arguments.k_batch}
     if extra:
