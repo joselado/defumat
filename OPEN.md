@@ -3769,13 +3769,45 @@ file still runs out. It is also not free: `test_electrostriction.py` went from
 on a file that was mostly failing fast before, so the honest comparison is
 against a passing baseline nobody has.
 
-**What to do with the eleven other files, decided by this measurement.** Add
-the fixture, because a file that finishes with one failure is strictly better
-than one that aborts, and expect it to leave the longest test in each file
-still exposed. **The cure, where a file still fails with it, is a process
-boundary per test** (`pytest --forked`, or the per-geometry child
-`tools/cluster/piezo_measure.py` already uses), because a process cures this by
-exiting and nothing inside one does.
+**And the worst file in the whole set already had the fixture.**
+`test_nonlinear.py` carried the autouse `jax.clear_caches()` at `abee9c21` (so
+did `test_stm.py` and `test_ten_site.py`, checked with `git show`), and it
+produced **84** mapping failures, more than any other file. So the fixture is
+not a mapping cure, on the evidence of the very run that was read as asking for
+it.
+
+**A mechanism that fits all three readings, and it is a reason for caution
+rather than a conclusion.** `jax.clear_caches()` drops JAX's compilation cache,
+so the *next* call at a shape already seen compiles again, and a compilation is
+a new ORC dylib with new mappings while the old ones stay loaded. That is
+`40d8fe2`'s "clearing caches does not unmap" stated the other way round: on a
+file that revisits shapes, the fixture trades a cache hit for a fresh set of
+mappings. The wall clock says that is what happened, since
+`test_electrostriction.py` went from 285 s to 1521 s, and recompilation is the
+only thing that buys. **The fixture is a memory tool** -- P28b measured it
+getting both smaller and faster on the workstation -- **being used on an
+address-space problem**, which is `CLAUDE.md`'s "inherit a refusal only after
+checking which machine it belongs to" with a cure in place of a refusal.
+
+**So do not add it to the remaining five on this evidence.** The measured
+offenders that do not have it are `test_spinor_dielectric.py`,
+`test_dispersion.py`, `test_response.py`, `test_lsda_response.py` and
+`test_gamma_only.py`. What separates a file the fixture rescues
+(`test_spectra.py`) from one it does not save (`test_nonlinear.py`) is not in
+the record, and adding it to five more files buys five more experiments with no
+hypothesis behind them.
+
+**The cure is a process boundary per test, and it needs no plugin.** A process
+cures this by exiting and nothing inside one does. `pytest --forked` is not
+available -- the cluster venv has neither `pytest-forked` nor `xdist`, and no
+`psutil` either, which is why every cluster log carries "the memory watchdog is
+off", and no `matplotlib`, which is why `tests/unit/test_result_plots.py`
+cannot be collected. **What is available is `tools/run_regression.sh` itself**,
+which invokes pytest once per entry of its file-glob argument and already
+accepts node IDs there: the attribution array passed seven of them. So a file
+that exhausts mappings can be run as a list of its own test IDs, one process
+each, today. The real repair is upstream of all of this and is in the next
+paragraph but one: compile fewer distinct shapes.
 
 **Two non-test witnesses of the same exhaustion, and this time the cause is
 in our code rather than in the test suite's shape.** Rungs 4 and 6 of the piezo

@@ -389,7 +389,8 @@ def test_tstress_puts_the_tensor_on_the_result(pseudo_dir):
 
 
 def test_an_input_asking_for_an_impossible_stress_warns_rather_than_raising(pseudo_dir):
-    """``tstress = .true.`` on a regime P11 does not cover must not fail the SCF.
+    """``tstress = .true.`` on a regime the stress does not cover must not fail
+    the SCF.
 
     Three of QE's own spin-orbit benchmarks carry ``tstress = .true.``, and
     before this was handled every one of them ended in a ``NotImplementedError``
@@ -401,9 +402,27 @@ def test_an_input_asking_for_an_impossible_stress_warns_rather_than_raising(pseu
 
     Asked for **by hand** it still raises, and that distinction is the whole
     point: a flag left in a file is not a request for a number.
+
+    **The cell is a spin spiral, and it used to be a noncollinear one.** This
+    test was written when the stress refused ``noncolin = .true.``, and it went
+    red the day **P46** implemented the spinor stress:
+    ``stress/autodiff.py`` passes ``spinors=True`` unconditionally, so
+    ``reject_spinors`` is never reached, ``compute_stress`` returns a tensor on
+    ``h-chain-90deg.in``, and the warning branch it was watching for is never
+    taken. It read as ``DID NOT WARN`` with ``Emitted warnings: []``, which is
+    what a *successful* stress looks like from outside, and it was recorded as
+    pre-existing and unexplained in ``PLAN.md`` P74 and measured again on a
+    cluster node in ``OPEN.md`` Part XIII item 4. What the test is about is the
+    switching-off, not the regime, so it now uses a regime
+    :func:`~defumat.stress.energy.require_a_differentiable_cell` still refuses:
+    a spin spiral, whose ``q`` is given in lattice coordinates, so a strain
+    turns the spiral too. The spinor stress itself is covered by
+    ``test_spinor_forces.py::test_stress_matches_quantum_espresso``, against
+    ``pw.x``, which is where that claim belongs.
     """
-    system = build_system(read_pw_input(CASES / "h-chain-90deg.in"))
+    system = build_system(read_pw_input(CASES / "h-chain-spiral.in"))
     assert not system.tstress
+    assert system.spiral_q is not None  # the refusal under test hangs on this
     system = dataclasses.replace(system, tstress=True)
     pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species)
 
@@ -412,7 +431,7 @@ def test_an_input_asking_for_an_impossible_stress_warns_rather_than_raising(pseu
     assert result.stress is None
     assert result.total_energy is not None  # the SCF itself was unaffected
 
-    with pytest.raises(NotImplementedError, match="noncollinear"):
+    with pytest.raises(NotImplementedError, match="spiral"):
         run_scf(system, pseudos, conv_thr=1e-6, max_iterations=40, tstress=True)
 
 
