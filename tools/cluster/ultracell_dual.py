@@ -28,6 +28,7 @@ import sys
 import time
 from pathlib import Path
 
+import jax
 import numpy as np
 import jax.numpy as jnp
 
@@ -202,6 +203,21 @@ def fourier(field, grid, miller):
     return spectrum.reshape(-1)[flat]
 
 
+def write(record, out: Path, label: str) -> None:
+    """Write what has been measured so far, after every arm.
+
+    **A case here dies for a reason that has nothing to do with its physics.**
+    Three PAW tasks of job `20350372` finished their whole primary ladder and
+    then aborted in the *convention* arm with ``LLVM ERROR: Unable to allocate
+    section memory`` and ``INTERNAL: Failed to materialize symbols``, which is
+    address space rather than memory (``OPEN.md`` Part XIII item 2) -- every
+    rung is a distinct shape and every shape is a compiled executable that stays
+    mapped. The numbers were in the log and not in any file, which is a bad
+    trade for one line.
+    """
+    (out / f"{label}.json").write_text(json.dumps(record, indent=2))
+
+
 def main(index: int, out: Path, pseudo_dir: Path) -> None:
     (label, template, upf, ecutwfc, dual, spinor, rungs, reference_nbnd,
      kgrid, conv_thr) = CASES[index]
@@ -282,6 +298,7 @@ def main(index: int, out: Path, pseudo_dir: Path) -> None:
     record["supercell_modulation_energy"] = per_cell - null_per_cell
     print(f"[{label}] supercell null offset "
           f"{record['supercell_null_offset']:+.4e} Ry per cell", flush=True)
+    write(record, out, label)
     record["supercell_energy_per_cell"] = per_cell
     record["supercell_converged"] = bool(reference.converged)
     # **The two sides do not discretise on the same set and that is the first
@@ -362,6 +379,12 @@ def main(index: int, out: Path, pseudo_dir: Path) -> None:
                     "converged": bool(result.converged),
                     "iterations": int(result.iterations),
                 }
+                # The mapping count is what kills a case, and this is what
+                # releases it: ``jax.clear_caches()`` freed 8924 mappings where
+                # ``gc.collect()`` freed none (``OPEN.md`` Part XIII item 2). It
+                # costs a recompilation per rung, which is minutes against a run
+                # that otherwise does not finish.
+                jax.clear_caches()
                 print(f"[{label}] {arm:6s} nbnd={nbnd:3d} "
                       f"gap={rows[str(nbnd)]['gap']:+.4e} Ry "
                       f"modulation={rows[str(nbnd)]['modulation_gap']:+.4e} "
@@ -378,10 +401,12 @@ def main(index: int, out: Path, pseudo_dir: Path) -> None:
           f"supercell {record['supercell_ngm']}", flush=True)
 
     record["ladder"] = ladder("elk")
+    write(record, out, label)
     # The convention arm on silicon only: on platinum the ladder is the
     # expensive half of the case and the convention is the cheap question.
     if template == "si":
         record["ladder_sphere"] = ladder("sphere")
+        write(record, out, label)
     # **The arm whose job is to move.** If the two above agree, that is either
     # the convention being worth nothing or the patch point being dead, and the
     # two read identically. A quarter of the cut-off -- below ``4 ecutwfc``,
@@ -393,10 +418,9 @@ def main(index: int, out: Path, pseudo_dir: Path) -> None:
     finally:
         HALF_CUTOFF = False
     record["seconds"] = time.time() - started
-
-    path = out / f"{label}.json"
-    path.write_text(json.dumps(record, indent=2))
-    print(f"[{label}] written to {path} in {record['seconds']:.0f} s", flush=True)
+    write(record, out, label)
+    print(f"[{label}] written to {out / (label + '.json')} in "
+          f"{record['seconds']:.0f} s", flush=True)
 
 
 if __name__ == "__main__":
