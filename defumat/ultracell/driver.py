@@ -403,7 +403,10 @@ def require_an_ultracell_regime(system, pseudos, basis) -> None:
     one-centre terms are evaluated per atom copy, and for a spinor the
     integrals are recombined into spin blocks and sandwiched between ``fcoef``
     one Q-difference at a time, which is ``newd_so`` with a wavevector on it.
-    The practical wall such a dataset meets first is the double grid below.
+    **A double grid runs**, so such a dataset is run at the dual it was
+    generated for rather than at ``ecutrho = 4 ecutwfc``; the warning below is
+    what is left of the refusal that used to stand here, and it now fires the
+    other way round.
 
     What is *not* here and is refused where it is reached: a
     ground state converged under a field (:func:`run_ultracell`, because the
@@ -445,45 +448,40 @@ def require_an_ultracell_regime(system, pseudos, basis) -> None:
             "the ultracell refuses gamma-only storage: the basis is built at "
             "k0 + Q for N different Q and none of them is Gamma"
         )
-    if basis.doublegrid:
-        # **This is the refusal an ultrasoft or PAW run meets first** whenever
-        # its input sets the ``ecutrho`` such a dataset actually wants. The
-        # ultracell box is built on the *dense* grid and everything already
-        # lives on it, so what is missing is not an interpolation between two
-        # boxes but the truncation that makes the two halves agree: ``h_psi``
-        # multiplies a wavefunction by the potential **interpolated down to the
-        # smooth sphere**, so a ``dV`` carrying its dense components into the
-        # matrix element would give the ultracell a term the frozen eigenvalue
-        # and the reference supercell do not have. Both halves are one line and
-        # neither is measured, which is why this is refused rather than taken.
-        raise NotImplementedError(
-            "the ultracell needs the smooth and dense grids to coincide, which "
-            "they do at ecutrho = 4 ecutwfc. With a double grid the smooth half "
-            "of the matrix element would carry dV's dense components where "
-            "h_psi truncates them to the smooth sphere, so the ultracell and "
-            "the supercell it is validated against would not be discretising "
-            "the same functional. Lower ecutrho to 4 ecutwfc, and read the "
-            "warning that comes with doing so"
-        )
-    if any(p.is_ultrasoft or p.is_paw for p in pseudos):
-        # **The silent half of the refusal above, and it is the one that will
-        # actually be met.** ``ecutrho`` defaults to ``4 ecutwfc`` here as it
+    # **A double grid was refused here and the refusal's premise was wrong**
+    # (``PLAN.md`` P88 stage 9). What it said is that ``h_psi`` multiplies a
+    # wavefunction by the potential interpolated down to the smooth sphere, so
+    # a ``dV`` living on the dense box would give the matrix element a term
+    # neither the frozen eigenvalues nor the reference supercell has. The
+    # premise is right and the conclusion does not follow: the gather reads
+    # ``dV`` only where two wavefunction spheres differ, at ``G'' - G + Q_d``
+    # with both ``G`` inside the ``ecutwfc`` sphere, so ``|G'' - G| <= 2
+    # sqrt(ecutwfc)`` and that *is* the smooth sphere. The dense half of ``dV``
+    # is unreachable by the triangle inequality, which is the same argument
+    # ``basis.interpolate`` already makes for the unit cell -- "the high G
+    # components dropped are ones no product of two wavefunctions can see".
+    # Measured rather than left as an argument: truncating ``dV`` to the tiled
+    # smooth sphere moves a modulated PAW silicon ultracell at ``ecutrho = 8
+    # ecutwfc`` by **1.3e-12 Ry** at ``N = 2`` with the displaced blocks alive,
+    # against 6.5e-4 Ry for zeroing ``dV`` at the same point.
+    if any(p.is_ultrasoft or p.is_paw for p in pseudos) and not basis.doublegrid:
+        # **What is left to say is that this run is not at a dual.** ``ecutrho`` defaults to ``4 ecutwfc`` here as it
         # does in ``pw.x`` (``system/builder.py``), so an ultrasoft or PAW input
-        # that simply leaves it out is *accepted* by the double-grid check and
-        # runs with the augmentation charge represented on the wavefunction
-        # grid -- which is the one thing such a dataset is built not to do. The
-        # run is internally consistent and a comparison against a supercell at
-        # the same pair is still like-for-like; what is wrong is the absolute
-        # number, and nothing downstream would say so.
+        # that simply leaves it out runs with the augmentation charge
+        # represented on the wavefunction grid -- which is the one thing such a
+        # dataset is built not to do. The run is internally consistent and a
+        # comparison against a supercell at the same pair is still
+        # like-for-like; what is wrong is the absolute number, and nothing
+        # downstream would say so.
         warnings.warn(
             "this ultracell runs an ultrasoft or PAW dataset at ecutrho = "
-            "4 ecutwfc, because that is the only value it accepts -- a double "
-            "grid is refused. Such a dataset is normally run at 8 to 12 times "
-            "ecutwfc, and at 4 the augmentation charge is represented on the "
-            "wavefunction grid: the run is self-consistent and a comparison "
-            "against a supercell at the same cutoffs is still like for like, "
-            "but the absolute energy is not converged in ecutrho and cannot be "
-            "compared against a pw.x number taken at the dataset's own dual",
+            "4 ecutwfc, which is the input's own default rather than the dual "
+            "such a dataset wants. At 4 the augmentation charge is represented "
+            "on the wavefunction grid: the run is self-consistent and a "
+            "comparison against a supercell at the same cutoffs is still like "
+            "for like, but the absolute energy is not converged in ecutrho and "
+            "cannot be compared against a pw.x number taken at the dataset's "
+            "own dual. Set ecutrho to 8 to 12 times ecutwfc, which runs",
             stacklevel=2,
         )
 

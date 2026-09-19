@@ -41,6 +41,7 @@ datasets each bring a unit cell and a four-atom supercell that share no shape
 with anything already in that file.
 """
 
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -78,11 +79,11 @@ DATASETS = {
     "paw": "Si.pz-n-kjpaw_psl.0.1.UPF",
 }
 
-#: ``ecutrho = 4 ecutwfc`` and not the dataset's own default of 8 to 12, because
-#: the ultracell refuses a double grid: the smooth half of its matrix element
-#: would carry ``dV``'s dense components where ``h_psi`` truncates them. Both
-#: sides of every comparison here run at the same pair, so what is measured is
-#: the method rather than the representation of the augmentation charge.
+#: ``ecutrho = 4 ecutwfc`` and not the dataset's own default of 8 to 12, which
+#: is a choice here rather than a limit: both sides of every comparison run at
+#: the same pair, so what is measured is the method rather than the
+#: representation of the augmentation charge, and the smaller dense grid is
+#: cheaper. The dual runs too and has its own section below.
 ECUTWFC, ECUTRHO = 16.0, 64.0
 
 SILICON = """&control
@@ -510,30 +511,162 @@ def test_a_turning_field_puts_the_moment_where_the_field_points(
     assert result.augmentation_residual > 1.0e-6
 
 
-# -- what is still refused ---------------------------------------------------
+# -- the dual, which is what such a dataset is actually run at ---------------
+
+
+#: The dataset's own dual, ``8 ecutwfc``, where the two grids come apart. Every
+#: other number in this file is at ``ECUTRHO`` and stays there: what the tests
+#: below add is the *double grid*, not a second cutoff for everything.
+ECUTRHO_DUAL = 8.0 * ECUTWFC
+
+
+def _silicon_at_a_dual(tmp_path, pseudo_dir, dataset, kgrid) -> Calculator:
+    """The same cell as :func:`_silicon`, at ``ecutrho = 8 ecutwfc``."""
+    path = tmp_path / f"si-{dataset}-dual.in"
+    path.write_text(SILICON.format(
+        upf=DATASETS[dataset], ecutwfc=ECUTWFC, ecutrho=ECUTRHO_DUAL,
+        k0=kgrid[0], k1=kgrid[1], k2=kgrid[2],
+    ))
+    return Calculator.from_file(path, pseudo_dir=pseudo_dir)
 
 
 @pytest.mark.slow
-def test_a_double_grid_is_refused_by_name(tmp_path, pseudo_dir):
-    """The wall an augmented run meets first, and the message says what to do.
+def test_a_double_grid_runs_and_warns_only_below_it(tmp_path, pseudo_dir):
+    """The refusal is gone, and the warning that replaced it fires the other way.
 
-    An ultrasoft or PAW dataset normally asks for ``ecutrho`` of 8 to 12 times
-    ``ecutwfc``, so this is the refusal a first attempt actually sees -- which
-    is why the message names ``ecutrho = 4 ecutwfc`` rather than describing the
-    problem.
+    An ultrasoft or PAW dataset asks for ``ecutrho`` of 8 to 12 times
+    ``ecutwfc``, which is the pair a first attempt actually writes; what is
+    worth saying now is the opposite case, a dataset run at the input default
+    of ``4 ecutwfc``, where the augmentation charge sits on the wavefunction
+    grid and the absolute energy is not the dataset's.
     """
     from defumat.ultracell.driver import require_an_ultracell_regime
 
-    path = tmp_path / "si-dual.in"
-    path.write_text(SILICON.format(
-        upf=DATASETS["ultrasoft"], ecutwfc=ECUTWFC, ecutrho=8.0 * ECUTWFC,
-        k0=2, k1=2, k2=2,
-    ))
-    calculator = Calculator.from_file(path, pseudo_dir=pseudo_dir)
+    dual = _silicon_at_a_dual(tmp_path, pseudo_dir, "ultrasoft", (2, 2, 2))
+    basis = build_basis(dual.system)
+    assert basis.doublegrid
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        require_an_ultracell_regime(dual.system, dual.pseudos, basis)
+
+    flat = _silicon(tmp_path, pseudo_dir, "ultrasoft", (2, 2, 2))
+    single = build_basis(flat.system)
+    assert not single.doublegrid
+    with pytest.warns(UserWarning, match="ecutrho = 4 ecutwfc"):
+        require_an_ultracell_regime(flat.system, flat.pseudos, single)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("dataset", list(DATASETS))
+def test_an_ultracell_at_a_dual_is_the_tiled_unit_cell(
+        dataset, tmp_path, pseudo_dir):
+    """The null at a double grid: the plumbing on the larger box.
+
+    What it checks is the box, the displaced tables and ``becsum`` at a grid
+    pair where the smooth set is a strict subset of the dense one. What it
+    **cannot** check is the truncation the lift is about, because ``dV`` is
+    identically zero here -- that is the test below, and the two are separate
+    for exactly that reason.
+    """
+    shape, kgrid = (2, 1, 1), (1, 2, 2)
+    folded = tuple(n * m for n, m in zip(shape, kgrid))
+    calculator = _silicon_at_a_dual(tmp_path, pseudo_dir, dataset, folded)
+    scf = calculator.get_scf(conv_thr=1e-12, nbnd=8)
+    assert scf.converged
+
+    result = run_ultracell(
+        calculator.system, calculator.pseudos, scf, shape, kgrid,
+        nbnd=16, conv_thr=1e-11,
+    )
+    assert result.converged
+    assert float(result.total_energy) == pytest.approx(
+        float(scf.total_energy), abs=1e-9
+    )
+    # Nothing is applied, so every displaced block is multiplied by zero.
+    assert result.augmentation_residual < 1.0e-12
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("dataset", list(DATASETS))
+def test_the_dense_half_of_dv_cannot_reach_the_matrix_element(
+        dataset, tmp_path, pseudo_dir):
+    """The argument the lifted refusal rests on, measured at ``N = 2``.
+
+    The refusal said that ``h_psi`` multiplies a wavefunction by the potential
+    truncated to the smooth sphere, so an ultracell ``dV`` living on the dense
+    box would carry a term neither the frozen eigenvalues nor the reference
+    supercell has. The premise is right and the conclusion does not follow: the
+    gather reads ``dV`` only where two wavefunction spheres differ, and the
+    difference of two vectors inside the ``ecutwfc`` sphere is inside the
+    ``4 ecutwfc`` one, which is the smooth sphere itself.
+
+    So truncating ``dV`` must change nothing, and the arm that truncates it is
+    run here to say so with a number rather than with the argument alone. The
+    displaced blocks are alive at ``N = 2`` under the modulation, which is what
+    makes this more than the null: the difference carries ``Q_d`` as well.
+
+    **The third arm is the one that says the probe is live.** A patch point
+    that silently missed would make the first two agree for the wrong reason,
+    which is this project's "a check whose null result cannot be told from a
+    pass"; zeroing ``dV`` at the same point moves the total by 6.5e-4 Ry.
+    """
+    import defumat.ultracell.driver as driver
+    from defumat.ultracell.grid import Ultracell
+
+    shape, kgrid = (2, 1, 1), (1, 2, 2)
+    folded = tuple(n * m for n, m in zip(shape, kgrid))
+    calculator = _silicon_at_a_dual(tmp_path, pseudo_dir, dataset, folded)
     basis = build_basis(calculator.system)
     assert basis.doublegrid
-    with pytest.raises(NotImplementedError, match="ecutrho = 4 ecutwfc"):
-        require_an_ultracell_regime(calculator.system, calculator.pseudos, basis)
+    scf = calculator.get_scf(conv_thr=1e-12, nbnd=8)
+    assert scf.converged
+
+    ultracell = Ultracell.build(shape, basis.dense.grid)
+    mask = np.zeros(basis.dense.grid, dtype=bool)
+    mask.reshape(-1)[np.asarray(basis.dense.fft_index)[: basis.smooth.ngm]] = True
+    keep_smooth = jnp.asarray(ultracell.reciprocal_mask(mask))
+
+    def run(patch=None):
+        # **The patch point is the matrix element and not ``delta_potential``**,
+        # because the two halves of ``dV`` are used in different places: the
+        # matrix element is the one the argument is about, while ``newd``'s
+        # integral against the augmentation charge reads the dense ``dV`` and
+        # is *meant* to. Truncating both instead moves the total by 1.2e-10 Ry
+        # on this cell, which is a measurement of what the augmentation
+        # integral takes from the dense half and not of what this tests.
+        original = driver.ultracell_matrix
+        if patch is not None:
+            driver.ultracell_matrix = (
+                lambda c, e, b, v, g, **kw: original(c, e, b, patch(v), g, **kw)
+            )
+        try:
+            result = run_ultracell(
+                calculator.system, calculator.pseudos, scf, shape, kgrid,
+                nbnd=24, external=_modulation(shape), conv_thr=1e-11,
+                states_conv_thr=1e-11,
+            )
+        finally:
+            driver.ultracell_matrix = original
+        assert result.converged
+        return result
+
+    def truncate(delta_v):
+        coefficients = jnp.fft.fftn(delta_v, axes=(-3, -2, -1))
+        return jnp.real(jnp.fft.ifftn(
+            jnp.where(keep_smooth, coefficients, 0.0), axes=(-3, -2, -1)
+        ))
+
+    dense = run()
+    smooth = run(truncate)
+    zeroed = run(lambda delta_v: 0.0 * delta_v)
+
+    # Not a null: the displaced blocks are carrying content under the
+    # modulation, so what agrees below agrees with ``Q_d != 0`` alive.
+    assert dense.augmentation_residual > 1.0e-6
+    assert float(smooth.total_energy) == pytest.approx(
+        float(dense.total_energy), abs=1.0e-10
+    )
+    assert abs(float(zeroed.total_energy) - float(dense.total_energy)) > 1.0e-5
 
 
 # -- two spin channels, which the nulls above cannot see ----------------------
