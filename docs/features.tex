@@ -2704,8 +2704,12 @@ radial and reciprocal-space intermediate a cell derivative rebuilds, where
 and holds nothing. Measured on ultrasoft AlAs, the first peaks at 139.6~GiB at
 64 $k$-points and grows by about 1.6~GiB a point, which puts a $6^3$ mesh on a
 whole cluster node. The default is the taped one because it is the route that
-extends to the next derivative; reach for the other when the mesh is what you
-are converging.
+extends to the next derivative; reach for the other, **on a norm-conserving
+dataset**, when the mesh is what you are converging. On an ultrasoft or PAW one
+it is refused by name, because \code{zstar\_eu.f90} hands that case to
+\code{zstar\_eu\_us.f90} and the transcription stops at the first file: measured
+on ultrasoft AlAs at 64 $k$-points it reads $+0.830702$ against the
+differentiated route's $+0.815802$, 1.8 per cent apart.
 
 The $-0.7638$ printed above is the \code{4 4 4} of the committed input, and it
 is thirteen per cent from where the calculation is going; the Berry-phase value

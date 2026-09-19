@@ -3972,8 +3972,38 @@ SCF and the field response underneath.
 against +0.815802, 1.8 per cent, where the two agree to 6.2e-15 on the
 calibration cell, because `zstar_eu.f90:90` hands an augmented dataset to
 `zstar_eu_us.f90` and this transcription stops at the first file. It is refused
-by name now. **So what is left is a memory problem rather than a physics one**, and it has
-now been sized without running anything. Compiling one field column of the taped
+by name now. **What would make the cheap route correct, sized rather than guessed, because
+the template is in this repository.** `born.py`'s own table names the four
+things an ultrasoft Born charge needs beyond `zstar_eu`'s main term, and for a
+*piezoelectric* constant the structure is the same as the Born charge rather
+than the same as a phonon: **only one leg moves `S`**. The strain leg does, and
+`_bare_strains` already carries it; the field leg does not, so its `dLambda` is
+a matrix element of what the field response has already built rather than a
+response to be solved for. What is left is therefore the single contraction
+`-<psi_m|dS/d(eps_ab)|psi_n> . dLambda^E_mn`, and **both factors exist as
+functions already**:
+:func:`defumat.response.strain.overlap_derivatives` is
+`<psi_m|dS/d(eps_ab)|psi_n>` for the six strains and returns ``None`` for a
+norm-conserving dataset, and
+:func:`defumat.response.born._multiplier_response` is
+`dLambda_mn = w_n <psi_m|dV_E|psi_n>`, which its own docstring calls "the whole
+of QE's first two ultrasoft stages at once". Both vanish identically for a
+norm-conserving dataset, **which is exactly why the two routes agree to
+6.2e-15 there and differ by 1.8 per cent here**. The `add_dkmds` term of that
+table is `jax.grad` of `frozen_polarization` and vanishes for the non-polar
+crystals this route is allowed on at all.
+
+**It is a derivation and not a copy, so it is not taken here.** The index order
+is the trap and is flagged in `_multiplier_response`'s own docstring: `Lambda_mn`
+pairs with `<psi_n|S|psi_m>`, the weight belongs to the *column*, and
+transposing it costs 0.28 on ultrasoft silicon while costing nothing at all on
+a norm-conserving cell -- the kind of error the regression gate cannot see.
+What makes it worth doing anyway is that the validation is already set up and
+sharp: the target is **+0.815802** on `alas-piezo.in` at 64 k-points, the floor
+is **6.2e-15** on the calibration cell where the new term must stay identically
+zero, and the job that checks it costs 2.3 GiB and six minutes.
+
+**The memory side of the same problem, sized without running anything.** Compiling one field column of the taped
 route at four k-counts and never executing it
 (`jit(...).lower(...).compile().memory_analysis()`, P73's instrument) gives
 **0.630, 3.679, 8.166 and 15.724 GiB** of temporaries at 64, 216, 512 and 1000

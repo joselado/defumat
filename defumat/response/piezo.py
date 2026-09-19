@@ -463,10 +463,38 @@ def require_a_norm_conserving_transcription(calculation) -> None:
     overlap (P39) and rebuilding the potential inside the traced function so
     that ``Q_ij(r)``'s own strain derivative is differentiated; the Born
     charge's ``h_psi`` has no overlap subtraction at all. What is left is what
-    ``zstar_eu_us.f90`` adds on top, the ``int3``/``dbecsum`` terms in which the
-    *self-consistent* potential response reaches ``D_ij`` through the
-    augmentation charge. :func:`clamped_ion_piezoelectric` has them because it
-    differentiates the energy rather than an operator.
+    ``zstar_eu_us.f90`` adds on top, and in this project's own terms it is one
+    contraction rather than three hundred lines.
+    :func:`clamped_ion_piezoelectric` has it because it differentiates the
+    energy rather than an operator.
+
+    **What it would take to lift this, since the template is already here.**
+    :mod:`defumat.response.born` explains that an ultrasoft Born charge costs
+    "one more tangent instead of ``zstar_eu_us.f90``'s five further stages",
+    and the reason is that **only one leg of that derivative moves ``S``**. The
+    piezoelectric constant has the same asymmetry, not a phonon's: the strain
+    leg moves ``S`` and :func:`~defumat.response.strain._bare_strains` carries
+    it, while the field leg does not, so its ``dLambda`` is a matrix element of
+    what the field response has already built. What is missing is therefore
+    ``-<psi_m|dS/d(eps_ab)|psi_n> . dLambda^E_mn``, and both factors are
+    functions that exist:
+    :func:`~defumat.response.strain.overlap_derivatives` for the first, which
+    returns ``None`` for a norm-conserving dataset, and
+    :func:`~defumat.response.born._multiplier_response` for the second, which
+    its own docstring calls "the whole of QE's first two ultrasoft stages at
+    once". **Both vanish identically for a norm-conserving dataset, which is
+    why the two routes agree to 6.2e-15 there and differ by 1.8 per cent
+    here.** ``add_dkmds``, the fourth entry of ``born.py``'s table, is
+    ``jax.grad`` of ``frozen_polarization`` and vanishes for the non-polar
+    crystals this route is allowed on at all.
+
+    It is a derivation rather than a copy and the index order is the trap --
+    ``_multiplier_response``'s docstring says the weight belongs to the
+    *column*, and transposing it costs 0.28 on ultrasoft silicon and nothing on
+    a norm-conserving cell, which is the kind of error no norm-conserving gate
+    can see. The validation is sharp and cheap: ``+0.815802`` on
+    ``alas-piezo.in`` at 64 k-points, ``6.2e-15`` on the calibration cell where
+    the new term must stay identically zero, and this route runs in 2.3 GiB.
     """
     if calculation.is_ultrasoft:
         raise NotImplementedError(
