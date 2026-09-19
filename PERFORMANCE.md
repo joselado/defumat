@@ -4017,6 +4017,64 @@ one to reach for.
 with the strain response on the screened side, costs **25 s** for six more
 Sternheimer solves. It is in the slow test set and nowhere near the default path.
 
+**What it costs as the k-mesh is opened up, measured on Triton 2026-09-19**
+(`batch-milan`, 4 cores, `DEFUMAT_CACHE_DIR=off`, `MaxRSS` from `sacct`; the
+same AlAs cell, `nosym`, whole unshifted grids). The ladder was run to find out
+which of two routes to `e_14` was unconverged, and its by-product is the first
+sizing of this quantity above one k-mesh:
+
+| grid | k-points | peak RSS | the response route alone | job |
+|---|---|---|---|---|
+| `4 4 4` | 64 | 5.4 GiB | (with the difference) 15 min | `20336476_0` |
+| `6 6 6` | 216 | **13.8 GiB** | 131 s | `20337789_0` |
+| `8 8 8` | 512 | **28.3 GiB** | 240 s | `20337789_1` |
+| `10 10 10` | 1000 | **46.6 GiB** | 393 s | `20338160_0` |
+| ultrasoft PBE, `ecutrho = 200`, the *reduced* `4 4 4` | 8 | **49.4 GiB** | 810 s | `20336374_1` |
+
+**The peak is close to affine in `nk` and the slope is about 40 MB a k-point**:
+14.5 GiB over 296 points from `6 6 6` to `8 8 8`, 18.3 GiB over 488 from `8 8 8`
+to `10 10 10`. **That sits badly with the paragraph above**, which says the peak
+does not move with `k_batch` because "what the tape holds is not the k axis",
+and the arithmetic points the same way: 4.2 GB at 64 points is 65 MB a point,
+the same order as the slope. The likely reconciliation is that the tape *is*
+per-k -- `f_l(|k+G|)` is rebuilt at every k inside the differentiated function --
+and that `k_batch` does not shrink it because a `lax.map` or `lax.scan` body
+**stacks its residuals under `jax.grad`**, which is exactly P73's lesson about
+the augmentation table and the reason both of its scan bodies are rematted. If
+that is right, the dial cannot help here and `jax.remat` on the per-k body can.
+**It is a hypothesis and it is being measured** rather than written into the
+docstring: `tools/cluster/piezo_us.sbatch` runs the ultrasoft cell at 64 points
+with and without `k_batch = 1`, which is the A/B the claim needs, and the
+docstring keeps its 64-point statement until that lands.
+
+**The Berry-phase route is the opposite shape: nothing in memory and everything
+in mappings.** Every rung of the same ladder peaked between **1.7 and 3.8 GiB**,
+including the 36-string ultrasoft one, because the loop holds one string's
+occupied manifold and the number of strings never enters the resident set. What
+it does hold is virtual-memory *mappings*, about 480 a string, and two rungs
+died of that rather than of memory -- `20337789_4` and `_6` sat at 3.0 and 3.8
+GiB for two hours having already thrown `Failed to materialize symbols`. The
+dial is `run_polarization`'s `clear_caches`, and on a 36-string mesh
+(`nppstr = 11` over `6x6`, norm-conserving AlAs), one fresh process per
+configuration with the kernel cache off:
+
+| | `/proc/self/maps` lines | wall clock, two samples |
+|---|---|---|
+| `clear_caches=None` | **19036**, 19034 | 104.6, 104.0 s |
+| `clear_caches=32`, the default | **3706**, 3701 | 115.7, 136.2 s |
+
+**Five times fewer mappings, for somewhere between eleven and thirty-one per
+cent of the time.** Two samples each, and the honest reading is that the
+mapping count is reproducible to five parts in ten thousand while the cost of
+clearing is not: the unclamped pair agree to 0.6 per cent and the clamped pair
+differ by 18. The phase is bit-identical in every run, and periods of 8, 16 and
+32 all give the same count, because a clear drops whatever has accumulated
+since the last one. Clearing every *string* is what actually costs: a 16-string
+mesh reads 13.0 s unclamped against 36.6 s at period 1 in one process, so the
+default is the longest period that bounds the count rather than the
+safest-looking one.
+
+
 **The whole test file is 8 tests in 93 s** and the notebook is 33 s, both of
 which include their own SCF and field response.
 

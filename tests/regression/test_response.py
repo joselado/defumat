@@ -44,6 +44,33 @@ from defumat.scf import run_scf
 from defumat.system import build_system
 from defumat.system.kpoints import KPoints
 
+
+@pytest.fixture(autouse=True)
+def _drop_compiled_code():
+    """``jax.clear_caches()`` between tests, for ``CLAUDE.md``'s reason.
+
+    Forty-seven of this file's failures on a cluster node were
+    ``INTERNAL: Failed to materialize symbols``, which is what a file that runs
+    the whole linear-response stack over several cells accumulates.
+
+    The results stay cached and only the compiled executables are dropped, which
+    trades recompilation against both the resident set and the process's count
+    of virtual-memory mappings -- ``vm.max_map_count`` is 65530 on an ordinary
+    node and XLA maps every compiled executable anonymously. Measured on a
+    Berry-phase loop, one ``jax.clear_caches()`` released 8924 mappings where
+    ``gc.collect()`` released none, so this does reach them (``OPEN.md``
+    Part XIII item 2).
+
+    **What it cannot do is help a single test that exhausts them on its own**,
+    because a fixture with a ``yield`` fires between tests. Where one test is
+    the offender the clear has to go inside its loop, which is what
+    ``run_polarization``'s ``clear_caches`` does, or the test has to run in a
+    process of its own -- ``tools/run_regression.sh`` takes node IDs for that.
+    """
+    yield
+    jax.clear_caches()
+
+
 pytestmark = [pytest.mark.regression, pytest.mark.slow]
 
 CASES = Path(__file__).resolve().parents[1] / "data" / "qe"

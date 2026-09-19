@@ -20,15 +20,27 @@ AlAs, which is the same structure with the two sublattices made inequivalent, is
 
 | | this notebook | reference |
 |---|---|---|
-| AlAs $e_{14}$, clamped-ion | **-0.764 C/m²** | none available: see below |
+| AlAs $e_{14}$, clamped-ion | **-0.764 C/m²** at this cell's mesh, **-0.670** converged | **-0.661**, a polarization difference |
 | silicon, every component | **< 10⁻⁵ C/m²** | zero, by inversion symmetry |
 | components $\bar{4}3m$ forbids | 2 × 10⁻¹⁴ of the scale | zero, and nothing imposes it |
 
-**The reference row is unusual and worth a sentence.** Quantum ESPRESSO does not compute a
+**The reference is unusual and worth a sentence.** Quantum ESPRESSO does not compute a
 piezoelectric tensor at all, and the one established code that does gets it from a finite
 difference of the polarization over a separate self-consistent calculation for every strain.
-So the numbers below are checked against symmetry and against each other rather than against
-another code's output.
+That is the reference quoted above, and it is worth trusting precisely because it shares no
+machinery with what this notebook computes: no response solver, no derivative, just two
+converged ground states and the Berry phase of each.
+
+**Read the first row twice, because it is the useful thing in this notebook.** The $-0.764$
+is what the cell below prints, on the $4\times4\times4$ k-mesh the input file asks for, and
+it is thirteen per cent away from the answer. Going to $6^3$, $8^3$ and $10^3$ gives
+$-0.687$, $-0.673$ and $-0.670$, and the polarization difference sits at $-0.661$ throughout,
+moving by less than one per cent whatever it is asked to do. So the mesh that converges the
+*energy* of this crystal does not converge its piezoelectric constant, and the reason is
+visible in the definition at the top: $e_{14}$ is a mixed derivative of an energy that is
+already stationary in the density, so the variational protection that makes a total energy
+forgiving about the zone sum is simply absent. **Converge the mesh on this quantity, not on
+the ground state**, whenever you want a piezoelectric constant to a few per cent.
 
 
 ```python
@@ -78,11 +90,11 @@ print(f"\nlargest component the crystal class forbids: "
 ```
 
     e_iJ  [C/m2]             xx       yy       zz       yz       xz       xy
-      P along x         -0.0000   0.0000  -0.0000  -0.7638  -0.0000  -0.0000
-      P along y          0.0000  -0.0000   0.0000  -0.0000  -0.7638   0.0000
-      P along z         -0.0000   0.0000  -0.0000   0.0000   0.0000  -0.7638
+      P along x         -0.0000  -0.0000  -0.0000  -0.7638  -0.0000  -0.0000
+      P along y         -0.0000  -0.0000   0.0000  -0.0000  -0.7638   0.0000
+      P along z         -0.0000  -0.0000  -0.0000  -0.0000  -0.0000  -0.7638
     
-    largest component the crystal class forbids: 2.2e-14 of e_14
+    largest component the crystal class forbids: 3.2e-14 of e_14
 
 
 ## 2. Silicon has none, and that is the point

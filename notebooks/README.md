@@ -264,6 +264,13 @@ fails over that ceiling, so the table below is a by-product of keeping the outpu
 true rather than something anyone has to remember to do. Wall clock on one
 workstation core, slowest last:
 
+**One entry was re-measured on 2026-09-19 and had drifted**: `28` is **90 s**
+here against the 33 in this table, on a re-execution where nothing in its code
+cells changed, only its prose. A cold run of the same notebook took 130 s, so
+the 90 is the warm figure and the two bracket whatever the 33 was measured
+under. Nothing else in the table has been re-measured, so treat the rest as the
+order of magnitude it is rather than as current to the second.
+
 | | s | | s | | s | | s |
 |---|---|---|---|---|---|---|---|
 | `01` | 5 | `06` | 23 | `34` | 40 | `08` | 171 |
@@ -273,7 +280,7 @@ workstation core, slowest last:
 | `03` | 10 | `21` | 30 | `45` | 85 | `17` | 203 |
 | `05` | 10 | `15` | 31 | `14` | 89 | `38` | 242 |
 | `04` | 122 | `24` | 31 | `26` | 109 | `19` | 243 |
-| `22` | 12 | `28` | 33 | `33` | 115 | `36` | 244 |
+| `22` | 12 | `28` | 90 | `33` | 115 | `36` | 244 |
 | `42` | 13 | `31` | 34 | `13` | 131 | `35` | 276 |
 | `16` | 18 | `40` | 34 | `30` | 232 | `20` | 282 |
 | `00` | 22 | `23` | 35 | `39` | 151 |  |  |
