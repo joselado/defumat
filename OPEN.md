@@ -3862,25 +3862,47 @@ inside the loop, measured above to hold the count at 976 across the whole mesh,
 and the padding is a separate improvement to the compile count and the wall
 clock rather than the cure.
 
-**The whole `slow` set was then run on a node, and the measured offenders are
-not the ones the input-count proxy named.** Eight array tasks, 22 files each
-(job `20336106`, all eight `COMPLETED`), counting
-`Failed to materialize symbols` and `Cannot allocate memory` per file:
-`test_nonlinear.py` (84), `test_spinor_dielectric.py` (70),
-`test_dispersion.py` (60), `test_electrostriction.py` (55),
-`test_response.py` (47), `test_lsda_response.py` (26), plus
-`test_spectra.py` and `test_gamma_only.py`, which do not appear in that count at
-all because they **abort** rather than raise -- `Fatal Python error: Aborted`
-with the faulthandler stack inside `backend_compile_and_load` in both, which is
-the same exhaustion reaching `abort()` inside LLVM instead of returning an
-error. Of the 37 individual failures in the six raising files, **33 are
-`jax.errors.JaxRuntimeError` and 4 are assertions**, so the classification is
-nearly clean: one number per file separates the environment from the physics.
-Ranked by measurement, the list to fix is those eight, and `test_stress.py`,
-`test_input_sweep.py`, `test_lsda.py`, `test_spinorbit.py`,
+**The whole `slow` set was then run on a node** -- eight array tasks, 22 files
+each, job `20336106`, all eight `COMPLETED`. **The first reading of it ranked
+the files by how many times the error string appeared, and that ranking is
+wrong**, because a single test that loops over displaced geometries raises once
+per geometry. `test_nonlinear.py` led that list with 84 occurrences and is in
+fact **2 failed of 13**, the least affected file of the eight. Ranked instead by
+what the runner reports, which is tests:
+
+| file | failed / run | peak | error strings, the old proxy |
+|---|---|---|---|
+| `test_spectra.py` | **aborted**, `exit=134` | 3.0 G | none: it aborts rather than raising |
+| `test_gamma_only.py` | **aborted**, `exit=134` | 2.9 G | none, same |
+| `test_electrostriction.py` | **15 of 20** | 2.9 G | 55 |
+| `test_spinor_dielectric.py` | **4 of 6** | 3.0 G | 70 |
+| `test_lsda_response.py` | **3 of 7** | 3.5 G | 26 |
+| `test_dispersion.py` | **8 of 22** | 3.2 G | 60 |
+| `test_response.py` | **7 of 35** | 3.8 G | 47 |
+| `test_nonlinear.py` | **2 of 13** | 3.0 G | 84 |
+
+Both aborts are `Fatal Python error: Aborted` with the faulthandler stack inside
+`backend_compile_and_load`, which is the same exhaustion reaching `abort()`
+inside LLVM instead of returning an error.
+
+**And the ordered pass/fail sequence is the evidence the fixture paragraph above
+needed.** `test_nonlinear.py`'s progress line is `...FF........`: three pass,
+two fail, and then **eight pass after them**. The two are consecutive
+parametrisations of one test, `si-us` and `si-paw`, the two augmented datasets
+and the heaviest cases in the file. So a test that exhausts the mappings does
+not poison the ones after it, which is the autouse `jax.clear_caches()` doing
+exactly what the measurement says it does, and it is why the fixture is worth
+adding while being no use to the test that exhausts inside itself.
+
+Of the individual failures in the six raising files, the great majority are
+`jax.errors.JaxRuntimeError` and eight are assertions, which item 4 below
+attributes one at a time.
+
+`test_stress.py`, `test_input_sweep.py`, `test_lsda.py`, `test_spinorbit.py`,
 `test_noncollinear_magnetism.py`, `test_scf.py`, `test_magnetic_constraints.py`,
 `test_uspp.py`, `test_topology.py` and `test_ldau.py` are *candidates* that this
-run did not convict -- several of them passed outright.
+run did not convict; several passed outright, and `test_ten_site.py` is the
+memory outlier rather than a mapping one at **17.2 G**.
 
 **One file fails on the node for a reason that is not this and not the code**:
 `tests/unit/test_result_plots.py` cannot be collected because the cluster venv

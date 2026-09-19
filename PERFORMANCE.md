@@ -3986,7 +3986,7 @@ cell, in the same process, off the same field response: AlAs (2 atoms, NC LDA,
 | SCF, `conv_thr = 1e-12` | 2.1 s | 0.48 GB |
 | the electric-field response (3 directions, self-consistent) | 15-20 s | 0.98 GB |
 | **Born charges** on top of it (P24b) | **0.8 s** | 1.13 GB |
-| **the piezoelectric tensor** on top of it | **6.4 s** warm, 8.7 s cold | **4.2 GB** |
+| **the piezoelectric tensor** on top of it | **6.4 s** warm, 8.7 s cold | **4.2 GB** (the tensor alone, in-process) |
 | the transcribed contraction beside it (`zstar_eu` with a strain label) | 4.0 s | no change |
 
 **Eight times the time and four times the peak, for a derivative with *fewer*
@@ -4023,7 +4023,7 @@ same AlAs cell, `nosym`, whole unshifted grids). The ladder was run to find out
 which of two routes to `e_14` was unconverged, and its by-product is the first
 sizing of this quantity above one k-mesh:
 
-| grid | k-points | peak RSS | the response route alone | job |
+| grid | k-points | peak RSS, **whole job** | the response route alone | job |
 |---|---|---|---|---|
 | `4 4 4` | 64 | 5.4 GiB | (with the difference) 15 min | `20336476_0` |
 | `6 6 6` | 216 | **13.8 GiB** | 131 s | `20337789_0` |
@@ -4031,21 +4031,34 @@ sizing of this quantity above one k-mesh:
 | `10 10 10` | 1000 | **46.6 GiB** | 393 s | `20338160_0` |
 | ultrasoft PBE, `ecutrho = 200`, the *reduced* `4 4 4` | 8 | **49.4 GiB** | 810 s | `20336374_1` |
 
-**The peak is close to affine in `nk` and the slope is about 40 MB a k-point**:
-14.5 GiB over 296 points from `6 6 6` to `8 8 8`, 18.3 GiB over 488 from `8 8 8`
-to `10 10 10`. **That sits badly with the paragraph above**, which says the peak
-does not move with `k_batch` because "what the tape holds is not the k axis",
-and the arithmetic points the same way: 4.2 GB at 64 points is 65 MB a point,
-the same order as the slope. The likely reconciliation is that the tape *is*
-per-k -- `f_l(|k+G|)` is rebuilt at every k inside the differentiated function --
-and that `k_batch` does not shrink it because a `lax.map` or `lax.scan` body
-**stacks its residuals under `jax.grad`**, which is exactly P73's lesson about
-the augmentation table and the reason both of its scan bodies are rematted. If
-that is right, the dial cannot help here and `jax.remat` on the per-k body can.
-**It is a hypothesis and it is being measured** rather than written into the
-docstring: `tools/cluster/piezo_us.sbatch` runs the ultrasoft cell at 64 points
-with and without `k_batch = 1`, which is the A/B the claim needs, and the
-docstring keeps its 64-point statement until that lands.
+**The whole-job peak is close to affine in `nk`, with a slope of about 40 MB a
+k-point**: 14.5 GiB over 296 points from `6 6 6` to `8 8 8`, 18.3 GiB over 488
+from `8 8 8` to `10 10 10`.
+
+**These are not the same quantity as the 4.2 GB above and must not be read
+against it directly.** That figure is the tensor alone, measured in-process off
+an existing field response; these are `sacct`'s `MaxRSS` for a job that also ran
+the SCF and the field response, and in the `4 4 4` row the Berry difference as
+well. So the 40 MB a k-point is an upper bound on what the *tensor* costs per
+point, and the fact that 4.2 GB over 64 points is 65 MB a point is a coincidence
+of the same order rather than a measurement of the same thing.
+
+**With that said, there is a real question here and it is worth stating.** The
+paragraph above says the peak does not move with `k_batch` because "what the
+tape holds is not the k axis", and that was measured at one k-count. But
+`f_l(|k+G|)` *is* per-k and it is rebuilt inside the differentiated function, so
+a tape that grows with `nk` is the thing to expect; and `k_batch` would not
+shrink it in any case, because a `lax.map` or `lax.scan` body **stacks its
+residuals under `jax.grad`**, which is exactly P73's lesson about the
+augmentation table and the reason both of its scan bodies are rematted. If that
+is right the dial cannot help and `jax.remat` on the per-k body can. **It is a
+hypothesis.** `tools/cluster/piezo_us.sbatch` runs the ultrasoft cell at 64
+points with and without `k_batch = 1`, which will say whether the peak moves at
+all -- though it sets the dial on the *Calculator*, so it reaches the SCF and
+the field response too, and a peak that moves will need
+`jit(...).lower(...).compile().memory_analysis()` at the two shapes, P73's own
+instrument, to say which of the three it was. The docstring keeps its 64-point
+statement until then.
 
 **The Berry-phase route is the opposite shape: nothing in memory and everything
 in mappings.** Every rung of the same ladder peaked between **1.7 and 3.8 GiB**,
