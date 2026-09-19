@@ -4136,6 +4136,25 @@ second derivative must agree at any cutoff and on any mesh -- which is worth
 saying here rather than only in `OPEN.md`, since it is the cheapest measurement
 this section records and it replaced a 139.6 GiB one.
 
+**And the ultrasoft cell itself is now a workstation job, timed here** (2026-09-19,
+`OMP_NUM_THREADS=4`, this machine, `tools/cluster/piezo_measure.py us --method
+zstar_eu --skip-difference`):
+
+| run | k-points | `e_14`, C/m^2 | wall | peak |
+|---|---|---|---|---|
+| contracted, `--nosym --kmesh 4` | 64 | +0.8213303507 | **19m04** | **3.6 GiB** |
+| contracted, the input's own wedge | 8 | +0.8213319777 | 6m28 | 3.3 GiB |
+| taped, same 64 points, Triton `20339831` | 64 | +0.821330452 | -- | 139.6 GiB |
+
+The first and third are **1.0e-07** apart, on different machines by different
+assemblies, where before the two missing terms they were 0.0149. The first two
+say the symmetrised wedge reproduces the closed grid to **1.6e-06**, against the
+taped route's recorded +0.815929 / +0.815802 pair at **1.3e-04** -- so on a
+reduced k-set the cheap route is the better-behaved one, which is the opposite
+of what it is usually reached for. **The `6 6 6` and `8 8 8` rungs that were
+sized as a cluster node are now 2.6 and 3.6 GiB**, and they are the measurement
+`OPEN.md`'s drift.3 entry needs next.
+
 **What the cheap route costs, which is the measurement that makes the gap worth
 closing.** Three rungs on the ultrasoft cell, `--skip-difference`, one task list
 (`20338722`):

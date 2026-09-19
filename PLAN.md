@@ -8450,6 +8450,28 @@ is that the cheap route — 2.6 MB a k-point against 16 MB of tape alone — is
 complete on an ultrasoft dataset, so the k-ladder that separates this cell's mesh
 error from the dataset effect is a workstation job rather than a node.
 
+*Confirmed on the cell the refusal is written about, and not only on the tiny
+one.* A cell chosen for cost establishes an identity, not a number, so the
+contracted route was then run on `alas-piezo.in` at the whole `4 4 4` grid, 64
+k-points, `--nosym`: **+0.8213303507** against the taped route's **+0.821330452**
+from Triton `20339831`, **1.0e-07 apart** where it had been 0.0149, in **3.6 GiB
+and 19m04** on this workstation against 139.6 GiB on a node.
+
+*The wedge completes, and the trap it would have fallen into is the one that
+decides where the remaining discrepancy lives.* The screened term is a product of
+two k-sums, so a rank-3 symmetrisation of the result completes it only if one
+factor is already the full-zone object — P36's rule. It is: `dielectric_tensor`
+mixes its `dvscf` from the *symmetrised* `drho`, so the value inside the term is
+full-zone while the `moved_drho` it multiplies stays the raw wedge sum, which is
+the arrangement P36 asks for on a term linear in the derivative factor. Measured:
+the contracted route's symmetrised **8-point wedge reproduces the whole 64-point
+grid to 1.6e-06** on a value of 0.82. The taped route's own recorded pair is
++0.815929 against +0.815802, **1.3e-04**, 78 times larger — which is the third
+of the three terms `born_effective_charges` carries and this tape does not,
+`_full_zone_field_response`, and it is the one piece of this pair still open. **So
+on a reduced k-set the cheap route is the better-behaved one**, which is the
+opposite of what it is usually reached for.
+
 ### P51 — The optical conductivity tensor, the Kerr angle and the anomalous Hall conductivity. ✅ DONE.
 
 `defumat/response/conductivity.py` and `defumat/workflows/conductivity.py`.

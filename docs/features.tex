@@ -2719,9 +2719,12 @@ constraint at all, but about what ``bare'' means when the coordinate is a
 strain, since freezing the density as an \emph{array} misses that the density
 is a function of the cell as well as of the states. With all of them in, the
 two routes read $1.473304405$ and $1.473304408$ on a small ultrasoft AlAs cell
-where they had been 1.6 per cent apart. \textbf{PAW is still refused by name}, because its
-one-centre energy is a function of \code{becsum} directly and the cross term
-that reaches is on no grid.
+where they had been 1.6 per cent apart, and $+0.8213303507$ against
+$+0.821330452$ on the cell above at 64 $k$-points, which took 3.6~GiB and
+nineteen minutes on the contracted route where the taped one took 139.6~GiB.
+\textbf{PAW is still refused by name}, because its one-centre energy is a
+function of \code{becsum} directly and the cross term that reaches is on no
+grid.
 
 The $-0.7638$ printed above is the \code{4 4 4} of the committed input, and it
 is thirteen per cent from where the calculation is going; the Berry-phase value

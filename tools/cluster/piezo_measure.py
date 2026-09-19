@@ -340,13 +340,17 @@ def main() -> None:
         piezo.require_a_measured_dataset = lambda calculation: None
         print("    the dataset refusal is lifted for this run only", flush=True)
         if arguments.method == "zstar_eu":
-            # A *second* refusal and lifted separately, which is the whole
-            # point of its being separate: the transcribed route was 1.8 per
-            # cent out on this cell until the multipliers' own response was
-            # added to it, and this run is what says whether that term is right.
-            piezo.require_a_norm_conserving_transcription = lambda c: None
-            print("    the transcription refusal is lifted too, which is what "
-                  "this run measures", flush=True)
+            # **Nothing is lifted here any more, and the branch is kept to say
+            # so.** That second refusal is now PAW's alone: this route was 1.8
+            # per cent out on this ultrasoft cell until both of the terms
+            # `zstar_eu_us.f90` stands for were written, and with them in it
+            # reads +0.8213303507 on the whole 4^3 grid against the taped
+            # route's +0.821330452, 1.0e-07 apart, for 3.6 GiB and 19 minutes
+            # against 139.6 GiB. What this script still lifts is
+            # `require_a_measured_dataset`, which is about the quantity rather
+            # than the assembly.
+            print("    the transcription refusal no longer applies to an "
+                  "ultrasoft dataset and is not patched", flush=True)
 
     extra = {} if arguments.k_batch is None else {"k_batch": arguments.k_batch}
     if extra:
