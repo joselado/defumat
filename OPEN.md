@@ -3972,10 +3972,29 @@ SCF and the field response underneath.
 against +0.815802, 1.8 per cent, where the two agree to 6.2e-15 on the
 calibration cell, because `zstar_eu.f90:90` hands an augmented dataset to
 `zstar_eu_us.f90` and this transcription stops at the first file. It is refused
-by name now. **So what is left is a memory problem rather than a physics one**:
-make the taped route cheaper, and the untested lever is a `lax.scan` over k with
-a rematted body, which is P73's own fix for the augmentation table, measurable
-with `memory_analysis()` for nothing. Third, the refusal *text* in `response/piezo.py:273` still
+by name now. **So what is left is a memory problem rather than a physics one**, and it has
+now been sized without running anything. Compiling one field column of the taped
+route at four k-counts and never executing it
+(`jit(...).lower(...).compile().memory_analysis()`, P73's instrument) gives
+**0.630, 3.679, 8.166 and 15.724 GiB** of temporaries at 64, 216, 512 and 1000
+k-points on the norm-conserving cell: **16 MB a k-point, essentially no fixed
+part**. The dial cannot touch that, because `forces/energy.py:energy_at` has no
+`map_k` or `sum_k` in it at all.
+
+**And the cheap lever was tried and is worth nothing**, which is worth writing
+down so nobody spends a day on it: `jax.checkpoint` around the strained energy,
+and again with `policy=nothing_saveable`, leaves the tape at 0.630 and 3.679 GiB
+unchanged to the byte. `jvp(grad(f))` of a function with no internal loop has
+nothing to trade. The lever that would work is a `lax.scan` over k **inside**
+`energy_at` with a rematted body, which is P73's fix for the augmentation table
+and is a change to the function every force and stress in the package goes
+through -- so it is sized here rather than taken.
+
+**The prize is large and measured.** The transcribed route costs **2.32 GiB at
+64 k-points and 2.63 at 216** against the taped route's 139.6 at 64, a factor of
+60, and it barely grows with `nk`. Either adding `zstar_eu_us.f90`'s missing
+term to it, or the `lax.scan`, turns the ultrasoft ladder from a whole-node job
+into a small one. Third, the refusal *text* in `response/piezo.py:273` still
 names `response/strain.py` as refusing the same datasets, which P41 measured to
 be untrue, and keeping the refusal is not a reason to keep the wrong cause in
 its message.

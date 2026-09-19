@@ -4062,16 +4062,37 @@ symmetry, the 64-point one ran `--skip-difference` on a `nosym` grid. Different
 task lists and different symmetry, so the difference is not a slope. **There is
 no clean k-scaling for the ultrasoft response on record**, only the one point.
 
-What *is* clean is why `k_batch` cannot help, and it is structural rather than
-arithmetic: `forces/energy.py:energy_at`, which is the function being
+**The tape itself was then measured, and it is per-k and linear.** One field
+column of `clamped_ion_piezoelectric`, lowered and compiled at four k-counts
+on the norm-conserving cell and **never run** -- P73's instrument,
+`jit(...).lower(...).compile().memory_analysis()`, which allocates not one
+byte, so the `10^3` row costs the same as the `4^3` row:
+
+| grid | k-points | `npwx` | temporaries | per k-point |
+|---|---|---|---|---|
+| `4 4 4` | 64 | 169 | 0.630 GiB | 10.1 MB |
+| `6 6 6` | 216 | 169 | 3.679 GiB | 17.4 MB |
+| `8 8 8` | 512 | 169 | 8.166 GiB | 16.3 MB |
+| `10 10 10` | 1000 | 169 | **15.724 GiB** | 16.1 MB |
+
+The slope between the last two is 15.5 MB a k-point, so the tape is per-k with
+almost no fixed part, and at `10^3` it is a third of the whole job's 46.6 GiB.
+**`k_batch` cannot touch it, and the reason is structural rather than
+arithmetic**: `forces/energy.py:energy_at`, which is the function being
 differentiated, does not go through `map_k` or `sum_k` at all, so the dial never
-reaches it and the eleven per cent that moved is the SCF and the field response
-underneath. The tape therefore holds the whole k axis by construction. Whether
-shrinking it is a `lax.scan` with a rematted body -- P73's lesson about the
-augmentation table, and the reason both of its scan bodies are rematted -- is
-untested, and the instrument for it costs nothing:
-`jit(...).lower(...).compile().memory_analysis()` allocates not one byte and
-says what the tape holds, which is what P73 used.
+reaches it, and the eleven per cent that moved on the ultrasoft cell is the SCF
+and the field response underneath.
+
+**`jax.checkpoint` at the whole-energy granularity is worth nothing, measured.**
+Wrapping the strained energy in `jax.checkpoint`, and again with
+`policy=nothing_saveable`, leaves the tape at **0.630 GiB at `4^3` and 3.679 at
+`6^3`, unchanged to the byte** in all three cases. That is the expected answer
+once it is stated: `jvp(grad(f))` of a function with no internal loop has
+nothing to trade, and a rematerialisation policy can only choose among
+checkpoints that exist. The lever would have to be a `lax.scan` over k *inside*
+`energy_at` with a rematted body -- P73's fix for the augmentation table -- and
+that is a change to the function every force and stress in the package goes
+through, so it is sized here and not taken.
 
 **The practical consequence, and the escape that turned out not to be one.**
 `6 6 6` on the ultrasoft cell is somewhere above 139.6 GiB and nothing on record
@@ -4084,6 +4105,13 @@ points it reads +0.830702 C/m^2 against the differentiated route's +0.815802,
 (`require_a_norm_conserving_transcription`). So the ultrasoft ladder needs the
 taped route made cheaper rather than a cheaper route, and that is the `lax.scan`
 question above.
+
+**What the cheap route costs, which is the measurement that makes the gap
+worth closing.** On the ultrasoft cell, `--skip-difference`, same task list:
+**2.32 GiB at 64 k-points and 2.63 GiB at 216** (`20338722_0` and `_1`), where
+the taped route is 139.6 GiB at 64. A factor of **60**, and it barely grows with
+`nk`, which is what "no tape" looks like. That is the prize for whoever adds
+`zstar_eu_us.f90`'s missing term to it, or for the `lax.scan`.
 
 **The Berry-phase route is the opposite shape: nothing in memory and everything
 in mappings.** Every rung of the same ladder peaked between **1.7 and 3.8 GiB**,
