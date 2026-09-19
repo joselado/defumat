@@ -4007,18 +4007,44 @@ reads **+0.815802**: the right sign, **21.8 per cent** of the gap, and the
 disagreement falls from 1.79 to **1.41 per cent**. So it is one piece of what
 `zstar_eu_us.f90` adds and not all of it, and the refusal stays.
 
-**What the remaining 78 per cent most likely is, named by the same template.**
-`born_effective_charges` hands its `jvp` more than the states and the
-multipliers: it also passes `shifts` and `becsum_shifts`, which are the *mixed
-state's* own first-order change under the field
-(`_full_zone_field_response`, `_full_zone_becsum_response`). A contracted route
-has no equivalent, because `<dpsi^E|dH^eps_bare|psi>` carries the screening only
-through `dpsi`, and on an augmented dataset the field also moves `becsum`, which
-feeds the augmentation density and so `D_ij`. That is QE's `drhous x dvscf` and
-`int3 x dbecsum`. **It is the candidate the construction points at rather than a
-measured cause**, and the way to settle it is the one that settled this piece:
-write it, check it stays inert on the calibration cell, and run the 64-point
-rung, which is six minutes and 2.4 GiB.
+**A correction, and it is the largest thing this entry found.** Earlier today
+this said "+0.815802 is the number and +0.830702 is the artefact", on the
+grounds that the differentiated assembly run in the *position* coordinate is
+the Born charge and that matches `ph.x` on ultrasoft AlAs. **That is the wrong
+function.** What matches `ph.x` is
+`defumat.response.born.born_effective_charges`, which carries three terms the
+piezoelectric assembly does not: the multipliers' own response, the
+`add_for_charges` sandwich (`constraint_position_term`), and the full-zone
+density shift. The piezoelectric route that *is* built from the same tape,
+`born_charges_from_stress_route`, says so in its own docstring -- in the
+position coordinate it is "``Z*`` minus its bare ionic term and minus the
+constraint term an ultrasoft dataset adds". Checked at the source rather than
+inferred: `multipliers`, `constraint_position_term`, `commutator` and
+`_full_zone` appear nowhere in `_frozen_energy_of`, `_field_column` or
+`clamped_ion_piezoelectric`.
+
+**So on an augmented dataset neither route is complete, and the 1.8 per cent
+was two incomplete assemblies disagreeing rather than one being wrong.** The
+term added today is real, is worth -0.00325 of the 0.0149, and belongs in
+*both* routes rather than only in the transcribed one -- which is why it closed
+a fifth of a gap it was never going to close, since it was aimed at a target
+that is itself missing the same physics.
+
+**And it falsifies a sentence in `require_a_measured_dataset`'s own docstring,
+by measurement.** That said "`qq_ij` has no cell in it, so the constraint stays
+strain-independent for an ultrasoft dataset exactly as it is for a
+norm-conserving one". `qq_ij` has no cell in it and the conclusion does not
+follow: `S = 1 + sum |beta> q <beta|` also carries `vkb`, which is
+`beta(|k+G|)` and moves with the cell like every other radial transform. A term
+measured at -0.00325 C/m^2 is not a term that vanishes. The docstring is
+corrected.
+
+**What this changes about the refusal.** It stops being a formality waiting on
+a number and becomes the right answer: the piezoelectric tensor of an ultrasoft
+or PAW dataset needs the constraint terms in whichever route computes it, and
+the only reference here that does not need them is the Berry-phase finite
+difference, +0.692986 at 11 strings over 6x6. That is now the target, and
++0.815802 is not.
 
 **The correction is close to mesh-independent, which is worth one line.** At
 `6 6 6` it takes the transcribed route from +0.730408 to **+0.727596**, a shift

@@ -239,11 +239,35 @@ def require_a_measured_dataset(calculation) -> None:
 
     Nothing in the assembly is norm-conserving. The density and ``becsum`` are
     handed to the functional as builders that carry the strain, which is what
-    the strain response already needed; ``qq_ij`` has no cell in it, so the
-    constraint stays strain-independent for an ultrasoft dataset exactly as it
-    is for a norm-conserving one; and the *displacement* leg of the same
+    the strain response already needed, and the *displacement* leg of the same
     assembly is validated on all three pseudopotential kinds, being the Born
     charge.
+
+    **One sentence that stood here is false and was measured to be false on
+    2026-09-19.** It said that "``qq_ij`` has no cell in it, so the constraint
+    stays strain-independent for an ultrasoft dataset exactly as it is for a
+    norm-conserving one". ``qq_ij`` indeed has no cell in it and the conclusion
+    does not follow: ``S = 1 + sum_ij |beta_i> q_ij <beta_j|`` also carries
+    ``vkb``, which is ``beta(|k+G|)`` and moves with the cell like every other
+    radial transform, so ``<psi|S|psi>`` deforms under a strain whatever
+    ``q_ij`` does. :func:`~defumat.response.strain.overlap_derivatives` is the
+    ``jvp`` that says so, and it is *not* zero here:
+    :func:`_multiplier_strain_term`, which is that object contracted with the
+    multipliers' own response, is **-0.00325 C/m^2** on ``alas-piezo.in`` at 64
+    k-points (Triton ``20339308_0``). A term measured at a fifth of the
+    disagreement between two routes is not a term that vanishes.
+
+    **The consequence is larger than the sentence.** If ``S`` deforms then this
+    assembly, which carries only the states tangent -- no multipliers, no
+    ``add_for_charges`` sandwich, no full-zone shift -- is missing on an
+    ultrasoft dataset exactly what
+    :func:`~defumat.response.born.born_effective_charges` supplies in the
+    position coordinate, and :func:`born_charges_from_stress_route`'s docstring
+    has said as much all along: run in the position coordinate this assembly is
+    ``Z*`` *minus the constraint term an ultrasoft dataset adds*. So the
+    refusal below is not a formality waiting on a measurement; **both** routes
+    to this tensor are incomplete for an augmented dataset, and the one
+    reference that is not is the Berry-phase finite difference.
 
     **What is missing is a measurement, and what stood here named the wrong
     obstacle.** The claim was that "every ultrasoft and PAW dataset committed
@@ -622,20 +646,29 @@ def _multiplier_strain_term(
     per cent. So this is one piece of what ``zstar_eu_us.f90`` adds and not all
     of it, and the refusal stays.
 
-    **What the remaining 78 per cent most likely is, named by the same
-    template.** :func:`~defumat.response.born.born_effective_charges` does not
-    hand its ``jvp`` only the states and the multipliers: it also passes
-    ``shifts`` and ``becsum_shifts``,
-    :func:`~defumat.response.born._full_zone_field_response` and
-    :func:`~defumat.response.born._full_zone_becsum_response`, which are the
-    *mixed state's* own first-order change under the field. A contracted route
-    has no equivalent, because ``<dpsi^E| dH^eps_bare |psi>`` carries the
-    screening only through ``dpsi``, and on an augmented dataset the field also
-    moves ``becsum``, which feeds the augmentation density and so ``D_ij``.
-    That is QE's ``drhous x dvscf`` and ``int3 x dbecsum``. It is the candidate
-    the construction points at rather than a measured cause, and the way to
-    settle it is the same one that settled this piece: write it, check it is
-    inert on the calibration cell, and run the 64-point rung.
+    **The target it was aimed at is not the truth, which is why a fifth was
+    all it could close.** ``+0.815802`` is
+    :func:`clamped_ion_piezoelectric`, and that assembly carries only the
+    states tangent: ``multipliers``, ``constraint_position_term``,
+    ``commutator`` and ``_full_zone`` appear nowhere in it, where
+    :func:`~defumat.response.born.born_effective_charges` -- the function that
+    actually matches ``ph.x`` on an ultrasoft cell -- carries all of them.
+    :func:`born_charges_from_stress_route` says the same thing from the other
+    side: in the position coordinate this tape is ``Z*`` *minus the constraint
+    term an ultrasoft dataset adds*. **So on an augmented dataset both routes
+    are incomplete and this term belongs in both**, and the only reference here
+    that needs none of it is the Berry-phase finite difference, ``+0.692986``.
+
+    The piece still missing from *both* is
+    :func:`~defumat.response.born.constraint_position_term`'s, which is
+    ``sum_n w_n <psi_n| dS/d(eps) | P_c r_k psi_n>`` in this coordinate:
+    ``_multiplier_response`` reaches only what the occupied-occupied block
+    carries, and its docstring says so, while ``add_for_charges`` is the rest
+    and is **worth 0.55 on ultrasoft silicon**, the difference between +0.47
+    and -0.079. ``internals["commutators"]`` is the ``P_c r|psi>`` it needs and
+    the sandwich is ``constraint_position_term``'s with
+    :meth:`~defumat.scf.driver.Calculation.at_strain` in place of
+    ``at_positions``.
     """
     if field_perturbations is None or band_weights is None:
         return None
