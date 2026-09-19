@@ -2655,6 +2655,11 @@ print(piezo.voigt)              # (3, 6) in C/m^2, columns xx yy zz yz xz xy
 print(piezo.e14)                # -0.7638: zincblende's one component
 print(piezo.e.shape)            # (3, 3, 3) in e/bohr^2, e[k, i, j]
 print(piezo.dielectric.epsilon) # the field response is shared, not re-solved
+
+# The same number contracted rather than taped: no forward-over-reverse tape,
+# so it is the route for a dense mesh or a large cell.
+cheap = calc.get_piezoelectric_tensor(method="zstar_eu")
+print(abs(cheap.e14 - piezo.e14))   # 6.2e-15
 \end{pycode}
 
 \code{pw.x} computes no piezoelectric tensor --- the word occurs once in the
@@ -2690,6 +2695,17 @@ Berry-phase finite difference        & $-0.661386$ & $-0.661964$ &             &
 \bottomrule
 \end{tabular}
 \end{center}
+
+\code{method} is what that second call is for, and on a big run it is not a
+detail: both routes consume the *same* field response, so neither checks the
+other's solve, but \code{'autodiff'} holds a forward-over-reverse tape of every
+radial and reciprocal-space intermediate a cell derivative rebuilds, where
+\code{'zstar\_eu'} contracts the response against the bare strain perturbation
+and holds nothing. Measured on ultrasoft AlAs, the first peaks at 139.6~GiB at
+64 $k$-points and grows by about 1.6~GiB a point, which puts a $6^3$ mesh on a
+whole cluster node. The default is the taped one because it is the route that
+extends to the next derivative; reach for the other when the mesh is what you
+are converging.
 
 The $-0.7638$ printed above is the \code{4 4 4} of the committed input, and it
 is thirteen per cent from where the calculation is going; the Berry-phase value

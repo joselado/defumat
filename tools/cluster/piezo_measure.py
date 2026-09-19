@@ -304,6 +304,16 @@ def main() -> None:
                         help="drop the crystal's point group, which is what the "
                              "calibration cell already does and what lets the "
                              "ultrasoft cell be laddered in k")
+    # `clamped_ion_piezoelectric` holds a forward-over-reverse tape and peaks at
+    # 139.6 GiB on the ultrasoft cell at 64 k-points, 1.6 GiB a point, which puts
+    # a `6 6 6` rung on a whole node. `zstar_eu` is the same number contracted
+    # rather than taped and carries no tape at all, so it is how this cell gets
+    # laddered -- after the two have been shown to agree on it, which is what
+    # the 64-point rung is for.
+    parser.add_argument("--method", default="autodiff",
+                        choices=("autodiff", "zstar_eu"),
+                        help="which route assembles the tensor above the shared "
+                             "field response")
     parser.add_argument("--skip-response", action="store_true",
                         help="the finite difference alone")
     parser.add_argument("--skip-difference", action="store_true",
@@ -346,6 +356,7 @@ def main() -> None:
                "what": case["what"], "nppstr": nppstr,
                "transverse": list(transverse), "kmesh": arguments.kmesh,
                "nosym": bool(arguments.nosym), "k_batch": arguments.k_batch,
+               "method": arguments.method,
                "nk": int(calculator.system.kpoints.nk)}
 
     start = time.time()
@@ -359,7 +370,7 @@ def main() -> None:
     reference = None
     if not arguments.skip_response:
         start = time.time()
-        tensor = calculator.get_piezoelectric_tensor()
+        tensor = calculator.get_piezoelectric_tensor(method=arguments.method)
         reference = float(tensor.e14)
         results["response"] = {
             "e14": reference,
@@ -367,7 +378,8 @@ def main() -> None:
             "converged": bool(tensor.converged),
             "seconds": time.time() - start,
         }
-        print(f"    response route: e_14 = {reference: .6f} C/m^2 "
+        print(f"    response route ({arguments.method}): "
+              f"e_14 = {reference: .6f} C/m^2 "
               f"(converged {tensor.converged}, "
               f"{results['response']['seconds']:.1f} s)", flush=True)
 

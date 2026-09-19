@@ -8248,6 +8248,21 @@ equal at `1 - s^2`. The same statement is why `e_14` carries no
 proper-against-improper ambiguity and no polarization-branch dependence, both
 corrections pairing two different Cartesian labels.
 
+**The cheap route is now reachable, which it was not** (2026-09-19).
+`piezoelectric_tensor` grew `method = 'autodiff' | 'zstar_eu'`, and both go
+through `Calculator.get_piezoelectric_tensor(method=...)`. They are the same
+number -- **6.2e-15** apart on AlAs through the entry point, which is the figure
+the internals-level test already pinned -- and they are not the same cost: the
+default holds a forward-over-reverse tape of every radial and reciprocal-space
+intermediate a cell derivative rebuilds, and the transcribed one contracts the
+field response against the bare strain perturbation and holds nothing. On the
+ultrasoft cell the difference is not academic, because the taped route peaks at
+**139.6 GiB** at 64 k-points and grows at 1.6 GiB a point. Both consume the same
+field response, so neither is a check on the other's *solve*; what the pair
+checks is the assembly above it. The module docstring had said for a month that
+the transcribed one "is the route to reach for" on a cell where the other does
+not fit, and there was no argument that reached it.
+
 **Where it lives.** `defumat/response/piezo.py`, reached by
 `Calculator.get_piezoelectric_tensor()`; `tests/regression/test_piezoelectric.py`
 (8 tests, 103 s: the three routes, the two symmetry statements, the wedge, and

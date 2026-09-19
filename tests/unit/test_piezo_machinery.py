@@ -112,3 +112,21 @@ def test_the_regimes_this_was_never_run_in_are_refused(case, message):
     """
     with pytest.raises(NotImplementedError, match=message):
         require_a_piezoelectric_tensor(_calculation(case))
+
+
+def test_an_unknown_route_is_refused_before_anything_is_solved():
+    """``method`` names a route and a typo must not quietly give the default.
+
+    The two routes are the same number at very different cost -- the
+    transcribed one carries no tape at all, which is what makes it the one to
+    reach for on a dense mesh -- so a caller who asked for it and silently got
+    the other would get the right answer and a peak they had chosen against.
+    The check is before the field response rather than after it, because the
+    response is the expensive part and there is nothing to learn from solving
+    it first.
+    """
+    from defumat.response.piezo import PIEZOELECTRIC_METHODS, piezoelectric_tensor
+
+    assert PIEZOELECTRIC_METHODS == ("autodiff", "zstar_eu")
+    with pytest.raises(ValueError, match="unknown piezoelectric method"):
+        piezoelectric_tensor(_calculation("alas-raman"), None, method="zstar-eu")

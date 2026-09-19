@@ -524,11 +524,19 @@ def piezoelectric_from_strain_response(calculation, solver, bare, strain) -> np.
 # -- the driver --------------------------------------------------------------
 
 
+#: The routes :func:`piezoelectric_tensor` will assemble the tensor with. Both
+#: consume the *same* field response, so neither is a check on the other's
+#: solve; what they differ in is what happens above it. See the module
+#: docstring's cost table for why the default is the dear one.
+PIEZOELECTRIC_METHODS = ("autodiff", "zstar_eu")
+
+
 def piezoelectric_tensor(
     calculation,
     result,
     verbose: bool = False,
     allow_unconverged: bool = False,
+    method: str = "autodiff",
     **response_options,
 ) -> PiezoelectricTensor:
     """The clamped-ion piezoelectric tensor of a converged insulator.
@@ -543,9 +551,28 @@ def piezoelectric_tensor(
             (:func:`~defumat.response.electrostriction.refined_states`).
         allow_unconverged: return an answer even when the field response did
             not converge. Off by default.
+        method: ``'autodiff'`` (default), the ``jvp`` of the stress that this
+            module is built around, or ``'zstar_eu'``, the transcribed
+            contraction of the field response against the bare strain
+            perturbation. **They are the same number and not the same cost**:
+            on the two-atom AlAs cell the second is 4.0 s against 6.4 and
+            carries no extra memory at all, where the first holds a
+            forward-over-reverse tape of every radial and reciprocal-space
+            intermediate the cell derivative rebuilds. That is worth reaching
+            for on a large cell or a dense mesh -- measured on the ultrasoft
+            cell, the autodiff route peaks at **139.6 GiB** at 64 k-points and
+            scales at 1.6 GiB a point, which puts ``6 6 6`` on a whole node.
+            The default stays ``'autodiff'`` because it is the route that
+            extends, and because the transcribed one is only as good as the
+            transcription, which is why both run in the regression file.
         response_options: passed to the field response.
     """
     require_a_piezoelectric_tensor(calculation)
+    if method not in PIEZOELECTRIC_METHODS:
+        raise ValueError(
+            f"unknown piezoelectric method {method!r}; expected one of "
+            f"{', '.join(PIEZOELECTRIC_METHODS)}"
+        )
 
     eigenvalues, psi = refined_states(calculation, result)
     density = jnp.asarray(result.density)
@@ -558,10 +585,15 @@ def piezoelectric_tensor(
         require_converged_responses(field, None)
 
     internals = field.internals
-    e = clamped_ion_piezoelectric(
-        calculation, psi, eigenvalues, jnp.asarray(internals["weights"]),
-        density, result.becsum, internals["dpsi"], internals["solver"].nocc,
-    )
+    if method == "zstar_eu":
+        e = piezoelectric_zstar_eu_style(
+            calculation, internals["solver"], density, internals["dpsi"],
+        )
+    else:
+        e = clamped_ion_piezoelectric(
+            calculation, psi, eigenvalues, jnp.asarray(internals["weights"]),
+            density, result.becsum, internals["dpsi"], internals["solver"].nocc,
+        )
     return PiezoelectricTensor(
         e=e,
         voigt=to_voigt(e) * E_BOHR2_TO_C_M2,
