@@ -174,11 +174,14 @@ the piece that joins them is the force a strain leaves behind.
   crystal class that leaves no direction invariant. A class that does leave one invariant is
   refused by name rather than reported with a term missing.
 - **Clamped-ion only**, as above.
-- **Norm-conserving pseudopotentials.** Nothing in the calculation is specific to
-  them, and the closely related effective charges of notebook 19 work with every
-  kind. What is missing is a crystal to check it on: a softer pseudopotential is
-  available here only for materials that have an inversion centre, and those have no
-  piezoelectric response to compare.
+- **Norm-conserving pseudopotentials.** A softer pseudopotential keeps part of the
+  electron density as a compact cloud pinned to each nucleus, and a strain carries and
+  deforms that cloud rather than simply moving it, so the strain derivative of the energy
+  gains terms the harder datasets do not have. Those terms are in, and the two
+  independent ways of assembling this tensor agree to 3 parts in $10^9$ on a soft
+  zincblende cell where they had been 1.6 per cent apart. What is still missing is a
+  comparison against something outside this calculation, and until that number exists a
+  softer dataset is refused by name rather than run.
 - **Insulators**, and everything else the linear-response solver needs: no metals, no spin
   spiral, no magnetic field, and a shifted k-grid only where the symmetry is kept.
 
