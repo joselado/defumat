@@ -4020,6 +4020,16 @@ measured cause**, and the way to settle it is the one that settled this piece:
 write it, check it stays inert on the calibration cell, and run the 64-point
 rung, which is six minutes and 2.4 GiB.
 
+**The correction is close to mesh-independent, which is worth one line.** At
+`6 6 6` it takes the transcribed route from +0.730408 to **+0.727596**, a shift
+of -0.00281 against -0.00325 at `4 4 4`, for 2.31 and 3.40 GiB. So this piece
+of the missing term is very nearly a constant offset rather than something that
+grows with the k-sampling. That is evidence about *this* piece and not about the
+other one, and the temptation it feeds -- that the whole missing term is a
+constant, so the transcribed route's convergence *curve* can stand in for the
+differentiated route's -- stays refused, because the remaining piece's mesh
+dependence has not been measured at all.
+
 **It was a derivation and not a copy.** The index order
 is the trap and is flagged in `_multiplier_response`'s own docstring: `Lambda_mn`
 pairs with `<psi_n|S|psi_m>`, the weight belongs to the *column*, and
