@@ -644,16 +644,26 @@ def require_a_norm_conserving_transcription(calculation) -> None:
 
     **The measurement, and the cell it was taken on is the point.** The two
     routes are made to agree on ``tests/data/qe/alas-piezo-tiny.in``, ultrasoft
-    AlAs at ``ecutwfc = 12`` and 8 k-points -- a cell chosen for cost and not
-    for physics, which is legitimate because **two assemblies of the same mixed
-    second derivative must agree at any cutoff and on any mesh**, so their
-    disagreement is a defect and not a convergence question. Before the second
-    term the gap on ``e_14`` was **-0.023777619** C/m^2 on a value of 1.4733,
-    1.6 per cent; the term reads **-0.023777621**, and what is left is
-    **2.6e-09**, the Sternheimer solve's own threshold rather than round-off,
-    since the two routes contract differently-converged intermediates. The same
-    two terms were measured together on ``alas-piezo.in`` at 64 k-points
-    (Triton ``20339831``), where the gap was 1.8 per cent.
+    AlAs at 8 k-points -- a cell chosen for cost and not for physics, which is
+    legitimate because **two assemblies of the same mixed second derivative must
+    agree at any cutoff and on any mesh**, so their disagreement is a defect and
+    not a convergence question. Two rungs of it were run and **each number below
+    belongs to one of them**, the committed ``ecutwfc = 10, ecutrho = 44`` and
+    the ``12 / 96`` the identity was first read at:
+
+    ===========  ============  ===========  ==========  ==========
+    rung         gap before    the term     gap after   peak
+    ===========  ============  ===========  ==========  ==========
+    ``12 / 96``  -0.023777619  -0.023777621  2.6e-09    18.9 GiB
+    ``10 / 44``  (not taken)   -0.022727213  1.7e-07    10.1 GiB
+    ===========  ============  ===========  ==========  ==========
+
+    on values of 1.473304 and 1.474377, so the defect is 1.61 and 1.54 per cent
+    and the cutoff moves neither it nor ``e_14``. What is left in each case is
+    the Sternheimer solve's own threshold rather than round-off, since the two
+    routes contract differently-converged intermediates. The same two terms were
+    measured together on ``alas-piezo.in`` at 64 k-points (Triton
+    ``20339831``), where the gap was 1.8 per cent.
 
     **What the norm-conserving agreement was worth, which is less than it
     looked.** The two routes agree to ``6.2e-15`` on ``alas-raman.in`` and did
@@ -684,7 +694,8 @@ def require_a_norm_conserving_transcription(calculation) -> None:
             "whose one-centre energy is a function of becsum directly and "
             "whose cross term with the field's dbecsum is on no grid. "
             "Ultrasoft runs here and agrees with method='autodiff' to 2.6e-09 "
-            "C/m^2 on alas-piezo-tiny.in. Use method='autodiff', which "
+            "C/m^2 on alas-piezo-tiny.in at ecutwfc = 12. Use "
+            "method='autodiff', which "
             "differentiates the energy and therefore carries the one-centre "
             "term too"
         )
@@ -704,7 +715,8 @@ def piezoelectric_zstar_eu_style(
     coordinate is the two contractions below, :func:`_multiplier_strain_term`
     and :func:`_screened_strain_term`, because only one leg of this derivative
     moves ``S``. With both in, the two routes agree to **2.6e-09** C/m^2 on
-    ultrasoft AlAs where they were 1.6 per cent apart.
+    ultrasoft AlAs at ``ecutwfc = 12`` where they were 1.6 per cent apart, and
+    to 1.7e-07 at the ``ecutwfc = 10`` the test cell is committed at.
 
     **The transcribed expression put beside the differentiated one**, in this
     project's usual arrangement. QE writes a Born charge as a bare perturbation
@@ -823,11 +835,13 @@ def _screened_strain_term(calculation, solver, field_dvscf) -> np.ndarray | None
     density even at frozen states.
 
     **Measured, and it is the whole of what was left** (``alas-piezo-tiny.in``,
-    ultrasoft AlAs at 8 k-points): the two routes were **-0.023777619** C/m^2
-    apart on ``e_14`` and this term is **-0.023777621**, agreeing to
-    **2.6e-09**, which is the Sternheimer solve's own threshold rather than
-    round-off -- the two routes contract differently-converged intermediates.
-    Every other component of the term is 1e-15.
+    ultrasoft AlAs at 8 k-points, **at the ``ecutwfc = 12, ecutrho = 96`` rung
+    rather than the committed ``10 / 44``**): the two routes were
+    **-0.023777619** C/m^2 apart on ``e_14`` and this term is **-0.023777621**,
+    agreeing to **2.6e-09**, which is the Sternheimer solve's own threshold
+    rather than round-off -- the two routes contract differently-converged
+    intermediates. At the committed rung the same pair reads **-0.022727213**
+    and **1.7e-07**. Every other component of the term is 1e-15 at both.
 
     **PAW is refused above rather than approximated here**
     (:func:`require_a_norm_conserving_transcription`). For an ultrasoft dataset

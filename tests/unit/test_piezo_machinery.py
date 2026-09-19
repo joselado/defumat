@@ -146,9 +146,10 @@ def test_the_transcribed_route_refuses_paw_and_no_longer_refuses_ultrasoft():
     ``zstar_eu.f90`` hands an augmented dataset to ``zstar_eu_us.f90``, and what
     those three hundred lines are worth in the strain coordinate turned out to
     be two contractions, because only one leg of this derivative moves ``S``.
-    With both in, the two routes agree to 2.6e-09 C/m^2 on ultrasoft AlAs where
-    they were 1.6 per cent apart, and that number is
-    ``test_piezoelectric.py``'s. What is still refused is PAW, whose one-centre
+    With both in, the two routes agree to 2.6e-09 C/m^2 on ultrasoft AlAs at
+    ``ecutwfc = 12`` and 1.7e-07 at the ``ecutwfc = 10`` the test cell is
+    committed at, where they were 1.6 per cent apart at both. Those numbers are
+    ``test_piezoelectric_augmented.py``'s. What is still refused is PAW, whose one-centre
     energy is a function of ``becsum`` directly, so the cross term the grid
     integral misses is on no grid at all.
     """

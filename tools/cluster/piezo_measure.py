@@ -308,8 +308,9 @@ def main() -> None:
     # 139.6 GiB on the ultrasoft cell at 64 k-points, 1.6 GiB a point, which puts
     # a `6 6 6` rung on a whole node. `zstar_eu` is the same number contracted
     # rather than taped and carries no tape at all, so it is how this cell gets
-    # laddered -- after the two have been shown to agree on it, which is what
-    # the 64-point rung is for.
+    # laddered -- and the two have now been shown to agree on an augmented
+    # dataset, 2.6e-09 C/m^2 on `alas-piezo-tiny.in`, so the ladder is a
+    # workstation job rather than a node.
     parser.add_argument("--method", default="autodiff",
                         choices=("autodiff", "zstar_eu"),
                         help="which route assembles the tensor above the shared "
