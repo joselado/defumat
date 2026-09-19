@@ -128,6 +128,44 @@ def _without_symmetry(calculator):
                       calculator.pseudos, announce=False)
 
 
+def _with_wedge(calculator, mesh):
+    """The irreducible wedge of the unshifted ``mesh^3`` grid, group kept.
+
+    **The same k-sample as :func:`_with_full_grid` and a fraction of the cost**,
+    which is what makes an ultrasoft ladder a workstation job. An unshifted
+    Monkhorst-Pack grid is closed under the point group, so the wedge and the
+    whole grid are two routes to one integral, and on this crystal the
+    contracted route was measured to take them to the same tensor: a symmetrised
+    8-point wedge against the whole 64-point grid, 1.6e-06 on a value of 0.82
+    (``OPEN.md`` Part XIII item 3). That identity is what this flag rests on and
+    it holds for the contracted route only -- the taped one was 78 times further
+    apart until its own wedge completion went in, and even now the control rung
+    below is the thing to read before the rungs above it.
+
+    The reduction is built the way ``System._rebuild_kpoints`` builds it, from
+    the crystal's own group with time reversal unless ``noinv``, and handed over
+    through :meth:`~defumat.calculator.Calculator.with_kpoints` so that
+    ``for_spin`` runs: every ``KPoints`` constructor applies the unpolarized
+    ``degspin`` unconditionally, and substituting a raw set is the trap that
+    reads a plasma frequency of 13.11 eV where the answer is 0.60.
+    """
+    from defumat.system.kpoints import KPoints
+
+    system = calculator.system
+    if system.nosym:
+        raise SystemExit("--wedge wants the crystal's point group and --nosym "
+                         "drops it; pass one or the other")
+    symmetries = system.symmetry_group()
+    grid = (int(mesh),) * 3
+    return calculator.with_kpoints(KPoints.automatic(
+        grid, (0, 0, 0), system.cell,
+        precision=system.kpoints.precision,
+        rotations=symmetries.rotation_array(),
+        time_reversal=not system.noinv and not system.domag,
+        t_rev=symmetries.t_rev_array(),
+    ))
+
+
 def _with_full_grid(calculator, mesh):
     """The **whole** ``mesh x mesh x mesh`` grid, unshifted, no symmetry.
 
@@ -167,7 +205,9 @@ def _polarization_child(payload, queue):
     if payload.get("nosym"):
         calculator = _without_symmetry(calculator)
     if payload.get("kmesh"):
-        calculator = _with_full_grid(calculator, payload["kmesh"])
+        calculator = (_with_wedge(calculator, payload["kmesh"])
+                      if payload.get("wedge")
+                      else _with_full_grid(calculator, payload["kmesh"]))
     at = np.asarray(calculator.system.cell.at)
     strain = np.asarray(payload["strain"])
     strained = calculator.with_cell(at @ (np.eye(3) + strain).T)
@@ -291,6 +331,12 @@ def main() -> None:
                         help="run on the whole N x N x N unshifted grid instead "
                              "of the input's; refuses a reduced cell unless "
                              "--nosym comes with it")
+    parser.add_argument("--wedge", action="store_true",
+                        help="ladder the irreducible wedge of that grid rather "
+                             "than the whole of it: the same sample, a fraction "
+                             "of the cost, and sound for the contracted route "
+                             "because its wedge reproduces its own closed grid "
+                             "to 1.6e-06")
     # `piezo.py`'s docstring says the tape "does not move with ``k_batch``,
     # because what the tape holds is not the k axis", measured at 64 k on the
     # small cell. The ladder's peaks are close to affine in ``nk`` (13.8 GiB at
@@ -362,12 +408,18 @@ def main() -> None:
         calculator = _without_symmetry(calculator)
         print("    the crystal's point group is dropped for this run", flush=True)
     if arguments.kmesh:
-        calculator = _with_full_grid(calculator, arguments.kmesh)
-        print(f"    the whole {arguments.kmesh}^3 grid, "
-              f"{calculator.system.kpoints.nk} k-points", flush=True)
+        if arguments.wedge:
+            calculator = _with_wedge(calculator, arguments.kmesh)
+            print(f"    the wedge of the {arguments.kmesh}^3 grid, "
+                  f"{calculator.system.kpoints.nk} k-points", flush=True)
+        else:
+            calculator = _with_full_grid(calculator, arguments.kmesh)
+            print(f"    the whole {arguments.kmesh}^3 grid, "
+                  f"{calculator.system.kpoints.nk} k-points", flush=True)
     results = {"case": arguments.case, "input": case["input"],
                "what": case["what"], "nppstr": nppstr,
                "transverse": list(transverse), "kmesh": arguments.kmesh,
+               "wedge": bool(arguments.wedge),
                "nosym": bool(arguments.nosym), "k_batch": arguments.k_batch,
                "method": arguments.method,
                "nk": int(calculator.system.kpoints.nk)}
@@ -402,7 +454,7 @@ def main() -> None:
         one = finite_difference(
             {"input": str(ROOT / case["input"]), "pseudo_dir": arguments.pseudo_dir,
              "kmesh": arguments.kmesh, "nosym": bool(arguments.nosym),
-             "k_batch": arguments.k_batch},
+             "wedge": bool(arguments.wedge), "k_batch": arguments.k_batch},
             magnitude, nppstr, transverse, arguments.conv_thr,
         )
         one["seconds"] = time.time() - start
