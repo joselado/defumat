@@ -3626,6 +3626,36 @@ state with nothing applied and stays there, is real and is not the ultracell's; 
 a genuine instability of LDA nickel at this cutoff or an SCF that stalls in a broken state is
 not settled here.
 
+## 3. At a dual the reference supercell is on a different box, and reads 2.2e-6 Ry per cell high **[opened 2026-09-20, P88 stage 9]**
+
+**What it is.** A supercell chooses its own dense FFT grid, and at
+`ecutrho = 8 ecutwfc` on the two-atom silicon cell that is `(54, 25, 25)` where the
+ultracell's box, which is `N` times the unit cell's, is `(50, 25, 25)`. The two sides then
+do not discretise the same functional, and the difference is not small against the number
+an `nbnd` ladder is trying to resolve: **with nothing applied the supercell sits 2.1978e-6
+Ry per cell above its own unit cell**, at `ecutrho = 4 ecutwfc` 5.4e-13.
+
+**How it showed.** As a violated variational bound, which is the same costume `OPEN.md`
+Part X item 2 wore: the first ladder at a dual put the ultracell 1.47e-6 Ry *below* the
+supercell at `nbnd = 48` and 1.90e-6 below at 96, falling further with every rung. Nothing
+was wrong with the ultracell. Reading each side against its **own** unmodulated state gives
++1.07e-4, +4.71e-6, +7.23e-7 and +3.02e-7 Ry at `nbnd = 12, 24, 48, 96`, above at every rung
+and falling, which is the ladder at `ecutrho = 4 ecutwfc` with a slightly better
+augmentation charge.
+
+**What is open and what is not.** The protocol is settled -- compare the energy of the
+modulation, not the total -- and `tools/cluster/ultracell_dual.py` records both. What is
+open is the **size** of the offset as a function of the cell and the dual, which job
+`20350372` measures at 4, 8 and 12 times `ecutwfc` on both silicon datasets and on
+platinum, and whether any of it survives into the *density* comparison, which is read
+Fourier component by Fourier component and has a two-box floor of its own
+(`tests/regression/test_ultracell.py` puts that at about 1e-4 relative).
+
+**The thing not to do** is to fix it by pinning the supercell's grid: `nr1/nr2/nr3` are
+refused at input here by name, the norm-conserving file reaches the same end by choosing an
+`ecutwfc` where the two boxes coincide, and a dual has no such lever. The difference of
+differences needs no grid to agree.
+
 # Part XI -- from the seeded NiBr2 helix on a GPU, reported 2026-09-17 (P88 stage 8)
 
 ## 1. A batched FFT plan fails to build at an ultracell's band count, and it is not an out-of-memory

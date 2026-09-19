@@ -5405,10 +5405,17 @@ print(ulr.energy_terms["one_center_paw"])     # -67.17927909, the one-centre ter
 print(float(np.abs(ulr.modulation).max()))    # 1.7738e-04 e/bohr^3, the response
 \end{pycode}
 
-\code{ecutrho = 4 ecutwfc} is the only value an ultracell accepts, and it is
-not what such a dataset wants: \code{run\_ultracell} says so with a warning,
-because the run is then self-consistent and comparable against a supercell at
-the same cutoffs while its absolute energy is not converged in \code{ecutrho}. Both datasets were measured against a real
+\code{ecutrho = 4 ecutwfc} is not what such a dataset wants, and
+\code{run\_ultracell} says so with a warning: the run is then self-consistent
+and comparable against a supercell at the same cutoffs while its absolute
+energy is not converged in \code{ecutrho}. The dual the dataset was generated
+for, 8 to 12 times \code{ecutwfc}, runs as well and is what an absolute number
+should be taken at. One thing to know before comparing a run at a dual against
+a real supercell: the supercell chooses its own FFT box, which at a dual is not
+the tiled one --- $(54, 25, 25)$ against $(50, 25, 25)$ on this cell --- and it
+then sits $2.20\times10^{-6}$ Ry per cell above its own unit cell with nothing
+applied. Compare the energy of the modulation, each side against its own
+unmodulated state, and that offset cancels. Both datasets were measured against a real
 four-atom supercell under the same applied potential: the induced density's
 error falls $1.18\times10^{-1}$, $1.56\times10^{-2}$, $3.72\times10^{-3}$
 ultrasoft and $1.17\times10^{-1}$, $1.71\times10^{-2}$, $5.09\times10^{-3}$ PAW
@@ -5923,16 +5930,11 @@ rebuilt here from the density alone; apply the field through
 \code{magnetic\_field} instead. DFT+U, the occupation matrix being per atom
 where an ultracell has $N$ copies of each. Spin spirals, as a second modulation of the same states.
 Gamma-only storage, the basis being built at $N$ points none of which is
-$\Gamma$. A double grid --- which is the wall an ultrasoft or PAW run meets
-first whenever its input sets the \code{ecutrho} such a dataset wants: the
-smooth half of the matrix element would then carry $\delta V$'s dense
-components where \code{h\_psi} truncates them to the smooth sphere, and the
-ultracell and the supercell it is validated against would not be discretising
-the same functional. Set \code{ecutrho = 4 ecutwfc}, and read the warning that
-comes with it --- \code{ecutrho} defaults to four times \code{ecutwfc} here as
-it does in \code{pw.x}, so an input that simply leaves it out is \emph{accepted}
-and runs with the augmentation charge on the wavefunction grid, which is the one
-thing such a dataset exists not to do. Symmetry is not used at all: a modulation breaks the
+$\Gamma$. A double grid is \emph{not} refused, and what remains of the refusal
+that used to stand here is a warning firing the other way: \code{ecutrho}
+defaults to four times \code{ecutwfc} here as it does in \code{pw.x}, so an
+augmented input that simply leaves it out runs with the augmentation charge on
+the wavefunction grid, which is the one thing such a dataset exists not to do. Symmetry is not used at all: a modulation breaks the
 crystal's point group, so the run needs \code{nosym} and the whole k-grid. And a
 non-integer ultracell is refused, where Elk's \code{avecu} is an independent
 input with no consistency check against its Q-grid. An \textbf{unconverged}

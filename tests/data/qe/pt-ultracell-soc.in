@@ -13,10 +13,10 @@
 ! one. That is deliberate -- it isolates the sandwich from the spin blocks, and
 ! the spin blocks are measured on silicon where the sandwich is trivial.
 !
-! ecutrho = 4 ecutwfc rather than the dataset's own dual, which an ultracell
-! refuses; the comparison against a real supercell is at the same pair on both
-! sides and is like for like, and the absolute energy is not converged in
-! ecutrho.
+! ecutrho = 4 ecutwfc rather than the dataset's own dual, which is a choice
+! rather than a limit since PLAN.md P88 stage 9 -- the comparison against a real
+! supercell is at the same pair on both sides and is like for like, and what it
+! costs is that the absolute energy is not converged in ecutrho.
  &control
     calculation = 'scf'
  /

@@ -192,11 +192,15 @@ matrix needs `S`, and `_ultracell_geometry` passed `apply_s = None` with a comme
 the ultracell refuses these datasets -- which is how the stale claim was found, and it is
 refused by name now.
 
-**The practical gate this entry named is still the practical gate.** `basis.doublegrid`
-refuses a dataset at its usual `ecutrho`, and every number above is at `ecutrho = 4 ecutwfc`.
-`PLAN.md` P88 stage 5 has what lifting it costs, and it is smaller than this entry implied:
-the box is already the dense one, so nothing has to be interpolated between two boxes -- what
-is needed is the mask that makes the smooth half of the matrix element agree with `h_psi`.
+**The practical gate this entry named is gone, and the mask it asked for was never needed**
+(`PLAN.md` P88 stage 9, 2026-09-20). The sizing was right that nothing has to be interpolated
+between two boxes and wrong that a mask was missing: the matrix element gathers onto the
+wavefunction sphere, so it reads `dV` only at `G'' - G + Q_d` with both `G` inside the
+`ecutwfc` sphere, and `|G'' - G| <= 2 sqrt(ecutwfc)` is the smooth sphere by definition. The
+dense half is unreachable rather than wrongly included. Measured: truncating `dV` before the
+matrix element moves modulated PAW silicon at `ecutrho = 8 ecutwfc`, `N = 2`, by 1.3e-12 Ry,
+where zeroing it there moves 6.5e-4. Every number above is still at `ecutrho = 4 ecutwfc`,
+which is now a choice about what a comparison costs rather than the only pair that runs.
 
 ## 9. Every fixed-density mode needs `becsum` beside the density
 

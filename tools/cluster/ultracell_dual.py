@@ -89,7 +89,13 @@ K_POINTS automatic
  {k0} {k1} {k2} 0 0 0
 """
 
-#: ``(label, template, dataset, ecutwfc, dual, spinor, nbnd rungs, reference nbnd)``.
+#: ``(label, template, dataset, ecutwfc, dual, spinor, nbnd rungs, reference nbnd,
+#: kgrid, conv_thr)``. The last two are per case because platinum is a **metal**
+#: and silicon is not: an fcc metal on eight k-points with Methfessel-Paxton
+#: smearing does not reach 1e-12 at all (it stalled at 1.9e-3 in 100 iterations,
+#: job `20350372` tasks 7 and 8), and the committed cell's own pair -- the
+#: ``kgrid`` the guide's snippet runs and ``conv_thr = 1e-10`` from the input --
+#: is what converges it.
 #: The spinor rungs are twice the collinear ones because a spinor band holds one
 #: electron where a collinear band holds two -- comparing the two regimes at the
 #: same ``nbnd`` reads as a factor of two of missing convergence and looks
@@ -100,23 +106,23 @@ CASES = [
     # read against this rather than against a table in another file: the phase
     # record has +1.07e-4, +4.46e-6 and +4.82e-7 Ry here at nbnd = 12, 24, 48.
     ("si-us-collinear-dual4", "si", "Si.pz-n-rrkjus_psl.0.1.UPF", 16.0, 4.0,
-     False, (12, 24, 48, 96), 12),
+     False, (12, 24, 48, 96), 12, (1, 2, 2), 1.0e-12),
     ("si-paw-collinear-dual4", "si", "Si.pz-n-kjpaw_psl.0.1.UPF", 16.0, 4.0,
-     False, (12, 24, 48, 96), 12),
+     False, (12, 24, 48, 96), 12, (1, 2, 2), 1.0e-12),
     ("si-us-collinear-dual8", "si", "Si.pz-n-rrkjus_psl.0.1.UPF", 16.0, 8.0,
-     False, (12, 24, 48, 96), 12),
+     False, (12, 24, 48, 96), 12, (1, 2, 2), 1.0e-12),
     ("si-paw-collinear-dual8", "si", "Si.pz-n-kjpaw_psl.0.1.UPF", 16.0, 8.0,
-     False, (12, 24, 48, 96), 12),
+     False, (12, 24, 48, 96), 12, (1, 2, 2), 1.0e-12),
     ("si-us-spinor-dual8", "si", "Si.pz-n-rrkjus_psl.0.1.UPF", 16.0, 8.0,
-     True, (24, 48, 96, 192), 24),
+     True, (24, 48, 96, 192), 24, (1, 2, 2), 1.0e-12),
     ("si-paw-spinor-dual8", "si", "Si.pz-n-kjpaw_psl.0.1.UPF", 16.0, 8.0,
-     True, (24, 48, 96, 192), 24),
+     True, (24, 48, 96, 192), 24, (1, 2, 2), 1.0e-12),
     ("si-paw-collinear-dual12", "si", "Si.pz-n-kjpaw_psl.0.1.UPF", 16.0, 12.0,
-     False, (12, 24, 48, 96), 12),
+     False, (12, 24, 48, 96), 12, (1, 2, 2), 1.0e-12),
     ("pt-soc-dual8", "pt", "Pt.rel-pz-n-rrkjus.UPF", 30.0, 8.0,
-     True, (16, 24, 40), 20),
+     True, (16, 24, 40), 28, (2, 2, 2), 1.0e-10),
     ("pt-soc-dual4", "pt", "Pt.rel-pz-n-rrkjus.UPF", 30.0, 4.0,
-     True, (16, 24, 40), 20),
+     True, (16, 24, 40), 28, (2, 2, 2), 1.0e-10),
 ]
 
 
@@ -197,16 +203,20 @@ def fourier(field, grid, miller):
 
 
 def main(index: int, out: Path, pseudo_dir: Path) -> None:
-    (label, template, upf, ecutwfc, dual, spinor, rungs,
-     reference_nbnd) = CASES[index]
-    shape, kgrid = (2, 1, 1), (1, 2, 2)
+    (label, template, upf, ecutwfc, dual, spinor, rungs, reference_nbnd,
+     kgrid, conv_thr) = CASES[index]
+    shape = (2, 1, 1)
+    # A loose ground state is refused by ``run_ultracell`` and the loop's own
+    # tolerances have to sit above it, so all three follow the case's cell.
+    reference_thr = max(conv_thr * 10, 1.0e-11)
+    loop_thr = max(conv_thr * 100, 1.0e-10)
     folded = tuple(n * m for n, m in zip(shape, kgrid))
     work = out / label
     work.mkdir(parents=True, exist_ok=True)
     record = {
         "case": label, "ecutwfc": ecutwfc, "ecutrho": dual * ecutwfc,
         "dual": dual, "spinor": spinor, "dataset": upf,
-        "shape": list(shape), "kgrid": list(kgrid),
+        "shape": list(shape), "kgrid": list(kgrid), "conv_thr": conv_thr,
     }
     started = time.time()
 
@@ -221,14 +231,15 @@ def main(index: int, out: Path, pseudo_dir: Path) -> None:
     print(f"[{label}] doublegrid={basis.doublegrid} dense={basis.dense.grid} "
           f"smooth={basis.smooth.grid}", flush=True)
 
-    scf = calculator.get_scf(conv_thr=1e-12, nbnd=max(8, reference_nbnd // 2))
+    scf = calculator.get_scf(conv_thr=conv_thr,
+                             nbnd=max(8, reference_nbnd // 2))
     record["unit_cell_energy"] = float(scf.total_energy)
     record["unit_cell_converged"] = bool(scf.converged)
     print(f"[{label}] unit cell {float(scf.total_energy):.10f} Ry", flush=True)
 
     # -- the null -----------------------------------------------------------
     null = run_ultracell(calculator.system, calculator.pseudos, scf, shape,
-                         kgrid, nbnd=rungs[1], conv_thr=1e-10)
+                         kgrid, nbnd=rungs[1], conv_thr=loop_thr)
     record["null_energy"] = float(null.total_energy)
     record["null_gap"] = float(null.total_energy) - float(scf.total_energy)
     record["null_residual"] = float(null.augmentation_residual)
@@ -249,7 +260,7 @@ def main(index: int, out: Path, pseudo_dir: Path) -> None:
         jnp.asarray(AMPLITUDE * np.cos(2 * np.pi * coordinates[..., 0])),
     )
     reference = run_scf(reference_cell.system, reference_cell.pseudos,
-                        calculation=calculation, conv_thr=1e-11,
+                        calculation=calculation, conv_thr=reference_thr,
                         nbnd=reference_nbnd)
     per_cell = float(reference.total_energy) / int(np.prod(shape))
     # **The supercell's own null, and it is the first thing a supercell
@@ -263,7 +274,7 @@ def main(index: int, out: Path, pseudo_dir: Path) -> None:
     # below carries that offset, which is why the modulation energy is reported
     # beside it: the offset cancels in a difference of differences.
     reference_null = run_scf(reference_cell.system, reference_cell.pseudos,
-                             conv_thr=1e-11, nbnd=reference_nbnd)
+                             conv_thr=reference_thr, nbnd=reference_nbnd)
     null_per_cell = float(reference_null.total_energy) / int(np.prod(shape))
     record["supercell_null_per_cell"] = null_per_cell
     record["supercell_null_offset"] = null_per_cell - float(scf.total_energy)
@@ -322,8 +333,8 @@ def main(index: int, out: Path, pseudo_dir: Path) -> None:
             for nbnd in (steps or rungs):
                 result = run_ultracell(
                     calculator.system, calculator.pseudos, scf, shape, kgrid,
-                    nbnd=nbnd, external=modulation, conv_thr=1e-10,
-                    states_conv_thr=1e-10,
+                    nbnd=nbnd, external=modulation, conv_thr=loop_thr,
+                    states_conv_thr=loop_thr,
                 )
                 box = result.ultracell.grid
                 ours = fourier(np.asarray(result.density)[0], box, miller)

@@ -473,19 +473,28 @@ what the spiral fixes (`at_spiral_q` passes `shift = -qcart` and the spiral's `Q
 `-q`) and what was implemented and measured; the other spelling was run deliberately and
 breaks the variational bound.
 
-**What is still refused is one thing, the double grid**, and two of the three this entry
-listed have since gone. The **spinor** combination was written the same day (`PLAN.md` P88
+**Nothing of this entry's list is refused any more**, the double grid having gone with the
+other two (`PLAN.md` P88 stage 9, 2026-09-20): the refusal's premise was right and its
+conclusion did not follow. `h_psi` does truncate the potential to the smooth sphere, and the
+ultracell's matrix element cannot see the dense half either, because the gather reads `dV`
+only where two wavefunction spheres differ and the difference of two vectors inside the
+`ecutwfc` sphere is inside the `4 ecutwfc` one. Truncating `dV` before the matrix element
+moves a modulated PAW silicon ultracell at `ecutrho = 8 ecutwfc` by **1.3e-12 Ry** with the
+displaced blocks alive, where zeroing it there moves 6.5e-4, which is what says the probe was
+live. The **spinor** combination was written the same day (`PLAN.md` P88
 stage 6): `D_ij` is the scalar integrals sandwiched between `fcoef`, with the displaced table
 inside that transform. And the ultracell **transmission** was never a missing term at all
 (stage 7): its exit-plane Gram matrix is not built from the whole state, and the unit cell
 hands `calculation._overlap` to the *whole-cell* diagnostic alone, so the plane needed the
 same vacuum guard the image and the spectrum inherit rather than an overlap operator. What
 refuses now is `exit_region = "volume"` on an augmented dataset, which is the one Gram matrix
-that is `<psi|S|psi>`. The **double grid** is the wall such a dataset meets first and is why
-every number here is at `ecutrho = 4 ecutwfc`; its lift is about three lines -- mask `dV` to
-the tiled smooth sphere for the smooth half of the matrix element, keep the dense `dV` for
-`newd`'s integral, which is QE's own split -- and was deliberately kept out of the same
-measurement rather than folded into it.
+that is `<psi|S|psi>`. The **double grid** was the wall such a dataset met first and is why
+every number here is at `ecutrho = 4 ecutwfc`; its lift was sized at three lines and cost
+none, the truncation those three lines would have applied being a no-op. What the lift
+brought with it instead is a *protocol*: at a dual the reference supercell picks its own FFT
+box, which is not the tiled one, and then sits 2.2e-6 Ry per cell above its own unit cell
+with nothing applied, so a gap there has to be read as a difference of differences
+(`OPEN.md` Part X item 3).
 
 **One augmented path is written and is exercised only on constructed arrays** (P88 stage 8,
 2026-09-17). The magnetization **seed** touches `becsum` as well as the density, and it has

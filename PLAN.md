@@ -340,7 +340,7 @@ because that is what decides whether it is a session or a phase.
   follow-up; memory held by **child** processes, which the cgroup charges and this does
   not; and the fact that the failure lands at *teardown*, after the peak — if the peak is
   the kill, what survives is the log line, which is why it is written first.
-- **The ultracell beyond an LDA** (P88, stages 1, 3a, 3b, 4, 5, 6, 7 and 8 done). Spin is in, collinear
+- **The ultracell beyond an LDA** (P88, stages 1, 3a, 3b, 4, 5, 6, 7, 8 and 9 done). Spin is in, collinear
   and noncollinear both: an applied `magnetic_field` modulates the moment, the two collinear
   channels share one Fermi level, and a spinor ultracell is *one* matrix per folded k-point
   rather than two, acted on by `V_0 + sigma . B`, so a texture that **turns** is reachable
@@ -15872,7 +15872,7 @@ told from silence is this project's most-repeated trap.
   which is a statement about that route rather than this one, and QE's own `average_pp.f90`
   refuses ultrasoft and PAW outright.
 
-### P88 -- The ultracell: a modulation a thousand cells long, solved in the unit cell's own states. ✅ DONE, stages 1, 3a, 3b, 4, 5, 6, 7 and 8 (LDA, direct route, `nspin = 1`, `2` and `4`, the total energy, ultrasoft/PAW in all three spin regimes, the augmented transmission, and the seeded modulation); stage 2 planned.
+### P88 -- The ultracell: a modulation a thousand cells long, solved in the unit cell's own states. ✅ DONE, stages 1, 3a, 3b, 4, 5, 6, 7, 8 and 9 (LDA, direct route, `nspin = 1`, `2` and `4`, the total energy, ultrasoft/PAW in all three spin regimes, the augmented transmission, the seeded modulation, and the double grid); stage 2 planned.
 
 Elk tasks 700/701 (ground state), 720/725 (band structure and spectral function), 731-3,
 741-3, 771-3 (plots); `src/modulr.f90` and the twenty routines around it. The method paper is
@@ -17593,6 +17593,52 @@ direction is the noncollinear one, and there the seeded helix shows it as iterat
 than as a residual: 5.44e-11 charge against 1.54e-11 magnetic in the closed sector at 14
 iterations, and 4.14e-11 against 3.33e-11 out of it at 290.
 
+**Stage 9: the double grid, which was refused for a term that cannot reach the matrix
+element** (2026-09-20). Every augmented number above is at `ecutrho = 4 ecutwfc` because
+`require_an_ultracell_regime` refused `basis.doublegrid`, and the refusal's reasoning was
+that `h_psi` multiplies a wavefunction by the potential interpolated down to the smooth
+sphere, so an ultracell `dV` living on the dense box would hand the matrix element a term
+neither the frozen eigenvalues nor the reference supercell has. **The premise is right and
+the conclusion does not follow.** The matrix element gathers onto the wavefunction sphere,
+so it reads `dV` only at `G'' - G + Q_d` with both `G` inside the `ecutwfc` sphere, and
+`|G'' - G| <= 2 sqrt(ecutwfc)` is the `4 ecutwfc` sphere -- the smooth one. It is the
+argument `basis/interpolate.py` already makes for the unit cell ("the high G components
+dropped are ones no product of two wavefunctions can see"), carried one wavevector out, and
+the three lines the lift was sized at would have been a no-op.
+
+**Measured rather than argued, and with a probe that had to move.** On modulated ultrasoft
+silicon at `ecutrho = 8 ecutwfc`, `N = 2`, with the displaced blocks alive at an
+augmentation residual of 1.14e-5: truncating `dV` to the tiled smooth sphere before the
+matrix element moves the total by **1.3e-12 Ry**, while zeroing `dV` at the same point moves
+it by 6.5e-4. Truncating `dV` *everywhere*, `newd`'s integral included, moves it by 1.2e-10,
+which is a measurement of what the augmentation integral takes from the dense half and not
+of what the refusal was about. Masking the ultracell's own `|G + Q|` sphere in place of the
+unit cell's dense sphere at every `Q` -- Elk's convention, `OPEN.md` Part X item 1 -- moves
+nothing at 1e-10 either, where a quarter of that cut-off does.
+
+**What the lift actually cost was a protocol, and it is the interesting half.** The first
+ladder at a dual put the ultracell **1.47e-6 Ry below** the four-atom supercell at
+`nbnd = 48` and 1.90e-6 below at 96, which the nested-basis bound forbids. The cause is not
+the ultracell: with nothing applied the supercell at `ecutrho = 8 ecutwfc` sits
+**2.1978e-6 Ry per cell above its own unit cell**, because it chooses its own dense FFT box,
+`(54, 25, 25)` where the tiled one is `(50, 25, 25)`, and the two sides then do not
+discretise the same functional. At `ecutrho = 4 ecutwfc` the supercell's box *is* the tiled
+one and the same check reads 5.4e-13, which is why no augmented ladder had ever needed it --
+and `tests/regression/test_ultracell.py` had already met the same effect on the
+norm-conserving side, where it is solved by choosing an `ecutwfc` at which the two boxes
+agree, a lever a dual does not have. So a gap at a dual is read as a **difference of
+differences**, each side against its own unmodulated state, and that restores the picture
+exactly: +1.07e-4, +4.71e-6, +7.23e-7, +3.02e-7 Ry at `nbnd = 12, 24, 48, 96`, above at
+every rung and falling, against the same cell's +1.0721e-4, +4.4643e-6, +4.8240e-7 at
+`ecutrho = 4 ecutwfc`, which this measurement reproduces to every digit as its control.
+
+**And the augmentation residual reads the dual as `OPEN.md` Part X item 1 predicts**: 1.03e-5
+under the modulation at `ecutrho = 8 ecutwfc` against 5.5e-5 at 4, which is the
+`ecutrho^-2.2` of that entry seen on a second grid rather than on the same one.
+
+The measurement across both datasets, both spin regimes, `ecutrho = 4, 8, 12 ecutwfc` and the
+fully relativistic platinum cell is `tools/cluster/ultracell_dual.py`, run as job `20350372`.
+
 **What is outstanding.**
 
 * **Stage 2** as planned above: the central-k route beside the direct one and the two
@@ -17646,6 +17692,9 @@ iterations, and 4.14e-11 against 3.33e-11 out of it at 290.
   at this size. `PERFORMANCE.md` has the measurement.
 * **A GGA** on the box, which would be a strict improvement on Elk's per-cell `potxc` rather
   than a transcription of it, and is refused meanwhile.
+* **A supercell comparison at a dual needs the reference run twice**, which is stage 9's
+  protocol and is not yet folded into the committed ladders: those are all at
+  `ecutrho = 4 ecutwfc`, where the offset is 5e-13 and the raw gap is the right number.
 * **The band structure and spectral function** (Elk's 720/725): post-processing on a converged
   ultracell state, deferred rather than forgotten, and the README row says so.
 
