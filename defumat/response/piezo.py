@@ -616,6 +616,12 @@ def _multiplier_strain_term(
     """
     if field_perturbations is None or band_weights is None:
         return None
+    if not isinstance(nocc, (int, np.integer)):
+        raise TypeError(
+            f"nocc must be the single occupied-band count, got {nocc!r}. "
+            "``SternheimerSolver.nocc`` is that number; the response's "
+            "``internals['nocc']`` is the per-spin tuple beside it"
+        )
     from defumat.response.born import _multiplier_response
     from defumat.response.strain import overlap_derivatives
 
@@ -761,7 +767,14 @@ def piezoelectric_tensor(
             calculation, internals["solver"], density, internals["dpsi"],
             field_perturbations=perturbations,
             band_weights=jnp.asarray(internals["weights"]),
-            nocc=internals["nocc"],
+            # ``solver.nocc`` and *not* ``internals["nocc"]``: the latter is the
+            # per-spin tuple ``(4,)`` and the former the one number across the
+            # channels, which is what slices an array.
+            # :func:`clamped_ion_piezoelectric` is handed the same thing one
+            # line further down, and getting it wrong here could not be caught
+            # on a norm-conserving cell, where
+            # :func:`_multiplier_strain_term` returns before it is used.
+            nocc=internals["solver"].nocc,
         )
     else:
         e = clamped_ion_piezoelectric(
