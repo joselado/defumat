@@ -8513,6 +8513,43 @@ still calling it the augmented case. It is the doc-drift of the 2026-09-18 audit
 from the other direction: not a stale sentence beside live code, but live prose
 beside code that had stopped running.
 
+*The three regression files pass on a node, and until now they had never been
+run in one process anywhere.* Job `20345288`, an array of three tasks on
+`milan3` under `batch-milan` at `c9bbfb1`, four cores and 32 G a task with
+`DEFUMAT_CACHE_DIR=off`, so every kernel was compiled once: **14 tests passed
+and none failed**, 3 in `test_piezoelectric_augmented.py` at 335.97 s, 1 in
+`test_piezoelectric_wedge.py` at 198.74 s and 10 in `test_piezoelectric.py` at
+563.03 s, with peak resident sets of **10.5, 8.0 and 5.2 GiB**
+(`/usr/bin/time`'s `ru_maxrss`, and `sacct` agrees at 10.6, 8.1 and 5.2). The
+JAX underneath is 0.11.1 and NumPy 2.5.2 against this workstation's 0.11.0 and
+2.4.6, which is the pair that moved eight other assertions by 1e-12 to 1e-7,
+and it moves none of these: the tightest thing asserted here is a relative
+1e-06 between two routes evaluated in the same process, and the only number
+quoted across machines is the closed-grid `e_14` of 1.474377366 at an absolute
+1e-04.
+
+**The split into three files was not optional and the peaks say so.** The
+augmented file alone resides 10.5 GiB against `tools/run_regression.sh`'s 12 GiB
+cap, so a second augmented cell in the same process has 1.5 GiB to live in,
+which is the killed run the wedge file's own docstring describes. Cold, the
+three cost 5m36, 3m19 and 9m23 against the workstation's warm 5m24, 1m55 and
+5m00: the wedge file is 1.7 times and the third 1.9 times the warm figure, and
+that difference is the compilation the on-disk cache was serving, which is the
+reason a first call is never timed here. The in-process watchdog was off for the
+whole array, because `psutil` is not importable in the cluster venv and
+`conftest.py` says so at collection time rather than silently, so the peaks
+above come from `/usr/bin/time` around pytest and not from the watchdog, and no
+test is named as the one that held them.
+
+**One defect in the job script was found by reading it rather than by running
+it** (`c9bbfb1`). `piezo_regression.sbatch` took its `REPO` line from
+`regression.sbatch`, whose default is `/scratch/work/ladovj1/apps/defumat-audit`,
+the *old* side of `attribute.sbatch`'s A/B sitting at `b247662`. Two of the
+three files were written after that commit, so the array would have failed on a
+missing path in two tasks out of three and the third would have tested the code
+the session started from. Its sibling jobs that day all used `defumat-jobs` and
+that is the default now.
+
 ### P51 — The optical conductivity tensor, the Kerr angle and the anomalous Hall conductivity. ✅ DONE.
 
 `defumat/response/conductivity.py` and `defumat/workflows/conductivity.py`.
