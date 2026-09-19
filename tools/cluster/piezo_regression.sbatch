@@ -43,8 +43,12 @@
 
 WORK=/scratch/work/ladovj1/calculations/defumat-piezo
 # The checkout to run, overridable so that a run never has to modify a working
-# tree someone else is using.
-REPO=${DEFUMAT_REPO:-/scratch/work/ladovj1/apps/defumat-audit}
+# tree someone else is using. It is `defumat-jobs`, which is the checkout every
+# other piezoelectric job of this session used and the one a bundle is fetched
+# into; `defumat-audit` is the *old* side of `attribute.sbatch`'s A/B and sits
+# at the commit that session started from, where two of the three files below
+# do not exist at all.
+REPO=${DEFUMAT_REPO:-/scratch/work/ladovj1/apps/defumat-jobs}
 VENV=/scratch/work/ladovj1/calculations/pypresso-gpu/venv
 
 mkdir -p "$WORK/out" || exit 1
