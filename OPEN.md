@@ -4167,8 +4167,18 @@ group kept, so the same unshifted `2 2 2` sample reduces from 8 points to 3:
 | contracted | 1.474382167 | 1.474382167 | 1.474377366 |
 
 The two were **1.05e-03** apart on the wedge and are now **3.4e-08**, and both
-now sit 4.8e-06 from the closed grid, which is the residue the rank-3 average
-leaves on the factor that stays a raw wedge sum. **The closed-grid numbers did
+now sit 4.8e-06 from the closed grid, **and the sentence first written here
+about that number was wrong and is retracted**. It said the 4.8e-06 was the
+residue the rank-3 average leaves on the factor that stays a raw wedge sum,
+which predicts zero: the average of a term *linear* in a covariant per-k factor
+is exact, which is P36's rule and what the norm-conserving cell confirms at
+4.5e-09. It is inherited from below instead. **The dielectric constant itself
+splits between the same two cells by 1.573e-05 relative**, 6.634e-04 on 42.16,
+five times the piezoelectric tensor's 3.26e-06, so the strain leg adds nothing
+measurable and there is no residue here to explain. Where that 1.573e-05 comes
+from is a question about the *field response* on an ultrasoft wedge, it is not
+this phase's, and it is opened as its own item with the two discriminators
+already run.. **The closed-grid numbers did
 not move by a bit**, which is the check the construction asks for: the shift is
 `symmetrize_directional(raw) - raw` and that is identically zero on a `nosym`
 run, so `alas-piezo-tiny.in` reads 1.474377366 and a two-route gap of
@@ -4287,6 +4297,70 @@ the sign difference between the two committed AlAs cells, which is the
 phases with one cell's lattice vectors, which is exact for `e_14` because
 `(S a_g)_x = 0` for a pure `y`-`z` shear, the same statement that makes `e_14`
 free of the proper-against-improper correction and of the polarization branch.
+
+## 5. An **ultrasoft** dielectric constant does not reproduce its own closed grid from a symmetry-reduced k-set, by 1.6e-05 relative **[opened 2026-09-19, found in passing; attributed to the dataset the same day, term not found]**
+
+An unshifted Monkhorst-Pack grid is closed under the point group, so a
+symmetrised wedge and the whole grid are the same k-sample by two routes and
+must give the same answer to round-off. On a **norm-conserving** cell they do:
+`response/efield.py`'s own docstring records a spinor silicon wedge reproducing
+the closed 64-point grid's tensor to **7.4e-13**, and the scalar pair to 4.1e-13.
+On an **ultrasoft** cell they do not.
+
+Measured on the two cells committed on 2026-09-19 for the piezoelectric
+identity, which are the same crystal, the same datasets, the same cutoffs and
+the same unshifted `2 2 2` sample, differing only in whether the point group is
+kept -- 8 points against 3:
+
+| quantity | closed grid | wedge minus closed | relative |
+|---|---|---|---|
+| `epsilon` | 42.15974622025 | 6.634e-04 | **1.573e-05** |
+| the converged `drho` | max 8.614e-01 | 8.970e-06 | 1.041e-05 |
+| the converged `dvscf` | max 5.143e+00 | 3.763e-04 | 7.315e-05 |
+
+**Two things are already ruled out and they are what makes this worth opening
+rather than noting.** It is **not the solver's convergence**: rerun with `tr2`
+at 1e-18 and the inner `threshold` at 1e-14, six orders tighter, and the
+`epsilon` split is **6.634e-04 to five digits, unchanged**. And it is **not the
+assembly above the loop**: the split is already in the converged induced density
+`drho`, so whatever is incomplete is inside the self-consistent response
+iteration rather than in the contraction that turns it into a tensor. The two
+ground states agree to 3e-11 Ry, so it is not the SCF either.
+
+**What it is not, as far as the obvious suspect goes.**
+`_symmetrize_becsum_response` is a no-op for a non-PAW dataset, which looks like
+the answer and is probably not: `SternheimerSolver.response_density` builds the
+augmentation charge's own response into `drho` before the loop symmetrises it
+(`sum_ij Q_ij(r) dbecsum_ij`, its docstring's third bullet), and
+`becsum_response` is carried separately only for PAW's one-centre potential,
+which an ultrasoft run does not have. That was read rather than tested, so it is
+a suspect discharged on an argument and not a measurement, which this file
+usually refuses -- it is written down so the next person does not spend the
+afternoon on it first.
+
+**What it costs and what it touches.** 1.6e-05 relative is far below anything
+currently claimed against `ph.x` or Elk, so nothing in the record is wrong
+because of it. What it does set is a **floor** under every ultrasoft quantity
+taken on a reduced k-set: the piezoelectric tensor's two routes agree to 3.4e-08
+on the same wedge and sit 4.8e-06 from their own closed grid, which is this and
+not theirs. Anything aiming below 1e-05 on an augmented wedge should run
+`nosym` until this is understood.
+
+**It is the dataset and not the cell, measured.** The same comparison on
+`alas-raman.in` -- the *same crystal*, norm-conserving, its own unshifted grid
+run whole against its symmetrised wedge, 64 points against 8 -- gives
+**3.545e-10** relative in `epsilon` and 8.689e-10 in `drho`, against the
+ultrasoft cell's 1.573e-05 and 1.041e-05. That is a factor of **4.4e04** between
+the two dataset kinds on one crystal through one code path, which is what makes
+this an ultrasoft hole rather than a property of a cheap cell or a small mesh.
+
+**So what is left to do is to find the term**, and the shape of the answer is
+already fixed by the three measurements above: it is inside the self-consistent
+iteration, it is in the augmentation, and it is not the solver's tolerance. The
+suspect discharged on an argument above -- `_symmetrize_becsum_response` being a
+no-op for a non-PAW dataset -- should be the first thing *tested* rather than
+read, since an argument is what this file least wants standing where a
+measurement is cheap.
 
 ## 4. Eight cluster test failures are assertions, none of them is this session's work, and one is a stale test rather than the environment **[opened 2026-09-19, attributed the same day]**
 

@@ -269,9 +269,25 @@ def require_a_measured_dataset(calculation) -> None:
     k-points (Triton ``20339308_0``). A term measured at a fifth of the
     disagreement between two routes is not a term that vanishes.
 
+    *All three of those terms were written on 2026-09-19 and the two routes now
+    agree to 3.4e-08 on a wedge and 1.0e-07 at 64 k-points; what the paragraph
+    below describes is what the refusal was protecting against until then, and
+    the refusal stays for the separate reason the last paragraph gives.*
+
+    **Two things about PAW, and both are reasons this refusal is not a
+    formality.** :func:`piezoelectric_zstar_eu_style` refuses it outright
+    (:func:`require_a_norm_conserving_transcription`), and in the taped route
+    :func:`~defumat.response.born._full_zone_becsum_response` is now **live in
+    the strain coordinate and exercised by nothing**: the wedge completion runs
+    for PAW as well as for ultrasoft, and no non-centrosymmetric PAW cell is
+    committed, so the one dataset kind whose ``becsum`` reaches the energy
+    outside the dense grid has neither of its two new paths under a test. That is
+    a hole in the coverage rather than a known defect, and it is written here
+    because this refusal is what stands between it and a user.
+
     **The consequence is larger than the sentence.** If ``S`` deforms then this
-    assembly, which carries only the states tangent -- no multipliers, no
-    ``add_for_charges`` sandwich, no full-zone shift -- is missing on an
+    assembly, carrying only the states tangent -- no multipliers, no
+    ``add_for_charges`` sandwich, no full-zone shift -- was missing on an
     ultrasoft dataset exactly what
     :func:`~defumat.response.born.born_effective_charges` supplies in the
     position coordinate, and :func:`born_charges_from_stress_route`'s docstring
@@ -366,19 +382,25 @@ def _frozen_energy_of(calculation, psi, eigenvalues, weights, density, becsum):
     carries the coordinate. Under a strain there is a third reason of the same
     kind -- the density is stored on a grid that does not move and carries a
     factor ``1/Omega``, so it responds to a strain even at frozen states.
+
+    **This is the norm-conserving assembly's energy**, with no multipliers and no
+    wedge completion; :func:`_shifted_frozen_energy_of` is the augmented one.
+    It carried an optional ``multipliers`` argument until the augmented branch
+    needed two more and moved to that function, at which point nothing passed it
+    any more.
     """
     positions = jnp.asarray(calculation.system.structure.positions)
     density_of, becsum_of = _raw_mixed_state(
         calculation, positions, psi, weights, density, becsum
     )
 
-    def energy(moved, states, multipliers=None):
+    def energy(moved, states):
         return energy_at(
             moved,
             FrozenState(
                 wavefunctions=states, weights=weights, eigenvalues=eigenvalues
             ),
-            density=density_of, becsum=becsum_of, multipliers=multipliers,
+            density=density_of, becsum=becsum_of,
         )
 
     return energy

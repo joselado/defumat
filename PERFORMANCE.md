@@ -4156,7 +4156,18 @@ now, with the closed-grid numbers unmoved to the bit. The cheap route needed
 none of it, its screening factor being the field's symmetrised `dvscf` already,
 which is an accident of what the response loop hands back rather than a virtue
 of the transcription -- worth one line here because the taped route looks like
-the safer one and on a reduced k-set it was not. **The `6 6 6` and `8 8 8` rungs that were
+the safer one and on a reduced k-set it was not.
+
+**And the two cells are two files, because of the cache rule with its sign
+reversed.** Each peaks at about 10 GiB of `run_regression.sh`'s 12 GiB cap. The
+two tests passed together once, at 5m52, and the *same code* was killed at 137
+the next time it ran -- the first run had compiled the second cell's kernels and
+the second read them back off `~/.cache/defumat/jax`, and loading a compiled
+executable expands it. **A two-cell file measured cold is not a two-cell file
+that runs warm.** Split, they are 5m24 and 1m55 and both pass warm. This is the
+`OPEN.md` Part I item 2 effect landing on a test gate rather than on a
+measurement, and it is the second time a peak figure taken here has turned out
+to be a figure about the cache. **The `6 6 6` and `8 8 8` rungs that were
 sized as a cluster node are now 2.6 and 3.6 GiB**, and they are the measurement
 `OPEN.md`'s drift.3 entry needs next.
 

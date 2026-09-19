@@ -8486,8 +8486,18 @@ it separates the two routes where the closed grid cannot:
 | contracted | 1.474382167 | 1.474382167 | 1.474377366 |
 
 The two were **1.05e-03** apart on the wedge and are **3.4e-08** now, and both
-sit 4.8e-06 from the closed grid, which is the residue the rank-3 average leaves
-on the factor that stays a raw wedge sum. **The closed-grid numbers did not move
+sit 4.8e-06 from the closed grid, **and the sentence first written here
+about that number was wrong and is retracted**. It said the 4.8e-06 was the
+residue the rank-3 average leaves on the factor that stays a raw wedge sum,
+which predicts zero: the average of a term *linear* in a covariant per-k factor
+is exact, which is P36's rule and what the norm-conserving cell confirms at
+4.5e-09. It is inherited from below instead. **The dielectric constant itself
+splits between the same two cells by 1.573e-05 relative**, 6.634e-04 on 42.16,
+five times the piezoelectric tensor's 3.26e-06, so the strain leg adds nothing
+measurable and there is no residue here to explain. Where that 1.573e-05 comes
+from is a question about the *field response* on an ultrasoft wedge, it is not
+this phase's, and it is opened as its own item with the two discriminators
+already run.. **The closed-grid numbers did not move
 by a bit** — the shift is `symmetrize_directional(raw) - raw`, identically zero
 on a `nosym` run, so the two-route gap on `alas-piezo-tiny.in` reads
 1.7135834085024726e-07 before and after, digit for digit, and `alas-raman.in`

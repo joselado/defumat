@@ -13,10 +13,11 @@ strain at frozen plane-wave coefficients is identically zero as well. A
 zincblende crystal's only independent component is the shear ``e_14``, so that
 cell could not have seen any of it.
 
-**Two cells, and the second is not a duplicate.** ``alas-piezo-tiny.in`` is the
-whole unshifted grid with no symmetry and says the two assemblies are the same
-derivative; ``alas-piezo-tiny-wedge.in`` is the same k-sample reduced to three
-points and says the *wedge sum* has been completed, which on an augmented
+**The wedge is the other half and is ``test_piezoelectric_wedge.py``**, a file
+of its own because each of these cells peaks at about 10 GiB of the runner's
+12 GiB cap. This one is the whole unshifted grid with no symmetry and says the
+two assemblies are the same derivative; that one is the same k-sample reduced to
+three points and says the *wedge sum* has been completed, which on an augmented
 dataset is a separate statement because one term of this derivative is quadratic
 in a per-k tangent and no average of the finished tensor can repair it. Each
 cell caught something the other could not: without the second, the taped route
@@ -73,23 +74,13 @@ PSEUDO = Path(__file__).resolve().parents[1] / "data" / "pseudo"
 #: again against the runner's memory cap without that mattering.
 SCREENED_E14 = -0.0227272
 
-#: ``tools/run_regression.sh`` caps each file at 12 GiB and this one measured
-#: **10.1 GiB** at ``ecutwfc = 10, ecutrho = 44``, 2m44 -- which is why it is a
-#: file of its own rather than three more tests in ``test_piezoelectric.py``: a
-#: file boundary is a process boundary under that runner, and the peak here is
-#: the taped route's forward-over-reverse tape rather than anything cached.
+#: ``tools/run_regression.sh`` caps each file at 12 GiB and this cell measured
+#: **10.1 GiB** at ``ecutwfc = 10, ecutrho = 44``, 2m44. That is why this is a
+#: file of its own rather than three more tests in ``test_piezoelectric.py``,
+#: and why the wedge cell beside it is a *third* file rather than a fourth test
+#: here: a file boundary is a process boundary under that runner, and one cell
+#: at 10.1 GiB of a 12 GiB cap leaves no room for a second.
 CASE = "alas-piezo-tiny"
-
-#: The same cell and the same unshifted grid with the point group kept, so that
-#: eight k-points reduce to three. The pair is what says the wedge sum has been
-#: completed, and on an augmented dataset that is a statement about a term
-#: quadratic in a per-k tangent rather than about the rank-3 symmetriser.
-WEDGE = "alas-piezo-tiny-wedge"
-
-#: ``e_14`` on the closed grid, C/m^2, from
-#: :func:`test_the_two_routes_agree_on_an_augmented_dataset` -- quoted rather
-#: than recomputed so that the wedge test costs one ground state and not two.
-CLOSED_GRID_E14 = 1.474377366
 
 
 @pytest.fixture(autouse=True)
@@ -101,13 +92,7 @@ def _bounded_compilation():
 
 @lru_cache(maxsize=1)
 def _field(case: str = CASE):
-    """One converged ground state and one field response.
-
-    ``maxsize=1`` and not 2, deliberately: the two cells here are a 10.1 GiB and
-    a 9.0 GiB peak and the runner caps the file at 12, so holding both alive is
-    exactly the accumulation ``CLAUDE.md`` names. The second cell evicts the
-    first and pays for its own SCF, which is seconds.
-    """
+    """One converged ground state and one field response, shared by the file."""
     system = build_system(read_pw_input(CASES / f"{case}.in"))
     pseudos = tuple(
         read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species
@@ -266,46 +251,3 @@ def test_dropping_either_augmented_term_reopens_the_gap():
     assert abs(without_screening - without_either) == pytest.approx(
         abs(multiplier), rel=1e-6
     )
-
-
-def test_the_wedge_completes_and_the_taped_route_is_where_it_did_not():
-    """The pair that says a wedge sum of a *product* has been completed.
-
-    On an augmented dataset the density moves with the strain at frozen states,
-    so the mixed second derivative carries ``int (drho/d(eps)) K (drho/dE)`` --
-    a product of two per-k tangents. A wedge sum of a product is not the product
-    of the full-zone objects, so averaging the finished rank-3 tensor cannot
-    repair it: one factor has to be made whole *before* it is contracted, which
-    is :func:`~defumat.response.born._full_zone_field_response` and is P36's
-    rule. The two routes need it in different amounts and that is the point of
-    asserting both: the contracted one's screening factor is the field's
-    converged ``dvscf``, which ``dielectric_tensor`` mixes from the
-    **symmetrised** density response and which is therefore full-zone already,
-    while the taped one builds its own from unsymmetrised builders.
-
-    Measured against the code of this morning, on this cell: the taped route
-    gave 1.475427270 C/m^2 on the wedge against 1.474377366 on the closed grid,
-    **1.05e-03** apart, where the contracted one split by 4.8e-06 -- a factor of
-    219, which is what says the defect was the taped route's and not the
-    symmetriser's. With the completion in, the two agree **on the wedge** to
-    3.4e-08 and both sit 4.8e-06 from the closed grid, which is the residue the
-    rank-3 average leaves on the factor that stays a raw wedge sum.
-
-    The closed-grid value is quoted rather than recomputed so this costs one
-    ground state; it is the number
-    :func:`test_the_two_routes_agree_on_an_augmented_dataset` asserts on the
-    cell beside this one.
-    """
-    taped, contracted = _both_routes(WEDGE)
-    # The identity again, and on three k-points it is the sharper of the two
-    # statements: this is what was 1.05e-03 before the completion went in.
-    assert abs(taped - contracted) < 1e-6, (
-        f"the two routes disagree on the wedge by {taped - contracted:.3e} C/m^2"
-    )
-    # ... and the wedge is the closed grid, which is what the pair exists for.
-    assert abs(taped - CLOSED_GRID_E14) < 1e-4
-    assert abs(contracted - CLOSED_GRID_E14) < 1e-4
-    # Three points, not eight: if the reduction stopped happening the test above
-    # would still pass and would be comparing the cell with itself.
-    calculation, *_ = _field(WEDGE)
-    assert calculation.system.kpoints.nk == 3
