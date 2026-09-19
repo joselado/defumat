@@ -8656,6 +8656,31 @@ the measured drift when a ladder ran above the threshold, and must be silent
 below it, which is three states rather than the one a "does it warn" test would
 have checked.
 
+**The refusal is lifted for ultrasoft above the mesh it was measured at, and
+kept whole for PAW** (2026-09-20). ``require_a_measured_dataset`` was one
+refusal about two dataset kinds and is now two conditions: PAW raises whatever
+the mesh, and an ultrasoft dataset raises below :data:`ULTRASOFT_MESH`
+divisions in each direction. **Eight is where the ultrasoft deficit first falls
+below the norm-conserving calibration's on the same mesh** -- 1.26 against 1.62
+at ``8 8 8``, 0.57 against 1.19 at ``10 10 10`` -- which is the statement that
+the dataset has stopped being the largest error and the mesh has taken over,
+and the mesh has a warning of its own. Below eight the two are not separable at
+all, the same cell reading 15.6 per cent out at ``4 4 4``, so a coarse
+ultrasoft run is refused where a coarse norm-conserving one is only warned
+about. A **measured** ladder overrides the threshold: ``kmesh_drift`` below
+``KMESH_STEP`` is evidence where a division count is a guess generalized from
+one cubic crystal, and the ladder's own coarse rungs are exempt by
+``allow_a_coarse_mesh`` because they are what does the measuring.
+
+**Why PAW keeps all of it**, and it is about the kind of evidence rather than
+the amount: everything measured for PAW here is *internal*, the wedge
+completion against its own closed grid, and an identity between two k-sets of
+one calculation says nothing about whether the calculation is right. No PAW
+crystal has been compared with anything outside this code. The test file ran on
+a node and passed there (``20347768_3``, ``batch-milan``, **2 passed in 4m32**
+at a peak of 12.1 GB, which is 180 MB under the workstation runner's cap and is
+why it lives in the cluster array).
+
 ### P51 — The optical conductivity tensor, the Kerr angle and the anomalous Hall conductivity. ✅ DONE.
 
 `defumat/response/conductivity.py` and `defumat/workflows/conductivity.py`.
