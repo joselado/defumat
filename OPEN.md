@@ -4752,11 +4752,26 @@ dielectric constant, `sum_vc |v|^2 / dE^3` over the 10-band window, moves by
 where `1/dE^3` has crushed it, and because the transition that dominates is the
 one the defect does not touch. On a mesh that is diluted again by Gamma's own
 weight, and **every k-point off the reciprocal lattice is exact**, so a shifted
-Monkhorst-Pack grid never meets it at all. Where it is not diluted is anything
-evaluated at Gamma alone or weighted there: a band velocity or effective mass at
-Gamma, `chi_0` and the optical conductivity around the deep transitions, SHG's
-and the shift current's three-band terms, and any f-sum rule, which has no
-`1/dE` suppression to hide behind.
+Monkhorst-Pack grid never meets it at all.
+
+**Two of the quantities the audit entry named are protected and were checked
+rather than inherited.** The *diagonal* is untouched: no `m -> m` entry appears
+anywhere in the error map above 1e-6, because the term needs two different
+states, one with weight at `G = 0` and one an `l = 1` projector sees. So a band
+velocity at Gamma is exact, and it is zero there by symmetry in any case. And
+the **effective mass at Gamma never evaluates `dH/dk` at Gamma**: P48's "a
+stencil must not contain its own centre" rule already keeps the centre out, so
+the six stencil points sit at `Gamma +/- delta e_a` with `DEFAULT_DELTA = 0.025`
+1/bohr, where `|k+G|^2 = 6.25e-4` against `_TINY = 1e-8`. It would take a
+`delta` below 1e-4, four hundred times smaller than Elk's own `deltaem`, to
+reach the guard.
+
+What is left is the **off-diagonal** elements at a reciprocal-lattice point,
+between a state with weight at `G = 0` and one an `l = 1` projector sees: the
+deep interband transitions in `chi_0` and the optical conductivity, SHG's and
+the shift current's three-band terms, and any f-sum rule, which has no `1/dE`
+suppression to hide behind. Nothing here takes a second `k` derivative
+analytically, so `l = 2`'s own version of this defect has no consumer today.
 
 **Pinned** by `tests/unit/test_velocity_locality.py::
 test_the_velocity_at_gamma_matches_a_frozen_sphere_difference`, an
