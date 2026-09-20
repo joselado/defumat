@@ -410,12 +410,17 @@ def test_a_paw_dataset_beside_a_norm_conserving_one_runs(pseudo_dir):
 
     The cell is displaced silicon so the force is not a symmetry residue, and
     the comparison is against the vendored ``pw.x`` on the same input. What the
-    number means is read off its two controls, the same cell with both species
-    PAW and with both norm-conserving: the mixed force lands **between** them,
-    at 1.15e-5 Ry/bohr against 3.9e-7 (PAW) and 2.0e-5 (norm-conserving), so
-    each species keeps its own accuracy and the mixed path adds nothing. P15
-    records ``<= 2e-5 Ry/bohr`` for displaced silicon, which is the envelope all
-    three sit in.
+    number means is read off three controls. Two are the same cell with both
+    species PAW and with both norm-conserving: the mixed force lands **between**
+    them, at 1.15e-5 Ry/bohr against 3.9e-7 (PAW) and 2.0e-5 (norm-conserving),
+    and P15 records ``<= 2e-5 Ry/bohr`` for displaced silicon, which is the
+    envelope all three sit in. Those two differ in *physics* as well as in
+    machinery, so on their own they leave room for a mixed-path error hiding
+    under the norm-conserving species' own 2.0e-5. The third closes it and needs
+    no reference: one dataset under **one** label and under **two** is the same
+    physics through a one-block assembly and a two-block one, and the two agree
+    to **1.4e-14 Ry** and **1.4e-15 Ry/bohr**. So the two-species layout is
+    exact and the 1.15e-5 is the norm-conserving species' own contribution.
     """
     from defumat.calculator import Calculator
     from defumat.io.qeref import read_qe_output
@@ -428,7 +433,8 @@ def test_a_paw_dataset_beside_a_norm_conserving_one_runs(pseudo_dir):
 
     scf = calculator.get_scf(conv_thr=1e-10)
     assert scf.converged, scf.accuracy
-    assert scf.total_energy == pytest.approx(reference.total_energy, abs=1e-7)
+    # The measurement is 4.7e-9 Ry; this is that plus a factor of four.
+    assert scf.total_energy == pytest.approx(reference.total_energy, abs=2e-8)
 
     forces = np.asarray(calculator.get_forces().forces)
     np.testing.assert_allclose(forces, np.asarray(reference.forces), atol=2e-5)

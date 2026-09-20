@@ -1308,10 +1308,21 @@ the same input: the total energy to **4.7e-9 Ry** and the force to **1.15e-5 Ry/
 force of 0.0758. **The force is read through two controls rather than against a tolerance**,
 because a mixed cell has no accuracy of its own to expect: the same cell with both species
 PAW agrees to **3.9e-7** and with both norm-conserving to **2.0e-5**, so the mixed number
-lands between them and each species keeps its own. P15 records `<= 2e-5 Ry/bohr` for
-displaced silicon, which is the envelope all three sit in. The cell is displaced on purpose
--- at the ideal positions the force is zero by symmetry on both sites, which is the residue
-trap and would have agreed whatever the augmentation did.
+lands between them. P15 records `<= 2e-5 Ry/bohr` for displaced silicon, which is the
+envelope all three sit in. The cell is displaced on purpose -- at the ideal positions the
+force is zero by symmetry on both sites, which is the residue trap and would have agreed
+whatever the augmentation did.
+
+**Those two controls differ in physics as well as in machinery, so a third one carries the
+conclusion.** "Each species keeps its own accuracy" does not follow from a number that lands
+between two others: a small mixed-path error would hide under the norm-conserving species'
+own 2.0e-5 and read exactly the same. The control that separates the two is one dataset
+under **one** label and under **two** -- identical physics through a one-block assembly and
+a two-block one, so every `zip(blocks, species_atoms)` loop and every `channel_offsets`
+index is exercised on a case whose answer is already validated, and it needs no reference at
+all. They agree to **1.4e-14 Ry** and **1.4e-15 Ry/bohr**, which is SCF round-off. The
+two-species layout is therefore exact and the mixed cell's 1.15e-5 is the norm-conserving
+species' own contribution.
 
 **Why a routine with five consumers kept a gap this plain.** Three of them build blocks that
 can carry a `None`: `onecenter`, which is where the crash surfaced, `electrostriction`'s

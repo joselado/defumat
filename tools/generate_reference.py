@@ -10,6 +10,13 @@ which is what `CLAUDE.md` asks for, so that the Fortran build is needed to
     python3 tools/generate_reference.py                 # everything missing
     python3 tools/generate_reference.py --force si2-us  # regenerate one case
 
+**The no-argument form stops on ``al-metal.pp.in``** (seen 2026-09-20). A
+``*.pp.in`` is a ``pp.x`` input rather than a ``pw.x`` one, so injecting
+``pseudo_dir`` into its ``&control`` gives ``read_namelists`` a namelist it does
+not know and the sweep exits there. ``NOT_PW_X_INPUT`` is the place that would
+skip it, but it matches on *cards* and this is a whole different program's
+input. Name the case until that is fixed.
+
 The projected density of states is the second case of the same thing and a
 sharper one: QE's test-suite has no ``projwfc`` case at all, so *every* reference
 for it is generated here (see ``PROJWFC`` below). Those need ``projwfc.x``, which
