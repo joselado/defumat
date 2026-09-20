@@ -3565,6 +3565,19 @@ ultrasoft silicon at `ecutrho = 64` Ry, falling to 7.21e-5 at 96 and 2.96e-5 at 
 is `ecutrho^-2.2`, and exactly zero at `N = 1`. **The Hartree side is not measured at all**
 and is the older of the two -- it has been there since stage 1 and nothing reports it.
 
+**What the convention is worth on the total energy is now measured, and it is nothing**
+(2026-09-20, P88 stage 9, jobs `20350372`/`20350451`). Masking the ultracell's own
+`|G + Q|` sphere in place of the unit cell's dense sphere at every `Q` -- a genuinely
+different set, 12872 kept against 12846 at `ecutrho = 8 ecutwfc` and 23835 against 23870 at
+12 -- moves no digit of any rung of any silicon case, at 1e-10 on the total. The arm that
+says the probe is live is a quarter of that cut-off, which moves the total by 8.3e-4 Ry.
+**That is the sphere and not `keep & flip`**, so the symmetric hull below is still
+unmeasured; what the two arms bound is the size of the effect, since the sphere differs
+from `keep` by more vectors than the hull does. The `ecutrho` dependence of the residual
+came with it, across grids rather than along one: 5.4e-5, 1.13e-5 and 5.24e-6 at
+`ecutrho = 4, 8, 12 ecutwfc` on PAW silicon, which is the `ecutrho^-2.2` this entry
+measured on one grid.
+
 **What it would take.** Symmetrising the kept set is one line, `keep & flip` with
 `flip = np.roll(keep[::-1, ::-1, ::-1], 1, axis=(0, 1, 2))`, and it changes the method's
 cutoff from Elk's set to its symmetric hull, which is a *different truncation* rather than a
@@ -3643,13 +3656,22 @@ was wrong with the ultracell. Reading each side against its **own** unmodulated 
 and falling, which is the ladder at `ecutrho = 4 ecutwfc` with a slightly better
 augmentation charge.
 
-**What is open and what is not.** The protocol is settled -- compare the energy of the
-modulation, not the total -- and `tools/cluster/ultracell_dual.py` records both. What is
-open is the **size** of the offset as a function of the cell and the dual, which job
-`20350372` measures at 4, 8 and 12 times `ecutwfc` on both silicon datasets and on
-platinum, and whether any of it survives into the *density* comparison, which is read
-Fourier component by Fourier component and has a two-box floor of its own
-(`tests/regression/test_ultracell.py` puts that at about 1e-4 relative).
+**Measured across nine cases** (jobs `20350372`, `20350439`, `20350451`; the table is in
+`PLAN.md` P88 stage 9). The offset **follows the boxes rather than the dual**: 2.2e-6 Ry per
+cell at `ecutrho = 8 ecutwfc` on every silicon case alike, collinear and spinor, where the
+supercell picks `(54, 25, 25)` against a tiled `(50, 25, 25)`; **2.4e-8 at 12**, where it
+picks `(64, 32, 32)`, which *is* the tiled box; and 5e-13 at 4. On platinum at its dual it
+is -9.4e-7, so the sign is not fixed either.
+
+**What is open.** The protocol -- compare the energy of the modulation, each side against
+its own unmodulated state -- cancels the offset to **first order and not exactly**: the
+spinor case's `nbnd = 192` rung reads -2.0e-7 Ry, about a tenth of the offset removed, so a
+gap below a few 1e-7 on this cell says nothing. Whether the remainder is the modulated
+state's own grid error or something else is not settled, and the clean way to settle it is a
+cell whose supercell box *is* the tiled one at a dual, which `ecutrho = 12 ecutwfc` on
+silicon happens to be. Whether any of it reaches the **density** comparison is also open;
+that one is read Fourier component by Fourier component and has a two-box floor of its own,
+which `tests/regression/test_ultracell.py` puts at about 1e-4 relative.
 
 **The thing not to do** is to fix it by pinning the supercell's grid: `nr1/nr2/nr3` are
 refused at input here by name, the norm-conserving file reaches the same end by choosing an

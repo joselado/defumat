@@ -17627,17 +17627,49 @@ one and the same check reads 5.4e-13, which is why no augmented ladder had ever 
 and `tests/regression/test_ultracell.py` had already met the same effect on the
 norm-conserving side, where it is solved by choosing an `ecutwfc` at which the two boxes
 agree, a lever a dual does not have. So a gap at a dual is read as a **difference of
-differences**, each side against its own unmodulated state, and that restores the picture
-exactly: +1.07e-4, +4.71e-6, +7.23e-7, +3.02e-7 Ry at `nbnd = 12, 24, 48, 96`, above at
-every rung and falling, against the same cell's +1.0721e-4, +4.4643e-6, +4.8240e-7 at
-`ecutrho = 4 ecutwfc`, which this measurement reproduces to every digit as its control.
+differences**, each side against its own unmodulated state, and that restores the picture.
 
-**And the augmentation residual reads the dual as `OPEN.md` Part X item 1 predicts**: 1.03e-5
-under the modulation at `ecutrho = 8 ecutwfc` against 5.5e-5 at 4, which is the
-`ecutrho^-2.2` of that entry seen on a second grid rather than on the same one.
+**The measurement, nine cases on the cluster** (`tools/cluster/ultracell_dual.py`, jobs
+`20350372`, `20350439` and `20350451`), `N = 2` against a real supercell under the same
+`0.05 cos(pi x_1)` Ry modulation, energies in Ry per unit cell:
 
-The measurement across both datasets, both spin regimes, `ecutrho = 4, 8, 12 ecutwfc` and the
-fully relativistic platinum cell is `tools/cluster/ultracell_dual.py`, run as job `20350372`.
+| case | `ecutrho` | supercell null offset | modulation energy above the supercell |
+|---|---|---|---|
+| ultrasoft, collinear | 4 | **+5.47e-13** | +1.072e-4, +4.464e-6, +4.824e-7, +6.201e-8 |
+| ultrasoft, collinear | 8 | +2.1978e-6 | +1.074e-4, +4.706e-6, +7.228e-7, +3.019e-7 |
+| PAW, collinear | 4 | **-2.98e-13** | +1.069e-4, +5.265e-6, +8.191e-7, +1.879e-7 |
+| PAW, collinear | 8 | +2.1942e-6 | +1.072e-4, +5.508e-6, +1.060e-6, +4.281e-7 |
+| PAW, collinear | 12 | **+2.44e-8** | +1.069e-4, +5.243e-6, +7.950e-7, +1.633e-7 |
+| ultrasoft, spinor | 8 | +2.1961e-6 | +3.912e-5, +3.376e-6, +9.226e-8, -2.035e-7 |
+| Pt, spinor, `lspinorb` | 4 | +3.35e-8 | +3.095e-5, +1.553e-5, +5.246e-6 |
+| Pt, spinor, `lspinorb` | 8 | -9.42e-7 | +3.155e-5, +1.613e-5, +5.847e-6 |
+
+at `nbnd = 12, 24, 48, 96` collinear, `24, 48, 96, 192` spinor and `16, 24, 40` on platinum.
+**The three rows at `ecutrho = 4 ecutwfc` are the control and reproduce the committed
+ladders to every digit** -- stage 5's +1.07e-4, +4.46e-6, +4.82e-7 and +1.07e-4, +5.27e-6,
++8.19e-7, and stage 6's platinum +3.092e-5, +1.549e-5, +5.211e-6 -- which is what says this
+script is the same measurement taken at a second pair of grids.
+
+**Three things to read off the table.** The **offset follows the boxes and not the dual**:
+at 12 the supercell picks `(64, 32, 32)`, which *is* the tiled box, and the offset falls
+back to 2.4e-8 while at 8 it is 2.2e-6 on every silicon case alike, spin regime included.
+The **modulation energy is positive and falling everywhere it can be**, which is the
+nested-basis statement surviving the dual. And the protocol has a **floor**: the spinor
+case's last rung reads -2.0e-7, about a tenth of the offset it removes, so the cancellation
+is first order in the grid difference rather than exact, and a gap below about 2e-7 Ry on
+this cell says nothing.
+
+**The dual buys the augmentation charge exactly what `OPEN.md` Part X item 1 predicts.**
+`augmentation_residual` under the modulation reads 5.4e-5, 1.13e-5 and 5.24e-6 at
+`ecutrho = 4, 8, 12 ecutwfc` on PAW silicon, and 1.27e-6 against 1.2e-7 on platinum at 4 and
+8 -- the `ecutrho^-2.2` of that entry read across grids rather than along one.
+
+**And the cut-off convention itself is worth nothing measurable, which is that entry's other
+half.** Masking the ultracell's own `|G + Q|` sphere in place of Elk's dense sphere at every
+`Q` -- 12872 kept against 12846 at the silicon dual, 23835 against 23870 at 12 -- moves no
+digit of any rung of any silicon case. The arm that says the probe is live is a quarter of
+that cut-off, which moves the total by 8.3e-4 Ry at `ecutrho = 4 ecutwfc` and 9.3e-4 on
+platinum.
 
 **What is outstanding.**
 

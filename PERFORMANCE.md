@@ -5891,6 +5891,36 @@ energy landed. At 0.3 per cent of an iteration the energy cannot be 15 per cent 
 notebook, so that difference is **unattributed** -- one sample, on a path whose compiled
 code had changed, is not a timing.
 
+### What the dual costs an augmented ultracell (P88 stage 9)
+
+The double grid was refused until 2026-09-20, so every augmented ultracell number was taken
+at `ecutrho = 4 ecutwfc`; the question the lift raises is what running at the dual the
+dataset was generated for costs. **The answer is nothing to speak of**, and the reason is
+structural: the ultracell box grows with `ecutrho` but the expensive part of an iteration is
+`2 npol N nbnd` transforms on the *wavefunction* sphere, which `ecutrho` does not touch.
+
+Nine cluster tasks, one case each, cold kernel cache (`DEFUMAT_CACHE_DIR=off`), four cores
+on `batch-milan`, whole case from the unit cell's SCF to the last rung of every arm --
+so these are comparable to each other and to nothing else:
+
+| case | `ecutrho = 4 ecutwfc` | at 8 | at 12 |
+|---|---|---|---|
+| ultrasoft silicon, collinear | 263 s | **264 s** | |
+| PAW silicon, collinear | 614 s | **609 s** | 620 s |
+| fcc platinum, `lspinorb` | 205 s | **233 s** | |
+| ultrasoft silicon, spinor | | 737 s | |
+
+**Silicon is flat to under one per cent and platinum pays 14 per cent**, which is the dense
+box growing from `(20, 20, 20)` to `(25, 25, 25)` on both cells while platinum's `nbnd` is
+lower and its box is therefore a larger share of the work. Each case is one sample rather
+than a median, so a few per cent either way is not a number; what the table is for is the
+order of magnitude, which is that the dual is free.
+
+**What is not comparable and is worth saying**: these are whole *cases*, including a unit
+cell, a tiled null, two supercell SCF runs and three arms of a band ladder, so they are a
+cost per measurement and not a cost per iteration. The per-iteration pair is the section
+above.
+
 ### What a spinor costs, against the same ultracell with one channel (P88 stage 3b)
 
 A noncollinear ultracell pays on three counts, and only the first is about spin. They
