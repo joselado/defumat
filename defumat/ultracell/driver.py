@@ -1408,10 +1408,24 @@ def run_ultracell(
             augmentation_residual,
         )
     if keep_states:
-        # **The last iteration's amplitudes, which are the ones the density
-        # came from.** Both branches above leave ``vectors`` and ``levels`` at
-        # the state ``result`` was packed from, converged or not, so an image
-        # built from these is an image of the density that was reported.
+        # **The last iteration's amplitudes**, which are the ones the *output*
+        # density came from. On the converged branch that is also the density
+        # reported, because ``density = new`` there and ``accuracy < conv_thr``
+        # says the two are the same to within ``conv_thr`` anyway.
+        #
+        # **On the unconverged branch it is not**, and the sentence here used to
+        # say it was. ``density`` is then ``mixer.mix(input, output)`` -- the
+        # extrapolation the *next* iteration would have started from -- while
+        # these amplitudes solved the last iteration's input potential. So an
+        # image built from the states on an unconverged run is an image of
+        # neither the reported density nor the one that produced the levels
+        # beside it, and how far apart they are is what ``accuracy`` in the
+        # warning above measures.
+        #
+        # The convention is deliberate and is shared with the unit cell:
+        # ``run_scf`` returns ``density=rho`` for the same reason, that what a
+        # result carries should be what a continuation re-enters with. It is
+        # the promise in this comment that was wrong, not the choice.
         result.states = UltracellStates(
             coefficients=coefficients,
             vectors=jnp.stack([jnp.stack(block, axis=0) for block in vectors],
