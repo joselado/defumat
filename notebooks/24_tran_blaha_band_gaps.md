@@ -55,7 +55,7 @@ scf = runs["TB09"].get_scf()
 print("silicon, TB09:   c = %.4f after %d iterations" % (scf.meta_c, scf.iterations))
 ```
 
-    silicon, TB09:   c = 1.0331 after 10 iterations
+    silicon, TB09:   c = 1.0331 after 8 iterations
 
 
 The two inputs differ by `input_dft = 'tb09'` and by nothing else.
@@ -150,11 +150,11 @@ value, as WIEN2k and VASP allow. Measured once, offline, on this cell:
 
 | `mbj_c` | | indirect gap (eV) | iterations |
 |---|---|---|---|
-| 1.000 | (Becke-Johnson) | 1.018 | 11 |
-| 1.033 | (self-consistent, this pseudopotential) | **1.134** | 10 |
-| 1.120 | (the all-electron value of the 2009 paper) | 1.455 | 21 |
-| 1.200 | | 1.776 | 23 |
-| 1.300 | | 2.215 | 24 |
+| 1.000 | (Becke-Johnson) | 1.018 | 7 |
+| 1.033 | (self-consistent, this pseudopotential) | **1.134** | 7 |
+| 1.120 | (the all-electron value of the 2009 paper) | 1.455 | 8 |
+| 1.200 | | 1.776 | 8 |
+| 1.300 | | 2.215 | 8 |
 
 At the all-electron $c$ this cell *overshoots*, which says the pseudopotential's $c$ and its
 density are not two independent errors: what the core removed is missing from $\tau$ and from
@@ -178,20 +178,23 @@ both inputs here carry `nbnd = 10`.
 
 ## Does it converge?
 
-$\tau$ lags the density by one iteration and $c$ couples every grid point to every other,
-which are both reasons to expect trouble. Measured on this cell, in evaluations of the
+The self-consistency problem has two fields here rather than one, since $\tau$ has to
+arrive at the same time as the density, and $c$ couples every grid point to every other.
+Both are reasons to expect trouble. Measured on this cell, in evaluations of the
 self-consistent map:
 
 | | LDA | TB09 |
 |---|---|---|
-| Anderson mixing, $\beta = 0.7$ | 6 | 11 |
-| Anderson mixing, $\beta = 0.3$ | 7 | 19 |
-| Newton-Krylov on the residual | 40 | 75 |
-| Newton-Krylov after 3 mixing steps | 17 | 59 |
+| Anderson mixing, $\beta = 0.7$ | 6 | 8 |
+| Anderson mixing, $\beta = 0.3$ | 7 | 10 |
+| Newton-Krylov on the residual | 26 | 54 |
+| Newton-Krylov after 3 mixing steps | 13 | 33 |
 
 Mixing wins, and the exact Jacobian does not pay for itself: this fixed point is not badly
 enough conditioned to be worth several inner solves per step. What the functional costs is a
-factor of about **1.8 in iterations** over LDA, growing with $c$.
+factor of about **1.3 in iterations** over LDA, and that factor no longer grows with $c$:
+the imposed-$c$ table above runs 7, 7, 8, 8, 8 from $c = 1.00$ to 1.30, flat where a
+larger $c$ used to cost three times as much.
 
 ## What it refuses
 

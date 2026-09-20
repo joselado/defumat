@@ -5041,6 +5041,28 @@ one fewer thing lagging the density. The saving is not one threshold's luck: **1
 1e-9, 11 to 8 at 1e-10 and 14 to 10 at 1e-12**, about a quarter to a third fewer iterations
 wherever it is asked.
 
+**The saving grows with `c`, and that is the shape to expect.** `c` is an average over the
+whole cell and reaches the potential through `tau`, so a lagged `tau` is exactly what should
+make a large `c` expensive, and it did: over the imposed-`c` ladder from 1.00 to 1.30 the
+iteration count used to run **11, 10, 21, 23, 24** and now runs **7, 7, 8, 8, 8**, a factor
+of three at the top and flat where it used to climb. The sentence in notebook 24 saying the
+cost grows with `c` was true and is not any more. That ladder was **rerun rather than
+edited**, which is what makes it a check as well as an update: the gap column is what the
+fixed point decides and it had to come back unchanged, and the notebook's own printed
+band-path gap does, at **1.133 eV** before and after. The gap column was reproduced rather
+than trusted, and the check also settled what it is a gap *of*: measured on the SCF mesh it
+reads 0.13 eV high at every `c`, which is not a discrepancy but a different quantity, the
+table being on the band path. On the path the far end comes back at **2.215 eV at
+`c = 1.300`**, the table's own figure to every printed digit.
+
+**Two rows of that notebook's other table moved for a different reason and it is not this
+one.** Anderson's LDA column is unchanged at 6 and 7, so the TB09 column going 11 to 8 and
+19 to 10 is `tau`; the Newton-Krylov rows moved on **both** functionals, 40 to 26 and 17 to
+13 on LDA as well as 75 to 54 and 59 to 33 on TB09, and nothing about `tau` touches an LDA
+run. The likely cause is the line-search repair in `scf/solvers.py:245` from the same audit
+series, which takes a bigger step on an exhausted search, but that is a plausible
+attribution rather than a measured one and is recorded as such.
+
 **The fixed point does not move, which is the thing a mixing change has to be checked
 against.** A mixer decides the path and not the answer, so the two codes' converged gaps
 must agree: at `conv_thr = 1e-12` the mixed run gives **1.266323329 eV** in 10 iterations
