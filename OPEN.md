@@ -4682,3 +4682,104 @@ the rest of the claim is withdrawn until a workstation run is in the record.
 What the A/B does establish is the thing it was built for, which is that none of
 these is attributable to the session, and the remaining question is environment
 against pre-existing rather than environment against session.
+
+
+# Part XIV -- measured and left open, 2026-09-20
+
+## 1. `dH/dk` at a reciprocal-lattice point is wrong on every `l = 1` channel
+
+`AUDIT-2026-09-20.md`'s `defumat/basis/gvectors.py:117`, reproduced and
+measured rather than fixed, because the repair is a choice between two routes
+that differ in kind (below).
+
+**The mechanism.** A projector column is
+`real_spherical_harmonics(kg, lmax)` times `projector_form_factors(p, modulus(kg))`
+(`pseudo/projectors.py:_angular_part`), and **both factors guard the origin by
+zeroing**: `modulus` returns `jnp.where(norm2 > _TINY, sqrt(...), 0.0)`, whose
+tangent on the false branch is 0, and `real_spherical_harmonics` sets `cost`,
+`u` and `v` through the same kind of `where`. Each guard is right on its own
+factor -- `sqrt` has an infinite derivative at zero and `Y_lm` has no limit
+there, and the primal is correct because `f_l(0) = 0` kills the finite harmonic.
+**The product is what carries the derivative.** For `l = 1`, `f_1(q) -> c q` and
+`Y_1m(qhat) = sqrt(3/4pi) q_alpha/q`, so the product is
+`sqrt(3/4pi) c q_alpha`, a *linear function of the vector* `q` whose derivative
+is `sqrt(3/4pi) c`. The code computes `Y df + dY f` with `df = f'(0) * 0` and
+`dY = 0` and returns zero. `l = 0` is genuinely flat and `l >= 2` genuinely
+vanishes, so `l = 1` is the only channel -- and it is in almost every dataset.
+
+**Structurally**, on `Si.pz-vbc`: `f_1(q) = 0.22912917 q` at small `q`, and
+`d/dk [f_1(|k|) Y_10(khat)]` at the origin is **0 in the code against
+0.11195307** in the closed form.
+
+**Physically**, `<psi_m|dH/dk|psi_n>` at Gamma on `si2-nosym.in`, the jvp
+against a central difference of the same operator at a *frozen sphere*:
+
+| | value |
+|---|---|
+| worst element, `nbnd = 10` | **0.13245** Ry bohr out of 1.0775 |
+| the same at `h = 2e-3`, `1e-3`, `5e-4` | 0.13245 every time |
+| `Gamma_1` x `Gamma_15` block (Frobenius over the axes) | **0.16957 against 0.45892**, ratio 0.3695 |
+| second `Gamma_1` x `Gamma_15` | 1.97044 against 1.88369, ratio 1.0461 |
+| `Gamma_25'` x `Gamma_15`, silicon's own optical transition | 2.33892 against 2.33892 |
+
+The blocks rather than the entries because `Gamma_15` is a degenerate triplet
+and the entries are the eigensolver's basis inside it (rule D4). **It is not an
+underestimate**: the first `Gamma_1` state is 63 per cent low and the second is
+4.6 per cent high, the sign following the relative phase of `psi(G = 0)` and
+`<beta|psi>`. And it reaches **only** the pairs with one partner carrying weight
+at `G = 0` and the other seen by an `l = 1` projector, which is why silicon's
+own optical transition does not move.
+
+**Three controls.** Off the reciprocal lattice the same comparison is pure
+truncation, 1.89e-7 at `h = 2e-3` falling to 1.18e-8 at `5e-4` at
+`k = (0.1, 0, 0)` and 9.42e-8 to 5.89e-9 at `(0.25, 0.25, 0.25)`, where Gamma's
+0.13245 does not move with `h` at all. With a dataset carrying **no `l = 1`
+projector** (N2 with `N.pbe-hgh`) Gamma itself is clean, 4.43e-9 on a matrix
+whose largest element is 0.89015. And `_TINY` is on `|k+G|^2` at 1e-8, so what
+is affected is the exact-zero row rather than a neighbourhood.
+
+**The null that looked like a pass, and it is the reason this is worth
+writing down.** At the default `nbnd = 4` the whole matrix is 2.65e-7 and so is
+the discrepancy. In diamond the occupied manifold at Gamma is `Gamma_1` plus
+`Gamma_25'`, and every matrix element of a *vector* operator among those four
+vanishes by symmetry, so the first run of this measurement read a clean zero and
+looked like agreement. The test carries that sentence so the next version of it
+is not written at `nbnd = 4`.
+
+**What it is worth.** Gamma's own contribution to a static independent-particle
+dielectric constant, `sum_vc |v|^2 / dE^3` over the 10-band window, moves by
+**1.435e-4** relative -- small because the affected transition sits at 14.6 eV
+where `1/dE^3` has crushed it, and because the transition that dominates is the
+one the defect does not touch. On a mesh that is diluted again by Gamma's own
+weight, and **every k-point off the reciprocal lattice is exact**, so a shifted
+Monkhorst-Pack grid never meets it at all. Where it is not diluted is anything
+evaluated at Gamma alone or weighted there: a band velocity or effective mass at
+Gamma, `chi_0` and the optical conductivity around the deep transitions, SHG's
+and the shift current's three-band terms, and any f-sum rule, which has no
+`1/dE` suppression to hide behind.
+
+**Pinned** by `tests/unit/test_velocity_locality.py::
+test_the_velocity_at_gamma_matches_a_frozen_sphere_difference`, an
+`xfail(strict=True)` carrying the numbers, so it fails the day the defect is
+fixed and forces this entry to move, with the off-lattice control passing beside
+it.
+
+**Two routes to the fix, and they differ in kind.**
+
+* **A, a `custom_jvp` on the column assembly** (`_species_columns` in
+  `pseudo/projectors.py`). The primal stays bit-identical everywhere; the
+  tangent is patched only on rows with `|k+G|^2 < _TINY` and only for `l = 1`
+  columns, by the closed form `(-i) sqrt(3/4pi) f_1'(0) e_alpha`. The slope is
+  available in closed form and was checked against the table:
+  `f_1'(0) = (4 pi / sqrt(Omega)) int dr (r beta)(r) r / 3` reproduces
+  0.2291291689 to **4.5e-11**. Contained, and it fixes the first derivative
+  only.
+* **B, the smooth factorisation.** Build the column as
+  `(|q|^l Y_lm(qhat)) * (f_l(q) / q^l)` -- a solid harmonic, which is a
+  polynomial in the cartesian components, times an even function with a finite
+  limit at the origin. Both factors are then differentiable there and no guard
+  is needed. It touches `harmonics.py`, which is validated element by element
+  against `ylmr2`, and `formfactors.py`, so every column moves at the ulp level
+  and every validated primal has to be re-checked. It fixes **all** derivative
+  orders, including `l = 2`'s second derivative at the origin, which is the same
+  defect one order up.
