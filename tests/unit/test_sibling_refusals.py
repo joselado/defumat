@@ -512,3 +512,66 @@ def test_two_more_consumers_refuse_gamma_storage(entry, sibling):
     with pytest.raises(NotImplementedError) as raised:
         guard(ordinary)
     assert "gamma" not in str(raised.value)
+
+
+def test_the_conductivity_forwards_tau_to_both_potential_builds():
+    """It took ``tau``, handed it to the bands, and rebuilt the potential without it.
+
+    A potential-only meta-GGA inverts this package's usual rule: ``v_x`` *is*
+    the expression rather than the gradient of one, so it is a function of
+    ``tau`` and a potential built without it cannot be built at all. ``tau``
+    was accepted at the top of ``run_conductivity`` and forwarded to
+    ``fixed_density_states``, which passes it at its own
+    ``calculation.potential`` call -- and then the second build here dropped
+    it, so a ``tb09`` or ``bj06`` run raised about a missing kinetic energy
+    density **after** diagonalising three times the occupied bands at every
+    k-point. The cost is the point: a refusal at the top would have been fine,
+    a crash at the end is not.
+
+    Source inspection rather than a meta-GGA run, and the claim is narrow
+    enough for it: what was wrong was a missing keyword at a call site, and
+    what is asserted is that the keyword is there at every
+    ``calculation.potential`` in a function that accepts ``tau``.
+    """
+    import inspect
+
+    from defumat.workflows import conductivity, nesting, nscf
+
+    def argument_list(text: str) -> str:
+        """Everything up to the matching close paren, comments removed.
+
+        Two ways the first drafts of this test could not fail. It stopped at
+        the first ``)``, which is ``jnp.asarray(density)`` and not the end of
+        the call; and it then matched ``tau=`` inside the *comment* that
+        explains the fix, so deleting the keyword left the test passing. Both
+        are the trap this file is full of, arriving in the test that checks for
+        it.
+        """
+        depth, out = 1, []
+        for character in text:
+            depth += (character == "(") - (character == ")")
+            if depth == 0:
+                break
+            out.append(character)
+        assert depth == 0, "unbalanced parentheses in the call"
+        code = "\n".join(
+            line.split("#")[0] for line in "".join(out).splitlines()
+        )
+        assert "#" not in code
+        return code
+
+    for module in (conductivity, nscf):
+        source = inspect.getsource(module)
+        calls = source.split("calculation.potential(")[1:]
+        assert calls, f"{module.__name__} no longer builds a potential"
+        for call in calls:
+            head = argument_list(call)
+            assert "tau=" in head, (
+                f"{module.__name__} rebuilds the potential without tau"
+            )
+
+    # ``nesting`` takes ``tau`` too and is *not* in the loop above on purpose:
+    # it forwards it to the band solve and never builds a potential of its own,
+    # so there is nothing here for it to drop. Asserting that keeps the set
+    # honest if it ever grows one.
+    assert "calculation.potential(" not in inspect.getsource(nesting)

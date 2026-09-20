@@ -144,6 +144,15 @@ def run_conductivity(
         jnp.asarray(density),
         1.0 if field_scale is None else float(field_scale),
         field,
+        # ``tau=tau``, which this used to drop. It is accepted at the top of
+        # this function and forwarded to the band solve, and then the potential
+        # was rebuilt here without it -- so a potential-only meta-GGA, whose
+        # ``v_x`` *is* a function of ``tau``, raised about a missing kinetic
+        # energy density **after** the run had diagonalised three times the
+        # occupied bands at every k-point. ``fixed_density_states`` passes it at
+        # its own ``calculation.potential`` call, which is the sibling this one
+        # diverged from.
+        tau=tau,
     )
     _, ddd_paw = calculation.onecenter(becsum)
 
