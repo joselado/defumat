@@ -6178,6 +6178,79 @@ stripped from the key as well, and `_adopt` is what drops the cache when one cha
 charges through the repaired path are **3.9673 on both atoms, identical to a calculator
 that never named it**. `tests/unit/test_projector_storage.py`.
 
+**A fourth face, and the one the two guards written for the first three did not reach
+(2026-09-20).** `SHARED_OPTIONS` is the set of options that mean the same thing wherever
+they are named, and that is what made them shared; what nobody wrote down is that meaning
+the same thing is not wanting the same **value**. **Twenty** entry points declare a
+`conv_thr` between 1e-8 and 1e-12 and argue for it in their own docstrings, and
+`Calculator.from_file` puts the input's `&electrons conv_thr` -- `pw.x`'s own 1e-6 is the
+usual value -- over every one of them; six more state a `max_iterations` and one a
+`k_batch`, **twenty-seven pairs**, counted rather than recalled because the first count
+written into this section was wrong twice over: it said fifteen where seventeen were
+already on the page it was read off, and three more entry points were in modules the scan
+had never imported and had silently reported as unresolved. Five short, and the sentence
+that first corrected it blamed the import for all five. What replaces the hand-kept list is one predicate read off
+the callee's own signature, `_callee_chose`: a calculator *default* yields where the entry
+point states a value differing from `run_scf`'s, and `None` is not a stated value, since
+`relax_spiral_q` writes it for `max_iterations` precisely so the SCF's own number comes
+through. It reaches `magnetoelectric_tensor`'s `max_iterations = 120` and
+`run_ultracell_transport`'s `k_batch = 1` at the same time, the second of which is a
+memory dial a slab was set to on purpose.
+
+**What it does not replace, and the distinction is the reason both exist.** Two sites had
+been guarded by hand and the obvious reading is that this supersedes them; checked, it
+supersedes neither. `get_relaxed_anisotropy`'s `_shared_scf_options(withheld=("conv_thr",))`
+guards the **`**kwargs`** route, and `run_relaxed_anisotropy` has no `conv_thr` parameter
+at all -- the tightening is inside `run_relaxed_direction` -- so there is no signature to
+read and `withheld` is still the whole mechanism there. `get_magnetoelectric_tensor`'s
+`exclude={"conv_thr"}` is vestigial, but for a better reason than being superseded: that
+signature now spells the two thresholds apart as `scf_conv_thr` and
+`polarization_conv_thr`, which is a repair rather than a guard. A predicate on a signature
+and a name withheld from a `**kwargs` are two mechanisms for two routes, and collapsing
+them would have reopened the first.
+
+**The rule is not symmetric, and that is the part a reading of the predicate alone gets
+wrong.** A threshold is a bound on an error, so a smaller one is never the wrong thing to
+hand a workflow: `_TOLERANCE_OPTIONS` is the one shared option that is *ordered*, and a
+calculator `conv_thr` tighter than the callee's still goes through. Without that,
+`run_ultracell`'s own 1e-8 would have withheld an input's `conv_thr = 1e-10` and the
+ultracell run would have come back **looser than the file asked for** -- and that 1e-8 is
+a second driver's default for the same quantity rather than a tightening, which
+`ultracell/driver.py`'s module docstring states outright ("`conv_thr` means the same thing
+in an ultracell run as in every other run in this package"). Nothing else in
+`SHARED_OPTIONS` is ordered: `max_iterations` of 40 against 100 and `k_batch` of 1 against
+the whole axis are not better or worse, they are what the workflow wants.
+
+**What the `conv_thr` half is worth, and it is small for a structural reason.** On the
+committed tetragonal cobalt pair, 1e-6 in place of `run_anisotropy`'s 1e-10 moves the MAE
+by **9.0e-7 meV on 1.235 meV**. The reason was checked rather than asserted, because both
+legs move together and a common-mode error is exactly what a frozen-density theorem is
+built to cancel: measured per leg, the in-plane band energy shifts by **2.057e-5 meV** and
+the out-of-plane one by **1.967e-5 meV**, so 96 per cent of the eigenvalue error cancels
+and 9.018e-7 survives -- which reproduces the difference measured on the MAE itself to
+every digit. The knob is live and not a null: the same ladder at 1e-4 moves the MAE by
+2.6e-5 meV and at 1e-3 by 4.4e-4.
+
+**The `nbnd` half is the one with the number.** `nbnd` is a property of the system whose
+bands are being counted, and the force theorem's two legs are two different systems: the
+same cobalt atom takes `default_nbnd = 9` collinear and **16** as a spinor, because a
+spinor band holds one electron where a collinear one holds two. A `nbnd` given to the
+scalar-relativistic calculator was forwarded into the noncollinear leg, where
+`nscf.py:177`'s `nbnd or system.nbnd or default_nbnd(...)` lets it win over the spinor
+input's own. Nine spinor bands for nine electrons is a filled-band insulator rather than a
+metal, and the anisotropy reads **7.926 meV against 1.235**, a factor of 6.4. It carries
+its own tell: `anisotropy_mev` and `free_anisotropy_mev` come back **bit-identical at
+7.925674463**, where on this cell the entropy term is 55 per cent of the answer and
+`test_the_torque_is_the_gradient` asserts they differ by more than 0.5 -- there are no
+empty states for the Fermi level to sit among, so `TS` is zero. `_SPINOR_LEG_OPTIONS` is
+what stays behind, and `_spinor_leg` carries the *spinor* calculator's own `nbnd` across
+in its place so that setting it where it belongs is not lost with it.
+`tests/unit/test_calculator.py`, six tests, and one of them is the reason the other five
+mean anything: a spy written as `(*args, **options)` is handed nothing at all, because
+`_defaults_for` filters strictly by named parameter, so every assertion about what a
+workflow did *not* receive passes for the wrong reason. The spies carry the real
+`__signature__`.
+
 
 ### P39 — The dynamical matrix when `S` moves with the atoms. ✅ DONE.
 

@@ -170,6 +170,52 @@ honouring \code{diagonalization = 'cg'} would turn a run that works into an
 error, and mapping it silently onto Davidson would be the kind of substitution
 refused everywhere else here. Name a solver at construction instead.
 
+\textbf{An adopted default yields to a workflow that chose its own}, and until
+2026-09-20 it did not. A threshold means the same thing wherever it is named,
+which is why it is forwarded at all, but meaning the same thing is not wanting
+the same value: twenty entry points declare a \code{conv\_thr} between
+$10^{-8}$ and $10^{-12}$ and say in their own documentation why --- a
+magnetocrystalline anisotropy is a difference of band-energy sums in the fifth
+decimal of an eV, an effective mass is a second difference of eigenvalues, a
+Berry phase is a product of overlaps around a closed loop. An input file that
+states \code{pw.x}'s own $10^{-6}$ was replacing every one of them. So a value
+adopted from the file, or given at construction, reaches an entry point only
+where that entry point repeats \code{run\_scf}'s own default, meaning it has no
+opinion; where it states one of its own, the workflow's number stands. Naming
+it at the call site --- \code{get\_anisotropy(soc, conv\_thr=1.0e-6)} ---
+still reaches it, which is the difference between a default and a refusal.
+
+\textbf{Tightening is always allowed}, and only loosening is withheld: a
+threshold is a bound on an error, so a \code{conv\_thr} of $10^{-12}$ given to
+the constructor still reaches a workflow whose own is $10^{-10}$. That
+asymmetry belongs to thresholds alone --- \code{max\_iterations} of 40 against
+100 is not better or worse, it is what the workflow wants --- and it is what
+keeps an input stating $10^{-10}$ from being withheld from an ultracell run,
+whose own $10^{-8}$ is a second driver's default for the same quantity rather
+than a tightening.
+
+On the committed tetragonal cobalt cell the substitution is worth little,
+and the reason is worth knowing: both legs of the force theorem diagonalise the
+\emph{same} frozen density on the same k-points at the same threshold, so the
+eigenvalue error is common mode and the difference keeps only what does not
+cancel. Measured, $10^{-6}$ in place of $10^{-10}$ moves the in-plane leg by
+$2.06 \times 10^{-5}$~meV and the out-of-plane leg by $1.97 \times
+10^{-5}$~meV, of which $9.0 \times 10^{-7}$~meV survives into an anisotropy of
+1.235~meV.
+
+\textbf{A band count does not cross between the two legs at all.} The force
+theorem is two calculators, and \code{nbnd} is a property of the system whose
+bands are being counted: a spinor band holds one electron where a collinear one
+holds two, so the same cobalt atom needs 9 bands collinear and 16 as a spinor.
+A \code{nbnd} given to the scalar-relativistic calculator used to be forwarded
+into the noncollinear run, where it wins over the spinor input's own, and 9
+spinor bands for 9 electrons is a filled-band insulator rather than a metal:
+the anisotropy reads \textbf{7.926~meV against 1.235}, and the free-energy
+anisotropy, which should differ from it by more than half, collapses onto the
+same number because there are no empty states for the Fermi level to sit among
+and the smearing entropy is zero. The spinor calculator's own \code{nbnd}
+crosses in its place, so stating it where it belongs still works.
+
 \textbf{The adopted namelist reaches a relaxation too}, and did not until
 2026-09-11: \code{electron\_maxstep}, \code{diago\_full\_acc} and
 \code{mixing\_fixed\_ns} were read off the file and then dropped on the way into

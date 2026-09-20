@@ -190,6 +190,121 @@ SCF_ONLY_OPTIONS = frozenset({
 })
 
 
+#: The shared options that belong to the **second** system a method runs on,
+#: and so must not cross into it from this calculator's defaults.
+#:
+#: The force theorem is two calculators: ``self`` is the scalar-relativistic
+#: collinear leg and ``spinor`` is the fully-relativistic noncollinear one,
+#: built from a different input file and a different set of pseudopotentials.
+#: A band count is a property of the system whose bands are being counted, and
+#: the two systems disagree about it, because a spinor band holds one electron
+#: where a collinear one holds two. Forwarding it put the collinear leg's
+#: number into the spinor run, where :func:`~defumat.workflows.nscf.run_nscf`'s
+#: ``nbnd or system.nbnd or default_nbnd(...)`` lets a stated value win over
+#: the spinor input's own, so the second leg ran with roughly half the bands it
+#: needs. Withholding it is what lets the spinor input's ``&system nbnd`` reach
+#: the run, which is the chain :meth:`Calculator.get_anisotropy` describes, and
+#: :func:`_spinor_leg` carries the spinor calculator's own value across in its
+#: place so that setting it there is not silently lost either.
+_SPINOR_LEG_OPTIONS = frozenset({"nbnd"})
+
+
+#: The shared options that are a **bound on an error**, where the two values in
+#: play are ordered and one of them is strictly better.
+#:
+#: There is one, and it is what keeps :func:`_callee_chose` from being wrong in
+#: the other direction. A threshold is a bound, so asking for a smaller one is
+#: always honourable and asking for a larger one silently defeats a choice the
+#: workflow made: a calculator default may therefore **tighten** a value the
+#: callee chose and never loosen it. Without the distinction an input stating
+#: ``conv_thr = 1e-10`` would have been withheld from
+#: :func:`~defumat.ultracell.driver.run_ultracell`, whose own 1e-8 is a second
+#: driver's default for the *same* quantity rather than a tightening -- that
+#: module says so outright, "``conv_thr`` means the same thing in an ultracell
+#: run as in every other run in this package" -- and the run would have come
+#: back looser than the file asked for. Nothing else here is ordered:
+#: ``max_iterations`` of 40 against 100 and ``k_batch`` of 1 against the whole
+#: axis are not better or worse, they are what the workflow wants.
+_TOLERANCE_OPTIONS = frozenset({"conv_thr"})
+
+
+#: :func:`~defumat.scf.driver.run_scf`'s own defaults, the reference an entry
+#: point's are read against in :func:`_callee_chose`.
+_RUN_SCF_DEFAULTS = {name: parameter.default for name, parameter
+                     in inspect.signature(run_scf).parameters.items()}
+
+
+def _callee_chose(parameters, name) -> bool:
+    """Has this entry point stated a value of its own for ``name``?
+
+    A shared option means the same thing everywhere it is named -- that is what
+    put it in :data:`SHARED_OPTIONS` -- but meaning the same thing is not
+    wanting the same value. **Twenty** entry points declare a ``conv_thr``
+    between 1e-8 and 1e-12 and say in their own docstrings why: an anisotropy
+    is a difference of band-energy sums in the fifth decimal of an eV, an
+    effective mass is a second difference of eigenvalues, a Berry phase is a
+    product of overlaps around a closed loop. A calculator built by
+    :meth:`Calculator.from_file` carries the input's ``&electrons conv_thr``,
+    and ``pw.x``'s own 1e-6 is the usual value there, so the calculator's
+    *default* was silently replacing every one of those choices with a
+    threshold four orders looser -- on both legs of a force theorem at once,
+    which is why the workflow's own ``drifts`` could not see it. Six more state
+    a ``max_iterations`` and one a ``k_batch``, twenty-seven pairs in all.
+
+    The rule is therefore that a calculator default yields to a value the
+    callee chose, and ``run_scf``'s signature is what "chose" is measured
+    against: an entry point repeating 1e-6 is repeating the SCF's default and
+    has no opinion, one that writes 1e-10 does. ``None`` is not a stated value
+    either -- :func:`~defumat.workflows.spiral.relax_spiral_q` writes it for
+    ``max_iterations`` precisely so the SCF's own number comes through -- and
+    neither is a parameter with no default at all, which the calculator must
+    supply or the call fails.
+
+    Nor is it symmetric, and :data:`_TOLERANCE_OPTIONS` is where that is
+    written down: a calculator ``conv_thr`` *tighter* than the callee's still
+    goes through, because a threshold is a bound on an error and a smaller one
+    is never the wrong thing to hand a workflow. What is withheld is a looser
+    one.
+
+    What this is not is a refusal either. Naming the option at the call site
+    still reaches it, ``get_anisotropy(soc, conv_thr=1e-6)`` included, which is
+    the difference between a default and a refusal and is the same line
+    :meth:`_shared_scf_options` draws with ``withheld``.
+
+    It does **not** replace that ``withheld``, and the two are not
+    interchangeable. ``withheld`` guards the ``**kwargs`` route, where there is
+    no signature to read: :func:`~defumat.workflows.anisotropy
+    .run_relaxed_anisotropy` has no ``conv_thr`` parameter at all and the
+    tightening happens inside it, so nothing here can see the choice and
+    :meth:`get_relaxed_anisotropy` must keep naming it. This guards the
+    named-parameter route, which is where the twenty-seven are. The second
+    guard written by hand, :meth:`get_magnetoelectric_tensor`'s
+    ``exclude={"conv_thr"}``, is vestigial for a better reason: that signature
+    now spells the two thresholds apart as ``scf_conv_thr`` and
+    ``polarization_conv_thr``, which is the repair rather than the guard -- and
+    its ``max_iterations = 120`` is one of the twenty-seven and was reached.
+    """
+    default = parameters[name].default
+    if default is inspect.Parameter.empty or default is None:
+        return False
+    return name in _RUN_SCF_DEFAULTS and default != _RUN_SCF_DEFAULTS[name]
+
+
+def _yields_to_callee(parameters, name, value) -> bool:
+    """Should this calculator default stand aside for the entry point's own?
+
+    :func:`_callee_chose` says whether there is a choice to stand aside for;
+    this says whether standing aside is the right thing to do with *this*
+    value. For a :data:`_TOLERANCE_OPTIONS` member it is not, when the value is
+    the stricter of the two: a bound on an error can always be made smaller.
+    """
+    if not _callee_chose(parameters, name):
+        return False
+    if name in _TOLERANCE_OPTIONS and isinstance(value, (int, float)):
+        return not value < parameters[name].default
+    return True
+
+
 #: Parameter name -> the :class:`~defumat.scf.driver.SCFResult` attribute that
 #: fills it. All five are properties of the converged *state* that cannot be
 #: rebuilt from the density, so an entry point that names one is supplied it
@@ -1656,8 +1771,11 @@ class Calculator:
                 "this one has nspin = 1: there is no magnetization to rotate, "
                 "and every direction would come out equal"
             )
-        system, pseudos = _spinor_leg(spinor)
-        forwarded = self._defaults_for(run_anisotropy, options)
+        system, pseudos, leg = _spinor_leg(spinor)
+        forwarded = self._defaults_for(run_anisotropy, options,
+                                       exclude=_SPINOR_LEG_OPTIONS)
+        for name, value in leg.items():
+            forwarded.setdefault(name, value)
         forwarded.setdefault(
             "becsum", becsum_for_leg(result.becsum, self.pseudos, pseudos)
         )
@@ -1720,8 +1838,11 @@ class Calculator:
         from defumat.workflows.anisotropy import run_torque
 
         result = self._ground_state("the magnetic torque")
-        system, pseudos = _spinor_leg(spinor)
-        merged = self._defaults_for(run_torque, options)
+        system, pseudos, leg = _spinor_leg(spinor)
+        merged = self._defaults_for(run_torque, options,
+                                    exclude=_SPINOR_LEG_OPTIONS)
+        for name, value in leg.items():
+            merged.setdefault(name, value)
         if angle is not None:
             merged["angle"] = angle
         return run_torque(system, pseudos, result.density, **merged)
@@ -1736,10 +1857,13 @@ class Calculator:
         from defumat.workflows.anisotropy import frozen_expectation
 
         result = self._ground_state("the first-order spin-orbit term")
-        system, pseudos = _spinor_leg(spinor)
+        system, pseudos, leg = _spinor_leg(spinor)
+        merged = self._defaults_for(frozen_expectation, options,
+                                    exclude=_SPINOR_LEG_OPTIONS)
+        for name, value in leg.items():
+            merged.setdefault(name, value)
         return frozen_expectation(
-            system, pseudos, result.density, direction=direction,
-            **self._defaults_for(frozen_expectation, options),
+            system, pseudos, result.density, direction=direction, **merged,
         )
 
     def get_force_theorem(self, spinor, direction=None, **options):
@@ -1747,10 +1871,13 @@ class Calculator:
         from defumat.workflows.anisotropy import run_force_theorem
 
         result = self._ground_state("a force-theorem band energy")
-        system, pseudos = _spinor_leg(spinor)
+        system, pseudos, leg = _spinor_leg(spinor)
+        merged = self._defaults_for(run_force_theorem, options,
+                                    exclude=_SPINOR_LEG_OPTIONS)
+        for name, value in leg.items():
+            merged.setdefault(name, value)
         return run_force_theorem(
-            system, pseudos, result.density, direction=direction,
-            **self._defaults_for(run_force_theorem, options),
+            system, pseudos, result.density, direction=direction, **merged,
         )
 
     def get_z2(self, **options):
@@ -2018,11 +2145,18 @@ class Calculator:
         the reasoning lives. It applies to the calculator's defaults only:
         anything the caller passed in ``options`` was written at the call site
         and is honoured.
+
+        A name whose meaning is the same and whose *value* the callee chose for
+        itself is dropped too, and :func:`_callee_chose` is where that reasoning
+        lives. The two rules are separate because they fail separately: a
+        meaning collision has to be listed by hand, where a value the callee
+        chose is on its own signature and can be read off it.
         """
         parameters = inspect.signature(func).parameters
         shared = {name: value for name, value in self.defaults.items()
                   if name in parameters and name not in exclude
-                  and name not in SETUP_ONLY_OPTIONS}
+                  and name not in SETUP_ONLY_OPTIONS
+                  and not _yields_to_callee(parameters, name, value)}
         return {**shared, **(options or {})}
 
     def _call_options(self, func, result: SCFResult, options,
@@ -2179,12 +2313,22 @@ def _same_options(new: dict, old: dict | None) -> bool:
 
 
 def _spinor_leg(spinor):
-    """``(system, pseudos)`` of the force theorem's one-shot leg.
+    """``(system, pseudos, defaults)`` of the force theorem's one-shot leg.
 
     Accepts a :class:`Calculator` -- the ordinary way, built from the ``nscf``
     input -- or the pair directly, for a caller already holding both.
+
+    ``defaults`` is the part of the second leg's own options that describes the
+    second leg's *system* rather than the first's, which is
+    :data:`_SPINOR_LEG_OPTIONS` and is a band count. The collinear calculator
+    withholds its own, so without this a ``nbnd`` set on the spinor calculator
+    at construction would reach nothing at all: it is not on
+    ``spinor.system``, and only the system and the pseudopotentials cross.
     """
     if isinstance(spinor, Calculator):
-        return spinor.system, spinor.pseudos
+        return spinor.system, spinor.pseudos, {
+            name: value for name, value in spinor.defaults.items()
+            if name in _SPINOR_LEG_OPTIONS
+        }
     system, pseudos = spinor
-    return system, pseudos
+    return system, pseudos, {}

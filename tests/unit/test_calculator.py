@@ -670,6 +670,261 @@ def test_an_option_left_alone_does_not_override_run_scfs_own_default():
     assert set(SCF_LOOP_OPTIONS) <= set(inspect.signature(run_scf).parameters)
 
 
+def _spy(monkeypatch, module, name, seen):
+    """Replace ``module.name`` with a recorder that keeps the real signature.
+
+    The signature is the point. ``_defaults_for`` filters strictly by named
+    parameter, so a stub written as ``(*args, **options)`` is handed nothing at
+    all and every assertion about what it did *not* receive passes for the
+    wrong reason -- a check whose null cannot be told from a pass, which is the
+    trap this file is testing a guard against.
+    """
+    real = getattr(module, name)
+
+    def fake(*args, **options):
+        seen[name] = options
+        return name
+
+    fake.__signature__ = inspect.signature(real)
+    monkeypatch.setattr(module, name, fake)
+    return fake
+
+
+def test_a_workflow_that_chose_its_own_conv_thr_keeps_it(pseudo_dir,
+                                                         monkeypatch):
+    """The input file's ``&electrons conv_thr`` must not reach a workflow that
+    picked a tighter one for a reason it wrote down.
+
+    Fifteen entry points declare a ``conv_thr`` between 1e-8 and 1e-12 -- an
+    anisotropy is a difference of band-energy sums in the fifth decimal of an
+    eV, an effective mass is a second difference of eigenvalues -- and
+    ``pw.x``'s own 1e-6 is what an input file usually states. Both legs of a
+    force theorem moved together, so the workflow's own ``drifts`` could not
+    see it.
+    """
+    import defumat.workflows.anisotropy as anisotropy
+    import defumat.workflows.topology as topology
+
+    seen = {}
+    for name in ("run_anisotropy", "run_torque", "run_force_theorem",
+                 "frozen_expectation"):
+        _spy(monkeypatch, anisotropy, name, seen)
+    _spy(monkeypatch, topology, "run_z2", seen)
+
+    calc = Calculator.from_text(SILICON, pseudo_dir, announce=False,
+                                conv_thr=1.0e-6)
+    spinor = Calculator.from_text(SILICON, pseudo_dir, announce=False)
+    calc._scf = _converged_stub()
+
+    calc.get_anisotropy(spinor)
+    calc.get_torque(spinor)
+    calc.get_force_theorem(spinor)
+    calc.get_first_order_soc(spinor)
+    calc.get_z2()
+    assert set(seen) == {"run_anisotropy", "run_torque", "run_force_theorem",
+                         "frozen_expectation", "run_z2"}, (
+        f"a spy was never called: {sorted(seen)}"
+    )
+    for name, options in seen.items():
+        assert "conv_thr" not in options, (
+            f"{name} was handed the calculator's 1e-6"
+        )
+
+
+def test_the_same_conv_thr_still_reaches_a_workflow_with_no_opinion(pseudo_dir,
+                                                                    monkeypatch):
+    """The other half, and the reason the rule reads the signature.
+
+    ``run_bands`` repeats ``run_scf``'s own 1e-6, which is the callee saying it
+    has no opinion, so the calculator's number is exactly what it is for.
+    Without this the rule would read as "``conv_thr`` is never forwarded",
+    which is a different thing and a wrong one.
+    """
+    import defumat.workflows.bands as bands
+
+    seen = {}
+    _spy(monkeypatch, bands, "run_bands", seen)
+    calc = Calculator.from_text(SILICON, pseudo_dir, announce=False,
+                                conv_thr=1.0e-8)
+    calc._scf = _converged_stub()
+    calc.get_bands()
+    assert seen["run_bands"]["conv_thr"] == 1.0e-8
+
+
+def test_naming_it_at_the_call_site_still_reaches_the_workflow(pseudo_dir,
+                                                               monkeypatch):
+    """A default is not a refusal, which is the line ``withheld`` already drew."""
+    import defumat.workflows.anisotropy as anisotropy
+
+    seen = {}
+    _spy(monkeypatch, anisotropy, "run_anisotropy", seen)
+    calc = Calculator.from_text(SILICON, pseudo_dir, announce=False,
+                                conv_thr=1.0e-6)
+    spinor = Calculator.from_text(SILICON, pseudo_dir, announce=False)
+    calc._scf = _converged_stub()
+    calc.get_anisotropy(spinor, conv_thr=1.0e-4)
+    assert seen["run_anisotropy"]["conv_thr"] == 1.0e-4
+
+
+def test_the_collinear_legs_band_count_does_not_cross_to_the_spinor_one(
+        pseudo_dir, monkeypatch):
+    """A spinor band holds one electron where a collinear one holds two.
+
+    ``self`` is the scalar-relativistic leg and the run happens on the *other*
+    calculator's system, so ``nbnd`` -- a property of the system whose bands
+    are being counted -- stays behind, and the spinor calculator's own crosses
+    in its place rather than being lost with it.
+    """
+    import defumat.workflows.anisotropy as anisotropy
+
+    seen = {}
+    _spy(monkeypatch, anisotropy, "run_anisotropy", seen)
+    calc = Calculator.from_text(SILICON, pseudo_dir, announce=False, nbnd=8)
+    calc._scf = _converged_stub()
+
+    plain = Calculator.from_text(SILICON, pseudo_dir, announce=False)
+    calc.get_anisotropy(plain)
+    assert seen["run_anisotropy"].get("nbnd") is None, (
+        "the collinear leg's band count crossed into the spinor run"
+    )
+
+    stated = Calculator.from_text(SILICON, pseudo_dir, announce=False, nbnd=16)
+    calc.get_anisotropy(stated)
+    assert seen["run_anisotropy"]["nbnd"] == 16, (
+        "the spinor leg's own band count was dropped with the other one"
+    )
+
+    calc.get_anisotropy(stated, nbnd=20)
+    assert seen["run_anisotropy"]["nbnd"] == 20, "a call-site count must win"
+
+
+def test_every_spinor_leg_callee_names_every_withheld_option():
+    """The ``setdefault`` that carries the second leg's options across would
+    otherwise hand an entry point a keyword it does not take."""
+    from defumat.calculator import _SPINOR_LEG_OPTIONS
+    from defumat.workflows.anisotropy import (frozen_expectation,
+                                              run_anisotropy,
+                                              run_force_theorem, run_torque)
+
+    for func in (run_anisotropy, run_torque, frozen_expectation,
+                 run_force_theorem):
+        named = set(inspect.signature(func).parameters)
+        assert _SPINOR_LEG_OPTIONS <= named, (
+            f"{func.__name__} does not name {sorted(_SPINOR_LEG_OPTIONS - named)}"
+        )
+
+
+def test_the_rule_is_read_off_the_signature_and_not_off_a_list():
+    """``_callee_chose`` is the whole guard, so its four cases are asserted
+    directly: a stated value that differs is the callee's, one that repeats
+    ``run_scf``'s is not, ``None`` is the callee having no opinion, and a
+    parameter with no default at all is one the calculator must supply or the
+    call fails."""
+    from defumat.calculator import _callee_chose
+
+    def entry(required, chosen=1.0e-10, silent=None, agreeing=1.0e-6):
+        pass
+
+    p = inspect.signature(entry).parameters
+    assert _callee_chose({"conv_thr": p["chosen"]}, "conv_thr")
+    assert not _callee_chose({"conv_thr": p["agreeing"]}, "conv_thr")
+    assert not _callee_chose({"max_iterations": p["silent"]}, "max_iterations")
+    assert not _callee_chose({"conv_thr": p["required"]}, "conv_thr")
+
+
+def test_a_tighter_conv_thr_from_the_calculator_still_tightens(pseudo_dir,
+                                                               monkeypatch):
+    """The rule is not symmetric, and the asymmetry is the physics.
+
+    A threshold is a bound on an error, so a smaller one is never the wrong
+    thing to hand a workflow. Without this an input stating 1e-10 would have
+    been withheld from ``run_ultracell``, whose own 1e-8 is a second driver's
+    default for the *same* quantity rather than a tightening -- that module
+    says so -- and the run would have come back looser than the file asked for.
+    """
+    import defumat.workflows.anisotropy as anisotropy
+
+    seen = {}
+    _spy(monkeypatch, anisotropy, "run_anisotropy", seen)
+    spinor = Calculator.from_text(SILICON, pseudo_dir, announce=False)
+
+    tighter = Calculator.from_text(SILICON, pseudo_dir, announce=False,
+                                   conv_thr=1.0e-12)
+    tighter._scf = _converged_stub()
+    tighter.get_anisotropy(spinor)
+    assert seen["run_anisotropy"]["conv_thr"] == 1.0e-12
+
+    # ... and the callee's own value is not "chosen" enough to beat an equal one
+    equal = Calculator.from_text(SILICON, pseudo_dir, announce=False,
+                                 conv_thr=1.0e-10)
+    equal._scf = _converged_stub()
+    equal.get_anisotropy(spinor)
+    assert "conv_thr" not in seen["run_anisotropy"]
+
+
+def test_only_a_tolerance_is_ordered_and_max_iterations_is_not(pseudo_dir):
+    """``max_iterations`` of 40 against 100 is not better or worse, so no value
+    of it from the calculator reaches a callee that chose one."""
+    from defumat.calculator import _yields_to_callee
+
+    def entry(conv_thr=1.0e-10, max_iterations=40):
+        pass
+
+    p = inspect.signature(entry).parameters
+    assert _yields_to_callee(p, "conv_thr", 1.0e-6)
+    assert not _yields_to_callee(p, "conv_thr", 1.0e-12)
+    assert _yields_to_callee(p, "conv_thr", 1.0e-10)
+    for value in (10, 40, 500):
+        assert _yields_to_callee(p, "max_iterations", value)
+
+
+def test_the_rule_reaches_the_entry_points_it_was_written_for():
+    """Which entry points it bites on, listed rather than left to be assumed.
+
+    Every one of these declares a ``conv_thr`` its own docstring argues for,
+    and every one of them was being handed the calculator's instead.
+    """
+    from defumat.calculator import _callee_chose
+    from defumat.response.effmass import effective_mass
+    from defumat.workflows.anisotropy import (frozen_expectation,
+                                              run_anisotropy,
+                                              run_force_theorem, run_torque)
+    from defumat.workflows.nesting import run_nesting
+    from defumat.workflows.spiral import relax_spiral_q
+    from defumat.workflows.orbital_magnetization import (
+        run_orbital_magnetization)
+    from defumat.workflows.polarization import run_polarization
+    from defumat.workflows.topology import (run_berry_curvature, run_z2,
+                                            run_z2_3d)
+
+    for func in (run_anisotropy, run_torque, frozen_expectation,
+                 run_force_theorem, effective_mass, run_nesting,
+                 relax_spiral_q, run_berry_curvature, run_z2, run_z2_3d,
+                 run_polarization, run_orbital_magnetization):
+        parameters = inspect.signature(func).parameters
+        assert _callee_chose(parameters, "conv_thr"), (
+            f"{func.__name__} no longer states a conv_thr of its own, so this "
+            "guard no longer covers it"
+        )
+    # ... and run_scf itself is the reference, so it can never be withheld.
+    assert not _callee_chose(inspect.signature(run_scf).parameters, "conv_thr")
+
+
+def _converged_stub():
+    """A minimal converged :class:`SCFResult` stand-in for the facade tests.
+
+    The workflows above are replaced by :func:`_spy`, so nothing reads the
+    arrays -- what is exercised is which options reach them.
+    """
+    import dataclasses
+
+    from defumat.scf.driver import SCFResult
+
+    fields = {f.name: None for f in dataclasses.fields(SCFResult)}
+    fields.update(converged=True, density=np.zeros((2, 4, 4, 4)), nspin=2)
+    return SCFResult(**fields)
+
+
 def test_the_adopted_namelist_reaches_the_scf_inside_a_relaxation(pseudo_dir):
     """The running counterpart of the signature test above.
 
