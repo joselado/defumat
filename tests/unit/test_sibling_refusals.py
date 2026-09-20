@@ -455,3 +455,60 @@ def test_the_transcribed_force_and_stress_refuse_gamma_storage(entry, term):
     with pytest.raises(NotImplementedError) as raised:
         entry_point(ordinary, None)
     assert "gamma" not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "entry, sibling",
+    [
+        ("angular_momenta", "projwfc/projections.py"),
+        ("spin_chi0", "tddft/chi0.py"),
+    ],
+)
+def test_two_more_consumers_refuse_gamma_storage(entry, sibling):
+    """Each has a sibling one file over that carries the rule, and did not.
+
+    ``projwfc/projections.py`` refuses gamma storage for the projected density
+    of states, and the site-resolved ``<L>``, ``<S>`` and ``<J>`` build their
+    projectors through ``build_atomic_projectors`` instead, never reaching that
+    guard. ``tddft/chi0.py`` refuses it for the unpolarized ``chi_0``, and its
+    spin-polarized twin did not. In both the wrong answer is the plausible one
+    -- a Loewdin charge at a quarter of its value, a magnon that is merely in
+    the wrong place -- which is what a refusal is for.
+    """
+    import types
+
+    if entry == "angular_momenta":
+        from defumat.projwfc.angular_momentum import (
+            _refuse_what_is_not_written as guard,
+        )
+        stub = types.SimpleNamespace(gamma_only=True, spiral=None)
+    else:
+        from defumat.tddft.spinchi0 import require_a_transverse_regime as guard
+
+        stub = types.SimpleNamespace(
+            gamma_only=True, is_paw=False, is_ultrasoft=False, spiral=None,
+            is_hubbard=False, nspin=2, system=types.SimpleNamespace(),
+        )
+
+    with pytest.raises(NotImplementedError) as raised:
+        guard(stub)
+    assert "gamma-only storage" in str(raised.value)
+    assert "K_POINTS automatic, 1 1 1 0 0 0" in str(raised.value)
+
+    # The sibling that already carried the rule, named so the pair is on record.
+    from pathlib import Path as _Path
+
+    root = _Path(__file__).resolve().parents[2] / "defumat"
+    assert "refuse_gamma_storage(" in (root / sibling).read_text(), sibling
+
+    # ...and silent on an ordinary run, or the guard is not a guard.
+    if entry == "angular_momenta":
+        ordinary = types.SimpleNamespace(gamma_only=False, spiral=object())
+    else:
+        ordinary = types.SimpleNamespace(
+            gamma_only=False, is_paw=True, is_ultrasoft=False, spiral=None,
+            is_hubbard=False, nspin=2, system=types.SimpleNamespace(),
+        )
+    with pytest.raises(NotImplementedError) as raised:
+        guard(ordinary)
+    assert "gamma" not in str(raised.value)

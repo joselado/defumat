@@ -77,6 +77,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.basis.fft import g_to_r, r_to_g
+from defumat.basis.gvectors import refuse_gamma_storage
 from defumat.batching import resolve_k_batch, sum_bands, sum_k
 from defumat.scf.occupations import smearing_order, w0gauss
 from defumat.system.kpoints import is_reduced
@@ -223,6 +224,14 @@ def require_a_transverse_regime(calculation) -> None:
         needs the grid to be closed anyway. Run with ``nosym`` and ``noinv``.
     """
     system = calculation.system
+    refuse_gamma_storage(
+        bool(getattr(calculation, "gamma_only", False)),
+        "a transverse spin susceptibility",
+        "the pair densities are formed with the full-sphere g_to_r over a "
+        "stored half sphere, which is the refusal its unpolarized sibling "
+        "chi0.py already carries -- a magnon spectrum would come back "
+        "plausible and wrong"
+    )
     if calculation.is_paw:
         raise NotImplementedError(
             "a transverse spin susceptibility with a PAW dataset is not "

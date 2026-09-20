@@ -73,6 +73,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from defumat.basis.gvectors import refuse_gamma_storage
 from defumat.pseudo.spinorbit import LMAXX, rot_ylm
 
 __all__ = [
@@ -254,6 +255,15 @@ def angular_momenta(
 
 
 def _refuse_what_is_not_written(calculation) -> None:
+    refuse_gamma_storage(
+        bool(getattr(calculation, "gamma_only", False)),
+        "site-resolved angular momenta and the Loewdin charge",
+        "<phi|S|psi> is a plain sum over the stored k + G list here, exactly as "
+        "it is in the projected density of states, which refuses this in "
+        "projections.py -- but this path builds its projectors through "
+        "build_atomic_projectors and never reaches that guard, so <L>, <S> and "
+        "<J> come back small, smooth and wrong rather than raising"
+    )
     if calculation.spiral:
         raise NotImplementedError(
             "site angular momenta on a spin spiral are not implemented: the two "
