@@ -5823,12 +5823,40 @@ def run_scf(
             ns_state if calculation.is_hubbard else None,
             ns_out if calculation.is_hubbard else None,
         )
-        # **After the mix, before the field steps.** The saved ``rho`` is the
+        if field is not None:
+            # ``reducebf`` (Elk 5.104), and the fixed-spin-moment feedback, both
+            # act between iterations -- after the density is mixed and before
+            # the next potential is built.
+            field_scale *= field.reducebf
+            if field.fsm_update == "elk" or field.constraint not in FEEDBACK:
+                field = field.feedback(rho, calculation.system.cell)
+            elif inner_converged:
+                # The secant scheme steps on *converged* pairs only. Between
+                # steps the field is held and the SCF is an ordinary one, which
+                # is the whole of why it costs a handful of solves rather than a
+                # thousand interleaved iterations -- ``m(B)`` is smooth where
+                # ``m`` at iteration ``i`` is not. The mixer keeps its history
+                # across the step: the density it holds is a better start for
+                # the next field than the atomic guess, and the field moves by
+                # less each time.
+                field = field.feedback(rho_out, calculation.system.cell)
+        # **After the mix and after the field steps.** The saved ``rho`` is the
         # next iteration's *input* and the mixer holds the history that belongs
         # to it, so a resume re-enters exactly where this iteration left -- which
         # is the whole difference between a restart that costs nothing and one
         # that pays back the iterations it saved. Checkpointing before the mix
         # would save a density the mixer's history does not match.
+        #
+        # **And after the field steps for the same reason, which it did not used
+        # to be.** ``reducebf`` and the feedback act between iterations, so a
+        # write placed before them pairs iteration ``i + 1``'s density with
+        # iteration ``i``'s ``field_scale`` and ``field``. A resume then enters
+        # ``i + 1`` with a field a factor ``1/reducebf`` too strong and, the
+        # decay being cumulative, stays that way for the whole of the rest of
+        # the run. The unconverged-exit write below already sat after the step,
+        # so the two write sites disagreed with each other about what a
+        # checkpoint means; they now agree, and what both mean is the state at
+        # the *start* of the next iteration.
         if checkpointing and iteration % checkpoint_every == 0:
             checkpointing = _write_checkpoint(
                 checkpoint_dir,
@@ -5850,23 +5878,6 @@ def run_scf(
                 ),
                 mixer, iteration, verbose,
             )
-        if field is not None:
-            # ``reducebf`` (Elk 5.104), and the fixed-spin-moment feedback, both
-            # act between iterations -- after the density is mixed and before
-            # the next potential is built.
-            field_scale *= field.reducebf
-            if field.fsm_update == "elk" or field.constraint not in FEEDBACK:
-                field = field.feedback(rho, calculation.system.cell)
-            elif inner_converged:
-                # The secant scheme steps on *converged* pairs only. Between
-                # steps the field is held and the SCF is an ordinary one, which
-                # is the whole of why it costs a handful of solves rather than a
-                # thousand interleaved iterations -- ``m(B)`` is smooth where
-                # ``m`` at iteration ``i`` is not. The mixer keeps its history
-                # across the step: the density it holds is a better start for
-                # the next field than the atomic guess, and the field moves by
-                # less each time.
-                field = field.feedback(rho_out, calculation.system.cell)
 
     # ``iteration > resumed_at + 1`` is "at least one iteration body ran": a
     # deadline already past when the loop is entered leaves no state to write,

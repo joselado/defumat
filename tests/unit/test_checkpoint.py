@@ -433,3 +433,50 @@ def test_a_resume_does_not_pin_the_checkpoint_for_the_whole_run(
         "the loaded checkpoint is still reachable during the SCF loop, so a "
         "resume is carrying a second wavefunction set for the whole run"
     )
+
+
+def test_the_checkpoints_field_scale_belongs_to_the_density_beside_it(
+    pseudo_dir, tmp_path
+):
+    """The write sat one ``reducebf`` step before the density it was saving.
+
+    ``reducebf`` and the fixed-spin-moment feedback act **between** iterations:
+    the loop mixes the density, and only then multiplies ``field_scale`` down
+    and steps the field. The cadence write was placed between those two, so it
+    paired iteration ``i + 1``'s density -- the mixer's output, which is what a
+    resume re-enters with -- against iteration ``i``'s scale. A resume then
+    entered with a field a factor ``1/reducebf`` too strong, and because the
+    decay is cumulative it stayed that way for the whole of the rest of the
+    run. The unconverged-exit write already sat *after* the step, so the two
+    sites disagreed with each other about what a checkpoint means.
+
+    The assertion is the pair rather than the number: the saved scale has to be
+    the one the saved iteration count implies, ``reducebf ** iterations``, and
+    it has to be the scale the run itself ended on. Asserting only the second
+    would pass on the defect at the last cadence boundary of a run that stops
+    there anyway.
+    """
+    from tests.conftest import GENERATED
+
+    text = (GENERATED / "h-atom-lsda.in").read_text()
+    marker = text.lower().index("&system") + len("&system")
+    reducebf = 0.5
+    text = (
+        text[:marker] + f"\n    reducebf = {reducebf}\n" + text[marker:]
+        + "LOCAL_MAGNETIC_FIELDS\n 0.0 0.0 0.10\n"
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        calculator = Calculator.from_text(text, pseudo_dir, announce=False)
+        result = calculator.get_scf(
+            max_iterations=3, checkpoint_dir=tmp_path, checkpoint_every=1
+        )
+
+    state = load_state(tmp_path / SCF_CHECKPOINT, system=calculator.system)
+    assert state.iterations == 3
+    assert state.field_scale == pytest.approx(reducebf ** state.iterations)
+    assert state.field_scale == pytest.approx(float(result.field_scale))
+    # ...and it is not the value the defect wrote, which is a clean factor of
+    # 1/reducebf away and is the number a run resumed from here would apply.
+    assert state.field_scale != pytest.approx(reducebf ** (state.iterations - 1))
