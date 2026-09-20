@@ -3008,6 +3008,16 @@ succeeded. What is refused now is the part of the moment lying off the axis the 
 along, which with no rotation is the pair `(m_x, m_y)` in another norm: both vanish exactly
 when `ns[1]` and `ns[2]` do, and the existing refusal still fires at the same 6.0e-1.
 
+**And that refusal had a third face, which is the one an axis cannot help with.** A
+`nspin = 1` target has nowhere to put a magnetization and `magnetization='none'` has just
+decided not to keep one, so both throw the whole moment away by design -- and the density's
+own `apply` does it on either path without a word, where `_convert_ns` measured an axis on a
+moment it was about to discard and raised. A DFT+U demotion of a canted shell into
+`nspin = 1` therefore refused where the identical non-Hubbard one ran. There was no `4 -> 1`
+`ns` test in the file at all, which is why it survived both the audit and the first pass at
+this entry; the repair returns `Re(total)/2` before the axis is consulted, bit-identical on a
+`z`-polarised shell because `(Re uu + Re dd)/2` and `Re(uu + dd)/2` are the same number.
+
 A collinear round trip through the decomposition costs **one ulp**, 2.2e-16 on occupations of
 order 1 (`((a+b)+(a-b))/2` is not `a`), which is why `1 -> 2` and `2 -> 1` stay written out
 and why the no-rotation spinor case is asserted at 3e-16 rather than bit-exact.

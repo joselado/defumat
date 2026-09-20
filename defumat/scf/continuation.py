@@ -825,6 +825,18 @@ def _convert_ns(ns, source, target, calculation, transfer=None):
         # ``(m_x, m_y)``, so the old ``max|ns[1]| + max|ns[2]|`` test in another
         # norm: both vanish exactly when ``ns[1]`` and ``ns[2]`` do.
         total, moment = spinor_ns_components(ns)
+        if target == 1 or (transfer is not None and transfer.mode == "none"):
+            # **Nothing is being written down, so there is nothing for an axis
+            # to be wrong about.** A one-channel target has nowhere to put a
+            # moment and ``mode = "none"`` has just decided not to keep one, so
+            # both of these throw the whole magnetization away by design and
+            # :func:`_depolarize_ns` is what follows for the second. Refusing
+            # them was the same asymmetry this branch exists to remove, one face
+            # in: the density's own ``apply`` drops the moment on either path
+            # without a word, so a DFT+U demotion of a shell lying off ``z`` was
+            # refused where the identical non-Hubbard one ran.
+            charge = jnp.real(total) / 2.0
+            return charge[None] if target == 1 else jnp.stack([charge, charge])
         axis = _ns_axis(None if transfer is None else transfer.project,
                         jnp.ndim(total))
         along = jnp.sum(axis * moment, axis=0)

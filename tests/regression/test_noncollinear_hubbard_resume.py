@@ -214,6 +214,10 @@ def test_a_promoted_shell_points_where_the_density_does(pseudo_dir):
 
     along_z, out_z = promote(0.0)
     along_x, out_x = promote(90.0)
+    # The premise stated rather than inherited: the two targets' magnetic groups
+    # are conjugate, so the k-sets are the same size and the counts are
+    # comparable at all.
+    assert along_x.system.kpoints.nk == along_z.system.kpoints.nk
     assert out_x.iterations == out_z.iterations, (
         f"turning the requested axis by 90 degrees cost "
         f"{out_x.iterations} iterations against {out_z.iterations} on the "

@@ -544,6 +544,53 @@ def test_demoting_a_shell_collinear_off_z_follows_the_density_axis():
                    _Hubbard(setup, nspin=2), transfer)
 
 
+def test_a_demotion_that_drops_the_moment_does_not_care_where_it_pointed():
+    """The same asymmetry one face further in, and it had no test at all.
+
+    A one-channel target has nowhere to put a magnetization and
+    ``magnetization='none'`` has just decided not to keep one, so both throw the
+    whole thing away -- and the density's own ``_SpinTransfer.apply`` does it
+    without a word on either path. The occupation matrix refused instead,
+    measuring an axis on a moment that was about to be discarded, so a DFT+U
+    demotion of a canted shell into ``nspin = 1`` raised where the identical
+    non-Hubbard one ran. There was no ``4 -> 1`` ``ns`` test in the file, which
+    is why.
+
+    What has to survive is the *charge*, which is the part worth carrying.
+    """
+    from defumat.hubbard.occupations import spinor_ns_from_components
+    from defumat.scf.continuation import _SpinTransfer
+
+    setup = _Setup()
+    up = np.diag([0.9, 0.8, 0.7])[None] * np.ones((2, 1, 1))
+    down = np.diag([0.3, 0.2, 0.1])[None] * np.ones((2, 1, 1))
+    canted = np.asarray(spinor_ns_from_components(
+        up + down, (up - down) * np.asarray([0.6, 0.0, 0.8])[:, None, None, None]))
+    result = _result(np.zeros((1, 2, 2, 2)), 4, ns=canted)
+
+    single = np.asarray(promote_ns(result, _Hubbard(setup, nspin=1),
+                                   _SpinTransfer(4, 1, mode="none")))
+    assert single.shape == (1, 2, 3, 3) and not np.iscomplexobj(single)
+    np.testing.assert_allclose(single[0], 0.5 * (up + down), atol=1e-15)
+
+    flattened = np.asarray(promote_ns(result, _Hubbard(setup, nspin=2),
+                                      _SpinTransfer(4, 2, mode="none")))
+    assert flattened.shape == (2, 2, 3, 3)
+    np.testing.assert_allclose(flattened[0], flattened[1], atol=0.0)
+    np.testing.assert_allclose(flattened[0], 0.5 * (up + down), atol=1e-15)
+
+    # A z-polarised shell goes the same way it always did, to the last bit:
+    # ``(Re uu + Re dd)/2`` and ``Re(uu + dd)/2`` are the same number.
+    straight = np.asarray(spinor_ns_from_components(
+        up + down, (up - down) * np.asarray([0.0, 0.0, 1.0])[:, None, None, None]))
+    old_route = np.mean(np.real(np.stack([straight[0], straight[3]])), axis=0,
+                        keepdims=True)
+    now = np.asarray(promote_ns(
+        _result(np.zeros((1, 2, 2, 2)), 4, ns=straight), _Hubbard(setup, nspin=1),
+        _SpinTransfer(4, 1, mode="none")))
+    assert np.array_equal(now, old_route)
+
+
 class _Setup:
     nslot = 2
     ldmx = 3
