@@ -11207,6 +11207,43 @@ need — symmetry is refused for a spinor occupation matrix anyway (P62b).
 constraint degenerates into the fixed spin moment `constrained_magnetization` already is,
 and it is refused by name rather than duplicated.
 
+**The preconditioner asymmetry is real and points the other way (2026-09-20).** The
+09-20 audit read `SpinorHamiltonian.diagonal` against its collinear twin and found the
+Hubbard term in one and not the other, which is true, and concluded that a spinor DFT+U run
+preconditions Davidson with a Hamiltonian it is not solving. One file of the vendored source
+settles it: **`pw.x` does not put the Hubbard potential in `h_diag` either.**
+`PW/src/usnldiag.f90` imports nothing from `ldaU` and holds zero occurrences of `ldaU`,
+`hubbard`, `vhpsi` or `v_hub`; `h_diag` is `g2kin(i) + v_of_0` (`:50`) plus the
+`deeq`/`deeq_nc` diagonal, in the `_nc` branch as well, and the only routine that touches it
+after `c_bands.f90` calls `usnldiag` is `oscdft_h_diag`, a different feature. `vhpsi` is
+applied in `h_psi.f90:244-249`, to the operator. So the spinor class matches the reference
+and **the collinear class is the departure**.
+
+The measurement agrees, and it was taken before the reading was reverted. One
+diagonalisation from the same starting vectors at the same threshold, which is the only
+comparable unit here: on `ni-ldau-noncol.in`, **157 steps against 157** at `ethr = 1e-6`
+from the starting density, 222 against 227 at 1e-10, and 197 against 209 and 310 against 306
+at the converged density -- no configuration in which adding the term helps. The collinear
+side is the same null read from the other direction, `ni-ldau-j0.in` giving **208 against
+209** and **332 against 331**, one step in three hundred, so removing the departure is not
+worth doing either. Both sides are pinned by a test now, which is what stops the pair being
+made consistent in either direction without a number
+(`tests/unit/test_hubbard_spinor.py`).
+
+**Three measurement failures on the way, all of them this project's own traps.** The first
+A/B ran both legs in one process and came back bit-identical in the **energy** as well as
+the step count -- `-85.640749327878` Ry twice -- which two different preconditioners do not
+do: `jit` caches on the traced function and the argument shapes and does not re-read a
+method the trace calls, so the second leg ran the first leg's executable, where outside
+`jit` the same patch moves the diagonal by 0.130 Ry. One process per leg. The second was a
+whole-SCF comparison, 18 iterations reaching 5.03e-10 against 20 reaching 7.83e-11, which
+confounds the preconditioner with a trajectory it can only shift by round-off. The third is
+the one that would have reached the record: `bn-ldau-noncol.in` returned **identical per-k
+counts at every k-point and both thresholds**, and two cells agreeing looks like strong
+evidence -- except that the Hubbard share of that cell's diagonal is **0.0036 Ry, 0.010 per
+cent**, against 0.1297 Ry and 0.550 per cent on nickel, so BN could not have shown a
+difference. Ask how large the perturbation is before reading a null.
+
 ### P63 — Magnons: the transverse spin susceptibility. ✅ DONE, collinear and norm-conserving.
 
 `defumat/tddft/spinchi0.py`, `defumat/tddft/spinkernel.py`,

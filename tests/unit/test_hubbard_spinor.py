@@ -158,3 +158,76 @@ def test_the_projector_columns_are_spin_slowest():
     # Four quadrants of one block, not four separate matrices.
     assert set(np.unique(spin)) == {0, 1, 2, 3}
     assert row.max() == column.max() == 9
+
+
+# --- the preconditioner -------------------------------------------------------
+
+
+def _hubbard_hamiltonian(case, pseudo_dir):
+    """A DFT+U Hamiltonian at the starting density: no SCF, one build."""
+    from pathlib import Path
+
+    from defumat.io.pwin import read_pw_input
+    from defumat.pseudo import read_upf
+    from defumat.scf.driver import Calculation
+    from defumat.system import build_system
+
+    cases = Path(__file__).resolve().parents[1] / "data" / "qe"
+    system = build_system(read_pw_input(cases / case))
+    pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file)
+                    for s in system.structure.species)
+    calculation = Calculation(system, pseudos)
+    potential = calculation.potential(calculation.starting_density())
+    _, _, terms = calculation.hubbard_terms(calculation.starting_ns())
+    hamiltonian = calculation.hamiltonian(potential.v_scf, None, terms)[0]
+    assert hamiltonian.hubbard is not None, f"{case} built no Hubbard term"
+    return hamiltonian
+
+
+def _hubbard_share(hamiltonian, ik=0):
+    """How much of ``diagonal`` comes from the Hubbard term, in Ry."""
+    import equinox as eqx
+
+    bare = eqx.tree_at(lambda h: h.hubbard, hamiltonian, None,
+                       is_leaf=lambda x: x is None)
+    return (np.asarray(hamiltonian.diagonal(ik))
+            - np.asarray(bare.diagonal(ik)))
+
+
+def test_the_spinor_preconditioner_is_usnldiag_nc_and_nothing_more(pseudo_dir):
+    """``diagonal`` carries no ``v_ns``, and that is ``pw.x``'s own term list.
+
+    Read as an asymmetry -- the collinear twin adds ``hubbard.diagonal(ik)``
+    and this does not -- it looks like a missing term. It is not.
+    ``PW/src/usnldiag.f90`` imports nothing from ``ldaU``, contains no
+    reference to ``vhpsi``, ``v_hub`` or ``ns``, and builds ``h_diag`` as
+    ``g2kin + v_of_0`` plus the ``deeq``/``deeq_nc`` diagonal and nothing else;
+    the only routine that touches ``h_diag`` afterwards is ``oscdft_h_diag``,
+    which is a different feature. ``vhpsi`` is applied in ``h_psi.f90``, to the
+    operator, never to the preconditioner. So this class matches the reference
+    and the collinear one is the departure.
+
+    Adding it was measured before it was reverted, on the one committed cell
+    where the term is not negligible: no configuration where it helps.
+    """
+    hamiltonian = _hubbard_hamiltonian("ni-ldau-noncol.in", pseudo_dir)
+    assert np.abs(_hubbard_share(hamiltonian)).max() == 0.0
+
+
+def test_the_collinear_preconditioner_carries_a_term_pw_x_does_not(pseudo_dir):
+    """The other half of the pair, so the asymmetry is pinned from both sides.
+
+    ``Hamiltonian.diagonal`` adds the Hubbard term where ``usnldiag.f90`` does
+    not. It is left that way because removing it is worth nothing either: on
+    ``ni-ldau-j0.in`` one diagonalisation from the same starting vectors takes
+    **208 steps against 209** at ``ethr = 1e-6`` and **332 against 331** at
+    1e-10, one step in three hundred, the term being 0.214 eV there. What this
+    test stops is the pair being made consistent in either direction without a
+    number, which is how the question arose.
+    """
+    hamiltonian = _hubbard_hamiltonian("ni-ldau-j0.in", pseudo_dir)
+    share = _hubbard_share(hamiltonian)
+    assert np.abs(share).max() > 0.0
+    # ... and it is a real term rather than round-off, so a reader can tell
+    # this assertion from one that would pass on a numerically dead branch.
+    assert np.abs(share).max() * RY_TO_EV > 0.1
