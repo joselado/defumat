@@ -155,15 +155,17 @@ def _jvp_against_difference(calculation, psi, density, coords, h=5.0e-4):
 
 
 @pytest.mark.slow
-@pytest.mark.xfail(strict=True, reason=(
-    "gvectors.py:117 -- the l = 1 tangent at k + G = 0 is zeroed, so dH/dk at "
-    "Gamma is wrong on every matrix element pairing a state with weight at "
-    "G = 0 with one an l = 1 projector sees. Measured on si2-nosym: the "
-    "Gamma_1-to-Gamma_15 block comes out at 0.3695 of its value, and the worst "
-    "element is 0.13245 Ry bohr out of 1.0775. When this passes the defect is "
-    "fixed and PLAN/OPEN must be updated"))
 def test_the_velocity_at_gamma_matches_a_frozen_sphere_difference(pseudo_dir):
-    """The defect, pinned by the number rather than described.
+    """The ``l = 1`` tangent at ``k + G = 0``, which used to be zero.
+
+    Both origin guards are right about their own factor and the product is what
+    carries the derivative, so the chain rule returned ``Y df + dY f = 0`` where
+    the truth is ``sqrt(3/4pi) f_1'(0)``. Before the repair the
+    ``Gamma_1``-by-``Gamma_15`` block came out at **0.3695** of its value,
+    0.16957 against 0.45892, with the worst entry 0.13245 Ry bohr out of 1.0775
+    and **no dependence on the step size**, which is what separates a missing
+    term from truncation. After it the comparison behaves like any other
+    k-point: 2.11e-7 at ``h = 2e-3`` falling to 1.32e-8 at ``5e-4``.
 
     **``nbnd`` must reach the conduction bands or this is a null**, and that is
     not a detail: in diamond the occupied manifold at Gamma is ``Gamma_1`` plus
@@ -191,7 +193,7 @@ def test_the_velocity_at_gamma_matches_a_frozen_sphere_difference(pseudo_dir):
     code, difference = _jvp_against_difference(
         calculation, jnp.asarray(psi), jnp.asarray(density), None)
     assert np.abs(difference).max() > 1.0, "the scale the comparison is against"
-    np.testing.assert_allclose(code, difference, atol=1e-6)
+    np.testing.assert_allclose(code, difference, atol=1e-7)
 
 
 @pytest.mark.slow
@@ -220,3 +222,72 @@ def test_the_velocity_off_the_reciprocal_lattice_is_right(pseudo_dir):
         calculation, jnp.asarray(psi), jnp.asarray(scf.density), None)
     assert np.abs(difference).max() > 1.0
     np.testing.assert_allclose(code, difference, atol=1e-7)
+
+
+
+def test_the_origin_slope_is_the_transform_of_the_same_table(pseudo_dir):
+    """``lim f_l(q)/q^l`` in closed form against the transform it is the limit of.
+
+    The correction's one number is ``f_1'(0)``, and taking it analytically
+    rather than by evaluating the transform at some small ``q`` is what keeps it
+    from being a second convention: same ``kkbeta`` range, same Simpson weights,
+    same prefactor, so the two agree by construction. Checked on the three kinds
+    of dataset and for ``l`` up to 2, because ``(2l+1)!!`` and the extra power
+    of ``r`` are the two places this can be written down wrong -- and it was
+    written down wrong once, with ``r^l`` where ``_beta_kernel`` carries
+    ``r^(l+1)``, which reads 0.2465 against 0.2291.
+    """
+    from defumat.pseudo.formfactors import (
+        projector_form_factors, projector_origin_slopes)
+
+    q = np.array([1.0e-5, 2.0e-5, 4.0e-5])
+    for name in ("Si.pz-vbc.UPF", "C.pz-rrkjus.UPF", "Pt.pbe-n-kjpaw_psl.0.1.UPF"):
+        pseudo = read_upf(pseudo_dir / name)
+        volume = 265.302
+        closed = np.asarray(projector_origin_slopes(pseudo, volume))
+        table = np.asarray(projector_form_factors(pseudo, q, volume))
+        for nb, projector in enumerate(pseudo.projectors):
+            l = projector.l
+            fitted = float(np.polyfit(q, table[nb] / q**l, 1)[1])
+            assert closed[nb] == pytest.approx(fitted, abs=2e-9, rel=1e-7), (
+                f"{name} channel {nb} (l = {l})")
+        assert len(closed) == len(pseudo.projectors)
+
+
+@pytest.mark.slow
+def test_the_correction_adds_exactly_zero_to_every_primal(pseudo_dir):
+    """It owns a ``jvp`` rule and nothing else, so no value may move.
+
+    ``_origin_tangent`` returns zeros at every row and every ``q``; the whole
+    repair is its custom rule. Measured across a norm-conserving, a mixed
+    PAW-and-norm-conserving and an ultrasoft cell, the total energy, the
+    eigenvalues, the forces and the stress are **bit-identical** before and
+    after. The stress is the one that had to be checked rather than argued: it
+    differentiates through ``modulus`` with respect to the *cell*, and it stays
+    exact because ``k + G = 0`` scales to zero under any strain, so the tangent
+    the rule fires on is itself zero there.
+
+    This test is the cheap standing version of that: the column array with the
+    correction, and the same array with it removed, compared as arrays.
+    """
+    from defumat import Calculator
+    from defumat.pseudo.projectors import _origin_slopes, _origin_tangent, \
+        projector_channels
+
+    calculator = Calculator.from_file(
+        CASES / "si2-nosym.in", pseudo_dir=pseudo_dir, announce=False)
+    calculation = calculator.calculation
+    core = calculation.projector_core
+    axes, slopes = _origin_slopes(
+        calculator.pseudos,
+        [projector_channels(p) for p in calculator.pseudos],
+        calculation.system.cell.volume,
+    )
+    added = np.asarray(_origin_tangent(core.kg, slopes, axes))
+    assert added.shape[-1] == len(axes) and added.shape[:-1] == core.kg.shape[:-1]
+    assert np.count_nonzero(added) == 0
+    # ...and the rows it is *about* exist in this cell, or the zero above is a
+    # statement about an empty set.
+    at_origin = np.asarray(np.sum(core.kg * core.kg, axis=-1)) <= 1.0e-8
+    assert at_origin.any(), "si2-nosym's unshifted grid has a k + G = 0 row"
+    assert any(s != 0 for s in np.asarray(slopes)), "and an l = 1 channel"

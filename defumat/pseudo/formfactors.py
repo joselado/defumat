@@ -205,6 +205,53 @@ def projector_form_factors(pseudo: Pseudopotential, q, omega: float) -> jnp.ndar
     return jnp.stack(rows, axis=0)
 
 
+def projector_origin_slopes(pseudo: Pseudopotential, omega) -> jnp.ndarray:
+    """``lim_{q -> 0} f_l(q) / q^l`` for every radial projector, shaped ``(nbeta,)``.
+
+    The small-``q`` limit of :func:`projector_form_factors`, taken analytically
+    rather than by evaluating the transform at a small ``q``. ``j_l(x)`` goes as
+    ``x^l / (2l+1)!!``, so
+
+        f_l(q) -> (4 pi / sqrt(Omega)) q^l / (2l+1)!! int dr (r beta)(r) r^{l+1},
+
+    on the same ``kkbeta`` range and with the same Simpson weights the transform
+    itself uses, so the two agree by construction rather than by luck. Measured
+    on ``Si.pz-vbc``'s ``l = 1`` channel: **0.2291291689** here against
+    0.2291291689 from a straight-line fit to the table at ``q = 1e-5`` to
+    ``4e-5``, agreeing to 4.5e-11.
+
+    **What wants this is the derivative and not the value.** At ``q = 0`` the
+    product ``f_l(q) Y_lm(qhat)`` is zero for every ``l > 0`` and the transform
+    gives that correctly; what it cannot give is the product's *tangent*, since
+    both factors are guarded at the origin separately (see
+    ``projectors._origin_tangent``). For ``l = 1`` that tangent is
+    ``sqrt(3/4pi)`` times the number returned here.
+
+    ``jnp`` throughout, for the reason :func:`projector_form_factors` gives:
+    ``omega`` arrives as a tracer under a stress derivative.
+    """
+    cutoff = pseudo.kkbeta
+    r = jnp.asarray(pseudo.r[:cutoff])
+    weights = simpson_weights(jnp.asarray(pseudo.rab[:cutoff]))
+    prefactor = FPI / jnp.sqrt(omega)
+    rows = []
+    for projector in pseudo.projectors:
+        l = projector.l
+        # (2l+1)!!, the leading coefficient of the spherical Bessel function.
+        factorial = 1.0
+        for odd in range(3, 2 * l + 2, 2):
+            factorial *= odd
+        beta = jnp.asarray(projector.beta[:cutoff])
+        # ``r ** (l + 1)`` and not ``r ** l``: ``j_l(qr)`` contributes ``r^l``
+        # and the transform carries an ``r`` of its own beside ``(r beta)``,
+        # which is the extra factor in ``_beta_kernel``'s integrand.
+        rows.append(
+            prefactor * jnp.sum(weights * beta * r ** (l + 1)) / factorial)
+    if not rows:
+        return jnp.zeros((0,))
+    return jnp.stack(rows)
+
+
 def atomic_form_factors(pseudo: Pseudopotential, q, omega) -> jnp.ndarray:
     """Radial parts of the pseudo-atomic orbitals, shaped ``(nwfc, nq)``.
 

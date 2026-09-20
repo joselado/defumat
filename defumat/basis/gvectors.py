@@ -96,8 +96,15 @@ def _transform(miller, matrix):
     return miller.astype(matrix.dtype) @ matrix
 
 
-#: Below this ``|G|^2`` a G-vector counts as the origin. QE's own ``eps8``.
-_TINY = 1.0e-8
+#: Below this ``|v|^2`` a vector counts as the origin in :func:`modulus`, where
+#: the square root is replaced by a flat zero. QE's own ``eps8``. It is public
+#: because a second module
+#: has to agree with it exactly: the guard costs the *tangent* of any product
+#: ``f_l(|v|) Y_lm(vhat)`` as well as the square root's, and
+#: ``pseudo.projectors`` puts the ``l = 1`` part of that tangent back on
+#: precisely the rows this threshold selects. Two thresholds would leave rows
+#: corrected that were never guarded, or the reverse.
+ORIGIN_TOL = 1.0e-8
 
 
 @jax.jit
@@ -114,7 +121,11 @@ def modulus(vectors):
     constant and no derivative ever reaches this.
     """
     norm2 = jnp.sum(vectors**2, axis=-1)
-    return jnp.where(norm2 > _TINY, jnp.sqrt(jnp.where(norm2 > _TINY, norm2, 1.0)), 0.0)
+    return jnp.where(
+        norm2 > ORIGIN_TOL,
+        jnp.sqrt(jnp.where(norm2 > ORIGIN_TOL, norm2, 1.0)),
+        0.0,
+    )
 
 
 @partial(jax.jit, static_argnames=("grid",))

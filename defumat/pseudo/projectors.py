@@ -29,9 +29,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from defumat.basis.gvectors import GVectors, modulus
+from defumat.basis.gvectors import ORIGIN_TOL, GVectors, modulus
 from defumat.basis.planewaves import PlaneWaveBasis
-from defumat.pseudo.formfactors import projector_form_factors
+from defumat.pseudo.formfactors import (
+    projector_form_factors, projector_origin_slopes)
 from defumat.pseudo.harmonics import real_spherical_harmonics
 from defumat.pseudo.upf import Pseudopotential
 from defumat.system.cell import Cell
@@ -290,6 +291,10 @@ def build_projector_core(
         jnp.asarray(beta_of), jnp.asarray(lm_of),
         jnp.asarray((-1j) ** np.asarray(l_of)),
     )
+    # Adds exactly zero and owns the ``l = 1`` tangent at ``k + G = 0``, which
+    # the two origin guards drop between them. See :func:`_origin_tangent`.
+    axes, slopes = _origin_slopes(pseudos, channels_by_species, cell.volume)
+    columns = columns + _origin_tangent(kg, slopes, axes)
 
     # One row per projector channel, in QE's order: atoms outermost, then the
     # channels of that atom's species.
@@ -351,6 +356,93 @@ def _species_columns(ylm, radial, beta_of, lm_of, l_phase):
         * jnp.take(radial, beta_of, axis=-1)
     )
     return columns * l_phase
+
+
+#: For an ``l = 1`` harmonic, the cartesian axis it is proportional to and the
+#: sign, in this module's ``lm`` ordering. Read off
+#: :func:`~defumat.pseudo.harmonics.real_spherical_harmonics` rather than
+#: derived: at the unit vectors it returns ``Y_1 = +c z``, ``Y_2 = -c x`` and
+#: ``Y_3 = -c y`` with ``c = sqrt(3/4pi)``, and the two minus signs are
+#: ``ylmr2``'s ``-sent/sqrt(2)`` surviving into the ``m = 1`` pair.
+_P_AXIS = {1: (2, 1.0), 2: (0, -1.0), 3: (1, -1.0)}
+
+
+@partial(jax.custom_jvp, nondiff_argnums=(2,))
+def _origin_tangent(kg, slopes, axes):
+    """Zero, carrying the tangent the guarded product loses at ``k + G = 0``.
+
+    A projector column is ``Y_lm(qhat) f_l(|q|)`` and **both factors guard the
+    origin by zeroing** -- :func:`~defumat.basis.gvectors.modulus` because
+    ``sqrt`` has an infinite derivative there, and
+    :func:`~defumat.pseudo.harmonics.real_spherical_harmonics` because a zero
+    vector has no direction. Each guard is right about its own factor and the
+    primal is right too, since ``f_l(0) = 0`` kills the finite harmonic. **The
+    product is what carries the derivative.** For ``l = 1``, ``f_1(q) -> c q``
+    and ``Y_1m(qhat) = sqrt(3/4pi) q_alpha/q``, so the product is
+    ``sqrt(3/4pi) c q_alpha`` -- a linear function of the *vector* ``q``, whose
+    derivative is ``sqrt(3/4pi) c`` and not zero. The chain rule computes
+    ``Y df + dY f`` with both terms zero and returns zero. ``l = 0`` is
+    genuinely flat (``f_0`` is even in ``q``) and ``l >= 2`` genuinely vanishes
+    (the product goes as ``q^l``), so ``l = 1`` is the only channel affected,
+    and it is in almost every dataset.
+
+    Measured before this correction, on ``si2-nosym.in`` at Gamma against a
+    central difference of the same operator at a frozen sphere: the
+    ``Gamma_1``-by-``Gamma_15`` block of ``<psi|dH/dk|psi>`` came out at
+    **0.3695** of its value (0.16957 against 0.45892, Frobenius over the three
+    axes), the worst entry being 0.13245 Ry bohr out of 1.0775, and it did not
+    move with the step size. ``OPEN.md`` Part XIV has the controls.
+
+    **The primal is exactly zero, at every row and every ``q``**, so nothing
+    this returns can move a value: it exists only to own a ``jvp`` rule. The
+    rule fires on the rows :data:`~defumat.basis.gvectors.ORIGIN_TOL` selects,
+    which is the same test ``modulus`` uses, so a row is corrected if and only
+    if it was guarded. A **strain** derivative reaches it and gets nothing,
+    correctly: ``k + G = 0`` scales to ``0`` under any strain, so ``dkg`` is
+    zero on exactly those rows.
+
+    ``axes`` is one entry per column, ``(cartesian axis, is an l = 1 channel)``
+    packed as a static tuple; ``slopes`` carries
+    ``(-i) sign sqrt(3/4pi) f_1'(0)`` and is zero for every other column, so
+    the arithmetic is uniform and the branch is in the data.
+    """
+    return jnp.zeros(kg.shape[:-1] + (len(axes),),
+                     dtype=jnp.result_type(kg, slopes, 1j))
+
+
+@_origin_tangent.defjvp
+def _origin_tangent_jvp(axes, primals, tangents):
+    kg, slopes = primals
+    dkg, _ = tangents
+    primal_out = _origin_tangent(kg, slopes, axes)
+    if not axes:
+        return primal_out, jnp.zeros_like(primal_out)
+    at_origin = jnp.sum(kg * kg, axis=-1) <= ORIGIN_TOL
+    along = jnp.take(dkg, jnp.asarray(axes), axis=-1)
+    tangent = jnp.where(at_origin[..., None], along * slopes, 0.0)
+    return primal_out, tangent.astype(primal_out.dtype)
+
+
+def _origin_slopes(pseudos, channels_by_species, volume):
+    """``(axes, slopes)`` for :func:`_origin_tangent`, one entry per column.
+
+    ``slopes`` is ``(-i)^l sign sqrt(3/4pi) lim_{q->0} f_1(q)/q`` on an
+    ``l = 1`` channel and zero on every other, so the correction is inert
+    wherever the guarded product's tangent was right to begin with.
+    """
+    root = float(np.sqrt(3.0 / (4.0 * np.pi)))
+    axes, slopes = [], []
+    for species, channels in enumerate(channels_by_species):
+        limits = projector_origin_slopes(pseudos[species], volume)
+        for nb, l, lm in channels:
+            if l != 1:
+                axes.append(0)
+                slopes.append(jnp.zeros((), dtype=jnp.result_type(limits, 1j)))
+                continue
+            axis, sign = _P_AXIS[lm]
+            axes.append(axis)
+            slopes.append((-1j) * sign * root * limits[nb])
+    return tuple(axes), jnp.stack(slopes)
 
 
 @jax.jit
