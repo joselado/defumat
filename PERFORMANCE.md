@@ -1743,6 +1743,38 @@ taken; `int3` is a `jvp` of `newd`, which the SCF already evaluates once per ite
 a primal that was going to be computed anyway -- which is the cost model of forward-mode
 differentiation and the reason this phase is not 2x slower again.
 
+### What putting the `l = 1` tangent back costs the velocity operator (2026-09-20)
+
+`dH/dk` at a reciprocal-lattice point was missing the `l = 1` part of its
+projector tangent (`PLAN.md` P24), and the repair is a `custom_jvp` on the
+column assembly whose primal is the identity. It is on `build_projector_core`,
+which `at_kcart` rebuilds **once per cartesian direction inside a `jvp`**, so
+it is paid three times per `VelocityOperator.matrix_elements` call and belongs
+here rather than in a footnote.
+
+One `matrix_elements` call, median of 15 warm, one process, same states:
+
+| | `si-epsilon-unshifted` (8 k, `npwx = 360`) | `si2-nosym` (64 k, `npwx = 200`) |
+|---|---|---|
+| no correction | **343 ms** | **1122.9 ms** |
+| the `custom_jvp` boundary, rule trivial | 389 ms | |
+| the rule active, eager | 469 ms | |
+| the rule active, compiled -- what is shipped | **465 ms** | **1149.7 ms** |
+| overhead | 122 ms, **35 per cent** | 27 ms, **2.4 per cent** |
+
+**It is a fixed cost per call and does not scale with the cell**, which is the
+number that decides whether it matters: the same absolute overhead is 35 per
+cent of an eight-k-point silicon cell and 2.4 per cent of a sixty-four-point
+one, and a production cell is larger than either. What it buys is in `PLAN.md`
+P24 -- a block of `dH/dk` at Gamma that was at 0.3695 of its value.
+
+**Two candidates that were measured and are not where the time goes.** The
+per-column slopes cost 1.30 ms per rebuild as a loop of JAX scalars and 1.01 ms
+as one gather; precomputing them *entirely* is worth **5 ms of the 125**. And
+`jit` on the rule is worth 4 ms. The cost is the `custom_jvp` boundary itself
+and the four array operations its rule performs, which is visible in the row
+where the boundary is present and the rule does nothing: 389 against 343.
+
 ## What a phonon costs (P25)
 
 Same cell as P24 — the two-atom silicon of `test-suite/ph_base/si.scf.in`, `ecutwfc = 18`,

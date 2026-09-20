@@ -4345,6 +4345,23 @@ one derivative that reaches `modulus` through the *cell*, and it stays exact bec
 `k + G = 0` scales to zero under any strain, so the tangent the rule fires on is itself zero
 there.
 
+**The spiral is the one other caller whose `dkg` at an origin row is not `dkcart`**, and it
+is unreachable on every committed cell, which was checked rather than argued: `dE/dq`
+differentiates `vkb(k +- q/2)`, so a row with `k +- q/2 + G = 0` would now get a tangent it
+did not have. The three hydrogen spiral cells carry `H.pz-vbc`, which has **no projectors at
+all**, and the two oxygen ones that do have an `l = 1` channel have **zero** rows inside
+`ORIGIN_TOL` at their `q = (0, 0, 0.25)`. Padded rows are a second such set -- at Gamma they
+sit at `kg = 0` and the rule fires on them -- and `_apply_phases`'s mask kills both the
+column and its tangent there, which the Gamma comparison proves rather than assumes: the
+finite difference evaluates at `k +- h`, where those rows are *not* at the origin, so a leak
+would show as a disagreement and it reads 1.32e-8.
+
+**What it costs is a fixed overhead per `matrix_elements` call and is in `PERFORMANCE.md`**:
+343 ms to 465 ms on an eight-k-point cell and 1122.9 to 1149.7 on a sixty-four-point one, so
+35 per cent against 2.4 per cent for the same 27 to 122 ms. The cost is the `custom_jvp`
+boundary rather than the arithmetic -- the boundary alone with a trivial rule reads 389 --
+and neither precomputing the slopes (5 ms of 125) nor `jit` (4 ms) is where it lives.
+
 **What is left is one order up.** `l = 2`'s second derivative at the origin is the same
 defect, and only the smooth factorisation -- a solid harmonic `|q|^l Y_lm` times
 `f_l(q)/q^l`, both differentiable at the origin -- reaches it. Nothing takes a second `k`
