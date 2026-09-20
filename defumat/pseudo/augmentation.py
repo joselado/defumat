@@ -235,9 +235,28 @@ class AugmentationCharge(eqx.Module):
         The nonlocal term is block diagonal over atoms; the Hamiltonian stores
         it as one dense matrix because ``nkb`` is small next to ``npw`` and a
         single ``einsum`` is worth more than the zeros are worth avoiding.
+
+        **A species' block may be ``None``, and that is the norm-conserving
+        species of a cell that also has a PAW one.** Such a species has
+        projectors, so it owns ``nh`` rows of this matrix, and it has no
+        augmentation charge and no one-centre correction, so what belongs in
+        them is zero -- which is what skipping it leaves. The caller that
+        produces the ``None`` is :meth:`~defumat.scf.Calculation.onecenter`,
+        whose blocks come from ``PawCorrections.energy_and_coefficients``, and
+        the bare ``D_ij^(0)`` of the norm-conserving species reaches the
+        Hamiltonian through ``projectors.dij`` instead (``_newd`` adds it).
+        Both lines below used to dereference the ``None``: the ``dtype`` when
+        the norm-conserving species is listed first and the ``shape`` when it is
+        listed second, so the species order did not save it. The two sibling
+        consumers were already guarded -- :meth:`charge` on ``q.shape[0] == 0``
+        and :meth:`TabulatedAugmentation.charge` on ``self.tables[t] is None``.
         """
-        matrix = jnp.zeros((self.nkb, self.nkb), dtype=blocks[0].dtype)
+        live = [block for block in blocks if block is not None]
+        dtype = live[0].dtype if live else jnp.zeros(()).dtype
+        matrix = jnp.zeros((self.nkb, self.nkb), dtype=dtype)
         for block, atoms in zip(blocks, self.species_atoms):
+            if block is None:
+                continue
             for n, atom in enumerate(atoms):
                 start = self.channel_offsets[atom]
                 stop = start + block.shape[-1]

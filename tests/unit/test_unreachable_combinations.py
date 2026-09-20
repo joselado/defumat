@@ -25,6 +25,7 @@ field with nowhere to act.
 
 import ast
 import inspect
+import pathlib
 import textwrap
 import warnings
 
@@ -348,3 +349,90 @@ def test_the_residual_solver_forwards_the_channel_counts(pseudo_dir):
     fixed = source.split('if scheme == "fixed"')[1].split("counts =")[0]
     assert "return" not in fixed.split("\n")[0]
     assert "counts=counts" in source
+
+
+# --- a PAW dataset beside a norm-conserving one ------------------------------
+
+
+def test_block_matrix_leaves_a_species_without_augmentation_at_zero():
+    """A ``None`` block is a norm-conserving species, and it owns rows all the same.
+
+    ``AugmentationCharge.block_matrix`` dereferenced its blocks unconditionally,
+    so the ``None`` its own PAW caller is written to pass raised an
+    ``AttributeError`` -- ``.dtype`` at the first line when the norm-conserving
+    species is listed first and ``.shape`` at the fourth when it is listed
+    second, so the species order did not save it. Such a species has projectors,
+    so ``nh`` rows of the ``(nkb, nkb)`` matrix are its, and it has no
+    augmentation charge and no one-centre correction, so what belongs in them is
+    zero. Its bare ``D_ij`` reaches the Hamiltonian through ``projectors.dij``,
+    which ``_newd`` adds separately.
+
+    Both orders are checked because both lines were reachable, and the
+    off-diagonal is checked because the whole point of the routine is that the
+    term is block diagonal over atoms.
+    """
+    import types
+
+    from defumat.pseudo.augmentation import AugmentationCharge
+
+    table = types.SimpleNamespace(
+        nkb=5, channel_offsets=(0, 3), species_atoms=((0,), (1,)))
+    paw = np.arange(9.0).reshape(1, 3, 3)
+
+    first = np.asarray(AugmentationCharge.block_matrix(table, (paw, None)))
+    assert first.shape == (5, 5)
+    np.testing.assert_allclose(first[:3, :3], paw[0])
+    assert np.abs(first[3:, 3:]).max() == 0.0
+    assert np.abs(first[:3, 3:]).max() == 0.0 and np.abs(first[3:, :3]).max() == 0.0
+
+    table.channel_offsets, table.species_atoms = (0, 2), ((0,), (1,))
+    second = np.asarray(AugmentationCharge.block_matrix(table, (None, paw)))
+    np.testing.assert_allclose(second[2:, 2:], paw[0])
+    assert np.abs(second[:2, :2]).max() == 0.0
+
+    # Every species norm-conserving is a legitimate argument too: the matrix is
+    # all zeros and the dtype cannot be read off a block that is not there.
+    empty = np.asarray(AugmentationCharge.block_matrix(table, (None, None)))
+    assert empty.shape == (5, 5) and np.abs(empty).max() == 0.0
+
+
+def test_a_paw_dataset_beside_a_norm_conserving_one_runs(pseudo_dir):
+    """`pw.x` runs this cell and nothing here refused it; it crashed instead.
+
+    ``okpaw = ANY(upf(1:ntyp)%tpawp)`` (``setup.f90:119``) and
+    ``paw_onecenter.f90`` loops ``IF (upf(i%t)%tpawp)`` per atom, so a PAW
+    dataset on one species and a norm-conserving one on another is an ordinary
+    ``pw.x`` run. Here the one-centre blocks arrive with a ``None`` at the
+    norm-conserving species and ``block_matrix`` dereferenced it, so what the
+    user met was a bare ``AttributeError`` from inside ``Calculation.onecenter``
+    -- after the basis, the symmetry search and the first diagonalisation had
+    been paid for -- rather than one of this module's named refusals.
+
+    The cell is displaced silicon so the force is not a symmetry residue, and
+    the comparison is against the vendored ``pw.x`` on the same input. What the
+    number means is read off its two controls, the same cell with both species
+    PAW and with both norm-conserving: the mixed force lands **between** them,
+    at 1.15e-5 Ry/bohr against 3.9e-7 (PAW) and 2.0e-5 (norm-conserving), so
+    each species keeps its own accuracy and the mixed path adds nothing. P15
+    records ``<= 2e-5 Ry/bohr`` for displaced silicon, which is the envelope all
+    three sit in.
+    """
+    from defumat.calculator import Calculator
+    from defumat.io.qeref import read_qe_output
+
+    cases = pathlib.Path(__file__).resolve().parents[1] / "data" / "qe"
+    reference = read_qe_output(cases / "reference.out.si2-paw-nc")
+    calculator = Calculator.from_file(
+        cases / "si2-paw-nc.in", pseudo_dir=pseudo_dir, announce=False)
+    assert calculator.calculation.is_paw, "this cell is meant to carry a PAW species"
+
+    scf = calculator.get_scf(conv_thr=1e-10)
+    assert scf.converged, scf.accuracy
+    assert scf.total_energy == pytest.approx(reference.total_energy, abs=1e-7)
+
+    forces = np.asarray(calculator.get_forces().forces)
+    np.testing.assert_allclose(forces, np.asarray(reference.forces), atol=2e-5)
+    # The force is the thing a symmetric cell would have hidden, so say it is
+    # there: 0.076 Ry/bohr along x, equal and opposite on the two atoms.
+    assert abs(forces[0, 0]) > 0.05
+    np.testing.assert_allclose(forces[0], -forces[1], atol=1e-8)
