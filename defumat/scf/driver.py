@@ -143,6 +143,7 @@ from defumat.scf.potential import (
     fixed_quantization_axis,
     scf_accuracy,
     scf_accuracy_split,
+    tau_accuracy,
     v_of_rho,
 )
 from defumat.xc.mgga import thomas_fermi_tau
@@ -195,6 +196,11 @@ def _field_potential(field, rho_r, cell, scale):
 _potential_of_rho = jax.jit(v_of_rho, static_argnums=(6, 8))
 _accuracy = jax.jit(scf_accuracy)
 _accuracy_split = jax.jit(scf_accuracy_split)
+#: ``tauk_ddot``, added to ``accuracy`` the way ``ns_ddot`` is rather than fused
+#: into ``scf_accuracy_split``: it is a different array and needs its own
+#: transform whatever happens, so fusing saves no FFT, and leaving that function
+#: untouched is what guarantees a non-meta run does not move by an ulp.
+_tau_accuracy = jax.jit(tau_accuracy)
 
 
 #: Where ``ethr`` starts, from ``PW/src/setup.f90``: the starting potential is a
@@ -427,8 +433,9 @@ def _pack_ns(ns, dtype, real):
     return packed.ravel()
 
 
-def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None):
-    """One mixing step over the density and, for PAW and DFT+U, its companions.
+def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None,
+         tau_in=None, tau_out=None):
+    """One mixing step over the density and, for PAW, DFT+U and a meta-GGA, its companions.
 
     All of them are packed into a single vector so that the extrapolation
     coefficients Anderson computes from the density residual are applied to
@@ -439,6 +446,36 @@ def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None):
     Hubbard potential is built from ``ns``, so an unmixed ``ns`` would drive the
     Hamiltonian from the *output* of the previous step while the density came
     from the mixed one.
+
+    ``tau`` joins them under a potential-only meta-GGA, which is what
+    ``mix_type``'s ``kin_g`` is: ``assign_scf_to_mix_type`` copies it in,
+    ``mix_type_AXPY`` scales it and ``assign_mix_to_scf_type`` rebuilds
+    ``kin_r`` from the mixed copy, all under
+    ``IF (xclib_dft_is('meta') .OR. lxdm)`` (``scf_mod.f90:320-326``,
+    ``:443-447``, ``:368-375``). It was replaced rather than mixed here until
+    2026-09-20, on a justification read off ``mix_rho.f90``, which contains no
+    ``kin`` string because it works on ``mix_type`` objects through those
+    helpers. The residual-solver route has always packed it
+    (:class:`~defumat.scf.residual.Residual`), so the two routes now agree with
+    each other as well as with ``pw.x``.
+
+    **The inner product is Euclidean and QE's is not**, and that is a
+    pre-existing deviation this block inherits rather than introduces.
+    ``mix_rho.f90:409-413`` builds Broyden's ``betamix`` from ``rho_ddot``, so
+    ``pw.x`` mixes in the same weighted metric it converges in; the mixer here
+    uses a plain Gram matrix on the packed real-space vector. For ``tau`` the
+    two agree up to a constant, by Parseval on a G-independent weight; the whole
+    difference is the charge half's ``1/G^2``, which is what Kerker is for and
+    which already leaves the trailing block at plain ``beta``. Measured on
+    ``si2-tb09.in``, ``|tau|_2 / |rho|_2 = 0.81``, so appending it raw gives it
+    comparable say in the least squares rather than either dominating or
+    vanishing.
+
+    Two costs to state. The history doubles for a meta run, one dense-grid array
+    per entry becoming two (``MEMORY-AUDIT.md`` D3, where the Anderson history
+    is already unmodelled), and the checkpointed mixer doubles with it. And
+    ``tau`` makes one more host round trip per iteration, which this function
+    already pays for the density.
     """
     flat = [np.asarray(rho).ravel()]
     flat_out = [np.asarray(rho_out).ravel()]
@@ -463,6 +500,12 @@ def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None):
         ns_dtype, ns_real = _ns_dtypes(ns_in)
         flat.append(_pack_ns(ns_in, ns_dtype, ns_real))
         flat_out.append(_pack_ns(ns_out, ns_dtype, ns_real))
+    if tau_in is not None:
+        # Real and grid-shaped, so no view and no reinterpretation: the only
+        # care needed is on the way back out, where the dtype must be ``tau``'s
+        # own and not the concatenation's.
+        flat.append(np.asarray(tau_in).ravel())
+        flat_out.append(np.asarray(tau_out).ravel())
 
     mixed = mixer.mix(np.concatenate(flat), np.concatenate(flat_out))
 
@@ -488,7 +531,17 @@ def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None):
         if complex_ns:
             block = block.view(ns_dtype)
         ns_mixed = jnp.asarray(block.reshape(ns_in.shape))
-    return rho_mixed, tuple(becsum_mixed), ns_mixed
+        offset += size
+    tau_mixed = None
+    if tau_in is not None:
+        # ``tau``'s own dtype, not the packed vector's: the concatenation
+        # promotes to whatever the widest block is, and taking that back
+        # unchanged is how a float32 run silently acquires a float64 ``tau``.
+        tau_mixed = jnp.asarray(np.ascontiguousarray(
+            mixed[offset : offset + tau_in.size],
+            dtype=np.asarray(tau_in).dtype,
+        ).reshape(tau_in.shape))
+    return rho_mixed, tuple(becsum_mixed), ns_mixed, tau_mixed
 
 
 @jax.jit
@@ -4700,10 +4753,22 @@ def _solve_residual(
         if residual.ns_shape is not None:
             # Sliced by ``unpack`` and not off the end of the vector: ``ns`` is
             # the last block only while nothing follows it, and ``tau`` does
-            # (:class:`ScfResidual`). ``tau`` itself is deliberately *not* in
-            # this measure -- ``conv_thr`` has to mean the same thing here as it
-            # means in the mixing loop, which converges on the density alone.
+            # (:class:`ScfResidual`).
             accuracy = accuracy + calculation.ns_accuracy(residual.unpack(r)[2])
+        if residual.tau_shape is not None:
+            # ``tau`` is in this measure since 2026-09-20, and it has to be:
+            # ``conv_thr`` means the same thing here as in the mixing loop, and
+            # that loop now carries ``tauk_ddot`` too. The sentence that used to
+            # stand here said the loop "converges on the density alone", which
+            # was true of the loop and was never true of ``pw.x``
+            # (``rho_ddot:828``). Same order as the loop -- charge and
+            # magnetization fused, then ``ns``, then ``tau`` -- which is
+            # ``unpack``'s order, so the two routes compose the same floats the
+            # same way.
+            accuracy = accuracy + _tau_accuracy(
+                jnp.asarray(residual.unpack(r)[3]),
+                calculation.basis.dense, calculation.system.cell,
+            )
         return float(accuracy)
 
     if warmup:
@@ -5569,6 +5634,22 @@ def run_scf(
                 # and the ``ethr`` schedule it drives is QE's.
                 accuracy += float(calculation.ns_accuracy(ns_out - ns_state))
 
+            if tau_state is not None:
+                # ``rho_ddot`` gains ``tauk_ddot`` under a meta-GGA for the same
+                # reason it gains ``ns_ddot`` under a Hubbard U: ``tau`` is an
+                # ingredient of the potential that is not a function of the
+                # density, so a stopping test built from the density residual
+                # alone does not bound it. Added here, in ``unpack``'s order
+                # (charge and magnetization fused, then ``ns``, then ``tau``),
+                # so the loop and ``accuracy_of`` compose the same floats in the
+                # same order and agree to the last bit.
+                tau_accuracy_term = float(_tau_accuracy(
+                    tau_out - tau_state, calculation.basis.dense,
+                    calculation.system.cell))
+                accuracy += tau_accuracy_term
+            else:
+                tau_accuracy_term = 0.0
+
             if iteration > 1 or attempt > 0 or accuracy >= floor:
                 break
             ethr = max(0.1 * accuracy / max(1.0, calculation.nelec), ETHR_MIN)
@@ -5720,6 +5801,11 @@ def run_scf(
                  # with the charge converged and the moment still drifting.
                  "charge_accuracy": charge_accuracy,
                  "magnetic_accuracy": magnetic_accuracy,
+                 # The third half of ``dr2`` under a meta-GGA, reported for the
+                 # reason the other two are: the sum hides which one is still
+                 # moving, and ``tau`` is the one whose residual nothing else in
+                 # this record would show.
+                 "tau_accuracy": tau_accuracy_term,
                  "residual": residual, "change": change,
                  # Davidson steps per k-point per spin channel, summed over the
                  # attempts this iteration made -- ``pw.x``'s "avg # of
@@ -5798,9 +5884,17 @@ def run_scf(
                 # whole array is in ``history`` every iteration.
                 lengths = np.linalg.norm(site_moments, axis=1)
                 extra += f"   |m|_site = {lengths.min():.4f}..{lengths.max():.4f}"
-            if magnetic_accuracy > 0.0:
-                extra += (f"   (dr2: charge {charge_accuracy:.2e}"
-                          f" + mag {magnetic_accuracy:.2e})")
+            if magnetic_accuracy > 0.0 or tau_accuracy_term > 0.0:
+                # Gated on either, not on the magnetization alone: an
+                # ``nspin = 1`` meta-GGA run has a tau half and no magnetic one,
+                # and printing nothing there would hide exactly the term this
+                # line exists to show.
+                parts = [f"charge {charge_accuracy:.2e}"]
+                if magnetic_accuracy > 0.0:
+                    parts.append(f"mag {magnetic_accuracy:.2e}")
+                if tau_accuracy_term > 0.0:
+                    parts.append(f"tau {tau_accuracy_term:.2e}")
+                extra += "   (dr2: " + " + ".join(parts) + ")"
             print(f"  iteration {iteration:3d}   E = {total:16.8f} Ry"
                   f"   accuracy = {accuracy:.2e}   ethr = {ethr:.2e}"
                   f"   |drho| = {residual:.2e}{extra}")
@@ -5815,22 +5909,23 @@ def run_scf(
             break
 
         previous_energy = total
-        if tau_state is not None:
-            # Replaced, not mixed, and that is this code's choice rather than
-            # QE's: ``mix_type`` carries ``kin_g`` under
-            # ``IF (xclib_dft_is('meta'))`` and ``assign_mix_to_scf_type``
-            # rebuilds ``kin_r`` from the mixed copy (``scf_mod.f90:368-375``),
-            # so ``pw.x`` mixes it. The comment here used to cite the
-            # Thomas-Fermi guess, which is about the *first* iteration and says
-            # nothing about the loop. What the choice costs is unmeasured, and
-            # its visible face is that ``accuracy`` below carries no
-            # ``tauk_ddot`` and so does not bound ``tau`` at all.
-            tau_state = tau_out
-        rho, becsum_state, ns_state = _mix(
+        # ``tau`` is mixed with the density and not replaced by the output, which
+        # is what ``mix_type``'s ``kin_g`` is (``scf_mod.f90:320-326``,
+        # ``:443-447``, ``:368-375``, all under
+        # ``IF (xclib_dft_is('meta') .OR. lxdm)``). It was replaced until
+        # 2026-09-20 on a justification read off ``mix_rho.f90``, which does not
+        # mention ``kin_r`` because it works through those helpers.
+        rho, becsum_state, ns_state, mixed_tau = _mix(
             mixer, rho, rho_out, becsum_state, becsum_out,
             ns_state if calculation.is_hubbard else None,
             ns_out if calculation.is_hubbard else None,
+            # ``tau_out`` exists only on the meta branch, so it is reached
+            # through ``tau_state`` rather than named unconditionally: an LDA
+            # run never assigns it.
+            tau_state, tau_out if tau_state is not None else None,
         )
+        if tau_state is not None:
+            tau_state = mixed_tau
         if field is not None:
             # ``reducebf`` (Elk 5.104), and the fixed-spin-moment feedback, both
             # act between iterations -- after the density is mixed and before

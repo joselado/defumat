@@ -5002,7 +5002,10 @@ sought in `(rho, tau)` jointly. That is what puts the `d v / d tau` block into
 the Jacobian, and that block runs through the implicit derivative of the
 Becke-Roussel inversion, which is why the `custom_jvp` is not optional.
 
-**`conv_thr` does not bound `tau` here and under `pw.x` it does (2026-09-20).** The
+**`tau` is mixed and converged on, as `pw.x` does (2026-09-20).** What follows is the
+defect as it was found, then the measurement that sized it, then what the repair is worth.
+
+**The premise that kept `tau` out of both was false.** The
 justification written for the mixing loop -- "`tau` is replaced, not mixed, exactly as
 `mix_rho.f90` leaves `kin_r` alone" -- was read off the one file that does not mention
 `kin_r`, and it does not mention it because it works on `mix_type` objects through the
@@ -5023,14 +5026,62 @@ and the run would not have stopped. Over the run the ratio ranges from 0.018 to 
 after the first iteration, so the term is the same order as `dr2` throughout rather than
 being large only at the end.
 
-**What that is worth is one iteration, and one iteration is worth 0.04 meV.** The gap is
-what this functional is for, and the same cell gives **1.266361911 eV at `conv_thr = 1e-9`
-in 10 iterations, 1.266312244 at 1e-10 in 11, and 1.266322354 at 1e-12 in 14** -- so the
-run as it stops today is **3.96e-5 eV** from the converged answer, 3.1e-5 of the gap. The
-defect is real and the stopping test genuinely does not bound `tau`; what it costs on the
-one committed meta-GGA cell is four hundredths of a milli-electronvolt. A magnetic cell is
-where it would be worth more, `tau`'s two channels being what P30's own 65 per cent
-measurement is about, and there is no committed magnetic `tb09` input to measure it on.
+**What the convergence half alone was worth is one iteration, and one iteration is worth
+0.04 meV.** The gap is what this functional is for, and the same cell gave **1.266361911 eV
+at `conv_thr = 1e-9` in 10 iterations, 1.266312244 at 1e-10 in 11, and 1.266322354 at 1e-12
+in 14** -- so the run as it stopped was **3.96e-5 eV** from the converged answer, 3.1e-5 of
+the gap. That is the number the decision was taken against, and it argued for doing nothing.
+
+**Mixing it is what changed the picture, and it is a speed result rather than an accuracy
+one.** With `tau` in the packed state and `tauk_ddot` in `accuracy`, the same cell at the
+same `conv_thr = 1e-9` converges in **8 iterations against 10** and lands at
+**1.53e-11 rather than 8.41e-10**, so it is both faster and an order and a half tighter --
+the stopping test is stricter and the run still reaches it sooner, because a mixed `tau` is
+one fewer thing lagging the density. The saving is not one threshold's luck: **10 to 8 at
+1e-9, 11 to 8 at 1e-10 and 14 to 10 at 1e-12**, about a quarter to a third fewer iterations
+wherever it is asked.
+
+**The fixed point does not move, which is the thing a mixing change has to be checked
+against.** A mixer decides the path and not the answer, so the two codes' converged gaps
+must agree: at `conv_thr = 1e-12` the mixed run gives **1.266323329 eV** in 10 iterations
+against the replaced run's **1.266322354** in 14, a difference of 9.8e-7 eV with the second
+converged an order tighter. What moves is the number a *loose* run reports, and it moves
+towards that answer: 1.266298 at 1e-9 against the old 1.266362, so the run that stops early
+is now 2.5e-5 eV out where it used to be 4.0e-5.
+
+**The spin form is regime-consistent and QE's is not, which is a deliberate departure of
+one factor.** `kin_g` is stored `(up, down)` where `of_g` is `(total, magnetization)`, and
+`tauk_ddot` sums the two channels and halves the result (`scf_mod.f90:913`), so an
+*unpolarized* two-channel run gets **one quarter** of what the identical one-channel run
+gets, while the charge half is the same in both because it is built from the total.
+Written here on `(total, magnetization)` as the density's halves already are, the two
+regimes agree exactly -- which is what keeps `test_the_two_spin_regimes_agree`'s 1e-12
+assertions standing, and that test is the only one exercising the whole polarized path.
+The consequence to state rather than discover: **an iteration count against `pw.x` for an
+LSDA meta-GGA run is not like-for-like**, the two codes' `dr2` differing by that factor
+there. At one channel and at four they agree, four already being the Pauli basis.
+
+**No gamma-only branch in the term, and that is not an omission.** Only the wavefunction
+sphere halves under `K_POINTS gamma`; the dense G set stays whole, measured -- a gamma run
+of this cell has `planewaves.gamma_only = True` with `dense.gamma_only = False` -- so the
+sum is already over the whole set. QE's own gamma branch there is worth a sentence because
+it is wrong: at `nspin >= 2` it doubles the running total *after* channel 1's `G = 0` term
+has been added (`scf_mod.f90:891-918`), so a `pw.x` gamma-only LSDA meta run over-counts
+`|tau_1(0)|^2`.
+
+**The inner product is Euclidean and QE's is not**, a pre-existing deviation the `tau`
+block inherits rather than introduces and which was not written down anywhere until now.
+`mix_rho.f90:409-413` builds Broyden's `betamix` from `rho_ddot`, so `pw.x` mixes in the
+same weighted metric it converges in; the mixer here uses a plain Gram matrix on the packed
+real-space vector, for `rho`, `becsum` and `ns` alike. For `tau` the two agree up to a
+constant, by Parseval on a G-independent weight, so the whole difference is the charge
+half's `1/G^2`, which is what Kerker is for and which already leaves the trailing block at
+plain `beta`. Measured, `|tau|_2 / |rho|_2 = 0.81`, so appending it raw gives it comparable
+say rather than either dominating or vanishing.
+
+A magnetic cell is where the convergence half would be worth more, `tau`'s two channels
+being what P30's own 65 per cent measurement is about, and there is no committed magnetic
+`tb09` input to measure it on.
 
 *Notebook 24.*
 

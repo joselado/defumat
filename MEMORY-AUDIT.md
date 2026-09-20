@@ -1678,6 +1678,15 @@ The dense-point count is inferred rather than read off an input file, so the 3.4
 +-10%; `PERFORMANCE.md:4474`'s "~2 000 000" for a 45-atom NiBr2 cycloid disagrees with it, and at the
 low figure the history is 1.3 GB. It scales linearly either way.
 
+**A meta-GGA doubles it (2026-09-20).** `tau` joined the packed state when the mixing loop
+started mixing it as `pw.x` does (`PLAN.md` P30), and `tau` is dense-grid shaped exactly as the
+density is, so every history entry carries two of them instead of one and the per-iteration
+concatenations double with it. The checkpointed mixer (`checkpoint.py`) doubles too. Nothing
+above changes for an LDA, GGA or LSDA run, and a potential-only meta-GGA is the only regime
+that pays it: on the numbers above, the 3.46 GB becomes 6.92 and the slab's 1.0 GB becomes 2.0.
+That is a real cost against a measured gain of two SCF iterations out of ten on `si2-tb09.in`,
+and the two are not comparable on the same cell, since nothing here runs a meta-GGA at that size.
+
 **It is host memory**, so it is outside P74's device `peak_bytes_in_use` figures — which is why it is
 not part of the 4.5 GB that entry leaves unexplained. On this CPU workstation, where
 `run_regression.sh` caps each file at 12 GB and the watchdog samples `memory_info().rss`, it is the

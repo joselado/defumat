@@ -174,17 +174,18 @@ in `docs/features.tex`'s amber boxes.
   functional, so they invert the rule above — nothing is differentiated, the expression
   *is* `v_x`. The consequences are enforced rather than documented: `run_scf` warns that
   its total is not the value of anything it minimised, and every consumer of
-  `forces/energy.py:energy_at` refuses. `tau` comes from the states and is **not mixed**,
-  which is this code's own choice and **not** QE's: the justification written here until
-  2026-09-20, "exactly as `mix_rho.f90` leaves `kin_r` alone", is false and was read off
-  the one file that does not mention `kin_r` because it operates on `mix_type` objects
-  through the helpers in `scf_mod.f90`, which do — `kin_g` is a field of `mix_type`
-  (`:73`), `assign_scf_to_mix_type` copies it in and `mix_type_AXPY` acts on it under
-  `IF (xclib_dft_is('meta'))`, and `assign_mix_to_scf_type` rebuilds `kin_r` from the
-  mixed `kin_g` (`:368-375`). `pw.x` also **converges** on it, `rho_ddot:828` adding
-  `tauk_ddot` at the magnetization half's weight, where `paw_ddot` two lines down is
-  written and commented out. So `conv_thr` here does not bound `tau` and under `pw.x` it
-  does. Energy-carrying meta-GGAs (TPSS, SCAN,
+  `forces/energy.py:energy_at` refuses. `tau` comes from the states and is **mixed with the
+  density and converged on**, as `pw.x` does — `kin_g` is a field of `mix_type` carried
+  under `IF (xclib_dft_is('meta'))` (`scf_mod.f90:320-326`, `:443-447`, `:368-375`) and
+  `rho_ddot:828` adds `tauk_ddot`. It was neither until 2026-09-20, on a justification
+  read off `mix_rho.f90`, the one file that does not mention `kin_r` because it works
+  through those helpers; the repair takes `si2-tb09.in` from 10 iterations at 8.41e-10 to
+  **8 at 1.53e-11**. **One factor is deliberately not QE's**: `kin_g` is stored
+  `(up, down)` where `of_g` is `(total, magnetization)`, and `tauk_ddot`'s halving at
+  `nspin = 2` gives an unpolarized two-channel run a quarter of what the identical
+  one-channel run gets, so the term is written here on `(total, magnetization)` and the two
+  regimes agree — at the price that an iteration count against `pw.x` for an **LSDA** meta
+  run is not like-for-like. Energy-carrying meta-GGAs (TPSS, SCAN,
   M06L) are **not** in — their potential has a `dE/dtau` piece acting on the wavefunction.
 - **Van der Waals** (P27): Grimme's **D2** only, as a pair sum over the nuclei outside
   `v_of_rho`. The other four are **refused by name**, where QE's `set_vdw_corr` warns and

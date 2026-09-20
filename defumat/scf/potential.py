@@ -55,6 +55,7 @@ from defumat.xc.functional import (
 
 __all__ = ["Potential", "v_of_rho", "hartree", "exchange_correlation",
            "gradient_correction", "meta_exchange", "scf_accuracy", "scf_accuracy_terms", "scf_accuracy_split",
+           "tau_accuracy",
            "total_charge",
            "with_core", "as_potential_components",
            "DEFAULT_FUNCTIONAL"]
@@ -203,6 +204,63 @@ def scf_accuracy_terms(residual_r: jnp.ndarray, gvectors: GVectors, cell: Cell):
             jnp.real(jnp.conj(magnetization[:, 0]) * magnetization[:, 0])
         )
     return charge, 0.5 * cell.volume * weight * contribution
+
+
+def tau_accuracy(residual_r: jnp.ndarray, gvectors: GVectors, cell: Cell):
+    """``tauk_ddot``: how far from self-consistency ``tau`` still is, in Ry.
+
+    QE's ``tauk_ddot`` (``PW/src/scf_mod.f90:855-933``), which ``rho_ddot`` adds
+    at ``:828`` under ``IF (xclib_dft_is('meta'))``. It is the magnetization
+    half's expression applied to the kinetic energy density: a **G-independent**
+    weight ``e2 4 pi / (2 pi)^2``, the ``G = 0`` component *included*, and half
+    the cell volume in front. There is no ``1/G^2`` because ``tau`` is not a
+    charge and an error in it costs the same at every wavelength.
+
+    **Why this is here at all.** ``tau`` is the one ingredient of a
+    potential-only meta-GGA's potential that is not a function of the density,
+    so a stopping test built from the density residual alone does not bound it.
+    Measured on ``si2-tb09.in`` before this term existed: at the iteration the
+    run stopped, ``accuracy`` read 8.412e-10 against ``conv_thr = 1e-9`` while
+    this term was **8.448e-10**, so the sum would have been 1.686e-9 and the run
+    would have gone on. What that one iteration is worth is 3.96e-5 eV on a
+    1.266 eV gap, which is why it is small rather than nothing.
+
+    **The spin form is regime-consistent and QE's is not**, which is a
+    deliberate departure of one factor. ``kin_g`` is stored ``(up, down)`` while
+    ``of_g`` is ``(total, magnetization)``, and ``tauk_ddot`` sums the two
+    channels and multiplies by ``0.5`` at ``nspin = 2`` (``scf_mod.f90:913``).
+    An **unpolarized** two-channel run therefore gets
+    ``0.5 (2 |tau/2|^2) = |tau|^2/4``, one quarter of what the identical
+    one-channel run gets, where the charge half is the same in both regimes
+    because it is built from the total. Written here on ``(total,
+    magnetization)`` as the density's halves already are, the two regimes agree
+    exactly, which is what ``test_the_two_spin_regimes_agree`` asserts bit for
+    bit. The consequence to state rather than discover: an iteration count
+    against ``pw.x`` for an **LSDA** meta-GGA run is not like-for-like, because
+    the two codes' ``dr2`` differ by that factor there. At one channel and at
+    four they agree, four already being the Pauli basis
+    (``tau, tau_x, tau_y, tau_z``) and so already the form used here.
+
+    **No gamma-only branch, and that is not an omission.** Only the wavefunction
+    sphere halves under ``K_POINTS gamma``; the dense G set stays whole
+    (``basis/builder.py`` passes ``gamma_only`` to ``build_plane_wave_basis``
+    alone, and a run under gamma storage has ``planewaves.gamma_only = True``
+    with ``dense.gamma_only = False``), so this sum is already over the whole
+    set. QE's own gamma branch here is worth one sentence because it is wrong:
+    at ``nspin >= 2`` it doubles the running total *after* channel 1's
+    ``G = 0`` term has been added (``scf_mod.f90:891-918``), so a ``pw.x``
+    gamma-only LSDA meta run over-counts ``|tau_1(0)|^2``.
+    """
+    residual_g = r_to_g(residual_r, gvectors.fft_index)
+    if residual_g.shape[0] == 2:
+        # ``(up, down)`` -> ``(total, magnetization)``, the basis the density's
+        # two halves are already reported in.
+        residual_g = jnp.stack(
+            [residual_g[0] + residual_g[1], residual_g[0] - residual_g[1]]
+        )
+    weight = E2 * FPI / (2.0 * jnp.pi) ** 2
+    contribution = jnp.sum(jnp.real(jnp.conj(residual_g) * residual_g))
+    return 0.5 * cell.volume * weight * contribution
 
 
 def exchange_correlation(

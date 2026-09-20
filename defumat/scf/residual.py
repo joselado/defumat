@@ -96,15 +96,23 @@ class ScfResidual:
     #: footing.
     ns_shape: tuple | None = None
     #: Shape of the kinetic energy density, or ``None`` when the functional is
-    #: not a meta-GGA. ``tau`` joins the state for a reason the mixing loop does
-    #: not have to face: the loop *lags* it (QE recomputes ``kin_r`` from the
-    #: output states and never mixes it), which is a perfectly good iteration
-    #: but makes ``F`` depend on something outside its argument. A root-finder
-    #: needs ``F`` to be a function, so ``tau`` is packed with the density and
-    #: the fixed point is sought in ``(rho, tau)`` jointly. **This is a
-    #: deviation from QE and it is the point**: the Jacobian then contains the
+    #: not a meta-GGA. ``tau`` is packed with the density and the fixed point is
+    #: sought in ``(rho, tau)`` jointly, because a root-finder needs ``F`` to be
+    #: a function of its argument and a lagged ``tau`` makes it depend on
+    #: something outside it. What is gained by that is the Jacobian's
     #: ``d v / d tau`` block, which is where a meta-GGA's convergence trouble
     #: lives and which no density mixer can model.
+    #:
+    #: The sentence that stood here until 2026-09-20 called this "a deviation
+    #: from QE and it is the point", on the grounds that "QE recomputes
+    #: ``kin_r`` from the output states and never mixes it". Both halves are
+    #: false: ``mix_type`` carries ``kin_g`` under
+    #: ``IF (xclib_dft_is('meta') .OR. lxdm)`` and ``assign_mix_to_scf_type``
+    #: rebuilds ``kin_r`` from the mixed copy (``scf_mod.f90:368-375``). The
+    #: mixing loop here now mixes it too, so the two routes agree with each
+    #: other and with ``pw.x``, and what is left of the deviation is the
+    #: Jacobian block, which is a property of the solver rather than of the
+    #: state.
     tau_shape: tuple | None = None
 
     # ---- packing -------------------------------------------------------

@@ -268,3 +268,140 @@ def test_the_potential_is_zero_where_the_density_is():
     assert np.all(np.isfinite(np.asarray(
         jax.jacfwd(lambda r: tb09_potential(r, zeros, zeros, zeros, 1.0))(rho)
     )))
+
+
+# --- tau in the convergence test ---------------------------------------------
+
+
+def _accuracy_pieces():
+    """A dense G set and a cell, built without an SCF."""
+    from defumat.basis.builder import build_basis
+    from defumat.io.pwin import read_pw_input
+    from defumat.system import build_system
+    from pathlib import Path
+
+    case = Path(__file__).resolve().parents[1] / "data" / "qe" / "si2-tb09.in"
+    system = build_system(read_pw_input(case))
+    return build_basis(system).dense, system.cell
+
+
+def test_the_tau_term_is_the_magnetization_halfs_expression():
+    """``tauk_ddot`` is ``rho_ddot``'s magnetization half applied to ``tau``.
+
+    A G-independent weight ``e2 4 pi / (2 pi)^2``, the ``G = 0`` component
+    included, half the cell volume in front. Checked against
+    :func:`scf_accuracy_terms`, which shares no code with it: the magnetization
+    of an ``(up, down)`` pair ``(tau, 0)`` is ``tau``, so the two must agree.
+    """
+    from defumat.scf.potential import scf_accuracy_terms, tau_accuracy
+
+    gvectors, cell = _accuracy_pieces()
+    rng = np.random.default_rng(20260920)
+    grid = gvectors.grid
+    tau = jnp.asarray(rng.normal(size=(1,) + grid))
+
+    mine = float(tau_accuracy(tau, gvectors, cell))
+    theirs = float(scf_accuracy_terms(
+        jnp.concatenate([tau, jnp.zeros_like(tau)]), gvectors, cell)[1])
+    assert mine == pytest.approx(theirs, rel=1e-13)
+    assert mine > 0.0
+
+
+def test_the_tau_term_agrees_across_the_two_spin_regimes():
+    """The departure from ``pw.x`` that was chosen, and its exact size.
+
+    ``kin_g`` is stored ``(up, down)`` while ``of_g`` is
+    ``(total, magnetization)``, and QE's ``tauk_ddot`` sums the two channels and
+    halves the result (``scf_mod.f90:913``), so an **unpolarized** two-channel
+    run gets one quarter of what the identical one-channel run gets. Written
+    here on ``(total, magnetization)`` as the density's halves already are, the
+    two regimes agree exactly -- which is what keeps
+    ``test_the_two_spin_regimes_agree`` bit for bit.
+    """
+    from defumat.scf.potential import tau_accuracy
+
+    gvectors, cell = _accuracy_pieces()
+    rng = np.random.default_rng(11)
+    grid = gvectors.grid
+    tau = jnp.asarray(rng.normal(size=(1,) + grid))
+    split = jnp.concatenate([tau / 2.0, tau / 2.0])
+
+    one = float(tau_accuracy(tau, gvectors, cell))
+    two = float(tau_accuracy(split, gvectors, cell))
+    assert two == pytest.approx(one, rel=1e-13)
+
+    # ... and QE's own form on the same pair is a quarter of it, which is the
+    # size of the departure rather than an adjective for it. ``tauk_ddot`` is
+    # ``0.5 (sum|up|^2 + sum|dn|^2)`` in the same weight, and a one-channel call
+    # of this function is exactly ``W sum|x|^2``, so it builds the literal form
+    # without a second transcription of the weight.
+    half = jnp.asarray(tau / 2.0)
+    literal = 0.5 * (float(tau_accuracy(half, gvectors, cell))
+                     + float(tau_accuracy(half, gvectors, cell)))
+    assert literal == pytest.approx(one / 4.0, rel=1e-13)
+
+
+def test_a_polarized_tau_is_not_the_same_number():
+    """The regime test above would pass on a function that ignored its input's
+    second channel, so a genuinely polarized pair has to move it."""
+    from defumat.scf.potential import tau_accuracy
+
+    gvectors, cell = _accuracy_pieces()
+    rng = np.random.default_rng(3)
+    grid = gvectors.grid
+    up = jnp.asarray(rng.normal(size=(1,) + grid))
+    down = jnp.asarray(rng.normal(size=(1,) + grid))
+    polarized = float(tau_accuracy(jnp.concatenate([up, down]), gvectors, cell))
+    unpolarized = float(tau_accuracy(
+        jnp.concatenate([up, up]), gvectors, cell))
+    assert polarized != pytest.approx(unpolarized, rel=1e-6)
+
+
+def test_the_residual_routes_accuracy_carries_tau_too():
+    """``conv_thr`` means one thing across the two solvers, so both carry it.
+
+    The mixing loop and :func:`~defumat.scf.driver.run_scf`'s residual route
+    compose ``accuracy`` from the same pieces in the same order -- charge and
+    magnetization fused, then ``ns``, then ``tau``, which is ``unpack``'s order
+    -- and a run that stopped on a different measure from the one it mixed with
+    could not be compared with it. The route had no meta-GGA test of any kind
+    before this one.
+    """
+    from pathlib import Path
+
+    from defumat.io.pwin import read_pw_input
+    from defumat.pseudo import read_upf
+    from defumat.scf.driver import Calculation, _accuracy, _tau_accuracy
+    from defumat.scf.residual import make_residual
+    from defumat.system import build_system
+
+    root = Path(__file__).resolve().parents[1] / "data"
+    system = build_system(read_pw_input(root / "qe" / "si2-tb09.in"))
+    pseudos = tuple(read_upf(root / "pseudo" / s.pseudo_file)
+                    for s in system.structure.species)
+    calculation = Calculation(system, pseudos)
+    residual = make_residual(calculation, system.nbnd, 1.0e-8)
+    assert residual.tau_shape is not None, "this cell is supposed to be a meta-GGA"
+
+    rng = np.random.default_rng(5)
+    rho = rng.normal(size=residual.shapes[0]) * 1.0e-4
+    tau = rng.normal(size=residual.tau_shape) * 1.0e-4
+    with_tau = residual.pack(rho, (), None, tau)
+    without = residual.pack(rho, (), None, np.zeros_like(tau))
+
+    def measure(vector):
+        size = int(np.prod(residual.shapes[0]))
+        total = float(_accuracy(
+            jnp.asarray(vector[:size]).reshape(residual.shapes[0]),
+            calculation.basis.dense, calculation.system.cell))
+        total += float(_tau_accuracy(
+            jnp.asarray(residual.unpack(vector)[3]),
+            calculation.basis.dense, calculation.system.cell))
+        return total
+
+    # The guard fires: a nonzero tau block has to raise the measure, and the
+    # amount is the tau term itself rather than an unexplained increase.
+    term = float(_tau_accuracy(jnp.asarray(tau), calculation.basis.dense,
+                               calculation.system.cell))
+    assert term > 0.0
+    assert measure(with_tau) - measure(without) == pytest.approx(term, rel=1e-10)

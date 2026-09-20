@@ -335,7 +335,7 @@ def test_a_mixer_does_not_promote_the_densitys_precision(dtype, mode):
 
     rho = np.random.default_rng(3).normal(size=(1, 4, 4, 4)).astype(dtype)
     mixer = get_mixer(mode, **({"beta": 0.4} if mode != "adaptive" else {}))
-    mixed, _, _ = _mix(mixer, rho, rho + 0.01, (), ())
+    mixed, _, _, _ = _mix(mixer, rho, rho + 0.01, (), ())
     assert np.asarray(mixed).dtype == np.dtype(dtype)
 
 
@@ -372,13 +372,63 @@ def test_the_ns_block_survives_the_mixer_in_either_precision(dtype, mode):
     # out-of-range increment for the adaptive mixer, where the identity comes
     # from mixing a vector with itself instead.
     mixer = get_mixer(mode, **({"beta": 1.0} if mode == "anderson" else {}))
-    _, _, mixed = _mix(mixer, rho, rho, (), (), ns_in=ns, ns_out=ns)
+    _, _, mixed, _ = _mix(mixer, rho, rho, (), (), ns_in=ns, ns_out=ns)
 
     mixed = np.asarray(mixed)
     assert mixed.shape == ns.shape
     assert np.iscomplexobj(mixed) == np.iscomplexobj(ns)
     assert mixed.dtype == ns.dtype
     assert mixed == pytest.approx(ns, rel=1e-6, abs=1e-7)
+
+
+@pytest.mark.parametrize("dtype", [np.float64, np.float32])
+@pytest.mark.parametrize("mode", ["anderson", "adaptive"])
+def test_the_tau_block_survives_the_mixer_in_either_precision(dtype, mode):
+    """``tau`` joins the packed vector under a meta-GGA, as ``kin_g`` does in
+    ``mix_type``, and it must come back in its own dtype.
+
+    The block is real and grid-shaped, so there is no ``view`` to get wrong the
+    way ``ns``'s was; what there is instead is the concatenation, which promotes
+    to the widest block present. Taking the promoted buffer back unchanged is
+    how a float32 run silently acquires a float64 ``tau``, which is the same
+    hardcoded-dtype violation one step along.
+    """
+    import numpy as np
+
+    from defumat.scf.driver import _mix
+
+    rng = np.random.default_rng(20260920)
+    tau = rng.normal(size=(2, 4, 4, 4)).astype(dtype)
+    rho = rng.normal(size=(2, 4, 4, 4))
+    mixer = get_mixer(mode, **({"beta": 1.0} if mode == "anderson" else {}))
+    _, _, _, mixed = _mix(mixer, rho, rho, (), (), tau_in=tau, tau_out=tau)
+
+    mixed = np.asarray(mixed)
+    assert mixed.shape == tau.shape
+    assert mixed.dtype == tau.dtype
+    assert mixed == pytest.approx(tau, rel=1e-6, abs=1e-7)
+
+
+def test_the_tau_block_is_actually_mixed_and_not_carried_through():
+    """The guard has to fire: a mixer that ignored the block would pass the
+    round-trip above, since mixing anything with itself is the identity."""
+    import numpy as np
+
+    from defumat.scf.driver import _mix
+
+    rng = np.random.default_rng(7)
+    rho = rng.normal(size=(1, 4, 4, 4))
+    tau_in = rng.normal(size=(1, 4, 4, 4))
+    tau_out = tau_in + 0.25
+    mixer = get_mixer("anderson", beta=0.5)
+    _, _, _, mixed = _mix(mixer, rho, rho + 0.01, (), (),
+                          tau_in=tau_in, tau_out=tau_out)
+    mixed = np.asarray(mixed)
+    assert not np.allclose(mixed, tau_in), "tau was carried through unmixed"
+    assert not np.allclose(mixed, tau_out), "tau was replaced rather than mixed"
+    # Anderson's first step is ``in + beta (out - in)``, which is what a single
+    # history entry can be, so the value is pinned rather than only bracketed.
+    assert mixed == pytest.approx(tau_in + 0.5 * (tau_out - tau_in), abs=1e-12)
 
 
 # --------------------------------------------------------------------------

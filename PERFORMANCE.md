@@ -3764,7 +3764,7 @@ one core. Timed per call, warm:
 | `sum_band` (the density) | 148 ms | 200 ms |
 | `tau` from the states | — | **1125 ms** |
 | `v_of_rho` | 9.3 ms | 86 ms |
-| SCF iterations to `conv_thr = 1e-9` | 6 | 10 |
+| SCF iterations to `conv_thr = 1e-9` | 6 | **8** (10 before `tau` was mixed) |
 
 **`tau` is the cost, and it is 7.6x the density it sits beside.** It should be
 3x: it transforms `i(k+G) c_G` for three cartesian directions where the density
@@ -3785,11 +3785,31 @@ large, so a Newton polish after ~30 halvings would do, and libxc's Brent takes
 and fixed-length, which is what `lax.fori_loop` wants, and because it is a
 quarter of what `tau` costs.
 
-**Nothing else changes.** The Hamiltonian, the eigensolver and the mixer are
-untouched: mBJ is a multiplicative potential, so unlike an energy-carrying
-meta-GGA (TPSS, SCAN) it needs no `dE/dtau` term acting on the wavefunction and
-no `h_psi_meta` counterpart. What the functional costs is the two builds above
-and the 1.8x in iterations.
+**The Hamiltonian and the eigensolver are untouched**, which is most of what
+this functional costs and does not cost: mBJ is a multiplicative potential, so
+unlike an energy-carrying meta-GGA (TPSS, SCAN) it needs no `dE/dtau` term
+acting on the wavefunction and no `h_psi_meta` counterpart. What the functional
+costs is the two builds above and the iteration count in the table.
+
+**The mixer is no longer untouched, and that is where the iteration count came
+down (2026-09-20).** `tau` was recomputed from the output states and replaced
+rather than mixed, on a justification about `pw.x` that turned out to be false
+(`PLAN.md` P30); mixing it as `mix_type`'s `kin_g` is takes the same cell from
+**10 iterations to 8 at `conv_thr = 1e-9`, 11 to 8 at 1e-10 and 14 to 10 at
+1e-12**, so the factor over LDA goes from 1.8 to about **1.3**. At
+`mixing_beta = 0.3` it is larger still, **19 to 10**. The fixed point does not
+move: 1.266323329 eV against 1.266322354 at 1e-12.
+
+**There is no `pw.x` pair for this row and there cannot be**, which is the thing
+to say rather than leave to be noticed. `pw.x` reaches TB09 only through libxc,
+and then passes a zero Laplacian and never sets `c`, so what it runs under that
+name is Becke-Johnson and an iteration count against it would be a count for a
+different functional. The LDA column beside it is the only like-for-like
+comparison this table admits. A second caveat applies to an **LSDA** meta run
+even against `pw.x`'s BJ06: the two codes' `dr2` differ there by a factor of
+four, because `tauk_ddot` is written on `(up, down)` with a halving where the
+term here is written on `(total, magnetization)` so that the two spin regimes
+agree (`PLAN.md` P30).
 
 ## What spin-orbit and PAW add to the Tran-Blaha potential (P31-P33)
 
