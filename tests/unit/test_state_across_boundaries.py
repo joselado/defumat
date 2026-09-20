@@ -108,6 +108,59 @@ def test_for_spin_is_idempotent():
     assert once.spin_normalized and twice.spin_normalized
 
 
+def test_for_spin_puts_the_degeneracy_back_on_a_demotion():
+    """It halved on the way up and did nothing on the way down.
+
+    ``for_spin`` was one-way: it divided by ``degspin`` going to ``nspin = 2``
+    or 4 and returned an already-normalised set untouched going back to 1. A
+    demotion therefore handed an unpolarized run a k-set whose weights still
+    summed to **one**, so it integrated half the electrons -- and the failure
+    does not look like one, because the run converges and simply puts the Fermi
+    level somewhere else.
+
+    What reaches it is
+    :meth:`~defumat.system.builder.System.with_spin` on a **gamma-only** run or
+    a band path, whose branches return the existing set instead of rebuilding
+    it; a rebuilt set gets the factor fresh from its constructor. The flag is
+    what makes the inverse well defined, so the round trip is exact rather than
+    a second convention, and it stays idempotent in both directions.
+    """
+    system = _system()
+    raw = KPoints.automatic((2, 2, 2), (0, 0, 0), system.cell)
+    assert float(np.asarray(raw.weights).sum()) == pytest.approx(2.0)
+
+    polarized = for_spin(raw, 2)
+    assert float(np.asarray(polarized.weights).sum()) == pytest.approx(1.0)
+
+    back = for_spin(polarized, 1)
+    assert float(np.asarray(back.weights).sum()) == pytest.approx(2.0)
+    assert not back.spin_normalized
+    assert np.asarray(back.weights) == pytest.approx(np.asarray(raw.weights))
+
+    # Idempotent the other way too, and exact on the round trip.
+    assert float(np.asarray(for_spin(back, 1).weights).sum()) == pytest.approx(2.0)
+    assert np.asarray(for_spin(back, 2).weights) == pytest.approx(
+        np.asarray(polarized.weights)
+    )
+
+    # And the same on a spinor set, which is halved for the other reason.
+    spinor = for_spin(raw, 4)
+    assert float(np.asarray(spinor.weights).sum()) == pytest.approx(1.0)
+    assert float(np.asarray(for_spin(spinor, 1).weights).sum()) == pytest.approx(2.0)
+
+    # ...and the path that actually reaches it, end to end. A gamma-only set is
+    # the one ``with_spin`` returns rather than rebuilds, so it is where the
+    # missing inverse showed: promoted and demoted again, the weights have to
+    # come back to where they started.
+    text = _SILICON.replace("K_POINTS automatic\n 2 2 2 0 0 0", "K_POINTS gamma")
+    gamma = build_system(parse_pw_input(text))
+    promoted = gamma.with_spin(2, starting_magnetization=[0.3])
+    demoted = promoted.with_spin(1, starting_magnetization=[0.0])
+    sums = [float(np.asarray(s.kpoints.weights).sum())
+            for s in (gamma, promoted, demoted)]
+    assert sums == pytest.approx([2.0, 1.0, 2.0])
+
+
 def test_an_unpolarized_k_set_is_not_marked_normalized():
     """Or a set built for ``nspin = 1`` would skip the halving it needs later."""
     raw = KPoints.automatic((2, 2, 2), (0, 0, 0), _system().cell)

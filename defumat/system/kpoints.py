@@ -595,13 +595,40 @@ def for_spin(kpoints: "KPoints", nspin: int) -> "KPoints":
     normalised then; and nothing else about which k-set gets the factor has
     changed -- ``setup.f90`` applies ``degspin`` to ``wk`` whatever the sampling
     is, a Gamma-only run included.
+
+    **And it goes both ways**, which it did not used to. A *demotion* --
+    ``nspin = 2`` or 4 down to 1 -- hands this an already normalised set, and
+    returning it unchanged leaves the weights halved for a run that wants the
+    whole degeneracy, so the unpolarized calculation integrates half the
+    electrons. It is reached by :meth:`~defumat.system.builder.System.with_spin`
+    on a gamma-only run or a band path, whose branches return the existing set
+    instead of rebuilding it; a rebuilt set gets the factor fresh from its
+    constructor and never had the problem. The flag is what makes the inverse
+    well defined, so the round trip is exact rather than a second convention.
     """
-    if int(nspin) not in (2, 4) or kpoints.spin_normalized:
+    polarized = int(nspin) in (2, 4)
+    if polarized == bool(kpoints.spin_normalized):
         return kpoints
+    if polarized:
+        return dataclasses.replace(
+            kpoints,
+            weights=kpoints.weights / DEGSPIN,
+            spin_normalized=True,
+        )
+    # **And back again, which this did not used to do.** A demotion reaches
+    # here with a set that *is* normalised -- ``System.with_spin`` from
+    # ``nspin = 2`` or 4 down to 1, whose gamma-only and band-path branches
+    # return the existing set rather than rebuilding it -- and returning it
+    # untouched leaves every weight halved, so the unpolarized run it is handed
+    # to integrates **half the electrons**. The flag is what makes the inverse
+    # well defined: it says the factor was taken out, so it can be put back,
+    # and the function stays idempotent in both directions. A set built for
+    # ``nspin = 1`` in the first place carries ``spin_normalized = False`` and
+    # is still returned untouched.
     return dataclasses.replace(
         kpoints,
-        weights=kpoints.weights / DEGSPIN,
-        spin_normalized=True,
+        weights=kpoints.weights * DEGSPIN,
+        spin_normalized=False,
     )
 
 
