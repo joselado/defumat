@@ -5002,6 +5002,36 @@ sought in `(rho, tau)` jointly. That is what puts the `d v / d tau` block into
 the Jacobian, and that block runs through the implicit derivative of the
 Becke-Roussel inversion, which is why the `custom_jvp` is not optional.
 
+**`conv_thr` does not bound `tau` here and under `pw.x` it does (2026-09-20).** The
+justification written for the mixing loop -- "`tau` is replaced, not mixed, exactly as
+`mix_rho.f90` leaves `kin_r` alone" -- was read off the one file that does not mention
+`kin_r`, and it does not mention it because it works on `mix_type` objects through the
+helpers in `scf_mod.f90`, which do: `kin_g` is a field of `mix_type` (`:73`),
+`assign_scf_to_mix_type` copies it in (`:320-326`) and `mix_type_AXPY` scales it
+(`:443-447`), both under `IF (xclib_dft_is('meta') .OR. lxdm)`, and
+`assign_mix_to_scf_type` rebuilds `kin_r` from the mixed `kin_g` (`:368-375`). `pw.x` also
+**converges** on it: `rho_ddot:828` adds `tauk_ddot`, at `fac = e2 fpi / tpi^2`, the same
+weight the magnetization half carries, where `paw_ddot` two lines below is written and
+commented out. So the omission here is not QE's, unlike `becsum`'s.
+
+**Measured on `si2-tb09.in`, the audit's own criterion is met.** Computing the term
+`rho_ddot` would have added -- `tauk_ddot` of `tau_i - tau_{i-1}`, since nothing is mixed
+-- beside the `accuracy` each iteration reported: the run stops at iteration 10 on
+`accuracy = 8.412e-10` against `conv_thr = 1e-9`, and the omitted term there is
+**8.448e-10**, a ratio of **1.004**. Had it been in the sum, `dr2` would have read 1.686e-9
+and the run would not have stopped. Over the run the ratio ranges from 0.018 to 1.004
+after the first iteration, so the term is the same order as `dr2` throughout rather than
+being large only at the end.
+
+**What that is worth is one iteration, and one iteration is worth 0.04 meV.** The gap is
+what this functional is for, and the same cell gives **1.266361911 eV at `conv_thr = 1e-9`
+in 10 iterations, 1.266312244 at 1e-10 in 11, and 1.266322354 at 1e-12 in 14** -- so the
+run as it stops today is **3.96e-5 eV** from the converged answer, 3.1e-5 of the gap. The
+defect is real and the stopping test genuinely does not bound `tau`; what it costs on the
+one committed meta-GGA cell is four hundredths of a milli-electronvolt. A magnetic cell is
+where it would be worth more, `tau`'s two channels being what P30's own 65 per cent
+measurement is about, and there is no committed magnetic `tb09` input to measure it on.
+
 *Notebook 24.*
 
 

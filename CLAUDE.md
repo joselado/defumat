@@ -175,7 +175,16 @@ in `docs/features.tex`'s amber boxes.
   *is* `v_x`. The consequences are enforced rather than documented: `run_scf` warns that
   its total is not the value of anything it minimised, and every consumer of
   `forces/energy.py:energy_at` refuses. `tau` comes from the states and is **not mixed**,
-  exactly as `mix_rho.f90` leaves `kin_r` alone. Energy-carrying meta-GGAs (TPSS, SCAN,
+  which is this code's own choice and **not** QE's: the justification written here until
+  2026-09-20, "exactly as `mix_rho.f90` leaves `kin_r` alone", is false and was read off
+  the one file that does not mention `kin_r` because it operates on `mix_type` objects
+  through the helpers in `scf_mod.f90`, which do — `kin_g` is a field of `mix_type`
+  (`:73`), `assign_scf_to_mix_type` copies it in and `mix_type_AXPY` acts on it under
+  `IF (xclib_dft_is('meta'))`, and `assign_mix_to_scf_type` rebuilds `kin_r` from the
+  mixed `kin_g` (`:368-375`). `pw.x` also **converges** on it, `rho_ddot:828` adding
+  `tauk_ddot` at the magnetization half's weight, where `paw_ddot` two lines down is
+  written and commented out. So `conv_thr` here does not bound `tau` and under `pw.x` it
+  does. Energy-carrying meta-GGAs (TPSS, SCAN,
   M06L) are **not** in — their potential has a `dE/dtau` piece acting on the wavefunction.
 - **Van der Waals** (P27): Grimme's **D2** only, as a pair sum over the nuclei outside
   `v_of_rho`. The other four are **refused by name**, where QE's `set_vdw_corr` warns and

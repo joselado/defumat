@@ -5816,7 +5816,15 @@ def run_scf(
 
         previous_energy = total
         if tau_state is not None:
-            # Replaced, not mixed. See the Thomas-Fermi comment above.
+            # Replaced, not mixed, and that is this code's choice rather than
+            # QE's: ``mix_type`` carries ``kin_g`` under
+            # ``IF (xclib_dft_is('meta'))`` and ``assign_mix_to_scf_type``
+            # rebuilds ``kin_r`` from the mixed copy (``scf_mod.f90:368-375``),
+            # so ``pw.x`` mixes it. The comment here used to cite the
+            # Thomas-Fermi guess, which is about the *first* iteration and says
+            # nothing about the loop. What the choice costs is unmeasured, and
+            # its visible face is that ``accuracy`` below carries no
+            # ``tauk_ddot`` and so does not bound ``tau`` at all.
             tau_state = tau_out
         rho, becsum_state, ns_state = _mix(
             mixer, rho, rho_out, becsum_state, becsum_out,
