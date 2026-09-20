@@ -4278,6 +4278,79 @@ metals and P24c is the layer under it.
 
 *Notebook 20 extended.*
 
+**The `l = 1` tangent at `k + G = 0` was zero, and the two guards that cost it are each
+correct** (2026-09-20, `AUDIT-2026-09-20.md`'s `basis/gvectors.py:117`). A projector column
+is `Y_lm(qhat) f_l(|q|)` and both factors guard the origin by zeroing: `modulus` because
+`sqrt` has an infinite derivative there, `real_spherical_harmonics` because a zero vector
+has no direction, and the primal is right either way because `f_l(0) = 0` kills the finite
+harmonic. **The product is what carries the derivative.** For `l = 1`, `f_1(q) -> c q` and
+`Y_1m(qhat) = sqrt(3/4pi) q_alpha/q`, so the product is `sqrt(3/4pi) c q_alpha`, a linear
+function of the *vector* `q` whose derivative is `sqrt(3/4pi) c`; the chain rule computes
+`Y df + dY f` with both terms zero. `l = 0` is genuinely flat and `l >= 2` genuinely
+vanishes, so `l = 1` is the only channel, and it is in almost every dataset.
+
+Measured on `si2-nosym.in` at Gamma, the `jvp` against a central difference of the same
+operator at a **frozen sphere**:
+
+| | before | after |
+|---|---|---|
+| `Gamma_1` x `Gamma_15` block, Frobenius over the axes | 0.16957 | **0.45892**, against a true 0.45892 |
+| ratio | 0.3695 | **1.0000** |
+| second `Gamma_1` x `Gamma_15` | 1.0461 | 1.0000 |
+| `Gamma_25'` x `Gamma_15`, silicon's own optical transition | 1.0000 | 1.0000 |
+| Gamma's `sum_vc` of `|v|^2/dE^3` | 1.435e-4 off | **1.489e-9** |
+| Gamma against the difference, `h = 2e-3` / `5e-4` | 0.13245 / 0.13245 | 2.11e-7 / **1.32e-8** |
+
+The blocks rather than the entries because `Gamma_15` is a degenerate triplet (rule D4).
+**It was not an underestimate**: the first `Gamma_1` state was 63 per cent low and the
+second 4.6 per cent high, the sign following the relative phase of `psi(G = 0)` and
+`<beta|psi>`. The `h`-independence is the tell -- truncation falls as `h^2` and this did not
+move at all, where after the repair Gamma falls as `h^2` exactly like the off-lattice
+control (1.89e-7 to 1.18e-8 on the same cell).
+
+**Three controls, and the third nearly hid it.** Off the reciprocal lattice the comparison
+is pure truncation. With a dataset carrying no `l = 1` projector (N2 with `N.pbe-hgh`) Gamma
+itself is clean, 4.43e-9 on a matrix of 0.89015. And at the default `nbnd = 4` **the whole
+matrix is 2.65e-7 and so is the discrepancy**: in diamond every matrix element of a vector
+operator among `Gamma_1` and `Gamma_25'` vanishes by symmetry, so the first run read a clean
+zero and looked like agreement. The term needs one partner with weight at `G = 0` and one an
+`l = 1` projector sees, which is a transition across the gap, so the check only exists above
+it.
+
+**What was never affected, checked rather than inherited from the audit's list.** The
+*diagonal*: no `m -> m` entry is above 1e-6 anywhere, because the term needs two different
+states, so a band velocity at Gamma was exact. And an effective mass at Gamma never
+evaluates `dH/dk` **at** Gamma -- P48's "a stencil must not contain its own centre" rule
+keeps the centre out, and the stencil sits at `delta = 0.025` 1/bohr against a guard at
+`|k+G|^2 = 1e-8`.
+
+**The repair is a `custom_jvp` whose primal is exactly zero.** `_origin_tangent`
+(`pseudo/projectors.py`) exists only to own a rule, and the rule fires on the rows
+`gvectors.ORIGIN_TOL` selects -- the same test `modulus` uses -- so a row is corrected **if
+and only if** it was guarded, which is why that threshold is public now. The number is
+`(-i) sign sqrt(3/4pi) f_1'(0)`, the axis and sign of each `l = 1` harmonic read off
+`real_spherical_harmonics` at the unit vectors rather than derived (`Y_1 = +c z`,
+`Y_2 = -c x`, `Y_3 = -c y`, the minus signs being `ylmr2`'s `-sent/sqrt(2)` surviving into
+the `m = 1` pair). `projector_origin_slopes` takes `lim f_l(q)/q^l` analytically on the same
+`kkbeta` range with the same Simpson weights as the transform it is the limit of, so the two
+agree by construction: **0.2291291689** against the table's 0.2291291689, and to 1.2e-9 or
+better for `l` up to 2 across a norm-conserving, an ultrasoft and a PAW dataset. It was
+written down wrong once, with `r^l` where `_beta_kernel` carries `r^(l+1)`, which reads
+0.2465 against 0.2291.
+
+**Nothing in the primal moves, and the stress was measured rather than argued.** The total
+energy, the eigenvalues, the forces and the stress are **bit-identical** on a
+norm-conserving, a mixed PAW-and-norm-conserving and an ultrasoft cell. The stress is the
+one derivative that reaches `modulus` through the *cell*, and it stays exact because
+`k + G = 0` scales to zero under any strain, so the tangent the rule fires on is itself zero
+there.
+
+**What is left is one order up.** `l = 2`'s second derivative at the origin is the same
+defect, and only the smooth factorisation -- a solid harmonic `|q|^l Y_lm` times
+`f_l(q)/q^l`, both differentiable at the origin -- reaches it. Nothing takes a second `k`
+derivative analytically today, so it is written down in `OPEN.md` Part XIV rather than
+built.
+
 ### P28a — A supercell is a regime, and it found two bugs. ✅ DONE.
 
 `defumat/scf/ewald.py`, `defumat/system/symmetry.py`, and

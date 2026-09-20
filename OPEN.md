@@ -4686,7 +4686,7 @@ against pre-existing rather than environment against session.
 
 # Part XIV -- measured and left open, 2026-09-20
 
-## 1. `dH/dk` at a reciprocal-lattice point is wrong on every `l = 1` channel
+## 1. `dH/dk` at a reciprocal-lattice point is wrong on every `l = 1` channel **[closed 2026-09-20, route A: the ratio goes 0.3695 to 1.0000 and no primal moves]**
 
 `AUDIT-2026-09-20.md`'s `defumat/basis/gvectors.py:117`, reproduced and
 measured rather than fixed, because the repair is a choice between two routes
@@ -4779,9 +4779,46 @@ test_the_velocity_at_gamma_matches_a_frozen_sphere_difference`, an
 fixed and forces this entry to move, with the off-lattice control passing beside
 it.
 
-**Two routes to the fix, and they differ in kind.**
+**Closed by route A, on the user's choice.** `_origin_tangent` in
+`pseudo/projectors.py` is a `custom_jvp` whose primal is exactly zero at every
+row and every `q`, so it exists only to own a rule; the rule fires on the rows
+`gvectors.ORIGIN_TOL` selects, which is the same test `modulus` uses, so a row
+is corrected **if and only if** it was guarded -- and the threshold is public
+now for that reason, two of them being enough to correct a row that was never
+guarded. After it:
 
-* **A, a `custom_jvp` on the column assembly** (`_species_columns` in
+| | before | after |
+|---|---|---|
+| `Gamma_1` x `Gamma_15` block | 0.16957 | **0.45892**, against a true 0.45892 |
+| ratio | 0.3695 | **1.0000** |
+| Gamma's `sum_vc \|v\|^2/dE^3` | 1.435e-4 off | **1.489e-9** |
+| Gamma against a difference, `h = 2e-3` / `5e-4` | 0.13245 / 0.13245 | 2.11e-7 / **1.32e-8** |
+
+so Gamma now falls as `h^2` like every other k-point (the off-lattice control
+is 1.89e-7 / 1.18e-8 on the same cell). **Nothing in the primal moves**: the
+total energy, the eigenvalues, the forces and the stress are bit-identical on a
+norm-conserving, a mixed PAW-and-norm-conserving and an ultrasoft cell. The
+stress is the one that had to be measured rather than argued, since it
+differentiates through `modulus` with respect to the *cell*; it is exact
+because `k + G = 0` scales to zero under any strain, so the tangent the rule
+fires on is itself zero there.
+
+`f_1'(0)` is taken analytically by `projector_origin_slopes`, on the same
+`kkbeta` range with the same Simpson weights as the transform it is the limit
+of, so the two agree by construction: **0.2291291689** against the table's
+0.2291291689, and to 1.2e-9 or better for `l` up to 2 across a norm-conserving,
+an ultrasoft and a PAW dataset. It was written down wrong once, with `r^l`
+where `_beta_kernel` carries `r^(l+1)`, which reads 0.2465 against 0.2291 --
+the test checks all three datasets and all three `l` for that reason.
+
+**Route B is not done and is the thing to reach for if a second `k` derivative
+ever appears.** Route A fixes the first derivative; `l = 2`'s second derivative
+at the origin is the same defect one order up, and nothing takes one today (the
+effective mass differences a `jvp`, on a stencil that excludes its centre).
+
+**The two routes, as they were put:**
+
+* **A, a `custom_jvp` on the column assembly** -- taken. (`_species_columns` in
   `pseudo/projectors.py`). The primal stays bit-identical everywhere; the
   tangent is patched only on rows with `|k+G|^2 < _TINY` and only for `l = 1`
   columns, by the closed form `(-i) sqrt(3/4pi) f_1'(0) e_alpha`. The slope is
