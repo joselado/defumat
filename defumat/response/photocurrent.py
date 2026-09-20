@@ -308,6 +308,23 @@ def generalized_derivative(energies, velocity, second, tol: float = DEGENERACY_T
     # :func:`band_velocity_difference`'s argument, which this used to make
     # without it while its sibling in ``shg`` made it with. One `vmap` because
     # the multiplet structure is a property of each k-point separately.
+    #
+    # **It is worth nothing measured, and that is recorded rather than
+    # assumed.** ``shg``'s four orders of magnitude on silicon's ``chi^(2)`` is
+    # a number about ``shg``'s assembly, and inheriting it here would be the
+    # "which machine does this refusal belong to" trap one door along. A/B on
+    # this assembly, 6x6x6 unshifted meshes, ``broadening = 0.01`` Ry as the
+    # multiplet tolerance: ``si2-nosym.in`` 2.261797e-09 and ``alas-raman.in``
+    # 1.142900e-04, **identical to the last bit** with the average and without
+    # it. The instrument could have said otherwise -- the same substitution
+    # moves a constructed threefold multiplet by 10.2 -- so the zero is a
+    # result and not a patch that failed to take. The likely reason is that a
+    # velocity diagonal vanishes by symmetry at the critical points where these
+    # two crystals are degenerate, which would make the average and the
+    # diagonal the same number there; that is an explanation that fits and it
+    # has not been checked, so it is written as one. What the change buys is
+    # that the answer no longer depends on which basis inside a multiplet the
+    # eigensolver returned, on a cell where that does make a difference.
     delta = jax.vmap(
         band_velocity_difference, in_axes=(0, 1, None), out_axes=1
     )(energies, velocity, tol)  # (3, nk, nb, nb)

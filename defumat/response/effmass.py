@@ -156,7 +156,11 @@ class EffectiveMass:
     multiplets: tuple
     #: ``(nspin, nbnd)``: ``||M - M^T|| / ||M||`` before symmetrisation. The
     #: tensor is a second derivative and so is symmetric exactly; what this
-    #: measures is the stencil's own error, and it is free.
+    #: measures is the stencil's own error, and it is free. **``nan`` for
+    #: ``method = "eigenvalue"``**, whose mixed difference writes the two
+    #: off-diagonal entries from one number, so the quantity is zero by
+    #: construction there and would read as a pass rather than as a null. That
+    #: route's stencil error is :attr:`truncation_by_spin`.
     asymmetry_by_spin: np.ndarray
     #: ``(nspin, nbnd)`` in 1/m_e: ``|M(h/2) - M(h)| / 3``, the ``O(h^2)``
     #: truncation the Richardson step removed, kept as an estimate of what is
@@ -347,7 +351,22 @@ def effective_mass(
     else:
         inverse_mass, truncation = tensors[0], None
 
-    asymmetry = _asymmetry(inverse_mass)
+    # ...but only where the route could have produced an asymmetric tensor.
+    # ``_by_eigenvalue`` writes ``curvature[a, b]`` and ``curvature[b, a]`` from
+    # one mixed second difference, so its tensor is symmetric by construction
+    # and ``||M - M^T||`` is identically zero on every cell, every centre and
+    # every step size. A diagnostic that returns the same clean zero across the
+    # whole family it is meant to discriminate reads as agreement rather than as
+    # silence, and nothing downstream can tell the two apart -- so the null is
+    # reported as ``nan`` rather than as a pass. There is no cheap repair: the
+    # four stencil points of the mixed difference are the *same set* under
+    # exchanging the labels, so the route has no second, independent estimate to
+    # be compared against. The honest statement is that this route's stencil
+    # error is measured by ``truncation_by_spin`` and not by this.
+    if method == "velocity":
+        asymmetry = _asymmetry(inverse_mass)
+    else:
+        asymmetry = np.full(inverse_mass.shape[:-2], np.nan)
     inverse_mass = 0.5 * (inverse_mass + np.swapaxes(inverse_mass, -1, -2))
 
     multiplets, refused = _multiplets(eigenvalues, inverse_mass, degeneracy_tol)

@@ -243,6 +243,31 @@ def test_the_truncation_is_reported_not_tuned_away(masses):
         assert np.all(np.isfinite(mass.truncation))
 
 
+def test_the_asymmetry_is_a_null_where_it_cannot_be_a_measurement(masses):
+    """One route measures the stencil's error with it and the other cannot.
+
+    ``||M - M^T||`` is free and is a real diagnostic for ``method="velocity"``,
+    which builds the two off-diagonal entries from different contractions. The
+    eigenvalue route writes both of them from **one** mixed second difference,
+    so its tensor is symmetric by construction and the quantity is identically
+    zero on every cell, every centre and every step size -- and a check whose
+    null result cannot be told from a pass is worse than no check, because
+    nothing downstream can tell the two apart. It is reported as ``nan``.
+
+    There is no cheap repair, which is why this is a null rather than a fix:
+    the four points of the mixed difference are the same set under exchanging
+    the labels, so the route has no second independent estimate to compare
+    against. What measures its stencil error is ``truncation``.
+    """
+    velocity = masses["velocity"].asymmetry_by_spin
+    assert np.all(np.isfinite(velocity))
+    assert np.all(velocity >= 0.0)
+
+    eigenvalue = masses["eigenvalue"].asymmetry_by_spin
+    assert np.all(np.isnan(eigenvalue))
+    assert eigenvalue.shape == velocity.shape
+
+
 def test_without_richardson_there_is_no_truncation_estimate(silicon):
     calculator, scf = silicon
     mass = effective_mass(
