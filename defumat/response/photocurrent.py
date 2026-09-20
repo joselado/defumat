@@ -126,6 +126,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -136,6 +137,7 @@ from defumat.system.kpoints import is_reduced
 
 __all__ = [
     "ShiftCurrent",
+    "band_velocity_difference",
     "dipole_matrix",
     "generalized_derivative",
     "shift_current",
@@ -237,6 +239,49 @@ def dipole_matrix(energies, velocity, tol: float = DEGENERACY_TOL):
     return -1j * _safe_ratio(jnp.asarray(velocity), gap[None], tol)
 
 
+def band_velocity_difference(energies, velocity, tol: float):
+    """``Delta^a_mn = v^a_mm - v^a_nn``, ``(3, nb, nb)``, in Ry bohr.
+
+    Elk's ``d(m, n, i)``, with **one thing added that Elk does not do and that
+    a plane-wave code cannot skip**: the diagonal is averaged over each
+    degenerate multiplet before the difference is taken.
+
+    ``Delta`` is built entirely out of the *diagonal* of an operator, and the
+    diagonal of an operator is not invariant under the unitary rotation a
+    degenerate eigensolver is free to apply inside a multiplet -- rule D4, and
+    P51's finding for the Drude weight one order up. What is invariant is the
+    multiplet's block trace, so each member takes the block's average, which is
+    what a symmetry-adapted basis would have given it and which reduces to
+    ``v^a_mm`` exactly wherever a band stands alone.
+
+    **It is worth four orders of magnitude and no symmetry check sees it.**
+    Silicon is centrosymmetric, so every part of ``chi^(2)`` must vanish; with
+    the bare diagonal the two ``Delta`` terms -- Eqs. (B12a) and (B16b), the
+    only two places ``Delta`` appears -- come out at **1499** and **238** on a
+    4x4x4 mesh where the other three sit at 0.09, and with the multiplet
+    average they fall to **0.10** and **0.055**, which is the same floor. The
+    high-symmetry points of the mesh are what does it: at ``Gamma`` silicon's
+    valence top is threefold degenerate, its block trace of ``v`` is zero by
+    symmetry, and an arbitrary basis inside it gives three nonzero diagonal
+    entries that cancel only in that sum.
+
+    Elk does not need this at 42x42x42 with a shifted mesh that misses the
+    symmetry points, which is why ``nonlinopt.f90`` has no counterpart to it
+    and why this is not a transcription bug.
+
+    Args:
+        energies: ``(nb,)`` in Ry -- what decides which bands are one multiplet.
+        velocity: ``(3, nb, nb)``, ``<n|dH/dk_a|m>`` in Ry bohr.
+        tol: bands closer than this in Ry are one multiplet. It is the
+            broadening, for :data:`DEGENERACY_TOL`'s reason.
+    """
+    diagonal = jnp.real(jnp.diagonal(jnp.asarray(velocity), axis1=-2, axis2=-1))
+    multiplet = (jnp.abs(energies[:, None] - energies[None, :]) < tol)
+    weight = multiplet.astype(diagonal.dtype)
+    averaged = (diagonal @ weight.T) / jnp.sum(weight, axis=1)[None, :]
+    return averaged[:, :, None] - averaged[:, None, :]
+
+
 def generalized_derivative(energies, velocity, second, tol: float = DEGENERACY_TOL):
     """``r^{c;a}_nm``, ``(3, 3, nk, nb, nb)`` indexed ``[a, c, k, n, m]``, in bohr^2.
 
@@ -257,8 +302,15 @@ def generalized_derivative(energies, velocity, second, tol: float = DEGENERACY_T
 
     gap = energies[:, :, None] - energies[:, None, :]  # w_nm
     g = _safe_ratio(velocity, gap[None], tol)  # v^a_nm / w_nm, = i r^a_nm
-    diagonal = jnp.real(jnp.diagonal(velocity, axis1=-2, axis2=-1))  # (3, nk, nb)
-    delta = diagonal[:, :, :, None] - diagonal[:, :, None, :]  # D^a_nm
+    # ``D^a_nm`` is built out of the *diagonal* of an operator, which is not
+    # invariant under the rotation a degenerate eigensolver is free to apply
+    # inside a multiplet -- rule D4, and the whole of
+    # :func:`band_velocity_difference`'s argument, which this used to make
+    # without it while its sibling in ``shg`` made it with. One `vmap` because
+    # the multiplet structure is a property of each k-point separately.
+    delta = jax.vmap(
+        band_velocity_difference, in_axes=(0, 1, None), out_axes=1
+    )(energies, velocity, tol)  # (3, nk, nb, nb)
 
     rows = []
     for a in range(3):

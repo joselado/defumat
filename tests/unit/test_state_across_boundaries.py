@@ -364,3 +364,44 @@ def test_qcutz_is_refused_rather_than_ignored():
 def test_a_zero_qcutz_is_not_asked_for():
     """QE's own sentinel is ``qcutz > 0``, so the default must pass through."""
     assert _system(", qcutz = 0.0").ecutwfc == 12.0
+
+
+# --- a deformed cell, and the k-points that have to follow it ----------------
+
+def test_an_explicit_k_list_follows_a_deformed_cell():
+    """``with_cell`` carries a k-list in crystal coordinates, or it carries nothing.
+
+    :class:`~defumat.system.kpoints.KPoints` stores cartesian coordinates in
+    units of ``2 pi / alat``, which are *not* fixed under a deformation; the
+    crystal ones are, and ``with_cell``'s docstring says so. The conversion was
+    being made with the **new** cell on both sides, which is
+    ``k_to_cartesian(k_to_crystal(k))`` -- the identity -- so an explicit list
+    kept the old reciprocal lattice's points and nothing about the run's shapes
+    changed to say so. It is a variable-cell relaxation's final SCF that
+    reaches this, and only for a ``K_POINTS crystal`` or ``tpiba`` card, since
+    an automatic grid goes down the other branch and is regenerated.
+
+    The two halves are the test: the crystal coordinates must be **unchanged**
+    and the cartesian ones must have **moved**. Asserting only the first passes
+    on the defect, because the identity leaves everything alone.
+    """
+    text = _SILICON.replace(
+        "K_POINTS automatic\n 2 2 2 0 0 0",
+        "K_POINTS crystal\n 3\n 0.00 0.00 0.00 1.0\n"
+        " 0.25 0.25 0.25 1.0\n 0.50 0.25 0.00 2.0",
+    )
+    system = build_system(parse_pw_input(text))
+    before_crystal = np.asarray(system.kpoints.crystal(system.cell))
+    before_cartesian = np.asarray(system.kpoints.coords)
+
+    # A uniaxial stretch, so the reciprocal lattice moves along one axis only
+    # and the expected shift is readable rather than a general rotation.
+    stretched = np.asarray(system.cell.at, dtype=float).copy()
+    stretched[2] *= 1.10
+    moved = system.with_cell(stretched)
+
+    after_crystal = np.asarray(moved.kpoints.crystal(moved.cell))
+    after_cartesian = np.asarray(moved.kpoints.coords)
+
+    assert after_crystal == pytest.approx(before_crystal, abs=1e-12)
+    assert np.max(np.abs(after_cartesian - before_cartesian)) > 1.0e-3

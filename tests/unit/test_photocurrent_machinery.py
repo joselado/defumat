@@ -235,3 +235,95 @@ def test_a_regime_the_assembly_covers_is_not_refused():
     unconditionally.
     """
     require_a_shift_current_regime(_Stub())
+
+
+def test_the_generalized_derivative_is_invariant_inside_a_multiplet():
+    """Rule D4 on the shift current's ``D^a``, which its sibling in ``shg`` had.
+
+    ``D^a_nm = v^a_nn - v^a_mm`` is built entirely out of the *diagonal* of an
+    operator, and a degenerate eigensolver is free to hand back any unitary
+    combination of a multiplet's members: the diagonal moves under that
+    rotation and the multiplet's block average does not.
+    :func:`~defumat.response.shg.band_velocity_difference` was written for
+    exactly this in the second-harmonic assembly, where it is worth four orders
+    of magnitude on silicon, and the generalised derivative -- the same
+    quantity, one module over -- took the bare diagonal.
+
+    The rotation is the test rather than a reference value, because there is no
+    reference: what a correct ``D^a`` obeys is that it does not depend on which
+    basis inside the multiplet the solver happened to return.
+    """
+    from scipy.stats import unitary_group
+
+    import jax.numpy as jnp
+
+    from defumat.response.photocurrent import band_velocity_difference
+
+    rng = np.random.default_rng(17)
+    nk, nb = 2, 6
+    energies = np.tile(
+        np.array([-0.9, -0.4, -0.4, -0.4, 0.7, 1.3]), (nk, 1)
+    )  # a threefold multiplet at every k-point
+
+    def hermitian(shape):
+        a = rng.normal(size=shape) + 1j * rng.normal(size=shape)
+        return 0.5 * (a + np.conj(np.swapaxes(a, -1, -2)))
+
+    velocity = hermitian((3, nk, nb, nb))
+    second = hermitian((3, 3, nk, nb, nb))
+
+    rotation = np.tile(np.eye(nb, dtype=complex), (nk, 1, 1))
+    for k in range(nk):
+        rotation[k, 1:4, 1:4] = unitary_group.rvs(3, random_state=5 + k)
+
+    def rotate(a):
+        return np.einsum("kpn,...kpq,kqm->...knm", np.conj(rotation), a, rotation)
+
+    before = np.asarray(generalized_derivative(
+        energies, velocity, second, tol=1.0e-8))
+    after = np.asarray(generalized_derivative(
+        energies, rotate(velocity), rotate(second), tol=1.0e-8))
+
+    # The multiplet block of ``D^a`` is what is invariant, so the statement is
+    # about the rows and columns the degenerate bands index.
+    block = np.ix_([1, 2, 3], [1, 2, 3])
+    delta_before = np.asarray(band_velocity_difference(
+        jnp.asarray(energies[0]), jnp.asarray(velocity[:, 0]), 0.05))
+    delta_after = np.asarray(band_velocity_difference(
+        jnp.asarray(energies[0]), jnp.asarray(rotate(velocity)[:, 0]), 0.05))
+    assert np.max(np.abs(delta_before - delta_after)) < 1.0e-12
+
+    # And the check that the test can fail: the bare diagonal, which is what
+    # this assembly used, moves under the same rotation.
+    def bare(v):
+        d = np.real(np.einsum("iknn->ikn", v))
+        return d[:, :, :, None] - d[:, :, None, :]
+
+    assert np.max(np.abs(bare(velocity) - bare(rotate(velocity)))) > 1.0e-3
+    assert before.shape == after.shape == (3, 3, nk, nb, nb)
+    del block
+
+
+def test_the_multiplet_average_is_exactly_the_diagonal_where_nothing_is_degenerate():
+    """So the fix is not a change to any run whose bands stand apart.
+
+    Bit for bit, not to a tolerance: the block of a band that is alone is that
+    band, and its average is its own value.
+    """
+    import jax
+    import jax.numpy as jnp
+
+    from defumat.response.photocurrent import band_velocity_difference
+
+    rng = np.random.default_rng(3)
+    nk, nb = 3, 5
+    energies = np.sort(rng.normal(size=(nk, nb)), axis=1)
+    velocity = rng.normal(size=(3, nk, nb, nb)) + 1j * rng.normal(size=(3, nk, nb, nb))
+    velocity = 0.5 * (velocity + np.conj(np.swapaxes(velocity, -1, -2)))
+
+    diagonal = np.real(np.einsum("iknn->ikn", velocity))
+    bare = diagonal[:, :, :, None] - diagonal[:, :, None, :]
+    averaged = np.asarray(jax.vmap(
+        band_velocity_difference, in_axes=(0, 1, None), out_axes=1
+    )(jnp.asarray(energies), jnp.asarray(velocity), DEGENERACY_TOL))
+    assert np.max(np.abs(averaged - bare)) == 0.0

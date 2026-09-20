@@ -525,11 +525,18 @@ class System(eqx.Module):
             lambda sys: (sys.cell.at, sys.structure.positions),
             self, (cell.at, positions),
         )
+        # ``self.cell`` is the cell the k-points' cartesian coordinates were
+        # written in, and it is the only place it still exists: ``moved`` has
+        # the new one. An explicit list is read in crystal coordinates with the
+        # old cell and written back with the new, and reading it with the new
+        # one makes the round trip the identity -- the list then keeps the old
+        # lattice's cartesian points, which is the thing this method exists to
+        # prevent.
         return dataclasses.replace(
-            moved, kpoints=moved._recelled_kpoints()
+            moved, kpoints=moved._recelled_kpoints(self.cell)
         )
 
-    def _recelled_kpoints(self) -> KPoints:
+    def _recelled_kpoints(self, previous: Cell | None = None) -> KPoints:
         """The k-set of :meth:`with_cell`'s new cell, at its own symmetry."""
         kpoints = self.kpoints
         if kpoints.path_length is not None or kpoints.gamma_only:
@@ -547,9 +554,14 @@ class System(eqx.Module):
             )
         else:
             # Crystal coordinates are what a deformation leaves alone; the
-            # cartesian ones this object stores are not.
+            # cartesian ones this object stores are not. So the list is read
+            # with the cell it was written in and put back with the new one --
+            # reading it with ``self.cell`` on both sides is
+            # ``k_to_cartesian(k_to_crystal(k))``, which is the identity and
+            # leaves the points on the old reciprocal lattice.
             rebuilt = KPoints.from_crystal(
-                np.asarray(kpoints.crystal(self.cell)),
+                np.asarray(kpoints.crystal(previous if previous is not None
+                                           else self.cell)),
                 np.asarray(kpoints.weights), self.cell,
                 precision=kpoints.precision,
             )
