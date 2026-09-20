@@ -406,3 +406,52 @@ def test_the_field_refusal_fires_before_the_regime_flags(pseudo_dir):
     with pytest.raises(NotImplementedError) as raised:
         require_a_sternheimer_regime(calculation)
     assert "magnetic field" in str(raised.value)
+
+
+# -- gamma-only storage, carried by one route and not by its transcription -----
+
+@pytest.mark.parametrize(
+    "entry, term",
+    [
+        ("forces", "force_us"),
+        ("stress", "stres_knl"),
+    ],
+)
+def test_the_transcribed_force_and_stress_refuse_gamma_storage(entry, term):
+    """The autodiff route carries the half-sphere rule and the transcription did not.
+
+    ``K_POINTS gamma`` stores one plane wave of each ``(G, -G)`` pair, so a sum
+    over the stored list is half the sum it looks like.
+    :func:`~defumat.forces.energy.energy_at` takes ``gamma_only`` as a static
+    argument and threads it through the kinetic term, the norms and the nonlocal
+    block; neither transcription contained the string at all, so ``force_us``
+    summed ``<beta|psi>`` and ``stres_knl`` summed ``|c_G|^2`` over half a
+    sphere and returned a force and a stress that are finite, correctly
+    symmetric and wrong by about a factor of two in those terms.
+
+    The guard is tested by *firing* it rather than by reading a clean zero: a
+    stub with ``gamma_only`` set is the whole input, since the refusal is the
+    first statement of each entry point and reads one attribute.
+    """
+    import types
+
+    from defumat.forces.analytic import analytic_forces
+    from defumat.stress.analytic import analytic_terms
+
+    entry_point = {"forces": analytic_forces, "stress": analytic_terms}[entry]
+    stub = types.SimpleNamespace(gamma_only=True, noncolin=False)
+    with pytest.raises(NotImplementedError) as raised:
+        entry_point(stub, None)
+    message = str(raised.value)
+    assert "gamma-only storage" in message
+    assert term in message
+    # The escape is exact and the message has to name it, since the refusal is
+    # otherwise a dead end on a cell that only fits in memory this way.
+    assert "K_POINTS automatic, 1 1 1 0 0 0" in message
+
+    # And it does not fire on an ordinary run, which is the half of a guard that
+    # a test asserting only the raise cannot tell from a guard that always fires.
+    ordinary = types.SimpleNamespace(gamma_only=False, noncolin=True)
+    with pytest.raises(NotImplementedError) as raised:
+        entry_point(ordinary, None)
+    assert "gamma" not in str(raised.value)

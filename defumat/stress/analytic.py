@@ -70,7 +70,7 @@ from jax.scipy.special import erf, erfc
 
 from defumat.basis.fft import r_to_g
 from defumat.basis.gradients import gradient
-from defumat.basis.gvectors import modulus
+from defumat.basis.gvectors import modulus, refuse_gamma_storage
 from defumat.pseudo.formfactors import local_potential_of_g
 from defumat.pseudo.potentials import structure_factors
 from defumat.pseudo.radial import simpson_weights, spherical_bessel
@@ -107,6 +107,16 @@ def analytic_terms(calculation, state) -> dict:
     **incomplete** -- the nonlocal pseudopotential is not among them, see the
     module docstring.
     """
+    refuse_gamma_storage(
+        bool(getattr(calculation, "gamma_only", False)),
+        "the analytic (transcribed) stress terms",
+        "stres_knl sums |c_G|^2 |k + G|^2 as a bare sum over the stored k + G "
+        "list (_kinetic), so the kinetic term comes back at roughly half its "
+        "value, where the autodiff route beside it carries the rule. The "
+        "dense-grid terms -- Hartree, local, exchange-correlation, the core "
+        "charge and the Ewald sum -- are unaffected, because only the "
+        "wavefunction sphere is halved and the dense G set stays whole",
+    )
     if calculation.noncolin:
         raise NotImplementedError(
             "the analytic stress expressions are written for nspin = 1 and "

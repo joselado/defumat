@@ -280,7 +280,7 @@ def run_sts(
     shift=None,
     kpoints=None,
     nbnd: int | None = None,
-    conv_thr: float | None = None,
+    conv_thr: float = 1.0e-6,
     k_batch: int | None | str = "default",
 ) -> STMSpectrum:
     """``dI/dV(r, V)``: a tunnelling spectrum at a point, a line or a plane.

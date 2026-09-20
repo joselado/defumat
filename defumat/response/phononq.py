@@ -970,7 +970,10 @@ def dynamical_matrix_at_q(
 
     kq, hamiltonians_kq, eigenvalues_kq, psi_kq = states_at_k_plus_q(
         calculation, potential.v_scf, q_cart,
-        nbnd=nbnd or np.asarray(wavefunctions).shape[2],
+        # ``jnp.shape`` rather than ``np.asarray(...).shape``: the second pulls
+        # the whole ground-state block to the host to read one integer, and JAX
+        # then keeps that host copy on the array for its lifetime.
+        nbnd=nbnd or jnp.shape(wavefunctions)[2],
     )
     two = TwoSphereSolver(solver, hamiltonians_kq, psi_kq, eigenvalues_kq, kq)
 

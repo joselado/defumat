@@ -223,32 +223,38 @@ def newton_krylov(
         norm = float(np.linalg.norm(r))
         length = 1.0
         for _ in range(4):
-            trial = x + length * direction
+            # ``taken`` is the length of the step ``trial`` actually is, which is
+            # not ``length`` once the loop has run out: the halving at the foot
+            # of the body moves ``length`` past the last point evaluated, so
+            # reporting ``length`` would name a step the solver never took.
+            taken = length
+            trial = x + taken * direction
             r_trial, psi_trial = evaluate(trial, warm)
-            if float(np.linalg.norm(r_trial)) < (1.0 - 1.0e-4 * length) * norm:
+            if float(np.linalg.norm(r_trial)) < (1.0 - 1.0e-4 * taken) * norm:
                 break
             length *= 0.5
         else:
-            # Four halvings and still no decrease. The shortest step is taken
-            # anyway rather than raising: the residual norm is not the quantity
-            # being converged (``accuracy_of`` is), and a Newton direction from
-            # an inexact inner solve can fail this test while still being an
-            # improvement in the measure that decides convergence. What must not
-            # happen is silence, so it is reported in ``history`` as
-            # ``step`` = 0.0625 and the caller can see the solver was crawling.
+            # Four halvings and still no decrease. The shortest step tried is
+            # taken anyway rather than raising: the residual norm is not the
+            # quantity being converged (``accuracy_of`` is), and a Newton
+            # direction from an inexact inner solve can fail this test while
+            # still being an improvement in the measure that decides
+            # convergence. What must not happen is silence, so it is reported in
+            # ``history`` as ``step`` = 0.125 and the caller can see the solver
+            # was crawling.
             pass
         x, r, psi = trial, r_trial, psi_trial
 
         accuracy = float(accuracy_of(r))
         converged = accuracy < conv_thr
         history.append(
-            {"iteration": iteration, "accuracy": accuracy, "step": length,
+            {"iteration": iteration, "accuracy": accuracy, "step": taken,
              "gmres": info, "steps": counters["steps"], "jvps": counters["jvps"],
              "seconds": time.perf_counter() - started}
         )
         if verbose:
             print(f"  newton {iteration:3d}   accuracy = {accuracy:.2e}   "
-                  f"lambda = {length:.3f}   F evaluations = {counters['steps']:4d}   "
+                  f"lambda = {taken:.3f}   F evaluations = {counters['steps']:4d}   "
                   f"jvps = {counters['jvps']:4d}   {history[-1]['seconds']:.1f}s",
                   flush=True)
 

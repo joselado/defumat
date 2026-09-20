@@ -433,24 +433,35 @@ def _frozen_density_response(calculation, solver, weights, ort=None):
         )
         return moved.augmented(to_dense(rho, smooth, dense), parts), parts
 
+    # Six evaluations, not nine. Both tangents a pair is differentiated along
+    # are symmetric under exchanging its labels -- ``strain_tangent`` returns
+    # ``(E_ab + E_ba)/2`` and :func:`orthogonality_states` writes ``out[a, b]``
+    # and ``out[b, a]`` as the same object -- so the transposed pair is not an
+    # approximation of this one, it is bit for bit this one, and running it is
+    # a third of the stage spent on an answer already in hand.
+    computed = {}
     grids, moved_grids = [], []
     parts_total = np.empty((3, 3), dtype=object)
     parts_moved = np.empty((3, 3), dtype=object)
     for a in range(3):
         row, moved_row = [], []
         for b in range(3):
-            tangent = strain_tangent(a, b)
-            rho_m, bec_m = jax.jvp(mixed, (zero, psi), (tangent, zero_states))[1]
-            if ort is None:
-                rho_t, bec_t = rho_m, bec_m
-            else:
-                rho_o, bec_o = jax.jvp(
-                    mixed, (zero, psi), (jnp.zeros((3, 3)), ort[a, b])
-                )[1]
-                rho_t = rho_m + rho_o
-                bec_t = tuple(
-                    None if x is None else x + y for x, y in zip(bec_m, bec_o)
-                )
+            pair = (min(a, b), max(a, b))
+            if pair not in computed:
+                tangent = strain_tangent(*pair)
+                rho_m, bec_m = jax.jvp(mixed, (zero, psi), (tangent, zero_states))[1]
+                if ort is None:
+                    rho_t, bec_t = rho_m, bec_m
+                else:
+                    rho_o, bec_o = jax.jvp(
+                        mixed, (zero, psi), (jnp.zeros((3, 3)), ort[pair])
+                    )[1]
+                    rho_t = rho_m + rho_o
+                    bec_t = tuple(
+                        None if x is None else x + y for x, y in zip(bec_m, bec_o)
+                    )
+                computed[pair] = (rho_t, bec_t, rho_m, bec_m)
+            rho_t, bec_t, rho_m, bec_m = computed[pair]
             row.append(rho_t)
             moved_row.append(rho_m)
             parts_total[a, b] = bec_t

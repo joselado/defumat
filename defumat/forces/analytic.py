@@ -44,6 +44,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.basis.fft import r_to_g
+from defumat.basis.gvectors import refuse_gamma_storage
 from defumat.forces.energy import reject_potential_only
 from defumat.scf.potential import (
     as_potential_components,
@@ -71,6 +72,17 @@ def analytic_forces(calculation, state):
     over, so a moved or strained one recompiles instead of answering at the old
     geometry.
     """
+    refuse_gamma_storage(
+        bool(getattr(calculation, "gamma_only", False)),
+        "the analytic (transcribed) forces",
+        "force_us contracts <beta|psi> and <beta|iG|psi> as bare sums over the "
+        "stored k + G list (_projector_force), where the autodiff route beside "
+        "it carries the rule through energy_at's gamma_only argument. The "
+        "dense-grid terms -- force_lc, force_cc, force_corr and the Ewald sum "
+        "-- are unaffected, because only the wavefunction sphere is halved and "
+        "the dense G set stays whole; it is the nonlocal term alone that is "
+        "wrong, and the total it enters with it",
+    )
     if calculation.noncolin:
         raise NotImplementedError(
             "forces for a noncollinear or spin-orbit calculation are not "
