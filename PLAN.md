@@ -489,6 +489,27 @@ limit of the `erf`-split integrand used for `q > 0`. QE's source says so in a co
 Getting it wrong shifts every eigenvalue by a constant (2.5 eV for silicon) while the
 calculation still converges beautifully.
 
+**The second trap, found 2026-09-20 and worth 2.4e-4 where it is reached.** QE's
+even-mesh Simpson closure is a set of *corrections to a running sum*, not a table of
+final weights: `simpsn.f90`'s loop runs to `mesh-1`, so `f(n-1)` already carries its
+`2/3` and the closure adds a whole `f(n-1) rab(n-1)` on top, reaching `3/3`.
+`simpson_weights` overwrote that slot with `1/3`, so every radial integral over an even
+number of points was short by `2/3 f(n-1) rab(n-1)`. The other three closure weights,
+`15/12`, `5/12` and the leading `1/3`, were right, and the function's own comment
+transcribed the closure correctly, which is what made the disagreement readable without
+running anything. *What reaches it:* `msh` is forced odd, so the local potential and the
+atomic charge never take the even branch; `kkbeta` does, and its parity is whatever the
+dataset makes it, so what the closure decides is `vkb` and the augmentation charge.
+Eleven of the committed files are even in `mesh` or in `kkbeta`, including **both nickel
+sets the magnetic runs use**, and the correction moves the nickel ultrasoft and PAW
+projector integrals by **2.4e-4** relative and the sg15 atomic charges by **6.1e-5** —
+against the 1e-4 the `kkbeta` docstring calls enough to ruin a total energy. **No
+validated reference number moves**: `Si.pz-vbc` and every cell the QE comparisons are
+taken on have an odd `kkbeta`. The check that catches it and shares no machinery with
+the weights is that they must integrate a constant exactly, `sum_i c_i = mesh - 1` for
+`rab = 1`, which the even branch failed by `2/3` and the odd branch passed
+(`tests/unit/test_pseudo.py`).
+
 **P4 — Hamiltonian and diagonalization. ✅ DONE.**
 `hamiltonian/operator.py` (kinetic + local via FFT + nonlocal, plus `apply_s`),
 `solvers/` — a name registry holding `davidson.py`, transcribed from `cegterg.f90`.
