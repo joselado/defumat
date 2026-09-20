@@ -63,6 +63,8 @@ __all__ = [
     "occupation_matrix",
     "projections",
     "spin_averaged_ns",
+    "spinor_ns_components",
+    "spinor_ns_from_components",
     "uniform_ns",
 ]
 
@@ -378,6 +380,53 @@ def spin_averaged_ns(ns) -> jnp.ndarray:
     return jnp.broadcast_to(jnp.mean(ns, axis=0, keepdims=True), ns.shape)
 
 
+def spinor_ns_components(ns):
+    """``(total, m)`` of a packed spinor ``ns`` -- charge and the Pauli vector.
+
+    The occupation matrix's counterpart of
+    :func:`~defumat.scf.continuation.spin_components`, one axis out: a density
+    at ``nspin_mag = 4`` is already stored on the Pauli basis, while ``ns`` is
+    stored as the four *spin pairs* of the matrix itself, so the decomposition
+    has to be done rather than read off.
+
+    ``total`` is ``Tr_spin rho = n_uu + n_dd`` and ``m`` is
+    ``(3, nslot, ldmx, ldmx)`` with ``m_a = Tr_spin(sigma_a rho)``, both of them
+    orbital matrices. **The packed pair is not the density matrix's index
+    order** -- ``ns[2 s1 + s2]`` is ``rho[s2, s1]``, which is the trap
+    :func:`initial_ns_noncollinear` documents at length -- so ``m_y`` is
+    ``i (ns[2] - ns[1])`` and not the other sign. This function and
+    :func:`spinor_ns_from_components` are the only two places that rule is
+    written, which is the point of having them.
+    """
+    ns = jnp.asarray(ns)
+    if ns.shape[0] != 4:
+        raise ValueError(
+            f"a spinor ns has 4 spin components and this one has {ns.shape[0]}")
+    # rho[0, 0], rho[1, 0], rho[0, 1], rho[1, 1]
+    uu, du, ud, dd = ns[0], ns[1], ns[2], ns[3]
+    return uu + dd, jnp.stack([du + ud, 1j * (ud - du), uu - dd])
+
+
+def spinor_ns_from_components(total, magnetization):
+    """The inverse of :func:`spinor_ns_components`: ``(n/2) I + (m/2) sigma``.
+
+    ``magnetization`` broadcasts against ``total``, so a single axis times a
+    scalar field is as good an argument as a full ``(3, ...)`` one.
+    """
+    total = jnp.asarray(total)
+    moment = jnp.broadcast_to(jnp.asarray(magnetization),
+                              (3,) + jnp.shape(total))
+    dtype = jnp.result_type(total, moment, 1j)
+    half = 0.5 * total.astype(dtype)
+    along = 0.5 * moment.astype(dtype)
+    # **Written out rather than conjugated.** ``m_x`` and ``m_y`` are themselves
+    # *orbital* matrices, Hermitian rather than real, so ``conj(m_x + i m_y)``
+    # is the transpose of the block that is wanted and not the block.
+    # ``ns[2 s1 + s2] = rho[s2, s1]``: index 1 is rho[1, 0], index 2 is rho[0, 1].
+    return jnp.stack([half + along[2], along[0] + 1j * along[1],
+                      along[0] - 1j * along[1], half - along[2]])
+
+
 def initial_ns_noncollinear(
     setup, starting_magnetization, angle1, angle2, per_atom=None
 ) -> jnp.ndarray:
@@ -406,7 +455,10 @@ def initial_ns_noncollinear(
     moment of ``-m`` along ``z`` is ``+m`` along ``-z``, which is the same
     state; doing both would undo it.
     """
-    ns = np.zeros((4, setup.nslot, setup.ldmx, setup.ldmx), dtype=complex)
+    # Plural, because ``total`` and ``moment`` are this loop's own per-species
+    # scalars: these are the whole field, one entry per slot and orbital.
+    charges = np.zeros((setup.nslot, setup.ldmx, setup.ldmx))
+    moments = np.zeros((3, setup.nslot, setup.ldmx, setup.ldmx))
     magnetization = np.asarray(starting_magnetization, dtype=float)
     theta = np.deg2rad(np.asarray(angle1, dtype=float))
     phi = np.deg2rad(np.asarray(angle2, dtype=float))
@@ -438,32 +490,24 @@ def initial_ns_noncollinear(
                 np.sin(theta[t]) * np.sin(phi[t]),
                 np.cos(theta[t]),
             ]) if t < len(theta) else np.array([0.0, 0.0, 1.0])
-        charge, spin = 0.5 * (major + minor), 0.5 * (major - minor)
-        # ``(n/2) I + (m/2) sigma . n``, whose eigenvalues are the two fillings.
-        block = charge * np.eye(2) + spin * np.array([
-            [axis[2], axis[0] - 1j * axis[1]],
-            [axis[0] + 1j * axis[1], -axis[2]],
-        ])
+        # The two fillings are the eigenvalues of ``(n/2) I + (m/2) sigma . n``,
+        # so what this loop writes is that charge and that moment; the block
+        # itself, and the packed-pair order it goes into, are
+        # :func:`spinor_ns_from_components`'s. **That order is the trap**: the
+        # entry at ``2 s1 + s2`` is ``rho[s2, s1]`` and not ``rho[s1, s2]``,
+        # because ``new_ns_nc`` accumulates
+        # ``conj(proj(m1, is1)) proj(m2, is2)``, which is
+        # ``<phi_{is2}| rho |phi_{is1}>`` -- the first label is the *ket*.
+        # Transposing a Hermitian block conjugates it, so getting it backwards
+        # leaves the charge, ``m_x`` and ``m_z`` untouched and seeds ``m_y``
+        # with the **opposite sign**, a starting texture that is a mirror image
+        # of the one asked for in one component only. It is written once, in
+        # that function, so this routine and the promotion in
+        # :mod:`defumat.scf.continuation` cannot disagree about it.
         for m in range(ldim):
-            for s1 in range(2):
-                for s2 in range(2):
-                    # ``block[s2, s1]`` and not ``block[s1, s2]``, because the
-                    # packed pair is **not** the density matrix's own index
-                    # order. ``new_ns_nc`` accumulates
-                    # ``conj(proj(m1, is1)) proj(m2, is2)``, which is
-                    # ``<phi_{is2}| rho |phi_{is1}>`` -- the first label is the
-                    # *ket* -- so the entry at ``2 s1 + s2`` is
-                    # ``rho[s2, s1]``. QE's own ``init_ns_nc`` writes it that
-                    # way round, its ``ns(2)`` being ``(m/2) sin(theta)
-                    # e^{+i phi}`` at the pair ``(is1, is2) = (1, 2)`` where
-                    # ``rho[1, 2]`` is ``e^{-i phi}``. Transposing a Hermitian
-                    # block conjugates it, so getting this backwards leaves the
-                    # charge, ``m_x`` and ``m_z`` untouched and seeds ``m_y``
-                    # with the **opposite sign** -- a starting texture that is
-                    # a mirror image of the one that was asked for, in one
-                    # component only.
-                    ns[2 * s1 + s2, slot, m, m] = block[s2, s1]
-    return jnp.asarray(ns)
+            charges[slot, m, m] = major + minor
+            moments[:, slot, m, m] = (major - minor) * axis
+    return spinor_ns_from_components(charges, moments)
 
 
 def initial_ns(setup, nspin: int, starting_magnetization, per_atom=None) -> jnp.ndarray:

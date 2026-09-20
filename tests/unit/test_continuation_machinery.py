@@ -9,6 +9,7 @@ approximating them, and that :meth:`System.with_spin` rebuilds the k-points
 instead of merely relabelling them.
 """
 
+import types
 import pathlib
 from functools import lru_cache
 
@@ -439,9 +440,108 @@ def test_demoting_a_spinor_ns_keeps_the_diagonal_and_refuses_a_canted_shell():
     assert np.allclose(back[0], np.real(ns[0])) and np.allclose(back[1], np.real(ns[3]))
 
     ns[1] = ns[2] = np.eye(3) * 0.3
-    with pytest.raises(NotImplementedError, match="off-diagonal spin blocks"):
+    with pytest.raises(NotImplementedError, match="off the axis z"):
         promote_ns(_result(np.zeros((1, 2, 2, 2)), 4, ns=ns),
                    _Hubbard(setup, nspin=2))
+
+
+def test_a_promoted_ns_points_where_the_target_asks_and_not_along_z():
+    """The promotion is a rotation, not only a reshape, and it was not.
+
+    ``promote_density`` and ``promote_becsum`` both turn the source's
+    magnetization onto the axis ``angle1``/``angle2`` name, and ``promote_ns``
+    dropped the two collinear channels into the two diagonal spin blocks
+    regardless -- a moment along ``z`` on a shell whose density had just been
+    laid along ``x``. Measured on fcc nickel (``U = 4.0`` eV, the converged
+    collinear ferromagnet carried into a noncollinear run with ``angle1 = 90``):
+    the density crossed with **0.491 mu_B along x** and the shell arrived with
+    **0.383 along z**, worth **30.7 mRy** of Hubbard splitting on the wrong
+    axis, 8 iterations against 2 to turn it -- and with ``mixing_fixed_ns = 10``
+    the run converged and reported success with the shell still on ``z``,
+    **4.11 mRy** above the right answer on a cell whose anisotropy is exactly
+    zero.
+
+    The cross-check is ``initial_ns_noncollinear``, which is what a *fresh* run
+    of the same target builds, on a direction with ``angle2 = 90`` so that
+    ``m_y`` is the whole of the transverse moment: ``sigma_x`` is symmetric, so
+    an axis in the ``xz`` plane cannot tell a transposed pack from a correct
+    one, and this is the object where that transpose has already been the bug
+    once (``test_the_seeded_occupation_matrix_is_qes_own_init_ns_nc``).
+    """
+    from defumat.hubbard.occupations import initial_ns, initial_ns_noncollinear
+    from defumat.scf.continuation import _SpinTransfer
+
+    setup = types.SimpleNamespace(
+        nslot=2, types=(0, 0), atoms=(0, 1), ldmx=5, noncolin=False,
+        species=(types.SimpleNamespace(ldim=5, occupation=8.0),),
+    )
+    theta, phi = np.deg2rad(90.0), np.deg2rad(90.0)
+    axis = (float(np.sin(theta) * np.cos(phi)), float(np.sin(theta) * np.sin(phi)),
+            float(np.cos(theta)))
+    collinear = np.asarray(initial_ns(setup, 2, [0.5]))
+    target = _Hubbard(setup, nspin=4)
+    promoted = np.asarray(promote_ns(
+        _result(np.zeros((1, 2, 2, 2)), 2, ns=collinear), target,
+        _SpinTransfer(source=2, target=4, mode="carry", direction=axis)))
+    fresh = np.asarray(initial_ns_noncollinear(
+        setup, starting_magnetization=[0.5],
+        angle1=[90.0], angle2=[90.0]))
+
+    # Hund's rule gives the same two fillings on both routes, so the promotion
+    # of a fresh collinear start *is* the fresh spinor start -- which is the
+    # statement that the continuation is no longer the odd path out.
+    np.testing.assert_allclose(promoted, fresh, atol=1e-15)
+    assert abs(promoted[1, 0, 0, 0].imag) > 0.1, "m_y is the whole moment here"
+
+    # ...and along z it is still the two diagonal blocks, to a round-off that
+    # the decomposition costs and nothing else does.
+    flat = np.asarray(promote_ns(
+        _result(np.zeros((1, 2, 2, 2)), 2, ns=collinear), target,
+        _SpinTransfer(source=2, target=4, mode="carry", direction=None)))
+    assert np.abs(flat[0] - collinear[0]).max() < 3.0e-16
+    assert np.abs(flat[3] - collinear[1]).max() < 3.0e-16
+    assert np.abs(flat[1]).max() == 0.0 and np.abs(flat[2]).max() == 0.0
+
+
+def test_demoting_a_shell_collinear_off_z_follows_the_density_axis():
+    """The same gap read backwards, and it was a refusal rather than a number.
+
+    ``_collinear_axis`` accepts a density collinear along any axis and rotates
+    it onto ``z``, while the occupation matrix's own test measured the
+    transverse pair in the *laboratory* frame -- so a DFT+U demotion from a
+    state collinear along ``x`` was refused where the identical non-Hubbard one
+    succeeded. The axis is the density's, sign included, so the shell's "up" is
+    the density's up.
+    """
+    from defumat.hubbard.occupations import spinor_ns_from_components
+    from defumat.scf.continuation import _SpinTransfer
+
+    setup = _Setup()
+    up = np.diag([0.9, 0.8, 0.7])[None] * np.ones((2, 1, 1))
+    down = np.diag([0.3, 0.2, 0.1])[None] * np.ones((2, 1, 1))
+    axis = (1.0, 0.0, 0.0)
+    ns = np.asarray(spinor_ns_from_components(
+        up + down, (up - down) * np.asarray(axis)[:, None, None, None]))
+    transfer = _SpinTransfer(source=4, target=2, mode="carry", project=axis)
+
+    back = np.asarray(promote_ns(_result(np.zeros((1, 2, 2, 2)), 4, ns=ns),
+                                 _Hubbard(setup, nspin=2), transfer))
+    assert not np.iscomplexobj(back)
+    np.testing.assert_allclose(back[0], up, atol=1e-15)
+    np.testing.assert_allclose(back[1], down, atol=1e-15)
+
+    # Without the axis it is the state this whole entry is about -- a shell
+    # lying off z -- and it is refused by name, as it was before.
+    with pytest.raises(NotImplementedError, match="off the axis z"):
+        promote_ns(_result(np.zeros((1, 2, 2, 2)), 4, ns=ns),
+                   _Hubbard(setup, nspin=2))
+
+    # And a genuinely canted shell is refused even with the axis, naming it.
+    canted = np.asarray(spinor_ns_from_components(
+        up + down, (up - down) * np.asarray([0.6, 0.0, 0.8])[:, None, None, None]))
+    with pytest.raises(NotImplementedError, match=r"off the axis \(1.0000"):
+        promote_ns(_result(np.zeros((1, 2, 2, 2)), 4, ns=canted),
+                   _Hubbard(setup, nspin=2), transfer)
 
 
 class _Setup:

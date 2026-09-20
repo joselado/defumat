@@ -70,6 +70,7 @@ def test_a_spinor_hubbard_run_resumes_from_its_own_checkpoint(pseudo_dir, tmp_pa
 #: collinear and a `rel-` dataset without spin-orbit coupling is refused by name.
 #: Nickel with `U = 4` and `J = 0.9`, ultrasoft, two atoms, one species.
 PROMOTION = "tests/data/qe/ni-kind1-force.in"
+TEXTURE = "tests/data/qe/ni-ldau-noncol.in"
 
 
 def test_a_collinear_hubbard_state_promotes_into_a_spinor_run(pseudo_dir):
@@ -140,3 +141,89 @@ def test_a_collinear_hubbard_state_promotes_into_a_spinor_run(pseudo_dir):
     # Both are the same physics; which local minimum a from-scratch spinor start
     # falls into is not something to pin.
     assert promoted.total_energy == pytest.approx(fresh.total_energy, abs=1e-4)
+
+
+def _shell_moment(ns):
+    """``(m_x, m_y, m_z)`` of one correlated shell, from a packed spinor ``ns``.
+
+    Written out here rather than imported, because what is being checked is the
+    direction the promotion put the moment in and the promotion's own decoder
+    would agree with it whatever it did. ``ns[2 s1 + s2]`` is ``rho[s2, s1]``.
+    """
+    uu, du, ud, dd = (np.asarray(ns)[i, 0] for i in range(4))
+    return np.array([float(np.real(np.trace(du + ud))),
+                     float(np.real(1j * np.trace(ud - du))),
+                     float(np.real(np.trace(uu - dd)))])
+
+
+def _direction(vector):
+    length = float(np.linalg.norm(vector))
+    return vector / length if length > 1e-12 else vector
+
+
+def test_a_promoted_shell_points_where_the_density_does(pseudo_dir):
+    """The correlated shell has to cross onto the same axis the charge does.
+
+    ``promote_density`` and ``promote_becsum`` rotate the source's
+    magnetization onto the axis ``angle1``/``angle2`` name and ``promote_ns``
+    wrote the two collinear channels into the two diagonal spin blocks
+    regardless, which is a moment along ``z``. On fcc nickel (``U = 4.0`` eV,
+    the converged collinear ferromagnet carried into ``angle1 = 90``) the
+    density crossed with **0.491 mu_B along x** and the shell arrived with
+    **0.383 along z**, worth **30.7 mRy** of Hubbard splitting on the wrong
+    axis.
+
+    **What that costs depends on whether the shell is free to turn, and both
+    cases are here.** Left free it turns, because the carried density's own
+    exchange field is along ``x`` and pulls it there, so what the defect costs
+    is iterations -- and the way to see them is that a global spin rotation is
+    free on a scalar-relativistic dataset, meaning that the continuation must
+    cost the same whatever axis is asked for. It did not: **2, 7 and 8**
+    iterations at ``angle1 = 0, 45, 90`` against 2, 2 and 2 after.
+
+    With ``mixing_fixed_ns = 10`` it is not a cost. That is QE's own variable
+    and the usual thing to set on a magnet with more than one solution: ``ns``
+    is held at its starting value, and the residual of that block is zero while
+    it is held (``electrons.f90:819-836`` resets the output to the input the
+    same way), so the run met ``conv_thr`` at iteration 6 without the freeze
+    ever being released. It reported success with the shell on ``z``, the
+    density on ``x``, and a total **4.11 mRy** above the right answer on a cell
+    whose anisotropy is exactly zero.
+    """
+    from pathlib import Path
+
+    text = Path(TEXTURE).read_text()
+    collinear = Calculator.from_text(
+        text.replace("noncolin = .true.", "nspin = 2")
+            .replace("angle1(1) = 0.0", "").replace("angle2(1) = 0.0", ""),
+        pseudo_dir, announce=False)
+    source = run_scf(collinear.system, collinear.pseudos, conv_thr=1e-8,
+                     mixing_beta=0.3, max_iterations=200, verbose=False)
+    assert source.converged and np.asarray(source.ns).shape[0] == 2
+
+    def promote(angle, **extra):
+        target = Calculator.from_text(
+            text.replace("angle1(1) = 0.0", f"angle1(1) = {angle}"),
+            pseudo_dir, announce=False)
+        out = run_scf(target.system, target.pseudos, conv_thr=1e-8,
+                      mixing_beta=0.3, max_iterations=200,
+                      starting_from=source, magnetization="carry",
+                      verbose=False, **extra)
+        assert out.converged, out.accuracy
+        return target, out
+
+    along_z, out_z = promote(0.0)
+    along_x, out_x = promote(90.0)
+    assert out_x.iterations == out_z.iterations, (
+        f"turning the requested axis by 90 degrees cost "
+        f"{out_x.iterations} iterations against {out_z.iterations} on the "
+        f"same state, and a global spin rotation is free here"
+    )
+
+    # Frozen, the shell cannot recover and the run says nothing about it.
+    _, frozen = promote(90.0, mixing_fixed_ns=10)
+    shell = _direction(_shell_moment(frozen.ns))
+    np.testing.assert_allclose(
+        shell, _direction(np.asarray(along_x.system.local_moments)[0]),
+        atol=1e-6)
+    assert frozen.total_energy == pytest.approx(source.total_energy, abs=1e-7)

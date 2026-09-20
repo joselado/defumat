@@ -267,3 +267,42 @@ def test_the_seeded_occupation_matrix_is_qes_own_init_ns_nc():
     )
     assert np.angle(up_down) == pytest.approx(phi, abs=1e-9)
     assert ns[2, 0, 0, 0] == pytest.approx(np.conj(up_down), abs=1e-12)
+
+
+def test_the_pauli_decomposition_of_a_spinor_ns_round_trips():
+    """The pack now has one owner, and the trap moved one step inside it.
+
+    ``spinor_ns_components`` and ``spinor_ns_from_components`` are what
+    ``initial_ns_noncollinear`` and the continuation's promotion both write
+    through, so the ``rho[s2, s1]`` rule the test above pins is stated once.
+    The step inside is that ``m_x`` and ``m_y`` are themselves *orbital*
+    matrices, Hermitian rather than real -- so the two off-diagonal spin blocks
+    are ``(m_x +/- i m_y)/2`` written out, and **not** one block and its
+    conjugate: conjugating a Hermitian matrix transposes it, which is the
+    orbital indices swapped and reads as agreement on every diagonal shell.
+    """
+    from defumat.hubbard.occupations import (
+        spinor_ns_components, spinor_ns_from_components)
+
+    rng = np.random.default_rng(17)
+    ldmx = 4
+    big = rng.normal(size=(2 * ldmx, 2 * ldmx)) + 1j * rng.normal(
+        size=(2 * ldmx, 2 * ldmx))
+    big = big + big.conj().T
+    rho = big.reshape(2, ldmx, 2, ldmx).transpose(0, 2, 1, 3)
+    ns = np.stack([rho[s2, s1] for s1 in range(2) for s2 in range(2)])[:, None]
+
+    total, moment = spinor_ns_components(ns)
+    back = np.asarray(spinor_ns_from_components(total, moment))
+    assert np.abs(back - ns).max() < 1.0e-15
+
+    # Each Pauli component is Hermitian in the orbital indices and none of them
+    # is symmetric, which is what makes the conjugate route wrong here and
+    # invisible on a diagonal starting matrix.
+    moment = np.asarray(moment)
+    for component in moment:
+        block = component[0]
+        assert np.abs(block - block.conj().T).max() < 1.0e-14
+        assert np.abs(block - block.T).max() > 0.1
+    naive = np.conj(0.5 * (moment[0] + 1j * moment[1]))
+    assert np.abs(naive - np.asarray(ns)[2]).max() > 0.1

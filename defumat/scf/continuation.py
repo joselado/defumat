@@ -80,7 +80,8 @@ from dataclasses import dataclass
 import jax.numpy as jnp
 import numpy as np
 
-from defumat.hubbard.occupations import ns_components
+from defumat.hubbard.occupations import (
+    ns_components, spinor_ns_components, spinor_ns_from_components)
 from defumat.scf.fields import VANISHING_MOMENT
 
 #: Above this, a spinor occupation matrix's off-diagonal spin blocks carry real
@@ -729,12 +730,14 @@ def promote_ns(result, calculation, transfer=None):
     **Crossing into a spinor is the same rule one axis further out**, and it is
     the density's own: decompose, decide, recompose. A spinor ``ns`` is
     ``(4, nslot, ldmx, ldmx)`` complex, the four entries being the spin pairs
-    ``(uu, ud, du, dd)``, so a collinear pair becomes the two *diagonal* blocks
-    with the off-diagonal ones zero -- the same shape ``initial_ns_noncollinear``
-    builds for a moment along ``z``. Coming back the other way keeps the
-    diagonal, which is exact only while the moment is along ``z``, so a
-    transverse block above :data:`TRANSVERSE_NS` is refused rather than dropped
-    silently.
+    ``(uu, ud, du, dd)``, so a collinear pair becomes a charge in both diagonal
+    blocks and a moment laid along **the target's own axis** -- the same
+    ``angle1``/``angle2`` direction ``initial_ns_noncollinear`` builds a fresh
+    start along, and the same one :meth:`_SpinTransfer.apply` turns the density
+    and ``becsum`` onto. Coming back the other way projects the moment onto the
+    axis the *density* is collinear along, so what is refused, above
+    :data:`TRANSVERSE_NS`, is the part of it that lies off that axis rather than
+    the part that lies off ``z``.
 
     This used to raise for **every** target with ``nspin = 4``, naming a blocker
     that P62b removed -- ``ns_nc`` is implemented and measured, 1.2e-7 Ry on
@@ -770,15 +773,33 @@ def promote_ns(result, calculation, transfer=None):
     # put a magnetization in any case, and ``_depolarize_ns`` is the identity
     # there.
     drop = transfer is not None and transfer.mode == "none"
-    converted = _convert_ns(ns, source, target, calculation)
+    converted = _convert_ns(ns, source, target, calculation, transfer)
     if converted is None:
         return None
     return _depolarize_ns(converted) if drop else converted
 
 
-def _convert_ns(ns, source, target, calculation):
+def _convert_ns(ns, source, target, calculation, transfer=None):
     """``ns`` reshaped from ``source`` channels to ``target``, magnetization and
     all. :func:`promote_ns` decides separately whether that magnetization stays.
+
+    **Crossing to or from a spinor is a rotation and not only a reshape**, which
+    is what this used to get wrong: the axis comes from the same
+    :class:`_SpinTransfer` the density and ``becsum`` are rotated with, so the
+    correlated shell and the charge it sits in point the same way in iteration
+    1. Writing the collinear pair into the two diagonal blocks regardless is a
+    moment along ``z``, and nothing in the SCF turns a moment -- measured on fcc
+    nickel (``U = 4.0`` eV, the converged collinear state carried into a
+    noncollinear run with ``angle1 = 90``), the density crossed with 0.491 mu_B
+    along ``x`` and the shell arrived with 0.383 along ``z``, worth 30.7 mRy of
+    Hubbard splitting on the wrong axis.
+
+    The rotation is the density's own rule one axis out -- decompose into charge
+    and a Pauli vector, turn the vector, recompose -- with
+    :func:`~defumat.hubbard.occupations.spinor_ns_from_components` owning the
+    packed-pair order, so this routine and ``init_ns_nc`` cannot drift apart. A
+    collinear round trip through it costs one ulp (2.2e-16 on occupations of
+    order 1), which is why ``1 -> 2`` and ``2 -> 1`` stay written out.
     """
     if source == target:
         return ns
@@ -789,29 +810,52 @@ def _convert_ns(ns, source, target, calculation):
     if source == 2 and target == 1:
         return jnp.mean(ns, axis=0, keepdims=True)
     if target == 4:
-        # ``(uu, ud, du, dd)``, packed as ``2 is1 + is2``. An unpolarized source
-        # puts the same block in both diagonal slots; a collinear one puts its
-        # two channels there. Complex, because a spinor ``ns`` is.
+        # An unpolarized source has the same block in both channels and no
+        # moment to turn; a collinear one lays ``up - down`` along the target's
+        # own axis. Complex, because a spinor ``ns`` is.
         up, down = (ns[0], ns[0]) if source == 1 else (ns[0], ns[1])
-        zero = jnp.zeros_like(up)
-        return jnp.stack([up, zero, zero, down]).astype(
-            jnp.result_type(up, 1j))
+        axis = _ns_axis(None if transfer is None else transfer.direction,
+                        jnp.ndim(up))
+        return spinor_ns_from_components(up + down, (up - down) * axis)
     if source == 4:
-        transverse = float(jnp.max(jnp.abs(ns[1])) + jnp.max(jnp.abs(ns[2])))
+        # The axis is ``transfer.project``, which :func:`_collinear_axis` read
+        # off the *density* -- including the sign it fixes there, so the shell's
+        # "up" is the density's. What is refused is the part of the moment that
+        # does not lie on it, which at ``project = None`` is the pair
+        # ``(m_x, m_y)``, so the old ``max|ns[1]| + max|ns[2]|`` test in another
+        # norm: both vanish exactly when ``ns[1]`` and ``ns[2]`` do.
+        total, moment = spinor_ns_components(ns)
+        axis = _ns_axis(None if transfer is None else transfer.project,
+                        jnp.ndim(total))
+        along = jnp.sum(axis * moment, axis=0)
+        transverse = float(jnp.max(jnp.abs(moment - axis * along)))
         if transverse > TRANSVERSE_NS:
+            named = "z" if transfer is None or transfer.project is None else (
+                "(" + ", ".join(f"{x:.4f}" for x in transfer.project) + ")")
             raise NotImplementedError(
-                f"this spinor occupation matrix has off-diagonal spin blocks of "
-                f"{transverse:.3e}, so its shell is not polarised along z and "
+                f"this spinor occupation matrix has {transverse:.3e} of its "
+                f"moment off the axis {named} that the density lies along, so "
                 f"there is no collinear ns that means the same thing. Demote to "
-                f"nspin = {calculation.nspin} from a run whose moment is along "
-                f"z, or start from init_ns (drop starting_from)"
+                f"nspin = {calculation.nspin} from a run whose shell is "
+                f"collinear, or start from init_ns (drop starting_from)"
             )
-        diagonal = jnp.real(jnp.stack([ns[0], ns[3]]))
+        diagonal = jnp.real(jnp.stack([total + along, total - along])) / 2.0
         return diagonal if target == 2 else jnp.mean(diagonal, axis=0,
                                                      keepdims=True)
     raise NotImplementedError(
         f"no ns promotion from {source} components to {target}"
     )
+
+
+def _ns_axis(direction, ndim: int):
+    """The axis an ``ns`` promotion rotates onto, shaped to broadcast.
+
+    ``None`` is ``z``, which is what :class:`_SpinTransfer` carries for a target
+    that needs no rotation and what a caller with no transfer at all gets.
+    """
+    values = (0.0, 0.0, 1.0) if direction is None else direction
+    return jnp.asarray(np.asarray(values, dtype=float)).reshape(
+        (3,) + (1,) * ndim)
 
 
 def promote_wavefunctions(result, calculation):
