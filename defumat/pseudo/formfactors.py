@@ -24,6 +24,7 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax.scipy.special import erf
 
 from defumat.pseudo.radial import simpson_weights, spherical_bessel
@@ -230,26 +231,44 @@ def projector_origin_slopes(pseudo: Pseudopotential, omega) -> jnp.ndarray:
     ``jnp`` throughout, for the reason :func:`projector_form_factors` gives:
     ``omega`` arrives as a tracer under a stress derivative.
     """
+    return FPI / jnp.sqrt(omega) * _origin_integrals(pseudo)
+
+
+def _origin_integrals(pseudo: Pseudopotential) -> jnp.ndarray:
+    """The cell-independent half of :func:`projector_origin_slopes`.
+
+    ``int dr (r beta)(r) r^(l+1) / (2l+1)!!`` for every projector, as **one**
+    matrix-vector product rather than a loop of them, because ``at_kcart``
+    rebuilds the projectors inside a ``jvp`` once per velocity call and the
+    dispatch count here is paid on a hot differentiable path.
+
+    **JAX and not numpy, although every array here is tabulated in a file.**
+    A stress derivative goes through ``Calculation.at_strain``, which sends the
+    whole calculation -- the pseudopotentials with it -- through a ``jvp``, so
+    ``pseudo.r``, ``pseudo.rab`` and every ``beta`` arrive as tracers with a
+    zero tangent. ``np.asarray`` of one of those is a
+    ``TracerArrayConversionError``, which is the same reason
+    :func:`projector_form_factors` is written in ``jnp``.
+    """
     cutoff = pseudo.kkbeta
+    if not pseudo.projectors:
+        return jnp.zeros((0,))
     r = jnp.asarray(pseudo.r[:cutoff])
     weights = simpson_weights(jnp.asarray(pseudo.rab[:cutoff]))
-    prefactor = FPI / jnp.sqrt(omega)
-    rows = []
-    for projector in pseudo.projectors:
-        l = projector.l
-        # (2l+1)!!, the leading coefficient of the spherical Bessel function.
-        factorial = 1.0
-        for odd in range(3, 2 * l + 2, 2):
-            factorial *= odd
-        beta = jnp.asarray(projector.beta[:cutoff])
-        # ``r ** (l + 1)`` and not ``r ** l``: ``j_l(qr)`` contributes ``r^l``
-        # and the transform carries an ``r`` of its own beside ``(r beta)``,
-        # which is the extra factor in ``_beta_kernel``'s integrand.
-        rows.append(
-            prefactor * jnp.sum(weights * beta * r ** (l + 1)) / factorial)
-    if not rows:
-        return jnp.zeros((0,))
-    return jnp.stack(rows)
+    # ``l`` is static -- it comes from the file's header, not from an array --
+    # so the powers and the double factorials are host constants.
+    ls = np.asarray([projector.l for projector in pseudo.projectors])
+    factorials = np.asarray([
+        float(np.prod(np.arange(3, 2 * l + 2, 2))) for l in ls
+    ])
+    beta = jnp.stack([
+        jnp.asarray(projector.beta[:cutoff]) for projector in pseudo.projectors
+    ])
+    # ``r ** (l + 1)`` and not ``r ** l``: ``j_l(qr)`` contributes ``r^l`` and
+    # the transform carries an ``r`` of its own beside ``(r beta)``, which is
+    # the extra factor in ``_beta_kernel``'s integrand.
+    powers = r[None, :] ** jnp.asarray(ls + 1)[:, None]
+    return (beta * powers) @ weights / jnp.asarray(factorials)
 
 
 def atomic_form_factors(pseudo: Pseudopotential, q, omega) -> jnp.ndarray:

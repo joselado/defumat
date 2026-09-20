@@ -32,12 +32,13 @@ import numpy as np
 from defumat.basis.gvectors import ORIGIN_TOL, GVectors, modulus
 from defumat.basis.planewaves import PlaneWaveBasis
 from defumat.pseudo.formfactors import (
-    projector_form_factors, projector_origin_slopes)
+    _origin_integrals, projector_form_factors)
 from defumat.pseudo.harmonics import real_spherical_harmonics
 from defumat.pseudo.upf import Pseudopotential
 from defumat.system.cell import Cell
 from defumat.system.kpoints import KPoints
 from defumat.system.structure import Structure
+from defumat.units import FPI
 
 __all__ = ["Projectors", "ProjectorCore", "build_projectors", "build_projector_core",
            "projector_channels"]
@@ -291,10 +292,10 @@ def build_projector_core(
         jnp.asarray(beta_of), jnp.asarray(lm_of),
         jnp.asarray((-1j) ** np.asarray(l_of)),
     )
-    # Adds exactly zero and owns the ``l = 1`` tangent at ``k + G = 0``, which
-    # the two origin guards drop between them. See :func:`_origin_tangent`.
+    # The identity, owning the ``l = 1`` tangent at ``k + G = 0`` that the two
+    # origin guards drop between them. See :func:`_with_origin_tangent`.
     axes, slopes = _origin_slopes(pseudos, channels_by_species, cell.volume)
-    columns = columns + _origin_tangent(kg, slopes, axes)
+    columns = _with_origin_tangent(columns, kg, slopes, axes)
 
     # One row per projector channel, in QE's order: atoms outermost, then the
     # channels of that atom's species.
@@ -367,9 +368,9 @@ def _species_columns(ylm, radial, beta_of, lm_of, l_phase):
 _P_AXIS = {1: (2, 1.0), 2: (0, -1.0), 3: (1, -1.0)}
 
 
-@partial(jax.custom_jvp, nondiff_argnums=(2,))
-def _origin_tangent(kg, slopes, axes):
-    """Zero, carrying the tangent the guarded product loses at ``k + G = 0``.
+@partial(jax.custom_jvp, nondiff_argnums=(3,))
+def _origin_tangent_rule(columns, kg, slopes, axes):
+    """``columns`` itself, carrying the tangent the origin guards lose.
 
     A projector column is ``Y_lm(qhat) f_l(|q|)`` and **both factors guard the
     origin by zeroing** -- :func:`~defumat.basis.gvectors.modulus` because
@@ -393,56 +394,99 @@ def _origin_tangent(kg, slopes, axes):
     axes), the worst entry being 0.13245 Ry bohr out of 1.0775, and it did not
     move with the step size. ``OPEN.md`` Part XIV has the controls.
 
-    **The primal is exactly zero, at every row and every ``q``**, so nothing
-    this returns can move a value: it exists only to own a ``jvp`` rule. The
-    rule fires on the rows :data:`~defumat.basis.gvectors.ORIGIN_TOL` selects,
-    which is the same test ``modulus`` uses, so a row is corrected if and only
-    if it was guarded. A **strain** derivative reaches it and gets nothing,
-    correctly: ``k + G = 0`` scales to ``0`` under any strain, so ``dkg`` is
-    zero on exactly those rows.
+    **The primal is the identity**, returned unchanged rather than added to, so
+    that no value can move for a structural reason rather than an arithmetic
+    one -- and so that the whole column array is not allocated a second time on
+    a path a 157-atom slab takes. The rule fires on the rows
+    :data:`~defumat.basis.gvectors.ORIGIN_TOL` selects, which is the same test
+    ``modulus`` uses, so a row is corrected if and only if it was guarded. A
+    **strain** derivative reaches it and gets nothing, correctly: ``k + G = 0``
+    scales to ``0`` under any strain, so ``dkg`` is zero on exactly those rows.
 
-    ``axes`` is one entry per column, ``(cartesian axis, is an l = 1 channel)``
-    packed as a static tuple; ``slopes`` carries
-    ``(-i) sign sqrt(3/4pi) f_1'(0)`` and is zero for every other column, so
-    the arithmetic is uniform and the branch is in the data.
+    ``axes`` is the cartesian axis of each column, packed as a static tuple;
+    ``slopes`` carries ``(-i) sign sqrt(3/4pi) f_1'(0)`` and is **zero for every
+    column that is not an ``l = 1`` channel**, so the arithmetic is uniform and
+    the branch lives in the data rather than in a mask.
     """
-    return jnp.zeros(kg.shape[:-1] + (len(axes),),
-                     dtype=jnp.result_type(kg, slopes, 1j))
+    return columns
 
 
-@_origin_tangent.defjvp
+@_origin_tangent_rule.defjvp
 def _origin_tangent_jvp(axes, primals, tangents):
-    kg, slopes = primals
-    dkg, _ = tangents
-    primal_out = _origin_tangent(kg, slopes, axes)
+    columns, kg, slopes = primals
+    dcolumns, dkg, _ = tangents
     if not axes:
-        return primal_out, jnp.zeros_like(primal_out)
+        return columns, dcolumns
     at_origin = jnp.sum(kg * kg, axis=-1) <= ORIGIN_TOL
     along = jnp.take(dkg, jnp.asarray(axes), axis=-1)
-    tangent = jnp.where(at_origin[..., None], along * slopes, 0.0)
-    return primal_out, tangent.astype(primal_out.dtype)
+    correction = jnp.where(at_origin[..., None], along * slopes, 0.0)
+    return columns, dcolumns + correction.astype(dcolumns.dtype)
+
+
+@partial(jax.jit, static_argnums=(3,))
+def _with_origin_tangent(columns, kg, slopes, axes):
+    """:func:`_origin_tangent_rule` under ``jit``.
+
+    **What this costs, measured rather than assumed**, because
+    ``build_projector_core`` runs eagerly and is rebuilt once per cartesian
+    direction inside a ``jvp``. One ``VelocityOperator.matrix_elements`` call,
+    median of 15 warm, on ``si-epsilon-unshifted`` (8 k-points, ``npwx = 360``):
+    **343 ms** with no correction at all, 389 ms with the ``custom_jvp``
+    boundary present and its rule trivial, 469 ms with the rule active, and
+    **465 ms** compiled -- so the cost is the boundary and its four array
+    operations rather than the dispatch, and ``jit`` buys 4 ms of it.
+
+    **It is a fixed cost per call and does not scale with the cell**, which is
+    what decides whether it matters: the same measurement on ``si2-nosym``
+    (64 k-points) is **1122.9 ms against 1149.7**, an overhead of 27 ms and
+    **2.4 per cent** where the eight-point cell paid 35. Precomputing the
+    slopes entirely -- the other candidate -- is worth 5 ms of the 125, so they
+    are not where the time goes.
+    """
+    return _origin_tangent_rule(columns, kg, slopes, axes)
 
 
 def _origin_slopes(pseudos, channels_by_species, volume):
-    """``(axes, slopes)`` for :func:`_origin_tangent`, one entry per column.
+    """``(axes, slopes)`` for :func:`_with_origin_tangent`, one per column.
 
-    ``slopes`` is ``(-i)^l sign sqrt(3/4pi) lim_{q->0} f_1(q)/q`` on an
-    ``l = 1`` channel and zero on every other, so the correction is inert
-    wherever the guarded product's tangent was right to begin with.
+    ``slopes`` is ``(-i) sign sqrt(3/4pi) lim_{q->0} f_1(q)/q`` on an ``l = 1``
+    channel and **zero on every other**, so the correction is inert wherever
+    the guarded product's tangent was right to begin with and the rule needs no
+    mask over channels.
+
+    **The signs are host arithmetic and the radial integrals are one batched
+    product**, since ``at_kcart`` rebuilds this inside a ``jvp`` once per
+    velocity call: a loop of JAX scalars here cost 1.30 ms per rebuild on
+    ``si-epsilon-unshifted`` against 1.01 ms like this. That is not where the
+    correction's cost is -- precomputing the whole thing saves 5 ms of 125 --
+    and it is written this way because the flat form is also the clearer one.
+    The integrals cannot go on the host, although every number in them is
+    tabulated: a stress derivative traces the whole calculation,
+    pseudopotentials included (see
+    :func:`~defumat.pseudo.formfactors._origin_integrals`).
     """
     root = float(np.sqrt(3.0 / (4.0 * np.pi)))
-    axes, slopes = [], []
+    offsets = np.cumsum([0] + [len(p.projectors) for p in pseudos])
+    axes, picks, coefficients = [], [], []
     for species, channels in enumerate(channels_by_species):
-        limits = projector_origin_slopes(pseudos[species], volume)
         for nb, l, lm in channels:
             if l != 1:
+                # A column the guards never cost anything: zero coefficient, and
+                # the index is a placeholder that the zero annihilates.
                 axes.append(0)
-                slopes.append(jnp.zeros((), dtype=jnp.result_type(limits, 1j)))
+                picks.append(0)
+                coefficients.append(0.0)
                 continue
             axis, sign = _P_AXIS[lm]
             axes.append(axis)
-            slopes.append((-1j) * sign * root * limits[nb])
-    return tuple(axes), jnp.stack(slopes)
+            picks.append(int(offsets[species]) + nb)
+            coefficients.append(-1j * sign * root)
+    if not axes:
+        return (), jnp.zeros((0,), dtype=complex)
+    table = jnp.concatenate([_origin_integrals(p) for p in pseudos])
+    slopes = (jnp.take(table, jnp.asarray(picks))
+              * jnp.asarray(np.asarray(coefficients, dtype=complex)))
+    return tuple(axes), slopes * (FPI / jnp.sqrt(volume))
 
 
 @jax.jit

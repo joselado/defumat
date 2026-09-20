@@ -258,8 +258,8 @@ def test_the_origin_slope_is_the_transform_of_the_same_table(pseudo_dir):
 def test_the_correction_adds_exactly_zero_to_every_primal(pseudo_dir):
     """It owns a ``jvp`` rule and nothing else, so no value may move.
 
-    ``_origin_tangent`` returns zeros at every row and every ``q``; the whole
-    repair is its custom rule. Measured across a norm-conserving, a mixed
+    ``_with_origin_tangent``'s primal is ``return columns``; the whole repair
+    is its custom ``jvp`` rule. Measured across a norm-conserving, a mixed
     PAW-and-norm-conserving and an ultrasoft cell, the total energy, the
     eigenvalues, the forces and the stress are **bit-identical** before and
     after. The stress is the one that had to be checked rather than argued: it
@@ -267,12 +267,16 @@ def test_the_correction_adds_exactly_zero_to_every_primal(pseudo_dir):
     exact because ``k + G = 0`` scales to zero under any strain, so the tangent
     the rule fires on is itself zero there.
 
-    This test is the cheap standing version of that: the column array with the
-    correction, and the same array with it removed, compared as arrays.
+    This test is the cheap standing version of that: the primal is compared
+    **byte for byte** with what was handed to it, which is the one comparison
+    that also separates ``-0.0`` from ``0.0`` and so would catch an earlier
+    draft of this that added an array of zeros instead. Beside it, the fact
+    that the rows the rule is about exist in this cell at all -- a zero that is
+    a statement about an empty set is the trap ``CLAUDE.md`` names.
     """
     from defumat import Calculator
-    from defumat.pseudo.projectors import _origin_slopes, _origin_tangent, \
-        projector_channels
+    from defumat.pseudo.projectors import (
+        _origin_slopes, _with_origin_tangent, projector_channels)
 
     calculator = Calculator.from_file(
         CASES / "si2-nosym.in", pseudo_dir=pseudo_dir, announce=False)
@@ -283,9 +287,14 @@ def test_the_correction_adds_exactly_zero_to_every_primal(pseudo_dir):
         [projector_channels(p) for p in calculator.pseudos],
         calculation.system.cell.volume,
     )
-    added = np.asarray(_origin_tangent(core.kg, slopes, axes))
-    assert added.shape[-1] == len(axes) and added.shape[:-1] == core.kg.shape[:-1]
-    assert np.count_nonzero(added) == 0
+    out = np.asarray(_with_origin_tangent(core.columns, core.kg, slopes, axes))
+    before = np.asarray(core.columns)
+    assert out.shape[-1] == len(axes)
+    # **Byte for byte, not ``allclose``.** The primal is ``return columns``,
+    # so the claim is identity rather than agreement, and comparing the raw
+    # bytes is the one comparison that also separates ``-0.0`` from ``0.0`` --
+    # which is exactly what adding a zeros array would have changed.
+    assert out.tobytes() == before.tobytes()
     # ...and the rows it is *about* exist in this cell, or the zero above is a
     # statement about an empty set.
     at_origin = np.asarray(np.sum(core.kg * core.kg, axis=-1)) <= 1.0e-8
