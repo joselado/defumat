@@ -53,9 +53,13 @@ def simpson_weights(rab) -> jnp.ndarray:
     if mesh % 2 == 1:
         coefficients[mesh - 1] = 1.0 / 3.0
     else:
-        # QE's even-mesh closure: ... + 2/3 f(n-3) + 15/12 f(n-2) + f(n-1) + 5/12 f(n)
+        # QE's even-mesh closure: ... + 2/3 f(n-3) + 15/12 f(n-2) + f(n-1) + 5/12 f(n).
+        # ``simpsn.f90`` runs its loop to ``mesh-1``, so ``f(n-1)`` already carries
+        # its 2/3 from the loop and the closure *adds* a whole term on top of it,
+        # reaching 3/3 -- the closure's three lines are corrections to the running
+        # sum rather than replacements, which is why two of them are ``+=``.
         coefficients[mesh - 3] -= 0.25 / 3.0
-        coefficients[mesh - 2] = 1.0 / 3.0
+        coefficients[mesh - 2] += 1.0 / 3.0
         coefficients[mesh - 1] = 1.25 / 3.0
 
     if isinstance(rab, (np.ndarray, list, tuple)):

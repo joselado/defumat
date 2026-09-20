@@ -11,6 +11,7 @@ from defumat.pseudo import (
     projector_form_factors,
     read_upf,
     simpson,
+    simpson_weights,
     spherical_bessel,
 )
 from defumat.pseudo.radial import RCUT
@@ -121,6 +122,84 @@ def test_simpson_integrates_a_known_function(silicon):
     """int_0^inf r^2 exp(-r) dr = 2, on the pseudopotential's own log mesh."""
     r, rab = silicon.r, silicon.rab
     assert float(simpson(r**2 * np.exp(-r), rab)) == pytest.approx(2.0, rel=1e-9)
+
+
+@pytest.mark.parametrize("mesh", [5, 6, 7, 8, 131, 602, 1141])
+def test_simpson_weights_integrate_a_constant_on_either_parity(mesh):
+    """``sum_i c_i rab_i`` is the mesh length in index space, exactly.
+
+    With ``rab = 1`` the integral of ``f = 1`` runs over ``mesh - 1`` unit
+    intervals whatever the rule is, so the weights summing to anything else is a
+    quadrature that does not integrate a constant. It is the one check on these
+    weights that shares no machinery with the way they are built, and the even
+    branch failed it by ``2/3`` while the odd branch passed: ``simpsn.f90``'s
+    loop runs to ``mesh-1``, so the even-mesh closure adds a whole
+    ``f(n-1) rab(n-1)`` on top of the ``2/3`` that point already carries, where
+    this overwrote it with ``1/3``.
+    """
+    weights = np.asarray(simpson_weights(np.ones(mesh)))
+    assert float(weights.sum()) == pytest.approx(mesh - 1, abs=1e-12)
+
+
+@pytest.mark.parametrize("closure", ["odd", "even"])
+def test_simpson_weights_are_simpsn_f90s_own_closure(closure):
+    """The weights against QE's ``simpsn.f90``, assembled the way it assembles them.
+
+    The Fortran accumulates ``fct`` of 4 or 2 over ``i = 2, mesh-1`` and then
+    adds its closure to the running sum, so the reference here is written the
+    same way round rather than as a table of final coefficients -- a table is
+    what drifted.
+    """
+    mesh = 11 if closure == "odd" else 12
+    reference = np.zeros(mesh)
+    for i in range(2, mesh):  # Fortran's DO i = 2, mesh-1, one-based
+        reference[i - 1] = 4.0 if i % 2 == 0 else 2.0
+    reference[0] += 1.0
+    if mesh % 2 == 1:
+        reference[mesh - 1] += 1.0
+    else:
+        reference[mesh - 3] -= 0.25
+        reference[mesh - 2] += 1.0
+        reference[mesh - 1] += 1.25
+    reference /= 3.0
+
+    rab = np.linspace(0.1, 1.3, mesh)
+    assert np.asarray(simpson_weights(rab)) == pytest.approx(reference * rab, rel=1e-14)
+
+
+def test_the_even_branch_is_reached_by_committed_datasets(pseudo_dir):
+    """Which of the shipped files integrate over an even number of points.
+
+    ``msh`` is forced odd, so the even branch is not reached through the local
+    potential or the atomic charge at all. It is reached through ``kkbeta``,
+    which is the largest of the projectors' own cutoffs and has whatever parity
+    it has -- so what the even closure decides is ``vkb`` and the augmentation
+    charge, on the ordinary path rather than in a tail. Eleven of the committed
+    datasets are even in ``mesh`` or in ``kkbeta`` and they include the two
+    nickel sets the magnetic runs use; the count is asserted so that a dataset
+    added later cannot quietly take this branch out of the suite.
+    """
+    even = [
+        path.name for path in sorted(pseudo_dir.glob("*.UPF"))
+        for pseudo in [read_upf(path)]
+        if pseudo.mesh % 2 == 0 or pseudo.kkbeta % 2 == 0
+    ]
+    assert "Ni.rel-pbe-spn-rrkjus_psl.1.0.0.UPF" in even
+    assert "Ni.pbe-nc-sg15.UPF" in even
+    assert len(even) >= 11
+
+    # And the branch is not a formality on them: what the closure decides is the
+    # weight of the last point, so it is worth something only where the
+    # integrand has not already died there. On the nickel ultrasoft set it has
+    # not -- the correction moved that dataset's projector integrals by 2.4e-4
+    # relative, against the 1e-4 the `kkbeta` docstring calls enough to ruin a
+    # total energy -- while `Si.pz-vbc`, and every cell the QE references are
+    # taken on, has an odd `kkbeta` and does not reach this branch at all.
+    nickel = read_upf(pseudo_dir / "Ni.rel-pbe-spn-rrkjus_psl.1.0.0.UPF")
+    last = nickel.kkbeta - 1
+    biggest = max(abs(float(p.beta[last])) for p in nickel.projectors)
+    assert biggest > 1e-3, "the projectors die before kkbeta, so the closure is moot here"
+    assert read_upf(pseudo_dir / "Si.pz-vbc.UPF").kkbeta % 2 == 1
 
 
 def test_atomic_charge_integrates_to_the_valence(silicon):

@@ -14,7 +14,12 @@ from defumat.pseudo.potentials import (
     structure_factors,
 )
 from defumat.pseudo.projectors import Projectors, build_projectors, projector_channels
-from defumat.pseudo.radial import mesh_cutoff_index, simpson, spherical_bessel
+from defumat.pseudo.radial import (
+    mesh_cutoff_index,
+    simpson,
+    simpson_weights,
+    spherical_bessel,
+)
 from defumat.pseudo.upf import AtomicOrbital, Projector, Pseudopotential, read_upf
 
 __all__ = [
@@ -35,6 +40,7 @@ __all__ = [
     "read_upf",
     "real_spherical_harmonics",
     "simpson",
+    "simpson_weights",
     "spherical_bessel",
     "starting_charge",
     "structure_factors",
