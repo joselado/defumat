@@ -447,7 +447,22 @@ def initial_ns_noncollinear(
         for m in range(ldim):
             for s1 in range(2):
                 for s2 in range(2):
-                    ns[2 * s1 + s2, slot, m, m] = block[s1, s2]
+                    # ``block[s2, s1]`` and not ``block[s1, s2]``, because the
+                    # packed pair is **not** the density matrix's own index
+                    # order. ``new_ns_nc`` accumulates
+                    # ``conj(proj(m1, is1)) proj(m2, is2)``, which is
+                    # ``<phi_{is2}| rho |phi_{is1}>`` -- the first label is the
+                    # *ket* -- so the entry at ``2 s1 + s2`` is
+                    # ``rho[s2, s1]``. QE's own ``init_ns_nc`` writes it that
+                    # way round, its ``ns(2)`` being ``(m/2) sin(theta)
+                    # e^{+i phi}`` at the pair ``(is1, is2) = (1, 2)`` where
+                    # ``rho[1, 2]`` is ``e^{-i phi}``. Transposing a Hermitian
+                    # block conjugates it, so getting this backwards leaves the
+                    # charge, ``m_x`` and ``m_z`` untouched and seeds ``m_y``
+                    # with the **opposite sign** -- a starting texture that is
+                    # a mirror image of the one that was asked for, in one
+                    # component only.
+                    ns[2 * s1 + s2, slot, m, m] = block[s2, s1]
     return jnp.asarray(ns)
 
 

@@ -67,8 +67,15 @@ def test_the_hubbard_shell_points_where_the_card_says(pseudo_dir):
 
     ns = np.asarray(calculation.starting_ns())
     for slot in range(setup.nslot):
-        block = np.array([[ns[0, slot, 0, 0], ns[1, slot, 0, 0]],
-                          [ns[2, slot, 0, 0], ns[3, slot, 0, 0]]])
+        # ``ns[2 s1 + s2]`` is ``rho[s2, s1]`` and not ``rho[s1, s2]``: the
+        # accumulation in :func:`~defumat.hubbard.occupations.occupation_matrix`
+        # is ``conj(proj[s1]) proj[s2]``, whose first label is the **ket**. So
+        # the entry read here as the up-down element is ``rho[1, 0]``, and
+        # ``m_y`` comes out with ``+2 Im`` rather than ``-2 Im``. This decoder
+        # used to use the seed's own (opposite) convention, which made the test
+        # a round trip through one mistake and blind to it.
+        block = np.array([[ns[0, slot, 0, 0], ns[2, slot, 0, 0]],
+                          [ns[1, slot, 0, 0], ns[3, slot, 0, 0]]])
         shell = np.array([
             2.0 * block[0, 1].real,
             -2.0 * block[0, 1].imag,
@@ -215,3 +222,48 @@ def test_a_collinear_card_reaches_the_hubbard_shell_too(pseudo_dir):
         for slot in range(setup.nslot)
     ])
     assert flat[0] == pytest.approx(flat[1])
+
+
+def test_the_seeded_occupation_matrix_is_qes_own_init_ns_nc():
+    """The packed pair is not the density matrix's index order, and it was.
+
+    ``new_ns.f90`` accumulates ``conj(proj(m1, is1)) proj(m2, is2)``, whose
+    first spin label is the **ket**, so ``nr(is1, is2)`` is
+    ``<phi_{is2}| rho |phi_{is1}> = rho[is2, is1]``, and it packs that as
+    ``i = 2 (is1 - 1) + is2``, which is this code's ``2 s1 + s2``.
+    ``initial_ns_noncollinear`` wrote ``rho[s1, s2]`` into that slot instead.
+    Transposing a Hermitian block conjugates it, so the charge, ``m_x`` and
+    ``m_z`` are untouched and ``m_y`` is seeded with the **opposite sign**: a
+    starting texture that is a mirror image of the one asked for, in one
+    component only, on a run that is forced to ``nosym`` and where this matrix
+    is the only steering there is.
+
+    The reference is QE's ``init_ns_nc`` closed form rather than a re-derivation
+    here, because a re-derivation shares the convention that is in question --
+    which is what the sibling test above was doing when it decoded the seed with
+    the seed's own index order and passed either way.
+    """
+    from defumat.hubbard.occupations import initial_ns_noncollinear
+
+    import types as _types
+
+    theta, phi = np.deg2rad(55.0), np.deg2rad(40.0)
+    setup = _types.SimpleNamespace(
+        nslot=1, types=(0,), atoms=(0,), ldmx=1,
+        species=(_types.SimpleNamespace(ldim=1, occupation=1.4),),
+    )
+    ns = np.asarray(initial_ns_noncollinear(
+        setup, starting_magnetization=[0.6],
+        angle1=[np.rad2deg(theta)], angle2=[np.rad2deg(phi)],
+    ))
+
+    # QE: ns(2) = (m/2) sin(theta) e^{+i phi} at the packed pair (is1, is2) =
+    # (1, 2), which is index 1 here, and ns(3) its conjugate at index 2.
+    up_down = ns[1, 0, 0, 0]
+    assert up_down.imag > 0.0, (
+        "the packed (up, down) entry must carry e^{+i phi}, which is QE's "
+        "ns(2); a negative imaginary part is rho[0, 1] written into rho[1, 0]'s "
+        "slot, and it is m_y with the wrong sign"
+    )
+    assert np.angle(up_down) == pytest.approx(phi, abs=1e-9)
+    assert ns[2, 0, 0, 0] == pytest.approx(np.conj(up_down), abs=1e-12)
