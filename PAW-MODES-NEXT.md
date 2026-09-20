@@ -195,8 +195,9 @@ refused by name now.
 **The practical gate this entry named is gone, and the mask it asked for was never needed**
 (`PLAN.md` P88 stage 9, 2026-09-20). The sizing was right that nothing has to be interpolated
 between two boxes and wrong that a mask was missing: the matrix element gathers onto the
-wavefunction sphere, so it reads `dV` only at `G'' - G + Q_d` with both `G` inside the
-`ecutwfc` sphere, and `|G'' - G| <= 2 sqrt(ecutwfc)` is the smooth sphere by definition. The
+wavefunction sphere, so it reads `dV` only at `(G'' - G) + Q_d` with both `G` inside the
+`ecutwfc` sphere, and `|(G'' - G) + Q_d| <= 2 sqrt(ecutwfc)` is a sphere in the ultracell's
+own reciprocal space -- the supercell's smooth sphere, which the dense box holds whole. The
 dense half is unreachable rather than wrongly included. Measured: truncating `dV` before the
 matrix element moves modulated PAW silicon at `ecutrho = 8 ecutwfc`, `N = 2`, by 1.3e-12 Ry,
 where zeroing it there moves 6.5e-4. Every number above is still at `ecutrho = 4 ecutwfc`,

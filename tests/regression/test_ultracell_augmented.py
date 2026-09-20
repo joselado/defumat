@@ -596,9 +596,13 @@ def test_the_dense_half_of_dv_cannot_reach_the_matrix_element(
     truncated to the smooth sphere, so an ultracell ``dV`` living on the dense
     box would carry a term neither the frozen eigenvalues nor the reference
     supercell has. The premise is right and the conclusion does not follow: the
-    gather reads ``dV`` only where two wavefunction spheres differ, and the
-    difference of two vectors inside the ``ecutwfc`` sphere is inside the
-    ``4 ecutwfc`` one, which is the smooth sphere itself.
+    gather reads ``dV`` only where two wavefunction spheres differ, at
+    ``(G'' - G) + Q_d`` with both ``G`` inside the ``ecutwfc`` sphere, and that
+    lies inside the ``4 ecutwfc`` sphere -- a sphere in the ultracell's own
+    reciprocal space, which is the supercell's smooth sphere and which the dense
+    box holds whole. The tiled *unit-cell* smooth sphere masked below is a
+    slightly different set, which is why the two arms agree at 1e-12 rather than
+    bit for bit.
 
     So truncating ``dV`` must change nothing, and the arm that truncates it is
     run here to say so with a number rather than with the argument alone. The

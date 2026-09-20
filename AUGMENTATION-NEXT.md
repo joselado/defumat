@@ -477,8 +477,9 @@ breaks the variational bound.
 other two (`PLAN.md` P88 stage 9, 2026-09-20): the refusal's premise was right and its
 conclusion did not follow. `h_psi` does truncate the potential to the smooth sphere, and the
 ultracell's matrix element cannot see the dense half either, because the gather reads `dV`
-only where two wavefunction spheres differ and the difference of two vectors inside the
-`ecutwfc` sphere is inside the `4 ecutwfc` one. Truncating `dV` before the matrix element
+only where two wavefunction spheres differ, and `(G'' - G) + Q_d` with both `G` inside the
+`ecutwfc` sphere lies inside the `4 ecutwfc` one -- which is the supercell's own smooth
+sphere, held whole by the dense box. Truncating `dV` before the matrix element
 moves a modulated PAW silicon ultracell at `ecutrho = 8 ecutwfc` by **1.3e-12 Ry** with the
 displaced blocks alive, where zeroing it there moves 6.5e-4, which is what says the probe was
 live. The **spinor** combination was written the same day (`PLAN.md` P88

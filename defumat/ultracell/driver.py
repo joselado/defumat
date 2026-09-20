@@ -454,12 +454,16 @@ def require_an_ultracell_regime(system, pseudos, basis) -> None:
     # a ``dV`` living on the dense box would give the matrix element a term
     # neither the frozen eigenvalues nor the reference supercell has. The
     # premise is right and the conclusion does not follow: the gather reads
-    # ``dV`` only where two wavefunction spheres differ, at ``G'' - G + Q_d``
-    # with both ``G`` inside the ``ecutwfc`` sphere, so ``|G'' - G| <= 2
-    # sqrt(ecutwfc)`` and that *is* the smooth sphere. The dense half of ``dV``
-    # is unreachable by the triangle inequality, which is the same argument
+    # ``dV`` only where two wavefunction spheres differ, at ``(G'' - G) + Q_d``
+    # with both ``G`` inside the ``ecutwfc`` sphere, so
+    # ``|(G'' - G) + Q_d| <= 2 sqrt(ecutwfc)`` -- a sphere in the *ultracell's*
+    # reciprocal space, which is the supercell's own smooth sphere, and the
+    # dense box holds every vector of it. The dense half of ``dV`` is
+    # unreachable by the triangle inequality, which is the same argument
     # ``basis.interpolate`` already makes for the unit cell -- "the high G
     # components dropped are ones no product of two wavefunctions can see".
+    # The tiled *unit-cell* smooth sphere is a slightly different set, which is
+    # why truncating to it measures 1.3e-12 rather than zero.
     # Measured rather than left as an argument: truncating ``dV`` to the tiled
     # smooth sphere moves a modulated PAW silicon ultracell at ``ecutrho = 8
     # ecutwfc`` by **1.3e-12 Ry** at ``N = 2`` with the displaced blocks alive,

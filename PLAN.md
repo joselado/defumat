@@ -17600,8 +17600,9 @@ that `h_psi` multiplies a wavefunction by the potential interpolated down to the
 sphere, so an ultracell `dV` living on the dense box would hand the matrix element a term
 neither the frozen eigenvalues nor the reference supercell has. **The premise is right and
 the conclusion does not follow.** The matrix element gathers onto the wavefunction sphere,
-so it reads `dV` only at `G'' - G + Q_d` with both `G` inside the `ecutwfc` sphere, and
-`|G'' - G| <= 2 sqrt(ecutwfc)` is the `4 ecutwfc` sphere -- the smooth one. It is the
+so it reads `dV` only at `(G'' - G) + Q_d` with both `G` inside the `ecutwfc` sphere, and
+`|(G'' - G) + Q_d| <= 2 sqrt(ecutwfc)` -- a sphere in the **ultracell's** reciprocal space,
+which is the supercell's own smooth sphere, and the dense box holds every vector of it. It is the
 argument `basis/interpolate.py` already makes for the unit cell ("the high G components
 dropped are ones no product of two wavefunctions can see"), carried one wavevector out, and
 the three lines the lift was sized at would have been a no-op.
@@ -17630,7 +17631,8 @@ agree, a lever a dual does not have. So a gap at a dual is read as a **differenc
 differences**, each side against its own unmodulated state, and that restores the picture.
 
 **The measurement, nine cases on the cluster** (`tools/cluster/ultracell_dual.py`, jobs
-`20350372`, `20350439` and `20350451`), `N = 2` against a real supercell under the same
+`20350372`, `20350439`, `20350451` and `20350537`; the PAW spinor row is read off its log,
+its own JSON having been lost to the abort the next paragraph describes and re-run since), `N = 2` against a real supercell under the same
 `0.05 cos(pi x_1)` Ry modulation, energies in Ry per unit cell:
 
 | case | `ecutrho` | supercell null offset | modulation energy above the supercell |
@@ -17641,14 +17643,18 @@ differences**, each side against its own unmodulated state, and that restores th
 | PAW, collinear | 8 | +2.1942e-6 | +1.072e-4, +5.508e-6, +1.060e-6, +4.281e-7 |
 | PAW, collinear | 12 | **+2.44e-8** | +1.069e-4, +5.243e-6, +7.950e-7, +1.633e-7 |
 | ultrasoft, spinor | 8 | +2.1961e-6 | +3.912e-5, +3.376e-6, +9.226e-8, -2.035e-7 |
+| PAW, spinor | 8 | +2.1930e-6 | +3.927e-5, +4.123e-6, +3.965e-7, -7.200e-8 |
 | Pt, spinor, `lspinorb` | 4 | +3.35e-8 | +3.095e-5, +1.553e-5, +5.246e-6 |
 | Pt, spinor, `lspinorb` | 8 | -9.42e-7 | +3.155e-5, +1.613e-5, +5.847e-6 |
 
 at `nbnd = 12, 24, 48, 96` collinear, `24, 48, 96, 192` spinor and `16, 24, 40` on platinum.
-**The three rows at `ecutrho = 4 ecutwfc` are the control and reproduce the committed
-ladders to every digit** -- stage 5's +1.07e-4, +4.46e-6, +4.82e-7 and +1.07e-4, +5.27e-6,
-+8.19e-7, and stage 6's platinum +3.092e-5, +1.549e-5, +5.211e-6 -- which is what says this
-script is the same measurement taken at a second pair of grids.
+**The three rows at `ecutrho = 4 ecutwfc` are the control**, and there the committed
+comparison is the *raw* gap, which is what stage 5 and stage 6 report: +1.0721e-4,
++4.4643e-6, +4.8240e-7 ultrasoft, +1.0693e-4, +5.2655e-6, +8.1909e-7 PAW and +3.0917e-5,
++1.5493e-5, +5.2122e-6 on platinum, against those stages' +1.07e-4, +4.46e-6, +4.82e-7,
++1.07e-4, +5.27e-6, +8.19e-7 and +3.092e-5, +1.549e-5, +5.211e-6 -- every digit, which is
+what says this script is the same measurement taken at a second pair of grids. The
+modulation column differs from the raw one there only by an offset of 1e-13 to 3e-8.
 
 **Three things to read off the table.** The **offset follows the boxes and not the dual**:
 at 12 the supercell picks `(64, 32, 32)`, which *is* the tiled box, and the offset falls
