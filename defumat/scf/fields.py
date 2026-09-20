@@ -331,15 +331,30 @@ def constraint_targets(
                 "is nothing per-atom for it to aim at"
             )
         targets = np.asarray(per_atom, dtype=float).reshape(-1, 3)
-        if constraint == "atomic fsm direction" and np.any(
-            np.linalg.norm(targets, axis=-1) <= VANISHING_MOMENT
-        ):
-            raise ValueError(
-                "constrained_magnetization = 'atomic fsm direction' with a zero "
-                "row in STARTING_MOMENTS: a zero vector carries no direction. "
-                "Give every atom a direction, or use 'atomic fsm' to fix the "
-                "lengths too"
-            )
+        if constraint == "atomic fsm direction":
+            modulus = np.linalg.norm(targets, axis=-1, keepdims=True)
+            if np.any(modulus <= VANISHING_MOMENT):
+                raise ValueError(
+                    "constrained_magnetization = 'atomic fsm direction' with a "
+                    "zero row in STARTING_MOMENTS: a zero vector carries no "
+                    "direction. Give every atom a direction, or use 'atomic "
+                    "fsm' to fix the lengths too"
+                )
+            # **Normalised, as 'atomic texture' normalises its own.** A
+            # ``STARTING_MOMENTS`` row is written in Bohr magnetons, so a unit
+            # target is the exception rather than the rule, and this scheme
+            # leaves the length free by design -- the length is not a target,
+            # only the direction is. The feedback did not care either way,
+            # because ``_orthogonalize`` divides by ``|x|^2``; what cared is
+            # :meth:`MagneticField.site_residuals`, which reads
+            # ``m . n / |m|`` as a cosine and gets ``|n| cos(theta)``. With
+            # ``|n| > 1`` the ``arccos`` clips to zero for every angle inside
+            # ``arccos(1/|n|)`` -- 60 degrees at ``|n| = 2`` -- so
+            # :meth:`satisfied` declares a texture converged while it is tens
+            # of degrees off; with ``|n| < 1`` it overstates the angle and the
+            # run never converges at all. Either way it is a residual that is
+            # not the angle it is printed as.
+            targets = targets / modulus
         return targets if noncollinear else targets[:, 2:3]
 
     if constraint == "atomic texture":

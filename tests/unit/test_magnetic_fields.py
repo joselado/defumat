@@ -992,3 +992,65 @@ def test_the_direction_feedback_never_pushes_along_the_target():
     step = np.asarray(field.feedback(rho, cell).atomic)
     assert abs(step[0, 2]) < 1e-13, "a direction field must not act along z"
     assert abs(step[0, 0]) > 1e-6, "and must act across it"
+
+
+def test_a_direction_target_is_normalised_before_it_is_read_as_a_cosine():
+    """``'atomic fsm direction'`` took its target's length into the angle.
+
+    A ``STARTING_MOMENTS`` row is written in Bohr magnetons, so a target of
+    length one is the exception rather than the rule, and this scheme leaves
+    the length free by design -- only the direction is a target. The targets
+    were nonetheless carried through unnormalised, and
+    :meth:`~defumat.scf.fields.MagneticField.site_residuals` reads
+    ``m . n / |m|`` as a cosine, which for a target of length ``|n|`` is
+    ``|n| cos(theta)``. With ``|n| = 2`` the ``arccos`` clips to zero for every
+    angle inside 60 degrees, so :meth:`~defumat.scf.fields.MagneticField.satisfied`
+    declares a texture converged while it is far from it; with ``|n| < 1`` the
+    angle is overstated and the run never converges.
+
+    The feedback never cared, because ``_orthogonalize`` divides by ``|x|^2``,
+    which is why nothing else in this file caught it.
+    """
+    from defumat.scf.fields import constraint_targets
+
+    def _direction_targets(per_atom):
+        """The scheme's targets as ``build_system`` would hand them over."""
+        return constraint_targets(
+            "atomic fsm direction", types=[0], starting_magnetization=[0.5],
+            angle1=[0.0], angle2=[0.0], fixed_magnetization=None, ntyp=1,
+            noncollinear=True, per_atom=per_atom,
+        )
+
+    for length in (2.0, 0.5):
+        targets = _direction_targets([[0.0, 0.0, length]])
+        assert np.linalg.norm(np.asarray(targets), axis=-1) == pytest.approx(1.0)
+
+    class _Regions:
+        def integrate(self, magnetization):
+            return jnp.stack([jnp.sum(magnetization, axis=(1, 2, 3))], axis=0)
+
+    cell = Cell.from_ibrav(1, [4.0, 0, 0, 0, 0, 0])
+    grid = (4, 4, 4)
+    m = np.zeros((4,) + grid)
+    # 30 degrees off z, which is inside the 60 the clip used to swallow.
+    m[1] = 0.5 * np.sin(np.deg2rad(30.0))
+    m[3] = 0.5 * np.cos(np.deg2rad(30.0))
+    rho = jnp.asarray(m)
+
+    field = MagneticField(
+        regions=_Regions(), uniform=jnp.zeros(3), atomic=jnp.zeros((1, 3)),
+        targets=jnp.asarray(_direction_targets([[0.0, 0.0, 2.0]])),
+        penalty=0.3, constraint="atomic fsm direction", fsm_update="elk",
+    )
+    residual = float(np.asarray(field.site_residuals(rho, cell))[0])
+    assert residual == pytest.approx(30.0, abs=1e-6)
+    assert not field.satisfied(rho, cell)
+
+    # ...and the falsifier: the unnormalised target reads it as exactly zero,
+    # so a test that only checked the repaired path would pass on the defect.
+    unnormalised = MagneticField(
+        regions=_Regions(), uniform=jnp.zeros(3), atomic=jnp.zeros((1, 3)),
+        targets=jnp.asarray([[0.0, 0.0, 2.0]]),
+        penalty=0.3, constraint="atomic fsm direction", fsm_update="elk",
+    )
+    assert float(np.asarray(unnormalised.site_residuals(rho, cell))[0]) == 0.0

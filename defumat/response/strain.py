@@ -454,7 +454,7 @@ def _frozen_density_response(calculation, solver, weights, ort=None):
                     rho_t, bec_t = rho_m, bec_m
                 else:
                     rho_o, bec_o = jax.jvp(
-                        mixed, (zero, psi), (jnp.zeros((3, 3)), ort[pair])
+                        mixed, (zero, psi), (jnp.zeros((3, 3)), ort[pair[0], pair[1]])
                     )[1]
                     rho_t = rho_m + rho_o
                     bec_t = tuple(

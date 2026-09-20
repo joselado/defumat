@@ -309,22 +309,25 @@ def generalized_derivative(energies, velocity, second, tol: float = DEGENERACY_T
     # without it while its sibling in ``shg`` made it with. One `vmap` because
     # the multiplet structure is a property of each k-point separately.
     #
-    # **It is worth nothing measured, and that is recorded rather than
-    # assumed.** ``shg``'s four orders of magnitude on silicon's ``chi^(2)`` is
-    # a number about ``shg``'s assembly, and inheriting it here would be the
-    # "which machine does this refusal belong to" trap one door along. A/B on
-    # this assembly, 6x6x6 unshifted meshes, ``broadening = 0.01`` Ry as the
-    # multiplet tolerance: ``si2-nosym.in`` 2.261797e-09 and ``alas-raman.in``
-    # 1.142900e-04, **identical to the last bit** with the average and without
-    # it. The instrument could have said otherwise -- the same substitution
-    # moves a constructed threefold multiplet by 10.2 -- so the zero is a
-    # result and not a patch that failed to take. The likely reason is that a
-    # velocity diagonal vanishes by symmetry at the critical points where these
-    # two crystals are degenerate, which would make the average and the
-    # diagonal the same number there; that is an explanation that fits and it
-    # has not been checked, so it is written as one. What the change buys is
-    # that the answer no longer depends on which basis inside a multiplet the
-    # eigensolver returned, on a cell where that does make a difference.
+    # **The spectrum is insensitive to ``D^a`` by construction, and that is a
+    # structural statement rather than a measurement on two cells.** ``v`` is
+    # Hermitian and ``delta`` is real, so the ``D``-dependent part of
+    # ``r^b_mn r^{c;a}_nm + r^c_mn r^{b;a}_nm`` is ``z + conj(z)``, and
+    # :func:`shift_integrand` takes the **imaginary** part of that sum. Measured
+    # at the worst k-point of AlAs's 6x6x6 mesh, band 86, where the velocity
+    # diagonal spreads by 1.31 Ry bohr inside a multiplet: this change moves
+    # ``delta`` by 1.24, moves ``r^{c;a}`` itself by **1.147e2 on 3.114e2, 37
+    # per cent**, and moves the integrand by **3.6e-12 on 3.6e3** -- the
+    # difference's own contribution has ``|Im| = 4.1e-13`` against
+    # ``|Re| = 66.0``, which is the cancellation written out.
+    #
+    # So what the change buys is that :func:`generalized_derivative`, which is a
+    # public entry point and is what the sum rule is validated against, no
+    # longer depends on which basis inside a multiplet the eigensolver returned.
+    # What it does not buy is any movement in ``sigma``, on this or any cell.
+    # ``shg``'s four orders of magnitude does not carry over, and the reason is
+    # not that these crystals are special: it is that ``chi^(2)`` has no
+    # ``Im`` around the pair.
     delta = jax.vmap(
         band_velocity_difference, in_axes=(0, 1, None), out_axes=1
     )(energies, velocity, tol)  # (3, nk, nb, nb)
