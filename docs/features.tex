@@ -708,16 +708,35 @@ has none, because nothing in the SCF breaks spin symmetry on its own and an
 unseeded promotion would converge back to the unpolarized solution and report
 success.
 
-A \code{HUBBARD} card comes along: the occupation matrix promotes with the
-density, a collinear pair going into the two \emph{diagonal} spin blocks of the
-spinor \code{ns} with the off-diagonal ones zero. That closes the staged route
-into a hard magnet --- converge the collinear antiferromagnet, promote it, let
-the moments cant --- and, because a spinor-to-spinor promotion is the same code
-path, the \textbf{checkpoint resume} of a noncollinear DFT+U run. Coming back
-the other way keeps the diagonal, which is exact only while the shell is
-polarised along $z$, so a transverse block above $10^{-8}$ is refused rather
-than dropped: the diagonal of a canted occupation matrix is a different state,
-not a coarser one.
+A \code{HUBBARD} card comes along, and the occupation matrix promotes the way
+the density does: it is decomposed into a charge and a Pauli vector, the vector
+is laid along the \emph{target's} own axis --- the \code{angle1}/\code{angle2}
+direction or the \code{STARTING\_MOMENTS} card, exactly what the charge and
+\code{becsum} are turned onto --- and the four spin pairs are rebuilt from the
+two. That closes the staged route into a hard magnet --- converge the collinear
+antiferromagnet, promote it, let the moments cant --- and, because a
+spinor-to-spinor promotion is the same code path, the \textbf{checkpoint
+resume} of a noncollinear DFT+U run. Coming back the other way, the moment is
+projected onto the axis the density is collinear along and the part of it that
+lies off that axis is \textbf{refused} above $10^{-8}$ rather than dropped: the
+diagonal of a canted occupation matrix is a different state, not a coarser one.
+
+\textbf{The shell and the charge have to cross onto the same axis, and until
+2026-09-20 only the charge did.} The pair was written into the two diagonal spin
+blocks whatever was asked for, which is a moment along $z$, so a run whose
+density crossed onto $x$ started with its correlated shell 90 degrees away from
+it. On fcc nickel at $U = 4.0$~eV the density arrived with 0.491~$\mu_B$ along
+$x$ and the shell with 0.383 along $z$, worth 30.7~mRy of Hubbard splitting on
+the wrong axis. Left free the shell turns, because the carried density's own
+exchange field pulls it, and what the mismatch costs is iterations --- a global
+spin rotation is free on a scalar-relativistic dataset, so the continuation must
+cost the same whatever axis is asked for, and it took 2, 7 and 8 iterations at
+\code{angle1} of 0, 45 and 90 against 2, 2 and 2 now. Under
+\code{mixing\_fixed\_ns} it is not a cost: the matrix is held at its starting
+value and the residual of that block is zero while it is held, so the run met
+\code{conv\_thr} before the freeze was released and reported success with the
+shell on $z$, the density on $x$, and a total 4.11~mRy above the right answer on
+a cell whose anisotropy is exactly zero.
 
 \code{magnetization} is how the moment crosses, on \code{run\_scf} and on
 \code{Calculator.with\_spin} and \code{with\_moments}. \code{'auto'} is the

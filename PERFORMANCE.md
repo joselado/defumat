@@ -1624,6 +1624,23 @@ thirty, because the magnetization is the slow variable and it is exactly what wa
 carried. Platinum is in between: the dataset changes with the spin-orbit coupling, so
 `becsum` is re-seeded and only the density crosses -- and that is still half the iterations.
 
+**A Hubbard `U` adds a row, and until 2026-09-20 it was the row that did not follow the
+rule.** The occupation matrix is not part of the charge and is promoted beside it, and it was
+laid along `z` whatever axis the target asked for, so a continuation onto another axis paid
+for turning a shell that should have crossed already pointing the right way. The instrument
+is an invariance rather than a tolerance -- a global spin rotation is free on a
+scalar-relativistic dataset, so the count must not depend on the angle:
+
+| fcc Ni, `U = 4.0` eV, 2 -> 4, `conv_thr = 1e-8` | before | after |
+|---|---|---|
+| `angle1 = 0` (the moment stays on `z`) | 2 | 2 |
+| `angle1 = 45` | 7 | **2** |
+| `angle1 = 90` (the moment onto `x`) | 8 | **2** |
+
+The collinear source itself takes 16 iterations, so what the defect cost is a third of the
+saving on every off-axis continuation. Under `mixing_fixed_ns` it was not a cost at all but a
+wrong answer, 4.11 mRy, which is `PLAN.md` P23b rather than this file.
+
 **What it costs is one promotion**, which is arithmetic on the dense grid: a decomposition
 into `(n, m)`, at most a 3x3 eigendecomposition to find an axis, and a recomposition. It is
 not measurable beside a diagonalisation. The wavefunctions cross as a span for the first

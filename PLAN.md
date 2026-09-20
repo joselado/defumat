@@ -2950,6 +2950,69 @@ converged run does not delete its last checkpoint: keying on it would make the s
 a test for each, and the first two fail against the old code.
 
 
+**The correlated shell crossed onto `z` whatever axis was asked for, and the charge beside
+it crossed onto the right one** (2026-09-20, `AUDIT-2026-09-20.md`'s `continuation.py:797`).
+`_SpinTransfer` is built once and applied to the density and to `becsum`, so both are turned
+onto the target's `local_moments` axis; `promote_ns` was handed the same transfer in P23b,
+but only for the *mode* decision -- carry, seed or none -- and the reshape half of the branch
+wrote the two collinear channels into the two diagonal spin blocks regardless, which is a
+moment along `z`. `initial_ns_noncollinear`'s own docstring is the statement of what that
+means, one line above the code that ignored it: **nothing in the SCF turns a moment.**
+
+On fcc nickel (`ni-ldau-noncol.in`, `U = 4.0` eV, the converged collinear ferromagnet carried
+into `angle1 = 90`) the density crossed with **0.491 mu_B along `x`** and the shell arrived
+with **0.383 along `z`**, worth **30.7 mRy** of Hubbard splitting on the wrong axis in the
+first Hamiltonian. **What that costs depends on whether the shell is free to turn, and the
+two answers are different in kind.**
+
+- *Free.* It turns, because the carried density's exchange field is along `x` and pulls it
+  there, so the converged state is the same to 1e-10 Ry and the defect is a cost. The
+  instrument that shows the cost is an invariance rather than a tolerance: a global spin
+  rotation is free on a scalar-relativistic dataset, so the continuation must cost the same
+  whatever axis is asked for. It did not -- **2, 7 and 8** iterations at `angle1 = 0, 45, 90`
+  against **2, 2 and 2** after.
+- *Frozen.* With `mixing_fixed_ns = 10` it is a wrong answer. `ns` is held at its starting
+  value and the residual of that block is zero while it is held -- `electrons.f90:819-836`
+  resets the output to the input the same way, so this is QE's semantics and not ours -- and
+  the run met `conv_thr` at iteration 6 without the freeze ever being released. It converged
+  and **reported success with the shell on `z` and the density on `x`**, at a total
+  **4.11 mRy** above the right answer, on a cell whose anisotropy is exactly zero.
+
+**The repair puts the packed-pair rule in one place, which is the point rather than a tidy
+consequence.** `ns[2 s1 + s2]` is `rho[s2, s1]` and not `rho[s1, s2]`, and getting it
+backwards seeds `m_y` with the opposite sign while leaving the charge, `m_x` and `m_z`
+untouched -- the defect closed three entries earlier in this same audit
+(`hubbard/occupations.py:450`), in this same object. A second hand-written pack is a second
+chance at it, so there is none: `spinor_ns_components` and `spinor_ns_from_components`
+(`hubbard/occupations.py`) are the decomposition and its inverse, `initial_ns_noncollinear`
+is rewritten through them **bit-identical** on three setups including a per-atom texture, and
+`_convert_ns` calls the same pair. The cross-check that says the continuation is no longer
+the odd path out is that the promotion of a Hund's-rule collinear start is now *exactly*
+`initial_ns_noncollinear`'s output for the same angles, checked at `angle2 = 90` because
+`sigma_x` is symmetric and an axis in the `xz` plane cannot tell a transposed pack from a
+correct one.
+
+**One trap inside the new primitive, invisible on every diagonal starting matrix.** `m_x` and
+`m_y` are themselves *orbital* matrices, Hermitian rather than real, so the two off-diagonal
+spin blocks are `(m_x +/- i m_y)/2` written out and **not** one block and its conjugate:
+conjugating a Hermitian matrix transposes it, which is the orbital indices swapped, and every
+starting `ns` in the tree is diagonal and would agree either way. The test builds a random
+Hermitian spinor `ns` whose orbital blocks are not symmetric and checks the conjugate route
+differs by 0.1.
+
+**The same gap read backwards was a refusal where the non-Hubbard path has a number.**
+`_collinear_axis` accepts a density collinear along any axis and rotates it onto `z`, while
+`_convert_ns`'s demotion measured the transverse pair in the *laboratory* frame -- so a DFT+U
+demotion from a state collinear along `x` was refused where the identical non-Hubbard one
+succeeded. What is refused now is the part of the moment lying off the axis the density lies
+along, which with no rotation is the pair `(m_x, m_y)` in another norm: both vanish exactly
+when `ns[1]` and `ns[2]` do, and the existing refusal still fires at the same 6.0e-1.
+
+A collinear round trip through the decomposition costs **one ulp**, 2.2e-16 on occupations of
+order 1 (`((a+b)+(a-b))/2` is not `a`), which is why `1 -> 2` and `2 -> 1` stay written out
+and why the no-rotation spinor case is asserted at 3e-16 rather than bit-exact.
+
+
 **P24 — Linear response by autodiff: the velocity operator, the Sternheimer equation,
 and the dielectric constant. ✅ DONE.** `defumat/response/` — `velocity.py`,
 `sternheimer.py`, `efield.py` — plus `Calculation.at_kcart`,

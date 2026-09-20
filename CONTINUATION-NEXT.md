@@ -13,6 +13,13 @@ than the one the phase measured; and the fresh-run sibling of the spiral guard, 
 at the door now and took `_common_direction`'s blindness to a `STARTING_MOMENTS` card
 with it.
 
+**Closed 2026-09-20:** the Hubbard occupation matrix crossed onto `z` whatever axis the
+target asked for, where the density and `becsum` beside it crossed onto the target's own.
+It is `PLAN.md` P23b's last section and it takes one row off the table at the foot of this
+file: a collinear DFT+U source promoted into a spinor target whose moments are **not** on
+`z` now has a number, 2 iterations at `angle1 = 0, 45, 90` alike against 2, 7 and 8, and a
+wrong answer of 4.11 mRy under `mixing_fixed_ns` before it.
+
 The state machinery itself is in good shape on the spin axis. What was closed in the same
 pass as this file is `PLAN.md` P23b: the spin spiral's rotated frame, `magnetization=`
 reaching the front door, the electron count that was never checked, a deformed cell refused
@@ -106,7 +113,10 @@ and it has never been run for any of these:
 
 - `U` switched on from a converged non-`U` run, and switched off again.
 - `U` crossing into `nspin = 4` together with `lspinorb`. P79 opened that promotion and
-  measured the `ns` shapes; the round trip as an identity is not in the table.
+  measured the `ns` shapes; the round trip as an identity is not in the table. The
+  **axis** half of it is now measured (the entry above), on a scalar-relativistic dataset
+  where a global spin rotation is free -- which is what makes the energy a usable check
+  there and is exactly what `lspinorb` takes away, so that row still has no number.
 - A spiral continued into a spiral at a neighbouring `q`, which is the one spiral case the
   new guards allow and the one a `q` sweep depends on.
 - A collinear source promoted into a planar spiral, which is the other allowed case.
