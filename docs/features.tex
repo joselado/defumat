@@ -1193,7 +1193,16 @@ report.
 \textbf{Kinds:} norm-conserving, \textbf{ultrasoft} and \textbf{PAW} --- the
 two-grid split, the augmentation charge, the overlap operator, self-consistent
 $D_{ij}$, and PAW's one-centre terms including its radial Poisson solve and
-spherical quadrature. UPF v2 is read.
+spherical quadrature. UPF v2 is read. \textbf{The kinds mix within one cell},
+which is an ordinary \code{pw.x} run and is now an ordinary one here: a
+norm-conserving species in a PAW cell has projectors and therefore rows of the
+$(n_{kb}, n_{kb})$ coefficient matrix, and it has no augmentation charge and no
+one-centre correction, so those rows stay zero and its bare $D_{ij}$ arrives
+through the same route it always did. Displaced silicon with
+\code{Si.pz-n-kjpaw\_psl.0.1.UPF} on one site and \code{Si.pz-vbc.UPF} on the
+other matches \code{pw.x} to \textbf{4.7e-9}~Ry and \textbf{1.15e-5}~Ry/bohr on
+a force of 0.0758 --- between the same cell run all-PAW (3.9e-7) and
+all-norm-conserving (2.0e-5), so each species keeps its own accuracy.
 
 \textbf{Functionals:} LDA (PZ), \textbf{PBE}, \textbf{revPBE}, \textbf{PBEsol},
 on the plane-wave grid and on the PAW spheres. The functional comes from the

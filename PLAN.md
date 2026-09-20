@@ -1286,6 +1286,42 @@ is a **projector** (`tests/unit/test_symmetrisation_projector.py`): `P(P x) = P 
 `{M_S}` is a representation, it needs no opinion about whose index convention is whose, and
 it fails by 1.9 on a result of size 1.4 when the pairing is wrong.
 
+**A PAW dataset beside a norm-conserving one crashed in the first iteration** (2026-09-20,
+`AUDIT-2026-09-20.md`'s `augmentation.py:239`). `pw.x` runs this combination with no
+complaint -- `okpaw = ANY(upf(1:ntyp)%tpawp)` (`setup.f90:119`) and `paw_onecenter.f90`
+loops `IF (upf(i%t)%tpawp)` per atom -- and nothing here refused it either, so the whole
+basis, the symmetry search and the first diagonalisation were paid for before
+`Calculation.onecenter` met a bare `AttributeError`. `block_matrix` dereferenced its blocks
+unconditionally: `blocks[0].dtype` when the norm-conserving species is listed first and
+`block.shape[-1]` when it is listed second, so the species order did not save it, and both
+were reproduced.
+
+The physics is one sentence and the repair is that sentence written down: **a norm-conserving
+species in a PAW run has projectors, so it owns `nh` rows of the `(nkb, nkb)` matrix, and it
+has no augmentation charge and no one-centre correction, so what belongs in those rows is
+zero** -- which is exactly what skipping the `None` leaves. Its bare `D_ij^(0)` reaches the
+Hamiltonian through `projectors.dij`, which `_newd` adds separately, so nothing is lost.
+
+*Check met*, on displaced silicon with `Si.pz-n-kjpaw_psl.0.1.UPF` on one site and
+`Si.pz-vbc.UPF` on the other (`tests/data/qe/si2-paw-nc.in`), against the vendored `pw.x` on
+the same input: the total energy to **4.7e-9 Ry** and the force to **1.15e-5 Ry/bohr** on a
+force of 0.0758. **The force is read through two controls rather than against a tolerance**,
+because a mixed cell has no accuracy of its own to expect: the same cell with both species
+PAW agrees to **3.9e-7** and with both norm-conserving to **2.0e-5**, so the mixed number
+lands between them and each species keeps its own. P15 records `<= 2e-5 Ry/bohr` for
+displaced silicon, which is the envelope all three sit in. The cell is displaced on purpose
+-- at the ideal positions the force is zero by symmetry on both sites, which is the residue
+trap and would have agreed whatever the augmentation did.
+
+**Why a routine with five consumers kept a gap this plain.** Three of them build blocks that
+can carry a `None`: `onecenter`, which is where the crash surfaced, `electrostriction`'s
+`dbecsum`, and `efield`'s, which writes `None` for a species with *no atoms*. Of the other
+two, `topology/augmentation.py` guards it itself by building a `(nat, 0, 0)` block, and
+`ultracell/augmentation.py`'s `_blocks_like` names this exact hazard in its own docstring --
+"`block_matrix` reads its dtype off the *first* block, so a norm-conserving species sitting
+first would decide it" -- and works around it per caller. So the one consumer that met the
+gap repaired its own call site instead of the routine, and the routine kept it.
+
 **P13 — Gradient-corrected functionals. ✅ DONE.** `xc/` restructured into QE's four
 independently chosen slots — local exchange, local correlation, and a gradient correction
 to each — behind a name registry (`xc/functional.py`), with `xc/gga.py` holding the PBE

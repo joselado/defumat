@@ -73,6 +73,15 @@ as of P100). The amber boxes of
 checked. The one thing neither sweep reaches is a path that runs on an augmented dataset
 and is quietly wrong, which is what `OPEN.md` is for.
 
+**And one thing that sentence itself does not reach**, found on 2026-09-20: a combination
+that is not refused, is not wrong, and **crashes**. Both sweeps look for a `raise` or a
+`warn`, so a path with neither is invisible to them by construction, and the case was a
+PAW dataset on one species beside a norm-conserving one on another -- an ordinary `pw.x`
+run, nothing here refusing it, and a bare `AttributeError` out of
+`AugmentationCharge.block_matrix` after the first diagonalisation had been paid for
+(`PLAN.md` P12). The sweep that would have caught it is the one nobody ran: **take the
+combinations the guards allow and run one of each.**
+
 Two definitions that matter for reading the table. `Calculation.is_ultrasoft` is
 `augmentation is not None`, which is **true for a PAW dataset as well**, so a guard
 written as `if calculation.is_ultrasoft: raise` refuses both. `Calculation.is_paw` is the
