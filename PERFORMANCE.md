@@ -5909,6 +5909,12 @@ so these are comparable to each other and to nothing else:
 | PAW silicon, collinear | 614 s | **609 s** | 620 s |
 | fcc platinum, `lspinorb` | 205 s | **233 s** | |
 | ultrasoft silicon, spinor | | 737 s | |
+| PAW silicon, spinor | | (1307 s) | |
+
+**The PAW spinor number is in brackets because it is not in the same units as the rest**:
+that case aborted on the mapping count and was re-run with `jax.clear_caches()` after every
+rung, which buys a recompilation per rung, so it is a case that survives rather than a case
+that was timed. The other eight are one compilation per shape as usual.
 
 **Silicon is flat to under one per cent and platinum pays 14 per cent**, which is the dense
 box growing from `(20, 20, 20)` to `(25, 25, 25)` on both cells while platinum's `nbnd` is

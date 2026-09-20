@@ -17631,8 +17631,9 @@ agree, a lever a dual does not have. So a gap at a dual is read as a **differenc
 differences**, each side against its own unmodulated state, and that restores the picture.
 
 **The measurement, nine cases on the cluster** (`tools/cluster/ultracell_dual.py`, jobs
-`20350372`, `20350439`, `20350451` and `20350537`; the PAW spinor row is read off its log,
-its own JSON having been lost to the abort the next paragraph describes and re-run since), `N = 2` against a real supercell under the same
+`20350372`, `20350439`, `20350451` and `20350537`; the PAW spinor case aborted after its
+primary ladder and was re-run, where every rung came back **bit for bit** what the log of
+the first run held), `N = 2` against a real supercell under the same
 `0.05 cos(pi x_1)` Ry modulation, energies in Ry per unit cell:
 
 | case | `ecutrho` | supercell null offset | modulation energy above the supercell |
