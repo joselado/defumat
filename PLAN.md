@@ -13169,6 +13169,33 @@ validated LSDA force by **6.1e-5 Ry/bohr** against a 5e-5 tolerance. A `jax.cust
 returning the exact first tangent off a `stop_gradient`ed primal is wrong differently: it
 corrupts the second derivative at *regular* points (-3.5306 to -2.0485).
 
+**The mask reached one order too far, and the stress is what said so (2026-09-21).**
+`spin_potential` returns a quantity that is already a first derivative, so
+`raw(stop_gradient(...))` masks the second, which is the convention above;
+`spin_energy_density` returns the *value*, so the same line masked the **first** derivative
+as well and zeroed `rho de_xc/drho` on the saturated branch. The energy never moved, which
+is why it survived every validated total. What moved is the stress of a fully polarized
+cell, because under a strain at frozen coefficients the whole density follows the cell
+where at frozen wavefunctions only a core or an augmentation charge does: on
+`h-atom-lsda.in` this code read **+6.65467905e-05 Ry/bohr^3 against `pw.x`'s -0.00001049**,
+11.3 kbar and the opposite sign, and with the tangent restored it reproduces `pw.x` to
+every printed digit. On a force it is worth 2.6e-6 Ry/bohr (`o2-lsda-force.in`, PAW), also
+toward `pw.x`. The set that fires is **863 of 64,000 points carrying 0.597 of the one
+electron**, not a fringe: `|up - dw| >= |up + dw|` is satisfied *exactly* once the minority
+channel is swamped in float64, so it is the core of the atom that lands on the masked
+branch. The repair is `f(x0) + J(x0) . (x - x0)` at `x0 = stop_gradient(x)`, on the
+saturated branch alone, which gives the exact first tangent and a second derivative of zero
+and leaves the regular branch bit-identical at every order, so the `custom_jvp` objection
+above does not apply to it. `OPEN.md` Part XIV item 2 carries the tables, and
+`h-atom-lsda-stress` is the reference case added for it, the tree having had no
+spin-polarized stress whose cell reaches this branch: the borrowed `pw_lsda/lsda.in` is
+nickel, whose two channels are populated everywhere. **This section's own tests are red as this is
+written, and not from this repair**: `test_the_lsda_born_charges_match_ph_x`,
+`test_a_magnetic_insulators_dielectric_constant_matches_ph_x` and
+`test_the_polarized_dielectric_constant_reduces_to_the_unpolarized_one` fail on master at
+0.0326 against 5e-4, 1.1164461 against 1.110915996, and 2.709e-07 against 1e-08, each
+giving the same number with the repaired `functional.py` and with the committed one.
+
 **The `Z*` term was a row/column mask and QE cannot write it down.** `_multiplier_response`
 applied the weight to the **column** of `dLambda_mn = w_n <psi_m|dV_E|psi_n>` and nothing to
 the **row**. The solver keeps `max(occupied_counts)` bands in every channel because the shape

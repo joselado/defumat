@@ -4835,3 +4835,145 @@ effective mass differences a `jvp`, on a stencil that excludes its centre).
   and every validated primal has to be re-checked. It fixes **all** derivative
   orders, including `l = 2`'s second derivative at the origin, which is the same
   defect one order up.
+
+## 2. The saturated-point mask in `spin_energy_density` zeroed the *first* derivative, and it was worth 11.3 kbar and a sign on the stress of a fully polarized cell **[closed 2026-09-21, the stress now reproduces `pw.x` to every printed digit]**
+
+`AUDIT-2026-09-20.md`'s `defumat/xc/functional.py:487`, reproduced and measured. It is a
+wrong answer on a committed input rather than a nuisance, and the number that says so is
+`pw.x`'s own stress on `tests/data/qe/h-atom-lsda.in`.
+
+**The mechanism.** The line is
+`jnp.where(saturated, raw(jax.lax.stop_gradient(rho)), raw(regular))`, which is the right
+shape in `spin_potential`, whose returned quantity is already a first derivative, so the
+`stop_gradient` kills the second, exactly as `dmxc_lsda` defines it. Here the returned
+quantity is the *value*, so the same line kills the first derivative instead. Two places
+said the opposite in so many words and both are now corrected: this method's own docstring,
+which claimed that only the second derivative is masked, and
+`spin_potential_and_energy_density`'s comment, which gave that as the reason the two calls
+are not fused into one `value_and_grad`.
+
+**Structurally**, at `rho = (1.0, 0.0)` on `pz`, against a central difference at `h = 1e-6`:
+
+| | up channel |
+|---|---|
+| autodiff, as committed | **0.0** |
+| central difference along the saturated branch | **-0.6288833068** |
+| autodiff with the tangent restored | -0.6288833066 |
+
+The up channel is the row to read, since both `(1 + h, 0)` and `(1 - h, 0)` stay saturated
+so the difference is taken along the branch, and the restored tangent reproduces it to
+2e-10. The down-channel difference steps across the boundary into a negative channel
+density and is not a comparable number: the restored tangent there is a one-sided
+derivative, `dzeta/d(down) = -2` at the boundary with `clamp_polarization` keeping the
+interior tangent, so it reads 1.4236 against a two-sided difference of 0.3900.
+
+**Physically, on the stress, which is where it is large.** Under a strain at frozen
+plane-wave coefficients the *whole* density moves, since `rho` carries `1/Omega`, so the
+XC stress reads `d(rho e_xc)/drho` at every point rather than only where a core or an
+augmentation charge sits. On `h-atom-lsda.in`, one hydrogen in a 12 bohr box at
+`nspin = 2`, the moment is one electron and the minority channel is at 1e-18, so the
+polarization is at the boundary over most of the atom (863 of 64,000 points, carrying 0.597
+of the one electron, and where they are is below):
+
+| | diagonal, Ry/bohr^3 | kbar |
+|---|---|---|
+| autodiff, as committed | **+6.65467905e-05** | +9.79 |
+| autodiff, first derivative restored | **-1.04885927e-05** | -1.54 |
+| `pw.x` 7.5, same input, serial | **-0.00001049** | **-1.54** |
+
+**The restored tangent reproduces `pw.x` to every digit it prints, and the committed code
+is wrong by 7.70e-05 Ry/bohr^3, which is 11.3 kbar and the opposite sign.** The total
+energy is the same on both legs and agrees with `pw.x` at -0.94606495 Ry, which is the
+control saying only the tangent moved, and it is this project's own "the energy can be
+right while its derivative is wrong" in a sixth place.
+
+**Why nothing caught it, and it is not that the stress is unvalidated at `nspin = 2`.**
+`test_stress.py`'s six generated cases are silicon four times plus `ni-ldau-stress`, which
+is `nspin = 1`, but its borrowed set carries `pw_lsda/lsda.in`, which is nickel at
+`nspin = 2` with a `pw.x` benchmark of -0.00010170 Ry/bohr^3. That cell is a **metal with
+both channels populated everywhere**, so not one of its points is saturated and the
+reference could not have shown this whatever it agreed to. It is the "which components the
+validation cell allows to be nonzero" habit one step over: the question to ask of a
+reference agreement is not only which components are nonzero but which *branch* of the code
+the cell reaches. Worth knowing for the test that closes it: 7.70e-05 Ry/bohr^3 is *inside* `tests/tolerances.py`'s
+`STRESS_RY_BOHR3 = 1e-4`, so the tensor assertion would have passed it and the pressure
+assertion, which is `abs = 1.0` kbar against 11.3, is the one that catches it.
+
+**On the force it is small, and that is consistent rather than contradictory.** At frozen
+wavefunctions the density moves with the geometry only through a core charge, an
+augmentation charge or PAW, and a core charge takes a point *out* of the saturated set
+rather than into it: `with_core` and `paw/onecenter.py:444` add `rho_core/nspin` to *each*
+channel, so the minority is lifted to `c/2` beside a majority of `up + c/2` and the
+cancellation that makes the two sums equal no longer happens. What is left to reach is the
+spin-resolved augmentation charge, which extends past the core radius. On `o2-lsda-force.in`, PAW and LSDA,
+restoring the tangent moves the force from 0.2105652 to 0.2105626 Ry/bohr, **2.6e-6**, and
+that is *toward* `pw.x`: the error against the reference 0.21055892 falls from 6.280e-6 to
+3.677e-6. The analytic route is 0.21055953 on both legs, as it must be, since it reads
+`v_xc` from `spin_potential`, which is masked at the right order, and that is what makes
+the pair a QE-free discriminator.
+
+**Which points are saturated, and this is why the stress moves by 11 kbar rather than by
+noise.** `_fully_polarized` is `|up - dw| >= |up + dw|`, which is a statement about a
+channel reaching zero and is reached here by **float64 cancellation instead**: with the
+minority channel at 1e-18 to 1e-19 everywhere, the two sums are bit-identical wherever
+`dw/up` falls below the machine epsilon, so the equality holds exactly rather than
+approximately. Measured on the hydrogen cell, the set that fires is **863 of 64,000 points
+carrying 0.597 of the one electron**, with `up` between 4.10e-3 and 1.584e-1, which is the
+peak of the density. The equality is exact at all 863 and the strict inequality holds at
+none, and no point of either channel is negative. So the mask does not fire in the fringe,
+it fires **in the core of the atom**, wherever the majority density is large enough to
+swamp the minority, and that is what puts 60 per cent of the charge on a branch whose
+tangent is zero.
+
+The same count on `o2-lsda-force.in` is 15,366 of 157,464 points, 9.76 per cent, but there
+they carry 0.0058 per cent of the charge and the largest density among them is 5.73e-5
+against a peak of 1.195: O2 has a real minority channel, so only the ripples saturate. That
+contrast is the whole difference between the two numbers above, and it says where to look
+for the next case, which is a cell whose minority channel is *empty* rather than small.
+
+**The repair, and it needs no `custom_jvp`.** What is wanted on the saturated branch is a
+value and a first tangent that are the expression's own and a second that is zero, and
+`f(x0) + J(x0) . (x - x0)` with `x0 = stop_gradient(x)` is that statement written down:
+the displacement is exactly zero so the value is unchanged, the derivative is `J` at the
+point itself, and `J` carries no tangent of its own, so a second differentiation gives zero
+rather than the infinity `rho_sigma^(4/3)` has there. It is two lines, `jax.jvp` of the
+same `raw` at the anchor, and **the regular branch is not touched at all**, which is what
+separates it from the `custom_jvp` on the whole method that moved a regular point's second
+derivative from -3.5306 to -2.0485. Checked at three points, value, gradient and Hessian
+all bit-identical to the committed expression at `(1, 0.3)`, `(0.05, 0.02)` and `(2, 1.9)`.
+
+**What it is measured at.** The hydrogen stress goes to **-1.04885927e-05 Ry/bohr^3**,
+which is `pw.x`'s -0.00001049 to every digit it prints, and the O2 force to 0.2105626, its
+error against `ph.x` falling from 6.280e-6 to 3.677e-6. At a saturated point the gradient
+is -0.6288833066 against a central difference of -0.6288833068 and the Hessian is exactly
+zero, so the mask that makes triplet O2's `Z*` finite is still there at the order it
+belongs at. `tests/regression/test_stress.py` and `tests/regression/test_forces.py`
+together are **58 passed in 3 m 36 s** with the new case in them, and the fast gate is
+**2868 passed, 64 skipped in 14 m 12 s**, the two new unit tests being the difference from
+2866.
+
+**What that does *not* say is that the O2 Born charge is validated.** The test the mask was
+written for, `test_the_lsda_born_charges_match_ph_x`, **fails**, and it fails identically
+with the repair and without it, at 0.0326 against a 5e-4 tolerance. So what is established
+is that the repair does not move it, which is the right check; whether it is right at all
+is the pre-existing question below.
+
+**The test that pins it** is `tests/unit/test_xc_spin_kernel.py`, two of them, and the
+first was checked to fail against the old code (gradient 0.0 where it now reads the
+difference). The reference case is new and committed: `h-atom-lsda-stress.in` with
+`reference.out.h-atom-lsda-stress`, generated by `tools/generate_reference.py` with the
+vendored serial `pw.x`, and it is in `test_stress.py`'s `GENERATED` list.
+
+**What is still owed.** Three tests of `tests/regression/test_lsda_response.py` fail on
+master and they are **not** this: `test_the_polarized_dielectric_constant_reduces_to_the_unpolarized_one`
+at 2.709e-07 against 1e-08, `test_a_magnetic_insulators_dielectric_constant_matches_ph_x`
+at 1.1164461 against 1.110915996, and `test_the_lsda_born_charges_match_ph_x` at 0.0326
+against 5e-4. Each was run against the committed `functional.py` and against the repaired
+one and the numbers are identical, so they predate today and belong to one of the
+twenty-seven audit fixes that the slow set has not been run over. The oxygen datasets are
+not the Simpson weights: `O.pz-rrkjus` has `cutoff_radius_index = 865` and `O.pz-kjpaw`
+761 and 773, all odd, so that branch is never taken on this cell.
+
+**What was not measured.** Whether the 2.6e-6 on the O2 force sits in the plane-wave `etxc`
+or in PAW's one-centre term, which one more pair of legs would separate; and the noncollinear
+regime, where `local_spin_frame` clamps `|m|` to `|n|` and reaches the same branch.
