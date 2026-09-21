@@ -4373,8 +4373,13 @@ tangent in the signature of a method every velocity in the package calls.
 
 **Where the k-grid has to be spent, and it is not where a total energy spends
 it.** Three quantities here converge at three different rates on the same cell.
-Aluminium's plasma frequency moves 13.78 → 12.98 eV between 4x4x4 and 8x8x8, 6
-per cent, because it integrates a Fermi surface. Nickel's anomalous Hall
+Aluminium's plasma frequency moves 20.49 → 11.89 eV between 4x4x4 and 8x8x8, a
+factor of 1.7, because it integrates a Fermi surface. (Those were 13.78 and
+12.98, "6 per cent", until 2026-09-21: the Fermi-surface delta was evaluated at
+the mirrored argument, and cold smearing's delta is the one in this package that
+is not even in `x`. The corrected delta has a sharper positive lobe on the
+occupied side, so it is *more* mesh-sensitive, not less, and the old pair's
+agreement was luck.) Nickel's anomalous Hall
 conductivity is far worse, because its integrand lives on near-degeneracies at
 that surface: it **changes sign** between 4x4x4 and 6x6x6 (`PLAN.md` P51 has
 the table), so one mesh's value on its own is not a number. And silicon's f-sum ratio

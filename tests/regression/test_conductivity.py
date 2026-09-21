@@ -40,7 +40,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from defumat.io.pwin import read_pw_input
+from defumat.io.pwin import parse_pw_input, read_pw_input
 from defumat.pseudo import read_upf
 from defumat.response.conductivity import optical_conductivity
 from defumat.response.velocity import VelocityOperator
@@ -70,8 +70,12 @@ def _bounded_compilation():
 
 
 @lru_cache(maxsize=2)
-def _converged(case: str):
-    system = build_system(read_pw_input(CASES / f"{case}.in"))
+def _converged(case: str, smearing: str | None = None):
+    text = (CASES / f"{case}.in").read_text()
+    if smearing is not None:
+        text = text.replace("smearing = 'marzari-vanderbilt'",
+                            f"smearing = '{smearing}'")
+    system = build_system(parse_pw_input(text))
     pseudos = tuple(
         read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species
     )
@@ -265,12 +269,20 @@ def test_the_plasma_frequency_of_aluminium_is_of_the_free_electron_scale():
 
     **512 k-points is not generosity.** On 4x4x4 the same cell gives 13.78 eV:
     a Fermi-surface integral needs the grid where a total energy does not.
+
+    **The number was 12.9796 until 2026-09-21** and the Fermi-surface delta was
+    evaluated at the mirrored argument ``(e - E_F)`` where every other
+    ``w0gauss`` call site writes ``(E_F - e)``. This cell smears with
+    ``marzari-vanderbilt``, whose delta is the only one in the package that is
+    not even in ``x``, so the flip moved the plasma frequency by **1.093 eV,
+    8.4 per cent**. Its Gaussian twin is bit-identical either way, which is what
+    says the harness is right and the physics moved.
     """
     system, pseudos, result = _converged("al-conductivity")
     sigma = run_conductivity(system, pseudos, result.density, nbnd=12,
                              window=1.5, nw=300, broadening=0.01)
     plasma = sigma.plasma_ev
-    assert plasma[0, 0] == pytest.approx(12.9796, abs=5e-3)
+    assert plasma[0, 0] == pytest.approx(11.8867, abs=5e-3)
 
     off = plasma - np.diag(np.diag(plasma))
     assert np.max(np.abs(off)) < 1e-3
@@ -464,3 +476,57 @@ def test_the_guard_is_inert_on_the_frequency_route_and_says_nothing():
     assert float(loose.plasma_ev[0, 0]) == pytest.approx(
         float(tight.plasma_ev[0, 0]), rel=1e-9
     )
+
+
+
+def test_the_fermi_surface_delta_is_the_derivative_of_the_occupations():
+    """Which sign is right, by an identity the conductivity shares nothing with.
+
+    The Drude weight's delta is meant to be ``dN/dE_F``, the derivative of the
+    electron count the SCF's own occupation function produces -- ``w0gauss`` is
+    literally ``jvp(wgauss)``, so mirroring its argument breaks that identity
+    rather than merely reweighting. The check differentiates ``_count`` by a
+    central difference, which touches ``wgauss`` and no ``w0gauss`` at all, and
+    compares both candidate arguments against it on ``al-conductivity``'s own
+    converged eigenvalues:
+
+        marzari-vanderbilt   dN/dE_F 5.64289 | (E_F - e) 5.64289 | (e - E_F) 5.54755
+        gaussian             dN/dE_F 5.51508 | (E_F - e) 5.51508 | (e - E_F) 5.51508
+        methfessel-paxton    dN/dE_F 5.46901 | (E_F - e) 5.46901 | (e - E_F) 5.46901
+        fermi-dirac          dN/dE_F 5.41708 | (E_F - e) 5.41708 | (e - E_F) 5.41708
+
+    **The three even functions cannot tell the two apart**, which is why a
+    Gaussian or Methfessel-Paxton cell could never have shown this, and cold
+    smearing misses by 9.5e-2 on 5.64 -- 1.7 per cent of the delta's total
+    weight, redistributed across the Fermi surface, which the velocity weighting
+    turns into the 8.4 per cent above.
+    """
+    from defumat.scf.occupations import _count, smearing_order, w0gauss
+
+    for name, mirrored_differs in (("marzari-vanderbilt", True),
+                                   ("gaussian", False),
+                                   ("methfessel-paxton", False)):
+        system, pseudos, result = _converged("al-conductivity", smearing=name)
+        eigenvalues = np.asarray(result.eigenvalues)
+        weights = np.asarray(system.kpoints.weights)
+        fermi = float(result.fermi_energy)
+        degauss = float(system.degauss)
+        ngauss = smearing_order(name)
+
+        step = 1.0e-4
+        def count(level):
+            return float(_count(eigenvalues, weights, degauss, ngauss, level))
+        slope = (count(fermi + step) - count(fermi - step)) / (2.0 * step)
+
+        def summed(x):
+            return float(np.sum(weights[:, None]
+                                * np.asarray(w0gauss(x, ngauss)) / degauss))
+        straight = summed((fermi - eigenvalues) / degauss)
+        mirrored = summed((eigenvalues - fermi) / degauss)
+
+        assert straight == pytest.approx(slope, rel=1e-4), name
+        if mirrored_differs:
+            assert abs(mirrored - slope) > 1e-2, (
+                f"{name}'s delta is not even in x, so the mirror has to differ")
+        else:
+            assert mirrored == pytest.approx(slope, rel=1e-4), name

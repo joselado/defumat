@@ -9271,14 +9271,41 @@ cancellation all enter it and none of them is fitted. **It is also a
 k-convergence error nothing else in this package sees**, because every other
 quantity here is an integral rather than an integral of a second derivative.
 
-*The Drude leg has its own limit.* Aluminium's plasma frequency is **12.98 eV**
-against a free-electron `sqrt(4 pi n)` of 16.27 — the 20 per cent is the
+*The Drude leg has its own limit.* Aluminium's plasma frequency is **11.89 eV**
+against a free-electron `sqrt(4 pi n)` of 16.27 — the 27 per cent is the
 zone-boundary gaps removing Fermi surface, which is what makes aluminium
 "nearly" free-electron rather than free-electron — and the tensor is isotropic
-to **1.7e-4 eV** on a cubic crystal run with `nosym`, with nothing imposing
+to **2.5e-4 eV** on a cubic crystal run with `nosym`, with nothing imposing
 that. It needs 512 k-points to get there, because what is being integrated is a
-Fermi surface and not a total energy: on 4x4x4 the same cell gives **13.78 eV**
+Fermi surface and not a total energy: on 4x4x4 the same cell gives **20.49 eV**
 (`al-conductivity.in`).
+
+**Those numbers were 12.98, 1.7e-4 and 13.78 until 2026-09-21**
+(`AUDIT-2026-09-20.md`'s `response/conductivity.py:854`). The Fermi-surface delta was
+evaluated at `(e - E_F)/degauss` where every other `w0gauss` call site in the package writes
+`(E_F - e)` -- `nesting.py:247` with a comment saying so, `_count` and `_entropy` in
+`scf/occupations.py`, and `w0gauss`'s own docstring, which states the convention and adds
+that "a sign flip here is invisible for a Gaussian and wrong for everything else". The line
+was a literal transcription of `dielectric.f90`'s `x = (ei - efermi)/swidth`, which is
+harmless in Elk because every `sdelta` Elk has is even in `x`.
+
+**Cold smearing is the one in this package that is not.** `wgauss` at `ngauss = -1` is built
+on `xp = x - 1/sqrt(2)`, so its derivative is 0.684 at `x = 0`, 0.025 at -1.414, 1e-4 at
++1.414 and **negative** beyond; mirroring the argument puts that whole asymmetric tail,
+negative lobe included, on the wrong side of the Fermi level. `al-conductivity.in` smears
+with `marzari-vanderbilt`, so the committed cell was one of the affected ones, which the
+audit entry supposed it was not.
+
+*Checks*: the plasma frequency moves **12.9796 to 11.8867 eV, 1.093 eV and 8.4 per cent**,
+while the same cell re-run with `smearing = 'gaussian'` gives **12.459264 either way, to the
+last digit** -- the control that says the harness is right and the physics moved. The
+decisive one shares nothing with the conductivity: `w0gauss` is `jvp(wgauss)`, so the delta
+has to be `dN/dE_F` of the electron count the SCF converged with, and differentiating
+`_count` by a central difference gives **5.64289** on this run against **5.64289** for
+`(E_F - e)` and **5.54755** for the mirror, 1.7 per cent of the delta's total weight. The
+three even functions -- Gaussian, Methfessel-Paxton, Fermi-Dirac -- reproduce `dN/dE_F` to
+1e-7 whichever way the argument is written, which is why no Gaussian cell could ever have
+shown this.
 
 **Four things the phase found, and none of them is a refusal.** Two are
 diagnostics reported to the caller, one was a bug in a shared boundary, and one

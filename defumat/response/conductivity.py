@@ -851,7 +851,21 @@ def _drude(calculation, fermi_energy, elements, energies, wk, frequencies,
         return np.zeros((3, 3)), zero
 
     ngauss = smearing_order(getattr(calculation.system, "smearing", "gaussian"))
-    x = (energies - float(fermi_energy)) / degauss
+    # **``(E_F - e)`` and not ``(e - E_F)``.** ``w0gauss``'s own docstring fixes
+    # the convention as ``x = (E - e)/degauss`` with ``E`` in the role of the
+    # level, and says in as many words that a sign flip is invisible for a
+    # Gaussian and wrong for everything else; ``nesting.py`` and ``_count`` and
+    # ``_entropy`` all write it that way round. This line was a literal
+    # transcription of ``dielectric.f90``'s ``x = (ei - efermi)/swidth``, which
+    # is harmless in Elk because every ``sdelta`` Elk has is even in ``x``.
+    # Cold smearing is not: ``wgauss`` is built on ``xp = x - 1/sqrt(2)``, so
+    # the delta is 0.684 at ``x = 0``, 0.025 at -1.414, 1e-4 at +1.414 and
+    # **negative** beyond, and mirroring the argument lands that whole
+    # asymmetric tail, negative lobe included, on the wrong side of the Fermi
+    # level. Since ``w0gauss`` is ``jvp(wgauss)``, the delta is the derivative
+    # of the occupation function the SCF converged with, and the flip breaks
+    # that identity rather than merely reweighting.
+    x = (float(fermi_energy) - energies) / degauss
     delta = w0gauss(x, ngauss) / degauss  # (nk, nbnd), 1/Ry
 
     # **The multiplet block, not the diagonal.** ``dielectric.f90`` writes the

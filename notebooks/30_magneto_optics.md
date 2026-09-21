@@ -75,9 +75,9 @@ print(f"          ratio    {abs(offdiagonal / diagonal):12.2e}")
 ```
 
     64 k-points, 36 bands, 200 frequencies up to 8.2 eV
-    at 1 eV:  sigma_xx       2937.8 S/cm
+    at 1 eV:  sigma_xx       2917.8 S/cm
               sigma_xy       -139.5 S/cm
-              ratio        4.75e-02
+              ratio        4.78e-02
 
 
 ## 2. The two halves of the tensor
@@ -162,8 +162,8 @@ print(f"  measured for bulk nickel   about 0.1 deg")
 ```
 
     through the visible (1.5 to 3.5 eV)
-      root mean square rotation  0.651 deg
-      largest                    +0.973 deg at 1.85 eV
+      root mean square rotation  0.661 deg
+      largest                    +1.034 deg at 1.85 eV
       measured for bulk nickel   about 0.1 deg
 
 
@@ -196,8 +196,8 @@ print(f"  silicon  (neither)                {si_anti:12.2e}")
 ```
 
     largest antisymmetric component, S/cm
-      nickel   (magnetic, spin-orbit)        1101.74
-      silicon  (neither)                    7.67e-08
+      nickel   (magnetic, spin-orbit)        1101.90
+      silicon  (neither)                    6.62e-08
 
 
 ## 5. The other half of a metal's conductivity
@@ -233,12 +233,12 @@ print(f"  isotropic to {np.abs(al.plasma_ev - np.diag(np.diag(al.plasma_ev))).ma
 
     fcc aluminium, 512 k-points
       free-electron gas         16.27 eV
-      from the band structure   12.98 eV
+      from the band structure   11.89 eV
     
-      isotropic to 1.7e-04 eV  (nothing imposes it: the run is nosym)
+      isotropic to 2.5e-04 eV  (nothing imposes it: the run is nosym)
 
 
-The band structure takes about 20 per cent off the free-electron answer. That is the
+The band structure takes about a quarter off the free-electron answer. That is the
 zone-boundary gaps removing Fermi surface, and it is exactly the sense in which aluminium is
 *nearly* free-electron rather than free-electron. (The bulk plasmon aluminium actually shows
 in an energy-loss experiment, near 15 eV, is a different quantity: it is where the whole
