@@ -10741,6 +10741,31 @@ omission rather than by physics, on the module's own advertised material. After,
 `240` and `150`, one of each. **Five directions either way**, so a length check could not
 have caught it and the test asserts the families.
 
+**Turning the quantization axis needed `nosym` and two of four call sites said so**
+(2026-09-21, `AUDIT-2026-09-20.md`'s `workflows/anisotropy.py:1015`).
+`_with_quantization_axis` rebuilds the k-points through `System.with_spin`, which for a
+magnetic noncollinear run takes the *magnetic* group of the **new** angles, sets
+`time_reversal = False` and reduces the grid with it. Its own docstring argued the rebuild
+is safe "because it only runs when the direction differs from the system's own, which
+`run_force_theorem` already requires `nosym` for" -- true of `run_force_theorem` (:534) and
+of the relaxed path (:1213), and false of `run_torque` (:1015) and `frozen_expectation`
+(:883), which reach the same helper with no such clause. `run_torque`'s direction is
+`cos(angle) first + sin(angle) second` at a default angle of `pi/4`, so the rebuild fires
+essentially always.
+
+**The measurement is a null on both cells the tree has, and that is what the record says.**
+Driving `run_torque` with the refusal monkeypatched away, on the same scalar density and
+changing nothing but whether the spinor system carries `nosym`: tetragonal cobalt gives
+`K1 = +0.552275` meV on 18 k-points against **+0.552274** on the 6-point wedge, and hexagonal
+cobalt `-0.927715` against **-0.927716** -- 1e-6 meV, so on these two the reduced wedge is a
+valid sampling of the quantity. What would show the defect is a magnetic group the torque's
+axial perturbation is not invariant under, and there is no such cell here.
+
+So this is a **consistency** fix rather than a measured wrong answer: the same argument two
+of the four entry points already enforce, moved to where the rebuild happens so that a fifth
+call site cannot miss it. `run_force_theorem`'s own check stays, being the more specific
+message a user of that path sees, and the one inside the helper is the backstop.
+
 #### P58b — `soc_scale`: switching the coupling off without changing the dataset.
 
 Elk's `socscf` (manual 5.118, `gensocfr.f90`), which exists there for exactly

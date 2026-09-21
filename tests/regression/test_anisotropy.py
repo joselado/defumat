@@ -286,6 +286,52 @@ def test_hexagonal_cobalt_keeps_both_basal_families():
         f"both basal families have to be represented, got {families}")
 
 
+def test_turning_the_axis_needs_nosym_at_every_entry_point():
+    """The argument was in a docstring and enforced at two of four call sites.
+
+    ``_with_quantization_axis`` rebuilds the k-points through
+    ``System.with_spin``, which for a magnetic noncollinear run takes the
+    *magnetic* group of the **new** angles and reduces the grid with it. Its own
+    docstring argued that this is safe "because it only runs when the direction
+    differs from the system's own, which ``run_force_theorem`` already requires
+    ``nosym`` for". That is true of ``run_force_theorem`` and of the relaxed
+    path, and false of ``run_torque`` and ``frozen_expectation``, which reach
+    the same helper with no such clause -- and ``run_torque``'s direction is
+    ``cos(angle) first + sin(angle) second`` at a default angle of ``pi/4``, so
+    the rebuild fires essentially always.
+
+    **The measurement is a null on both cells the tree has**, and the record
+    says so rather than borrowing the entry's forecast. Driving ``run_torque``
+    with the refusal monkeypatched away, tetragonal cobalt gives
+    ``K1 = +0.552275`` meV on 18 k-points against ``+0.552274`` on the 6-point
+    wedge, and hexagonal cobalt ``-0.927715`` against ``-0.927716``: agreement
+    to 1e-6 meV, so on these two the reduced wedge is a valid sampling. What
+    would show it is a magnetic group the torque's axial perturbation is not
+    invariant under, and there is no such cell here. The check is therefore a
+    **consistency** fix -- the same argument the other two entry points already
+    enforce, moved to where the rebuild is so a fifth call site cannot miss it.
+    """
+    import re
+
+    scalar, spinor = _tetragonal()
+    text = re.sub(r"nosym\s*=\s*\.true\.,?", "",
+                  (GENERATED / "co-tetragonal-anisotropy-soc.in").read_text())
+    reduced = Calculator.from_text(text, GENERATED.parent / "pseudo",
+                                   announce=False)
+    assert not reduced.system.nosym, "this cell has to reach the guarded branch"
+
+    scf = scalar.get_scf()
+    with pytest.raises(ValueError, match="needs nosym"):
+        run_torque(reduced.system, reduced.pseudos, scf.density)
+    with pytest.raises(ValueError, match="needs nosym"):
+        frozen_expectation(reduced.system, reduced.pseudos, scf.density,
+                           direction=(1.0, 0.0, 0.0))
+
+    # ...and the committed cell, which carries nosym, still runs.
+    torque = run_torque(spinor.system, spinor.pseudos, scf.density)
+    assert np.isfinite(float(torque.anisotropy_constant_mev))
+
+
 # ----------------------------------------------------------------------
 # rung 1: without the coupling there is no anisotropy at all
 # ----------------------------------------------------------------------

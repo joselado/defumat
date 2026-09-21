@@ -829,10 +829,24 @@ def _with_quantization_axis(system: System, direction) -> System:
 
     Rebuilding the k-points is what :meth:`~defumat.system.builder.System.
     with_spin` would otherwise cost here, and it is exactly what must not
-    happen between two directions. It is safe because it only runs when the
-    direction differs from the system's own, which :func:`run_force_theorem`
-    already requires ``nosym`` for -- and a ``nosym`` grid is the complete one
-    whatever group is asked about it.
+    happen between two directions. **The argument that it is safe is
+    ``nosym``**, and until 2026-09-21 that argument was made in this docstring
+    and enforced at two of the four call sites. :func:`run_force_theorem`
+    checks it and the relaxed path checks it; :func:`run_torque` and
+    :func:`frozen_expectation` did not, and both rotate the axis essentially
+    always -- ``run_torque``'s direction is ``cos(angle) first + sin(angle)
+    second`` at a default angle of ``pi/4``. So the check is here now, where the
+    rebuild is, and a fifth call site cannot miss it.
+
+    ``with_spin`` routes into ``System._respin_kpoints``, which for a magnetic
+    noncollinear run takes the *magnetic* group of the **new** angles, sets
+    ``time_reversal = False`` and rebuilds ``KPoints.automatic`` on it. Two
+    directions then arrive on two different wedges, which is the k-sampling
+    rather than the physics; and a torque differentiates
+    ``sum_k w_k <psi|H(theta)|psi>`` in ``theta``, whose ``dH/dtheta`` carries
+    an axial vector perpendicular to the direction the group was built around
+    and therefore not invariant under it -- a response on a reduced k-set, with
+    nothing symmetrising it.
     """
     angle1, angle2 = angles_from_direction(direction)
     ntyp = len(system.starting_magnetization)
@@ -842,6 +856,19 @@ def _with_quantization_axis(system: System, direction) -> System:
         # having defaulted to the system's own angles. Returned untouched so
         # that a single-direction run never rebuilds its k-points at all.
         return system
+    if not system.nosym:
+        own = tuple(np.round(np.asarray(
+            direction_from_angles(system.angle1[0], system.angle2[0])), 6))
+        raise ValueError(
+            f"turning the quantization axis away from the system's own "
+            f"angle1/angle2 ({own}) needs nosym = .true.: a magnetic "
+            "noncollinear run reduces its k-grid with the magnetic symmetry "
+            "group, which depends on where the moment points, so the rotated "
+            "run would be sampled on a different wedge from the one it is "
+            "compared against -- and a torque is a derivative of a wedge sum "
+            "with respect to a direction the wedge is not symmetric in. QE's "
+            "own force-theorem example sets nosym for this reason"
+        )
     return system.with_spin(angle1=wanted[0], angle2=wanted[1])
 
 
