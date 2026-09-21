@@ -342,3 +342,61 @@ def test_the_saturated_energy_never_moved():
     energy = functional.spin_energy_density(jnp.asarray([[up], [0.0]]))
     approached = functional.spin_energy_density(jnp.asarray([[up], [1.0e-13]]))
     assert float(np.abs(np.asarray(energy) - np.asarray(approached)).max()) < 1.0e-12
+
+
+def test_the_first_derivative_survives_at_full_polarization():
+    """The energy density is masked at second order, and only at second order.
+
+    ``spin_potential`` returns a quantity that is *already* a first derivative,
+    so a ``stop_gradient`` on its argument masks the second, which is QE's
+    convention. ``spin_energy_density`` returns the *value*, so the same line
+    masked the first derivative too and zeroed ``rho de_xc/drho`` wherever a
+    channel is swamped in float64. It survived because the total energy is
+    exactly right either way (``OPEN.md`` Part XIV item 2): what it cost was
+    11.3 kbar and a sign on the stress of ``h-atom-lsda.in``, against ``pw.x``.
+
+    The up channel is the row to assert on. Both ``(1 + h, 0)`` and
+    ``(1 - h, 0)`` are saturated, so the difference is taken along the branch
+    rather than across it, where the down channel's would step into a negative
+    density.
+    """
+    functional = get_functional("pz")
+    point = jnp.asarray([[1.0], [0.0]])
+    assert bool(_fully_polarized(point)[0])
+
+    def energy(rho):
+        return jnp.sum(functional.spin_energy_density(rho))
+
+    h = 1.0e-6
+    difference = float(
+        (energy(point.at[0, 0].add(h)) - energy(point.at[0, 0].add(-h))) / (2.0 * h)
+    )
+    gradient = float(jax.grad(energy)(point)[0, 0])
+
+    assert difference == pytest.approx(-0.6288833068, abs=1.0e-9)
+    assert gradient == pytest.approx(difference, abs=1.0e-8)
+    assert abs(gradient) > 0.1
+
+
+def test_the_second_derivative_is_still_zero_at_full_polarization():
+    """...and the mask that keeps ``Z*`` finite is still there.
+
+    ``rho_sigma^(4/3)``'s second derivative is infinite at a vanishing channel,
+    and QE defines the kernel to be zero rather than regularising it. Taking the
+    first derivative back has to leave that alone, or triplet O2's Born charges
+    return ``NaN`` again, which is what they did before the mask existed (P70).
+    """
+    functional = get_functional("pz")
+
+    def energy(rho):
+        return jnp.sum(functional.spin_energy_density(rho))
+
+    saturated = jax.hessian(energy)(jnp.asarray([[1.0], [0.0]])).reshape(2, 2)
+    assert np.all(np.asarray(saturated) == 0.0)
+
+    # A regular point keeps every order, and the branch is the unmasked
+    # expression itself rather than an approximation of it.
+    regular = np.asarray(jax.hessian(energy)(jnp.asarray([[1.0], [0.3]])).reshape(2, 2))
+    assert np.all(np.isfinite(regular))
+    assert abs(regular[0, 0]) > 1.0e-3
+    assert regular[0, 1] == pytest.approx(regular[1, 0], rel=1.0e-12)

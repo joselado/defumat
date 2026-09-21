@@ -462,29 +462,54 @@ class Functional(eqx.Module):
         split is reproduced here, so what this returns is a function of the
         sanitised pair alone and the caller supplies the sign.
 
-        **The value and the first derivative are exactly the expression below;
-        only the second derivative is masked**, and it has to be, because this
-        is the *other* route to ``dmxc_lsda``. ``scf.potential`` builds ``etxc``
-        from this, ``forces.energy`` takes ``etxc`` into the total energy, and
+        **The value is exactly the expression below and *every* derivative of
+        it is masked at a saturated point**, the first included. The mask has to
+        be there at second order, because this is the *other* route to
+        ``dmxc_lsda``: ``scf.potential`` builds ``etxc`` from this,
+        ``forces.energy`` takes ``etxc`` into the total energy, and
         ``response.born`` / ``response.phonon`` differentiate that gradient once
-        more -- so a Born charge reaches ``d^2 e_xc/d rho^2`` without ever
+        more, so a Born charge reaches ``d^2 e_xc/d rho^2`` without ever
         touching ``dv_of_drho``. Measured on triplet O2 with the kernel already
         masked and this one not: every entry of ``Z*`` came back ``NaN``.
 
-        The first derivative is finite at a fully polarized point and is taken
-        there, so a *force* is unchanged to the last digit; the identity
-        ``d e/d n_sigma = (v_sigma - e)/n`` is **not** used to write it, because
-        :meth:`spin_potential` evaluates at the signed total and an unclipped
-        polarization where this evaluates at ``|n|`` and a clipped ``zeta`` --
-        the two disagree at exactly the saturated points, and substituting one
-        for the other moves the validated LSDA force by 6.1e-5 Ry/bohr.
+        **The first derivative is the expression's own and the second is zero**,
+        which is what the line below writes down. It reached the first as well
+        until 2026-09-21, and what that cost is measured rather than argued
+        (``OPEN.md`` Part XIV item 2): the energy was right throughout, and the
+        stress of a fully polarized cell lost its whole XC diagonal, since under
+        a strain the density follows the cell where at frozen wavefunctions only
+        a core or an augmentation charge does. On ``h-atom-lsda.in`` the masked
+        first derivative gave **+6.65467905e-05 Ry/bohr^3** where ``pw.x``
+        prints -0.00001049, 11.3 kbar and the opposite sign, and the expression
+        below reproduces ``pw.x`` to every printed digit. On a force it was
+        worth 2.6e-6 Ry/bohr (``o2-lsda-force.in``), also toward ``pw.x``.
+
+        The identity ``d e/d n_sigma = (v_sigma - e)/n`` is **not** the way to
+        write that first derivative, because :meth:`spin_potential` evaluates at
+        the signed total and an unclipped polarization where this evaluates at
+        ``|n|`` and a clipped ``zeta``: the two disagree at exactly the
+        saturated points, and substituting one for the other moves the validated
+        LSDA force by 6.1e-5 Ry/bohr.
         """
         def raw(pair):
             return self._spin_energy_density(*_spin_channels(pair)[1:3])
 
         saturated = _fully_polarized(rho)
         regular = jnp.where(saturated[None], _RHO_TRASH, rho)
-        return jnp.where(saturated, raw(jax.lax.stop_gradient(rho)), raw(regular))
+        # On the saturated branch the value and the *first* tangent are the
+        # expression's own and the second is zero, which is the order this
+        # method has to be masked at. ``f(x0) + J(x0) . (x - x0)`` with
+        # ``x0 = stop_gradient(x)`` is that statement written down: the
+        # displacement is exactly zero so the value is ``raw(rho)``, the
+        # derivative is ``J`` at the point itself, and ``J`` carries no tangent
+        # of its own, so differentiating a second time gives zero rather than
+        # the infinity ``rho_sigma^(4/3)`` has there. Applying the same trick to
+        # the *whole* method instead is what moves a regular point's second
+        # derivative from -3.5306 to -2.0485, so the regular branch is left
+        # exactly as it was.
+        anchor = jax.lax.stop_gradient(rho)
+        value, tangent = jax.jvp(raw, (anchor,), (rho - anchor,))
+        return jnp.where(saturated, value + tangent, raw(regular))
 
     def spin_potential(self, rho: jnp.ndarray) -> jnp.ndarray:
         """``(v_up, v_dw)``: ``d(rho e_xc)/d rho_sigma``, Ry, by differentiation.
@@ -525,9 +550,11 @@ class Functional(eqx.Module):
         the pair of channels in place of the single density.
         """
         # Two calls rather than one ``value_and_grad(has_aux=True)``, because the
-        # potential's derivative is masked at a fully polarized point and the
-        # energy density's is not -- the *first* derivative of ``e_xc`` is finite
-        # there and is what a force reads. The value returned is unchanged: the
+        # two are masked at different orders at a fully polarized point. What
+        # this comment used to claim, that the energy density's first derivative
+        # survives there, is false and is a measured defect worth 11.3 kbar on a
+        # polarized stress (``OPEN.md`` Part XIV item 2): it is zeroed along with
+        # the second. The value returned is unchanged: the
         # aux this used to carry was ``_spin_energy_density`` at the same
         # sanitised pair :meth:`spin_energy_density` evaluates, and the extra
         # evaluation is pointwise with no transform in it.
