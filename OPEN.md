@@ -4979,9 +4979,11 @@ not the Simpson weights: `O.pz-rrkjus` has `cutoff_radius_index = 865` and `O.pz
 below. The two `ph.x` comparisons are the `l = 1` tangent at `k + G = 0` that `27eeaa2`
 restored the day before, attributed by an A/B at its single switch and closed by a
 `Calculation(origin_tangent=False)` that puts QE's own zero back on a `ph.x` comparison.
-The third is **not red at all**: it passes in isolation on master, silicon's explicit
-k-list being shifted so that no `k + G = 0` exists in it, and the 2.709e-07 was
-run-order dependent.
+The third is **not this, and is not attributed**: it *passes* now, both on its own and
+in file order, and silicon's explicit k-list is shifted so no `k + G = 0` exists in it
+and the flag cannot reach it. Why it read 2.709e-07 against 1e-08 the day before is
+unmeasured, and a pass here does not discharge a failure seen there -- it stays open as
+item 4.
 
 **What was not measured.** Whether the 2.6e-6 on the O2 force sits in the plane-wave `etxc`
 or in PAW's one-centre term, which one more pair of legs would separate; and the noncollinear
@@ -5026,6 +5028,34 @@ reference tests take it, and the QE-free checks on the same cell keep the defaul
 
 **What is not closed by it.** Nothing takes a second `k` derivative analytically today, so
 `l = 2`'s second derivative at the origin is still the open one order up (item 1). And the
-five Gamma-holding reference cells were enumerated but only two were *run* --
-`si-epsilon-unshifted`, `alas-raman` and `al2-metal` are unmeasured, and the slow set over
-the twenty-eight fixes is still owed.
+five Gamma-holding reference cells were enumerated but only two were *run*. The three
+unmeasured ones, named so that a slow run knows what to look for, are
+`si-epsilon-unshifted` (whose `-nosym` twin is `tests/regression/test_tddft.py`'s `CASE`,
+and a TDDFT head **is** `dH/dk`), `alas-raman` and `al2-metal`. A **dynamical matrix is
+not a candidate** -- it does not go through `dH/dk` -- so what to grep for is an E-field
+or an optical head, not a phonon.
+
+**One notebook is stale for the same reason, and it predates this entry.**
+`notebooks/27_excitons_and_tddft.ipynb` runs `si-epsilon-unshifted-nosym`, Gamma at a
+sixty-fourth, and was last executed **2026-09-02**, where the tangent landed on
+**2026-09-20** -- so its committed output is from before the term existed. Nothing here
+moved it further, the default being unchanged, and the size to expect is roughly a
+quarter of `si10-epsilon`'s 2.2e-5 relative. It is one entry in the larger fact that the
+notebook set has not been re-executed over the twenty-eight fixes.
+
+## 4. A spin-polarized dielectric identity that read 2.709e-07 one day and passes the next
+
+`tests/regression/test_lsda_response.py::test_the_polarized_dielectric_constant_reduces_to_the_unpolarized_one`
+compares `si-epsilon.in` run as `nspin = 1` and as `nspin = 2` with no magnetization, which
+must agree exactly, at a tolerance of 1e-08. It was reported **failing at 2.709e-07** on
+2026-09-20 and **passes** on 2026-09-21, on its own and in file order, with the same input
+and a `functional.py` the reporting session had already excluded by running both legs of it.
+
+It is **not** the `k + G = 0` row of item 3: silicon's explicit k-list is shifted and holds
+no such plane wave, and the flag was measured to leave that cell bit-identical. What is left
+is that 2.709e-07 is 2e-08 *relative* on an `eps` of about 13, reached through two
+independent SCF runs and two iterative response solves, so the honest reading is that the
+number sits near the tolerance rather than that it is fixed. **What would settle it** is
+running the pair a few times and reading the spread, which is cheap and has not been done;
+until then a pass here does not discharge the failure seen there, which is this project's
+own "a check whose null result cannot be told from a pass" pointing the other way.

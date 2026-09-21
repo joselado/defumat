@@ -4537,8 +4537,11 @@ Gamma-containing mesh take it so that the reference agreement stays an exact, li
 rather than a widened tolerance. The deviation is therefore stated, measured and
 selectable, which is what `CLAUDE.md` asks of a deviation this size. **What it is not is a
 free choice**: on a Gamma-only cell the carried term is the derivative the operator has,
-and a velocity, an effective mass or a spectrum taken there is wrong without it by the
-amounts above -- the flag exists to reproduce `ph.x`, not to improve on the default.
+and a velocity or a spectrum taken there is wrong without it by the amounts above -- the
+flag exists to reproduce `ph.x`, not to improve on the default. **The effective mass is
+not on that list**, and the reason is in this same section: P48's "a stencil must not
+contain its own centre" keeps the centre out, so `dH/dk` is never evaluated *at* Gamma
+there.
 
 **Why the earlier record did not catch it.** The measurements behind the tangent were
 `<psi|dH/dk|psi>` against a central difference of the same operator, which is the right

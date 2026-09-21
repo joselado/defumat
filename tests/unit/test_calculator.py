@@ -21,9 +21,9 @@ import textwrap
 import numpy as np
 import pytest
 
-from defumat.calculator import (SCF_ONLY_OPTIONS, SHARED_OPTIONS,
-                                 _ELECTRONS_OPTIONS, Calculator,
-                                 electrons_defaults)
+from defumat.calculator import (SCF_ONLY_OPTIONS, SETUP_ONLY_OPTIONS,
+                                 SHARED_OPTIONS, _ELECTRONS_OPTIONS,
+                                 Calculator, electrons_defaults)
 from defumat.io.pwin import parse_pw_input
 from defumat.pseudo import read_upf
 from defumat.scf.driver import run_scf
@@ -585,6 +585,34 @@ def test_the_default_is_qes_code_default_and_not_its_documented_one(pseudo_dir):
     calc = Calculator.from_text(SILICON, pseudo_dir, announce=False)
     assert calc.calculation.david is None
     assert DAVID_NDIM == 4
+
+
+def test_origin_tangent_reaches_the_calculation_from_the_front_door(pseudo_dir):
+    """QE's convention for the ``l = 1`` tangent at ``k + G = 0``, through the facade.
+
+    It is a :data:`SETUP_ONLY_OPTIONS` member rather than a shared one: it
+    configures the projector core and no entry point takes a parameter of that
+    name, so it is accepted, consumed here and never forwarded. Given per call
+    it has to replace the ``Calculation``, like ``david`` and ``projectors``.
+
+    What it is for, and the numbers, are in
+    :func:`~defumat.pseudo.projectors.build_projector_core` and `PLAN.md` P24:
+    ``False`` reproduces ``ph.x``, which zeroes that row where the limit it is
+    zeroing is a nonzero gradient, and the default keeps the term.
+    """
+    calc = Calculator.from_text(SILICON, pseudo_dir, announce=False)
+    assert "origin_tangent" in Calculator.SETUP_OPTIONS
+    assert "origin_tangent" in SETUP_ONLY_OPTIONS
+    # The default is the derivative the operator has, not QE's zero.
+    assert calc.calculation.origin_tangent is True
+
+    at_construction = Calculator.from_text(
+        SILICON, pseudo_dir, announce=False, origin_tangent=False)
+    assert at_construction.calculation.origin_tangent is False
+
+    # ...and per call it rebuilds rather than being forwarded to an entry point.
+    calc.get_scf(origin_tangent=False)
+    assert calc.calculation.origin_tangent is False
 
 
 def test_david_is_a_setup_option_and_rebuilds_the_calculation(pseudo_dir):
