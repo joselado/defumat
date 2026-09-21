@@ -112,12 +112,23 @@ def onecenter_gradient_correction(
 
     if nspin == 1:
         # ``rho_full(ixk,1) = ABS(...)``: QE takes the absolute value in the
-        # unpolarized branch only, so it stays inside this one.
-        density = jnp.abs(rho_rad[0] / r2 + core)  # (nx, mesh)
+        # unpolarized branch only, so it stays inside this one -- and **after**
+        # the gradient rather than before it. ``paw_onecenter.f90:762`` calls
+        # ``PAW_gradient`` on ``rho_rad*rm2 + rho_core`` with no ``ABS`` in
+        # sight (``:1099`` builds the integrand), and only at ``:780-781`` does
+        # ``rho_full`` get ``IF (nspin_mag==1) rho_full = ABS(rho_full)``
+        # before it goes into ``xc_gcx``. Taking it first makes the radial
+        # component ``d|rho|/dr = sign(rho) drho/dr``, which is invisible in
+        # ``sigma`` -- a sum of squares -- and so in ``v1``, ``v2`` and the
+        # gradient-correction energy, and survives only in ``h = v2 grad``,
+        # whose divergence is part of ``ddd``. So it would move the SCF fixed
+        # point and leave every energy-at-a-given-density comparison intact.
+        signed = rho_rad[0] / r2 + core  # (nx, mesh)
 
-        grad = _gradient(rho_lm[0], density, paw)  # (3, nx, mesh)
+        grad = _gradient(rho_lm[0], signed, paw)  # (3, nx, mesh)
         sigma = jnp.sum(grad * grad, axis=0)
 
+        density = jnp.abs(signed)
         v1, v2 = paw.functional.gradient_potentials(density, sigma)
         energy_density = paw.functional.gradient_energy(density, sigma)
 

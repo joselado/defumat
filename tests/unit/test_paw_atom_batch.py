@@ -153,3 +153,71 @@ def test_a_small_sublattice_keeps_the_vmap(pseudo_dir):
             os.environ.pop("DEFUMAT_PAW_ATOM_BATCH", None)
         else:
             os.environ["DEFUMAT_PAW_ATOM_BATCH"] = previous
+
+
+# --- where QE takes the absolute value of the on-site density ----------------
+
+
+def _species(pseudo_dir):
+    """One PAW species object, the thing the one-centre routines take."""
+    return _corrections(pseudo_dir, 1).species[0]
+
+
+def test_the_one_centre_gradient_differentiates_the_signed_density(pseudo_dir):
+    """``PAW_gradient`` takes the gradient first and ``ABS`` afterwards.
+
+    ``paw_onecenter.f90:762`` calls ``PAW_gradient`` on
+    ``rho_rad*rm2 + rho_core`` with no ``ABS``, and only at ``:780-781`` does
+    ``rho_full`` get ``IF (nspin_mag==1) rho_full = ABS(rho_full)`` before it
+    goes into ``xc_gcx``. This took the absolute value first, so the radial
+    component was ``d|rho|/dr = sign(rho) drho/dr``.
+
+    **The reordering is confined and that is the check**: ``sigma`` is a sum of
+    squares, so the sign flip is invisible in it and therefore in ``v1``, ``v2``
+    and the gradient-correction *energy*; it survives only in ``h = v2 grad``,
+    whose divergence is part of ``ddd``. So the energy at a *given* density is
+    the same either way and only the SCF fixed point moves -- which is exactly
+    the comparison against ``pw.x`` that cannot see it.
+
+    **The reachable set is empty on every committed PAW-GGA cell**, measured
+    rather than argued: reading ``rho_rad[0]/r^2 + core`` from inside the trace
+    over the whole quadrature of a converged run,
+    ``alas-piezo-tiny-paw`` gives **0 negative of 3,812,100** values and
+    ``si10-paw-pbe`` **0 of 8,215,200**, minimum exactly 0.0 in both (the padded
+    tail past the augmentation sphere). ``radial_derivative`` is a stencil on
+    the array rather than an autodiff of ``abs``, so on an array that is nowhere
+    negative the two orders are pointwise identical -- and the total energy, the
+    eigenvalues, the one-centre energy and ``ddd`` are bit-identical on both
+    cells. The density here is therefore *constructed* to go negative.
+    """
+    from defumat.paw.gradient import _gradient, onecenter_gradient_correction
+
+    paw = _species(pseudo_dir)
+    nlm, mesh, nx = paw.nlm, len(paw.r), paw.angular.ylm.shape[0]
+
+    # A spherical on-site density that changes sign partway out: r^2 rho with a
+    # node, which is what an augmentation charge can produce.
+    radial = np.linspace(1.0, -1.0, mesh)
+    rho_lm = np.zeros((1, nlm, mesh))
+    rho_lm[0, 0] = radial * float(np.sqrt(4.0 * np.pi))
+    rho_lm[0, min(1, nlm - 1)] = 0.2 * radial
+    rho_lm = jnp.asarray(rho_lm)
+    rho_rad = jnp.einsum("xl,slr->sxr", paw.angular.ylm[:, :nlm], rho_lm)
+    core = jnp.zeros((nx, mesh))
+
+    signed = rho_rad[0] / paw.r2 + core
+    assert float(jnp.min(signed)) < 0.0, "the constructed density has to go negative"
+
+    straight = _gradient(rho_lm[0], signed, paw)
+    absolute = _gradient(rho_lm[0], jnp.abs(signed), paw)
+    assert float(jnp.max(jnp.abs(straight - absolute))) > 1.0, (
+        "the two orders have to differ on a density that changes sign")
+
+    # ``sigma`` is what the functional sees, and it is a sum of squares -- but
+    # only because the *whole* gradient is taken of one or the other, so this is
+    # the statement that the two sigmas genuinely differ and the confinement is
+    # in ``v1``/``v2`` being functions of it rather than of the sign.
+    potential, energy, vector = onecenter_gradient_correction(
+        rho_lm, rho_rad, core, paw, None, False)
+    assert np.isfinite(float(energy)) and vector is None
+    assert np.all(np.isfinite(np.asarray(potential)))

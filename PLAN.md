@@ -1417,6 +1417,37 @@ two, `topology/augmentation.py` guards it itself by building a `(nat, 0, 0)` blo
 first would decide it" -- and works around it per caller. So the one consumer that met the
 gap repaired its own call site instead of the routine, and the routine kept it.
 
+
+**The one-centre GGA took the absolute value before the gradient, where QE takes it after**
+(2026-09-21, `AUDIT-2026-09-20.md`'s `paw/gradient.py:116`). `paw_onecenter.f90:762` calls
+`PAW_gradient` on `rho_rad*rm2 + rho_core` with no `ABS` in it, and only at `:780-781` does
+`rho_full` get `IF (nspin_mag==1) rho_full = ABS(rho_full)` before going into `xc_gcx`. This
+built `density = abs(rho_rad[0]/r2 + core)` and then differentiated *that*, so the radial
+component of the gradient was `d|rho|/dr = sign(rho) drho/dr`.
+
+**The consequence is confined and that is what makes it hard to see.** `sigma` is a sum of
+squares, so the sign flip is invisible in it and therefore in `v1`, `v2` and the
+gradient-correction *energy*; it survives only in `h = v2 grad rho`, whose divergence is part
+of `ddd`. The energy at a **given** density is identical either way, so it hides behind every
+PAW-PBE energy agreement already recorded, and only the SCF fixed point would move.
+
+**The reachable set is empty on every committed PAW-GGA cell, measured rather than argued.**
+Reading `rho_rad[0]/r^2 + core` from inside the trace over the whole quadrature of a
+converged run: `alas-piezo-tiny-paw` gives **0 negative of 3,812,100** values and
+`si10-paw-pbe` **0 of 8,215,200**, with the minimum exactly 0.0 in both (the padded tail past
+the augmentation sphere). `radial_derivative` is a stencil on the array rather than an
+autodiff of `abs`, so on an array that is nowhere negative the two orders are pointwise
+identical -- and the total energy, the eigenvalues, the one-centre energy and `ddd` are
+**bit-identical** on both cells after the reordering. The test therefore builds a density
+that *does* change sign, where the two gradients differ by more than 1.
+
+**The first instrument for this reported a null that was its own failure**, and it is the
+trap this project keeps: a monkeypatch calling `np.asarray` inside the routine, wrapped in a
+`try/except` that fell back silently. On `alas-piezo-tiny-paw` it read; on `si10-paw-pbe`,
+whose ten atoms take the `vmap`ped one-centre path, `np.asarray` of a tracer raised and the
+`except` swallowed it, so the script printed "the branch was never entered" for a cell that
+enters it **160 times**. `jax.debug.callback` reads from inside the trace and is what the
+measurement above uses.
 **P13 — Gradient-corrected functionals. ✅ DONE.** `xc/` restructured into QE's four
 independently chosen slots — local exchange, local correlation, and a gradient correction
 to each — behind a name registry (`xc/functional.py`), with `xc/gga.py` holding the PBE
