@@ -136,14 +136,14 @@ def _probe_potential(calculation, amplitudes):
     return jnp.asarray(np.stack([a * field for a in amplitudes]))
 
 
-def _converged(name, **kwargs):
+def _converged(name, origin_tangent=True, **kwargs):
     from defumat.scf import Calculation
 
     system = build_system(read_pw_input(CASES / f"{name}.in"))
     pseudos = tuple(
         read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species
     )
-    calculation = Calculation(system, pseudos)
+    calculation = Calculation(system, pseudos, origin_tangent=origin_tangent)
     result = run_scf(system, pseudos, calculation=calculation, **kwargs)
     assert result.converged
     return system, pseudos, calculation, result
@@ -163,9 +163,23 @@ def _hydrogen_chain():
 
 
 @lru_cache(maxsize=None)
-def _oxygen_molecule():
-    """The triplet O2 of ``o2-fixed-lsda.in`` -- seven bands up, five down."""
-    return _converged("o2-fixed-lsda", conv_thr=1e-12, max_iterations=200)
+def _oxygen_molecule(origin_tangent=True):
+    """The triplet O2 of ``o2-fixed-lsda.in`` -- seven bands up, five down.
+
+    ``origin_tangent=False`` is **Quantum ESPRESSO's convention** for the
+    ``l = 1`` tangent of ``<k+G|beta>`` at ``k + G = 0``, and the two ``ph.x``
+    comparisons below take it while the QE-free checks keep the default. This
+    cell is Gamma-only, so it is the cell where the row carries its full weight
+    rather than one k-point's share: see
+    :func:`~defumat.pseudo.projectors.build_projector_core` and `PLAN.md` P24.
+
+    The ground state itself does not depend on it -- the rule is the identity in
+    the primal and the total energy is **-63.3630837811 Ry on both legs**, every
+    digit -- so what the second SCF here buys is a second *projector core*, not
+    a second state.
+    """
+    return _converged("o2-fixed-lsda", origin_tangent=origin_tangent,
+                      conv_thr=1e-12, max_iterations=200)
 
 
 @pytest.mark.slow
@@ -415,10 +429,21 @@ def test_a_magnetic_insulators_dielectric_constant_matches_ph_x():
     ``ph.x`` computes this happily -- ``phq_readin.f90:546`` refuses an electric
     field only for *noncollinear* magnetism and ``:957`` only for a smeared or
     tetrahedron metal -- and ``reference.out.ph-o2-fixed-lsda`` is its output.
+
+    **It runs on QE's convention for the ``l = 1`` tangent at ``k + G = 0``**
+    (``_oxygen_molecule(origin_tangent=False)``), because this cell is
+    Gamma-only and that row therefore carries its full weight here. QE zeroes it
+    -- ``commutator_Hx_psi.f90:113-118`` sets ``gk_vpol = 0`` and
+    ``dylmr2.f90:88-92`` sets ``dylm = 0`` -- where the product
+    ``f_1(q) Y_1m(qhat) -> c sqrt(3/4pi) q_m`` is linear in the vector and so
+    has a nonzero gradient there. Keeping the term is this code's default and
+    what it is worth against ``ph.x`` is measured rather than argued:
+    ``eps_xx`` reads 1.11644639 with the term and 1.11091517
+    without it, against ``ph.x``'s 1.110915996. `PLAN.md` P24.
     """
     from defumat.response.efield import dielectric_tensor
 
-    _, _, calculation, result = _oxygen_molecule()
+    _, _, calculation, result = _oxygen_molecule(origin_tangent=False)
     response = dielectric_tensor(
         calculation, result.wavefunctions, result.eigenvalues,
         result.density, result.becsum, born_charges=False, max_iterations=40,
@@ -465,10 +490,21 @@ def test_the_lsda_born_charges_match_ph_x():
     Compared against the **raw** block -- QE prints ``Z*`` both with and without
     the acoustic sum rule, and the ASR-applied one is ~0 by construction on a
     homonuclear molecule and would agree with anything.
+
+    **It runs on QE's convention for the ``l = 1`` tangent at ``k + G = 0``**
+    (``_oxygen_molecule(origin_tangent=False)``), because this cell is
+    Gamma-only and that row therefore carries its full weight here. QE zeroes it
+    -- ``commutator_Hx_psi.f90:113-118`` sets ``gk_vpol = 0`` and
+    ``dylmr2.f90:88-92`` sets ``dylm = 0`` -- where the product
+    ``f_1(q) Y_1m(qhat) -> c sqrt(3/4pi) q_m`` is linear in the vector and so
+    has a nonzero gradient there. Keeping the term is this code's default and
+    what it is worth against ``ph.x`` is measured rather than argued:
+    ``Z*_xx`` reads 0.1011009 with the term and 0.1337198
+    without it, against ``ph.x``'s 0.13367. `PLAN.md` P24.
     """
     from defumat.response.efield import dielectric_tensor
 
-    _, _, calculation, result = _oxygen_molecule()
+    _, _, calculation, result = _oxygen_molecule(origin_tangent=False)
     response = dielectric_tensor(
         calculation, result.wavefunctions, result.eigenvalues,
         result.density, result.becsum, born_charges=True, max_iterations=40,

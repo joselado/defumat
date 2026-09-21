@@ -4483,6 +4483,73 @@ defect, and only the smooth factorisation -- a solid harmonic `|q|^l Y_lm` times
 derivative analytically today, so it is written down in `OPEN.md` Part XIV rather than
 built.
 
+**And it is a term `ph.x` does not have, measured 2026-09-21.** The tangent is right and
+Quantum ESPRESSO does not carry it, so the two codes disagree on exactly the cells where
+the row has weight, and the disagreement was found as three red tests rather than as an
+argument. QE zeroes that row **twice over**: `PW/src/commutator_Hx_psi.f90:113-118` sets
+`gk_vpol = 0` where `g2k < 1.0d-10`, which kills the `gen_us_dj` term whatever `djl`
+reads, and `upflib/dylmr2.f90:88-92` sets `dg = 0` where `gg <= eps`, so `dylm` and the
+`gen_us_dy` term go with it. `work(ig, jkb) = dvkb1 + dvkb * gk_vpol` is therefore
+identically zero there.
+
+**The limit is smooth, so what QE writes is a dropped term rather than a convention.**
+Writing QE's own two pieces at small `q` for `l = 1`:
+
+    term2 = djl Y_1m (q_alpha/q)  ->  c sqrt(3/4pi) q_m q_alpha / q^2
+    term1 = jl dY_1m/dq_alpha     ->  c sqrt(3/4pi) (delta_m,alpha - q_m q_alpha / q^2)
+    sum                           ->  c sqrt(3/4pi) delta_m,alpha
+
+The two are individually direction-dependent and their sum is not, and QE's guards set
+both to zero at exactly `q = 0` and lose the `delta_m,alpha`. A `k` of 1e-4 off Gamma
+computes the term, so QE's `dH/dk` is **discontinuous at Gamma** and this code's is not.
+`l = 0` and `l = 2` are untouched either way: `f_0` is even so its slope vanishes, and
+`f_2 Y_2m` is quadratic, so both gradients are zero at the origin anyway.
+
+**What it is worth, on the cell where the row carries its full weight.**
+`o2-fixed-lsda.in` is Gamma-only, against `reference.out.ph-o2-fixed-lsda`:
+
+| | eps_xx = eps_yy | eps_zz | Z*_xx | Z*_zz |
+|---|---|---|---|---|
+| this code, tangent carried | 1.11644639 | 1.19737703 | 0.1011009 | 0.2272242 |
+| `origin_tangent = False`, QE's zero | 1.11091517 | 1.19800116 | 0.1337198 | 0.2004090 |
+| `ph.x` 7.5 | 1.110915996 | 1.198004867 | 0.13367 | 0.20023 |
+| error on QE's leg | **8.2e-07** | **3.7e-06** | **5.0e-05** | **1.8e-04** |
+
+The tolerances are 2e-5 on `eps` and 5e-4 on `Z*`, so QE's leg passes both and the carried
+term fails both, at +5.5e-3 on `eps_xx` and -3.3e-2 on a `Z*_xx` of 0.1337, which is a
+quarter of it. **The total energy is -63.3630837811 Ry on both legs, every digit**, which
+is the control saying only the derivative moved and is the same statement
+`test_the_correction_adds_exactly_zero_to_every_primal` makes byte for byte.
+
+**The weight is the k-point's, so an unshifted mesh sees a fraction of it.**
+`si10-epsilon.in` is `4 4 1 0 0 0`, Gamma at a sixteenth, and the term is worth **4.0e-4**
+on a tensor of 19 -- four times that test's 1e-4 tolerance and 2.2e-5 relative. Of the
+cells carrying a response reference, five hold Gamma at all: `o2-fixed-lsda` (weight 1),
+`si-epsilon-unshifted`, `si10-epsilon`, `alas-raman` and `al2-metal`. The shifted ones --
+`si-epsilon`, `c-epsilon`, `alas-epsilon-us`, `si-epsilon-us`, `si-epsilon-paw` -- never
+reach the row and cannot see the flag at all, which is the second half of the unit test.
+
+**The resolution is a switch, and the default is the physics.**
+`Calculation(..., origin_tangent=False)` puts QE's zero back
+(`defumat/pseudo/projectors.py`, threaded through all six `build_projector_core` sites and
+`Calculator`'s `SETUP_ONLY_OPTIONS`), and the three `ph.x` comparisons on a
+Gamma-containing mesh take it so that the reference agreement stays an exact, live check
+rather than a widened tolerance. The deviation is therefore stated, measured and
+selectable, which is what `CLAUDE.md` asks of a deviation this size. **What it is not is a
+free choice**: on a Gamma-only cell the carried term is the derivative the operator has,
+and a velocity, an effective mass or a spectrum taken there is wrong without it by the
+amounts above -- the flag exists to reproduce `ph.x`, not to improve on the default.
+
+**Why the earlier record did not catch it.** The measurements behind the tangent were
+`<psi|dH/dk|psi>` against a central difference of the same operator, which is the right
+check and shares no machinery with the projector-slope arithmetic -- and it is a check
+against *this code's own* `H(k)`, so no amount of it could have shown that QE's
+hand-derived `dH/dk` differs. The record's "what was never affected" covered the diagonal
+and the effective mass and did not cover a QE reference, because none of the cells that
+day held Gamma. It is `CLAUDE.md`'s "which branch does the validation cell reach" habit at
+one more remove: the question to ask of a reference agreement is not only which components
+the cell allows to be nonzero, but whether the cell reaches the row at all.
+
 ### P28a — A supercell is a regime, and it found two bugs. ✅ DONE.
 
 `defumat/scf/ewald.py`, `defumat/system/symmetry.py`, and

@@ -122,10 +122,10 @@ def _release_compiled_code():
 
 
 @lru_cache(maxsize=2)
-def _converged(case: str, pseudo_dir: Path):
+def _converged(case: str, pseudo_dir: Path, origin_tangent: bool = True):
     system = build_system(read_pw_input(CASES / f"{case}.in"))
     pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species)
-    calculation = Calculation(system, pseudos)
+    calculation = Calculation(system, pseudos, origin_tangent=origin_tangent)
     conv = 1.0e-8 if case == "al10-metal-tetra" else 1.0e-10
     result = run_scf(system, pseudos, calculation=calculation, conv_thr=conv,
                      max_iterations=200)
@@ -575,6 +575,15 @@ def test_the_dielectric_tensor_at_ten_sites(pseudo_dir):
     off-diagonal entries were 0.97 out while the isotropic average, which
     symmetrisation cannot move, was already right to 5e-6.
 
+    **It runs on QE's convention for the ``l = 1`` tangent at ``k + G = 0``**,
+    which is the row QE zeroes (``commutator_Hx_psi.f90:113-118`` and
+    ``dylmr2.f90:88-92``) and this code carries by default. This mesh is
+    ``4 4 1 0 0 0``, so it holds Gamma at a sixteenth of the weight rather than
+    all of it, and the term is worth **4.0e-4** on a tensor of 19 -- four times
+    the 1e-4 tolerance below, and small enough that only an unshifted mesh sees
+    it at all. The Gamma-only measurement is on ``o2-fixed-lsda`` in
+    `PLAN.md` P24.
+
     **The thirty Gamma phonons of this cell are not computed here.** The
     reference (``reference.out.ph-si10-epsilon``) carries them and `PLAN.md`
     P28b records the comparison, but thirty Sternheimer perturbations is over an
@@ -586,7 +595,8 @@ def test_the_dielectric_tensor_at_ten_sites(pseudo_dir):
 
     from defumat.response.efield import dielectric_tensor
 
-    system, calculation, result = _converged("si10-epsilon", pseudo_dir)
+    system, calculation, result = _converged("si10-epsilon", pseudo_dir,
+                                             origin_tangent=False)
     response = dielectric_tensor(calculation, result.wavefunctions, result.eigenvalues,
                                  result.density, result.becsum, born_charges=False)
 

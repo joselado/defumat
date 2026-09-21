@@ -130,15 +130,22 @@ SHARED_OPTIONS = frozenset({
 #: an entry point: they configure the :class:`~defumat.scf.driver.Calculation`
 #: itself, which :attr:`Calculator.calculation` builds from them.
 #:
-#: There is one, and the reason it is not simply shared is the same collision
-#: :data:`SCF_ONLY_OPTIONS` documents, one step worse. ``projectors`` is this
+#: There are two, and the reason ``projectors`` is not simply shared is the
+#: same collision :data:`SCF_ONLY_OPTIONS` documents, one step worse. It is this
 #: code's **memory** dial -- ``'default'`` keeps the projectors resident,
 #: ``'rebuild'`` recomputes them per k-point -- and
 #: :func:`~defumat.workflows.pdos.run_pdos` has a parameter of the same name
 #: meaning the **Hubbard projector scheme**, ``'ortho-atomic'`` against
 #: ``'atomic'``. Sharing the name would forward a memory setting into a physics
 #: one, so it is accepted, adopted and consumed here, and stops here.
-SETUP_ONLY_OPTIONS = frozenset({"projectors"})
+#:
+#: ``origin_tangent`` is here for the other reason: it is a **convention**
+#: rather than a dial, it is consumed by the projector builder alone, and no
+#: entry point takes it. ``False`` reproduces Quantum ESPRESSO's zero for the
+#: ``l = 1`` tangent at ``k + G = 0``, which is what a ``ph.x`` comparison on a
+#: Gamma-containing mesh is held to; see
+#: :func:`~defumat.pseudo.projectors.build_projector_core`.
+SETUP_ONLY_OPTIONS = frozenset({"projectors", "origin_tangent"})
 
 #: The subset of :data:`SHARED_OPTIONS` that describes the **SCF loop** and
 #: nothing else, and is therefore *not* forwarded past it.
@@ -606,12 +613,14 @@ class Calculator:
                 k_batch=self.defaults.get("k_batch", "default"),
                 david=self.defaults.get("david"),
                 projectors=self.defaults.get("projectors", "default"),
+                origin_tangent=self.defaults.get("origin_tangent", True),
             )
         return self._calculation
 
     #: The options that define a :class:`~defumat.scf.driver.Calculation`
     #: rather than one run over it. Given per call, they have to rebuild it.
-    SETUP_OPTIONS = ("diagonalization", "k_batch", "david", "projectors")
+    SETUP_OPTIONS = ("diagonalization", "k_batch", "david", "projectors",
+                     "origin_tangent")
 
     def _adopt(self, options) -> None:
         """Take a per-call setup option as this calculator's own.

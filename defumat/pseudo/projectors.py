@@ -227,6 +227,7 @@ def build_projector_core(
     planewaves: PlaneWaveBasis,
     kpoints: KPoints,
     kcart: jnp.ndarray | None = None,
+    origin_tangent: bool = True,
 ) -> ProjectorCore:
     """Everything in ``<k+G|beta>`` except where the atoms are.
 
@@ -238,6 +239,26 @@ def build_projector_core(
     reason), and the only host-side step is choosing which plane waves are in
     the sphere. A spin spiral's ``dE/dq`` is the caller
     (:mod:`defumat.forces.spiral`).
+
+    ``origin_tangent`` carries the ``l = 1`` tangent at ``k + G = 0``, which is
+    the default and is the derivative the operator actually has: the product
+    ``f_1(q) Y_1m(qhat)`` goes to ``c sqrt(3/4pi) q_m``, linear in the vector
+    ``q``, so its gradient at the origin is ``c sqrt(3/4pi) delta_m,alpha``
+    rather than zero (see :func:`_with_origin_tangent`).
+
+    **``origin_tangent=False`` is Quantum ESPRESSO's convention and is there so
+    that a ``ph.x`` comparison stays exact.** QE zeroes that row twice over --
+    ``PW/src/commutator_Hx_psi.f90:113-118`` sets ``gk_vpol = 0`` where
+    ``g2k < 1.0d-10``, killing the ``gen_us_dj`` term whatever ``djl`` reads,
+    and ``upflib/dylmr2.f90:88-92`` sets ``dg = 0`` where ``gg <= eps``, so
+    ``dylm`` and the ``gen_us_dy`` term go with it -- which makes QE's
+    ``dH/dk`` discontinuous at exactly Gamma, since a ``k`` of 1e-4 off it
+    computes the term. The row exists only where ``k + G = 0``, so the flag
+    changes nothing on a shifted mesh and everything on a Gamma-only cell:
+    measured on ``o2-fixed-lsda`` against ``reference.out.ph-o2-fixed-lsda``,
+    ``eps_xx`` reads 1.11644639 here and 1.11091517 with the flag off against
+    ``ph.x``'s 1.110915996, and ``Z*_xx`` 0.10110 against 0.13372 and 0.13367
+    (`PLAN.md` P24).
     """
     channels_by_species = [projector_channels(p) for p in pseudos]
     nkb = sum(len(channels_by_species[t]) for t in structure.types)
@@ -294,7 +315,11 @@ def build_projector_core(
     )
     # The identity, owning the ``l = 1`` tangent at ``k + G = 0`` that the two
     # origin guards drop between them. See :func:`_with_origin_tangent`.
+    # ``origin_tangent=False`` is QE's convention and drops it again, which is
+    # what a ``ph.x`` comparison on a Gamma-containing mesh is held to.
     axes, slopes = _origin_slopes(pseudos, channels_by_species, cell.volume)
+    if not origin_tangent:
+        axes = ()
     columns = _with_origin_tangent(columns, kg, slopes, axes)
 
     # One row per projector channel, in QE's order: atoms outermost, then the
@@ -324,10 +349,12 @@ def build_projectors(
     gvectors: GVectors,
     planewaves: PlaneWaveBasis,
     kpoints: KPoints,
+    origin_tangent: bool = True,
 ) -> Projectors:
     """Assemble ``<k+G|beta>`` for every k-point, atom and channel."""
     core = build_projector_core(
-        pseudos, structure, cell, gvectors, planewaves, kpoints
+        pseudos, structure, cell, gvectors, planewaves, kpoints,
+        origin_tangent=origin_tangent,
     )
     return core.at_positions(structure.positions)
 

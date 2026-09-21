@@ -2230,6 +2230,22 @@ print(spectrum.raman_activity, spectrum.depolarisation)
 \code{dynmat.x}'s \code{RamanIR}, kept a pure function of arrays so it is
 testable without a self-consistent run.
 
+\textbf{At $\Gamma$ this code carries a term \code{ph.x} does not, and
+\code{origin\_tangent} is the knob that puts \code{ph.x}'s convention back.}
+The plane wave with $\mathbf k+\mathbf G=0$ exists only at $\Gamma$ exactly, and
+there the $l=1$ projector's $\mathbf k$-derivative is finite: the product
+$f_1(q)\,Y_{1m}(\hat{\mathbf q})\to c\sqrt{3/4\pi}\,q_m$ is linear in the
+vector, so its gradient is $c\sqrt{3/4\pi}\,\delta_{m\alpha}$ rather than zero.
+Quantum ESPRESSO zeroes that row, which makes its $\mathrm{d}H/\mathrm{d}\mathbf k$
+discontinuous at $\Gamma$ --- a $\mathbf k$ of $10^{-4}$ off it computes the
+term. The default here is the derivative the operator has;
+\code{Calculation(..., origin\_tangent=False)} reproduces \code{ph.x}. What it
+is worth is the weight of $\Gamma$ in the k-sum, so a \emph{shifted} mesh cannot
+see it at all, an unshifted one sees a fraction, and a $\Gamma$-only cell sees
+all of it: on the O$_2$ molecule $\epsilon_{xx}$ reads $1.116446$ against
+$1.110915$, and $Z^{\ast}_{xx}$ $0.10110$ against $0.13372$, where \code{ph.x}
+gives $1.110915996$ and $0.13367$.
+
 \textbf{A Born charge is validated on a polar crystal, and the reason is worth
 one sentence.} In silicon $Z^{\ast}$ is zero by symmetry, so the $-0.0757$ both
 codes print is a basis-set residue and agreeing about it says nothing about the

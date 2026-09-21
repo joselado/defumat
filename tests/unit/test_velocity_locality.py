@@ -44,14 +44,14 @@ pytestmark = pytest.mark.unit
 CASES = Path(__file__).resolve().parents[1] / "data" / "qe"
 
 
-@lru_cache(maxsize=2)
-def _calculation(case: str, pseudo_dir: Path):
+@lru_cache(maxsize=4)
+def _calculation(case: str, pseudo_dir: Path, origin_tangent: bool = True):
     """No SCF: the claim is about the *operator*, not about a ground state."""
     system = build_system(read_pw_input(CASES / f"{case}.in"))
     pseudos = tuple(
         read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species
     )
-    return Calculation(system, pseudos)
+    return Calculation(system, pseudos, origin_tangent=origin_tangent)
 
 
 def _velocity_shift(case: str, pseudo_dir: Path) -> tuple[float, float]:
@@ -300,3 +300,50 @@ def test_the_correction_adds_exactly_zero_to_every_primal(pseudo_dir):
     at_origin = np.asarray(np.sum(core.kg * core.kg, axis=-1)) <= 1.0e-8
     assert at_origin.any(), "si2-nosym's unshifted grid has a k + G = 0 row"
     assert any(s != 0 for s in np.asarray(slopes)), "and an l = 1 channel"
+
+
+def _velocity(case: str, pseudo_dir: Path, origin_tangent: bool):
+    """``<psi|dH/dk|psi>`` on a fixed random block, one leg of the switch."""
+    calculation = _calculation(case, pseudo_dir, origin_tangent)
+    rng = np.random.default_rng(3)
+    v_scf = calculation.potential(
+        jnp.zeros((calculation.nspin_mag,) + tuple(calculation.basis.dense.grid))
+    ).v_scf
+    nk = len(calculation.system.kpoints.weights)
+    width = calculation.basis.planewaves.npwx * calculation.npol
+    psi = jnp.asarray(
+        rng.normal(size=(calculation.nspin, nk, 4, width))
+        + 1j * rng.normal(size=(calculation.nspin, nk, 4, width))
+    )
+    return np.asarray(VelocityOperator(calculation, v_scf, None).matrix_elements(psi))
+
+
+def test_qes_origin_convention_is_reachable_and_changes_only_gamma(pseudo_dir):
+    """``origin_tangent=False`` is QE's zero, and it is inert off Gamma.
+
+    QE drops the ``l = 1`` tangent of ``<k+G|beta>`` at ``k + G = 0`` twice
+    over -- ``PW/src/commutator_Hx_psi.f90:113-118`` sets ``gk_vpol = 0`` where
+    ``g2k < 1.0d-10``, and ``upflib/dylmr2.f90:88-92`` sets ``dg = 0`` where
+    ``gg <= eps``, so ``dylm`` goes with it -- while the product
+    ``f_1(q) Y_1m(qhat) -> c sqrt(3/4pi) q_m`` is linear in the vector and has
+    the gradient ``c sqrt(3/4pi) delta_m,alpha`` there. This code carries the
+    term and the flag puts QE's zero back, which is what a ``ph.x`` comparison
+    on a Gamma-containing mesh is held to (``o2-fixed-lsda`` and
+    ``si10-epsilon``; `PLAN.md` P24 has the numbers).
+
+    **Both halves are asserted, because a switch that did nothing would pass
+    the half that matters less.** On ``si2-nosym``, whose mesh holds Gamma, the
+    two legs must *differ*; on ``si-epsilon``, whose explicit k-list is shifted
+    and holds no ``k + G = 0`` at all, they must be **bit-identical**, which is
+    the statement that the flag reaches exactly the row it claims to and no
+    other.
+    """
+    at_gamma = [_velocity("si2-nosym", pseudo_dir, flag) for flag in (True, False)]
+    moved = np.abs(at_gamma[0] - at_gamma[1]).max()
+    scale = np.abs(at_gamma[0]).max()
+    assert moved > 1.0e-3 * scale, (
+        f"the flag did nothing on a Gamma-containing mesh: {moved} on {scale}")
+
+    shifted = [_velocity("si-epsilon", pseudo_dir, flag) for flag in (True, False)]
+    assert shifted[0].tobytes() == shifted[1].tobytes(), (
+        "the flag moved a mesh that has no k + G = 0 in it")

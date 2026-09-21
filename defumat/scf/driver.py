@@ -1498,6 +1498,7 @@ class Calculation:
         k_batch: int | None | str = "default",
         david: int | None = None,
         projectors: str | None = "default",
+        origin_tangent: bool = True,
     ):
         # **The substitution is conditional now.** Half-sphere storage is
         # consumed where it can be and substituted away where it cannot, so
@@ -1526,6 +1527,17 @@ class Calculation:
         # ``None`` is a single ``vmap`` over all of them. See
         # :mod:`defumat.batching`.
         self.k_batch = resolve_k_batch(k_batch)
+        #: Carry the ``l = 1`` tangent of ``<k+G|beta>`` at ``k + G = 0``.
+        #:
+        #: The default is the derivative the operator actually has. ``False``
+        #: is **Quantum ESPRESSO's convention**, which zeroes that one row
+        #: (``commutator_Hx_psi.f90:113-118`` and ``dylmr2.f90:88-92``), and is
+        #: what a ``ph.x`` comparison on a Gamma-containing mesh is held to --
+        #: the row exists only where ``k + G = 0``, so a shifted mesh never
+        #: reaches it and the flag is inert there. See
+        #: :func:`~defumat.pseudo.projectors.build_projector_core` for the
+        #: numbers it is worth.
+        self.origin_tangent = bool(origin_tangent)
         self.pseudos = tuple(pseudos)
         self.basis = basis if basis is not None else build_basis(system)
         if self.basis.planewaves.gamma_only and not self.gamma_only:
@@ -1672,7 +1684,7 @@ class Calculation:
         # :meth:`at_positions`.
         self.projector_core = build_projector_core(
             self.pseudos, system.structure, system.cell, smooth, planewaves,
-            self.basis_kpoints,
+            self.basis_kpoints, origin_tangent=self.origin_tangent,
         )
         # ``rebuild`` keeps the *core* and forms each k-point's ``(npwx, nkb)``
         # on demand, which is ``init_us_2`` inside ``c_bands.f90``'s ``k_loop``.
@@ -2718,7 +2730,7 @@ class Calculation:
         # part of the derivative rather than a cached table it multiplies.
         strained.projector_core = build_projector_core(
             self.pseudos, structure, cell, smooth, self.basis.planewaves,
-            self.basis_kpoints, kcart,
+            self.basis_kpoints, kcart, origin_tangent=self.origin_tangent,
         )
         strained.projectors = strained.projector_core.at_positions(
             positions, qq=self.projectors.qq
@@ -2862,7 +2874,8 @@ class Calculation:
         # against ``|k+G|``, so unlike a change of position this is not a matter
         # of a new structure factor over a cached core.
         moved.projector_core = build_projector_core(
-            self.pseudos, system.structure, cell, smooth, planewaves, kpoints
+            self.pseudos, system.structure, cell, smooth, planewaves, kpoints,
+            origin_tangent=self.origin_tangent,
         )
         moved.projectors = moved.projector_core.at_positions(
             system.structure.positions, qq=self.projectors.qq
@@ -2966,7 +2979,7 @@ class Calculation:
         moved.kinetic = planewaves.kinetic(smooth, self.basis_kpoints, cell, kcart)
         moved.projector_core = build_projector_core(
             self.pseudos, self.system.structure, cell, smooth, planewaves,
-            self.basis_kpoints, kcart,
+            self.basis_kpoints, kcart, origin_tangent=self.origin_tangent,
         )
         moved.projectors = moved.projector_core.at_positions(
             self.system.structure.positions, qq=self.projectors.qq
@@ -3075,7 +3088,7 @@ class Calculation:
             moved.kinetic = planewaves.kinetic(smooth, self.basis_kpoints, cell, kcart)
             moved.projector_core = build_projector_core(
                 self.pseudos, self.system.structure, cell, smooth, planewaves,
-                self.basis_kpoints, kcart,
+                self.basis_kpoints, kcart, origin_tangent=self.origin_tangent,
             )
             moved.projectors = moved.projector_core.at_positions(
                 self.system.structure.positions, qq=self.projectors.qq
@@ -3115,7 +3128,7 @@ class Calculation:
         )
         moved.projector_core = build_projector_core(
             self.pseudos, system.structure, cell, smooth, planewaves,
-            moved.basis_kpoints,
+            moved.basis_kpoints, origin_tangent=self.origin_tangent,
         )
         moved.projectors = moved.projector_core.at_positions(
             system.structure.positions, qq=self.projectors.qq
