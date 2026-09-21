@@ -651,8 +651,21 @@ def cardinal_directions(system: System, n: int = 1) -> tuple:
                     continue
                 lattice = np.array([i1, i2, i3], dtype=float)
                 # ``gentpmae`` compares the *lattice* coordinates under the
-                # integer rotation matrices, then converts once at the end.
-                images = [rotation @ lattice for rotation in rotations]
+                # integer rotation matrices, then converts once at the end --
+                # and the matrix is the **transpose**. ``Symmetries``' own class
+                # docstring fixes the convention: ``rotations[s]`` is ``M`` with
+                # ``S a_i = sum_j M_ij a_j``, so a *direct*-lattice coordinate
+                # vector goes to ``M^T n`` while a Miller index goes to ``M m``
+                # (``kpoints.py`` rotates ``k`` as ``xkg @ rotation.T``, which is
+                # the same statement). ``cartesian`` two lines below is
+                # ``at.T @ lattice``, a direct-lattice vector, so this is the
+                # first of the two. ``{M}`` and ``{M^T}`` are both groups of the
+                # same order, so the reduction still partitioned the candidates
+                # into orbits and nothing raised -- they were the orbits of a
+                # different action, and they coincide only where the matrices
+                # are signed permutations, which is cubic, tetragonal and
+                # orthorhombic.
+                images = [rotation.T @ lattice for rotation in rotations]
                 if any(
                     any(np.sum(np.abs(image - other)) < 1.0e-6 for other in seen)
                     for image in images

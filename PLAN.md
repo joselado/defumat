@@ -10711,6 +10711,36 @@ converged **magnetic field** or constrained moment, whose energy is outside the
 reported total; and a **spin spiral**, which refuses spin-orbit coupling
 permanently and so has no coupling to switch on.
 
+**`cardinal_directions` reduced its candidates with the transposed action**
+(2026-09-21, `AUDIT-2026-09-20.md`'s `workflows/anisotropy.py:655`).
+:class:`Symmetries` stores `rotations[s] = M` with `S a_i = sum_j M_ij a_j`, so a *direct*
+lattice coordinate vector goes to `M^T n` -- a Miller index is the one that goes to `M m`,
+and `kpoints.py` rotates `k` as `xkg @ rotation.T` for the same reason. The orbit was built
+as `M n` on a vector converted two lines later as `at.T @ lattice`, which is a
+direct-lattice vector. `{M}` and `{M^T}` are both groups of the same order, so the reduction
+still partitioned the 26 candidates into orbits and nothing raised; they were the orbits of
+a different action.
+
+**Which one is the point group needs no convention to settle**, and that is the check that
+went in: only one of `basis M inverse` and `basis M^T inverse` is orthogonal. Measured as
+`max|R R^T - I|`, hcp cobalt reads **5.33 against 2.2e-16**, zincblende AlAs 5.00 against
+1.6e-17 and noncollinear nickel 5.00 against 2.1e-18, while tetragonal cobalt is 2.2e-16
+either way.
+
+**The entry's safe set is wrong and the tetragonal cell is why nothing showed.** It named
+cubic, tetragonal and orthorhombic as unaffected because their matrices are signed
+permutations -- true of a *simple* lattice and false for fcc and hcp, whose rotation
+matrices in the **primitive crystal basis** are general integers however cubic the crystal
+is. Every cell in `tests/data/qe` with `ibrav = 2` or `4` was affected; only the tetragonal
+one was not, and it is the one the anisotropy tests use.
+
+*What it cost*: on hcp cobalt the two in-plane representatives came out at `phi = 180` and
+`240` degrees, **both of the `[100]` family**, with the `[210]` family at 30 degrees modulo
+60 missing entirely -- so `MagneticAnisotropy.anisotropy` in the basal plane was zero by
+omission rather than by physics, on the module's own advertised material. After, they are
+`240` and `150`, one of each. **Five directions either way**, so a length check could not
+have caught it and the test asserts the families.
+
 #### P58b — `soc_scale`: switching the coupling off without changing the dataset.
 
 Elk's `socscf` (manual 5.118, `gensocfr.f90`), which exists there for exactly

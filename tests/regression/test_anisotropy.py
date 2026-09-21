@@ -196,6 +196,96 @@ def test_cardinal_directions_are_reduced_by_the_crystal_group():
     assert len(directions) < 26
 
 
+def test_the_direction_orbit_is_the_point_group_and_not_its_transpose():
+    """Which action reduces the candidates, settled without reading a docstring.
+
+    ``Symmetries`` stores ``rotations[s] = M`` with ``S a_i = sum_j M_ij a_j``,
+    so a *direct*-lattice coordinate vector goes to ``M^T n`` -- a Miller index
+    is the one that goes to ``M m``. ``cardinal_directions`` built its orbit as
+    ``M n`` on a vector it converts two lines later as ``at.T @ lattice``, which
+    is a direct-lattice vector.
+
+    The check here needs neither convention: **exactly one of the two actions is
+    the point group**, because only one of ``basis M inverse`` and
+    ``basis M^T inverse`` is orthogonal, and orthogonality is a property of the
+    matrix rather than of anybody's index order. Measured as
+    ``max|R R^T - I|``: hcp cobalt **5.33 against 2.2e-16**, zincblende AlAs
+    5.00 against 1.6e-17, noncollinear nickel 5.00 against 2.1e-18.
+
+    **Tetragonal cobalt cannot tell them apart** (2.2e-16 both ways), which is
+    the control -- and it is also why this went unnoticed. The audit entry put
+    the safe set as "cubic, tetragonal and orthorhombic"; that is true of a
+    *simple* lattice, and false for fcc and hcp, whose rotation matrices in the
+    primitive crystal basis are not signed permutations however cubic the
+    crystal is.
+    """
+    from pathlib import Path
+
+    from defumat.system.builder import system_from_file
+
+    cases = Path(__file__).resolve().parents[1] / "data" / "qe"
+    discriminating = {"co-hcp-anisotropy-sr": 5.0, "alas-piezo": 4.0,
+                      "ni-noncol-111": 4.0}
+    for case, floor in discriminating.items():
+        system = system_from_file(cases / f"{case}.in")
+        basis = np.asarray(system.cell.at, dtype=float).T
+        inverse = np.linalg.inv(basis)
+        straight = transposed = 0.0
+        for matrix in np.asarray(system.symmetry_group().rotation_array(),
+                                 dtype=float):
+            for value, label in ((matrix, "straight"), (matrix.T, "transposed")):
+                cartesian = basis @ value @ inverse
+                residue = float(np.abs(cartesian @ cartesian.T - np.eye(3)).max())
+                if label == "straight":
+                    straight = max(straight, residue)
+                else:
+                    transposed = max(transposed, residue)
+        assert transposed < 1e-12, f"{case}: M^T has to be the point group"
+        assert straight > floor, f"{case}: M has to be visibly not one"
+
+    # ...and the cell where the two coincide, which is the control that says the
+    # discriminating cells are discriminating and not merely different.
+    system = system_from_file(cases / "co-tetragonal-anisotropy-sr.in")
+    basis = np.asarray(system.cell.at, dtype=float).T
+    inverse = np.linalg.inv(basis)
+    for matrix in np.asarray(system.symmetry_group().rotation_array(), dtype=float):
+        for value in (matrix, matrix.T):
+            cartesian = basis @ value @ inverse
+            assert np.abs(cartesian @ cartesian.T - np.eye(3)).max() < 1e-12
+
+
+def test_hexagonal_cobalt_keeps_both_basal_families():
+    """The count was right either way, so only the membership shows it.
+
+    A hexagonal crystal has two inequivalent in-plane direction families,
+    ``[100]``-type at ``phi = 0, 60, 120, ...`` and ``[210]``-type at
+    ``30, 90, 150, ...``, and the basal-plane anisotropy is the difference
+    between them. Reduced with the wrong action, hcp cobalt's two in-plane
+    representatives came out at ``phi = 180`` and ``240`` -- **both** of the
+    first family, with the second missing entirely, so
+    ``MagneticAnisotropy.anisotropy`` in the basal plane was zero by omission
+    rather than by physics. After, they are ``240`` and ``150``, one of each.
+
+    **Five directions both ways**, which is why a length check could not have
+    caught this and the test asserts the families instead.
+    """
+    from pathlib import Path
+
+    from defumat.system.builder import system_from_file
+
+    cases = Path(__file__).resolve().parents[1] / "data" / "qe"
+    system = system_from_file(cases / "co-hcp-anisotropy-sr.in")
+    directions = cardinal_directions(system, 1)
+    assert len(directions) == 5
+
+    in_plane = [d for d in directions if abs(d[2]) < 1e-9]
+    families = {round(float(np.degrees(np.arctan2(d[1], d[0]))) % 60.0, 1)
+                for d in in_plane}
+    assert len(in_plane) == 2
+    assert families == {0.0, 30.0}, (
+        f"both basal families have to be represented, got {families}")
+
+
 # ----------------------------------------------------------------------
 # rung 1: without the coupling there is no anisotropy at all
 # ----------------------------------------------------------------------
