@@ -1,0 +1,45 @@
+! The stress of a hydrogen atom in a box at nspin = 2, which is the cell that
+! reaches the exchange-correlation energy's saturated branch with real charge on
+! it rather than with a fringe.
+!
+! One electron and one channel: the minority density is 1e-18 to 1e-21 over the
+! whole grid, so wherever the majority density is large enough to swamp it in
+! float64 the test |rho_up - rho_dw| >= |rho_up + rho_dw| holds exactly. That is
+! 863 of 64,000 points here and they carry 0.597 of the one electron, meaning the
+! saturated branch is the core of the atom rather than the vacuum around it.
+!
+! Why the stress and not the force. At frozen wavefunctions the density follows
+! the geometry only through a core or an augmentation charge, and this dataset
+! has neither, so the force cannot see the branch at all; under a strain the
+! whole density moves, since rho carries 1/Omega, so the strain derivative reads
+! d(rho e_xc)/drho at every point. With that derivative masked the diagonal came
+! out at +6.65e-05 Ry/bohr^3 against pw.x's -1.049e-05, which is 11.3 kbar and
+! the opposite sign, and the total energy was right to every digit throughout.
+!
+! The other spin-polarized stress in the suite is pw_lsda/lsda.in, nickel, whose
+! two channels are both populated everywhere, so not one of its points is
+! saturated and it could not have shown this.
+ &control
+    calculation = 'scf'
+    tstress = .true.
+    tprnfor = .true.
+ /
+ &system
+    ibrav = 1, celldm(1) = 12.0,
+    nat = 1, ntyp = 1,
+    ecutwfc = 25.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.02
+    nspin = 2
+    starting_magnetization(1) = 0.6
+    nbnd = 4
+ /
+ &electrons
+    mixing_beta = 0.3
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ H  1.008  H.pz-vbc.UPF
+ATOMIC_POSITIONS (alat)
+ H 0.0 0.0 0.0
+K_POINTS {automatic}
+ 1 1 1 0 0 0

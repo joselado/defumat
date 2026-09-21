@@ -73,7 +73,17 @@ pytestmark = [pytest.mark.regression, pytest.mark.slow]
 
 CASES = Path(__file__).resolve().parents[1] / "data" / "qe"
 
-#: The five generated cases, in the order they add capability.
+#: The generated cases, in the order they add capability. The last one is the
+#: only cell here that reaches the exchange-correlation energy's saturated
+#: branch with charge on it: one hydrogen at ``nspin = 2``, whose minority
+#: density is 1e-18 over the whole grid, so 863 of 64,000 points satisfy
+#: ``|rho_up - rho_dw| >= |rho_up + rho_dw|`` exactly in float64 and they carry
+#: 0.597 of the one electron. With the first derivative of ``e_xc`` masked there
+#: the diagonal read +6.65e-05 Ry/bohr^3 against ``pw.x``'s -1.049e-05, 11.3
+#: kbar and the opposite sign, with the total energy right throughout
+#: (``OPEN.md`` Part XIV item 2). The borrowed ``pw_lsda/lsda.in`` is polarized
+#: too and could not have shown it: nickel's two channels are both populated
+#: everywhere, so none of its points is saturated.
 GENERATED = [
     "si2-nc-stress",
     "si2-nc-sheared",
@@ -81,6 +91,7 @@ GENERATED = [
     "si2-paw-stress",
     "si2-us-pbe-stress",
     "ni-ldau-stress",
+    "h-atom-lsda-stress",
 ]
 
 #: QE test-suite inputs that carry ``tstress = .true.`` and whose
