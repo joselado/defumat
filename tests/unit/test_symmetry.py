@@ -137,3 +137,96 @@ def test_symmetry_group_honours_the_nosym_it_takes():
     assert trivial.nsym == 1
     assert trivial.symmorphic
     assert np.array_equal(trivial.rotation_array()[0], np.eye(3, dtype=int))
+
+
+# --- the acceptance tolerance is QE's, not one ten times tighter -------------
+
+
+def test_a_translation_written_with_six_decimals_is_a_third():
+    """``0.333333`` is a crystallographic third and used to be nothing at all.
+
+    The filter accepts a component when ``1/|residue|`` is close to an integer,
+    and ``1/0.333333 = 3.000003`` sits 3.0e-6 from 3 -- inside QE's
+    ``eps2 = 1e-5`` (``symm_base.f90:23``, used at ``sgam_at:557-569``) and
+    three times outside the 1e-6 this used to apply. So a hexagonal cell whose
+    positions are written with six decimals lost **every** non-symmorphic
+    operation, and the only other candidate for a sublattice swap is the zero
+    translation, which fails the structure match.
+    """
+    from defumat.system.symmetry import _crystallographic_translation
+
+    exact = np.array([1.0 / 3.0, 2.0 / 3.0, 0.5])
+    written = np.array([0.333333, 0.666667, 0.5])
+    assert _crystallographic_translation(exact)
+    assert _crystallographic_translation(written)
+    # ...and a translation that is *not* a crystallographic fraction still is
+    # not one, so the loosening did not turn the filter into a pass-through.
+    assert not _crystallographic_translation(np.array([0.2, 0.0, 0.0]))
+    assert not _crystallographic_translation(np.array([0.142857, 0.0, 0.0]))
+
+
+def test_hcp_cobalt_finds_the_group_pw_x_finds(pseudo_dir):
+    """Four numbers against ``pw.x``'s own header on the same input.
+
+    ``pw.x`` on ``co-hcp-anisotropy-sr.in`` prints ``24 Sym. Ops., with
+    inversion, found (12 have fractional translation)``, ``number of k points=
+    6`` and a smooth FFT grid of ``(15, 15, 30)``. This read **4**, **8** and
+    ``(15, 15, 25)``: the twelve operations that swap the two hcp sublattices
+    need ``ft = (1/3, 2/3, 1/2)`` and the filter rejected it, and
+    :meth:`Symmetries.fft_factors` then lost the factor of 3 that those
+    translations carry.
+
+    **It was a cost rather than an error**, which is worth saying because the
+    audit entry forecast otherwise: the four operations still formed a group
+    and its eight-point wedge is a valid sampling of the same zone, so the
+    density was symmetrised over a proper subgroup and the total came out at
+    -148.81512176 Ry against ``pw.x``'s -148.81512173, moving to -148.81512173
+    after. What it cost is iterations, **38 against 16**.
+    """
+    from pathlib import Path
+
+    from defumat.system.builder import system_from_file
+
+    case = Path(__file__).resolve().parents[1] / "data" / "qe"
+    system = system_from_file(case / "co-hcp-anisotropy-sr.in")
+    group = system.symmetry_group(nosym=system.nosym)
+    translations = np.asarray(group.translation_array())
+
+    assert len(group.rotation_array()) == 24
+    assert int(np.count_nonzero(np.abs(translations).sum(axis=1) > 1e-5)) == 12
+    assert tuple(group.fft_factors()) == (3, 3, 2)
+    assert len(np.asarray(system.kpoints.weights)) == 6
+
+
+def test_the_position_tolerance_has_room_on_every_committed_cell():
+    """Loosening ``_maps_structure`` cannot merge two atoms, measured.
+
+    The risk of matching positions at 1e-5 instead of 1e-6 is a cell with two
+    atoms closer than that in crystal coordinates. The closest pair anywhere in
+    ``tests/data/qe`` is **0.1**, on the two hydrogen chains, which is four
+    orders of magnitude of headroom -- and QE itself never goes below 1e-5
+    except by halving ``accep`` when the group fails to close.
+    """
+    import glob
+    from pathlib import Path
+
+    from defumat.system.builder import system_from_file
+    from defumat.system.symmetry import _POSITION_TOLERANCE
+
+    case = Path(__file__).resolve().parents[1] / "data" / "qe"
+    closest = np.inf
+    for path in sorted(glob.glob(str(case / "*.in"))):
+        try:
+            system = system_from_file(path)
+        except Exception:                                   # noqa: BLE001
+            continue
+        crystal = np.asarray(system.structure.positions_crystal(system.cell)) % 1.0
+        if len(crystal) < 2:
+            continue
+        difference = crystal[:, None, :] - crystal[None, :, :]
+        difference -= np.rint(difference)
+        separation = np.abs(difference).max(axis=-1)
+        np.fill_diagonal(separation, np.inf)
+        closest = min(closest, float(separation.min()))
+    assert closest > 1.0e-3, f"closest pair {closest:.3e} in crystal coordinates"
+    assert closest / _POSITION_TOLERANCE > 1.0e3

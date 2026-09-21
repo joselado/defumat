@@ -49,7 +49,29 @@ __all__ = ["Symmetries", "lattice_point_group", "find_symmetries", "is_supercell
            "symmetrize_magnetization", "symmetrize_vector_density",
            "symmetrize_tensor_density"]
 
+#: QE's ``eps1``. It is the right scale for a determinant, a cell length or a
+#: metric, which is what most of the uses below are.
 _TOLERANCE = 1.0e-6
+#: **Whether two atomic positions coincide, and whether a fractional translation
+#: is a crystallographic fraction.** QE uses ``eps2 = 1e-5`` for the second
+#: (``symm_base.f90:23``, ``sgam_at:557-569``) and ``accep = 1e-5`` for the first
+#: (``:57``, through ``eqvect`` at ``:985``), and the two numbers are the same;
+#: one constant here rather than two names for one value.
+#:
+#: **Ten times tighter was not a safer choice, it was a different crystal.** A
+#: translation component written as ``0.333333`` gives ``1/0.333333 = 3.000003``
+#: and a residue of 3.0e-6 from the integer 3 -- inside QE's 1e-5 and three
+#: times outside 1e-6 -- so every non-symmorphic operation of a hexagonal cell
+#: written with six decimals was discarded. Measured on
+#: ``co-hcp-anisotropy-sr.in``, whose second atom is ``0.333333 0.666667
+#: 0.500000``: **4 operations against ``pw.x``'s 24** (12 of them with a
+#: fractional translation), 8 k-points against 6, and a smooth FFT grid of
+#: ``(15, 15, 25)`` against ``(15, 15, 30)``, since :meth:`Symmetries.
+#: fft_factors` loses the factor of 3 with the translations that carry it.
+#: ``find_sym`` never reaches 1e-6 in any case: it starts at 1e-5 and only
+#: *halves* on failure, to 5e-6 and 2.5e-6, before giving up and setting
+#: ``nsym = 1``.
+_POSITION_TOLERANCE = 1.0e-5
 #: QE compares magnetizations with ``eps2 = 1e-5`` (``sgam_at_mag``), looser than
 #: the position tolerance because ``m_loc`` is a product of input numbers.
 _MAGNETIC_TOLERANCE = 1.0e-5
@@ -720,10 +742,10 @@ def _crystallographic_translation(candidate) -> bool:
     """
     for component in np.asarray(candidate):
         residue = component - np.rint(component)
-        if abs(residue) < _TOLERANCE:
+        if abs(residue) < _POSITION_TOLERANCE:
             continue
         order = int(np.rint(1.0 / abs(residue)))
-        if abs(1.0 / abs(residue) - order) > _TOLERANCE:
+        if abs(1.0 / abs(residue) - order) > _POSITION_TOLERANCE:
             return False
         if order not in _CRYSTALLOGRAPHIC_DENOMINATORS:
             return False
@@ -740,7 +762,7 @@ def _maps_structure(rotated, positions, types) -> bool:
     """Whether every rotated position coincides with an atom of the same species."""
     difference = rotated[:, None, :] - positions[None, :, :]
     difference -= np.rint(difference)  # modulo a lattice translation
-    matches = np.all(np.abs(difference) < _TOLERANCE, axis=-1)
+    matches = np.all(np.abs(difference) < _POSITION_TOLERANCE, axis=-1)
     matches &= types[:, None] == types[None, :]
     return bool(np.all(matches.any(axis=1)))
 
@@ -841,7 +863,12 @@ def atom_mapping(cell: Cell, structure: Structure, symmetries: Symmetries) -> np
             difference = image[None, :] - positions
             difference -= np.rint(difference)
             matches = np.flatnonzero(
-                (np.abs(difference) < _TOLERANCE).all(axis=1) & (types == types[a])
+                # The same ``accep`` :func:`_maps_structure` accepted the
+                # operation with: tighter here and an operation that passed
+                # there raises an ``AssertionError`` from inside this table,
+                # which is ``sgam_at`` building ``irt`` with ``eqvect`` in QE.
+                (np.abs(difference) < _POSITION_TOLERANCE).all(axis=1)
+                & (types == types[a])
             )
             if matches.size != 1:
                 raise AssertionError(

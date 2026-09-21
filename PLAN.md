@@ -461,6 +461,48 @@ Three things this phase settled:
   Both are implemented (`Symmetries.fft_factors`, `is_supercell`), and where a committed
   benchmark predates them the reference is regenerated with the vendored `pw.x`
   (`tools/generate_reference.py`).
+- **The acceptance tolerance was ten times tighter than QE's, and that is a different
+  crystal rather than a safer one** (2026-09-21, `AUDIT-2026-09-20.md`'s
+  `system/symmetry.py:726`). The fractional-translation filter accepted a component when
+  `1/|residue|` was within `1e-6` of an integer, where QE's `sgam_at` uses
+  `eps2 = 1e-5` (`symm_base.f90:23`, `:557-569`), and `_maps_structure` matched positions
+  at `1e-6` where `eqvect` uses `accep = 1e-5` (`:57`, `:985`) -- which `find_sym` only
+  ever *halves* on failure, so QE never reaches 1e-6 at all. A translation written as
+  `0.333333` gives `1/0.333333 = 3.000003` and a residue of **3.0e-6** from the integer 3:
+  inside QE's window and three times outside ours, so every non-symmorphic operation of a
+  hexagonal cell written with six decimals was discarded, the only other candidate for a
+  sublattice swap being the zero translation, which fails the structure match.
+
+  Measured on `co-hcp-anisotropy-sr.in`, against `pw.x`'s own header on the same file:
+
+  | | before | after | `pw.x` |
+  |---|---|---|---|
+  | operations | 4 | **24** | 24 |
+  | of them with a fractional translation | 0 | **12** | 12 |
+  | k-points | 8 | **6** | 6 |
+  | smooth FFT grid | (15, 15, 25) | **(15, 15, 30)** | (15, 15, 30) |
+  | total energy | -148.81512176 | **-148.81512173** | -148.81512173 |
+
+  **It was a cost and not an error, which is not what the entry forecast.** The audit leaned
+  on the 1.7e-4 Ry graphite precedent above; here the energy moved by **3.2e-8 Ry** and the
+  agreement with `pw.x` went from 3.18e-8 to 4.13e-10. The reason is structural: the four
+  operations still formed a group, and its eight-point wedge is a valid sampling of the same
+  zone, so the density was symmetrised over a proper subgroup rather than over the wrong set,
+  and the smooth grid moves only the aliasing in `vloc_psi` because which plane waves are in
+  the sphere is decided by `ecutwfc` and not by the box. What it cost is iterations,
+  **38 against 16**. Where the subgroup *would* have been an error is any consumer that
+  assumes the crystal's full group -- a symmetrised response, or `fft_factors` under a
+  non-symmorphic operation the code then applies -- and the anisotropy this cell exists for
+  is not one: `tools/gpu/p59_check.py` takes both force-theorem legs on the *spinor* input,
+  which carries `nosym = .true.` and was never on this branch, so only the density it is
+  built from moved, by 3.2e-8 Ry.
+
+  **One input of 195 changes**, `co-hcp-anisotropy-sr`, and it has no committed reference, so
+  no validated number in the tree moves. `co-hcp-anisotropy-soc`, which the audit entry also
+  named, carries `nosym` and never reached the filter. The risk of matching positions at 1e-5
+  is two atoms closer than that, and the closest pair anywhere in `tests/data/qe` is **0.1**
+  in crystal coordinates, four orders of magnitude of headroom, which a test now asserts
+  rather than a paragraph claiming it.
 - **Miller indices are stored, cartesian G is derived.** Storing cartesian components would
   freeze the cell and make stress-by-differentiation impossible; a test confirms
   `grad(|G|²)` w.r.t. the lattice is non-zero (rule D2).
