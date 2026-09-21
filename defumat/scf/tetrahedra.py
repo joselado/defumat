@@ -220,6 +220,7 @@ def build_tetrahedra(
     rotations: np.ndarray,
     bg: np.ndarray,
     time_reversal: bool = True,
+    t_rev: np.ndarray | None = None,
     precision: Precision = DEFAULT_PRECISION,
 ) -> Tetrahedra:
     """Cut the Monkhorst-Pack grid into tetrahedra and index them into the IBZ.
@@ -230,11 +231,18 @@ def build_tetrahedra(
         rotations: the crystal's symmetries in crystal axes, the same ones the
             wedge was reduced with -- the tetrahedra corners are looked up in
             *that* reduced list.
+        time_reversal, t_rev: the rest of that triple, and they are not
+            optional in practice. ``equiv`` indexes into the list
+            :func:`~defumat.system.kpoints.grid_equivalence` produces for the
+            group it is given, so a corner is only in the right place when all
+            three match what built the k-set -- which is
+            :meth:`~defumat.system.builder.System.grid_symmetry`. The defaults
+            here are the unpolarised non-``nosym`` case and nothing else.
         bg: reciprocal lattice vectors as rows; only their relative lengths
             matter, and only for the optimised/linear shaft choice.
     """
     nk1, nk2, nk3 = (int(n) for n in grid)
-    equiv = grid_equivalence(grid, shift, rotations, time_reversal)
+    equiv = grid_equivalence(grid, shift, rotations, time_reversal, t_rev)
 
     if kind == "bloechl":
         offsets = np.broadcast_to(_CUBE[_BLOECHL_TETRAHEDRA], (6, 4, 3))
@@ -263,23 +271,50 @@ def build_tetrahedra(
     )
 
 
-def tetrahedra_for(occupations, kpoints, symmetries, cell) -> Tetrahedra:
+def tetrahedra_for(occupations, kpoints, symmetries, cell,
+                   grid_symmetry=None) -> Tetrahedra:
     """The tetrahedra of a calculation, from the objects a driver already holds.
 
     Refuses an explicit k-point list the way ``PP/src/dos.f90`` does: the method
     needs the grid the points came from, and there is no way to recover one.
+
+    ``grid_symmetry`` is :meth:`~defumat.system.builder.System.grid_symmetry`'s
+    triple, and **it is the whole triple or none of it**. The corners of every
+    microcell are looked up in the reduced list by walking the orbits again, so
+    the rotations, the time reversal and the per-operation ``t_rev`` all have to
+    be the ones the k-set was built with; two of the three agreeing is not
+    enough. Measured on a ``nosym`` fcc aluminium grid, where the run
+    diagonalises all 64 points and the corners were folded onto 32 of them,
+    **32 of 64 corners were sent to the wrong representative**; on AlAs with
+    ``noinv``, where the crystal has no inversion to make time reversal
+    redundant, **55 of 64**.
+
+    ``rotations = None`` in that triple is ``nosym``, which
+    :meth:`~defumat.system.kpoints.KPoints.automatic` reads as "the complete
+    grid" -- so here it is the identity with **no** time reversal, which is the
+    same statement and the one ``grid_equivalence`` understands. Omitting the
+    argument keeps the group as given with time reversal on, which is the
+    unpolarised symmetric case and nothing else.
     """
     if kpoints.grid is None:
         raise ValueError(
             "the tetrahedron method needs an automatic k-point grid "
             "(K_POINTS automatic); an explicit list carries no tetrahedra"
         )
+    if grid_symmetry is None:
+        rotations, time_reversal, t_rev = symmetries.rotation_array(), True, None
+    else:
+        rotations, time_reversal, t_rev = grid_symmetry
+        if rotations is None:
+            rotations, time_reversal, t_rev = np.eye(3, dtype=int)[None], False, None
     return build_tetrahedra(
         tetrahedron_kind(occupations),
         kpoints.grid,
         kpoints.shift or (0, 0, 0),
-        symmetries.rotation_array(),
+        rotations,
         np.asarray(cell.bg_2pi_alat),
+        time_reversal=time_reversal,
+        t_rev=t_rev,
         precision=kpoints.precision,
     )
 

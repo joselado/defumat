@@ -170,3 +170,69 @@ def test_dos_file_matches_dos_x_layout(tmp_path):
 
     path = write_dos(tmp_path / "si.dos", dos)
     assert path.read_text() == text
+
+
+# --- the tetrahedra are indexed into the list the eigenvalues are on ---------
+
+
+@pytest.mark.parametrize(("case", "extra", "wrong_before"), [
+    ("al-tetrahedra", "    nosym = .true.,", 32),
+    ("alas-piezo", "    noinv = .true.,", 55),
+])
+def test_the_tetrahedra_corners_land_in_the_k_set_the_run_built(
+        case, extra, wrong_before, pseudo_dir):
+    """The corners are looked up in a reduced list, so the group has to match.
+
+    ``grid_equivalence`` returns an index **into the reduced list**, and
+    ``build_tetrahedra`` used to be handed the rotations alone, with
+    ``time_reversal`` defaulting to ``True`` and no ``t_rev`` parameter at all.
+    Every corner index is a valid index into the longer eigenvalue array, so the
+    gather succeeds and nothing raises -- the eigenvalues are simply somebody
+    else's.
+
+    Two cells, because the first one alone is a null on the second's defect.
+    Under ``nosym`` the run diagonalises the complete 64-point grid while the
+    corners were folded onto 32 of them: **32 of 64 wrong**. Under ``noinv`` the
+    fold is redundant on a *centrosymmetric* crystal, so fcc aluminium shows
+    nothing and zincblende AlAs, which has no inversion, shows **55 of 64** --
+    with the run on 10 k-points and the corners spanning 8.
+    """
+    from pathlib import Path
+
+    from defumat.io.pwin import parse_pw_input
+    from defumat.system.builder import build_system
+    from defumat.system.kpoints import KPoints, grid_equivalence
+
+    path = Path(__file__).resolve().parents[1] / "data" / "qe" / f"{case}.in"
+    system = build_system(parse_pw_input(
+        path.read_text().replace("&system", f"&system\n{extra}")))
+    grid = tuple(int(n) for n in system.kpoints.grid)
+    shift = tuple(int(s) for s in (system.kpoints.shift or (0, 0, 0)))
+    rotations, time_reversal, t_rev = system.grid_symmetry()
+
+    built = KPoints.automatic(grid, shift, system.cell, rotations=rotations,
+                              time_reversal=time_reversal, t_rev=t_rev)
+    nk = len(np.asarray(built.weights))
+    complete = len(monkhorst_pack(grid, shift)[0])
+
+    identity = np.eye(3, dtype=int)[None]
+    want = (np.arange(complete) if rotations is None else
+            grid_equivalence(grid, shift, rotations, time_reversal, t_rev))
+    stale = grid_equivalence(
+        grid, shift, system.symmetry_group(nosym=system.nosym).rotation_array(),
+        True)
+    assert int(np.count_nonzero(want != stale)) == wrong_before, (
+        "the defect this pins is the one that was measured")
+
+    tetrahedra = build_tetrahedra(
+        "bloechl", grid, shift,
+        identity if rotations is None else rotations,
+        np.asarray(system.cell.bg_2pi_alat),
+        time_reversal=False if rotations is None else time_reversal,
+        t_rev=None if rotations is None else t_rev,
+    )
+    corners = np.asarray(tetrahedra.corners)
+    assert int(corners.max()) + 1 == nk, (
+        f"the corners span {int(corners.max()) + 1} points and the run has {nk}")
+    assert set(np.unique(corners)) == set(range(nk)), (
+        "every k-point the run diagonalised has to be a corner of something")

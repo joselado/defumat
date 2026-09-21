@@ -713,6 +713,48 @@ Transcription traps, in the order they cost time:
    building; the symmetric pairwise mean used here agrees whenever the relation is
    transitive, which at 1e-6 Ry it is, and both preserve the total.
 
+
+**The tetrahedra were indexed into a list reduced by a different group** (2026-09-21,
+`AUDIT-2026-09-20.md`'s `workflows/dos.py:453`). The decomposition is built on the full
+`nk1 nk2 nk3` grid, where a microcell has eight well-defined corners, and every corner is
+then looked up in the **reduced** list through `grid_equivalence` -- so the rotations, the
+time reversal and the per-operation `t_rev` all have to be the ones the k-set was built
+with. `tetrahedra_for` forwarded the rotations alone: `time_reversal` defaulted to `True`
+and `build_tetrahedra` had no `t_rev` parameter at all. Every corner index is a valid index
+into the longer eigenvalue array, so the gather succeeds and nothing raises; the eigenvalues
+are simply somebody else's.
+
+**It reaches the SCF and not only the density of states**, which is the larger half and was
+not in the entry: `Calculation.occupations` (`driver.py:4493`) builds its own tetrahedra
+through the same call. Measured on `al-tetrahedra.in` with `nosym` added, against the same
+input without it -- the same crystal on the same points, so the two must agree:
+
+| | total energy | Fermi level |
+|---|---|---|
+| `nosym`, before | -4.22533421 Ry | 0.683911 Ry |
+| `nosym`, after | **-4.19790161** | **0.626627** |
+| the wedge, either way | -4.19789860 | 0.626626 |
+
+**27.4 mRy on the total and 57.3 mRy, 0.78 eV, on the Fermi level**, on a metal, so every
+occupation downstream moved with it.
+
+**Two cells, because one of them is a null on the other's defect.** Under `nosym` the run
+diagonalises the complete 64-point grid while the corners were folded onto 32 of them:
+**32 of 64 corners sent to the wrong representative**. Under `noinv` the fold is redundant
+on a *centrosymmetric* crystal, so fcc aluminium shows nothing at all and zincblende AlAs,
+which has no inversion, shows **55 of 64**, with the run on 10 k-points and the corners
+spanning 8. The magnetic noncollinear case is a third mechanism -- the operations flagged in
+`t_rev` were used as plain rotations *and* a global time reversal was added on top -- and it
+measures **0 of 64** on `ni-noncol-111`, whose magnetic group happens to give the same
+orbits either way. So the `t_rev` path is threaded now and no cell in the tree exercises it,
+which is the honest state rather than the entry's "twice over".
+
+The triple has one owner, `System.grid_symmetry()`, because three places need it and two of
+them cannot import the third: the NSCF k-set (`denser_grid`), the unfolding a nesting
+function does, and the tetrahedra, which are built from `Calculation` as well as from
+`run_dos`. `rotations = None` is `nosym`, which `KPoints.automatic` reads as "the complete
+grid", so the tetrahedra take the identity with time reversal **off**, which is the same
+statement in the form `grid_equivalence` understands.
 **P8 x P9 — what integrating them needed.** Both schemes stay per channel; the workflow
 loops over them and the `.dos` file grows a `dosup`/`dosdw` pair with one summed
 `Int dos`, as `dos.f90` writes it. Two things were not mechanical:

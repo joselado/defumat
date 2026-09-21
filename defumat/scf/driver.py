@@ -4490,8 +4490,15 @@ class Calculation:
             # ``-TS`` term: the method integrates the true step function, which
             # is why QE prints no "smearing contrib." for a tetrahedron run.
             if getattr(self, "_tetrahedra", None) is None:
+                # **The triple, not the rotations alone.** The corners are
+                # looked up in the list the k-set was reduced to, so the
+                # tetrahedra have to be built with the group that reduced it --
+                # under ``nosym`` the run diagonalises the complete grid while
+                # the corners were folded onto half of it, and the Fermi level
+                # this scheme produces comes off the wrong points.
                 self._tetrahedra = tetrahedra_for(
-                    scheme, self.system.kpoints, self.symmetries, self.system.cell
+                    scheme, self.system.kpoints, self.symmetries,
+                    self.system.cell, self.system.grid_symmetry()
                 )
             counts = (self.nelup, self.neldw) if self.two_fermi_energies else None
             wg, ef = tetrahedron_occupations_spin(

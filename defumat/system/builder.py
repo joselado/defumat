@@ -644,6 +644,31 @@ class System(eqx.Module):
 
         return Calculator(self, pseudos, **options)
 
+    def grid_symmetry(self):
+        """``(rotations, time_reversal, t_rev)`` this run reduces a k-grid with.
+
+        **One source of truth for a triple that has to be the same in three
+        places**: the k-set an NSCF run is built on
+        (:func:`~defumat.workflows.nscf.denser_grid`), the unfolding a nesting
+        function does, and the tetrahedra, whose corners are looked up in that
+        same reduced list. Where two of them disagree about the group, every
+        corner is sent to somebody else's representative and nothing raises --
+        the eigenvalues are simply the wrong ones, and that is the P28a family
+        of defect.
+
+        ``rotations`` is ``None`` for a ``nosym`` run, which
+        :meth:`~defumat.system.kpoints.KPoints.automatic` reads as "return the
+        complete grid". ``time_reversal`` is off under ``noinv`` and off for a
+        magnetic noncollinear run, both of which are ``setup.f90``'s rule, and
+        ``t_rev`` marks the operations that are symmetries only together with
+        time reversal.
+        """
+        magnetic = self.nspin == 4 and self.domag
+        symmetries = self.symmetry_group()
+        rotations = None if self.nosym else symmetries.rotation_array()
+        t_rev = None if self.nosym else symmetries.t_rev_array()
+        return rotations, (not self.noinv and not magnetic), t_rev
+
     def symmetry_group(self, nosym: bool = False) -> Symmetries:
         """The space group of the crystal -- magnetic if the run is.
 

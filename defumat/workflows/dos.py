@@ -450,7 +450,8 @@ def run_dos(
         # wrong ones. The pair has to be decided once: see
         # :func:`~defumat.workflows.nscf.denser_grid`.
         symmetries = system.symmetry_group(nosym=system.nosym)
-        tetrahedra = tetrahedra_for(scheme, nscf.kpoints, symmetries, system.cell)
+        tetrahedra = tetrahedra_for(scheme, nscf.kpoints, symmetries,
+                                    system.cell, system.grid_symmetry())
         degauss = 0.0
     elif degauss is None:
         degauss = system.degauss or delta_e

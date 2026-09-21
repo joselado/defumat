@@ -427,9 +427,10 @@ def grid_symmetry(system: System):
 
     ``rotations`` is ``None`` for a ``nosym`` run, which is what ``KPoints.
     automatic`` reads as "return the complete grid".
+
+    The rule itself is :meth:`~defumat.system.builder.System.grid_symmetry`,
+    because the *tetrahedra* need the same triple and are built from
+    :class:`~defumat.scf.driver.Calculation` as well as from here, which cannot
+    import a workflow.
     """
-    magnetic = system.nspin == 4 and system.domag
-    symmetries = system.symmetry_group()
-    rotations = None if system.nosym else symmetries.rotation_array()
-    t_rev = None if system.nosym else symmetries.t_rev_array()
-    return rotations, (not system.noinv and not magnetic), t_rev
+    return system.grid_symmetry()

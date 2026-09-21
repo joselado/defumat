@@ -134,3 +134,61 @@ def test_the_three_variants_disagree_by_more_than_the_tolerance(qe_testsuite, ps
         for name, _ in NSCF_CASES
     ]
     assert abs(levels[0] - levels[1]) > 20.0 * FERMI_EV
+
+
+def test_nosym_and_the_wedge_reach_the_same_fermi_level(pseudo_dir):
+    """A ``nosym`` run is the same physics on the complete grid, and it was not.
+
+    The tetrahedra are built on the full grid and every corner is looked up in
+    the *reduced* list, so the group that reduced the k-set and the group the
+    corners are folded with have to be the same one. ``build_tetrahedra`` was
+    handed the rotations alone, with ``time_reversal`` defaulting to ``True``:
+    under ``nosym`` the run diagonalises all 64 points of aluminium's grid and
+    the corners were folded onto 32 of them, so half the list never contributed
+    and the other half was counted twice. Every index is valid, so nothing
+    raised.
+
+    **It reaches the SCF and not only the density of states**, because
+    ``Calculation.occupations`` builds its own tetrahedra the same way. Measured
+    on ``al-tetrahedra.in`` with ``nosym`` added, against the same input without
+    it:
+
+        before   E = -4.22533421 Ry   E_F = 0.683911 Ry
+        after    E = -4.19790161 Ry   E_F = 0.626627 Ry
+        wedge    E = -4.19789860 Ry   E_F = 0.626626 Ry
+
+    -- 27.4 mRy on the total and **57.3 mRy, 0.78 eV, on the Fermi level**, on a
+    quantity that has to agree with the symmetric run exactly because it is the
+    same crystal sampled on the same points.
+    """
+    from pathlib import Path
+
+    from defumat import Calculator
+
+    text = (Path(__file__).resolve().parents[1] / "data" / "qe"
+            / "al-tetrahedra.in").read_text()
+    wedge = Calculator.from_text(text, pseudo_dir, announce=False)
+    whole = Calculator.from_text(
+        text.replace("&system", "&system\n    nosym = .true.,"), pseudo_dir,
+        announce=False)
+
+    reduced = wedge.get_scf(conv_thr=1e-10)
+    complete = whole.get_scf(conv_thr=1e-10)
+    assert reduced.converged and complete.converged
+    assert len(np.asarray(whole.system.kpoints.weights)) == 64, (
+        "nosym has to reach the complete grid or this compares nothing")
+
+    assert complete.fermi_energy == pytest.approx(reduced.fermi_energy, abs=1e-5)
+    assert complete.total_energy == pytest.approx(reduced.total_energy, abs=1e-5)
+
+    # The density of states on top of it, compared with the wedge's rather than
+    # with ``nelec``: the integral to ``E_F`` is a trapezoid on a finite energy
+    # grid and misses the electron count by 0.035 either way, so the statement
+    # that means something is that the two runs agree.
+    def filled(calculator, scf):
+        dos = calculator.get_dos()
+        energies, values = np.asarray(dos.energies), np.asarray(dos.dos)
+        below = energies <= scf.fermi_energy
+        return float(np.trapezoid(values[below], energies[below]))
+
+    assert filled(whole, complete) == pytest.approx(filled(wedge, reduced), abs=1e-3)

@@ -621,7 +621,8 @@ def w0gauss(x: jnp.ndarray, ngauss: int) -> jnp.ndarray:
     return jax.jvp(lambda t: wgauss(t, ngauss), (x,), (jnp.ones_like(x),))[1]
 
 
-def tetrahedra_for(occupations: str, kpoints, symmetries, cell):
+def tetrahedra_for(occupations: str, kpoints, symmetries, cell,
+                   grid_symmetry=None):
     """The tetrahedron decomposition of a calculation's k-grid.
 
     Re-exported here so that the occupation schemes are reachable from one
@@ -631,7 +632,7 @@ def tetrahedra_for(occupations: str, kpoints, symmetries, cell):
     """
     from defumat.scf.tetrahedra import tetrahedra_for as _build
 
-    return _build(occupations, kpoints, symmetries, cell)
+    return _build(occupations, kpoints, symmetries, cell, grid_symmetry)
 
 
 def tetrahedron_occupations(tetrahedra, eigenvalues, weights, nelec):
