@@ -56,7 +56,15 @@ python3 -c "import jax; print('jax', jax.__version__, jax.devices())"
 # Not through `tools/test-fast.sh`: that script pins and times for the
 # workstation, and what is wanted here is the selection alone. The marker is the
 # selection, so it is spelled out rather than inherited.
-python3 -m pytest -m "not slow" -q -p no:cacheprovider
+#
+# **One file is ignored, and it is the environment rather than the code.** The
+# venv these jobs run has no `matplotlib`, so `test_result_plots.py` cannot even
+# be imported, and a collection error stops the whole run rather than failing one
+# file -- 1243 tests deselected and nothing executed. Ignoring it here does not
+# make this gate equivalent to the workstation's, which is why that one stays the
+# authority: what this answers is whether anything *else* broke.
+python3 -m pytest -m "not slow" -q -p no:cacheprovider \
+    --ignore=tests/unit/test_result_plots.py
 STATUS=$?
 echo "pytest exit $STATUS"
 
