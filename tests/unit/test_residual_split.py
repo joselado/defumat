@@ -163,3 +163,23 @@ def test_an_unpolarized_region_is_counted_rather_than_split():
     assert bins["unpolarized_points"] == 2 * GRID[1] * GRID[2]
     assert np.isfinite(bins["longitudinal"])
     assert np.isfinite(bins["rotation"])
+
+
+def test_a_nonmagnetic_run_still_answers_every_bin_by_name():
+    """The twin has to be readable by the code that reads the magnet.
+
+    F2's deconfounder compares a magnetic run against its nonmagnetic twin, so a
+    consumer reading a bin by name must get a zero for a channel the regime does
+    not have rather than a ``KeyError``. The bins that exist are still real:
+    ``charge`` is the whole residual here.
+    """
+    rho_in = np.full((1,) + GRID, 1.0)
+    rho_out = np.full((1,) + GRID, 1.02)
+
+    bins = residual_bins(rho_in, rho_out, CELL)
+
+    assert bins["charge"] > 0.0
+    for name in ("longitudinal", "rotation", "transverse"):
+        assert bins[name] == 0.0
+    assert bins["rotation_coefficients"] == [0.0, 0.0, 0.0]
+    assert bins["unpolarized_points"] == 0

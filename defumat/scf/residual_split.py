@@ -102,12 +102,19 @@ def residual_bins(rho_in, rho_out, cell, becsum_in=None, becsum_out=None) -> dic
     if rho_in.shape[0] < 4:
         # A collinear run has no direction to project on: the whole magnetic
         # residual is longitudinal by construction, and the rotation bin is
-        # exactly zero, which is the other half of the trip test.
-        if rho_in.shape[0] == 2:
-            bins["longitudinal"] = _norm(residual[1], weight)
-            bins["rotation"] = 0.0
-            bins["transverse"] = 0.0
-            bins["rotation_coefficients"] = [0.0, 0.0, 0.0]
+        # exactly zero, which is the other half of the trip test. A run with no
+        # magnetization at all has neither, and **every key is still present**,
+        # because a consumer that reads a bin by name should get a zero for a
+        # channel the regime does not have rather than a KeyError -- the whole
+        # point of the dump is to compare a magnetic run against its nonmagnetic
+        # twin, so both have to be readable by the same code.
+        bins["longitudinal"] = (
+            _norm(residual[1], weight) if rho_in.shape[0] == 2 else 0.0
+        )
+        bins["rotation"] = 0.0
+        bins["transverse"] = 0.0
+        bins["rotation_coefficients"] = [0.0, 0.0, 0.0]
+        bins["unpolarized_points"] = 0
         return _with_becsum(bins, becsum_in, becsum_out)
 
     magnetization = rho_in[1:4]
