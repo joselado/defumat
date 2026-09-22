@@ -5146,7 +5146,7 @@ into any of them would break. `test_tddft` is one and runs `si-epsilon-unshifted
 Gamma at a sixty-fourth, which closes one of the cells item 3 left unmeasured; `al2-metal`
 is the last one outstanding.
 
-## 6. Three failures the slow set found that are **not** the `k + G = 0` row, and one of them is not a tolerance question
+## 6. Three failures the slow set found that are **not** the `k + G = 0` row **[closed 2026-09-22; both were budgets rather than defects]**
 
 All three move a **primal** quantity, which the origin tangent cannot touch, so none is
 item 3.
@@ -5155,15 +5155,24 @@ item 3.
   `noncolin-constrain_atomic.in`'s total energy at -55.69055643867099 against QE's
   -55.69055687, out by **4.3e-07** against a 3e-07 tolerance. It is **not** the even-mesh
   Simpson closure: `Fe.pz-nd-rrkjus.UPF` has full mesh 957, `msh` 839 and `kkbeta` 751, all
-  odd, so that branch is never taken here and `59b2ebb`'s claim holds on this cell. The
-  candidates that remain are `9f089fa` (the direction constraint's normalisation),
-  `2b84b0c` (the symmetry tolerance, which would move the k-set) and `21fe25b`
-  (`scf/fields.py`); a bisect on the one test settles it.
-- **The third is a different thing and should not be folded into that drift.**
-  `test_the_two_fixed_spin_moment_rules_find_the_same_field` has one leg **not converged
-  after 2000 iterations**, at accuracy 3.556e-04 against a `conv_thr` of 1e-08, reporting
-  `M = 2.0705` where the leg beside it converges in **66** iterations at `M = 2.0005`. A
-  fixed-spin-moment run that no longer converges is a defect rather than a tolerance.
+  odd, so that branch is never taken here and `59b2ebb`'s claim holds on this cell.
+  **It is the fixture's `conv_thr`**, and the four iterations it costs to fix are the whole
+  price: a constraint on the total moment is a stiff global feedback, so the total energy
+  trails the density residual further than usual here, and the gap against `pw.x` reads
+  **4.31e-07 Ry at 1e-11 in 43 iterations and 1.91e-09 at 1e-13 in 47**. 1e-15 buys nothing
+  at 3.73e-08 in 64, which is `pw.x`'s own printed precision rather than a real move. The
+  fixture asks for 1e-13.
+- **The third is a different thing and is also not a defect.**
+  `test_the_two_fixed_spin_moment_rules_find_the_same_field` had one leg not converged after
+  2000 iterations, at accuracy 3.556e-04, reporting `M = 2.0705` where the leg beside it
+  converges in **66** iterations at `M = 2.0005`. With the budget raised it **does**
+  converge, at **3380 iterations**, to accuracy 9.4e-09 with `M = 1.9993` and
+  `B = -0.0109895` against the secant rule's -0.0109659 -- inside the test's own 1e-4. The
+  budget was the bet: this test's docstring already retires
+  `secant.iterations * 5 < elk.iterations` because the interleaved rule is marginally damped
+  and its damping time is chaotic at the 3.5-eps level, and it then left `elk.converged`
+  inside 2000, which is a claim about the same number that does not exist. The damping time
+  is now measured at **288, 1380 and 3380** iterations on this cell, and the budget is 8000.
 - **`test_stm.py::test_an_antiferromagnet_is_flat_in_charge_and_alternates_in_spin`
   **[closed 2026-09-22, and it was neither a regression nor a defect]**. The assertion is
   that the two antiferromagnetic sublattices carry the same charge, which symmetry makes

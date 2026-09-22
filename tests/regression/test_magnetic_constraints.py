@@ -45,7 +45,19 @@ CONSTRAINED_RY = 3e-7
 
 
 @lru_cache(maxsize=None)
-def _run(path: Path, pseudo_dir: Path, conv_thr: float = 1e-11, max_iterations: int = 200):
+def _run(path: Path, pseudo_dir: Path, conv_thr: float = 1e-13, max_iterations: int = 200):
+    """A constrained noncollinear run, converged tightly enough to be compared.
+
+    **1e-13 rather than 1e-11, and the four iterations it costs are the whole
+    price.** A constraint on the total moment is a stiff global feedback, so the
+    total energy trails the density residual by further than usual here:
+    measured against `pw.x`'s -55.69055687 on
+    ``noncolin-constrain_atomic.in``, the gap is **4.31e-07 Ry at 1e-11 in 43
+    iterations and 1.91e-09 at 1e-13 in 47**, against a tolerance of 3e-07. The
+    looser value failed it; the tighter one lands two orders inside `pw.x`'s own
+    printed precision. 1e-15 buys nothing, reading 3.73e-08 in 64 iterations,
+    which is that printed precision rather than a real move.
+    """
     pwin = read_pw_input(path)
     system = build_system(pwin)
     pseudos = tuple(
@@ -284,8 +296,16 @@ def test_the_two_fixed_spin_moment_rules_find_the_same_field(pseudo_dir):
     the same field, the same energy and the same moment, which is what the test
     is for.
     """
+    # **8000 rather than 2000, and the budget is the same non-assertable
+    # quantity the docstring retires above.** The interleaved rule's damping
+    # time has now been measured at **288, 1380 and 3380** iterations on this
+    # cell, across changes as small as the 3.5 eps one named above, so a budget
+    # is a bet on a chaotic number rather than a property of the scheme. 2000
+    # lost that bet on 2026-09-21; at 3380 the run converges to acc = 9.4e-09
+    # with M = 1.9993 and B = -0.0109895 against the secant's -0.0109659, which
+    # is the physics this test is actually for.
     _, secant = _fsm(pseudo_dir, "secant", 300)
-    _, elk = _fsm(pseudo_dir, "elk", 2000)
+    _, elk = _fsm(pseudo_dir, "elk", 8000)
 
     assert secant.converged and elk.converged
     field_secant = float(np.asarray(secant.magnetic_field.uniform)[0])
