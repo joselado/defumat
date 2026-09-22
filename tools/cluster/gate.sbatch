@@ -63,6 +63,21 @@ python3 -c "import jax; print('jax', jax.__version__, jax.devices())"
 # file -- 1243 tests deselected and nothing executed. Ignoring it here does not
 # make this gate equivalent to the workstation's, which is why that one stays the
 # authority: what this answers is whether anything *else* broke.
+#
+# **Three failures here are the environment and are expected**, measured
+# 2026-09-22: `test_memory_watchdog.py`'s `test_off_is_inert_and_is_not_a_warning`,
+# `test_the_real_fixture_fails_the_named_test` and
+# `test_the_real_fixture_leaves_a_passing_test_alone` all assert that the watchdog
+# printed `memory watchdog: peak=`, and the venv has no `psutil`, so it cannot.
+# A clean run of this job is therefore **3 failed** and not 0, and a fourth
+# failure is the thing to look at. Do not "fix" those three by relaxing them --
+# they pass on the workstation, which is where the gate that gates a push runs.
+#
+# (A fourth used to fail and was real, though pre-existing: one test read the
+# gitignored QE tree before the guard that skips without it, so it raised
+# `FileNotFoundError` instead of skipping. It was found here and nowhere else,
+# because the tree is present on the workstation, which is the case for this job
+# existing at all.)
 python3 -m pytest -m "not slow" -q -p no:cacheprovider \
     --ignore=tests/unit/test_result_plots.py
 STATUS=$?
