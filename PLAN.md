@@ -20947,6 +20947,25 @@ comfortably inside what the two bases are separately measured to be worth. The
 free-energy column reproduces P86's -20.712 and -50.214 to the digit, so this is
 the same run rather than a new one.
 
+**And the corrected pair has now been run, which turns the resolution from a
+subtraction into a direct comparison.** With `fermi-dirac` on this side and
+`stype = 3` on Elk's, both totals carry `-TS` and nothing has to be corrected:
+
+| | defumat | Elk | Elk/defumat |
+|---|---|---|---|
+| `E(1/4) - E(0)` | -67.73 meV | **-67.37 meV** | **0.995** |
+| `E(1/2) - E(0)` | -141.45 meV | **-138.94 meV** | **0.982** |
+| `int |m|` at `q = 0` | 0.938 | 0.961 | +2.4% |
+| at `q = 1/4` | 0.902 | 0.889 | -1.5% |
+| at `q = 1/2` | 0.846 | 0.753 | -11% |
+
+All six runs converged, Elk's in 46, 29 and 23 loops. **The two codes agree on
+`E(q) - E(0)` to 0.5 and 1.8 per cent**, on a quantity the original fixture put a
+factor of 6.6 apart, which is the whole of this phase confirmed by a measurement
+rather than by an argument about what the totals mean. The moments agree to a few
+per cent except at the zone boundary, which is the one number worth pulling on
+next and is not a convention.
+
 **What made this findable, and what hid it.** The defumat side's spiral machinery
 was never in question and this confirms it: `tests/regression/test_spin_spirals.py`
 already reproduces `E(q = b3/2)` from a **collinear** antiferromagnet in the
