@@ -2271,3 +2271,41 @@ matrix-free forward is not matrix-free backward without remat).
   slab, bi20-soc, si8-us — `nk = 1`, so it changes nothing. On a many-k PAW cell it would, and the
   spiral's pattern is the fix that already exists. It is the same mechanism as A1, A4 and A5, named
   where it costs.
+
+---
+
+## The seven files that do not fit a 12 G cap, measured 2026-09-22
+
+Sized on Triton rather than inferred, because the workstation could only ever report the
+cap. `tools/run_regression.sh` on 2026-09-21 lost seven files to `SIGKILL` at **12.42 GB
+give or take 10 MB**, which is the cap and says nothing about what any of them needs. Job
+20383108, one array task per file on `batch-milan` at 64 G with `DEFUMAT_CACHE_DIR=off`
+(`tools/cluster/bigtests.sbatch`), peaks from the runner's own watchdog line:
+
+| file | peak | tests | wall |
+|---|---|---|---|
+| `test_ldau_flavours.py` | **20548M** | 9 passed | 25 m 54 s |
+| `test_noncollinear_hubbard_resume.py` | **19823M** | 3 passed | 3 m 53 s |
+| `test_ten_site.py` | **17231M** | 27 passed | 31 m 10 s |
+| `test_piezoelectric_paw.py` | 15246M | 2 failed | 3 m 20 s |
+| `test_lsda.py` | 14179M | 55 passed | 3 m 14 s |
+| `test_spinor_forces.py` | 13061M | 21 passed | 13 m 9 s |
+| `test_piezoelectric_augmented.py` | 11247M | 3 passed | 4 m 42 s |
+
+**Six of the seven are above 12 G and three are above 17 G**, so the kills were the cap
+working rather than a regression, and `DEFUMAT_TEST_MEM_MAX` wants **about 24 G** on a
+machine that can afford it. Three files at 17 to 20 GB is also the answer to why they were
+never seen: the workstation has 30 GB total, so two of them side by side is the whole
+machine.
+
+**These are a lower bound on the warm figures, not a like-for-like.** The cache was off, and
+`CLAUDE.md`'s rule is that a miss is cheaper in memory and dearer in time than a hit. The
+demonstration is in the table rather than in the argument: `test_piezoelectric_augmented`
+peaks at **11.2 G cold here and was killed at 12.4 G warm** on the workstation, which is the
+603 MB-entry effect of `OPEN.md` Part I item 2 at one file's scale. What is still unrun is
+the warm-against-cold pair on one file, and it is now a smaller question than the cap.
+
+The three fastest of the seven are 3 to 5 minutes, so **wall clock is not what kept them
+out of the gate** -- `test_lsda.py` runs 55 tests in 3 m 14 s and needs 14 GB to do it. The
+`slow` marker is carrying a memory fact under a time name for these, which is worth knowing
+before anything is moved back.

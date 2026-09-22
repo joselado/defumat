@@ -5103,9 +5103,46 @@ already records that loading one 603 MB cache entry is worth 6.3 GB resident.
 **The discriminator is one run and it is the experiment the skill says has never been
 done**: `DEFUMAT_CACHE_DIR=off` on `test_ten_site` alone, against the same file warm.
 **Raising the cap is the wrong first move**, since it answers nothing and hides the
-question. Until that is run, `test_piezoelectric_paw` and `test_piezoelectric_augmented`
-carry item 3's convention change **unverified** -- the wedge, which imports the same
-fixture, is the only one of the three that was run.
+question.
+
+**All seven were then run on Triton, 2026-09-22 (job 20383108), and they are not a cache
+artefact: they genuinely need more than 12 GB.** One array task per file on `batch-milan`
+at 64 G, `DEFUMAT_CACHE_DIR=off`, `tools/cluster/bigtests.sbatch`:
+
+| file | peak | result |
+|---|---|---|
+| `test_ldau_flavours` | **20548M** | 9 passed, 25 m 54 s |
+| `test_noncollinear_hubbard_resume` | **19823M** | 3 passed, 3 m 53 s |
+| `test_ten_site` | **17231M** | 27 passed, 31 m 10 s |
+| `test_piezoelectric_paw` | 15246M | **2 failed**, 3 m 20 s |
+| `test_lsda` | 14179M | 55 passed, 3 m 14 s |
+| `test_spinor_forces` | 13061M | 21 passed, 13 m 9 s |
+| `test_piezoelectric_augmented` | 11247M | 3 passed, 4 m 42 s |
+
+Six of the seven peak **above** the 12 G cap, three of them above 17 G, so the workstation
+kills were the cap doing its job rather than a regression. **The cache reading survives and
+sharpens**: this run was *cold* and a miss is cheaper in memory than a hit, so these are a
+**lower bound** on the warm workstation peaks -- and `test_piezoelectric_augmented`, the one
+file that peaks *below* 12 G here at 11.2 G, is precisely the one that died at 12.4 G warm,
+which is that 603 MB-entry effect in miniature. What is still unrun is the warm-against-cold
+pair on one file, which is a smaller question than it was: the cap needs raising to about
+**24 G** on this machine regardless of how it resolves.
+
+The two `test_piezoelectric_paw` failures were item 3's convention not reaching a file that
+defines its **own** `_field` instead of importing the augmented one, both against constants
+recorded before the term existed, on a `2 2 2 0 0 0` mesh that holds Gamma at an eighth:
+`e_14` 5.571e-04 from `CLOSED_GRID_E14` against 1e-4, and the dielectric constant 42.2464
+against a recorded 42.051 at rel 1e-3. Fixed the same day.
+
+**The set difference that would have caught it was then run**: twelve test files build their
+own `Calculation` and touch a `dH/dk` quantity without naming the convention
+(`test_electrostriction`, `test_nonlinear`, `test_phonons`, `test_photocurrent`,
+`test_response`, `test_shg`, `test_spinor_dielectric`, `test_spinor_response`, `test_tddft`,
+`test_piezo_machinery`, `test_retention`, `test_sibling_refusals`), and **all twelve are
+green**, so they are candidates rather than defects -- the list is what a Gamma cell dropped
+into any of them would break. `test_tddft` is one and runs `si-epsilon-unshifted-nosym`,
+Gamma at a sixty-fourth, which closes one of the cells item 3 left unmeasured; `al2-metal`
+is the last one outstanding.
 
 ## 6. Three failures the slow set found that are **not** the `k + G = 0` row, and one of them is not a tolerance question
 
