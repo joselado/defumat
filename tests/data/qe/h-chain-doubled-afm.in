@@ -1,0 +1,58 @@
+! The hydrogen chain of h-chain-spiral-elk.in, DOUBLED along z and run collinear:
+! the antiferromagnet, the two moments opposite.
+!
+! This pair is the arbiter for the factor of five between this code's E(q) and
+! Elk's. Both codes compute a spiral through their own implementation of the
+! generalized Bloch theorem, so a disagreement about E(q) could be the machinery
+! or the physics, and nothing separated the two. This cell contains no spiral at
+! all: q = b3/2 of the unit cell **is** the collinear antiferromagnet of the cell
+! doubled along z, which is a statement about the two states rather than about
+! either code, so
+!
+!     E(AFM) - E(FM) in the doubled cell = 2 [ E(q = 1/2) - E(q = 0) ]
+!
+! and both sides can be had from ordinary collinear runs.
+!
+! This code's own spiral already satisfies that identity to **1e-10 Ry**
+! (tests/regression/test_spin_spirals.py's q = b3/2 test, whose reference has
+! nspin = 2 and is not a spiral at all), so this pair is not a check of defumat
+! against itself -- it is the number Elk's collinear path can be asked for, on a
+! cell where Elk's spiral is not involved.
+!
+! Everything else is the spiral fixture's so that the two runs differ by the cell
+! and the magnetic arrangement and by nothing else: the functional (input_dft =
+! 'pw', matching Elk's xctype = 3), the dataset, the cutoff, the smearing and the
+! convergence threshold. The k-grid is 1 1 4 because the cell is twice as long,
+! which samples the same Brillouin zone as the unit cell's 1 1 8 -- the grid the
+! defumat scan converged at.
+!
+! The two atoms are two species pointing at one file, which is what lets a
+! starting magnetization differ between them in a way pw.x can also read.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 6, celldm(1) = 12.0, celldm(3) = 0.83333333333333,
+    nat = 2, ntyp = 2,
+    ecutwfc = 25.0,
+    input_dft = 'pw'
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.10
+    nspin = 2
+    nosym = .true.
+    starting_magnetization(1) = 0.6
+    starting_magnetization(2) = -0.6
+    nbnd = 12
+ /
+ &electrons
+    mixing_beta = 0.3
+    conv_thr = 1.0d-11
+    electron_maxstep = 300
+ /
+ATOMIC_SPECIES
+ H1 1.008 H.pz-vbc.UPF
+ H2 1.008 H.pz-vbc.UPF
+ATOMIC_POSITIONS (crystal)
+ H1 0.0 0.0 0.0
+ H2 0.0 0.0 0.5
+K_POINTS {automatic}
+ 1 1 4 0 0 0

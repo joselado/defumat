@@ -1,0 +1,98 @@
+! The hydrogen chain of tests/data/elk/h_chain_spiral/, DOUBLED along z and run
+! collinear -- the arbiter for the factor of five between the two codes' E(q).
+!
+! Why this cell exists.  defumat and Elk agree on the spiral's moments to 4 per
+! cent at every wavevector and disagree about E(q) - E(0) by a factor of about
+! five, and after the k-grid, both bases and the held field were checked, every
+! named candidate is dead.  What has never been separated is the spin-spiral
+! MACHINERY from the PHYSICS: both codes compute E(q) through their own spiral
+! implementation, so a disagreement could be either.
+!
+! This cell separates them, because it contains no spiral at all.  q = b3/2 of
+! the unit cell IS the collinear antiferromagnet of the cell doubled along z,
+! which is a statement about the two states and not about either code, so
+!
+!     E(AFM) - E(FM)  in the doubled cell  =  2 [ E(q = 1/2) - E(q = 0) ]
+!
+! and both sides of that can be computed with ordinary collinear machinery.
+! defumat's own spiral already satisfies the identity to 1e-10 Ry
+! (tests/regression/test_spin_spirals.py, against a doubled cell whose nspin is
+! 2 and which is not a spiral at all), so the prediction on this side is about
+! -113 meV.  If Elk's collinear number lands near that, Elk's SPIRAL is the
+! outlier and its own manual already calls spinsprl an experimental feature; if
+! it lands near -520 meV, the two codes disagree about the magnetism of this
+! chain and the spiral implementations are both exonerated, which would point at
+! the pseudopotential or the functional instead.
+!
+! Everything not listed here is the spiral fixture's, deliberately: the
+! functional, the smearing, the mixer, the convergence targets, rgkmax's default
+! and the species file are all carried over so that this run and that one differ
+! by the cell and the magnetic arrangement and by nothing else.
+!
+! The field is per-atom (bfcmt) rather than global, and it is held at the same
+! magnitude in both arrangements so that only its ARRANGEMENT differs.  Elk will
+! not polarise on its own, which is the whole reason the spiral fixture holds a
+! field, and reducebf is 1 for the reason recorded there: a fading seed leaves a
+! converged-looking run with the magnetism quietly gone.
+
+tasks
+  0
+
+xctype
+  3
+
+spinpol
+  .true.
+
+! Per-atom seed fields.  The job script flips the sign on the SECOND atom to turn
+! the ferromagnet into the antiferromagnet, and changes nothing else.
+reducebf
+  1.0
+
+stype
+  0
+
+swidth
+  0.05
+
+symtype
+  0
+
+nempty
+  8
+
+mixtype
+  1
+
+epspot
+  1.e-7
+
+epsengy
+  1.e-7
+
+maxscl
+  200
+
+sppath
+  './'
+
+! a = b = 12 bohr as in the spiral fixture, c DOUBLED from 5 to 10 bohr
+avec
+  12.0   0.0   0.0
+   0.0  12.0   0.0
+   0.0   0.0  10.0
+
+atoms
+  1                                   : nspecies
+  'H.in'                              : spfname
+  2                                   : natoms
+  0.0  0.0  0.0    0.0  0.0  0.002    : atposl, bfcmt
+  0.0  0.0  0.5    0.0  0.0  0.002    : atposl, bfcmt
+
+! half the spiral fixture's 1 1 8 along z, which is the same sampling of the
+! same Brillouin zone once the cell is doubled
+ngridk
+  1  1  4
+
+tshift
+  .false.
