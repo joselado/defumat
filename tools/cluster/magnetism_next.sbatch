@@ -18,23 +18,23 @@
 #        per iteration: charge, the length of `m`, the rigid rotation on the
 #        three generators, the rest of the transverse channel, and the magnetic
 #        part of `becsum`.
-#   4    **P104's own outstanding item.** The iodine cell's transverse
-#        susceptibility came out at -658.9 mu_B/Ry, negative, which says its
-#        moment direction is a stationary point that is not a minimum -- and that
-#        cell is the one P83's entire refusal rests on. Seeding the moment off
-#        `z` and reading where it goes is the measurement, swept over four angles
-#        because one angle cannot tell a slow return from a slow departure.
 #   3    **F2 Option 0, the trip test.** A rotated *converged* state fed back,
 #        whose residual must be zero to the level the run converged at, because
 #        `F(R rho) = R F(rho)` for a spin-rotation-invariant functional. A
 #        number here that is not at the convergence level says something in the
 #        run is not invariant, which is worth more than the bin it was built to
 #        test.
+#   4    **P104's own outstanding item.** The iodine cell's transverse
+#        susceptibility came out at -658.9 mu_B/Ry, negative, which says its
+#        moment direction is a stationary point that is not a minimum -- and that
+#        cell is the one P83's entire refusal rests on. Seeding the moment off
+#        `z` and reading where it goes is the measurement, swept over four angles
+#        because one angle cannot tell a slow return from a slow departure.
 #
 # ---- the #SBATCH values ----
 #
 # partition     batch-milan.
-# array         0-3.
+# array         0-4.
 # time          08:00:00, set by task 0 and headroom for the rest. P83's own
 #               probe script took 637 s for about thirty `chi_0` evaluations on
 #               this cell, so a sixty-iteration screened solve is roughly twenty
