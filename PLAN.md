@@ -21024,3 +21024,74 @@ energies, add up one of them.**
   `CLAUDE.md`'s standing rule left open and needs one core and an idle machine.
 * **The moment comparison is unaffected and stays as P86 records it**, including
   that the converged defumat moment crosses Elk's rather than approaching it.
+
+### P106 -- A separate step length for the magnetization: 43 iterations to 20, against `pw.x`'s 19. ✅ DONE on one cell.
+
+`MAGNETISM-NEXT.md` F2 lists several operators that might fix a slow magnetic
+SCF and its own rule is that **none of them may be chosen without Option 0**,
+because no cell here had ever been told apart on which of four directions it is
+slow in. P102 is that measurement and it says the answer for this cell: 28 of 43
+iterations are magnetism, the **longitudinal** residual plateaus while the charge
+keeps falling, and nothing conditions that direction -- both preconditioners
+divide out a `1/q^2` the magnetic kernel does not have, so a step length is the
+only thing acting on it.
+
+So the option this phase takes is F2's first and cheapest: **a separate
+`mixing_beta` for the magnetization**, which is VASP's `AMIX_MAG` and which Elk
+also exposes. It is a **departure from `pw.x`**, which uses one `alphamix` for
+every component of `mix_type`, and is marked as one.
+
+**It is one place rather than four.** Every path already gives the magnetization a
+plain `beta * r`: the unpreconditioned step by construction, and both
+preconditioners deliberately, Kerker screening the charge alone because the
+Thomas-Fermi divergence belongs to the charge response and the magnetization has
+none. So rescaling the magnetic components of the *output* of a step turns all of
+them into `beta_mag * r` and nothing else moves
+(`Mixer.magnetic_step`). **The rotation is not optional at `nspin = 2`**: a
+collinear density is carried as `(up, down)`, so scaling channel 1 would scale
+*down* and change the charge with it; the pair is rotated, scaled and rotated
+back, exactly as Kerker does around its screening.
+
+**The number, on `fe-noncolin-pbe-stress.in` at its own `mixing_beta = 0.2`:**
+
+| `beta_mag` | iterations | energy against unset |
+|---|---|---|
+| unset | 43 | -- |
+| **0.2** (the control) | **43** | **+0.00e+00, bit-identical** |
+| 0.4 | 29 | -2.93e-10 Ry |
+| 0.6 | 27 | -2.74e-10 Ry |
+| 0.8 | 24 | -3.0e-10 Ry |
+| **1.0** | **20** | -2.67e-10 Ry |
+
+**43 to 20 is a factor of 2.15, and it puts this code at 20 against `pw.x`'s 19
+on a cell where it was at 43.** Every row converged and every row landed on the
+same total energy within 3e-10 Ry, so this is the same state reached sooner and
+not a different one reached at all -- which is the thing that would make an
+iteration count meaningless and is checked rather than assumed.
+
+**The control is in the sweep and is the row that makes the rest readable.**
+`beta_mag` equal to the input's own `mixing_beta` reproduces the unset run
+*exactly*, energy difference `+0.00e+00`, which is what says the knob is doing
+only what it claims. A unit test pins the same property in closed form, because
+otherwise every comparison against QE would carry an unstated term.
+
+**What this does not establish.**
+
+* **One cell.** The prediction the mechanism makes is falsifiable and is being
+  run: on `fe-mag-1k`, whose nonmagnetic twin left only **4 of 25** iterations to
+  magnetism, the same knob should buy *much less*. If it buys as much there, the
+  mechanism in P102 is not what is acting.
+* **`beta_mag = 1.0` is an undamped magnetic channel**, and this cell's magnetic
+  direction is *crawling* rather than sloshing -- P102's plateau is what says so,
+  and the monotone sweep above is consistent with it. A cell whose magnetization
+  oscillates instead would want the opposite, and nothing here tests that, so the
+  default is deliberately **unset**, which is `pw.x`'s rule.
+* **It is refused rather than ignored where it cannot work.** The adaptive mixer
+  carries one step length per component already, so a second global one for a
+  subset of them is not defined; that is raised at setup on the same flag that
+  gates a preconditioner, because a run that cannot work should not find out
+  three hours in.
+* **No `PERFORMANCE.md` pair, no README row and no `docs/features.tex` entry
+  yet.** `mixing_beta_mag` is this code's own knob rather than a `pw.x` variable,
+  so the guide has to document it; it reaches `run_scf` and the facade
+  (`SHARED_OPTIONS`, `SCF_ONLY_OPTIONS`) and nothing else is wired.
