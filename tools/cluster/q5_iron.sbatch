@@ -96,10 +96,10 @@ if [ "$CODE" = "qe" ]; then
     export ESPRESSO_TMPDIR="$WORK/scratch/$CASE"
     mkdir -p "$ESPRESSO_TMPDIR"
     "$QEBIN/pw.x" -in "$REPO/tests/data/qe/$CASE.in" \
-        > "$WORK/out/qe-$CASE.out" 2>&1
+        > "$WORK/out/qe-${SLURM_ARRAY_JOB_ID}-$CASE.out" 2>&1
     STATUS=$?
     echo "pw.x exit $STATUS"
-    tail -40 "$WORK/out/qe-$CASE.out"
+    tail -40 "$WORK/out/qe-${SLURM_ARRAY_JOB_ID}-$CASE.out"
     # The scratch tree holds the wavefunctions and is reproducible output; the
     # `.out` is the reference and is what gets committed.
     rm -rf "$ESPRESSO_TMPDIR"

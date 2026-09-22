@@ -51,7 +51,12 @@ def measure(name: str, conv_thr: float, max_iterations: int, k_batch):
     calculator = Calculator.from_file(
         CASES / f"{name}.in", pseudo_dir=PSEUDO,
     )
-    options = {"conv_thr": conv_thr, "max_iterations": max_iterations}
+    # `verbose` so that a run which is limit-cycling says so while it is
+    # running rather than at the end: the first attempt at this cell spent
+    # its whole wall clock silent, and what it was doing -- chattering at
+    # 5.5e-6 Ry on too small a smearing -- was legible from iteration ten.
+    options = {"conv_thr": conv_thr, "max_iterations": max_iterations,
+               "verbose": True}
     if k_batch is not None:
         options["k_batch"] = k_batch
 
@@ -105,7 +110,7 @@ def main() -> None:
     parser.add_argument("case", help="a stem under tests/data/qe, without .in")
     parser.add_argument("--out", required=True, help="where to write the JSON")
     parser.add_argument("--conv-thr", type=float, default=1e-11)
-    parser.add_argument("--max-iterations", type=int, default=200)
+    parser.add_argument("--max-iterations", type=int, default=300)
     parser.add_argument("--k-batch", type=int, default=None)
     arguments = parser.parse_args()
 

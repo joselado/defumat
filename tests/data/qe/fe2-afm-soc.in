@@ -40,6 +40,15 @@
 ! would want: a converged `dr2` bounds a moment two to four orders more weakly
 ! than it bounds an energy, measured three times in this project, and both the
 ! site moments and the forces are what is being compared.
+! **The smearing and the grid are the validated iron cells' and not a fresh
+! choice**, which a first attempt got wrong and paid for. At `degauss = 0.02` on
+! an unshifted grid `pw.x` limit-cycles at 5.5e-6 Ry on this cell and crawls at
+! 1e-7 on its canted partner, neither reaching `conv_thr`: a small smearing on a
+! metal under-resolves the Fermi surface and the occupations chatter from one
+! iteration to the next. 0.05 Ry with `marzari-vanderbilt` and a shifted
+! `4 4 4 1 1 1` are what `fe-noncolin-pbe-stress.in` and
+! `benchmarks/fe-unstable-nonmagnetic.in` both carry, and they are carried here
+! for the same reason rather than tuned.
  &control
     calculation = 'scf'
     tprnfor = .true.
@@ -48,7 +57,7 @@
  &system
     ibrav = 1, celldm(1) = 5.42, nat = 2, ntyp = 2,
     ecutwfc = 35.0, ecutrho = 280.0,
-    occupations = 'smearing', smearing = 'marzari-vanderbilt', degauss = 0.02
+    occupations = 'smearing', smearing = 'marzari-vanderbilt', degauss = 0.05
     noncolin = .true.
     lspinorb = .true.
     nosym = .true.
@@ -63,7 +72,7 @@
  &electrons
     mixing_beta = 0.3
     conv_thr = 1.0d-11
-    electron_maxstep = 200
+    electron_maxstep = 300
  /
 ATOMIC_SPECIES
  Fe1 55.845 Fe.rel-pbe-spn-rrkjus_psl.0.2.1.UPF
@@ -72,4 +81,4 @@ ATOMIC_POSITIONS (alat)
  Fe1 0.00 0.00 0.00
  Fe2 0.52 0.50 0.50
 K_POINTS {automatic}
- 4 4 4 0 0 0
+ 4 4 4 1 1 1
