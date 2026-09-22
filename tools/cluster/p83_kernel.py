@@ -190,12 +190,16 @@ def screened_response(calculation, reference, direction, iterations, threshold):
         density = jnp.asarray(vector.reshape(shape))
         result = density - solver.chi0(screen(density))
         applications.append(1)
-        return np.asarray(result).ravel()
+        # `np.array` and not `np.asarray`: the latter hands back a **read-only**
+        # view of the JAX buffer, and GMRES updates its Krylov vectors in place,
+        # so the solve dies in the orthogonalisation with "output array is
+        # read-only" rather than anywhere near the physics.
+        return np.array(result, dtype=float).ravel()
 
     operator = LinearOperator(
         (int(np.prod(shape)), int(np.prod(shape))), matvec=apply, dtype=float
     )
-    right_hand_side = np.asarray(solver.chi0(bare)).ravel()
+    right_hand_side = np.array(solver.chi0(bare), dtype=float).ravel()
 
     residuals = []
     solution, info = gmres(
