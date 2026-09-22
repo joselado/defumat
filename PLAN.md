@@ -20735,7 +20735,10 @@ is carried here for the same reason rather than tuned.
 * **The canted leg needs a decision rather than more iterations, and the word
   "slow" would be the wrong one.** At about 140 iterations `pw.x` sits at 6e-8 Ry
   and defumat's accuracy oscillates between 1e-8 and 1e-7, neither reaching
-  1e-11, and that is the **physics** rather than a budget: nothing protects 90
+  1e-11. **Both have now run out their budgets**: `pw.x` stopped at its
+  `electron_maxstep = 300` at 1.5e-7 Ry, never printing a converged site
+  decomposition, and defumat's leg ended the same way. That is the **physics**
+  rather than a budget: nothing protects 90
   degrees on this cell, so the state drifts along a direction whose restoring
   force is the spin-orbit anisotropy alone -- which P104 has just measured, on a
   different cell, as a transverse susceptibility twenty-four thousand times the
