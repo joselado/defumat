@@ -344,7 +344,31 @@ for a spiral ground state at its own `q`, validated against the collinear antife
 the doubled cell at `q = (0, 0, 1/2)` — the same identity P19 used for the spiral energy. It
 is refused today for its own reason (two spheres), and it is the cheaper half.
 
-### E. Spin spirals have no external number of any kind [15]
+### E. Spin spirals have no external number of any kind [15]. ✅ CLOSED by P105: the factor of five was a free energy against an internal energy.
+
+**Read `PLAN.md` P105 before anything below.** Elk's entropy term is guarded by
+`IF (stype == 3)` -- "non-zero only for the Fermi-Dirac smearing function" -- and
+the fixture uses `stype = 0`, chosen so the smearing would match QE's Gaussian,
+which is exactly what makes `engyts` identically zero. So Elk's printed total is
+the **internal** energy where QE's and this code's carry `-TS` inside them and are
+a **free** energy, and the comparison was `F(q) - F(0)` against `E(q) - E(0)`.
+
+At `degauss = 0.1 Ry` the entropy moves by **+112 meV** between `q = 0` and
+`q = 1/4`, five times the difference it was being compared against, because the
+spiral's moment grows with `q` and its more spin-split spectrum leaves fewer
+states at the Fermi level. Removing it: **-132.986 and -263.813 meV against Elk's
+-136.294 and -265.206**, which is 2.4 and 0.5 per cent.
+
+All four candidates below are dead and each was measured: the k-grid is worth
+nothing, this code's basis a tenth, the held field was credited with 6 per cent
+under a conversion **274 times too large** (`cb = g_e/4c` was dropped), and Elk's
+own basis is worth about **one per cent** between `rgkmax` 7 and 8. A convention
+error is invisible to convergence, which is why four sweeps each moved the number
+a few per cent and left the factor where it was.
+
+What is left is a fixture that states the convention, a `stype = 3` version of the
+comparison that needs no correction, and the `PERFORMANCE.md` pair. **The original
+text follows and its numbers stand; its conclusion does not.**
 
 **P86 built the whole apparatus for (a) and did not finish taking the number. Read that
 first** (`PLAN.md` P86): the matched input pair is committed
