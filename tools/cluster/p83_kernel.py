@@ -122,18 +122,32 @@ def field_potential(calculation, density, direction, amplitude):
 
 def finite_difference(system, pseudos, calculation, reference, direction, step,
                       conv_thr, max_iterations):
-    """``dm/dB`` from two converged SCF runs under plus and minus the field."""
+    """``dm/dB`` from two converged SCF runs under plus and minus the field.
+
+    **The field is set on the `Calculation` and not passed to `run_scf`**, which
+    has no such keyword: `Calculation.magnetic_field` is built from the system's
+    own input cards at construction and is what `driver.py` reads inside the
+    loop. The original is put back afterwards, because the same object serves the
+    zero-field ground state and both legs, and a field left behind on it would
+    make the *next* measurement a run under a field nobody asked for -- which is
+    the shape of `OPEN.md` A2, one layer out.
+    """
     moments, records = {}, {}
+    original = calculation.magnetic_field
     for sign in (+1, -1):
         field, _ = field_potential(
             calculation, reference.density, direction, sign * step
         )
         started = time.time()
-        result = run_scf(
-            system, pseudos, calculation=calculation,
-            conv_thr=conv_thr, max_iterations=max_iterations,
-            magnetic_field=field, starting_from=reference,
-        )
+        try:
+            calculation.magnetic_field = field
+            result = run_scf(
+                system, pseudos, calculation=calculation,
+                conv_thr=conv_thr, max_iterations=max_iterations,
+                starting_from=reference,
+            )
+        finally:
+            calculation.magnetic_field = original
         moments[sign] = moment_of(result.density, calculation.system.cell)
         records[sign] = {
             "converged": bool(result.converged),
