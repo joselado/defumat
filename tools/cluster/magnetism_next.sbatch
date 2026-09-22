@@ -18,6 +18,12 @@
 #        per iteration: charge, the length of `m`, the rigid rotation on the
 #        three generators, the rest of the transverse channel, and the magnetic
 #        part of `becsum`.
+#   4    **P104's own outstanding item.** The iodine cell's transverse
+#        susceptibility came out at -658.9 mu_B/Ry, negative, which says its
+#        moment direction is a stationary point that is not a minimum -- and that
+#        cell is the one P83's entire refusal rests on. Seeding the moment off
+#        `z` and reading where it goes is the measurement, swept over four angles
+#        because one angle cannot tell a slow return from a slow departure.
 #   3    **F2 Option 0, the trip test.** A rotated *converged* state fed back,
 #        whose residual must be zero to the level the run converged at, because
 #        `F(R rho) = R F(rho)` for a spin-rotation-invariant functional. A
@@ -43,7 +49,7 @@
 #               arrays at once beside the Sternheimer solver's own state.
 #SBATCH --job-name=defumat-magnext
 #SBATCH --partition=batch-milan
-#SBATCH --array=0-3
+#SBATCH --array=0-4
 #SBATCH --time=08:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
@@ -79,6 +85,8 @@ case ${SLURM_ARRAY_TASK_ID:-0} in
            --out "$WORK/out/f2-split-$JOB.json" ;;
     3) python3 -u tools/cluster/f2_option0.py --stage trip \
            --out "$WORK/out/f2-trip-$JOB.json" ;;
+    4) python3 -u tools/cluster/p104_tilt.py --angles 0,2,10,30 \
+           --out "$WORK/out/p104-tilt-$JOB.json" ;;
     *) echo "no such task"; exit 1 ;;
 esac
 echo "exit $?"
