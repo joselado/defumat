@@ -86,11 +86,26 @@ echo "file:   $FILE"
 echo "commit: $(git rev-parse --short HEAD)  $(git log --oneline -1)"
 python3 -c "import jax; print('jax', jax.__version__, jax.devices())"
 
-tools/run_regression.sh "$WORK/out/reg-$FILE" "slow" "$FILE.py"
+# **The glob is a path, not a basename.** `run_regression.sh`'s third argument
+# defaults to `tests/regression/test_*.py tests/unit/test_*.py`, so a bare
+# `test_ten_site.py` matches nothing, pytest exits 4 on a usage error, and the
+# runner still returns 0 -- which is how the first submission of this job
+# "completed" seven tasks in 30 seconds at 48 M.
+tools/run_regression.sh "$WORK/out/reg-$FILE" "slow" "tests/regression/$FILE.py"
 status=$?
 
 echo "=== summary ==="
-cat "$WORK/out/reg-$FILE/summary.txt" 2>/dev/null
+SUMMARY="$WORK/out/reg-$FILE/summary.txt"
+cat "$SUMMARY" 2>/dev/null
+
+# **A task that ran nothing must not report success**, which is this project's
+# own "a check whose null result cannot be told from a pass". The summary line
+# has to say some test passed, failed or was killed; anything else -- a usage
+# error, an empty collection, a missing file -- is a failed task.
+if ! grep -qE "[0-9]+ (passed|failed)|killed \(SIGKILL" "$SUMMARY" 2>/dev/null; then
+    echo "NOTHING RAN: no passed/failed/killed line in $SUMMARY" >&2
+    status=1
+fi
 echo "exit $status"
 date
 echo "=== done ==="
