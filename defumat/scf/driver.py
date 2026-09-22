@@ -4865,6 +4865,7 @@ def run_scf(
     mixing_from=None,
     max_seconds: float | None = None,
     residual_split: bool = False,
+    mixing_beta_mag: float | None = None,
 ) -> SCFResult:
     """Run the self-consistent field loop to convergence.
 
@@ -5253,6 +5254,39 @@ def run_scf(
             "starting_ns was given but this calculation has no Hubbard U; "
             "add a HUBBARD card rather than having the matrix silently ignored"
         )
+
+    if mixing_beta_mag is not None:
+        # **A separate step length for the magnetization**, VASP's ``AMIX_MAG``,
+        # and a deliberate departure from ``pw.x``, which uses one ``alphamix``
+        # for every component of ``mix_type``. P102 is what makes it worth
+        # having: on ``fe-noncolin-pbe-stress.in`` 28 of 43 iterations are
+        # magnetism, against 4 of 25 on the collinear benchmark, and the
+        # longitudinal residual plateaus while the charge keeps falling. Kerker
+        # cannot reach that direction -- it divides out a ``1/q^2`` the magnetic
+        # kernel does not have -- so a step length is the only thing acting on
+        # it.
+        if not mixer.accepts_precondition:
+            # Refused **at setup** for the same reason a preconditioner is: a
+            # run that cannot work should not find out three hours in. The
+            # adaptive scheme keeps one step length per component already, so a
+            # second global one for a subset of them is not defined rather than
+            # merely unsupported.
+            raise ValueError(
+                f"mixing_beta_mag is not defined for mixing_mode "
+                f"{mixing_mode!r}: its step is not one scalar times the "
+                "residual -- it already carries a step length per component "
+                "(Elk's mixadapt) -- so a separate magnetic one has nothing to "
+                "multiply. Use 'anderson' or 'linear', or leave it unset"
+            )
+        if float(mixing_beta_mag) <= 0.0:
+            raise ValueError(
+                f"mixing_beta_mag = {mixing_beta_mag} is not a step length; it "
+                "is the weight the magnetization's residual is mixed at and "
+                "must be positive. Leave it unset for pw.x's rule, which is the "
+                "charge's own beta"
+            )
+        mixer.beta_mag = float(mixing_beta_mag)
+        mixer.shape = tuple(np.shape(rho))
 
     if mixing_mode.lower() in PRECONDITIONED:
         # A preconditioner's ``beta`` is an operator on the grid, so it cannot

@@ -74,6 +74,17 @@ class Mixer:
     #: run that cannot work should not find out three hours in.
     accepts_precondition = True
 
+    #: A separate step length for the **magnetization**, VASP's ``AMIX_MAG``.
+    #: ``None`` is ``pw.x``'s own rule, one ``alphamix`` for every component of
+    #: ``mix_type``, and is the default. See :meth:`magnetic_step`.
+    beta_mag = None
+
+    #: ``(nspin_mag, n1, n2, n3)``, needed only when :attr:`beta_mag` is set,
+    #: because the residual reaches :meth:`step` as a flat vector and which part
+    #: of it is the magnetization is not recoverable from the vector alone. The
+    #: driver installs it beside the preconditioner.
+    shape = None
+
     def mix(self, rho_in: np.ndarray, rho_out: np.ndarray) -> np.ndarray:
         raise NotImplementedError
 
@@ -88,8 +99,69 @@ class Mixer:
         the argument is here rather than closed over when the mixer is built.
         """
         if self.precondition is None:
-            return self.beta * residual
-        return self.precondition(residual, density)
+            stepped = self.beta * residual
+        else:
+            stepped = self.precondition(residual, density)
+        return self.magnetic_step(stepped)
+
+    def magnetic_step(self, stepped: np.ndarray) -> np.ndarray:
+        """Rescale the magnetization's part of an already-taken step.
+
+        **Why this is one place rather than four.** Every path here gives the
+        magnetization a plain ``beta * r``: the unpreconditioned step does it by
+        construction, and both preconditioners do it deliberately -- Kerker
+        screens the *charge* alone, because the Thomas-Fermi ``q^-2`` divergence
+        is a property of the charge response and the magnetization has none, so
+        its own branches read ``beta * head[c]``. So multiplying the magnetic
+        components of the *output* by ``beta_mag/beta`` turns every one of them
+        into ``beta_mag * r`` and nothing else moves.
+
+        **What it is for**, and it is a departure from ``pw.x`` rather than a
+        correction to it. QE uses one ``alphamix`` for every component of
+        ``mix_type``; VASP exposes ``AMIX_MAG`` and Elk gives the magnetic
+        channel its own control, because one scalar is known not to serve both.
+        The reason is the spectrum rather than taste: the charge's slow direction
+        is the long-wavelength Hartree one, which a preconditioner compresses,
+        and the magnetization's is the **Stoner** enhancement
+        ``chi_0/(1 - I chi_0)``, which is local, has no ``1/q^2`` for Kerker to
+        divide out, and amplifies a uniform change at every wavelength equally.
+        ``PLAN.md`` P102 is what says that matters here: on
+        ``fe-noncolin-pbe-stress.in`` **28 of 43 iterations are magnetism**,
+        against 4 of 25 on the collinear benchmark, and the longitudinal residual
+        plateaus while the charge keeps falling.
+
+        **The rotation is not optional at ``nspin = 2``.** A collinear density is
+        carried as ``(up, down)`` and not as ``(charge, magnetization)``, so
+        scaling channel 1 would scale *down* rather than the moment, which is a
+        different operator that also changes the charge. The pair is rotated,
+        scaled and rotated back, exactly as Kerker does around its screening. At
+        ``nspin_mag = 4`` channel 0 already is the charge and no rotation is
+        needed.
+
+        The tail beyond the density -- ``becsum``, ``ns``, ``tau`` -- is left at
+        ``beta``. Giving it the magnetic step would be a second departure with no
+        measurement behind it, and ``becsum``'s own residual is now reported
+        (:func:`~defumat.scf.residual_split.becsum_residual`) so that whether it
+        needs one can be asked with a number.
+        """
+        if self.beta_mag is None or self.shape is None:
+            return stepped
+        shape = tuple(self.shape)
+        nspin = shape[0]
+        if nspin == 1:
+            return stepped
+        ratio = float(self.beta_mag) / float(self.beta)
+        stepped = np.array(stepped, copy=True)
+        size = int(np.prod(shape))
+        head = stepped[:size].reshape(shape)
+        if nspin == 2:
+            charge, moment = head[0] + head[1], head[0] - head[1]
+            moment = ratio * moment
+            head[0], head[1] = 0.5 * (charge + moment), 0.5 * (charge - moment)
+        else:
+            head[1:] *= ratio
+        stepped[:size] = head.reshape(-1)
+        return stepped
 
     def reset(self) -> None:
         pass

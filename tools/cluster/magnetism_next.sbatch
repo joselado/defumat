@@ -30,11 +30,16 @@
 #        cell is the one P83's entire refusal rests on. Seeding the moment off
 #        `z` and reading where it goes is the measurement, swept over four angles
 #        because one angle cannot tell a slow return from a slow departure.
+#   5    **F2's first option, now choosable.** A separate step length for the
+#        magnetization, swept against the unset run on the cell Option 0
+#        characterised. The baseline is in the sweep rather than remembered:
+#        `beta_mag` equal to the input's own `mixing_beta` must reproduce the
+#        unset run exactly, and if it does not, no other row means anything.
 #
 # ---- the #SBATCH values ----
 #
 # partition     batch-milan.
-# array         0-4.
+# array         0-5.
 # time          08:00:00, set by task 0 and headroom for the rest. P83's own
 #               probe script took 637 s for about thirty `chi_0` evaluations on
 #               this cell, so a sixty-iteration screened solve is roughly twenty
@@ -49,7 +54,7 @@
 #               arrays at once beside the Sternheimer solver's own state.
 #SBATCH --job-name=defumat-magnext
 #SBATCH --partition=batch-milan
-#SBATCH --array=0-4
+#SBATCH --array=0-5
 #SBATCH --time=08:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
@@ -87,6 +92,9 @@ case ${SLURM_ARRAY_TASK_ID:-0} in
            --out "$WORK/out/f2-trip-$JOB.json" ;;
     4) python3 -u tools/cluster/p104_tilt.py --angles 0,2,10,30 \
            --out "$WORK/out/p104-tilt-$JOB.json" ;;
+    5) python3 -u tools/cluster/f2_option0.py --stage betamag \
+           --betamag 0.2,0.4,0.6,0.8,1.0 \
+           --out "$WORK/out/f2-betamag-$JOB.json" ;;
     *) echo "no such task"; exit 1 ;;
 esac
 echo "exit $?"

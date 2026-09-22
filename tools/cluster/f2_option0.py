@@ -199,10 +199,60 @@ def stage_trip(arguments) -> dict:
     return record
 
 
+def stage_betamag(arguments) -> dict:
+    """Is a separate step length for the magnetization worth anything?
+
+    F2's first option, and Option 0 is what makes it choosable: on this cell 28
+    of 43 iterations are magnetism, the longitudinal residual plateaus while the
+    charge keeps falling, and nothing conditions that direction -- Kerker divides
+    out a ``1/q^2`` the magnetic kernel does not have, so a step length is the
+    only thing acting on it. VASP exposes ``AMIX_MAG`` for this reason and Elk
+    gives the magnetic channel its own control; ``pw.x`` uses one ``alphamix``
+    for everything, so this is a departure and needs a number.
+
+    **The baseline is in the sweep rather than remembered.** ``beta_mag`` equal
+    to the input's own ``mixing_beta`` must reproduce the unset run exactly, and
+    if it does not then the knob is not doing what it says and no other row
+    means anything.
+
+    **What would make a win spurious**, and both are reported per row so it can
+    be seen rather than assumed: a run that converged to a *different state* has
+    not converged faster, so the total energy and the moment are printed beside
+    the count; and a count is one sample of a quantity that is chaotic on a
+    marginally damped controller, which is why the energies are compared to
+    1e-8 Ry before any row is called a win.
+    """
+    values = [float(v) for v in arguments.betamag.split(",")]
+    record = {"rows": []}
+    _, _, _, result, seconds = run(
+        MAGNETIC, arguments.conv_thr, arguments.max_iterations, split=False,
+    )
+    reference = summary(result, seconds)
+    record["unset"] = reference
+    print(f"unset          {reference['iterations']:4d} iterations  "
+          f"E = {reference['total_energy']:.9f}")
+
+    for value in values:
+        _, _, _, result, seconds = run(
+            MAGNETIC, arguments.conv_thr, arguments.max_iterations,
+            split=False, mixing_beta_mag=value,
+        )
+        row = summary(result, seconds)
+        row["mixing_beta_mag"] = value
+        row["energy_difference"] = row["total_energy"] - reference["total_energy"]
+        record["rows"].append(row)
+        print(f"beta_mag {value:5.2f}  {row['iterations']:4d} iterations  "
+              f"E = {row['total_energy']:.9f}  "
+              f"dE = {row['energy_difference']:+.2e} Ry  "
+              f"{'converged' if row['converged'] else 'NOT CONVERGED'}")
+    return record
+
+
 STAGES = {
     "deconfounder": stage_deconfounder,
     "split": stage_split,
     "trip": stage_trip,
+    "betamag": stage_betamag,
 }
 
 
@@ -211,6 +261,8 @@ def main() -> None:
     parser.add_argument("--stage", required=True, choices=sorted(STAGES))
     parser.add_argument("--conv-thr", type=float, default=1e-10)
     parser.add_argument("--max-iterations", type=int, default=200)
+    parser.add_argument("--betamag", default="0.2,0.4,0.6,0.8,1.0",
+                        help="values to sweep for --stage betamag")
     parser.add_argument("--out", required=True)
     arguments = parser.parse_args()
 
