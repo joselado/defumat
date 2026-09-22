@@ -636,6 +636,28 @@ plausible wrong answer rather than an error. `PLAN.md` has the phase that found 
   8924 mappings where `gc.collect()` released none, and that the autouse fixture had failed
   on `test_nonlinear.py`, whose progress line is `...FF........`, two failures with eight
   passes after them. (`OPEN.md` Part XIII item 2, 2026-09-19.)
+- **A test asserting a tolerance its own `conv_thr` or iteration budget does not
+  deliver.** Four of the six failures in the 2026-09-21 slow pass were this and **none was
+  a defect**, which is what makes it a trap rather than a nuisance: each looked like a
+  regression, each had a plausible culprit among the day's fixes, and each was reproduced
+  **bit-identical at a commit predating all of them**. The quantity being asserted converges
+  more slowly than the residual `conv_thr` measures, and by enough to matter: an STM value
+  read off a plane is still moving in its **sixth digit** while the density residual is at
+  7.7e-13; a constrained noncollinear total energy is **4.31e-07 Ry** from `pw.x` at 1e-11
+  and **1.91e-09** at 1e-13, four iterations later; a no-spin-orbit directional degeneracy
+  reads 8.1e-2 meV at 1e-10 and 1.16e-2 at 1e-12. The iteration-count form is the same bet
+  on a different number: a marginally damped fixed-spin-moment controller took **288, 1380
+  and 3380** iterations across changes as small as 3.5 eps, so any fixed budget is a claim
+  about a chaotic quantity. **Two habits.** A test on a derived quantity states its own
+  `conv_thr` rather than inheriting the input's, and says what it measured there. And
+  before attributing such a failure to a recent change, **re-run it at a commit that
+  predates the change** -- it costs one worktree and it was decisive all four times, twice
+  returning numbers identical to the last digit. The sibling trap is the opposite reading:
+  a residue that shrinks with `conv_thr` is convergence, one that **plateaus** is real, and
+  only a sweep tells them apart -- the anisotropy case did both, falling by seven and then
+  stopping on a floor that a scalar-relativistic dataset then localised to seven orders
+  below.
+
 - **The forecast sentence under a verified table is the one nobody checks.** Its two
   siblings above are about how a number was obtained; this is about *where the scrutiny
   went*. Every figure in the NiBr2 projector-dial entry was checked by two sessions --
