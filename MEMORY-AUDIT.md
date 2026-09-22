@@ -2288,6 +2288,7 @@ give or take 10 MB**, which is the cap and says nothing about what any of them n
 | `test_noncollinear_hubbard_resume.py` | **19823M** | 3 passed | 3 m 53 s |
 | `test_ten_site.py` | **17231M** | 27 passed | 31 m 10 s |
 | `test_piezoelectric_paw.py` | 15246M | 2 failed | 3 m 20 s |
+| `test_piezoelectric_paw.py`, after the fix | 14869M | 2 passed | 2 m 57 s |
 | `test_lsda.py` | 14179M | 55 passed | 3 m 14 s |
 | `test_spinor_forces.py` | 13061M | 21 passed | 13 m 9 s |
 | `test_piezoelectric_augmented.py` | 11247M | 3 passed | 4 m 42 s |

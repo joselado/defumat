@@ -5114,7 +5114,7 @@ at 64 G, `DEFUMAT_CACHE_DIR=off`, `tools/cluster/bigtests.sbatch`:
 | `test_ldau_flavours` | **20548M** | 9 passed, 25 m 54 s |
 | `test_noncollinear_hubbard_resume` | **19823M** | 3 passed, 3 m 53 s |
 | `test_ten_site` | **17231M** | 27 passed, 31 m 10 s |
-| `test_piezoelectric_paw` | 15246M | **2 failed**, 3 m 20 s |
+| `test_piezoelectric_paw` | 15246M | **2 failed**, 3 m 20 s (fixed; **2 passed** at 14869M, job 20384927) |
 | `test_lsda` | 14179M | 55 passed, 3 m 14 s |
 | `test_spinor_forces` | 13061M | 21 passed, 13 m 9 s |
 | `test_piezoelectric_augmented` | 11247M | 3 passed, 4 m 42 s |
@@ -5132,7 +5132,9 @@ The two `test_piezoelectric_paw` failures were item 3's convention not reaching 
 defines its **own** `_field` instead of importing the augmented one, both against constants
 recorded before the term existed, on a `2 2 2 0 0 0` mesh that holds Gamma at an eighth:
 `e_14` 5.571e-04 from `CLOSED_GRID_E14` against 1e-4, and the dielectric constant 42.2464
-against a recorded 42.051 at rel 1e-3. Fixed the same day.
+against a recorded 42.051 at rel 1e-3. Fixed the same day and **verified on the cluster**: job 20384927 reads **2 passed** at
+14869M, so all seven of the large files now pass and item 5 is a sizing result rather than
+a list of unknowns.
 
 **The set difference that would have caught it was then run**: twelve test files build their
 own `Calculation` and touch a `dH/dk` quantity without naming the convention
