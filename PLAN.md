@@ -20743,8 +20743,8 @@ is carried here for the same reason rather than tuned.
   direction, so raising `electron_maxstep` buys nothing. **The comparison has to
   be at a defined angle**, which means `constrained_magnetization = 'atomic'` on
   both sides with the penalty energy reported separately and kept out of the
-  totals, or a cell where 90 degrees is symmetry-protected. Until then what the
-  two codes agree on is what exists at that level: They agree so far on the two quantities that exist at
+  totals, or a cell where 90 degrees is symmetry-protected. Until then, what the
+  two codes agree on is the two quantities that exist at
   that level -- the total magnetization, (3.31, 3.32, 0.00) against
   (3.3298, 3.3000, 0.0001), and the total energy, -508.34000290 Ry against a
   defumat value oscillating around -508.3399 -- and `pw.x` has not yet printed a
