@@ -202,6 +202,14 @@ def becsum_residual(becsum_in, becsum_out) -> tuple:
         return None, None
     total = magnetic = 0.0
     for before, after in zip(becsum_in, becsum_out):
+        # **A species can be ``None`` here and a mixed cell is where it happens.**
+        # ``becsum`` carries one entry per species and a norm-conserving one has
+        # no augmentation occupations at all, so a PAW dataset beside a
+        # norm-conserving one gives a tuple with a hole in it. ``jnp.asarray``
+        # raises on that rather than returning an empty array, so the check has
+        # to come before the conversion and not after it.
+        if before is None or after is None:
+            continue
         before = jnp.asarray(before)
         after = jnp.asarray(after)
         if before.ndim == 0 or before.size == 0:

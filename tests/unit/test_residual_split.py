@@ -244,3 +244,27 @@ def test_a_collinear_becsum_still_reports_its_magnetic_half():
     total, magnetic = becsum_residual((before,), (after,))
     assert total == pytest.approx(np.sqrt(2))
     assert magnetic == pytest.approx(np.sqrt(2))
+
+
+def test_a_species_with_no_augmentation_is_skipped_rather_than_converted():
+    """A mixed cell's ``becsum`` has a hole in it, and it is a ``None``.
+
+    ``becsum`` carries one entry per species and a norm-conserving species has no
+    augmentation occupations, so a PAW dataset beside a norm-conserving one gives
+    a tuple with ``None`` in it. ``jnp.asarray(None)`` raises rather than
+    returning an empty array, so the check has to come before the conversion --
+    which it did not, and `test_a_paw_dataset_beside_a_norm_conserving_one_runs`
+    is the test that found it.
+    """
+    augmented = np.zeros((4, 1, 3))
+    moved = augmented.copy()
+    moved[1] = 2.0
+
+    total, magnetic = becsum_residual((augmented, None), (moved, None))
+
+    assert total == pytest.approx(2.0 * np.sqrt(3))
+    assert magnetic == pytest.approx(2.0 * np.sqrt(3))
+
+    # And a tuple that is *all* holes is the norm-conserving case reached the
+    # long way round, which must still report nothing rather than zero.
+    assert becsum_residual((None,), (None,)) == (0.0, 0.0)
