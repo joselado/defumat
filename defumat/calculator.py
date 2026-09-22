@@ -114,6 +114,12 @@ SHARED_OPTIONS = frozenset({
     "diago_full_acc",
     "mixing_mode",
     "mixing_beta",
+    # This code's own knob rather than a `pw.x` variable: a separate step length
+    # for the magnetization, VASP's ``AMIX_MAG``. It is SCF-only for the same
+    # reason ``mixing_beta`` is, and it is here so that a calculator can reach it
+    # at all -- an option `run_scf` takes and `SHARED_OPTIONS` does not name is
+    # one the facade silently drops.
+    "mixing_beta_mag",
     "mixing_ndim",
     "mixing_fixed_ns",
     "max_iterations",
@@ -182,6 +188,7 @@ SCF_ONLY_OPTIONS = frozenset({
     "diago_full_acc",
     "mixing_mode",
     "mixing_beta",
+    "mixing_beta_mag",
     "mixing_ndim",
     "mixing_fixed_ns",
     "max_iterations",

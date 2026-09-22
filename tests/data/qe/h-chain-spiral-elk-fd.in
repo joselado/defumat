@@ -1,3 +1,33 @@
+! **THE WIDTH IS MEASURED AND NOT MATCHED, and the first attempt at this fixture
+! got it wrong in a way only the moment showed.**  Setting swidth to the Gaussian
+! fixture's 0.05 Ha matches a NUMBER and not a temperature: under Fermi-Dirac
+! that is kT = 1.36 eV, which destroys the magnetism outright.  Both codes then
+! converge, agree with each other to six decimals, and are comparing nothing --
+! Elk's total moment came back at 1.7e-04 and defumat's int|m| at 0.0020, against
+! 0.54 and 0.515 on the Gaussian pair.  That is this project's "a check whose null
+! result cannot be told from a pass" exactly: two codes agreeing about a
+! nonmagnetic chain.
+!
+! So the width is chosen from a sweep of the QE side rather than copied
+! (defumat, q = 0, conv_thr 1e-10):
+!
+!     degauss (Ry)   int|m|     -TS (Ry)
+!          0.10      0.00195   -0.141049     <- magnetism gone
+!          0.05      0.32206   -0.050193     <- half suppressed
+!          0.02      0.90181   -0.002055     <- this fixture
+!          0.01      0.92881   -0.000048
+!          0.005     0.92955   -0.000000055
+!
+! 0.02 Ry is where the moment has reached its low-temperature value, 0.90 of the
+! saturated 0.93, while the entropy is still 28 meV and therefore still large
+! enough that the convention this pair exists to neutralise would matter if it
+! were not neutralised.  Below 0.01 the term vanishes and the fixture would prove
+! nothing; above 0.05 the magnet does.
+!
+! Note the low-temperature moment is 0.93 and the Gaussian pair's is 0.515, so
+! **that pair's smearing was itself suppressing the moment by nearly half**.  The
+! two pairs are different physical states and no number crosses between them.
+!
 ! The Fermi-Dirac twin of h-chain-spiral-elk.in, and the cell to prefer for any
 ! new spiral comparison against Elk.
 !
@@ -5,15 +35,17 @@
 ! its entropy term only for Fermi-Dirac smearing (energy.f90:242,
 ! IF (stype == 3)), so with the Gaussian its total is an INTERNAL energy where
 ! this code's and QE's are FREE energies, and E(q) - E(0) means a different thing
-! on the two sides. At degauss = 0.1 Ry that gap is 112 meV between q = 0 and
+! on the two sides. On the Gaussian pair, at its degauss = 0.1 Ry, that gap is
+! 112 meV between q = 0 and
 ! q = 1/4, five times the difference being compared, and it is the whole of the
 ! factor of five PLAN.md P86 could not place and P105 resolved. With fermi-dirac
 ! on this side and stype = 3 on Elk's, both totals carry -TS and the two can be
 ! subtracted directly.
 !
-! degauss is unchanged at 0.1 Ry: for this scheme it is kT, and Elk's swidth is
-! kT in Hartree, so 0.1 Ry against 0.05 Ha is the same pair of numbers the
-! Gaussian fixture already carried.
+! degauss is 0.02 Ry here and NOT the Gaussian pair's 0.1: see the sweep at the
+! head of this file for why, which is that 0.1 Ry of Fermi-Dirac destroys the
+! magnetism outright. For this scheme degauss is kT and Elk's swidth is kT in
+! Hartree, so 0.02 Ry is swidth = 0.01 Ha, which is what the Elk twin carries.
 !
 ! **The state is not the Gaussian cell's and no number should be carried across.**
 ! A different smearing function is a different free-energy surface, so the moment,
@@ -33,9 +65,11 @@
 ! it has no core.
 !
 ! Also changed: conv_thr and the spiral wavevector are left where the scan sets
-! them, and degauss stays at 0.1 Ry (Elk's swidth = 0.05 Ha) for the reason the
-! original header gives -- at a small smearing this soft magnetic surface lands
-! in whichever nearby minimum the starting density is closest to.
+! them. **The inherited sentence about degauss staying at 0.1 Ry does not apply
+! to this cell** and is replaced by the sweep above: this one runs 0.02. The
+! caution it carried is still real -- at a small smearing this soft magnetic
+! surface lands in whichever nearby minimum the starting density is closest to --
+! and is why the sweep stops at 0.02 rather than going lower.
 !
 ! PLAN.md P86 has the comparison.
  &control
@@ -46,7 +80,7 @@
     nat = 1, ntyp = 1,
     ecutwfc = 25.0,
     input_dft = 'pw'
-    occupations = 'smearing', smearing = 'fermi-dirac', degauss = 0.10
+    occupations = 'smearing', smearing = 'fermi-dirac', degauss = 0.02
     noncolin = .true.
     nosym = .true.
     starting_magnetization(1) = 0.6

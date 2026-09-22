@@ -1,3 +1,33 @@
+! **THE WIDTH IS MEASURED AND NOT MATCHED, and the first attempt at this fixture
+! got it wrong in a way only the moment showed.**  Setting swidth to the Gaussian
+! fixture's 0.05 Ha matches a NUMBER and not a temperature: under Fermi-Dirac
+! that is kT = 1.36 eV, which destroys the magnetism outright.  Both codes then
+! converge, agree with each other to six decimals, and are comparing nothing --
+! Elk's total moment came back at 1.7e-04 and defumat's int|m| at 0.0020, against
+! 0.54 and 0.515 on the Gaussian pair.  That is this project's "a check whose null
+! result cannot be told from a pass" exactly: two codes agreeing about a
+! nonmagnetic chain.
+!
+! So the width is chosen from a sweep of the QE side rather than copied
+! (defumat, q = 0, conv_thr 1e-10):
+!
+!     degauss (Ry)   int|m|     -TS (Ry)
+!          0.10      0.00195   -0.141049     <- magnetism gone
+!          0.05      0.32206   -0.050193     <- half suppressed
+!          0.02      0.90181   -0.002055     <- this fixture
+!          0.01      0.92881   -0.000048
+!          0.005     0.92955   -0.000000055
+!
+! 0.02 Ry is where the moment has reached its low-temperature value, 0.90 of the
+! saturated 0.93, while the entropy is still 28 meV and therefore still large
+! enough that the convention this pair exists to neutralise would matter if it
+! were not neutralised.  Below 0.01 the term vanishes and the fixture would prove
+! nothing; above 0.05 the magnet does.
+!
+! Note the low-temperature moment is 0.93 and the Gaussian pair's is 0.515, so
+! **that pair's smearing was itself suppressing the moment by nearly half**.  The
+! two pairs are different physical states and no number crosses between them.
+!
 ! The Fermi-Dirac twin of h_chain_spiral/, and the fixture to prefer for any new
 ! spiral number against Elk.
 !
@@ -103,7 +133,7 @@ stype
   3
 
 swidth
-  0.05
+  0.01
 
 ! no symmetry, matching QE's nosym = .true.
 symtype
