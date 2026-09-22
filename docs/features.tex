@@ -964,6 +964,70 @@ spiral scan, a $\lambda$ ramp, a moment-versus-field sweep --- is exactly what
 would otherwise read \code{total\_energy} off an unconverged density without
 looking at \code{converged}.
 
+\code{mixing\_beta\_mag} gives the \textbf{magnetization} a step length of its
+own, separate from the charge's \code{mixing\_beta}. It is this code's own knob
+and a deliberate departure from \code{pw.x}, which uses one \code{alphamix} for
+every component of its density; VASP exposes the same thing as \code{AMIX\_MAG}
+and Elk gives the magnetic channel its own control. Unset by default, which is
+QE's rule, and setting it equal to \code{mixing\_beta} reproduces an unset run
+exactly rather than nearly.
+
+The reason it exists is that the two channels are slow for different reasons and
+one scalar cannot serve both. The charge's bad direction is the long-wavelength
+Hartree one, which Kerker and \code{local-TF} compress; the magnetization's is
+the Stoner enhancement $\chi_0/(1 - I\chi_0)$, which is local, has no $1/q^2$
+for a preconditioner to divide out, and amplifies a uniform change at every
+wavelength equally. Nothing conditions that direction, so a step length is all
+there is.
+
+\textbf{Whether to use it is a measurement rather than a preference, and the
+measurement is \code{residual\_split}.} \code{run\_scf(residual\_split=True)}
+puts a five-way split of each iteration's residual into
+\code{SCFResult.history} --- charge, the length of $\mathbf m$, the rigid
+rotation, the rest of the transverse channel, and the magnetic part of
+\code{becsum} --- and it is what says which channel a given cell is spending its
+iterations in. The two committed iron benchmarks are opposite cases and the knob
+follows the split, not the cell:
+
+\begin{center}
+\begin{tabular}{lrr}
+\toprule
+\code{mixing\_beta\_mag} & \code{fe-noncolin-pbe-stress} & \code{fe-mag-1k} \\
+\midrule
+unset & 43 & 25 \\
+equal to \code{mixing\_beta} & 43 & 25 \\
+$0.6$ & \textbf{27} & 36 \\
+$1.0$ & \textbf{20} & 31 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The first cell spends 28 of its 43 iterations in the magnetic channel and the
+knob takes it to 20, against \code{pw.x}'s 19 on the same input. The second
+spends 4 of 25 there, and the same knob makes it a third \emph{worse}. Every run
+in that table converged to the same total energy as its own unset baseline within
+$3\times 10^{-10}$~Ry, so these are the same states reached sooner or later and
+not different ones.
+
+\begin{refuses}
+\code{mixing\_beta\_mag} is \textbf{refused at setup} with
+\code{mixing\_mode = 'adaptive'} rather than ignored. That scheme already
+carries one step length per component of the mixed vector, so a second global one
+for a subset of them is not defined; the refusal is on the same property that
+makes \code{adaptive} refuse a preconditioner, and it is raised when the mixer is
+built rather than at the first mix, so a run that cannot work does not find out
+hours in. A non-positive value is refused for the same reason any step length
+would be.
+
+It acts on the \textbf{density} alone. \code{becsum}, \code{ns} and $\tau$ keep
+the charge's step, because giving them the magnetic one would be a second
+departure with no measurement behind it. \code{becsum}'s own residual is now
+reported every iteration --- outside \code{dr2}, where it cannot be, since
+\code{paw\_ddot} is not positive definite and \code{pw.x} comments the term out
+for that reason --- so whether it needs a step of its own can be asked with a
+number.
+\end{refuses}
+
 \code{mixing\_ndim} sets how many previous iterations the extrapolation spans,
 default 8 as in \code{pw.x}. Raising it is the standard first move on a cell
 that will not converge, and \emph{on the magnetic benchmark here it does not
