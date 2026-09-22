@@ -1,15 +1,24 @@
-! **THE CONVENTION THIS CELL'S NUMBERS CARRY.**  This total is a FREE energy: QE's
-! and this code's reported total both include the smearing contribution -TS.  The
-! Elk twin's is an INTERNAL energy, because Elk computes its entropy term only for
-! Fermi-Dirac smearing (energy.f90:242, IF (stype == 3)) and the matched fixture
-! uses stype = 0 to match this cell's Gaussian.  The two E(q) - E(0) are therefore
-! different quantities.
+! The Fermi-Dirac twin of h-chain-spiral-elk.in, and the cell to prefer for any
+! new spiral comparison against Elk.
 !
-! At degauss = 0.1 Ry the difference is not small: the entropy moves by 112 meV
-! between q = 0 and q = 1/4, five times the free-energy difference itself, which
-! is the whole of the factor of five PLAN.md P86 could not place.  Subtract
-! energy_terms['smearing'] from each total before comparing with Elk, or use the
-! fermi-dirac pair, which needs no correction.
+! **It differs in one word, and that word is why the pair exists.** Elk computes
+! its entropy term only for Fermi-Dirac smearing (energy.f90:242,
+! IF (stype == 3)), so with the Gaussian its total is an INTERNAL energy where
+! this code's and QE's are FREE energies, and E(q) - E(0) means a different thing
+! on the two sides. At degauss = 0.1 Ry that gap is 112 meV between q = 0 and
+! q = 1/4, five times the difference being compared, and it is the whole of the
+! factor of five PLAN.md P86 could not place and P105 resolved. With fermi-dirac
+! on this side and stype = 3 on Elk's, both totals carry -TS and the two can be
+! subtracted directly.
+!
+! degauss is unchanged at 0.1 Ry: for this scheme it is kT, and Elk's swidth is
+! kT in Hartree, so 0.1 Ry against 0.05 Ha is the same pair of numbers the
+! Gaussian fixture already carried.
+!
+! **The state is not the Gaussian cell's and no number should be carried across.**
+! A different smearing function is a different free-energy surface, so the moment,
+! the energy and E(q) - E(0) all move; what this fixture buys is that the two
+! codes are on the same surface as each other, which the other pair was not.
 !
 ! The QE-side twin of tests/data/elk/h_chain_spiral/elk.in: the SAME hydrogen
 ! chain spiral, set up so that the two codes differ by their basis and nothing
@@ -37,7 +46,7 @@
     nat = 1, ntyp = 1,
     ecutwfc = 25.0,
     input_dft = 'pw'
-    occupations = 'smearing', smearing = 'gaussian', degauss = 0.10
+    occupations = 'smearing', smearing = 'fermi-dirac', degauss = 0.10
     noncolin = .true.
     nosym = .true.
     starting_magnetization(1) = 0.6

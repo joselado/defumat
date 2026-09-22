@@ -1,30 +1,11 @@
-! **THE CONVENTION THIS FIXTURE'S NUMBERS CARRY, and it cost two months.**  Elk's
-! total energy here is an INTERNAL energy and QE's is a FREE energy, so
-! E(q) - E(0) from this run is not the same quantity as E(q) - E(0) from
-! h-chain-spiral-elk.in and the two must not be subtracted from one another
-! without saying so.
+! The Fermi-Dirac twin of h_chain_spiral/, and the fixture to prefer for any new
+! spiral number against Elk.
 !
-! The mechanism is one line of Elk: energy.f90:242 guards the entropy term with
-! "non-zero only for the Fermi-Dirac smearing function", IF (stype == 3), so with
-! the stype = 0 below engyts is identically zero and engytot carries no -TS.  QE's
-! "!    total energy" and defumat's SCFResult.total_energy both put the smearing
-! contribution INSIDE the reported total.
-!
-! It is not small here.  At swidth = 0.05 Ha the entropy moves by 112 meV between
-! q = 0 and q = 1/4, because the spiral's moment grows with q and a more
-! spin-split spectrum leaves fewer states at the Fermi level -- five times the
-! free-energy difference it was being compared against, which is the whole of the
-! "factor of five" PLAN.md P86 could not place and P105 resolved.
-!
-! The check that catches this in two minutes, and which nobody ran: Elk's printed
-! energy breakdown SUMS TO its printed total.  Kinetic plus Coulomb plus exchange
-! plus correlation is -0.466004773945 against a total of -0.466004773945, and that
-! equality is what says the entropy slot is empty.  Before comparing two codes'
-! total energies, add up one of them.
-!
-! h_chain_spiral_fd/ is the same comparison with stype = 3 on this side and
-! fermi-dirac smearing on the QE side, which needs no correction at all and is the
-! fixture to prefer for a new number.
+! It differs from that one in ONE line, stype, and everything else -- the cell,
+! the functional, the field, the mixer, the k-grid, the convergence targets and
+! the species file -- is carried over unchanged so the two can be read against
+! each other.  See PLAN.md P105 for why the line matters and
+! tests/data/qe/h-chain-spiral-elk-fd.in for the other side of the pair.
 !
 ! The spin-spiral hydrogen chain of tests/data/qe/h-chain-spiral.in, as an Elk
 ! ground state.  This is the external comparison that the spiral machinery has
@@ -106,9 +87,20 @@ bfieldc
 reducebf
   1.0
 
-! Gaussian smearing, in Hartree: QE's degauss = 0.1 Ry
+! **Fermi-Dirac smearing, and this one line is the whole point of this fixture.**
+! energy.f90:242 computes Elk's entropy term only IF (stype == 3), so with the
+! Gaussian its engytot carries no -TS and is an INTERNAL energy where QE's and
+! defumat's totals are FREE energies.  At this width that difference is 112 meV
+! between q = 0 and q = 1/4 and was the whole of the factor of five PLAN.md P86
+! could not place.  With stype = 3 both sides carry -TS and E(q) - E(0) can be
+! compared directly, with no correction and nothing to remember.
+!
+! swidth is kT in HARTREE for this scheme, and QE's fermi-dirac degauss is kT in
+! Ry, so 0.05 here is degauss = 0.1 there -- the same pair of numbers the
+! Gaussian fixture already carries, because both schemes take a width rather than
+! a broadening with a scheme-dependent factor.
 stype
-  0
+  3
 
 swidth
   0.05
