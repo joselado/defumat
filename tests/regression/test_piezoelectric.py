@@ -88,11 +88,24 @@ def _bounded_compilation():
 
 @lru_cache(maxsize=2)
 def _converged(case: str):
+    """The ground state, on QE's ``k + G = 0`` convention.
+
+    **This file runs on Quantum ESPRESSO's convention for the ``l = 1`` tangent
+    at ``k + G = 0``** (``origin_tangent=False``). Every external anchor here is
+    a ``ph.x`` number on an AlAs cell whose mesh is ``4 4 4 0 0 0`` and so holds
+    Gamma, and QE zeroes that row where this code carries it by default
+    (``commutator_Hx_psi.f90:113-118``, ``dylmr2.f90:88-92``; `PLAN.md` P24).
+    Carrying it moves ``Z*`` by **2.0e-3** on 1.92461 and the dielectric
+    constant by **3.7e-2** on 12.9673, both past their tolerances, while every
+    *route identity* in this file -- one assembly against another at 1e-12, the
+    driver against its own solve at 1e-8 -- holds on either leg, which is what
+    says the term is applied consistently and only the reference moved.
+    """
     system = build_system(read_pw_input(CASES / f"{case}.in"))
     pseudos = tuple(
         read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species
     )
-    calculation = Calculation(system, pseudos)
+    calculation = Calculation(system, pseudos, origin_tangent=False)
     result = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-12,
                      max_iterations=100)
     return system, pseudos, calculation, result

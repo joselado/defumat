@@ -92,12 +92,24 @@ def _bounded_compilation():
 
 @lru_cache(maxsize=1)
 def _field(case: str = CASE):
-    """One converged ground state and one field response, shared by the file."""
+    """One converged ground state and one field response, shared by the file.
+
+    **On QE's convention for the ``l = 1`` tangent at ``k + G = 0``**
+    (``origin_tangent=False``), and it is the whole piezoelectric family that
+    takes it rather than this file alone: ``test_piezoelectric_wedge.py`` and
+    ``test_piezoelectric_paw.py`` import this fixture, and the wedge asserts
+    against ``CLOSED_GRID_E14``, a number *this* file recorded. Carrying the
+    term moves ``e_14`` by **5.47e-4** on 1.4744, so a family split across the
+    two conventions would disagree with itself about its own constant. The rule
+    is `PLAN.md` P24's: a reference number or a recorded constant taken before
+    the term existed runs on QE's convention, a route identity runs on either.
+    Every identity here is the second kind and holds on both legs.
+    """
     system = build_system(read_pw_input(CASES / f"{case}.in"))
     pseudos = tuple(
         read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species
     )
-    calculation = Calculation(system, pseudos)
+    calculation = Calculation(system, pseudos, origin_tangent=False)
     result = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-10,
                      max_iterations=100)
     eigenvalues, psi = refined_states(calculation, result)

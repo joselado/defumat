@@ -4543,6 +4543,34 @@ not on that list**, and the reason is in this same section: P48's "a stencil mus
 contain its own centre" keeps the centre out, so `dH/dk` is never evaluated *at* Gamma
 there.
 
+**The rule for which leg a test takes, because there are now five files on it.** A test
+whose anchor is a `ph.x` or `dynmat.x` number, or a constant this code recorded *before*
+the term existed, runs on `origin_tangent=False`; a **route identity** -- one assembly
+against another, a wedge against a closed grid, a driver against its own solve -- runs on
+the default, because it holds on either leg and is the check that says the term is applied
+consistently. Every such identity was confirmed to hold on both legs when this was
+measured: 1e-12 between the two Born-charge assemblies, 1e-8 between the driver and its
+solve, 1e-6 between the taped and contracted piezoelectric routes. The files on QE's leg
+are `test_lsda_response.py` (the two `ph.x` tests, the QE-free ones keeping the default),
+`test_ten_site.py` (the dielectric tensor alone), and `test_piezoelectric.py`,
+`test_spectra.py` and `test_piezoelectric_augmented.py`'s `_field` in full -- the last of
+those because `test_piezoelectric_wedge.py` and `test_piezoelectric_paw.py` import it and
+the wedge asserts against `CLOSED_GRID_E14`, a constant the augmented file recorded, so a
+family split across the two conventions would disagree with itself about its own number.
+
+**What the term is worth follows the weight of Gamma in the k-sum**, which is the sentence
+that predicts the next case rather than describing the ones seen:
+
+| cell | mesh | Gamma's weight | what it moved |
+|---|---|---|---|
+| `o2-fixed-lsda` | Gamma only | 1 | `eps_xx` +5.5e-3, `Z*_xx` -3.3e-2 on 0.1337 |
+| `si10-epsilon` | `4 4 1 0 0 0` | 1/16 | 4.0e-4 on a tensor of 19 |
+| `alas-raman`, `alas-piezo` | `4 4 4 0 0 0` | 1/64 | `Z*` 2.0e-3 on 1.92461, `eps` 3.7e-2 on 12.967, `e_14` 5.5e-4 on 1.4744 |
+
+A **shifted** mesh has no `k + G = 0` at all and cannot see the flag, which is the second
+half of the unit test and is why `si-epsilon`, `c-epsilon`, `alas-epsilon-us`,
+`si-epsilon-us` and `si-epsilon-paw` never moved.
+
 **Why the earlier record did not catch it.** The measurements behind the tangent were
 `<psi|dH/dk|psi>` against a central difference of the same operator, which is the right
 check and shares no machinery with the projector-slope arithmetic -- and it is a check

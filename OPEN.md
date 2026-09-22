@@ -5026,14 +5026,37 @@ live check instead of a widened tolerance. The flag threads through all six
 `build_projector_core` sites and `Calculator.SETUP_ONLY_OPTIONS`; the three affected
 reference tests take it, and the QE-free checks on the same cell keep the default.
 
+**The scope was then measured rather than left named, by the slow set the same night, and
+it was wider than the two cells above.** Four more tests failed on it, all on AlAs meshes
+that hold Gamma, and an A/B under `origin_tangent=False` passed every one of them where
+the default failed all four:
+
+| test | anchor | out by | tolerance |
+|---|---|---|---|
+| `test_piezoelectric.py::test_the_same_assembly_in_the_position_coordinate_is_the_born_charge` | `ph.x`'s `Z*` | 2.0e-3 | 5e-4 |
+| `test_piezoelectric.py::test_the_driver_reports_the_dielectric_constant_it_already_solved` | `ph.x`'s `eps` 12.967 | 3.7e-2 | 1e-3 |
+| `test_spectra.py::test_the_born_charges_of_alas_match_ph_x` | the same `ph.x` `Z*` | 2.0e-3 | 3e-4 |
+| `test_piezoelectric_wedge.py::test_the_wedge_completes_and_the_taped_route_is_where_it_did_not` | `CLOSED_GRID_E14`, **this code's own** | 5.5e-4 | 1e-4 |
+
+**The reassuring half is what did *not* fail.** Each of those tests asserts a **route
+identity** before the reference, and every one passed on both legs -- 1e-12 between the two
+Born-charge assemblies, 1e-8 between the driver and its own solve, 1e-6 between the taped
+and contracted piezoelectric routes. So the term is applied *consistently*; what moved is
+the comparison with QE, which is the same finding as O2 and not a second defect.
+`PLAN.md` P24 carries the rule for which leg a test takes and the table of what Gamma's
+weight is worth. Closed by putting the piezoelectric family and `test_spectra.py` on QE's
+convention: **10, 14 and 1 passed** on `test_piezoelectric.py`, `test_spectra.py` and
+`test_piezoelectric_wedge.py`.
+
 **What is not closed by it.** Nothing takes a second `k` derivative analytically today, so
-`l = 2`'s second derivative at the origin is still the open one order up (item 1). And the
-five Gamma-holding reference cells were enumerated but only two were *run*. The three
-unmeasured ones, named so that a slow run knows what to look for, are
-`si-epsilon-unshifted` (whose `-nosym` twin is `tests/regression/test_tddft.py`'s `CASE`,
-and a TDDFT head **is** `dH/dk`), `alas-raman` and `al2-metal`. A **dynamical matrix is
-not a candidate** -- it does not go through `dH/dk` -- so what to grep for is an E-field
-or an optical head, not a phonon.
+`l = 2`'s second derivative at the origin is still the open one order up (item 1).
+`si-epsilon-unshifted` and `al2-metal` are still unmeasured -- the first has a `-nosym`
+twin that is `tests/regression/test_tddft.py`'s `CASE`, and a TDDFT head **is** `dH/dk`,
+and that file passed, which is evidence at 1/64 weight rather than proof. A **dynamical
+matrix is not a candidate**, not going through `dH/dk` at all, so what to grep for is an
+E-field or an optical head, not a phonon. `test_piezoelectric_paw.py` and
+`test_piezoelectric_augmented.py` take the convention through the shared `_field` and
+**neither was run**, for the reason item 5 gives.
 
 **One notebook is stale for the same reason, and it predates this entry.**
 `notebooks/27_excitons_and_tddft.ipynb` runs `si-epsilon-unshifted-nosym`, Gamma at a
@@ -5059,3 +5082,58 @@ number sits near the tolerance rather than that it is fixed. **What would settle
 running the pair a few times and reading the spread, which is cheap and has not been done;
 until then a pass here does not discharge the failure seen there, which is this project's
 own "a check whose null result cannot be told from a pass" pointing the other way.
+
+## 5. Seven files of the slow set are **unrun rather than failed**, and they all stopped at the same 12.4 GB
+
+The 2026-09-21 pass of `tools/run_regression.sh` (180 files, **1270 passed**) lost seven to
+`SIGKILL` at the 12 G cap: `test_ldau_flavours` (12425M), `test_lsda` (12427M),
+`test_noncollinear_hubbard_resume` (12400M), `test_piezoelectric_augmented` (12425M),
+`test_piezoelectric_paw` (12420M), `test_spinor_forces` (12427M) and `test_ten_site`
+(12426M). An eighth, `test_ldau`, survived and the **watchdog named** its worst test:
+`test_converged[pw_lda+U/lda+U_force.in]` at 11101M, 73 passed beside it.
+
+**The seven peaks are 12.42 GB give or take 10 MB, which is the cap and not the tests.**
+Nothing here says what any of them *needs*, so the number to quote is that they did not
+run. Two of the seven are on record running clean: `test_ten_site` is P28b's own file,
+measured complete under `jax.clear_caches()`, and it died here after thirteen passing
+tests. Against the `test-runs` skill's 1.0 to 1.3 GB per slow file, seven files arriving at
+one ceiling is either a memory regression in this code or a **cache state** -- `CLAUDE.md`
+already records that loading one 603 MB cache entry is worth 6.3 GB resident.
+
+**The discriminator is one run and it is the experiment the skill says has never been
+done**: `DEFUMAT_CACHE_DIR=off` on `test_ten_site` alone, against the same file warm.
+**Raising the cap is the wrong first move**, since it answers nothing and hides the
+question. Until that is run, `test_piezoelectric_paw` and `test_piezoelectric_augmented`
+carry item 3's convention change **unverified** -- the wedge, which imports the same
+fixture, is the only one of the three that was run.
+
+## 6. Three failures the slow set found that are **not** the `k + G = 0` row, and one of them is not a tolerance question
+
+All three move a **primal** quantity, which the origin tangent cannot touch, so none is
+item 3.
+
+- **`test_magnetic_constraints.py`, three failures on one cell.** Two are one number:
+  `noncolin-constrain_atomic.in`'s total energy at -55.69055643867099 against QE's
+  -55.69055687, out by **4.3e-07** against a 3e-07 tolerance. It is **not** the even-mesh
+  Simpson closure: `Fe.pz-nd-rrkjus.UPF` has full mesh 957, `msh` 839 and `kkbeta` 751, all
+  odd, so that branch is never taken here and `59b2ebb`'s claim holds on this cell. The
+  candidates that remain are `9f089fa` (the direction constraint's normalisation),
+  `2b84b0c` (the symmetry tolerance, which would move the k-set) and `21fe25b`
+  (`scf/fields.py`); a bisect on the one test settles it.
+- **The third is a different thing and should not be folded into that drift.**
+  `test_the_two_fixed_spin_moment_rules_find_the_same_field` has one leg **not converged
+  after 2000 iterations**, at accuracy 3.556e-04 against a `conv_thr` of 1e-08, reporting
+  `M = 2.0705` where the leg beside it converges in **66** iterations at `M = 2.0005`. A
+  fixed-spin-moment run that no longer converges is a defect rather than a tolerance.
+- **`test_stm.py::test_an_antiferromagnet_is_flat_in_charge_and_alternates_in_spin`**,
+  against 0.029525036433705836 at 3e-07. Unattributed.
+
+## 7. A cell with no spin-orbit coupling broke its own directional degeneracy by 0.108 meV
+
+`test_relaxed_anisotropy.py::test_without_spin_orbit_coupling_every_direction_has_the_same_energy`
+fails with the two directions **1.079e-01 meV** apart. Without spin-orbit coupling the
+total energy cannot depend on the direction the moment points, so this is a symmetry
+statement the code makes about itself rather than a comparison with anything, and it is the
+single most alarming number in the 2026-09-21 pass. It is a **total energy**, so it is not
+the origin tangent. Unattributed, and it wants a session of its own rather than the tail of
+one.
