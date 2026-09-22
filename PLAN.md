@@ -20666,3 +20666,88 @@ directly.
   notebook**, because none is owed: this is a diagnostic and a measurement rather
   than a user-facing feature. The instrument has unit tests and the numbers are
   here.
+
+### P103 -- The first external number for a textured augmented spinor: the antiferromagnet agrees to 6e-9 Ry. ✅ DONE for the collinear-axis half; the canted half is in flight.
+
+`MAGNETISM-NEXT.md` Q5 has stood as **the largest validation gap in the
+noncollinear stack** since it was written: everything that only turns on when a
+fully relativistic ultrasoft or PAW dataset carries moments that are not all
+parallel -- `add_becsum_so` on a textured `becsum`, `qq_so` inside an overlap
+whose two projectors sit on atoms with different local spin frames, and the
+`fcoef` recombination that dresses both -- had no external number of any kind.
+One atom cannot reach any of them, because one atom is parallel to itself, and
+every committed noncollinear reference in this tree is either one atom
+(`fe-kind1-noncol.in`, `fe-noncolin-pbe-stress.in`) or norm-conserving
+(`h4-cycloid-90.in`). QE's own test-suite has no such cell either.
+
+**Two cells, and the pair is the measurement.** `fe2-afm-soc.in` is the
+conventional bcc iron cell with two atoms and their moments antiparallel along
+`x`, which is a state one global spin axis still describes; `fe2-canted-soc.in`
+changes `angle2(2)` from 180 to 90 and nothing else, which is what populates the
+off-diagonal spin blocks. A disagreement of the same size in both is about the
+augmented spinor machinery generally, and one that appears only in the canted
+cell is about the terms a texture switches on. **The second atom is displaced by
+0.02 alat in both**, because at the undisplaced positions the two atoms are
+related by inversion and every force is zero by symmetry -- comparing forces
+there would be agreeing about a residue, which is the trap the Born charges of a
+centrosymmetric cell already cost this project an afternoon.
+
+**The number, on the antiferromagnet.** Both codes converged, defumat to
+`accuracy = 4.00e-12` in **49** iterations and `pw.x` to its own threshold in
+**181**:
+
+| | defumat | `pw.x` | difference |
+|---|---|---|---|
+| total energy | -508.285833614 Ry | -508.28583362 Ry | **6e-9 Ry** |
+| site 1 charge | 14.416255 | 14.416255 | every printed digit |
+| site 2 charge | 14.417934 | 14.417934 | every printed digit |
+| site 1 moment | 1.517942 mu_B | 1.517942 | every printed digit |
+| site 2 moment | 1.490979 mu_B | 1.490966 | **1.3e-5 mu_B** |
+| force on atom 1 | +0.00377799 Ry/bohr | +0.00377766 | **3.3e-7 Ry/bohr** |
+
+The two site moments differ from each other by 0.027 mu_B because the second atom
+is displaced, which is the cell working rather than a defect: the inversion that
+would make them equal is what was removed on purpose. Both codes put the moments
+at 180.0 degrees and both sphere radii are 1.911 bohr, `pw.x` printing it as
+0.353 alat.
+
+**What the agreement is evidence for, and what it is not.** `add_becsum_so`,
+`qq_so` in the overlap and the `fcoef` dressing are all live here -- the dataset
+is `Fe.rel-pbe-spn-rrkjus_psl.0.2.1.UPF` and the run is `lspinorb` -- and the
+force is a derivative, so the augmentation charge is exercised in the gradient and
+not only in the total. What this cell **cannot** separate is a term that needs two
+*different* spin frames, because antiparallel moments are still one axis. That is
+what the canted cell is for, and until it lands the claim is the narrow one: the
+augmented spinor machinery agrees with `pw.x` at the level this project's best
+references reach, on a cell with two inequivalent moments.
+
+**Two things worth recording beside it.** defumat converged this cell in 49
+iterations where `pw.x` took 181, which is the opposite of the 2:1 disadvantage
+P102 measures on `fe-noncolin-pbe-stress.in` and is unexplained. And the first
+attempt at this cell used `degauss = 0.02` on an unshifted grid, where `pw.x`
+limit-cycled at 5.5e-6 Ry for 86 iterations and never converged: a small smearing
+on a metal under-resolves the Fermi surface, and the 0.05 Ry with
+`marzari-vanderbilt` on a shifted grid that every validated iron cell here carries
+is carried here for the same reason rather than tuned.
+
+**What is outstanding.**
+
+* **The canted leg, which is the half the item is really about.** Both codes are
+  still running it and **both are slow in the same way**: at about 140 iterations
+  `pw.x` sits at 6e-8 Ry and defumat's accuracy oscillates between 1e-8 and 1e-7,
+  neither reaching 1e-11. They agree so far on the two quantities that exist at
+  that level -- the total magnetization, (3.31, 3.32, 0.00) against
+  (3.3298, 3.3000, 0.0001), and the total energy, -508.34000290 Ry against a
+  defumat value oscillating around -508.3399 -- and `pw.x` has not yet printed a
+  converged site decomposition, so the site moments cannot be compared. **The 7.0
+  mu_B in its output is the starting guess and not a state**: that block sits at
+  line 345 of 2907, before the first iteration, and the antiferromagnetic run
+  prints two such blocks where this one has printed one.
+* **A regression test and the rest of the deliverables.** The cells are committed
+  and the measurement script with them, but there is no test asserting the
+  numbers above, no README row, no `docs/features.tex` entry and no timing pair.
+  The number exists; the phase does not yet.
+* **PAW.** These cells are ultrasoft, which isolates `add_becsum_so` and `qq_so`
+  from PAW's one-centre terms in two different local spin frames -- the case
+  nothing here has ever been checked on at all. That is the next cell up and it is
+  not committed.
