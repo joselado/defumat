@@ -21024,21 +21024,39 @@ energies, add up one of them.**
   above, which is a statement about two totals rather than about the state, but
   it does mean the cell as committed is a strongly smeared magnet and not a
   ground state, and anything read as physics from it should say so.
-* **The collinear arbiter is still running, and what it tests is not this.** It
-  was built as a discriminator between two hypotheses that are both now dead, and
-  it should not be read as a check on the paragraph above: **P105's evidence is
-  complete without it**, the free-energy column reproducing P86 to the digit, the
-  internal-energy column landing within 2.4 and 0.5 per cent of Elk, and the
-  supercell identity putting this code's spiral at 1e-10 Ry. What the arbiter
-  actually compares is **Elk's collinear path against Elk's own spiral path**,
-  and three things have to be carried across before its number means anything: the
-  entropy correction applied to the defumat side, a **matched field** -- a
-  per-atom `bfcmt` on both atoms of a doubled cell is not the global `bfieldc` on
-  one atom of the unit cell -- and the k-grid, the doubled cell's `1 1 4` being
-  the unit cell's `1 1 8` rather than the `1 1 4` Elk's published number sits on.
-  At 27 loops its unconverged reading is -735 meV against a naive -528, and
-  **that gap is those three differences and not a failure of this phase**; a
-  reader who takes it otherwise will reopen a closed item.
+* **The collinear arbiter has run, and it confirms this phase from a direction
+  the phase did not use.** It was built as a discriminator between two hypotheses
+  that are both now dead, and this entry previously said it should not be read as
+  a check on the paragraph above. That was too cautious. Converged
+  (`elk-fm` in 128 loops, `elk-afm` in 44):
+
+  | | `E(AFM) - E(FM)`, doubled cell | twice its own `E(q=1/2) - E(q=0)` | ratio |
+  |---|---|---|---|
+  | defumat, free energy | -104.51 meV | -100.43 meV | **1.041** |
+  | Elk, internal energy | -568.97 meV | -530.41 meV | **1.073** |
+
+  Two things follow, and the second is the one worth having.
+
+  **Each code's spiral reproduces its own collinear doubled cell**, to 4 per cent
+  here and 7 per cent in Elk, and those residuals are the k-grid: the doubled
+  cell's `1 1 4` is the unit cell's `1 1 8`, which P86 measured as worth about
+  that. So **both spiral implementations are internally consistent with their own
+  collinear paths**, which is the check this code already had at 1e-10 Ry and Elk
+  had not.
+
+  **And the factor survives with the spirals removed.** Elk against defumat is
+  **5.44** on a comparison in which *neither code runs a spiral at all* -- two
+  collinear calculations of an antiferromagnet and a ferromagnet in a doubled
+  cell -- which is the same family as the 5 to 6.6 the spiral fixture showed.
+  A factor that persists when the machinery under suspicion is deleted is not
+  that machinery's, and that is the convention, independently.
+
+  **What this comparison cannot do is give the corrected number**, and the limit
+  is recorded rather than worked around: `spiral_arbiter.py` reports the total
+  energy and the Ewald term but not the smearing term, so the entropy cannot be
+  subtracted from the defumat side afterwards and the 5.44 cannot be turned into
+  a number near one without rerunning it. The Fermi-Dirac pair above already is
+  that number, at 0.995 and 0.982, so the rerun is not worth taking.
 * **`PERFORMANCE.md` still has no Elk pair for the spiral**, which is
   `CLAUDE.md`'s standing rule left open and needs one core and an idle machine.
 * **The moment comparison is unaffected and stays as P86 records it**, including
