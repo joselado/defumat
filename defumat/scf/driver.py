@@ -146,7 +146,7 @@ from defumat.scf.potential import (
     tau_accuracy,
     v_of_rho,
 )
-from defumat.scf.residual_split import residual_bins
+from defumat.scf.residual_split import becsum_residual, residual_bins
 from defumat.xc.mgga import thomas_fermi_tau
 from defumat.xc.functional import resolve_functional
 from defumat.solvers import get_eigensolver
@@ -5632,6 +5632,18 @@ def run_scf(
                     rho_out - rho, calculation.basis.dense, calculation.system.cell
                 )
             )
+            # **The half `accuracy` cannot see**, reported every iteration and
+            # fed to nothing. What reaches `accuracy` from `becsum` is only what
+            # `addusdens` put on the grid; PAW's one-centre piece is not in it
+            # at all, and that matches `pw.x`, which writes the term and
+            # comments it out because `paw_ddot` is not positive definite
+            # (`scf_mod.f90:843`). So the fix is to *report* it: a run stalling
+            # inside `becsum` -- measured, growing fourfold between iterations 6
+            # and 11 on an ultrasoft magnet while every grid bin fell -- looked
+            # exactly like a run converging. Two small host transfers.
+            becsum_accuracy, becsum_magnetic = becsum_residual(
+                becsum_state, becsum_out
+            )
             if residual_split:
                 # ``MAGNETISM-NEXT.md`` F2 Option 0: which of the four
                 # directions the run is still moving in. Off by default and
@@ -5891,6 +5903,9 @@ def run_scf(
         if site_moments is not None:
             entry["site_charges"] = site_charges.tolist()
             entry["site_moments"] = site_moments.tolist()
+        if becsum_accuracy is not None:
+            entry["becsum_accuracy"] = becsum_accuracy
+            entry["becsum_magnetic_accuracy"] = becsum_magnetic
         if residual_split:
             entry["residual_split"] = iteration_split
         history.append(entry)
@@ -5930,6 +5945,17 @@ def run_scf(
                 if tau_accuracy_term > 0.0:
                     parts.append(f"tau {tau_accuracy_term:.2e}")
                 extra += "   (dr2: " + " + ".join(parts) + ")"
+            if becsum_accuracy is not None:
+                # **Outside the parentheses on purpose.** `becsum` is not in
+                # `dr2` and printing it inside would say it was; its units are
+                # the occupations' rather than the density's, so it is
+                # comparable with itself across iterations and not with the
+                # number beside it.
+                extra += (
+                    f"   becsum {becsum_accuracy:.2e}"
+                    + (f"/{becsum_magnetic:.2e} mag" if becsum_magnetic else "")
+                    + " (outside dr2)"
+                )
             print(f"  iteration {iteration:3d}   E = {total:16.8f} Ry"
                   f"   accuracy = {accuracy:.2e}   ethr = {ethr:.2e}"
                   f"   |drho| = {residual:.2e}{extra}")

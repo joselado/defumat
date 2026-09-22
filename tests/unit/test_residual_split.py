@@ -10,7 +10,7 @@ rotated antiferromagnet, whose net moment is zero at every angle.
 import numpy as np
 import pytest
 
-from defumat.scf.residual_split import residual_bins
+from defumat.scf.residual_split import becsum_residual, residual_bins
 
 
 class Cell:
@@ -183,3 +183,64 @@ def test_a_nonmagnetic_run_still_answers_every_bin_by_name():
         assert bins[name] == 0.0
     assert bins["rotation_coefficients"] == [0.0, 0.0, 0.0]
     assert bins["unpolarized_points"] == 0
+
+
+# --- the becsum residual, which is the half `accuracy` cannot see -------------
+
+
+def test_a_norm_conserving_run_has_no_becsum_residual():
+    """``(None, None)`` rather than zero, because there is nothing to report.
+
+    A zero would say the augmentation occupations are converged; there are none,
+    and the console line and the history both have to be able to tell those
+    apart.
+    """
+    assert becsum_residual((), ()) == (None, None)
+    assert becsum_residual(None, None) == (None, None)
+
+
+def test_the_becsum_residual_is_zero_when_nothing_moved():
+    before = (np.ones((4, 2, 6)),)
+    assert becsum_residual(before, before) == (0.0, 0.0)
+
+
+def test_the_magnetic_half_excludes_the_charge_channel():
+    """Channel 0 is what ``addusdens`` already routed onto the grid.
+
+    The charge channel of ``becsum`` reaches ``accuracy`` through the smooth
+    density; the magnetization channels reach nothing. Reporting them together
+    only would hide exactly the half the number exists for.
+    """
+    before = np.zeros((4, 1, 3))
+    after = before.copy()
+    after[0] = 3.0          # charge only
+    total, magnetic = becsum_residual((before,), (after,))
+    assert total == pytest.approx(3.0 * np.sqrt(3))
+    assert magnetic == 0.0
+
+    after = before.copy()
+    after[2] = 4.0          # one magnetization channel only
+    total, magnetic = becsum_residual((before,), (after,))
+    assert total == pytest.approx(4.0 * np.sqrt(3))
+    assert magnetic == pytest.approx(4.0 * np.sqrt(3))
+
+
+def test_the_species_of_a_mixed_cell_are_summed_together():
+    """One number for the run, not one per species, and a norm not a sum."""
+    first = np.zeros((2, 1, 1))
+    second = np.zeros((2, 1, 1))
+    total, _ = becsum_residual(
+        (first, second),
+        (first + np.array([[[3.0]], [[0.0]]]), second + np.array([[[4.0]], [[0.0]]])),
+    )
+    assert total == pytest.approx(5.0)
+
+
+def test_a_collinear_becsum_still_reports_its_magnetic_half():
+    """``nspin = 2`` has channel 1 as the magnetization, not three of them."""
+    before = np.zeros((2, 1, 2))
+    after = before.copy()
+    after[1] = 1.0
+    total, magnetic = becsum_residual((before,), (after,))
+    assert total == pytest.approx(np.sqrt(2))
+    assert magnetic == pytest.approx(np.sqrt(2))

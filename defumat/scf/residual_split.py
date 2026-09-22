@@ -51,7 +51,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 import numpy as np
 
-__all__ = ["residual_bins", "ROTATION_GENERATORS"]
+__all__ = ["residual_bins", "becsum_residual", "ROTATION_GENERATORS"]
 
 #: The three generators of a rigid spin rotation, as the antisymmetric action
 #: ``e_a x m``. Written as index triples rather than as matrices because the
@@ -162,21 +162,59 @@ def residual_bins(rho_in, rho_out, cell, becsum_in=None, becsum_out=None) -> dic
     return _with_becsum(bins, becsum_in, becsum_out)
 
 
-def _with_becsum(bins: dict, becsum_in, becsum_out) -> dict:
-    """The fifth bin, and it is the one nothing else in the log can see."""
+def becsum_residual(becsum_in, becsum_out) -> tuple:
+    """``(total, magnetic)``: how far the augmentation occupations moved.
+
+    **This is the half of the residual that `accuracy` cannot see**, and it is
+    reported because of that rather than fed to anything. `scf_accuracy_split`
+    takes the *smooth density* residual, so what reaches the convergence number
+    from ``becsum`` is only what ``addusdens`` already put on the grid,
+    ``Q_ij(r) becsum``, at the charge half's ``1/|G|^2`` weight; PAW's one-centre
+    piece, the all-electron minus pseudo Hartree and exchange-correlation on the
+    radial grids, is not in it at all.
+
+    **That matches `pw.x` exactly and is not a deviation**, which is also why
+    this number must stay outside the convergence test rather than being added
+    to it. QE writes the term and comments it out (``PW/src/scf_mod.f90:843``):
+
+    .. code-block:: fortran
+
+        ! Beware: commented out because it yields too often negative values
+        ! IF (okpaw)  rho_ddot = rho_ddot + paw_ddot(rho1%bec, rho2%bec)
+
+    ``paw_ddot`` is not positive definite, so a convergence measure built on it
+    can go negative. What is wrong is not that the term is missing from `dr2`; it
+    is that nothing anywhere reported it, so a run stalling inside it looked
+    exactly like a run converging.
+
+    **Two numbers rather than one**, because on a magnet the moment lives in the
+    d-shell occupations: the total, and the part carried by the magnetization
+    channels alone, which is the one that can move while the charge sits still.
+    Channel 0 is the charge and is the piece ``addusdens`` already routed onto
+    the grid.
+
+    The norm is a plain Euclidean one over the occupations, whose units are
+    electrons rather than the density's, so **it is comparable with itself across
+    iterations and not with `accuracy`**. Quoting it beside `dr2` as though the
+    two were the same size is the mistake this docstring exists to prevent.
+    """
     if not becsum_in or not becsum_out:
-        bins["becsum"] = None
-        return bins
-    total = 0.0
+        return None, None
+    total = magnetic = 0.0
     for before, after in zip(becsum_in, becsum_out):
         before = jnp.asarray(before)
         after = jnp.asarray(after)
-        if before.ndim == 0 or before.shape[0] < 2:
+        if before.ndim == 0 or before.size == 0:
             continue
-        # Channels 1 onwards are the magnetization of the augmentation
-        # occupations; channel 0 is its charge and is already inside the smooth
-        # density's own residual through ``addusdens``.
-        difference = after[1:] - before[1:]
+        difference = after - before
         total += float(jnp.sum(difference**2))
-    bins["becsum"] = float(np.sqrt(total))
+        if before.shape[0] >= 2:
+            magnetic += float(jnp.sum(difference[1:] ** 2))
+    return float(np.sqrt(total)), float(np.sqrt(magnetic))
+
+
+def _with_becsum(bins: dict, becsum_in, becsum_out) -> dict:
+    """The fifth bin, which is :func:`becsum_residual`'s magnetic half."""
+    _, magnetic = becsum_residual(becsum_in, becsum_out)
+    bins["becsum"] = magnetic
     return bins

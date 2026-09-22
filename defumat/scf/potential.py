@@ -158,7 +158,17 @@ def scf_accuracy(residual_r: jnp.ndarray, gvectors: GVectors, cell: Cell) -> jnp
 
 
 def scf_accuracy_split(residual_r: jnp.ndarray, gvectors: GVectors, cell: Cell):
-    """``(dr2, charge, magnetization)`` -- the total **and** its two halves.
+    """**What this does not see, and where that is reported.** The argument is the
+    *smooth density* residual, so the only part of ``becsum`` inside the number
+    is what ``addusdens`` already put on the grid; PAW's one-centre piece is not
+    in it at all. That matches ``pw.x``, which writes the term and comments it
+    out because ``paw_ddot`` is not positive definite
+    (``PW/src/scf_mod.f90:843``), so it is a convention rather than an omission
+    -- but it means a run can stall inside ``becsum`` and look like one
+    converging. :func:`~defumat.scf.residual_split.becsum_residual` is the number
+    that says so, reported every iteration and fed to nothing.
+
+    ``(dr2, charge, magnetization)`` -- the total **and** its two halves.
 
     One function rather than two, and one transform of the residual rather than
     two, because both numbers are wanted every iteration and the residual's FFT
