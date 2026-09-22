@@ -20821,52 +20821,73 @@ eigenvalue of `chi_0 K` approaching one from below and simple mixing converges a
 number. GMRES took 12 applications on the longitudinal channel and 22 on the
 transverse one.
 
-**And the transverse channel is the finding nobody was looking for.**
-`dm_x/dB_x` comes out at **-658.9 mu_B/Ry**, converged to a residual of 7.3e-9 in
-22 applications -- **twenty-four thousand times the longitudinal value, and
-negative**. The sign is not a convention: the same field object and the same
-potential give a *positive* longitudinal susceptibility that a finite difference
-confirms, so the two cannot differ in convention. A negative transverse
-susceptibility says the moment along `z` is a stationary point of the direction
-that is **not a minimum**, and a fixed-point iteration is stability-blind, so an
-SCF sits on it happily. The finite-difference partner for that number does not
-exist and could not: under a transverse field the SCF **did not converge**, 200
-iterations reaching 8.4e-8 Ry against 1e-12, which is what a run driven away from
-an unstable direction does.
+**And the transverse channel is the finding nobody was looking for, with the
+first reading of it wrong.** `dm_x/dB_x` comes out at **-658.9 mu_B/Ry**, a
+residual of 7.3e-9 in 22 applications, **twenty-four thousand times the
+longitudinal value and negative**, and its finite-difference partner does not
+exist: under a transverse field the SCF ran 200 iterations to 8.4e-8 Ry against
+1e-12 without converging.
 
-Read as physics, `chi_perp ~ |m|/K` puts the anisotropy at about `1/659` Ry, some
-20 meV, which is the right scale for spin-orbit coupling on iodine, and the sign
-would say `z` is the hard direction rather than the easy one.
+**The obvious reading of that sign is that `z` is a saddle, and it is wrong.**
+A negative transverse susceptibility would say the moment direction is a
+stationary point that is not a minimum, which a fixed-point iteration sits on
+happily, and since `i-atom-soc.in` is the cell P83's entire refusal rests on that
+would have been a candidate for the 5.3 per cent. It was written down here that
+way and then tested, because it is an explanation that fits a number. **The test
+refutes it.** Seeding the same cell with the moment tilted off `z` and converging
+it at `nosym`, so nothing forces the direction:
 
-**That reading is held open until the tilt run lands, because it is an
-explanation that fits a number.** One thing it needs is already checked by
-reading rather than by argument: a direction-only penalty carries a `1/|m|` whose
-gradient is a large *negative* transverse term, which would produce exactly this
-sign, and the probe cannot have one -- it is built with `penalty = 0.0` and no
-targets, so `MagneticField.constraint` is its default `"none"` and
-`constraint_energy` returns a literal `jnp.asarray(0.0)` on that branch
-(`scf/fields.py:521-534`). What is *not* yet excluded is anything that would make
-the response negative without the state being unstable, and the discriminator is
-the cheap one: seed the moment off `z` and see where it goes. **If it returns to
-`z`, the sign is something else and this paragraph is wrong**; if it rotates away
-or fails to settle, `z` is a saddle and P83's whole comparison is being made about
-one.
+| seed `theta` | final `theta` | |
+|---|---|---|
+| 0 deg | 0.000 deg | converged |
+| 2 deg | **0.0062 deg** | converged |
+| 10 deg | **0.0119 deg** | converged |
+| 30 deg | 45.2 deg | **not** converged, 300 iterations at 4.0e-10 |
+
+A ten-degree tilt relaxes back to a hundredth of a degree, so **`z` is locally
+stable and the direction is a minimum**, and the saddle reading is dead.
+
+**What the number does say, and it is the part that survives.** The magnitude is
+real and means the transverse channel is extremely soft, `chi_perp ~ |m|/K`
+putting the anisotropy near 20 meV, which is the right scale for spin-orbit
+coupling on iodine. What cannot be trusted is the **sign**: a very soft direction
+is one where `1 - chi_0 K` has an eigenvalue close to zero, the solution of a
+nearly singular system is large, and which side of the singularity a numerical
+eigenvalue falls on decides the sign. That also explains the third fact, which is
+that the finite-difference leg could not converge -- a nearly flat direction under
+a field is not a well-posed SCF -- and it is this project's own trap in a new
+place: **a number with the wrong sign and the right magnitude reads as a
+discovery**.
+
+One alternative was excluded by reading rather than by argument, and is recorded
+so it is not tested again: a direction-only penalty carries a `1/|m|` whose
+gradient is a large negative transverse term and would give exactly this sign, and
+the probe cannot have one -- built with `penalty = 0.0` and no targets, its
+`constraint` is the default `"none"` and `constraint_energy` returns a literal
+`jnp.asarray(0.0)` on that branch (`scf/fields.py:521-534`).
+
+**The 30-degree seed is left as an open fact rather than explained.** It does not
+converge and drifts to 45 degrees, which is neither a return to `z` nor a run
+that has settled anywhere, and one unconverged run is not a basin.
 
 **What is outstanding.**
 
-* **Whether P83's whole comparison is being made about a saddle.** The cell was
-  chosen because it is an insulator, textured and norm-conserving, and nothing
-  in P83 knew its moment direction is unstable. What this does **not** say is that
-  the comparison is wrong -- both codes agree on the ground state energy to the
-  printed digit, so they are on the same stationary point -- but a response about
-  a nearly unstable direction is a delicate object and the 5.3 per cent now has a
-  candidate nobody had written down. **Letting the moment relax and asking where
-  it goes is the measurement**, and it is cheap.
-* **The transverse kernel has no independent check and now cannot have this one.**
-  A finite difference under a transverse field does not converge on this cell.
-  What would work is a cell whose easy axis is where the moment sits, or a
+* ~~**Whether P83's whole comparison is being made about a saddle.**~~ **Answered
+  the same day, and the answer is no**: a ten-degree tilt relaxes back to 0.012
+  degrees, so `z` is a minimum and P83's comparison is about a stable state. What
+  is left of the question is the 30-degree seed, which does not converge and
+  drifts to 45 degrees; one unconverged run is not a basin and it is recorded as a
+  fact rather than a finding.
+* **The transverse kernel still has no independent check and cannot have this
+  one.** A finite difference under a transverse field does not converge on this
+  cell, and the reason is now understood rather than guessed: the direction is
+  nearly flat, so an SCF under a field along it is not well posed and the linear
+  system's sign is decided by round-off. What would work is a cell whose
+  anisotropy is large enough to make the transverse channel stiff, or a
   constrained-direction run on this one, whose penalty is then outside both totals
-  and has to be handled.
+  and has to be handled. **Until then the transverse number is a magnitude without
+  a sign**, and quoting it any other way would repeat the mistake this phase
+  already made once.
 * **The electric-field source term**, which is now one of the two remaining
   suspects and has never been checked on a spinor on its own.
 * **The refusal stands.** `require_a_measured_spinor_response` still refuses a
