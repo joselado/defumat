@@ -1,0 +1,46 @@
+! **The nonmagnetic twin of `tests/data/qe/fe-noncolin-pbe-stress.in`**, which is
+! the deconfounder `MAGNETISM-NEXT.md` F2 Option 0 asks for and which does not
+! exist for the noncollinear cell.
+!
+! That cell takes 43 SCF iterations where `pw.x` takes 19 at the same
+! `mixing_beta` and the same `conv_thr`, with the two energies agreeing to
+! 6.7e-9 Ry, and the 43 is attributable to nothing: the same 2:1 reading of
+! `fe-mag-1k`'s 25 against 12 collapsed once `fe-unstable-nonmagnetic.in` was run
+! and took 21, so most of that excess was not magnetic at all. Until the same
+! twin exists here, every explanation of the 43 that appeals to the magnetization
+! is an explanation that fits a number.
+!
+! Everything is the magnetic cell's and one thing changes, which is that there is
+! no magnetism: `nspin = 1` rather than `noncolin` with a starting moment. The
+! cutoffs, the smearing, the k-grid, `nosym`, `nbnd`, `mixing_beta` and
+! `conv_thr` are all carried over unchanged, because a deconfounder that also
+! moves a knob deconfounds nothing.
+!
+! `nbnd = 16` is the magnetic cell's count and is kept although a collinear run
+! needs half as many: the band count changes the eigensolver's work per
+! iteration and could change the iteration count through `ethr`, and the point
+! here is the iteration count.
+ &control
+    calculation = 'scf'
+    verbosity = 'high'
+ /
+ &system
+    ibrav = 3, celldm(1) = 5.217, nat = 1, ntyp = 1,
+    ecutwfc = 25.0, ecutrho = 200.0,
+    occupations = 'smearing', smearing = 'marzari-vanderbilt', degauss = 0.05
+    nspin = 1
+    nosym = .true.
+    nbnd = 16
+ /
+ &electrons
+    mixing_beta = 0.2
+    conv_thr = 1.0d-10
+    diago_david_ndim = 4
+    electron_maxstep = 200
+ /
+ATOMIC_SPECIES
+ Fe 55.847 Fe.pbe-nd-rrkjus.UPF
+ATOMIC_POSITIONS (alat)
+ Fe 0.0 0.0 0.0
+K_POINTS {automatic}
+ 4 4 4 1 1 1

@@ -86,7 +86,7 @@ export MKL_NUM_THREADS=1
 echo "=== node ==="; hostname; date
 echo "task $TASK   rgkmax $RGKMAX   q_3 $QZ"
 echo "commit: $(git -C "$REPO" rev-parse HEAD)"
-which elk && elk --version 2>&1 | head -2
+which elk
 
 cp "$FIXTURE/elk.in" "$FIXTURE/H.in" "$RUN/" || exit 1
 cd "$RUN" || exit 1
@@ -116,7 +116,11 @@ open("elk.in", "w").write("\n".join(out))
 print("rgkmax", rgkmax, "vqlss z", qz)
 PY
 
-elk > elk.log 2>&1
+# `srun` rather than a bare `elk`: the module's binary is MPI-linked, and run
+# outside a launcher it dies in `ext3x_client.c` before reading its input, which
+# reads exactly like a bad `elk.in`. One task with the whole cpus-per-task under
+# it, so the parallelism is Elk's OpenMP and not ranks.
+srun --ntasks=1 --cpus-per-task="${SLURM_CPUS_PER_TASK:-4}" elk > elk.log 2>&1
 echo "elk exit $?"
 
 echo "--- total energy and moment ---"

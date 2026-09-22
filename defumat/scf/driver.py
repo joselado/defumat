@@ -146,6 +146,7 @@ from defumat.scf.potential import (
     tau_accuracy,
     v_of_rho,
 )
+from defumat.scf.residual_split import residual_bins
 from defumat.xc.mgga import thomas_fermi_tau
 from defumat.xc.functional import resolve_functional
 from defumat.solvers import get_eigensolver
@@ -4863,6 +4864,7 @@ def run_scf(
     checkpoint_every: int = 10,
     mixing_from=None,
     max_seconds: float | None = None,
+    residual_split: bool = False,
 ) -> SCFResult:
     """Run the self-consistent field loop to convergence.
 
@@ -5630,6 +5632,17 @@ def run_scf(
                     rho_out - rho, calculation.basis.dense, calculation.system.cell
                 )
             )
+            if residual_split:
+                # ``MAGNETISM-NEXT.md`` F2 Option 0: which of the four
+                # directions the run is still moving in. Off by default and
+                # feeding nothing -- it is read from the same ``rho_out - rho``
+                # the mixer is about to be handed, and ``accuracy`` above is
+                # untouched, because that number drives the ``ethr`` schedule
+                # and a diagnostic must not change the run it is diagnosing.
+                iteration_split = residual_bins(
+                    rho, rho_out, calculation.system.cell,
+                    becsum_state, becsum_out,
+                )
             if calculation.is_hubbard:
                 ns_out = calculation.occupation_matrix(wavefunctions, wg)
                 if iteration == 1 and starting_density is None and starting_ns is None:
@@ -5878,6 +5891,8 @@ def run_scf(
         if site_moments is not None:
             entry["site_charges"] = site_charges.tolist()
             entry["site_moments"] = site_moments.tolist()
+        if residual_split:
+            entry["residual_split"] = iteration_split
         history.append(entry)
         if verbose:
             if moment is not None:
