@@ -139,6 +139,29 @@ zero.
 
 ### A2. A textured spinor's dielectric tensor is 5.3 per cent from `ph.x` and nobody knows whose fault it is [new, P83]
 
+**P104 removed one of the three suspects, in the direction the disagreement is
+in, and found something nobody was looking for.** The longitudinal spin
+susceptibility measured two ways -- the same screened response the dielectric
+constant is built on, and a central difference of two converged SCF runs under a
+uniform Zeeman field, which touches no response solver at all -- agree to
+**0.238 per cent**, and that is the honest reading rather than the 0.455 at the
+smaller step, because halving `h` *doubles* the disagreement where a truncation
+error would quarter it: what is left in the difference is `eps/h` with a moment
+error of 2.6e-8 mu_B. So the magnetic kernel and its self-consistency are right
+together along the moment, against a disagreement twenty times larger, and **the
+two suspects left are the electric-field source term and `ph.x` itself**.
+
+**And the cell is transversely unstable.** `dm_x/dB_x` is **-658.9 mu_B/Ry**,
+negative and twenty-four thousand times the longitudinal value, converged to
+7.3e-9 in 22 matrix applications. The sign is not a convention, the same field
+object giving a positive longitudinal value that a finite difference confirms, so
+the moment along `z` is a stationary point that is **not a minimum** -- which a
+fixed-point iteration sits on happily and which nothing in P83 knew. Its finite
+difference could not be taken at all: under a transverse field the SCF ran 200
+iterations to 8.4e-8 without converging, which is what a run driven away from an
+unstable direction does. Whether the moment stays on `z` is the next measurement
+and it is cheap.
+
 **Phase.** P83 opened the dielectric tensor and the Born charges for a spinor and validated
 them for `nspin_mag = 1` -- the identity against the scalar run at 5.0e-14, the wedge against
 the closed grid at 7.4e-13, `ph.x` at 4.3e-5. The **textured** case (`nspin_mag = 4`) runs,
@@ -624,6 +647,32 @@ transverse channel.
 
 #### Option 0, and every other option's decisive number depends on it
 
+**✅ DONE -- P102, and it overturns the bound item F was carrying.** The
+deconfounder is the headline: `fe-noncolin-pbe-stress.in` takes **43** iterations
+at its own `mixing_beta` and its nonmagnetic twin takes **15**, so **28 of the 43
+are magnetism** where `fe-mag-1k`'s twin left 4 of 25 -- and the twin is *below*
+`pw.x`'s 19 on the magnetic cell, so the charge channel is not the problem and
+the whole excess over `pw.x`, and more, lives in the magnetic directions.
+**"Most of the excess is not magnetic" is a fact about `fe-mag-1k` and does not
+carry to a noncollinear cell.**
+
+The split says which magnetic direction. The **longitudinal** bin is above the
+charge from iteration 6 and plateaus at about 9e-4 for iterations 26 to 31 while
+the charge keeps falling, which is the Stoner direction with no preconditioner on
+it; the rigid rotation is not excited on a one-atom cell with a fixed axis, at
+1e-6 to 4e-5 throughout; and **`becsum` grows by a factor of four between
+iterations 6 and 11 while every grid bin falls**, ending three orders down where
+the charge manages five. Its units are not the density's, so the *magnitude* is
+not comparable across bins and the **rate** is, which is the finding.
+
+The trip test passes with a falsifier: a rotated converged state fed back gives a
+residual that is flat, and if anything falling, from 0.05 to 1.00 radians, where a
+run that was not rotation-invariant would grow with the angle. That measures the
+Goldstone flatness of this cell directly rather than the bin.
+
+**What Option 0 does not do is choose.** The longitudinal channel and `becsum`
+are where the iterations go, and each has a candidate below; none is taken.
+
 **Two runs and one dump, and it is hours rather than a phase.** Nothing below can be chosen
 on argument, because the four directions call for four different operators and no cell here
 has ever been told apart on which one it is slow in.
@@ -992,7 +1041,18 @@ under another, and the gradient correction is what feels that most. `H.pbe-hgh.U
 committed. Rule that out before concluding the cell is frustrated.
 
 **Q5 — ultrasoft or PAW with several non-parallel moments has no external number in any
-regime.** [O13] Take `fe-kind1-noncol.in` (`Fe.rel-pbe-spn-rrkjus`), build a two-atom
+regime. ✅ Half closed by P103.** The two cells exist -- `fe2-afm-soc.in` and
+`fe2-canted-soc.in`, the conventional bcc iron cell on
+`Fe.rel-pbe-spn-rrkjus_psl.0.2.1.UPF` with `lspinorb`, differing in `angle2(2)`
+alone and with the second atom displaced by 0.02 alat so that the force is a real
+number rather than the residue two atoms related by inversion would leave. On the
+**antiferromagnet**, against `pw.x`: the total energy agrees to **6e-9 Ry**, both
+site charges and the first site moment to every printed digit, the second site
+moment to 1.3e-5 mu_B and the force to 3.3e-7 Ry/bohr. What that cannot separate
+is a term needing two *different* spin frames, antiparallel moments still being
+one global axis; the **canted** leg is the half the item is really about, both
+codes are slow on it, and PAW -- one-centre terms in two different local frames --
+is a cell further still and is not committed. The original text follows. [O13] Take `fe-kind1-noncol.in` (`Fe.rel-pbe-spn-rrkjus`), build a two-atom
 antiferromagnetic version (`angle2 = 0` and `180`) and a canted one at 90 degrees, and
 generate a `pw.x` reference for each; compare total energy, both site moments and the
 forces. Until then, everything that only turns on in that combination — `add_becsum_so` on a
