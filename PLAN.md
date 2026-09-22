@@ -20849,3 +20849,91 @@ says `z` is the hard direction rather than the easy one.
 * **The refusal stands.** `require_a_measured_spinor_response` still refuses a
   textured spinor dielectric tensor, and should, because what has been located is
   where the error is *not*.
+
+### P105 -- The spin spiral's factor of five was a free energy against an internal energy. ✅ DONE, and the item is closed.
+
+`PLAN.md` P86 recorded the spin spiral's first external comparison and a
+disagreement it could not place: the two codes agree on the moments to 4 per cent
+at three wavevectors and disagree about `E(q) - E(0)` by a factor that itself
+moves, 6.6 at `q = 1/4` and 5.3 at `q = 1/2`. Four candidates were named over two
+sessions and every one of them is now dead:
+
+* **the k-grid**, worth nothing: the defumat scan at `1 1 4/8/16/32` converges by
+  8 and is flat to 0.03 meV out to 32;
+* **this code's basis**, worth a tenth: `ecutwfc` 25 to 80 moves the ratio from
+  6.18 to 5.42;
+* **the held field**, worth less than was claimed and for a reason that is itself
+  a defect in the record -- the 6 per cent credited to it was measured under a
+  field **274 times too large**, because the conversion read Elk's `bfieldc` as an
+  energy in Hartree and dropped `cb = g_e/4c = 3.6529e-3`. `bfieldc = 0.002` is
+  **1.4612e-5 Ry** in this code's units, not 0.004, and `0.004/1.4612e-5` is
+  273.75 where `1/cb` is 273.75;
+* **Elk's own basis**, measured here for the first time and worth about **one per
+  cent**: `rgkmax` 7 to 8, which is 25 to 32.6 Ry of interstitial plane waves,
+  moves `E(1/4) - E(0)` from -133.85 to -135.37 meV and `E(1/2) - E(0)` from
+  -260.88 to -259.27.
+
+**The cause is that the two codes were not asked for the same quantity.**
+`energy.f90:238-256` computes Elk's entropy term and guards it with a comment
+that is the whole answer: *"non-zero only for the Fermi-Dirac smearing
+function"*, `IF (stype == 3)`. The fixture uses **`stype = 0`**, Methfessel-Paxton
+order zero, chosen so that the smearing would match QE's Gaussian -- and that is
+exactly the choice that makes `engyts` identically zero, so Elk's printed total
+is the **internal energy** `E`. QE's `!total energy` and this code's
+`SCFResult.total_energy` both carry the smearing contribution `-TS` **inside**
+them, so they are a **free energy** `F`. The comparison was `F(q) - F(0)` against
+`E(q) - E(0)`.
+
+**And the term is large here, for a physical reason.** `degauss = 0.1 Ry` is a
+wide smearing, and the spiral's moment grows with `q` -- 0.515, 0.636, 0.708 in
+`int |m|` at the three wavevectors -- so its spectrum is more spin-split, fewer
+states sit at the Fermi level, and the entropy **falls**. Measured on the
+committed fixture:
+
+| `q_3` | `-TS` (Ry) | `F(q) - F(0)` | `E(q) - E(0)` | Elk |
+|---|---|---|---|---|
+| 0 | -0.033077731 | 0 | 0 | 0 |
+| 1/4 | -0.024825692 | -20.712 meV | **-132.986 meV** | -136.294 meV |
+| 1/2 | -0.017378516 | -50.214 meV | **-263.813 meV** | -265.206 meV |
+
+The entropy alone moves by **+112 meV** between `q = 0` and `q = 1/4`, five times
+the free-energy difference it was being compared against. **Removing it brings the
+two codes to 2.4 per cent at `q = 1/4` and 0.5 per cent at `q = 1/2`**, which is
+comfortably inside what the two bases are separately measured to be worth. The
+free-energy column reproduces P86's -20.712 and -50.214 to the digit, so this is
+the same run rather than a new one.
+
+**What made this findable, and what hid it.** The defumat side's spiral machinery
+was never in question and this confirms it: `tests/regression/test_spin_spirals.py`
+already reproduces `E(q = b3/2)` from a **collinear** antiferromagnet in the
+doubled cell and `E(q = b3/4)` from a 90-degree noncollinear supercell, both to
+**1e-10 Ry**, with references that are not spirals at all -- seven orders below
+the disagreement. So the error was never in either code's spiral; it was in what
+the two totals mean. What hid it is that every candidate anyone named was a
+*convergence* parameter, and a convention error is invisible to convergence: all
+four sweeps moved the number by a few per cent and left the factor of five
+exactly where it was.
+
+**The habit this is an instance of.** Elk's printed breakdown sums to its printed
+total exactly -- kinetic plus Coulomb plus exchange plus correlation equals
+-0.466004773945 against a total of -0.466004773945 -- which is what says the
+entropy slot is empty, and reading that sum is a two-minute check that no session
+did in two months of looking at this number. **Before comparing two codes' total
+energies, add up one of them.**
+
+**What is outstanding.**
+
+* **The fixture should say this**, and both headers should name the convention
+  rather than leaving the next reader to rediscover it. A `stype = 3` Elk run
+  with a matched Fermi-Dirac smearing on the QE side is the version of this
+  comparison that needs no correction at all, and is the better fixture.
+* **The collinear arbiter is still running and is now a *test* of this
+  explanation rather than a discriminator.** `E(AFM) - E(FM)` in the doubled cell
+  is twice `E(q = 1/2) - E(q = 0)`, computed by both codes with no spiral
+  machinery anywhere, so Elk's value must match this code's **without** the
+  smearing term. That is a prediction with a number attached, which is the best
+  kind of check to have left running.
+* **`PERFORMANCE.md` still has no Elk pair for the spiral**, which is
+  `CLAUDE.md`'s standing rule left open and needs one core and an idle machine.
+* **The moment comparison is unaffected and stays as P86 records it**, including
+  that the converged defumat moment crosses Elk's rather than approaching it.
