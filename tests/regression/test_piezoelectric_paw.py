@@ -56,12 +56,27 @@ def _bounded_compilation():
 
 @lru_cache(maxsize=2)
 def _field(case: str):
-    """One converged ground state and one field response, per cell."""
+    """One converged ground state and one field response, per cell.
+
+    **On QE's convention for the ``l = 1`` tangent at ``k + G = 0``**
+    (``origin_tangent=False``), for `PLAN.md` P24's rule: both numbers this file
+    asserts against -- ``CLOSED_GRID_E14`` and the 42.051 dielectric constant --
+    are constants *this code* recorded before the term existed. This file has
+    its own fixture rather than sharing
+    ``test_piezoelectric_augmented.py``'s, so it needs its own copy of the
+    convention; that it did not have one is how both of its tests failed while
+    the wedge beside them passed.
+
+    The mesh is ``2 2 2 0 0 0``, which holds Gamma at **an eighth**, the
+    heaviest weight of any cell in the piezoelectric family, so this is where
+    the term is worth most: 5.571e-04 C/m^2 on ``e_14`` and **0.195 on a
+    dielectric constant of 42.05**, against tolerances of 1e-4 and 4.2e-2.
+    """
     system = build_system(read_pw_input(CASES / f"{case}.in"))
     pseudos = tuple(
         read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species
     )
-    calculation = Calculation(system, pseudos)
+    calculation = Calculation(system, pseudos, origin_tangent=False)
     result = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-10,
                      max_iterations=100)
     eigenvalues, psi = refined_states(calculation, result)
