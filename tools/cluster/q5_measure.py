@@ -65,7 +65,11 @@ def measure(name: str, conv_thr: float, max_iterations: int, k_batch):
     scf_seconds = time.time() - started
 
     started = time.time()
-    forces = np.asarray(calculator.get_forces())
+    # `get_forces` returns a `Forces`, whose `.forces` is the `(nat, 3)` array
+    # in Ry/bohr cartesian -- the same frame and units `pw.x` prints, which is
+    # why `test_spinor_forces.py` compares the two with no conversion at all.
+    force_result = calculator.get_forces()
+    forces = np.asarray(force_result.forces)
     force_seconds = time.time() - started
 
     moments = np.asarray(scf.site_moments)
@@ -100,6 +104,13 @@ def measure(name: str, conv_thr: float, max_iterations: int, k_batch):
                                 else [float(x) for x in scf.magnetization_vector],
         "forces": forces.tolist(),
         "max_force": float(np.abs(forces).max()),
+        "force_method": str(getattr(force_result, "method", "")),
+        # QE's `sumfor`: the sum over atoms before it was subtracted off. It is
+        # not a force, it is a convergence diagnostic, and a large value is what
+        # says a comparison against `pw.x` is measuring the run rather than the
+        # code.
+        "total_before_correction":
+            np.asarray(force_result.total_before_correction).tolist(),
         "scf_seconds": scf_seconds,
         "force_seconds": force_seconds,
     }
