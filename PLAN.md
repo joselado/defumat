@@ -20967,10 +20967,44 @@ energies, add up one of them.**
 
 **What is outstanding.**
 
-* **The fixture should say this**, and both headers should name the convention
-  rather than leaving the next reader to rediscover it. A `stype = 3` Elk run
-  with a matched Fermi-Dirac smearing on the QE side is the version of this
-  comparison that needs no correction at all, and is the better fixture.
+* ~~**The fixture should say this**~~ -- **done**, and both headers now name the
+  convention, the Elk one carrying the two-minute check as well. A `stype = 3`
+  pair was built beside them (`tests/data/elk/h_chain_spiral_fd/`,
+  `tests/data/qe/h-chain-spiral-elk-fd.in`) because a comparison that needs no
+  correction is better than a correction to remember.
+
+  **And the first version of that pair was a null, caught only by the moment.**
+  Copying the Gaussian fixture's `swidth = 0.05` Ha into a Fermi-Dirac run
+  matches a *number* rather than a temperature: under Fermi-Dirac that is
+  `kT = 1.36 eV` and it destroys the magnetism. Both codes converged, agreed with
+  each other to six decimals, and were comparing nothing -- Elk's total moment
+  **1.7e-04** and this code's `int |m|` **0.0020**, against 0.54 and 0.515 on the
+  Gaussian pair. Two codes agreeing about a nonmagnetic chain is this project's
+  own "a check whose null result cannot be told from a pass", and what showed it
+  is the line the parent fixture's header already tells its reader to read first.
+
+  The width is therefore measured. Sweeping this side at `q = 0`:
+
+  | `degauss` (Ry) | `int \|m\|` | `-TS` (Ry) |
+  |---|---|---|
+  | 0.10 | 0.00195 | -0.141049 |
+  | 0.05 | 0.32206 | -0.050193 |
+  | **0.02** | **0.90181** | **-0.002055** |
+  | 0.01 | 0.92881 | -0.000048 |
+  | 0.005 | 0.92955 | -5.5e-8 |
+
+  0.02 Ry is where the moment has reached its low-temperature value while the
+  entropy is still 28 meV, so the convention this pair exists to neutralise would
+  still matter if it were not neutralised; below 0.01 the term vanishes and the
+  fixture proves nothing, and above 0.05 the magnet does.
+
+  **One thing that sweep says in passing and is worth more than the fixture.**
+  The low-temperature moment of this chain is **0.93** and the Gaussian pair's is
+  **0.515**, so the smearing every number in P86 and P105 was taken at is itself
+  suppressing the moment by nearly half. That does not touch the resolution
+  above, which is a statement about two totals rather than about the state, but
+  it does mean the cell as committed is a strongly smeared magnet and not a
+  ground state, and anything read as physics from it should say so.
 * **The collinear arbiter is still running, and what it tests is not this.** It
   was built as a discriminator between two hypotheses that are both now dead, and
   it should not be read as a check on the paragraph above: **P105's evidence is
