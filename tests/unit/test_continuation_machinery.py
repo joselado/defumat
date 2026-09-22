@@ -1272,13 +1272,29 @@ def test_tau_crosses_untouched_when_the_magnetization_does():
 # --- with_positions and the FFT grid -------------------------------------------
 
 
+def _silicon_text():
+    """The reference input's text, or skip -- **read it no other way.**
+
+    ``quantum_espresso/`` is gitignored, so a fresh checkout and every cluster
+    node have none of it, and the repository's rule is that a test needing it
+    skips cleanly rather than failing. The guard used to live inside
+    ``_silicon_calculator`` alone, which is one step too late for any caller that
+    edits the text before handing it over: such a caller reads the file first and
+    dies in ``read_text`` with a ``FileNotFoundError``, which is not a skip and
+    does not look like a missing tree either. One test did exactly that, and it
+    took a cluster gate to find it because the tree is present on the
+    workstation.
+    """
+    if not SILICON.is_file():
+        pytest.skip("QE reference tree not present")
+    return SILICON.read_text()
+
+
 def _silicon_calculator(text=None):
     from defumat.calculator import Calculator
 
-    if not SILICON.is_file():
-        pytest.skip("QE reference tree not present")
     if text is None:
-        text = SILICON.read_text()
+        text = _silicon_text()
     return Calculator.from_text(text, "tests/data/pseudo", announce=False)
 
 
@@ -1320,7 +1336,7 @@ def test_with_positions_rebuilds_where_a_frozen_grid_would_be_unsound():
     would hand ``sym_rho`` operations the grid cannot carry, so that case
     rebuilds and the seed check then raises honestly.
     """
-    text = SILICON.read_text().replace("Si 0.25 0.25 0.25", "Si 0.30 0.25 0.25")
+    text = _silicon_text().replace("Si 0.25 0.25 0.25", "Si 0.30 0.25 0.25")
     calculator = _silicon_calculator(text)
     assert calculator.calculation.basis.dense.grid == (15, 15, 15)
 
