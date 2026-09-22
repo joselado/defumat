@@ -85,11 +85,20 @@ end-to-end test caught it. An array-algebra test passed either way.
 ### A. No linear response for a spinor, so a magnet with spin-orbit coupling has no phonons and no spectra [11]
 
 **Partly closed. P81 did the solve; P83 did the dielectric tensor and the Born charges
-for a spinor carrying no net moment. What is below is the state before those, kept
-because its reasoning is why the rest has the shape it does. Still open: the textured
-case (item A2, immediately after this one), the phonons and everything above them
-(`symmetrize_displacement`'s axial landmine), and the ultrasoft spinor
-(`set_int3_nc`).**
+for a spinor carrying no net moment; P98 did the augmented spinor. What is below is the
+state before those, kept because its reasoning is why the rest has the shape it does.**
+
+**Two of the three things this heading used to list as open are closed** (checked
+2026-09-22). The **ultrasoft spinor** is done: `set_int3_nc` never had to be written,
+`_perturbed_coefficients` being one `jvp` of `Calculation.coefficients`, which already
+dispatches on `noncolin`, and the number is 9.528810788 against `ph.x`'s 9.528846009 on
+fully relativistic AlAs. And the **landmine below is defused**:
+`Calculation.symmetrize_directional` now rotates the `nspin_mag = 4` magnetization block
+through `symmetrize_spin_vector_density` with `magnetization_signs`, so the axial law and
+the time-reversal sign are both in it. **Still open: the textured case** (item A2,
+immediately after this one) **and the phonons and everything above them**, which is one
+assembly per quantity on top of a solve that exists -- `response/efield.py` is the only
+caller that has opted in with `noncollinear=True`.
 
 **Phase.** The largest item here by consequence: everything above the ground state is closed
 for a noncollinear run — phonons, Born charges, the dielectric constant, LO-TO splitting,
@@ -329,6 +338,15 @@ disagreement.** Elk at `q = 0` and `q = 1/4`, both converged:
   0.6151 at `q = 1/4`), which is the level this project already records for an
   all-electron-against-pseudopotential moment (bcc iron, 2.0613 against 2.2145);
 * **`E(1/4) - E(0)` is -136.294 meV in Elk against -20.712 meV here, a factor of 6.6.**
+
+**The 6.6 is the under-converged pair and the headline is now 5.42 and 4.67**, at the two
+wavevectors, after the defumat side's k-grid and basis were both converged (`PLAN.md` P86).
+**And the field candidate this item carried is dead**: the conversion behind it read Elk's
+`bfieldc` as an energy in Hartree and dropped `cb = g_e/4c`, so the 6 per cent it was
+credited with was measured under a field **274 times too large**. The true field is
+1.46e-5 Ry rather than 0.004, and the held field is therefore excluded more firmly than
+this item claims rather than less. **Elk's own basis is the last candidate**, and
+`tools/cluster/spiral_elk.sbatch` is that sweep.
 
 So the two codes converge to recognisably the same magnetic state and disagree about what
 turning it costs. **The obvious explanation is already dead**: Elk holds a small field and
@@ -1009,9 +1027,10 @@ a correction, and it needs a number before it is anything.
 
 ## 4. Deliverables owed
 
-**The notebook, for `STARTING_MOMENTS` and everything built on it.** `CLAUDE.md` requires
-one per feature and this is deliverable 4 of five for the feature the whole of P77–P79 rests
-on. **It is blocked by the checkout, not by the work**: `07_spin_polarization` and
+**The notebook, for `STARTING_MOMENTS` and everything built on it. Largely delivered:
+`notebooks/43_magnetic_textures.ipynb` exists and is the texture notebook this asked for.**
+What still stands of this item is the *other* two, and it is a checkout problem rather than
+a writing one. `CLAUDE.md` requires one notebook per feature, and: `07_spin_polarization` and
 `11_noncollinear_magnetism_and_fields` were both checked on 2026-09-12 and both build their
 `Calculator` from `../quantum_espresso/qe-7.5-ReleasePack/qe-7.5/test-suite/...`, which is
 gitignored and absent here, so neither can be re-executed and

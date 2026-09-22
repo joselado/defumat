@@ -204,8 +204,14 @@ new phase is started. Each entry names the missing term rather than the missing 
 because that is what decides whether it is a session or a phase.
 
 - **Wyckoff input** (P6, the one part of that phase not done).
-- **A relaxed magnetocrystalline anisotropy**, as against P58's frozen-density force
-  theorem, and **PAW** for it (the handoff carries no `becsum`); **`average_pp`** with it.
+- **`average_pp`**, and an external pair for the **relaxed** magnetocrystalline
+  anisotropy. ~~A relaxed anisotropy, and PAW for it~~ -- **both closed by P87**, which
+  differences *total* energies of one self-consistent run per direction and therefore
+  hands nothing over, so it has no handoff to refuse for and reaches PAW and DFT+U:
+  0.447 meV on tetragonal cobalt against the force theorem's **free** energy 0.552, with
+  an identity control that plateaus at **0.011 meV**. What is left of the entry is
+  `average_pp`, which belongs to the *frozen* route, and the fact that neither route has
+  ever been compared with another code.
 - **The dynamical matrix of an ultrasoft or PAW *metal*** (P39: `addusdynmat`, the
   density's cross derivative, needs both tangents in one `jvp` where P28's weight split
   puts them in two).
