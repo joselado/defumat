@@ -5125,8 +5125,22 @@ item 3.
   after 2000 iterations**, at accuracy 3.556e-04 against a `conv_thr` of 1e-08, reporting
   `M = 2.0705` where the leg beside it converges in **66** iterations at `M = 2.0005`. A
   fixed-spin-moment run that no longer converges is a defect rather than a tolerance.
-- **`test_stm.py::test_an_antiferromagnet_is_flat_in_charge_and_alternates_in_spin`**,
-  against 0.029525036433705836 at 3e-07. Unattributed.
+- **`test_stm.py::test_an_antiferromagnet_is_flat_in_charge_and_alternates_in_spin`
+  **[closed 2026-09-22, and it was neither a regression nor a defect]**. The assertion is
+  that the two antiferromagnetic sublattices carry the same charge, which symmetry makes
+  exactly zero, so any number it reads is a convergence artifact -- and it **behaves like
+  one**: the relative gap is 1.60e-05, 1.39e-05, 3.43e-06 and 4.28e-07 at `conv_thr` of
+  1e-09, 1e-11, 1e-13 and 1e-15, converging cleanly to zero. It is **not** one of the
+  twenty-eight fixes either: at `ffc2593`, before any of them landed, the same cell at the
+  input's 1e-11 gives **A = 0.029525447994383 and B = 0.029525036433713, bit-identical** to
+  master. The test had simply been asserting 1e-5 at a convergence that delivers 1.39e-5,
+  and only now was the slow set run to see it. What is worth keeping is the reason: the
+  density residual is already at **7.7e-13** while the number read off the STM plane is
+  still moving in its **sixth digit**, so a quantity sampled at a point off the atoms
+  inherits the residual with a much larger prefactor than the energy does, and a test on
+  it has to state its own `conv_thr` rather than inherit the input's. Closed by converging
+  that one test at 1e-15, three iterations more, for 23x margin; `test_stm.py` is 12
+  passed.
 
 ## 7. A cell with no spin-orbit coupling broke its own directional degeneracy by 0.108 meV
 

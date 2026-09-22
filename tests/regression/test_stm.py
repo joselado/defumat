@@ -46,9 +46,29 @@ def _drop_compiled_code():
 
 
 @lru_cache(maxsize=2)
-def _converged(case: str):
+def _converged(case: str, conv_thr: float | None = None):
+    """The ground state, with ``conv_thr`` overriding the input where it is given.
+
+    **A number read off an STM plane converges more slowly than the residual
+    ``conv_thr`` measures**, and by enough to matter. Measured on
+    ``h-chain-afm``, whose input asks for 1e-11, as the *relative* gap between
+    the two antiferromagnetic sublattices, which symmetry makes exactly zero:
+
+    | ``conv_thr`` | iterations | accuracy | sublattice gap |
+    |---|---|---|---|
+    | 1e-09 | 11 | 1.50e-10 | 1.60e-05 |
+    | 1e-11 | 12 | 7.70e-13 | 1.39e-05 |
+    | 1e-13 | 14 | 3.24e-15 | 3.43e-06 |
+    | 1e-15 | 15 | 2.78e-16 | 4.28e-07 |
+
+    The density residual is already at 7.7e-13 in the second row while the
+    quantity read off the plane is still moving in its sixth digit, so a test
+    asserting the sublattice symmetry to 1e-5 has to say which convergence it
+    is asserting it at rather than inherit the input's. Three more iterations
+    buy two orders, which is why the tight row is affordable here.
+    """
     calculator = Calculator.from_file(CASES / f"{case}.in", pseudo_dir=PSEUDO)
-    calculator.get_scf()
+    calculator.get_scf(**({} if conv_thr is None else {"conv_thr": conv_thr}))
     return calculator
 
 
@@ -202,7 +222,10 @@ def test_an_antiferromagnet_is_flat_in_charge_and_alternates_in_spin():
     ``-z`` sees the other, by equal and opposite amounts, which is the
     antiferromagnetic symmetry reproducing itself rather than being imposed.
     """
-    calculator = _converged("h-chain-afm")
+    # 1e-15 rather than the input's 1e-11: the sublattice gap this asserts is a
+    # convergence artifact all the way down, and at the input's value it is
+    # 1.39e-5 against the 1e-5 below. See :func:`_converged` for the table.
+    calculator = _converged("h-chain-afm", conv_thr=1.0e-15)
     common = dict(plane=_CHAIN_PLANE, shape=(4, 32), width=0.10)
     charge = calculator.get_stm(**common)
     up = calculator.get_stm(spin="up", **common)
