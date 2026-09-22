@@ -287,7 +287,7 @@ def main() -> None:
             "finite_difference": {},
         }
         print(f"[{name}] response      dm/dB = {response} "
-              f"({response_record['iterations']} iterations, "
+              f"({response_record['applications']} matrix applications, "
               f"residual {response_record['residual']:.3e})")
 
         for step in steps:
