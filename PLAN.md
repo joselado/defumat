@@ -21025,7 +21025,7 @@ energies, add up one of them.**
 * **The moment comparison is unaffected and stays as P86 records it**, including
   that the converged defumat moment crosses Elk's rather than approaching it.
 
-### P106 -- A separate step length for the magnetization: 43 iterations to 20, against `pw.x`'s 19. ✅ DONE on one cell.
+### P106 -- A separate step length for the magnetization: 43 iterations to 20 where Option 0 says to use it, and 25 to 36 where it says not to. ✅ DONE.
 
 `MAGNETISM-NEXT.md` F2 lists several operators that might fix a slow magnetic
 SCF and its own rule is that **none of them may be chosen without Option 0**,
@@ -21077,10 +21077,28 @@ otherwise every comparison against QE would carry an unstated term.
 
 **What this does not establish.**
 
-* **One cell.** The prediction the mechanism makes is falsifiable and is being
-  run: on `fe-mag-1k`, whose nonmagnetic twin left only **4 of 25** iterations to
-  magnetism, the same knob should buy *much less*. If it buys as much there, the
-  mechanism in P102 is not what is acting.
+* ~~**One cell.**~~ **Two, and the second is the falsifiable prediction, run and
+  passed -- inverted, which is stronger than "much less".** The mechanism says
+  the knob should buy little on `fe-mag-1k`, whose nonmagnetic twin leaves only
+  **4 of 25** iterations to magnetism. It does not buy little; it **costs**:
+
+  | `beta_mag` | `fe-noncolin-pbe-stress` (28 of 43 magnetic) | `fe-mag-1k` (4 of 25) |
+  |---|---|---|
+  | unset | 43 | 25 |
+  | the control | **43**, `+0.00e+00` | **25**, `+0.00e+00` |
+  | 0.6 | 27 | **36** |
+  | 1.0 | **20** | 31 |
+
+  **The knob helps exactly where Option 0 says the iterations are magnetic and
+  hurts exactly where it says they are not**, and the control row reproduces the
+  unset run on both cells. That is the two phases fitting together rather than
+  two separate results: P102's dump is what says whether to reach for this, and
+  without it the second column would read as the knob being unreliable.
+
+  It is also why the default is **unset** rather than a value, and why the guide
+  entry this owes has to carry the dump beside the knob. A user who turns it up
+  on a cell whose slow direction is the charge will make their run worse by a
+  third, and the number that tells them apart is `residual_split`.
 * **`beta_mag = 1.0` is an undamped magnetic channel**, and this cell's magnetic
   direction is *crawling* rather than sloshing -- P102's plateau is what says so,
   and the monotone sweep above is consistent with it. A cell whose magnetization
