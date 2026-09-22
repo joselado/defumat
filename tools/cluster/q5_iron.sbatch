@@ -43,9 +43,13 @@
 #               enough not to backfill badly.
 # cpus-per-task 8. XLA sizes its pool from the affinity mask and Slurm's cgroup
 #               is what bounds it; MKL and OMP are pinned to 1 beside it. The
-#               `pw.x` tasks spend the same eight on MPI ranks instead, which is
-#               k-point parallelism over 64 points and is the one axis both
-#               codes parallelise.
+#               `pw.x` tasks run **serially** on one of the eight and leave the
+#               rest idle, which is deliberate: an `--ntasks=1` allocation gives
+#               MPI a single slot whatever the CPU count is, so a first attempt
+#               at `mpirun -np 8` died in the launcher rather than in the
+#               physics, and a two-atom cell on a 30^3 grid does not need the
+#               ranks. Serial is also the only form a `PERFORMANCE.md` pair may
+#               be taken in, so nothing is lost.
 # mem           32G. Measured rather than copied: `Calculator.estimate()` on
 #               both cells gives a 232 MB augmentation table over a ~400 MB
 #               working set, and the force is a reverse-mode derivative that
@@ -91,7 +95,7 @@ if [ "$CODE" = "qe" ]; then
     export ESPRESSO_PSEUDO="$REPO/tests/data/pseudo"
     export ESPRESSO_TMPDIR="$WORK/scratch/$CASE"
     mkdir -p "$ESPRESSO_TMPDIR"
-    mpirun -np 8 "$QEBIN/pw.x" -nk 8 -in "$REPO/tests/data/qe/$CASE.in" \
+    "$QEBIN/pw.x" -in "$REPO/tests/data/qe/$CASE.in" \
         > "$WORK/out/qe-$CASE.out" 2>&1
     STATUS=$?
     echo "pw.x exit $STATUS"
