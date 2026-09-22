@@ -5181,12 +5181,40 @@ item 3.
   that one test at 1e-15, three iterations more, for 23x margin; `test_stm.py` is 12
   passed.
 
-## 7. A cell with no spin-orbit coupling broke its own directional degeneracy by 0.108 meV
+## 7. A cell with no spin-orbit coupling broke its own directional degeneracy by 0.108 meV **[attributed 2026-09-22: it is the `soc_scale = 0` reduction, and the route is exact without it]**
 
 `test_relaxed_anisotropy.py::test_without_spin_orbit_coupling_every_direction_has_the_same_energy`
-fails with the two directions **1.079e-01 meV** apart. Without spin-orbit coupling the
+failed with the two directions **1.079e-01 meV** apart. Without spin-orbit coupling the
 total energy cannot depend on the direction the moment points, so this is a symmetry
-statement the code makes about itself rather than a comparison with anything, and it is the
-single most alarming number in the 2026-09-21 pass. It is a **total energy**, so it is not
-the origin tangent. Unattributed, and it wants a session of its own rather than the tail of
-one.
+statement the code makes about itself rather than a comparison with anything, and it was
+the single most alarming number in the 2026-09-21 pass.
+
+**It splits into two numbers, and only the smaller one is real.** Most of it is
+convergence: the spread reads 6.7e-2, 8.1e-2, **1.16e-2** and 1.11e-2 meV at `conv_thr` of
+1e-8, 1e-10, 1e-12 and 1e-14, so it falls by seven and then **stops at a floor of about
+1.1e-2 meV** that no further convergence removes. The test asked for 1e-10 and asserted
+1e-3, which is neither the converged number nor the floor.
+
+**The floor is the `soc_scale = 0` reduction of a fully-relativistic dataset, and nothing
+else.** The matched scalar-relativistic partner `Co.pbe-nd-rrkjus` -- same element,
+functional and generation, with **no** `dvan_so`, `qq_so` or `fcoef` to reduce -- gives
+**3.5e-09 meV** on the identical cell at the identical `conv_thr`, **seven orders below**
+the relativistic dataset's 1.16e-2. So `run_relaxed_anisotropy` is exact and what is
+imperfect is switching the coupling off in the dataset.
+
+Three things it is **not**, each ruled out by measurement rather than by argument. Not the
+k-set: the cell is `nosym`. Not the gradient-corrected functional's quantization axis,
+which is the mechanism the test's own docstring names and which was worth 36.8 meV on the
+frozen route -- forcing `input_dft = 'pz'` gives **9.3e-2 meV against PBE's 8.1e-2** at the
+same settings, so the LDA is no better and the GGA is not the path. And not one of the
+twenty-eight audit fixes: at `ffc2593` the same cell gives **8.0968e-02 and 1.1605e-02**
+at `conv_thr` 1e-10 and 1e-12, bit-identical to master.
+
+Closed as a test by separating the two claims the one assertion was making at once: the
+relativistic leg now runs at 1e-12 and is bounded at 2e-2 meV with the reduction named in
+its message, and a new `test_the_same_identity_is_exact_on_the_scalar_relativistic_partner`
+asserts the route's own identity at 1e-6 meV where it measures 3.5e-9. **What stays open is
+the floor itself**: 1.16e-2 meV of residue in the reduction, on a *tetragonal* cell, where
+`pseudo/spinorbit.py`'s own record measured "0.000000" for the same identity on **hexagonal**
+cobalt -- which is this project's "which components the validation cell allows" habit one
+more time, and is where to start.
