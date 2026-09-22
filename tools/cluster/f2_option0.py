@@ -223,9 +223,11 @@ def stage_betamag(arguments) -> dict:
     1e-8 Ry before any row is called a win.
     """
     values = [float(v) for v in arguments.betamag.split(",")]
-    record = {"rows": []}
+    cell = Path(arguments.cell) if arguments.cell else MAGNETIC
+    record = {"rows": [], "cell": str(cell)}
+    print(f"cell           {cell}")
     _, _, _, result, seconds = run(
-        MAGNETIC, arguments.conv_thr, arguments.max_iterations, split=False,
+        cell, arguments.conv_thr, arguments.max_iterations, split=False,
     )
     reference = summary(result, seconds)
     record["unset"] = reference
@@ -234,7 +236,7 @@ def stage_betamag(arguments) -> dict:
 
     for value in values:
         _, _, _, result, seconds = run(
-            MAGNETIC, arguments.conv_thr, arguments.max_iterations,
+            cell, arguments.conv_thr, arguments.max_iterations,
             split=False, mixing_beta_mag=value,
         )
         row = summary(result, seconds)
@@ -261,6 +263,8 @@ def main() -> None:
     parser.add_argument("--stage", required=True, choices=sorted(STAGES))
     parser.add_argument("--conv-thr", type=float, default=1e-10)
     parser.add_argument("--max-iterations", type=int, default=200)
+    parser.add_argument("--cell", default=None,
+                        help="a cell to sweep instead of the noncollinear one")
     parser.add_argument("--betamag", default="0.2,0.4,0.6,0.8,1.0",
                         help="values to sweep for --stage betamag")
     parser.add_argument("--out", required=True)
