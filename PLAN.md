@@ -16406,7 +16406,11 @@ been run and it sharpens this: the factor is **not** constant -- see the `q = 1/
 below.)
 
 **The obvious explanation is dead, and it was killed with a number rather than an
-argument.** Elk carries `bfieldc = 0.002 Ha = 0.004 Ry` for the whole run and defumat
+argument.** (**The conversion in the next sentence is wrong by `1/cb = 273.75` and the
+correction is in "What is outstanding" below**: `bfieldc` is a field and enters as
+`cb * bfieldc` with `cb = g_e/4c`, so 0.002 is 1.46e-5 Ry rather than 0.004. The conclusion
+of this paragraph survives and strengthens, the true field being smaller still.) Elk
+carries `bfieldc = 0.002 Ha = 0.004 Ry` for the whole run and defumat
 carries none; a field cannot enter the difference directly, its Zeeman energy being outside
 the reported total in both codes, but it biases the *state* -- and it acts differently on a
 `q = 0` ferromagnet, where every moment lies along it, than on a spiral whose moments turn
@@ -16432,6 +16436,34 @@ Neither is a factor of 6.6. **The held field is not the cause.**
   `B_field` is a potential shift in Ry, and nobody has checked the factor. **And whatever
   it is, it is not an overall scale**, so a single wrong constant cannot be the whole story
   and the two `E(q)` curves differ in shape.
+
+  **The factor has now been checked, and the bullet above wrote the right formula beside
+  the wrong number** (2026-09-22). `bfieldc` is a **field**, not an energy: `genbs.f90:15`
+  adds `cb * bfieldc` to the Kohn-Sham field and `energy.f90:77` uses the same constant for
+  the Zeeman energy, with `cb = gfacte/(4 solsc)` and `gfacte = 2.00231930436256`,
+  `sol = 137.035999084` declared as parameters in `modmain.f90:1264` and `:1238`. So
+  `cb = 3.6529e-3`, and matching the up-down splitting against this code's
+  `field_energy = -B . m` with `B` in Ry gives
+
+      B_defumat [Ry] = 2 cb bfieldc = 1.4612e-05 Ry   for bfieldc = 0.002.
+
+  **The table above ran 0.004 Ry, which is 273.75 times that, and `1/cb` is 273.75 to the
+  digit** -- the conversion read the number as an energy in Hartree and applied the factor
+  of two to Rydberg alone, dropping the coupling constant entirely. So the "6 per cent" the
+  held field is credited with is the effect of a field **274 times too large**, the true
+  one is far smaller, and the field is excluded more firmly than that row claims rather
+  than less. It also disposes of the observation the bullet was built on: defumat's moment
+  did not respond more strongly to the same field, it responded to a field two orders
+  larger, so there is nothing there to explain.
+
+  **What this does not do is close the item**, and it is worth being exact about that: the
+  headline scan carries no field on the defumat side at all, so no number in the
+  `E(q) - E(0)` comparison moves. What changes is which candidates are left, and after this
+  there is one, which is Elk's own basis. `tools/cluster/spiral_elk.sbatch` is that sweep,
+  `rgkmax` of 7, 8 and 9 at the three wavevectors, with `rgkmax = 7` serving as a version
+  control before it is a rung: P86's Elk numbers came from a 9.6.8 build that exists on no
+  machine here, and the sweep runs Triton's `elk/10.2.4` module, so that rung has to
+  reproduce -136.294 meV or the ladder is measuring the version.
 * ~~**Elk at `q = 1/2`**~~ -- **run, and the ratio moves.** 42 loops, both criteria met,
   total energy `-0.475911217903` Ha and moment `0.6380129665` mu_B. So there are three
   points and the question this bullet asked has an answer:
