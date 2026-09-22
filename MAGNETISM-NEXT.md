@@ -151,16 +151,18 @@ error of 2.6e-8 mu_B. So the magnetic kernel and its self-consistency are right
 together along the moment, against a disagreement twenty times larger, and **the
 two suspects left are the electric-field source term and `ph.x` itself**.
 
-**And the cell is transversely unstable.** `dm_x/dB_x` is **-658.9 mu_B/Ry**,
-negative and twenty-four thousand times the longitudinal value, converged to
-7.3e-9 in 22 matrix applications. The sign is not a convention, the same field
-object giving a positive longitudinal value that a finite difference confirms, so
-the moment along `z` is a stationary point that is **not a minimum** -- which a
-fixed-point iteration sits on happily and which nothing in P83 knew. Its finite
-difference could not be taken at all: under a transverse field the SCF ran 200
-iterations to 8.4e-8 without converging, which is what a run driven away from an
-unstable direction does. Whether the moment stays on `z` is the next measurement
-and it is cheap.
+**And the transverse channel is very soft, which is not the same as unstable.**
+`dm_x/dB_x` is **-658.9 mu_B/Ry**, twenty-four thousand times the longitudinal
+value, and its finite difference could not be taken at all: under a transverse
+field the SCF ran 200 iterations to 8.4e-8 without converging. The negative sign
+was first read as saying the moment along `z` is a saddle, and **that reading was
+tested the same day and is dead**: seeds tilted 2 and 10 degrees off `z` relax
+back to 0.0062 and 0.0119 degrees, so `z` is a minimum and P83's comparison is
+about a stable state. What survives is the magnitude, which puts the anisotropy
+near 20 meV; what does not is the sign, because a nearly flat direction is one
+where `1 - chi_0 K` has an eigenvalue close to zero and the sign of a nearly
+singular solve is decided by round-off. **The transverse number is a magnitude
+without a sign.**
 
 **Phase.** P83 opened the dielectric tensor and the Born charges for a spinor and validated
 them for `nspin_mag = 1` -- the identity against the scalar run at 5.0e-14, the wedge against

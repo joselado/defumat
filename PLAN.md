@@ -20761,7 +20761,7 @@ is carried here for the same reason rather than tuned.
   nothing here has ever been checked on at all. That is the next cell up and it is
   not committed.
 
-### P104 -- The kernel of a textured spinor, cleared along the moment by a route that shares only the ground state; and the cell turns out to be transversely unstable. ✅ DONE for the longitudinal channel.
+### P104 -- The kernel of a textured spinor, cleared along the moment by a route that shares only the ground state; and a transverse number whose sign was a nearly singular system. ✅ DONE for the longitudinal channel.
 
 P83's dielectric tensor of a magnetic spin-orbit insulator agrees with `ph.x` to
 4.6e-4 across the moment and is **5.3 per cent** away along it, on a cell whose
