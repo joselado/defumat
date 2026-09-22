@@ -13,6 +13,45 @@ later one, and the last section says where `MAGNETISM-NEXT.md` has drifted.
 Each entry gives the physics first, then where it stands, then what it needs. Phase numbers
 refer to `PLAN.md` §3, letters and Q-numbers to `MAGNETISM-NEXT.md`.
 
+## What the top four now say (worked 2026-09-22, same day)
+
+Items 1 to 4 were taken in this order and all four have measured answers. The
+records are `PLAN.md` P102 to P105; this is the one-line version.
+
+1. **Q5, the textured augmented spinor.** Half closed (**P103**). On the new
+   two-atom iron antiferromagnet, against `pw.x`: total energy to **6e-9 Ry**,
+   both site charges and the first site moment to every printed digit, the second
+   site moment to 1.3e-5 mu_B, the force to 3.3e-7 Ry/bohr. The canted leg is the
+   half the item is really about and needs a **constrained** angle rather than
+   more iterations, since nothing protects 90 degrees on that cell.
+2. **The spiral against Elk.** **Closed (P105), and the answer is a convention.**
+   Elk's entropy term is non-zero only for Fermi-Dirac smearing and the fixture
+   uses Gaussian, so Elk reports an internal energy where this code and QE report
+   a free energy. At `degauss = 0.1 Ry` the entropy moves by 112 meV between
+   `q = 0` and `q = 1/4`, five times the difference it was compared against;
+   removing it gives **-132.986 and -263.813 meV against Elk's -136.294 and
+   -265.206**. All four previously named candidates were measured and are dead,
+   including a held field that had been converted **274 times too large**.
+3. **The textured spinor dielectric tensor.** One suspect removed (**P104**). The
+   longitudinal spin susceptibility from the screened response and from a central
+   difference of two converged SCF runs agree to **0.238 per cent**, so the kernel
+   and its self-consistency are right along the direction `ph.x` disagrees in. The
+   two suspects left are the electric-field source term and `ph.x`. A transverse
+   number of -658.9 mu_B/Ry was first read as an instability and **that reading
+   was refuted the same day**: the moment is locally stable and the sign belongs
+   to a nearly singular solve.
+4. **Converging a noncollinear SCF.** Option 0 done (**P102**). The magnetic cell
+   takes 43 iterations and its nonmagnetic twin **15**, so 28 of the 43 are
+   magnetism where `fe-mag-1k`'s twin left 4 of 25, and the twin is below `pw.x`'s
+   19. The slow direction is the **longitudinal** one, the rigid rotation is not
+   excited on that cell, and **`becsum` grows fourfold mid-run** while every grid
+   bin falls, with nothing in the log able to see it. Its units differ from the
+   density's, so its rate is comparable and its magnitude is not.
+
+Still running when this was written: the canted iron leg on both codes, the
+collinear arbiter (which tests Elk's collinear path against Elk's own spiral, not
+P105), and nothing else.
+
 ## The ranking
 
 1. **An ultrasoft or PAW cell with several non-parallel moments has no external number in
