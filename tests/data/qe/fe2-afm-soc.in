@@ -1,0 +1,75 @@
+! **Two iron atoms with antiparallel moments on a fully relativistic ultrasoft
+! dataset**, which is the regime `MAGNETISM-NEXT.md` Q5 names as the largest
+! validation gap in the noncollinear stack.
+!
+! Everything that only turns on when an augmented dataset carries several
+! non-parallel moments has no external number of any kind: `add_becsum_so` on a
+! textured `becsum`, `qq_so` inside an overlap whose two projectors sit on atoms
+! whose spin frames differ, and the `fcoef` recombination that dresses both. A
+! one-atom cell cannot reach any of them, because one atom is trivially parallel
+! to itself, and every committed noncollinear reference here is either one atom
+! (`fe-kind1-noncol.in`, `fe-noncolin-pbe-stress.in`) or norm-conserving
+! (`h4-cycloid-90.in`). This cell and its canted partner `fe2-canted-soc.in` are
+! the pair that reaches them, and the comparison is against `pw.x`.
+!
+! **The geometry is the conventional bcc cell with one atom displaced**, and the
+! displacement is the point rather than an accident. Two atoms at the corner and
+! the body centre are related by inversion, so the force on each is zero by
+! symmetry and comparing forces would be comparing a residue, which is the trap
+! `CLAUDE.md` records for the Born charges of a centrosymmetric crystal. Moving
+! the second atom by 0.02 alat along x leaves a real force of order 1e-2
+! Ry/bohr for the two codes to disagree about, and it is the same displacement
+! in the canted cell, so the two magnetic arrangements are compared at one
+! geometry.
+!
+! **The two atoms are two species pointing at one file**, because `angle1`,
+! `angle2` and `starting_magnetization` are per species in `pw.x` and there is no
+! other way to state a texture that both codes read the same way. A
+! `STARTING_MOMENTS` card would be this code's own route and `pw.x` cannot read
+! it, so the comparison would not be of the same input.
+!
+! The moments lie in the xy plane and point along +x and -x, so the state is a
+! collinear antiferromagnet carried through the noncollinear machinery, which is
+! what makes it the calibration of the pair: the canted cell is the one with a
+! genuinely textured `becsum`, and a disagreement that is already present here is
+! not about the texture.
+!
+! `nosym` because a vector density on a reduced k-set has to be symmetrised as an
+! axial field on both sides, and the point of this cell is the augmentation terms
+! rather than the symmetriser. `conv_thr` is 1e-11 rather than the 1e-8 an energy
+! would want: a converged `dr2` bounds a moment two to four orders more weakly
+! than it bounds an energy, measured three times in this project, and both the
+! site moments and the forces are what is being compared.
+ &control
+    calculation = 'scf'
+    tprnfor = .true.
+    verbosity = 'high'
+ /
+ &system
+    ibrav = 1, celldm(1) = 5.42, nat = 2, ntyp = 2,
+    ecutwfc = 35.0, ecutrho = 280.0,
+    occupations = 'smearing', smearing = 'marzari-vanderbilt', degauss = 0.02
+    noncolin = .true.
+    lspinorb = .true.
+    nosym = .true.
+    starting_magnetization(1) = 0.5
+    starting_magnetization(2) = 0.5
+    angle1(1) = 90.0
+    angle2(1) = 0.0
+    angle1(2) = 90.0
+    angle2(2) = 180.0
+    nbnd = 40
+ /
+ &electrons
+    mixing_beta = 0.3
+    conv_thr = 1.0d-11
+    electron_maxstep = 200
+ /
+ATOMIC_SPECIES
+ Fe1 55.845 Fe.rel-pbe-spn-rrkjus_psl.0.2.1.UPF
+ Fe2 55.845 Fe.rel-pbe-spn-rrkjus_psl.0.2.1.UPF
+ATOMIC_POSITIONS (alat)
+ Fe1 0.00 0.00 0.00
+ Fe2 0.52 0.50 0.50
+K_POINTS {automatic}
+ 4 4 4 0 0 0

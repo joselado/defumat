@@ -1,0 +1,63 @@
+! **Two iron atoms with moments 90 degrees apart on a fully relativistic
+! ultrasoft dataset**: the textured half of `MAGNETISM-NEXT.md` Q5, whose
+! calibration is `fe2-afm-soc.in`.
+!
+! The cell, the dataset, the cutoffs, the displacement and every convergence
+! setting are the antiferromagnet's, and one thing changes, which is `angle2(2)`
+! from 180 to 90 degrees. That is what makes the pair a measurement rather than
+! two runs: a disagreement with `pw.x` that is the same size in both cells is
+! about the augmented spinor machinery generally, and one that appears only here
+! is about the terms a texture switches on.
+!
+! **What those terms are.** With the two moments antiparallel the density is
+! still describable by one global spin axis, so `becsum`'s off-diagonal spin
+! blocks carry nothing that a sign cannot absorb; at 90 degrees they do.
+! `add_becsum_so` recombines the `fcoef` weighted projector pairs into the four
+! real components of the augmentation charge, `qq_so` enters the overlap between
+! two projectors on atoms whose local frames differ, and PAW's one-centre terms
+! would build two different local spin frames in one cell, which is the case
+! nothing here has ever been checked on. This cell is ultrasoft rather than PAW,
+! so it isolates the first two; the PAW version is the next cell up and is not
+! committed yet.
+!
+! The state is not expected to be the ground state and does not need to be. What
+! is compared is that two codes given the same input reach the same total energy,
+! the same two site moments and the same forces, and a canted arrangement held by
+! nothing but its own stationarity is as good a test of that as a minimum, as
+! long as both codes are seeded the same way and both converge. Whether it
+! survives at all is itself the measurement: a texture that collapses to the
+! collinear state in one code and not in the other is the answer rather than a
+! failed run.
+ &control
+    calculation = 'scf'
+    tprnfor = .true.
+    verbosity = 'high'
+ /
+ &system
+    ibrav = 1, celldm(1) = 5.42, nat = 2, ntyp = 2,
+    ecutwfc = 35.0, ecutrho = 280.0,
+    occupations = 'smearing', smearing = 'marzari-vanderbilt', degauss = 0.02
+    noncolin = .true.
+    lspinorb = .true.
+    nosym = .true.
+    starting_magnetization(1) = 0.5
+    starting_magnetization(2) = 0.5
+    angle1(1) = 90.0
+    angle2(1) = 0.0
+    angle1(2) = 90.0
+    angle2(2) = 90.0
+    nbnd = 40
+ /
+ &electrons
+    mixing_beta = 0.3
+    conv_thr = 1.0d-11
+    electron_maxstep = 200
+ /
+ATOMIC_SPECIES
+ Fe1 55.845 Fe.rel-pbe-spn-rrkjus_psl.0.2.1.UPF
+ Fe2 55.845 Fe.rel-pbe-spn-rrkjus_psl.0.2.1.UPF
+ATOMIC_POSITIONS (alat)
+ Fe1 0.00 0.00 0.00
+ Fe2 0.52 0.50 0.50
+K_POINTS {automatic}
+ 4 4 4 0 0 0
