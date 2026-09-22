@@ -20529,3 +20529,140 @@ confirm it is a quantity where the term is not a 2e-10 relative correction to a
 total: the anisotropy is the candidate, the correction being a projector on
 `r-hat` and therefore not cancelling between two moment directions, and it is
 the next thing to measure.
+
+### P102 -- Which of the four directions a noncollinear SCF is slow in: the deconfounder says magnetism, and the blind spot is real. ✅ DONE (Option 0).
+
+`MAGNETISM-NEXT.md` item F has been open since it was written because the question
+is put one level too low. What decides how fast a damped fixed-point iteration
+converges is not the mixer but the spectrum of the map the mixer damps: a density
+error `e` comes back as `(1 - beta) e + beta J e` with `J = chi_0 K`, and in a
+noncollinear cell there are four directions in that spectrum with four different
+physical origins -- long-wavelength charge, the length of `m`, the rigid rotation
+of every moment together, and the transverse twist at finite `q`. Four different
+operators are on offer to fix them and **no cell here had ever been told apart on
+which one it is slow in**, which is why item F2's own rule is that none of its
+options may be chosen without this measurement.
+
+This is that measurement. It chooses nothing; it says what there is to choose
+about.
+
+**The instrument.** `defumat/scf/residual_split.py` splits one iteration's
+residual five ways -- charge, the component of `dm` along `m_in(r)` pointwise, the
+rigid rotation, what is left of the transverse residual, and the magnetic part of
+`becsum`. It is off unless asked for (`run_scf(residual_split=True)`), is computed
+from the same `rho_out - rho` the mixer is about to be handed, and feeds nothing,
+because `accuracy` drives the `ethr` schedule and a diagnostic must not change the
+run it is diagnosing.
+
+**The rotation bin is the generator projection and not the `Q = 0` transverse
+component**, and that is the one design decision here. The obvious definition is a
+null that cannot be told from a pass: every compensated texture has `m_{Q = 0} = 0`
+and a rigid rotation leaves it zero, so an antiferromagnet, a spiral and a helix
+would all read zero whether or not the mode is live. The projection on the three
+generators, `c_a = int dm . (e_a x m_in) / int |e_a x m_in|^2`, reduces to the
+`Q = 0` component for a ferromagnet and costs the same single pass, and it reads in
+**radians** -- the rigid rotation that best fits this residual.
+
+**The test that says why is the one that fires on the wrong definition.** A rigidly
+rotated antiferromagnet, whose net moment is zero to 1e-15 before the rotation and
+after it, reads **1e-3 radians** in the generator bin, which is the angle it was
+turned by. Three more pin the split: a pure length change puts nothing in the
+rotation bin, a collinear run's rotation bin is **exactly** zero rather than small,
+and an unpolarized region is counted rather than divided by a vanishing length. One
+assertion was written too tight and the code was right, which is worth recording
+because the correction is the physics: a rotation by `theta` leaves every moment's
+length alone but leaves the *residual* a component along `m` of `|m|(cos theta - 1)`,
+so the longitudinal bin reads `theta^2/2` of the rotation bin rather than zero. The
+test asserts the scaling instead -- halving the angle halves the rotation bin and
+quarters the other two.
+
+**The deconfounder, and it is the headline.** `fe-noncolin-pbe-stress.in` takes 43
+iterations where `pw.x` takes 19, and until now that 43 was attributable to
+nothing: the identical 2:1 reading of `fe-mag-1k` collapsed the moment its own
+nonmagnetic twin was run at 21 against 25, leaving the magnetic share bounded by
+four iterations. The noncollinear cell had no twin. It has one now
+(`benchmarks/fe-noncolin-nonmagnetic.in`, the same cell, cutoffs, smearing,
+k-grid, `nosym`, `nbnd`, `mixing_beta` and `conv_thr`, with `nspin = 1` in place of
+the moment), and the answer is the opposite of `fe-mag-1k`'s:
+
+| | iterations |
+|---|---|
+| `fe-noncolin-pbe-stress.in` | **43** |
+| its nonmagnetic twin | **15** |
+| `pw.x` on the magnetic cell | 19 |
+
+**28 of the 43 iterations are magnetism, which is 65 per cent, where `fe-mag-1k`'s
+twin left 4 of 25, which is 16.** And the twin at 15 is *below* `pw.x`'s 19 on the
+magnetic cell, so the charge channel here is not the problem at all: the whole
+excess over `pw.x`, and more, lives in the magnetic directions. **Item F's bound --
+"most of the excess is not magnetic" -- is a fact about `fe-mag-1k` and does not
+carry to a noncollinear cell.**
+
+**Which magnetic direction, from the split.** The run converged in 43 iterations at
+`accuracy = 4.37e-11`, total energy -55.788729936729595 Ry, and the five bins over
+those 43 iterations say:
+
+* **the longitudinal channel is the slow one.** It is above the charge bin from
+  iteration 6 onward, usually by an order of magnitude, and between iterations 26
+  and 31 it **plateaus at about 9e-4** while the charge falls from 9.4e-5 to
+  5.3e-5. That is the Stoner direction, the one with no preconditioner on it: both
+  `approx_screening` and `approx_screening2` divide out a `1/q^2` the magnetic
+  kernel does not have, and `beta * head[c]` is a step length rather than an
+  approximate inverse Jacobian.
+* **the rigid rotation is not the mechanism on this cell**, at 1e-6 to 4e-5
+  throughout, which is what a one-atom cell with a fixed quantization axis should
+  give and is the bin doing its job rather than failing to see anything.
+* **the transverse channel is small too**, 1.5e-4 falling to 7.8e-6.
+* **and `becsum` is a real blind spot, measured.** It starts at 9.5, **grows by a
+  factor of four to 5.7 between iterations 6 and 11 while every grid bin falls**,
+  and ends at 1.8e-3 -- three orders of reduction where the charge manages five.
+  Nothing in the run sees any of this: both halves of `accuracy` are of the smooth
+  density, and what reaches them is only what `addusdens` already put on the grid.
+  **A residual that grows through a third of the run with no number in the log is
+  exactly the shape `OPEN.md` Y2 predicted and nobody could previously observe.**
+
+  *The caveat that must travel with that.* The `becsum` bin is a plain L2 norm over
+  arrays whose units are not the density's, so its **magnitude** is not comparable
+  with the other four and the figure "three orders above everything" would be a
+  units error. What is comparable is its **rate**, and the rate is the finding: it
+  falls by 3.2e3 where the charge falls by 5.8e4, and it is the only bin that is
+  not monotone.
+
+**The trip test, and its falsifier.** A rotated *converged* state fed back as input
+must give a residual at the level the run converged at, because
+`F(R rho) = R F(rho)` for a spin-rotation-invariant functional. At 0.05, 0.25 and
+1.00 radians the bins read
+
+| angle | charge | longitudinal | rotation | transverse |
+|---|---|---|---|---|
+| 0.05 | 3.61e-6 | 3.59e-6 | 1.53e-6 | 6.45e-6 |
+| 0.25 | 3.55e-6 | 3.08e-6 | 1.33e-6 | 6.49e-6 |
+| 1.00 | 2.03e-6 | 1.64e-6 | 1.00e-6 | 4.61e-6 |
+
+**flat, and if anything falling, across a factor of twenty in angle** -- including
+one radian, which is 57 degrees and not a perturbation. A run that was *not*
+rotation-invariant would give a residual growing with the angle, so the check has a
+falsifier and did not fire it. What that measures is the physics rather than the
+bin: **the spin-rotation manifold of this cell is flat to the level the run
+converged at**, which is the Goldstone mode of item F2's third direction, seen
+directly.
+
+**What is outstanding.**
+
+* **The options themselves.** This says the longitudinal channel and `becsum` are
+  where the iterations go on this cell, and F2's list has a candidate for each -- a
+  separate `mixing_beta` for the magnetization, the Stoner preconditioner
+  generalized to a spinor, and a reported `becsum` residual. None is chosen here.
+* **A cell where the rotation bin *is* live.** The one measured is a one-atom
+  ferromagnet with a fixed axis, so the bin was tested by the synthetic rotation and
+  by the trip test rather than by a run that needed it. The ultracell of P88 stage
+  3b is the cell for that, and it is item F2's own decisive run.
+* **The `becsum` growth is observed and not explained.** That it rises fourfold
+  mid-run is a fact about the residual, not yet a mechanism, and the obvious
+  candidate -- that `becsum` is mixed at the plain `beta` where the density is
+  extrapolated by Anderson -- is an explanation that fits a number and is therefore
+  not accepted here without an A/B that removes it.
+* **No `PERFORMANCE.md` pair, no README row, no `docs/features.tex` entry and no
+  notebook**, because none is owed: this is a diagnostic and a measurement rather
+  than a user-facing feature. The instrument has unit tests and the numbers are
+  here.
