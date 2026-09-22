@@ -112,7 +112,9 @@ def field_potential(calculation, density, direction, amplitude):
     differentiates *this* potential.
     """
     field = MagneticField(
-        uniform=jnp.asarray([amplitude * component for component in direction])
+        regions=None,
+        uniform=jnp.asarray([amplitude * component for component in direction]),
+        atomic=None, targets=None, penalty=0.0,
     )
     potential, _, _ = field.potential(density, calculation.system.cell)
     return field, potential
@@ -149,32 +151,75 @@ def finite_difference(system, pseudos, calculation, reference, direction, step,
     return susceptibility, records
 
 
-def screened_response(calculation, reference, direction, mixing, iterations,
-                      threshold):
-    """``dm/dB`` from the same screened fixed point the dielectric constant uses.
+def screened_response(calculation, reference, direction, iterations, threshold):
+    """``dm/dB`` from the same screened response the dielectric constant uses.
 
-    ``drho = chi_0(dv_bare + K drho)`` by linear mixing. The response is linear,
-    so the only thing that can go wrong is the rate, and the residual is reported
-    rather than assumed: an unconverged fixed point here would read as a
-    disagreement with the finite difference and is exactly the null this project
-    does not accept as a measurement.
+    **The fixed point is solved as a linear system rather than iterated**, and
+    that is not a convenience. What is being measured is
+
+        (1 - chi_0 K) drho = chi_0 dv_bare,
+
+    and the whole physics of a magnet is that the operator on the left is nearly
+    singular: the interacting susceptibility is ``chi_0/(1 - I chi_0)``, so a
+    Stoner-enhanced cell has an eigenvalue of ``chi_0 K`` approaching one from
+    below. Simple mixing on such a system converges as ``|1 - beta(1 - J)|`` per
+    step, which for ``J`` near one is arbitrarily slow -- and the transverse
+    direction is worse still, since at ``q = 0`` a rotation of the moment is a
+    Goldstone mode gapped only by the spin-orbit anisotropy, milli-electronvolt
+    scale against an exchange field of electronvolts. A hundred iterations there
+    would return a residual rather than a number, and a residual is not a
+    measurement.
+
+    GMRES treats the enhancement exactly: the number of matrix applications is
+    set by the spectrum's *spread* rather than by its proximity to one, so the
+    near-singular direction costs a few extra Krylov vectors instead of an
+    unbounded number of sweeps. Each application is one ``chi_0`` solve and one
+    kernel evaluation, which is the same unit of work simple mixing spends per
+    sweep.
     """
+    from scipy.sparse.linalg import LinearOperator, gmres
+
     solver = make_sternheimer(calculation, reference, noncollinear=True)
     screen = _screening_kernel(calculation, reference.density, "full")
     _, bare = field_potential(calculation, reference.density, direction, 1.0)
 
-    drho = jnp.zeros_like(reference.density)
-    trace = []
-    for step in range(iterations):
-        new = solver.chi0(bare + screen(drho))
-        residual = float(jnp.max(jnp.abs(new - drho)))
-        drho = drho + mixing * (new - drho)
-        trace.append(residual)
-        if residual < threshold:
-            break
+    shape = np.asarray(reference.density).shape
+    applications = []
+
+    def apply(vector):
+        density = jnp.asarray(vector.reshape(shape))
+        result = density - solver.chi0(screen(density))
+        applications.append(1)
+        return np.asarray(result).ravel()
+
+    operator = LinearOperator(
+        (int(np.prod(shape)), int(np.prod(shape))), matvec=apply, dtype=float
+    )
+    right_hand_side = np.asarray(solver.chi0(bare)).ravel()
+
+    residuals = []
+    solution, info = gmres(
+        operator, right_hand_side, rtol=threshold, maxiter=iterations,
+        callback=lambda value: residuals.append(float(value)),
+        callback_type="pr_norm",
+    )
+    drho = jnp.asarray(solution.reshape(shape))
+    # The residual is recomputed rather than read off the solver, because what
+    # matters is the residual of the system that was meant to be solved and not
+    # the one GMRES restarted on.
+    residual = float(
+        np.linalg.norm(apply(solution) - right_hand_side)
+        / max(np.linalg.norm(right_hand_side), 1e-300)
+    )
     return (
         moment_of(drho, calculation.system.cell),
-        {"iterations": len(trace), "residual": trace[-1], "trace": trace},
+        {
+            "applications": len(applications),
+            "info": int(info),
+            "converged": bool(info == 0),
+            "residual": residual,
+            "trace": residuals,
+        },
     )
 
 
@@ -186,9 +231,8 @@ def main() -> None:
     parser.add_argument("--directions", default="z,x")
     parser.add_argument("--conv-thr", type=float, default=1e-12)
     parser.add_argument("--max-iterations", type=int, default=200)
-    parser.add_argument("--mixing", type=float, default=0.5)
-    parser.add_argument("--response-iterations", type=int, default=60)
-    parser.add_argument("--response-threshold", type=float, default=1e-10)
+    parser.add_argument("--response-iterations", type=int, default=120)
+    parser.add_argument("--response-threshold", type=float, default=1e-8)
     parser.add_argument("--out", required=True)
     arguments = parser.parse_args()
 
@@ -211,10 +255,28 @@ def main() -> None:
         direction = DIRECTIONS[name]
         started = time.time()
         response, response_record = screened_response(
-            calculation, reference, direction, arguments.mixing,
+            calculation, reference, direction,
             arguments.response_iterations, arguments.response_threshold,
         )
         response_record["seconds"] = time.time() - started
+        if not response_record["converged"]:
+            # **Stop rather than spend the finite differences on it.** An
+            # unconverged solve returns a number, and that number compared
+            # against a converged finite difference reads as a disagreement
+            # about the kernel when it is a disagreement about the solve. The
+            # directions are ordered with the moment's own axis first for this
+            # reason: it is the one ``ph.x`` disagrees along, and the transverse
+            # one is the near-Goldstone direction that is expected to be harder.
+            print(f"[{name}] the screened solve did not converge "
+                  f"(residual {response_record['residual']:.3e}); "
+                  f"stopping before the finite difference")
+            record["directions"][name] = {
+                "response": response.tolist(),
+                "response_detail": response_record,
+                "finite_difference": {},
+                "abandoned": "the screened solve did not converge",
+            }
+            break
         entry = {
             "response": response.tolist(),
             "response_detail": response_record,

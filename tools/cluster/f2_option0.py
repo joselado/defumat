@@ -39,6 +39,7 @@ from pathlib import Path
 
 import numpy as np
 
+from defumat.calculator import electrons_defaults
 from defumat.io.pwin import read_pw_input
 from defumat.pseudo import read_upf
 from defumat.scf import Calculation, run_scf
@@ -51,21 +52,40 @@ PSEUDO = Path("tests/data/pseudo")
 
 
 def load(path: Path):
-    system = build_system(read_pw_input(path))
+    """The cell **and its own `&electrons` namelist**, which is the whole point.
+
+    ``run_scf`` called directly does not read an input file's ``&electrons``;
+    only ``Calculator.from_file`` does, through ``electrons_defaults``. Calling
+    it directly therefore silently substitutes the code's own ``mixing_beta``
+    for the input's, and on this cell that is the difference between the number
+    the item is about and a different number: ``fe-noncolin-pbe-stress.in`` asks
+    for 0.2 and takes 43 iterations, where the default takes 24. A deconfounder
+    run at the wrong beta deconfounds nothing, so the namelist is adopted here
+    exactly as the facade adopts it.
+    """
+    pwin = read_pw_input(path)
+    system = build_system(pwin)
     pseudos = tuple(
         read_upf(PSEUDO / species.pseudo_file)
         for species in system.structure.species
     )
-    return system, pseudos, Calculation(system, pseudos)
+    return system, pseudos, Calculation(system, pseudos), electrons_defaults(pwin)
 
 
 def run(path: Path, conv_thr, max_iterations, split: bool, **extra):
-    system, pseudos, calculation = load(path)
+    system, pseudos, calculation, options = load(path)
+    # **The namelist wins over the command line**, and the command line only
+    # supplies what the namelist left out. That is the right way round here
+    # because the whole quantity being measured is an iteration count at the
+    # input's own settings, and a flag that silently replaced `mixing_beta`
+    # would be the defect this function exists to prevent, one layer up.
+    options = {**extra, **options}
+    options.setdefault("conv_thr", conv_thr)
+    options.setdefault("max_iterations", max_iterations)
     started = time.time()
     result = run_scf(
         system, pseudos, calculation=calculation,
-        conv_thr=conv_thr, max_iterations=max_iterations,
-        residual_split=split, verbose=True, **extra,
+        residual_split=split, verbose=True, **options,
     )
     return system, pseudos, calculation, result, time.time() - started
 
