@@ -20751,3 +20751,101 @@ is carried here for the same reason rather than tuned.
   from PAW's one-centre terms in two different local spin frames -- the case
   nothing here has ever been checked on at all. That is the next cell up and it is
   not committed.
+
+### P104 -- The kernel of a textured spinor, cleared along the moment by a route that shares only the ground state; and the cell turns out to be transversely unstable. ✅ DONE for the longitudinal channel.
+
+P83's dielectric tensor of a magnetic spin-orbit insulator agrees with `ph.x` to
+4.6e-4 across the moment and is **5.3 per cent** away along it, on a cell whose
+ground state the two codes agree about to the printed digit. That is 40 per cent
+of the whole exchange-correlation contribution, and the quantity is refused by
+name until the disagreement is located. Three suspects were left after P83: the
+kernel, the electric-field source term, and `ph.x`.
+
+**This removes the kernel, along the direction the disagreement is in.**
+
+**The design, and why it separates them.** One number, the longitudinal spin
+susceptibility `dm_z/dB_z` at `q = 0`, measured two ways: the **same screened
+response** the dielectric constant is built on,
+`(1 - chi_0 K) drho = chi_0 dv_bare` with the same `dv_of_drho` and the same
+spinor Sternheimer solve; and a **central difference of two converged SCF runs**
+under a uniform Zeeman field, which touches no response solver, no kernel object
+and no perturbation expression at all. They share the ground state and nothing
+above it. A **magnetic** probe rather than an electric one because Hartree is
+blind to the magnetization, so what screens it *is* `f_xc` -- and because the
+nonmagnetic spinor case already reaches `ph.x` to 4.3e-5, which largely clears
+the source term and leaves the kernel's magnetic blocks as the thing never
+exercised on its own. The bare perturbation is taken from
+`MagneticField.potential` so the two routes cannot differ by a sign or a factor
+of two, and the field is set on the `Calculation` and put back in a `finally`,
+since `run_scf` has no such keyword and a field left behind would make the next
+measurement a run under a field nobody asked for.
+
+**The numbers, on `i-atom-soc.in`.** The ground state reproduces P83's to the
+digit, -25.801170023 Ry with a moment of 1.000340 mu_B along `z`:
+
+| route | `dm_z/dB_z` (mu_B/Ry) | relative to the response |
+|---|---|---|
+| screened response, 12 matrix applications, residual 6.9e-9 | **2.77073704e-2** | -- |
+| central difference, `h` = 2e-4 Ry | 2.76413499e-2 | **0.238 per cent** |
+| central difference, `h` = 1e-4 Ry | 2.75813820e-2 | 0.455 per cent |
+
+**The finite difference is noise-limited and not truncation-limited, which is
+what makes 0.24 per cent the honest reading rather than 0.45.** Halving `h`
+**doubles** the disagreement -- the ratio is 1.91 where a truncation error would
+have quartered it -- so what is left in it is `eps/h` with `eps` the SCF's own
+error in the converged moment, which works out at 2.6e-8 mu_B. That is the
+project's own Y1 finding in another place: a converged `dr2` bounds a moment far
+more weakly than it bounds an energy. **The two routes therefore agree to within
+the finite difference's own floor**, and the conclusion is that the magnetic
+exchange-correlation kernel and its self-consistency are right together along the
+moment. Against that, 5.3 per cent is twenty times larger.
+
+**So two suspects are left for P83's disagreement and the kernel is not one of
+them**: the electric-field source term for a spinor -- `dvpsi_e`, the velocity
+operator and a spinor's commutator with it, which a potential probe never reaches
+-- and `ph.x` itself, whose `noncolin` linear-response path is recent code.
+
+**The solve is a linear system and that is not a convenience.** The interacting
+susceptibility is `chi_0/(1 - I chi_0)`, so a Stoner-enhanced cell has an
+eigenvalue of `chi_0 K` approaching one from below and simple mixing converges as
+`|1 - beta(1 - J)|` per sweep, which near `J = 1` returns a residual rather than a
+number. GMRES took 12 applications on the longitudinal channel and 22 on the
+transverse one.
+
+**And the transverse channel is the finding nobody was looking for.**
+`dm_x/dB_x` comes out at **-658.9 mu_B/Ry**, converged to a residual of 7.3e-9 in
+22 applications -- **twenty-four thousand times the longitudinal value, and
+negative**. The sign is not a convention: the same field object and the same
+potential give a *positive* longitudinal susceptibility that a finite difference
+confirms, so the two cannot differ in convention. A negative transverse
+susceptibility says the moment along `z` is a stationary point of the direction
+that is **not a minimum**, and a fixed-point iteration is stability-blind, so an
+SCF sits on it happily. The finite-difference partner for that number does not
+exist and could not: under a transverse field the SCF **did not converge**, 200
+iterations reaching 8.4e-8 Ry against 1e-12, which is what a run driven away from
+an unstable direction does.
+
+Read as physics, `chi_perp ~ |m|/K` puts the anisotropy at about `1/659` Ry, some
+20 meV, which is the right scale for spin-orbit coupling on iodine, and the sign
+says `z` is the hard direction rather than the easy one.
+
+**What is outstanding.**
+
+* **Whether P83's whole comparison is being made about a saddle.** The cell was
+  chosen because it is an insulator, textured and norm-conserving, and nothing
+  in P83 knew its moment direction is unstable. What this does **not** say is that
+  the comparison is wrong -- both codes agree on the ground state energy to the
+  printed digit, so they are on the same stationary point -- but a response about
+  a nearly unstable direction is a delicate object and the 5.3 per cent now has a
+  candidate nobody had written down. **Letting the moment relax and asking where
+  it goes is the measurement**, and it is cheap.
+* **The transverse kernel has no independent check and now cannot have this one.**
+  A finite difference under a transverse field does not converge on this cell.
+  What would work is a cell whose easy axis is where the moment sits, or a
+  constrained-direction run on this one, whose penalty is then outside both totals
+  and has to be handled.
+* **The electric-field source term**, which is now one of the two remaining
+  suspects and has never been checked on a spinor on its own.
+* **The refusal stands.** `require_a_measured_spinor_response` still refuses a
+  textured spinor dielectric tensor, and should, because what has been located is
+  where the error is *not*.
