@@ -20732,10 +20732,19 @@ is carried here for the same reason rather than tuned.
 
 **What is outstanding.**
 
-* **The canted leg, which is the half the item is really about.** Both codes are
-  still running it and **both are slow in the same way**: at about 140 iterations
-  `pw.x` sits at 6e-8 Ry and defumat's accuracy oscillates between 1e-8 and 1e-7,
-  neither reaching 1e-11. They agree so far on the two quantities that exist at
+* **The canted leg needs a decision rather than more iterations, and the word
+  "slow" would be the wrong one.** At about 140 iterations `pw.x` sits at 6e-8 Ry
+  and defumat's accuracy oscillates between 1e-8 and 1e-7, neither reaching
+  1e-11, and that is the **physics** rather than a budget: nothing protects 90
+  degrees on this cell, so the state drifts along a direction whose restoring
+  force is the spin-orbit anisotropy alone -- which P104 has just measured, on a
+  different cell, as a transverse susceptibility twenty-four thousand times the
+  longitudinal one. Two fixed-point iterations drift differently along such a
+  direction, so raising `electron_maxstep` buys nothing. **The comparison has to
+  be at a defined angle**, which means `constrained_magnetization = 'atomic'` on
+  both sides with the penalty energy reported separately and kept out of the
+  totals, or a cell where 90 degrees is symmetry-protected. Until then what the
+  two codes agree on is what exists at that level: They agree so far on the two quantities that exist at
   that level -- the total magnetization, (3.31, 3.32, 0.00) against
   (3.3298, 3.3000, 0.0001), and the total energy, -508.34000290 Ry against a
   defumat value oscillating around -508.3399 -- and `pw.x` has not yet printed a
@@ -20827,7 +20836,21 @@ an unstable direction does.
 
 Read as physics, `chi_perp ~ |m|/K` puts the anisotropy at about `1/659` Ry, some
 20 meV, which is the right scale for spin-orbit coupling on iodine, and the sign
-says `z` is the hard direction rather than the easy one.
+would say `z` is the hard direction rather than the easy one.
+
+**That reading is held open until the tilt run lands, because it is an
+explanation that fits a number.** One thing it needs is already checked by
+reading rather than by argument: a direction-only penalty carries a `1/|m|` whose
+gradient is a large *negative* transverse term, which would produce exactly this
+sign, and the probe cannot have one -- it is built with `penalty = 0.0` and no
+targets, so `MagneticField.constraint` is its default `"none"` and
+`constraint_energy` returns a literal `jnp.asarray(0.0)` on that branch
+(`scf/fields.py:521-534`). What is *not* yet excluded is anything that would make
+the response negative without the state being unstable, and the discriminator is
+the cheap one: seed the moment off `z` and see where it goes. **If it returns to
+`z`, the sign is something else and this paragraph is wrong**; if it rotates away
+or fails to settle, `z` is a saddle and P83's whole comparison is being made about
+one.
 
 **What is outstanding.**
 
@@ -20927,12 +20950,21 @@ energies, add up one of them.**
   rather than leaving the next reader to rediscover it. A `stype = 3` Elk run
   with a matched Fermi-Dirac smearing on the QE side is the version of this
   comparison that needs no correction at all, and is the better fixture.
-* **The collinear arbiter is still running and is now a *test* of this
-  explanation rather than a discriminator.** `E(AFM) - E(FM)` in the doubled cell
-  is twice `E(q = 1/2) - E(q = 0)`, computed by both codes with no spiral
-  machinery anywhere, so Elk's value must match this code's **without** the
-  smearing term. That is a prediction with a number attached, which is the best
-  kind of check to have left running.
+* **The collinear arbiter is still running, and what it tests is not this.** It
+  was built as a discriminator between two hypotheses that are both now dead, and
+  it should not be read as a check on the paragraph above: **P105's evidence is
+  complete without it**, the free-energy column reproducing P86 to the digit, the
+  internal-energy column landing within 2.4 and 0.5 per cent of Elk, and the
+  supercell identity putting this code's spiral at 1e-10 Ry. What the arbiter
+  actually compares is **Elk's collinear path against Elk's own spiral path**,
+  and three things have to be carried across before its number means anything: the
+  entropy correction applied to the defumat side, a **matched field** -- a
+  per-atom `bfcmt` on both atoms of a doubled cell is not the global `bfieldc` on
+  one atom of the unit cell -- and the k-grid, the doubled cell's `1 1 4` being
+  the unit cell's `1 1 8` rather than the `1 1 4` Elk's published number sits on.
+  At 27 loops its unconverged reading is -735 meV against a naive -528, and
+  **that gap is those three differences and not a failure of this phase**; a
+  reader who takes it otherwise will reopen a closed item.
 * **`PERFORMANCE.md` still has no Elk pair for the spiral**, which is
   `CLAUDE.md`'s standing rule left open and needs one core and an idle machine.
 * **The moment comparison is unaffected and stays as P86 records it**, including
