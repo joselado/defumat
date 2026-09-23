@@ -1,0 +1,46 @@
+! **Two iron moments held 90 degrees apart, with no spin-orbit coupling**: the
+! robust magnet `MAGNETISM-NEXT.md` item B asked for, on which a per-atom
+! feedback field can be told apart from a penalty (`PLAN.md` P108).
+!
+! Simple cubic with iron at 0 and (1/2, 1/2, 1/2), which is bcc iron in its
+! conventional cell, on the scalar-relativistic ultrasoft `Fe.pz-nd-rrkjus.UPF`
+! of `benchmarks/fe-mag-1k.in`. Without spin-orbit coupling nothing but exchange
+! acts between the two moments, and exchange wants them parallel: seeded
+! parallel this cell is a ferromagnet at 1.868 mu_B per site, and seeded at 90
+! degrees with nothing holding it the pair turns parallel (or, from a 1 mu_B
+! seed, loses its moment altogether). So holding 90 degrees costs a real
+! torque, 0.03 Ry of field per atom, which is what makes the cell a test of a
+! controller: the hydrogen pair of `h2-texture-120.in` carries 0.000235 mu_B
+! unconstrained, so its `m(B)` is nearly a step and no fixed-gain loop can be
+! stable against it.
+!
+! The same cell in Elk (`tools/cluster/b_elk_fsm.sbatch`, `fsmtype -2`, Elk's
+! default `taufsm` and mixer) holds the 90 degrees in 55 loops under a field of
+! 0.0097 Ha per atom, which is the external number the scheme here is held to.
+!
+! No constraint is set here: the tests add the scheme, and the STARTING_MOMENTS
+! card that carries the targets.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 1, celldm(1) = 5.42, nat = 2, ntyp = 1,
+    ecutwfc = 25.0, ecutrho = 200.0,
+    occupations = 'smearing', smearing = 'marzari-vanderbilt', degauss = 0.05
+    noncolin = .true.
+    nosym = .true.
+    starting_magnetization(1) = 0.5
+    angle1(1) = 90.0
+    angle2(1) = 0.0
+ /
+ &electrons
+    mixing_beta = 0.3
+    conv_thr = 1.0d-8
+ /
+ATOMIC_SPECIES
+ Fe 55.847 Fe.pz-nd-rrkjus.UPF
+ATOMIC_POSITIONS (alat)
+ Fe 0.00 0.00 0.00
+ Fe 0.50 0.50 0.50
+K_POINTS {automatic}
+ 2 2 2 1 1 1

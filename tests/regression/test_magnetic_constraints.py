@@ -247,10 +247,11 @@ def test_fixed_spin_moment_holds_the_moment(pseudo_dir):
     *convergence test*: the field is outside the density, so ``dr2`` falls below
     ``conv_thr`` long before the moment arrives.
 
-    The budget is a **performance guard**, not a tolerance. The default
-    ``secant`` update takes 74 iterations on this case; the interleaved rule it
-    replaced took 1380, and if a change puts this back into the hundreds it is
-    the controller that broke, not the physics.
+    The budget is a **performance guard**, not a tolerance. The ``secant``
+    update takes 74 iterations on this case, and if a change puts this back into
+    the hundreds it is the controller that broke, not the physics. (It is no
+    longer the default: Elk's rule, read off the output density, takes 20 --
+    see the next test.)
     """
     system, result = _fsm(pseudo_dir, "secant", 300)
 
@@ -266,46 +267,30 @@ def test_fixed_spin_moment_holds_the_moment(pseudo_dir):
 
 
 def test_the_two_fixed_spin_moment_rules_find_the_same_field(pseudo_dir):
-    """``secant`` and ``elk`` are the same answer at different cost.
+    """``secant`` and ``elk`` are the same answer, and Elk's rule is now the faster.
 
-    The transcription is kept and checked against the scheme that replaced it,
-    the way every pluggable piece here is: what may differ is the path, never
-    the fixed point. Both stop as soon as ``|m - 2|`` is inside 1e-3 and they
-    approach from opposite sides, so the residual difference in the field is
-    that tolerance divided by the susceptibility -- 1.1e-3 mu_B over the
-    45 mu_B/Ry measured on this case, which is the 4e-5 Ry asserted below.
+    The transcription is kept and checked against the other scheme, the way
+    every pluggable piece here is: what may differ is the path, never the fixed
+    point. Both stop as soon as ``|m - 2|`` is inside 1e-3, so the residual
+    difference in the field is that tolerance divided by the susceptibility --
+    1.1e-3 mu_B over the 45 mu_B/Ry measured on this case, which is the 4e-5 Ry
+    asserted below.
 
-    **Why the interleaved rule is slow, since the number invites the question.**
-    Elk updates the field after *every* SCF iteration, so the controller reads a
-    moment that has not finished responding to the last nudge. Instrumented on
-    this case, the susceptibility it appears to see swings between ``+2591`` and
-    ``-1252`` mu_B/Ry between consecutive iterations. The gain is not what is
-    wrong: Elk's ``tau = 0.02`` against a measured ``1/chi`` of 0.022 is already
-    a Newton step. At converged density ``m(B)`` is smooth -- 2.499, 2.274,
-    2.036, 1.837 mu_B at ``B = 0``, -0.005, -0.010, -0.020 Ry -- which is what
-    the secant rule steps on.
-
-    **How long the ringing takes is itself chaotic, and the assertion below says
-    only what survives that.** Measured at 1380 iterations once and at 288
-    another time, and what separated the two runs was ``|psi|^2`` being evaluated
-    as ``Re(conj(psi) psi)`` rather than ``abs(psi)**2`` -- the same number to
-    **3.5 eps** (:func:`defumat.scf.density.band_density`). A marginally damped
-    controller has no well-defined damping time at that resolution, so an earlier
-    ``secant.iterations * 5 < elk.iterations`` was asserting a number that does
-    not exist. Every *physics* assertion above is unaffected: both rules reach
-    the same field, the same energy and the same moment, which is what the test
-    is for.
+    **This test used to assert the opposite order, and the reason it was wrong
+    is the finding.** Elk updates the field after every SCF iteration, and this
+    code read the moment for that update off the *mixed* density, which lags the
+    iteration's output by the mixer's damping. The controller then saw a
+    susceptibility swinging between +2591 and -1252 mu_B/Ry from one iteration
+    to the next and rang for 288, 1380 or 3380 iterations depending on
+    round-off, and that was written up as the interleaved rule's nature. Elk
+    reads ``mommt`` off the output density (``rhomag``, before ``mixerifc``), and
+    read the same way this case converges in **20** iterations against the
+    secant's 74 (``PLAN.md`` P108). The ordering is asserted because it is what
+    the phase is about; the size of the gap is not, since both counts are
+    properties of a controller and not of the physics.
     """
-    # **8000 rather than 2000, and the budget is the same non-assertable
-    # quantity the docstring retires above.** The interleaved rule's damping
-    # time has now been measured at **288, 1380 and 3380** iterations on this
-    # cell, across changes as small as the 3.5 eps one named above, so a budget
-    # is a bet on a chaotic number rather than a property of the scheme. 2000
-    # lost that bet on 2026-09-21; at 3380 the run converges to acc = 9.4e-09
-    # with M = 1.9993 and B = -0.0109895 against the secant's -0.0109659, which
-    # is the physics this test is actually for.
     _, secant = _fsm(pseudo_dir, "secant", 300)
-    _, elk = _fsm(pseudo_dir, "elk", 8000)
+    _, elk = _fsm(pseudo_dir, "elk", 300)
 
     assert secant.converged and elk.converged
     field_secant = float(np.asarray(secant.magnetic_field.uniform)[0])
@@ -314,6 +299,8 @@ def test_the_two_fixed_spin_moment_rules_find_the_same_field(pseudo_dir):
     assert secant.total_energy == pytest.approx(elk.total_energy, abs=1e-4)
     assert secant.magnetization == pytest.approx(2.0, abs=1e-3)
     assert elk.magnetization == pytest.approx(2.0, abs=1e-3)
-    # The point of the exercise: the secant rule is the cheaper path to the same
-    # fixed point. By how much is not assertable -- see the docstring.
-    assert secant.iterations < elk.iterations
+    # Measured 20 against 74. Before P108 it was hundreds to thousands against
+    # 74, so this is the assertion that fails if the read goes back to the
+    # mixed density.
+    assert elk.iterations < 60
+    assert elk.iterations < secant.iterations

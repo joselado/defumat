@@ -164,3 +164,70 @@ def test_the_direction_only_penalty_does_not_converge_on_this_cell(pseudo_dir):
         "this lambda ran 200 and the most generous row ran 400, so a pass here "
         "is a stronger statement than the assertion, not a weaker one."
     )
+
+
+#: The robust magnet for the feedback schemes (``PLAN.md`` P108): two iron
+#: moments at 90 degrees, no spin-orbit coupling, targets along x and y at the
+#: ferromagnet's own 1.868 mu_B per site.
+IRON = "tests/data/qe/fe2-canted-nosoc.in"
+IRON_UNIT = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+
+
+def _iron(scheme, lam, pseudo_dir, **options):
+    from pathlib import Path
+    text = Path(IRON).read_text().replace(
+        "    nosym = .true.\n",
+        f"    nosym = .true.\n    constrained_magnetization = '{scheme}'\n"
+        f"    lambda = {lam}\n")
+    rows = IRON_UNIT * 1.868
+    text += ("STARTING_MOMENTS\n"
+             + "".join(f"  {r[0]:.6f}  {r[1]:.6f}  {r[2]:.6f}\n" for r in rows))
+    calculator = Calculator.from_text(text, pseudo_dir, announce=False)
+    scf = calculator.get_scf(conv_thr=1e-8, max_iterations=150, verbose=False,
+                             **options)
+    moments = np.asarray(scf.site_moments)
+    hats = moments / np.linalg.norm(moments, axis=1)[:, None]
+    between = np.degrees(np.arccos(np.clip(hats[0] @ hats[1], -1.0, 1.0)))
+    return scf, between, moments
+
+
+@pytest.mark.slow
+def test_elks_per_atom_field_holds_a_canted_iron_pair(pseudo_dir):
+    """Elk's ``fsmtype = 2`` with Elk's reading and Elk's mixer holds 90 degrees.
+
+    Measured on this cell (``PLAN.md`` P108): 46 iterations to 90.002 degrees
+    with the lengths at the target to 1e-4 mu_B, where the vector penalty at
+    the largest ``lambda`` this cell tolerates holds 89.2 degrees (0.39 per
+    site) in 76, and Elk itself holds the direction-only variant in 55 loops.
+    It needs all three of Elk's choices: the moment read off the output
+    density, a mixer with no history (``'adaptive'``, Elk's ``mixadapt`` at
+    Elk's ``beta0``), and Elk's gain in this code's units. With Anderson it runs
+    away at every gain tried.
+    """
+    scf, between, moments = _iron("atomic fsm", 0.02, pseudo_dir,
+                                  mixing_mode="adaptive", mixing_beta=0.05)
+    assert scf.converged, scf.accuracy
+    assert between == pytest.approx(90.0, abs=0.05), between
+    np.testing.assert_allclose(np.linalg.norm(moments, axis=1), 1.868, atol=2e-3)
+    # The field that does it is a torque, perpendicular-dominated and about
+    # 0.03 Ry per atom: a result a penalty cannot report.
+    field = np.asarray(scf.magnetic_field.atomic)
+    assert 0.01 < np.linalg.norm(field[0]) < 0.06
+
+
+@pytest.mark.slow
+def test_a_history_mixer_is_warned_about_under_a_per_atom_field(pseudo_dir):
+    """The guard that must fire: Anderson under a per-atom feedback field.
+
+    Measured to run away on this cell at every gain from 0.0025 to 0.04, so the
+    run is warned about at setup, before any iteration is spent. Only the
+    warning is asserted here, on a one-iteration budget.
+    """
+    from pathlib import Path
+    text = Path(IRON).read_text().replace(
+        "    nosym = .true.\n",
+        "    nosym = .true.\n    constrained_magnetization = 'atomic fsm direction'\n"
+        "    lambda = 0.02\n") + "STARTING_MOMENTS\n  1.868 0 0\n  0 1.868 0\n"
+    calculator = Calculator.from_text(text, pseudo_dir, announce=False)
+    with pytest.warns(RuntimeWarning, match="per-atom feedback field"):
+        calculator.get_scf(max_iterations=1, verbose=False)

@@ -161,7 +161,7 @@ print(f'\nthe two energies differ by '
 ```
 
                          energy (Ry)   |m| per site   out of plane
-        4 operations   -3.8187943769         0.4675        4.8e-24
+        4 operations   -3.8187943769         0.4675        2.8e-24
          no symmetry   -3.8187943871         0.4676        6.5e-06
     
     the two energies differ by 1.0e-08 Ry
@@ -283,6 +283,42 @@ moment holds it in place. `constrained_magnetization = 'atomic'` with the same
 `STARTING_MOMENTS` card as its target is the one to use, with `lambda` setting
 the stiffness; its energy is reported separately and is not part of the total, by
 the same convention that keeps an external field's energy out.
+
+A penalty is a term in the energy, so at convergence it is still pushing: the
+angle that is left over is that push, and no choice of `lambda` removes it. The
+other way to hold a texture is to apply a field on each atom and adjust it until
+the moment sits exactly where it was asked to be, which is Elk's fixed spin
+moment scheme resolved by atom (`constrained_magnetization = 'atomic fsm'`).
+What converges is then a genuine stationary point of the unconstrained energy in
+that field, and the field itself is a result: it is the torque the texture
+costs.
+
+Let us see the two side by side on a real magnet: two iron atoms of bcc iron,
+asked to sit 90 degrees apart, where exchange wants them parallel.
+
+
+
+```python
+text = open('../tests/data/qe/fe2-canted-nosoc.in').read().replace('nosym = .true.', "nosym = .true., constrained_magnetization = 'atomic fsm', lambda = 0.02")
+held = Calculator.from_text(text + 'STARTING_MOMENTS\n 1.868 0 0\n 0 1.868 0\n', '../tests/data/pseudo', announce=False).get_scf(verbose=False, mixing_mode='adaptive', mixing_beta=0.05)
+m = np.array(held.site_moments)
+print(f'{held.iterations} iterations, {np.degrees(np.arccos(m[0] @ m[1] / np.prod(np.linalg.norm(m, axis=1)))):.3f} degrees apart, |m| = {np.linalg.norm(m, axis=1).round(4)} mu_B, field = {np.linalg.norm(np.asarray(held.magnetic_field.atomic), axis=1).round(4)} Ry')
+```
+
+    46 iterations, 90.002 degrees apart, |m| = [1.868  1.8681] mu_B, field = [0.0264 0.0264] Ry
+
+
+The field holds the pair at 90.00 degrees with both moments at the length they
+were asked for. The penalty on the same cell, at `lambda = 1`, takes 76
+iterations and leaves the pair at 89.2 degrees, 0.8 short, and it cannot be
+made stiffer here, because at `lambda = 10` the calculation no longer
+converges. The field that does it is about 0.026 Ry per atom, mostly
+perpendicular to each moment, which is the exchange torque between the two
+atoms read off directly. Elk, run on the same cell with the same scheme, holds
+the same 90 degrees in 55 iterations under a field of 0.019 Ry. The field wants
+a mixer with no memory of earlier iterations, which is why it is run with
+`mixing_mode = 'adaptive'` and a small `mixing_beta`; the calculation warns if
+it is not.
 
 *The checks behind the numbers here live in
 `tests/regression/test_a_vector_texture_survives.py` and

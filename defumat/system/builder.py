@@ -186,7 +186,7 @@ class System(eqx.Module):
     #: Which fixed-spin-moment update rule to use -- a defumat extension with
     #: no pw.x counterpart, since the scheme itself has none. See
     #: :data:`defumat.scf.fields.FSM_UPDATES`.
-    fsm_update: str = eqx.field(static=True, default="secant")
+    fsm_update: str = eqx.field(static=True, default="elk")
     #: ``r_m`` per species in bohr, or ``()`` for the radius ``make_pointlists``
     #: derives. A defumat extension only in being an input at all.
     integration_radii: tuple = eqx.field(static=True, default=())

@@ -5270,13 +5270,12 @@ def run_scf(
     if mixing_beta_mag is not None:
         # **A separate step length for the magnetization**, VASP's ``AMIX_MAG``,
         # and a deliberate departure from ``pw.x``, which uses one ``alphamix``
-        # for every component of ``mix_type``. P102 is what makes it worth
-        # having: on ``fe-noncolin-pbe-stress.in`` 28 of 43 iterations are
-        # magnetism, against 4 of 25 on the collinear benchmark, and the
-        # longitudinal residual plateaus while the charge keeps falling. Kerker
-        # cannot reach that direction -- it divides out a ``1/q^2`` the magnetic
-        # kernel does not have -- so a step length is the only thing acting on
-        # it.
+        # for every component of ``mix_type``. Kerker cannot reach the magnetic
+        # direction -- it divides out a ``1/q^2`` the magnetic kernel does not
+        # have -- so a step length is the only thing acting on it. What it buys
+        # is smaller than P106 first measured: on the corrected Anderson fit
+        # (P107) it takes ``fe-noncolin-pbe-stress.in`` from 15 iterations to 11,
+        # where P106's 43 to 20 was mostly the fit.
         if not mixer.accepts_precondition:
             # Refused **at setup** for the same reason a preconditioner is: a
             # run that cannot work should not find out three hours in. The
@@ -5298,6 +5297,27 @@ def run_scf(
                 "charge's own beta"
             )
         mixer.beta_mag = float(mixing_beta_mag)
+    if (system.constrained_magnetization in FEEDBACK_ATOMIC
+            and system.fsm_update == "elk"
+            and mixing_mode.lower() != "adaptive"):
+        # Warned rather than refused: nothing is wrong with the input, but
+        # the measurement says the run will not converge. A per-atom field
+        # updated every iteration makes the SCF map change under the mixer,
+        # and a mixer with a history extrapolates across maps that no longer
+        # exist. On the canted iron pair (``PLAN.md`` P108) Anderson runs away
+        # at every gain from 0.0025 to 0.04 Ry/mu_B, while Elk's own mixer,
+        # which carries no history, holds 90 degrees to 0.001 in 46 to 64
+        # iterations -- and is the mixer Elk itself ran the same scheme with.
+        warnings.warn(
+            f"constrained_magnetization = {system.constrained_magnetization!r} "
+            f"with fsm_update = 'elk' under mixing_mode = {mixing_mode!r}: a "
+            "per-atom feedback field changes the SCF map every iteration, and a "
+            "mixer that extrapolates over a history of old maps was measured to "
+            "run away on this scheme at every gain tried. Use mixing_mode = "
+            "'adaptive' with mixing_beta = 0.05, which is Elk's mixer and "
+            "Elk's beta0 and holds a canted iron pair to 0.001 degrees",
+            RuntimeWarning, stacklevel=2,
+        )
         mixer.shape = tuple(np.shape(rho))
 
     if mixing_mode.lower() in PRECONDITIONED:
@@ -6039,7 +6059,23 @@ def run_scf(
             # the next potential is built.
             field_scale *= field.reducebf
             if field.fsm_update == "elk" or field.constraint not in FEEDBACK:
-                field = field.feedback(rho, calculation.system.cell)
+                # **The output density, as Elk reads it.** ``bfieldfsm`` steps on
+                # ``mommt``, which ``rhomag`` computes from the density this
+                # iteration's states produced, before the mixer touches it
+                # (``gndstate.f90``: ``rhomag`` -> ``mixerifc`` -> ``bfieldfsm``).
+                # Reading the mixed density instead feeds the controller a moment
+                # the mixer has already damped, which is a lag, and a fixed-gain
+                # integrator against a lagging moment winds up: measured on the
+                # two-atom canted iron cell (``PLAN.md`` P108), the field climbed
+                # to 0.25 Ry while the moment it was turning did not move, where
+                # 0.03 Ry holds the state. With the output density and Elk's
+                # adaptive mixer the same scheme holds 90 degrees to 0.001 in 63
+                # iterations. For a non-feedback constraint ``feedback`` is the
+                # identity, so which density it is handed does not matter.
+                field = field.feedback(
+                    rho_out if field.constraint in FEEDBACK else rho,
+                    calculation.system.cell,
+                )
             elif inner_converged:
                 # The secant scheme steps on *converged* pairs only. Between
                 # steps the field is held and the SCF is an ordinary one, which

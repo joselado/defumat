@@ -163,7 +163,7 @@ drive any of this and is what the examples below use.
 | **Tensor moments of the correlated shell**: the occupation matrix in an orthonormal basis of multipoles, where the charge, the spin moment and $\mathbf{L}\cdot\mathbf{S}$ are single components. One of them can be held fixed, which selects an orbital ordering a field would not find on its own. | `TENSOR_MOMENTS` card, `tensor_moment_penalty` | | ✓ |
 | **Around-mean-field double counting**, the alternative to the fully-localised limit: the shell's mean occupation is subtracted before the interaction, so a uniformly filled shell is corrected by exactly nothing. | `hubbard_double_counting = 'amf'` | | ✓ |
 | **Slater integrals from the orbital**: the interaction computed from the manifold's own all-electron radial function with a screened Coulomb kernel, so one chosen $U$ fixes $F^0$, $F^2$, $F^4$ and $J$ in place of an atomic table. | `hubbard_slater = 'yukawa'`, `LAMBDA` on the `HUBBARD` card | | ✓ |
-| **Holding a texture with a field instead of a penalty**: Elk's fixed-spin-moment scheme resolved by atom, one constraining field per site driven by that site's own error, fixing either the full moment vector or its **direction alone**. A converged feedback field is a genuine stationary point where a penalty leaves a residual force, but on the one cell it has been measured on the penalty still wins, by the amount note 20 gives. | `constrained_magnetization = 'atomic fsm'` and `'atomic fsm direction'` with a `STARTING_MOMENTS` card, `fsm_update` | | ✓ |²⁰
+| **Holding a texture with a field instead of a penalty**: Elk's fixed-spin-moment scheme resolved by atom, one constraining field per site driven by that site's own error, fixing either the full moment vector or its **direction alone**. A converged feedback field is a genuine stationary point where a penalty leaves a residual force, and on a canted iron pair it holds 90 degrees to 0.002 where the penalty holds 0.39 per site, with the torque that does it as a result (note 20). | `constrained_magnetization = 'atomic fsm'` and `'atomic fsm direction'` with a `STARTING_MOMENTS` card, `fsm_update` | | ✓ |²⁰
 | **Spin spirals** at any wavevector, without a supercell, on norm-conserving, ultrasoft and PAW datasets alike — the transverse block of the density pairs the two components at different k-points, so its augmentation charge is the table displaced to $Q_{ij}(\mathbf{G}-\mathbf{q})$. Needs `nosym`; spin-orbit coupling is refused. | `spiral_q`, `defumat spiral` | | ✓ |
 | **Relaxing the spiral wavevector** down $\mathrm{d}E/\mathrm{d}\mathbf{q}$ to the ground-state pitch, on norm-conserving, ultrasoft and PAW datasets alike — the displaced augmentation table is itself a function of $\mathbf{q}$, so it is rebuilt inside the differentiated path together with the overlap operator the orthonormality constraint carries and PAW's one-centre energy. | `relax_spiral_q`, `Calculator.get_spiral_relaxation` | | |
 | **$E(\mathbf{q})$ and the Heisenberg exchange constants**: a spiral scan's energy against its wavevector, fitted over neighbour shells to $E(\mathbf{q}) - E(0) = m^2 \sum_{\mathbf{R}} J(\mathbf{R})\,[1 - \cos(\mathbf{q}\cdot\mathbf{R})]$, with the fit residual saying how well a Heisenberg model describes the surface. $E(\mathbf{q})$ can be accumulated from $\mathrm{d}E/\mathrm{d}\mathbf{q}$ instead of read off the energies, which removes the steps a rebuilt plane-wave basis puts in the curve. | `run_spiral_scan`, `heisenberg_exchange`, `Calculator.get_spiral_scan` | | |
@@ -328,18 +328,18 @@ Where the tick is qualified:
   corrugation is quantised to the grid spacing where this one is interpolated
   between scan planes and takes the plane's own normal.
 
-- ²⁰ **Transcribed and not yet shown to win.** The argument for it is sound
-  and the implementation is checked against Elk's own routines, but on the only
-  cell it has been measured on it does not converge: the 120-degree hydrogen
-  pair rings with a *growing* envelope over 2000 iterations at half Elk's
-  default gain, where the vector penalty holds the angle to 0.576 degrees per
-  site in 38. The two update rules fail for two different reasons and each names
-  its own fix: the fixed gain is unstable because that cell is barely magnetic
-  unconstrained (0.000235 $\mu_B$), so its $m(B)$ is nearly a step; the secant
-  is stable and converges to the *wrong state*, getting the moment lengths right
-  to 8 per cent and the angles wrong by 145 degrees, because it models
-  $\mathrm{d}m/\mathrm{d}B$ as diagonal and a texture's angles are set by the
-  exchange between atoms. `PLAN.md` P85 has both trajectories.
+- ²⁰ **Measured against Elk on the same cell, and it wins on a robust magnet.**
+  Two iron moments at 90 degrees without spin-orbit coupling
+  (`tests/data/qe/fe2-canted-nosoc.in`): `'atomic fsm'` converges in 46
+  iterations with the pair at 90.002 degrees and both lengths on target, where
+  the vector penalty holds 89.2 degrees in 76 and Elk's own `fsmtype = -2`
+  holds the direction in 55 loops. It needs Elk's three choices: the moment
+  read off the output density, Elk's history-free mixer (`mixing_mode =
+  'adaptive'`, `mixing_beta = 0.05`), which is warned about when absent, and
+  Elk's gain in this code's units (0.02 Ry per $\mu_B$, the default). The
+  earlier verdict that it does not converge was measured on a hydrogen pair
+  that is barely magnetic unconstrained and with the first two choices wrong.
+  `PLAN.md` P108.
 - ¹⁹ `pw.x` converges a noncollinear spin-orbit run at a stated moment
   direction and prints its total energy, so the quantity is reachable — by
   running it once per direction and subtracting by hand. There is no routine:

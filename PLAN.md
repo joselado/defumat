@@ -16169,6 +16169,15 @@ residual drifting under the threshold cannot make it pass again.
 
 ### P85 -- Elk's per-atom feedback field: transcribed, and measured to ring on the cell it was meant to beat. ⏳ IMPLEMENTED AND MEASURED; the verdict is negative on this cell and the cell is the wrong one.
 
+> **Superseded by P108 (2026-09-23).** The scheme holds a canted iron pair to 0.002
+> degrees in 46 iterations, beating the penalty, once it reads the moment off the
+> output density as Elk does and runs under Elk's history-free mixer. The two
+> diagnoses below were each half right: the hydrogen cell is the wrong cell, and
+> the ringing was also the controller reading the *mixed* density. The secant's
+> "stable and blind" did not carry to iron, where it is stuck instead (its gate
+> never reopens), so the 3x3 susceptibility block this entry asked for is not
+> needed.
+
 `defumat/scf/fields.py`. `MAGNETISM-NEXT.md` item B: "Elk's per-atom feedback field, so a
 held texture is exact rather than nearly". The claim to beat was P79's -- the 120-degree
 hydrogen pair held to **0.55 degrees per site in 38 iterations** by the vector penalty at
@@ -21295,3 +21304,112 @@ standing.**
 * **No README row and no notebook**, because none is owed: this changes how quickly a
   run converges and not what it converges to. The `PERFORMANCE.md` entry carries the
   table above.
+
+### P108 -- Elk's per-atom field holds a canted iron pair to 0.002 degrees, once it reads what Elk reads and mixes as Elk mixes. ✅ DONE.
+
+`defumat/scf/driver.py` (the feedback read, the mixer warning), `defumat/scf/fields.py`
+(`DEFAULT_FSM_GAIN`, `DEFAULT_FSM_UPDATE`), `tests/data/qe/fe2-canted-nosoc.in`,
+`tools/cluster/b_elk_fsm.sbatch`. `MAGNETISM-NEXT.md` item B: P85 transcribed
+`bfieldfsm.f90` as `'atomic fsm'` and `'atomic fsm direction'`, measured it to ring on
+the hydrogen pair, and put the blame on the cell. This phase ran the robust magnet that
+entry asked for, and Elk on the same cell, and the blame moved.
+
+**The cell.** Two iron atoms in bcc iron's conventional cell, 90 degrees apart, no
+spin-orbit coupling, `Fe.pz-nd-rrkjus.UPF` at 25 Ry, `2 2 2 1 1 1`, targets along `x` and
+`y`. Seeded parallel it is a ferromagnet at **1.868 mu_B** per site; seeded at 90 degrees
+with nothing holding it the pair goes parallel, or, from a 1 mu_B seed, loses its moment
+(0.003 mu_B, 0.076 Ry above the ferromagnet). So holding it costs a torque against
+exchange, which is what a controller test needs and what the hydrogen pair, at 0.000235
+mu_B unconstrained, could not supply.
+
+**Elk holds it.** Elk 10.2.4 (Triton's module), the same cell, `fsmtype = -2`, Elk's
+default `taufsm = 0.01`, Elk's default mixer (which the module prints as `mixtype 1`,
+adaptive linear, `beta0 = 0.05`): **converged in 55 loops**, the two muffin-tin moments
+1.725 mu_B each and exactly 90 degrees apart, under 0.0097 Ha of perpendicular field per
+atom. Two things to read beside that number. Elk landed with both moments *antiparallel*
+to their targets, which a direction-only scheme permits (projecting the field
+perpendicular to the target fixes the line and both ends of it); what B needs is the 90
+degrees between them, which it held. And at a quarter of the gain Elk fails as this code
+did, 300 loops with the pair drifting toward parallel. The unconstrained control goes
+ferromagnetic (2.82 mu_B in total) where this code's 1 mu_B canted seed went nonmagnetic,
+which is the seed and not the controller: Elk seeds with a 0.001 field.
+
+**This code, before: every fixed-gain row runs away.** `conv_thr = 1e-8`, 200 to 300
+iterations, the input's Anderson at `mixing_beta = 0.3`:
+
+| scheme | update | gain (Ry/mu_B) | result |
+|---|---|---|---|
+| `atomic` (penalty) | -- | 1 | **converged, 76 iterations, 89.221 degrees, 0.39 per site** |
+| `atomic` (penalty) | -- | 10, 100 | blows up (one site to 15 mu_B) |
+| `atomic fsm direction` | elk | 0.0025, 0.01, 0.04 | runs away (fields to 0.2 to 0.7 Ry) |
+| `atomic fsm` | elk | 0.01 | runs away |
+| `atomic fsm` | secant | 0.01 | 90.2 degrees at 200 and 91.7 at 800, never converged |
+| `atomic fsm direction` | secant | 0.01, 0.02 | 102 and 158 degrees |
+
+The penalty's tolerable stiffness is a tenth of the hydrogen pair's (10 there), which is
+the inverse of the susceptibility: a robust moment makes a stiff penalty unstable.
+
+**The trace says what is wrong, and the static test says what is not.** Instrumented at
+the gain that equals Elk's: from iteration 5 to 17 the field on atom 1 grows steadily from
+0.051 to 0.153 Ry along `-y` while the moment it should turn sits at 0.3 to 0.6 mu_B along
+`+y` and its *length* grows from 2.1 to 2.8. A fixed perpendicular field of 0.1 Ry per
+atom, with no controller, converges in **13** iterations and turns both moments onto it,
+to (-0.64, -2.92) and (-2.92, -0.64), so the potential is right and the failure is the
+loop: an integrator stepping every iteration against a moment that lags it.
+
+**Three differences from Elk, and each was measured necessary.**
+
+1. **Which density the update reads.** Elk's `gndstate.f90` calls `rhomag` (which
+   computes `mommt`), then `mixerifc`, then `bfieldfsm`, so the field steps on the
+   *output* moment. This code read the *mixed* density, which lags the output by the
+   mixer's damping and is further moved by Anderson's extrapolation. Now the output.
+2. **The mixer.** The field changes the SCF map every iteration, and Anderson fits a
+   secant over a history of maps that no longer exist. With the output read and
+   Anderson, the direction scheme at 0.02 still runs away (60 degrees at 300); under
+   `mixing_mode = 'adaptive'` at `mixing_beta = 0.05`, Elk's `mixadapt` at Elk's
+   `beta0`, it converges. Without the output read, the adaptive mixer fails too (50
+   degrees at 300). Warned about at setup rather than refused, since the input is legal.
+3. **The gain's units.** Elk's `bfsmcmt` is added to the Kohn-Sham field in Hartree with
+   no `cb` (`addbfsm.f90`), so `taufsm = 0.01` is 0.01 Ha/mu_B and **0.02 Ry/mu_B** in
+   this code's `-B . m` convention. The default was 0.01 here, labelled Elk's; it is 0.02
+   now.
+
+**The number, with all three:**
+
+| scheme | gain | iterations | pair angle | per site | lengths | field per atom |
+|---|---|---|---|---|---|---|
+| `atomic fsm` | 0.02 | **46** | **90.002** | 0.001, 0.002 | 1.8680, 1.8681 | 0.0264 Ry |
+| `atomic fsm direction` | 0.02 | **63** | **90.000** | 0.001, 0.000 | 2.136 (free) | 0.0296 Ry |
+| `atomic fsm direction` | 0.04 | 64 | 90.000 | 0.001, 0.001 | 2.136 | 0.0296 Ry |
+| `atomic fsm direction` | 0.01 | not at 300 | 89.997 | 0.81, 0.80 | 2.13 | 0.029 Ry |
+| Elk, `fsmtype -2` | 0.01 Ha | **55** | 90.000 | -- | 1.725 (free) | 0.0097 Ha = 0.019 Ry |
+
+**The feedback field beats the penalty on the cell built to tell them apart**: 0.002
+degrees in 46 iterations against 0.39 in 76. The direction-only variant leaves the length
+free and it goes to 2.136 mu_B where Elk's goes to 1.725; the two codes' spheres are not
+the same volume (Elk's muffin tin is 2.32 bohr) and the holding fields differ by 1.55 in
+the same direction, so the comparison is of the controller and not of the moment.
+
+**It moves one more result, a larger one.** The cell-wide `'fsm'` reads through the same
+line, and `fe-fsm.in` under the `elk` update now converges in **20 iterations** under
+Anderson (27 under the adaptive mixer) against the secant's 74, to the same field within
+2e-5 Ry. `tests/regression/test_magnetic_constraints.py` recorded 288, 1380 and 3380 for
+it, called the damping time chaotic, and explained it as the rule stepping before the
+density had finished responding; it was the rule reading a density the mixer had already
+damped. The cell-wide scheme converges under Anderson where the per-atom one does not,
+which is consistent with a single field on a whole-cell moment perturbing the map less
+than two fields on two strongly coupled moments. That is an explanation that fits, not a
+measurement. **The default update is `elk` now**, being the faster on both cells, and the
+secant stays: on the iron pair it is stuck rather than blind, its gate (a converged inner
+SCF) never reopening once the inner run plateaus at 5e-5 under a held field.
+
+**What this does not establish.**
+
+* **The 3x3 per-atom susceptibility is not needed** and is not written: the diagonal
+  secant's failure on iron is its gate and not its model, and the fixed gain needs no
+  model.
+* **The hydrogen pair has not been rerun with the recipe.** It is the wrong cell for a
+  controller for P85's reason, which stands.
+* **No `PERFORMANCE.md` pair against Elk yet.** Elk's run was four threads and this
+  code's was not pinned; a single-core pair on one Triton node is owed.
+

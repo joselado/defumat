@@ -206,12 +206,15 @@ FADED_FIELD = 1.0e-4
 #:
 #: ``"elk"``
 #:     ``B <- B - tau (m - m_fix)`` after *every* SCF iteration, transcribed
-#:     from ``bfieldfsm.f90``. Correct, and slow for a reason that is worth
-#:     understanding: the field is nudged while the density is still moving, so
-#:     the controller reads a moment that has not finished responding to the
-#:     last nudge and it rings. On ``fe-fsm.in`` the apparent susceptibility it
-#:     sees swings between +2591 and -1252 mu_B/Ry from one iteration to the
-#:     next, and the ringing takes 1380 iterations to damp below 1e-3.
+#:     from ``bfieldfsm.f90``, with the moment read off the iteration's
+#:     **output** density as Elk reads ``mommt``. This entry used to say the
+#:     rule is slow because the field is nudged while the density is still
+#:     moving -- 288, 1380 and 3380 iterations on ``fe-fsm.in`` -- and that was
+#:     a fact about reading the *mixed* density, which lags the output by the
+#:     mixer's damping. Read as Elk reads it, the same case converges in **20**
+#:     iterations against the secant's 74, to the same field within 2e-5 Ry
+#:     (``PLAN.md`` P108). A per-atom scheme wants Elk's mixer as well: see the
+#:     warning in the driver.
 #: ``"secant"``
 #:     Update only when the inner SCF has converged, and step by the measured
 #:     susceptibility rather than by a fixed gain. At converged density ``m(B)``
@@ -219,13 +222,20 @@ FADED_FIELD = 1.0e-4
 #:     -0.020 Ry on that same case -- so a secant on it is a Newton step, and
 #:     the whole run costs a handful of SCF solves instead.
 #:
+#:     It steps only on a converged inner SCF, and that gate is its weakness:
+#:     on the canted iron pair the inner SCF under a held field plateaued at an
+#:     accuracy of 5e-5, the gate never opened again, and the field sat frozen
+#:     from iteration 200 to 800 (P108).
+#:
 #: **The gain was never the problem.** Elk's ``tau`` of 0.02 against a measured
-#: ``1/chi`` of 0.022 is already the right step size; what makes the difference
-#: is *when* the step is taken.
+#: ``1/chi`` of 0.022 is already the right step size; what made the difference
+#: was which density the step read.
 FSM_UPDATES: tuple[str, ...] = ("secant", "elk")
 
-#: The default, because it is the same answer for a tenth of the iterations.
-DEFAULT_FSM_UPDATE = "secant"
+#: The default, because it is Elk's rule and, read off the output density, the
+#: faster of the two on every cell measured: 20 iterations against 74 on
+#: ``fe-fsm.in``, and on the canted iron pair the only one that converges.
+DEFAULT_FSM_UPDATE = "elk"
 
 #: Elk's ``taufsm``, the feedback gain, and the default for **every feedback
 #: scheme** when a run does not set ``lambda``.
@@ -239,6 +249,13 @@ DEFAULT_FSM_UPDATE = "secant"
 #: Bohr magnetons to give a field in Rydbergs, so 10 is not a stiff penalty
 #: there but a 10 Ry step from a 1 mu_B error.
 #:
+#: **Elk's 0.01 is 0.02 here, and the default is 0.02.** Elk's field is in
+#: Hartree and is added to the Kohn-Sham field directly (``addbfsm.f90``, no
+#: ``cb``), so ``taufsm = 0.01`` is 0.01 Ha per mu_B, which in this code's
+#: ``-B . m`` convention in Rydberg is 0.02. This default was 0.01 until P108,
+#: which is half of Elk's gain: on the canted iron pair 0.01 was still moving at
+#: 0.8 degrees per site after 300 iterations where 0.02 converged in 63.
+#:
 #: Measured on the 120-degree hydrogen pair, where the penalty's answer at
 #: ``lambda = 10`` is 0.55 degrees per site in 38 iterations: at ``tau = 0.2``,
 #: twenty times Elk's default, the vector feedback scheme runs 200 iterations
@@ -246,7 +263,7 @@ DEFAULT_FSM_UPDATE = "secant"
 #: 0.26 -- it is not a slow approach, it is the field overshooting into
 #: saturation and staying there. So a feedback run that does not name ``lambda``
 #: gets this, and one that names a penalty-sized value is warned.
-DEFAULT_FSM_GAIN = 0.01
+DEFAULT_FSM_GAIN = 0.02
 
 #: Above this, a feedback gain is warned about as a probable penalty stiffness.
 #: Twenty times Elk's default is the measurement above; the threshold is set an

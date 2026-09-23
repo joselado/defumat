@@ -239,7 +239,17 @@ The script this entry said was already written in P83's scratch was not in the t
 against the current API. `scratchpad/iodine_chi0.py` is the one that does, with the case,
 the direction, the probe pattern and the step list as arguments.
 
-### B. Elk's per-atom feedback field, so a held texture is exact rather than nearly [10, remaining half]
+### B. Elk's per-atom feedback field, so a held texture is exact rather than nearly [10, remaining half]. ✅ CLOSED by P108.
+
+**Closed 2026-09-23.** On the robust magnet this item asked for, two iron moments at 90
+degrees without spin-orbit coupling (`tests/data/qe/fe2-canted-nosoc.in`), `'atomic fsm'`
+holds the pair to **0.002 degrees in 46 iterations** against the penalty's 0.39 per site
+in 76, and Elk's own `fsmtype = -2` holds it in 55 loops. It needed three of Elk's choices
+this code had not made: reading the moment off the **output** density, a history-free
+mixer (`'adaptive'` at Elk's `beta0 = 0.05`, now warned about when absent), and Elk's gain
+in this code's units (0.02 Ry/mu_B, the default now). The same read takes the cell-wide
+`fsm` on `fe-fsm.in` from hundreds or thousands of iterations to **20**. No 3x3
+susceptibility is needed. `PLAN.md` P108. The text below is the state before.
 
 **P85 built it and measured it, and the measurement is negative on this cell. Read
 `PLAN.md` P85 before picking this up.** `'atomic fsm'` and `'atomic fsm direction'` are
