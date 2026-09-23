@@ -165,8 +165,8 @@ def multiplet_cut(eigenvalues: jnp.ndarray, nbnd: int) -> float:
 
     ``min_k (eps[nbnd] - eps[nbnd-1])`` in Ry: the distance from the last
     retained band to the first discarded one, so ``eigenvalues`` has to carry
-    **at least** ``nbnd + 1`` bands on its last axis -- the frozen solve asks
-    for one band more than it keeps for exactly this reason
+    **at least** ``nbnd + 1`` bands on its last axis -- the driver solves once
+    more with one band more than it keeps for exactly this reason
     (:func:`~defumat.ultracell.driver.run_ultracell`).
 
     **Why this is checked rather than assumed.** The ultracell basis is the span

@@ -902,8 +902,8 @@ def run_ultracell(
         nbnd: bands per folded k-point. Pass it: this is the one knob the
             method's accuracy depends on, and the insulating default gives no
             empty bands at all, which leaves the envelope nothing to be built
-            from. The frozen solve asks for ``nbnd + 1`` and keeps ``nbnd``:
-            the extra band is what the gap across the cut
+            from. The basis is an ``nbnd``-band frozen solve, and a second
+            one with ``nbnd + 1`` bands gives the band the gap across the cut
             (:attr:`UltracellResult.multiplet_gap`) is measured against.
         external: an applied potential in Ry, either ``(*box)`` on the ultracell
             grid or a callable taking ``(..., 3)`` **unit-cell** crystal
@@ -1030,18 +1030,10 @@ def run_ultracell(
     k0 = for_spin(k0, int(system.nspin))
     folded = for_spin(folded, int(system.nspin))
 
-    from defumat.workflows.nscf import fixed_density_states
+    from defumat.workflows.nscf import fixed_density_bands, fixed_density_states
 
-    # **One band more is solved than is kept**, because whether the truncation
-    # splits a multiplet is a statement about the gap *across* the cut,
-    # ``eps[nbnd] - eps[nbnd-1]``, and band ``nbnd + 1`` is on the far side of
-    # it. It is measured and then dropped before anything is built from the
-    # states, so no array below changes shape. The count kept is the one
-    # ``fixed_density_states`` would have resolved on its own.
-    kept = _kept_bands(system, pseudos, nbnd)
-    calculation, folded_system, eigenvalues, wavefunctions = fixed_density_states(
-        system, pseudos, jnp.asarray(reference.density), kpoints=folded,
-        nbnd=kept + 1,
+    frozen = dict(
+        kpoints=folded,
         # **The frozen states of a PAW run need the converged ``becsum`` and not
         # only the converged density.** The one-centre potential is a functional
         # of ``becsum`` rather than of ``rho``, so a fixed-density solve handed
@@ -1054,6 +1046,25 @@ def run_ultracell(
         **({} if states_conv_thr is None else {"conv_thr": states_conv_thr}),
         david=david,
     )
+    kept = _kept_bands(system, pseudos, nbnd)
+    calculation, folded_system, eigenvalues, wavefunctions = fixed_density_states(
+        system, pseudos, jnp.asarray(reference.density), nbnd=kept, **frozen,
+    )
+    # **Whether the truncation splits a multiplet is a statement about the gap
+    # across the cut**, ``eps[nbnd] - eps[nbnd-1]``, and band ``nbnd + 1`` is on
+    # the far side of it, so it is read off a second solve that asks for one
+    # band more and whose states are thrown away. The basis itself stays the
+    # ``nbnd``-band solve: taking it from the wider one instead changes the
+    # Davidson subspace, and on the magnetic silicon cell that left 3 of 13
+    # bands unconverged at two k-points after 100 steps and moved the tiled
+    # null from one iteration to seven. The extra band is a diagnostic, so its
+    # own convergence warning is not the basis's and is not repeated.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        _, _, wider = fixed_density_bands(
+            system, pseudos, jnp.asarray(reference.density), nbnd=kept + 1,
+            **frozen,
+        )
 
     cells = ultracell.cells
     nk0 = k0.nk
@@ -1067,17 +1078,15 @@ def run_ultracell(
     npol = int(system.npol)
     nspin_mag = int(system.nspin_mag)
     blocks = 2 if nspin == 2 else 1
-    solved = int(eigenvalues.shape[-1])
-    nbnd = solved - 1
+    nbnd = int(eigenvalues.shape[-1])
     npwx = int(wavefunctions.shape[-1]) // npol
 
-    eigenvalues = np.asarray(eigenvalues).reshape(blocks, nk0, cells, solved)
-    # Measured on all the solved bands, then the extra one is dropped.
-    gap = multiplet_cut(eigenvalues, nbnd)
-    eigenvalues = eigenvalues[..., :nbnd]
+    eigenvalues = np.asarray(eigenvalues).reshape(blocks, nk0, cells, nbnd)
+    gap = multiplet_cut(np.asarray(wider).reshape(blocks, nk0, cells, nbnd + 1), nbnd)
+    del wider
     coefficients = jnp.asarray(wavefunctions).reshape(
-        blocks, nk0, cells, solved, npol * npwx
-    )[..., :nbnd, :]
+        blocks, nk0, cells, nbnd, npol * npwx
+    )
     del wavefunctions
     # **The padding is zeroed here rather than trusted.** Every plane-wave array
     # is padded to a common ``npwx`` and a padded entry points at ``G = 0``, so

@@ -1773,21 +1773,29 @@ class Calculator:
         # The two thresholds are named apart in the signature for that reason.
         forwarded = self._defaults_for(magnetoelectric_tensor, options,
                                        exclude=frozenset({"conv_thr"}))
-        # **The input's mixing reaches the six ground states.** They are
-        # ``run_scf`` calls made inside the workflow with ``scf_options`` and
-        # nothing else, so an input's ``mixing_beta`` never got there and each
-        # ran at the driver's default -- the defect ``OPEN.md`` A10 fixed for
-        # ``get_relax``. On Cr2O3 (``mixing_beta = 0.3`` in the input) the
-        # ground state at ``B_z = 0.005`` converges in 30 iterations through
-        # ``get_scf`` and did not converge in 150 here. Explicit ``scf_options``
-        # from the caller still win.
-        scf_options = dict(forwarded.pop("scf_options", None) or {})
-        for name in SCF_ONLY_OPTIONS - {"max_iterations"}:
-            if name in self.defaults:
-                scf_options.setdefault(name, self.defaults[name])
+        scf_options = self._inner_scf_options(forwarded.pop("scf_options", None))
         return magnetoelectric_tensor(
             self.system, self.pseudos, scf_options=scf_options, **forwarded,
         )
+
+    def _inner_scf_options(self, scf_options) -> dict:
+        """The input's SCF settings, for ground states a workflow runs itself.
+
+        **The input's mixing reaches the six ground states** of the
+        magnetoelectric difference. They are ``run_scf`` calls made inside the
+        workflow with ``scf_options`` and nothing else, so an input's
+        ``mixing_beta`` never got there and each ran at the driver's default --
+        the defect ``OPEN.md`` A10 fixed for ``get_relax``. On Cr2O3
+        (``mixing_beta = 0.3`` in the input) the ground state at
+        ``B_z = 0.005`` converges in 30 iterations through ``get_scf`` and did
+        not converge in 150 there. Explicit ``scf_options`` from the caller
+        still win.
+        """
+        merged = dict(scf_options or {})
+        for name in SCF_ONLY_OPTIONS - {"max_iterations"}:
+            if name in self.defaults:
+                merged.setdefault(name, self.defaults[name])
+        return merged
 
     def get_chern(self, **options) -> float:
         """The Chern number of one plane -- an exact integer on any mesh."""
