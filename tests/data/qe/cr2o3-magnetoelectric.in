@@ -1,0 +1,50 @@
+! **Cr2O3, the canonical linear magnetoelectric**: the cell `PLAN.md` P57 moved to
+! after AlAs's reachable column turned out to be forced to zero by symmetry.
+!
+! Corundum in the rhombohedral setting (`ibrav = 5`, the threefold axis along z),
+! the experimental a = 4.9570 and c = 13.5923 Angstrom giving a_rh = 10.1271 bohr
+! and alpha = 55.096 degrees. Cr at (t, t, t) with t = 0.1525, 0.3475, 0.6525,
+! 0.8475 (the hexagonal z = 0.3475), O at the 6e positions with x = 0.5556. The
+! Cr-O distances come out 1.964 and 2.013 Angstrom against the measured 1.965 and
+! 2.016, and the volume 96.4 Angstrom^3.
+!
+! **The order is + - + - along the axis, and that is what makes it
+! magnetoelectric.** Inversion (t -> 1 - t) pairs 0.1525 with 0.8475 and 0.3475
+! with 0.6525, opposite spins in both pairs, so inversion and time reversal are
+! each broken and their product is kept: a linear tensor is allowed with no base
+! field, and alpha_zz along the moments is one of its two independent entries.
+! The field along z is parallel to the moments, which is the column this code
+! converges (P57's transverse runs plateau).
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 5, celldm(1) = 10.1271, celldm(4) = 0.57237,
+    nat = 10, ntyp = 3,
+    ecutwfc = 48.0, ecutrho = 460.0,
+    noncolin = .true., lspinorb = .true.,
+    nosym = .true., noinv = .true.,
+    starting_magnetization(1) = 0.2, angle1(1) = 0.0,
+    starting_magnetization(2) = 0.2, angle1(2) = 180.0,
+ /
+ &electrons
+    conv_thr = 1.0d-9
+    mixing_beta = 0.3
+ /
+ATOMIC_SPECIES
+ Cr1 51.996 Cr.rel-pbe-spn-rrkjus_psl.1.0.0.UPF
+ Cr2 51.996 Cr.rel-pbe-spn-rrkjus_psl.1.0.0.UPF
+ O   15.999 O.rel-pbe-n-rrkjus_psl.1.0.0.UPF
+ATOMIC_POSITIONS crystal
+ Cr1  0.152500  0.152500  0.152500
+ Cr2  0.347500  0.347500  0.347500
+ Cr1  0.652500  0.652500  0.652500
+ Cr2  0.847500  0.847500  0.847500
+ O    0.555600  0.944400  0.250000
+ O    0.250000  0.555600  0.944400
+ O    0.944400  0.250000  0.555600
+ O    0.444400  0.055600  0.750000
+ O    0.750000  0.444400  0.055600
+ O    0.055600  0.750000  0.444400
+K_POINTS automatic
+ 4 4 4 0 0 0
