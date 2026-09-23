@@ -21582,9 +21582,18 @@ halves of the new one.
   `rho = (0.02, -0.001)`, gradients `(0.01,0,0)` and `(0.002,0,0)`, `sc` went from
   1.64e-4 Ry/bohr^3 to 0 and both derivatives with it, for PBE and PBEsol and both
   signs of `zeta`. `|zeta| = 1` exactly, every point of a saturated magnet, is kept and
-  evaluated as QE keeps it. The four SCF fingerprints below include `fe-mag-1k`, a PBE
-  ultrasoft magnet, and it is bit-identical, so it has no cut point; which committed
-  reference has one is not known, and the two the reviewers named are in Part XVI item 1.
+  evaluated as QE keeps it. `fe-noncolin-pbe-stress`, the reference the reviewers thought
+  likeliest to move (its route builds `(n +- |m|)/2` unclamped), is **bit-identical** to
+  the old code in energy and stress, so the cut does not fire there; `o-paw-spin-pbe` has
+  not been run.
+* **`test_noncollinear_gga.py`'s stress test failed, and it was convergence.** Run for
+  the cut above, it read 1.039122e-3 Ry/bohr^3 against `pw.x`'s 1.03807e-3, 1.05e-6 on a
+  tolerance of 5e-7, and exactly that at `707ac29` and before P109 (`52c637a`) as well.
+  When the test was written it read 1.038232e-3 at 43 iterations; since P107 the SCF
+  meets the input's `conv_thr = 1e-10` in 15, with the energy moved by 3e-10 Ry and the
+  stress still moving in its sixth digit. At `conv_thr = 1e-12` the stress is 1.038330e-3
+  (2.6e-7 from `pw.x`, 17 iterations) and at 1e-14 1.038321e-3, so it plateaus. The test
+  now states its own 1e-12 and the file passes, 3 of 3.
 * **An empty channel under fixed LSDA occupations** (Part XVI item 4). The refusal is
   gone and the empty channel's level is `iweights`' own -1e20 (`iweights.f90:51`, `:60`),
   with its HOMO a branch rather than `eigenvalues[..., occupied - 1]`, which at

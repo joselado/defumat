@@ -67,6 +67,16 @@ ENERGY_RY = 5.0e-8
 STRESS_RY_BOHR3 = 5.0e-7
 PRESSURE_KBAR = 0.1
 
+#: The stress test's own threshold, because the stress converges more slowly
+#: than the ``dr2`` the input's ``conv_thr = 1e-10`` measures. The diagonal read
+#: 1.038232e-3 at 43 iterations when this test was written; P107's mixer reaches
+#: ``dr2 < 1e-10`` in 15, where it reads **1.039122e-3**, 1.05e-6 from ``pw.x``'s
+#: 1.03807e-3 with the energy moved by 3e-10 Ry. At 1e-12 it is 1.038330e-3
+#: (2.6e-7 from ``pw.x``, 17 iterations) and at 1e-14 1.038321e-3, so the
+#: residue is a plateau and the 1e-10 figure was the convergence (``PLAN.md``
+#: P110). The energy and moment test keeps the input's threshold, which it meets.
+STRESS_CONV_THR = 1.0e-12
+
 
 @pytest.fixture(autouse=True)
 def _drop_compiled_code():
@@ -125,7 +135,9 @@ def test_the_noncollinear_gga_stress_matches_pw_x(pseudo_dir):
     second check that costs nothing -- and one the *energy* comparison has no
     counterpart for.
     """
-    calculator = _calculator(pseudo_dir)
+    calculator = Calculator.from_file(
+        CASES / f"{CASE}.in", pseudo_dir, announce=False, conv_thr=STRESS_CONV_THR
+    )
     calculator.get_scf(max_iterations=200)
     stress = calculator.get_stress()
     tensor = np.asarray(stress.tensor)

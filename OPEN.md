@@ -5331,7 +5331,10 @@ is wrong) and the spin-GGA files (the minority potential of a saturated point ch
 `fe-noncolin-pbe-stress` in `test_noncollinear_gga.py` (its noncollinear route builds
 `(n +- |m|)/2` with no clamp, as QE's `compute_rho` does, so it can reach `|zeta| > 1`) and
 `o-paw-spin-pbe` in `test_lsda.py` (a PAW sphere's radial minority channel); a move away
-from `pw.x` would be a defect in the cut. The shared per-dataset setup reaches
+from `pw.x` would be a defect in the cut. **`test_noncollinear_gga.py` has now run**, 3 of
+3 after one change: `fe-noncolin-pbe-stress` is bit-identical to the old code, and its
+stress test was failing already, since P107, on a stress converging more slowly than the
+input's `conv_thr`; it now states its own 1e-12 (`PLAN.md` P110). The shared per-dataset setup reaches
 `test_stress.py`, `test_uspp.py`, `test_paw_noncollinear.py` and the two spiral files,
 and the one-`Calculation` workflows reach `test_conductivity.py`, `test_tddft.py`,
 `test_shg.py`, `test_photocurrent.py` and `test_magnons.py`.
