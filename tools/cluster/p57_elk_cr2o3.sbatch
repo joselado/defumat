@@ -3,7 +3,7 @@
 # (`tests/data/qe/cr2o3-magnetoelectric.in`). The same crystal in pw.x's own
 # ibrav = 5 vectors, so the Cartesian components of the two tensors are the same
 # components, and the same + - + - order along the threefold axis, seeded by a
-# small field per muffin tin as Elk's own NiO-AFM example seeds its order.
+# staggered field per muffin tin (see the atoms block for why +-1.0).
 #
 # **No base field**, because the antiferromagnetic order already breaks time
 # reversal, so the linear tensor is what task 390's central difference measures.
@@ -84,15 +84,20 @@ avec
 sppath
   '$SPECIES'
 
-! Cr in the + - + - order along the axis, seeded by a small field per atom
+! Cr in the + - + - order along the axis, held by a staggered field per atom.
+! +-0.01 (Elk's NiO-AFM value) let the run from atomic densities fall into the
+! ferromagnet, all four moments near (-1.49, -1.49, -1.72): job 20411996. +-1.0
+! is cb x 1.0 = 3.7e-3 Ha, about 0.1 eV, and has the antiferromagnet's own
+! symmetry, so it selects the order without lowering the symmetry the tensor
+! is constrained by. Task 390 keeps it applied (reducebf = 1).
 atoms
   2
   'Cr.in'
   4
-  0.152500  0.152500  0.152500    0.0  0.0  0.01
-  0.347500  0.347500  0.347500    0.0  0.0 -0.01
-  0.652500  0.652500  0.652500    0.0  0.0  0.01
-  0.847500  0.847500  0.847500    0.0  0.0 -0.01
+  0.152500  0.152500  0.152500    0.0  0.0  1.0
+  0.347500  0.347500  0.347500    0.0  0.0 -1.0
+  0.652500  0.652500  0.652500    0.0  0.0  1.0
+  0.847500  0.847500  0.847500    0.0  0.0 -1.0
   'O.in'
   6
   0.555600  0.944400  0.250000
