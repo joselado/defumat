@@ -492,7 +492,20 @@ the re-run gives **-0.41 meV**, because the `q = 0` end is no longer on the meta
 ferromagnetic branch (0.0273 mu_B on an atom seeded at 1.0). The conclusion stands and the
 numbers do not; which of P77–P79's changes moved that minimum is unidentified.
 
-### F. The mixer's metric — and its headroom is now bounded [17]
+### F. The mixer's metric — and its headroom is now bounded [17]. ✅ CLOSED by P107: it was not the metric, it was `becsum` in the fit.
+
+**Closed 2026-09-23.** The item's own first step -- the Anderson coefficients under the
+flat form and under `rho_ddot` -- was run and the angle was large, but for a reason the
+item did not list: the ultrasoft `becsum` block is **98 to 99.99 per cent** of the flat
+residual norm on `fe-mag-1k`, so the fit was to the projector occupations. `pw.x` never
+fits on `becsum`. Fitted on the density and still mixed, `fe-mag-1k` takes **11**
+iterations against `pw.x`'s 12, `fe-noncolin-pbe-stress` **15** against 19,
+`fe-unstable` **23** against 23, and the Co(0001) film under `local-TF` converges in
+**30** where it never did. The flat-against-`1/G^2` difference the item was about is
+real and small, within 1.3 of `pw.x`'s optimum at worst once `becsum` is out. `PLAN.md`
+P107 has the nine-cell table. **Much of F2 below was measured against the polluted
+fit**: P102's plateau and P106's 43 to 20 are both corrected there. The text that
+follows is the state before, kept for its reasoning.
 
 **Phase, and smaller than it looked.** `benchmarks/fe-mag-1k.in` takes **25** SCF iterations
 where `pw.x` takes **12** at the same `conv_thr = 1e-8`, with the two energies agreeing to
@@ -673,6 +686,10 @@ transverse channel.
 
 #### Option 0, and every other option's decisive number depends on it
 
+**Reread by P107.** The split below was taken on an Anderson fit dominated by `becsum`;
+rerun on the corrected fit the longitudinal plateau is gone and the cell takes 15
+iterations. The instrument stands and its reading of *this* cell does not.
+
 **✅ DONE -- P102, and it overturns the bound item F was carrying.** The
 deconfounder is the headline: `fe-noncolin-pbe-stress.in` takes **43** iterations
 at its own `mixing_beta` and its nonmagnetic twin takes **15**, so **28 of the 43
@@ -756,7 +773,10 @@ decide it, because a departure from `pw.x` needs a number rather than an argumen
   accident. Decided by iterations on `fe-noncolin-pbe-stress` at fixed charge `beta`, with
   the ceiling set by Option 0: if the dump says the residual is charge-dominated, this buys
   nothing and should not land.
-- **Elk's `mixadapt`. ✅ DONE, and it is the largest single number this item has.** Per
+- **Elk's `mixadapt`. ✅ DONE, and it is the largest single number this item has.**
+  **Superseded by P107 on this cell**: Anderson now takes 15 iterations at the input's own
+  `mixing_beta = 0.2`, so the 16 below is no longer ahead of it; the adaptive mixer fits
+  nothing and its own count is unchanged. Per
   component of the mixed vector, `beta_j` grows by `beta_0` while the residual keeps its sign
   and is halved toward `beta_0` when it flips, so the step lengthens on its own along a
   direction that is not turning around, which is what a flat manifold looks like from inside.
@@ -984,7 +1004,8 @@ about -- it sat under a table of verified rows and was never checked itself.
   `lorbm` for ultrasoft too, so there is no reference to check it against. It stays
   refused, and the reason is that rather than the primitive.
 
-**What is reachable is the ultrasoft magnon**, where the missing term is the augmentation
+**What was reachable was the ultrasoft magnon, and P93 closed it** (the table's P63 row);
+the paragraph is kept because it names the check that did it. The missing term was the augmentation
 inside the transverse matrix element,
 
     M_G = <psi_{nk,up}| e^{-i(q+G).r} |psi_{m k+q,dn}>

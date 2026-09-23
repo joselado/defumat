@@ -5282,6 +5282,44 @@ from **one** transform of the residual: **12.4 ms** per iteration on a 64³ grid
 which is what preserving the old total bit for bit would need -- costs a second transform,
 24.6 ms, so the fused form is a 1.5% surcharge where the separate one is 100%.
 
+## The Anderson fit without `becsum`, against `pw.x` (P107, 2026-09-23)
+
+**Iterations to each input's own `conv_thr` at its own `mixing_beta`, this code against
+serial `pw.x` 7.5 on this workstation, same inputs, same pseudopotentials.** Not a wall
+clock: a mixer change moves the count and not the cost of an iteration, and the count is
+the number both codes print. Both sides were run the same day, `pw.x` pinned to one core
+(`taskset -c 13`, `OMP_NUM_THREADS=1`); the defumat counts are independent of cores.
+
+| cell | before (fit on `becsum`) | after (fit on the density) | `pw.x` |
+|---|---|---|---|
+| `benchmarks/fe-mag-1k.in` | 25 | **11** | 12 |
+| `tests/data/qe/fe-noncolin-pbe-stress.in` | 43 | **15** | 19 |
+| `benchmarks/fe-unstable.in` | 67 | **23** | 23 |
+| `benchmarks/fe-unstable-nonmagnetic.in` | 21 | **16** | 20 |
+| `benchmarks/si8-us-1k.in` | 10 | 9 | 8 |
+| `benchmarks/ni-ldau-1k.in` | 10 | 8 | 8 |
+| `benchmarks/si8-paw-1k.in` | 8 | 8 | 9 |
+| `tests/data/qe/o-paw-spin.in` | 8 | 8 | 8 |
+| `tests/data/qe/co-slab-forcetheorem-sr.in` (`local-TF`) | not converged at 100 | **30** | 24 |
+
+**What it was.** The Gram matrix Anderson solves was flat over the whole packed vector,
+and on an ultrasoft transition metal `becsum` is 98 per cent and more of that vector's
+squared norm, so the coefficients were chosen for the projector occupations. `pw.x`'s
+`rho_ddot` never reads `becsum`. `PLAN.md` P107 has the offline coefficient analysis and
+the A/B, and this table replaces the 25-against-12 row above as the current figure for
+`fe-mag-1k`: the four iterations the deconfounder bounded were real, the other ten were
+this.
+
+**It settles two backlog items on this page.** `fe-mag-1k`'s 2:1 (`OPEN.md` H9) is 11
+against 12, and the Co(0001) film under `local-TF` -- recorded on 2026-09-01 as
+oscillating around -223.142 Ry and never reaching `conv_thr = 1e-10` -- converges in 30
+against `pw.x`'s 24. **One thing the film now shows that nothing could before**: this
+code's converged total, -223.13882793 Ry, is **1.6e-5 Ry** above `pw.x`'s -223.13884423
+on the same input, at the same total moment. That is a disagreement about the fixed point
+rather than the route to it, it predates this change (the run had never converged, so it
+had never been compared), and it is filed in `OPEN.md` rather than explained here. The
+-223.13876 quoted on 2026-09-01 is not this `pw.x` build's number.
+
 ## What a spinor dielectric response costs against `ph.x` (P83)
 
 **The pair, single core each, on an idle machine, both codes on the system BLAS.**

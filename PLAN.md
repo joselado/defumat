@@ -20532,6 +20532,15 @@ the next thing to measure.
 
 ### P102 -- Which of the four directions a noncollinear SCF is slow in: the deconfounder says magnetism, and the blind spot is real. ✅ DONE (Option 0).
 
+> **Corrected by P107 (2026-09-23), and the correction is to the reading, not to the
+> numbers.** Every figure below was measured with the Anderson fit taking its coefficients
+> from a packed vector 98 per cent of whose flat norm was the ultrasoft `becsum`. With the
+> fit on the density alone the same cell takes **15** iterations, not 43, and the same
+> five-bin split has **no longitudinal plateau** (7.1e-2 at iteration 4, 5.7e-5 at 13). So
+> "28 of 43 iterations are magnetism" and the Stoner reading of the plateau were facts
+> about the fit rather than about this cell. The instrument, the trip test and the rotation
+> and transverse bins stand.
+
 `MAGNETISM-NEXT.md` item F has been open since it was written because the question
 is put one level too low. What decides how fast a damped fixed-point iteration
 converges is not the mixer but the spectrum of the map the mixer damps: a density
@@ -21067,6 +21076,13 @@ energies, add up one of them.**
 
 ### P106 -- A separate step length for the magnetization: 43 iterations to 20 where Option 0 says to use it, and 25 to 36 where it says not to. ✅ DONE.
 
+> **Remeasured by P107 (2026-09-23), and most of the effect was the fit.** On the corrected
+> Anderson fit, same cells and the same control rows (again bit-identical to unset),
+> `beta_mag = 1.0` takes `fe-noncolin-pbe-stress.in` from **15 to 11** where the table
+> below reads 43 to 20, and still costs on `fe-mag-1k.in`, **11 to 14** where it read 25
+> to 31. The knob stays, unset by default; the size of what it buys is P107's table and
+> not this one.
+
 `MAGNETISM-NEXT.md` F2 lists several operators that might fix a slow magnetic
 SCF and its own rule is that **none of them may be chosen without Option 0**,
 because no cell here had ever been told apart on which of four directions it is
@@ -21153,3 +21169,129 @@ otherwise every comparison against QE would carry an unstated term.
   yet.** `mixing_beta_mag` is this code's own knob rather than a `pw.x` variable,
   so the guide has to document it; it reaches `run_scf` and the facade
   (`SHARED_OPTIONS`, `SCF_ONLY_OPTIONS`) and nothing else is wired.
+
+### P107 -- The Anderson fit was choosing its coefficients for `becsum`: fitted on the density alone, `fe-mag-1k` takes 11 iterations against `pw.x`'s 12. ✅ DONE.
+
+`defumat/scf/mixing.py` (`AndersonMixer.mix`'s `exclude`), `defumat/scf/driver.py`
+(`_mix`). `MAGNETISM-NEXT.md` item F asked, as its own first step, for the angle
+between the Anderson coefficients under this code's flat Gram matrix and under
+`pw.x`'s `rho_ddot`, and said a small angle would close the item as measured. The
+angle was large, and the reason was not the one the item suspected.
+
+**The measurement.** One run of `benchmarks/fe-mag-1k.in` with the mixer's inputs
+recorded, and the coefficients recomputed offline over the same eight-deep history
+under three quadratic forms: the flat form on the whole packed vector (what the code
+did), the flat form on the density block alone, and `rho_ddot` itself
+(`scf_mod.f90:718`: `4 pi e2 / G^2` on the charge with `G = 0` dropped,
+`4 pi e2 / (2 pi)^2` on the magnetization, over the smooth sphere only). The number
+read is the extrapolated residual each set of coefficients leaves, **in `pw.x`'s
+metric**, divided by `pw.x`'s own optimum over the same history:
+
+| over 23 iterations | flat, whole vector | flat, density only |
+|---|---|---|
+| median | **5.18** | 1.09 |
+| worst | **32.4** | 1.29 |
+| angle to `rho_ddot`'s coefficients | 3 to 145 degrees | 1.5 to 28 degrees |
+
+**`becsum` is 98.0 to 99.99 per cent of the flat squared residual at every
+iteration.** Its entries are not in the density's units and nothing fixes how much say
+each block of the packed vector gets, so the least-squares fit was a fit to the
+projector occupations with the density carried along. `pw.x` never fits on it:
+`rho_ddot` reads the density, `ns` (`ns_ddot`) and `tau` (`tauk_ddot`) and nothing
+else. For an ultrasoft run QE does not carry `becsum` in `mix_type` at all, and for PAW
+it carries it and fits without it, `paw_ddot` being commented out because it is not
+positive definite (`scf_mod.f90:843`). **So the flat-against-`1/G^2` difference that
+item F was about is real and is the small one**: fitted flat on the density alone the
+coefficients are within 1.3 of `rho_ddot`'s optimum at worst, against 32 with
+`becsum` in.
+
+**The fix is `rho_ddot`'s rule, and it is one slice.** `_mix` passes the `becsum`
+block to `AndersonMixer.mix` as `exclude`: it is left out of the Gram matrix and the
+norms and is still combined with the same coefficients, which is what keeps it
+consistent with the density it belongs to. On an ultrasoft run the mixed `becsum`
+feeds nothing (only PAW's `onecenter` reads it, and a converged run hands back
+`becsum_out`), so there the change is entirely to which coefficients the density gets.
+`driver.FIT_BECSUM = True` restores the old fit, and is kept only so this A/B can be
+re-run.
+
+**The number, iterations to each input's own `conv_thr` at its own `mixing_beta`,
+against serial `pw.x` 7.5 on the same machine and the same input:**
+
+| cell | dataset | fitted on `becsum` | fitted on the density | `pw.x` | energy moved |
+|---|---|---|---|---|---|
+| `benchmarks/fe-mag-1k.in` | US, noncollinear | 25 | **11** | 12 | 9e-10 Ry |
+| `tests/data/qe/fe-noncolin-pbe-stress.in` | US, noncollinear, PBE | 43 | **15** | 19 | 3e-10 Ry |
+| `benchmarks/fe-unstable.in` | US, LSDA | 67 | **23** | 23 | 1.5e-8 Ry |
+| `benchmarks/fe-unstable-nonmagnetic.in` | US | 21 | **16** | 20 | 1.1e-8 Ry |
+| `benchmarks/si8-us-1k.in` | US | 10 | 9 | 8 | < 1e-10 Ry |
+| `benchmarks/ni-ldau-1k.in` | US, DFT+U | 10 | 8 | 8 | 8e-10 Ry |
+| `benchmarks/si8-paw-1k.in` | PAW | 8 | 8 | 9 | 0 |
+| `tests/data/qe/o-paw-spin.in` | PAW, LSDA | 8 | 8 | 8 | 2e-10 Ry |
+| `tests/data/qe/co-slab-forcetheorem-sr.in` | US, LSDA, `local-TF` | > 100 | **30** | 24 | (not converged before) |
+
+**Every ultrasoft cell got faster and neither PAW cell moved, and the PAW rows are not
+evidence that PAW is immune.** The first draft of this entry said a PAW `becsum` does
+not dominate the flat norm; measured, it does -- **43 to 94 per cent** of the squared
+residual on `si8-paw-1k.in` and 4 to 94 per cent on `o-paw-spin.in`, with the flat
+coefficients 2.8 and 6.3 times off `rho_ddot`'s optimum at the median. Those two cells
+simply converge in 8 iterations whichever coefficients they get, in both codes. So what
+the PAW rows show is that the exclusion does no harm where it is not needed, and a slow
+PAW magnet is the cell that would say what it is worth there. **After the fix this code
+is within six iterations of `pw.x` on every row, and at or below it on five of nine.**
+The energies moved at the level of the inputs' `conv_thr` (1.5e-8 Ry on `fe-unstable`
+at `conv_thr = 1e-8` is the largest), and the moments by 2e-4 mu_B on the noncollinear
+cells, which is the same state reached sooner rather than a different one.
+
+**The Co(0001) film is the row that had been carried as a backlog item.**
+`tests/data/qe/co-slab-forcetheorem-sr.in`, three layers, ultrasoft, `nspin = 2`,
+`mixing_mode = 'local-TF'` at `pw.x`'s own `beta = 0.7`: `PERFORMANCE.md` recorded 48
+iterations to within 3.4e-4 Ry of `pw.x` and then an oscillation that never reached
+`conv_thr = 1e-10`. Fitted on `becsum` it is still unconverged at 100 iterations;
+fitted on the density it **converges in 30**, against `pw.x`'s 24 measured the same day
+on the same input, at the same total moment to 5e-6 mu_B. **And it shows a disagreement
+nothing could show before**: the converged total, -223.13882793 Ry, is **1.6e-5 Ry** above
+`pw.x`'s -223.13884423. The route cannot move a fixed point, and this cell had never
+converged here, so the gap predates this phase; it is `OPEN.md` Part XV item 1.
+
+**It rereads three earlier results, and each is corrected in place rather than left
+standing.**
+
+* **P102's "28 of 43 iterations are magnetism".** The deconfounder was right that the
+  excess was not charge, and wrong about what it was. Rerun on the corrected fit, the
+  same five-bin split on `fe-noncolin-pbe-stress.in` has no longitudinal plateau: the
+  longitudinal bin falls from 7.1e-2 at iteration 4 to 9.0e-4 at 10 and 5.7e-5 at 13,
+  where with `becsum` in the fit it sat at 8.7e-4 to 9.1e-4 from iteration 25 to 31.
+  The plateau P102 read as the Stoner direction with nothing conditioning it was the
+  fit. The rotation and transverse bins read as before.
+* **P106's `beta_mag`.** Remeasured on the corrected fit, same cells and the same
+  control rows, which again reproduce the unset run bit for bit:
+
+  | `beta_mag` | `fe-noncolin-pbe-stress` | `fe-mag-1k` |
+  |---|---|---|
+  | unset | 15 | 11 |
+  | 0.6 | 12 | 13 |
+  | 1.0 | 11 | 14 |
+
+  So the knob is worth 15 to 11 where P106 measured 43 to 20, and it still costs where
+  it cost before. It stays, unset by default, and most of what P106 credited to it was
+  this.
+* **F2's `mixadapt` headline**, 16 iterations on `fe-noncolin-pbe-stress.in` against
+  the best Anderson's 24. Anderson now takes 15 at the input's own `mixing_beta = 0.2`,
+  so on this cell the adaptive mixer is no longer ahead. It is per component and fits
+  nothing, so its own count is unaffected.
+
+**What this does not establish.**
+
+* **The flat-against-`rho_ddot` difference is left in**, and it is now bounded by the
+  measurement rather than suspected: 1.09 at the median and 1.29 at worst on
+  `fe-mag-1k`, against 5.2 and 32 for what was removed. Writing `rho_ddot` into the
+  Gram matrix would take one FFT per history entry per iteration and would buy at most
+  that.
+* **`becsum`'s own residual still falls more slowly than the density's** (0.12 at
+  iteration 13 against a charge bin of 3e-5 on `fe-noncolin-pbe-stress.in`), and on an
+  ultrasoft run it no longer matters, since nothing reads the mixed copy. On a PAW
+  magnet it is the one-centre input, and whether it should get a fit of its own is
+  still `OPEN.md` Y2's question.
+* **No README row and no notebook**, because none is owed: this changes how quickly a
+  run converges and not what it converges to. The `PERFORMANCE.md` entry carries the
+  table above.

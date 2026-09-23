@@ -1456,7 +1456,16 @@ P71 was validated against, not the timing.
 
 ---
 
-### H9. `fe-mag-1k` takes 32 SCF iterations where `pw.x` takes 12 **[measured 2026-09-12]**
+### H9. `fe-mag-1k` takes 32 SCF iterations where `pw.x` takes 12 **[closed 2026-09-23 at 11 against 12 -- `PLAN.md` P107]**
+
+**Closed, and the cause was neither the magnetization nor the metric.** The Anderson fit
+was computing its coefficients on the whole packed vector, and the ultrasoft `becsum`
+block is 98 per cent and more of that vector's flat squared norm, so the extrapolation was
+chosen for the projector occupations. `pw.x` never fits on `becsum` (`rho_ddot` reads the
+density, `ns` and `tau`). Fitting on the density and still mixing `becsum` takes this cell
+from 25 to **11** against `pw.x`'s 12, at the same energy to 9e-10 Ry. The original entry
+follows.
+
 
 Surfaced by the new `fast` benchmark set (`performance/sweep.py`), and it is the
 one row in that set whose *total* ratio and *per-iteration* ratio disagree:
@@ -5227,3 +5236,25 @@ the floor itself**: 1.16e-2 meV of residue in the reduction, on a *tetragonal* c
 `pseudo/spinorbit.py`'s own record measured "0.000000" for the same identity on **hexagonal**
 cobalt -- which is this project's "which components the validation cell allows" habit one
 more time, and is where to start.
+
+# Part XV -- from the Anderson fit, 2026-09-23 (P107)
+
+## 1. The Co(0001) film converges 1.6e-5 Ry above `pw.x` **[opened 2026-09-23]**
+
+`tests/data/qe/co-slab-forcetheorem-sr.in` (three layers, `Co.pbe-nd-rrkjus.UPF`,
+`nspin = 2`, Marzari-Vanderbilt at `degauss = 0.005`, `mixing_mode = 'local-TF'`) had
+never converged in this code until P107 took `becsum` out of the Anderson fit, so there
+had never been a converged total to compare. There is now: **-223.13882793 Ry against
+serial `pw.x` 7.5's -223.13884423**, both to `conv_thr = 1e-10`, the total moment 5.26 on
+both. 1.6e-5 Ry is four orders above the pair's convergence and three above what the
+validated collinear ultrasoft cells reach, so it is a property of the fixed point.
+
+**What it is not.** Not the mixer: Anderson's coefficients choose the route, and the
+converged density is where the residual vanishes whatever they are. Not the reference
+drift: the -223.13876 quoted in `PERFORMANCE.md` on 2026-09-01 was not this build's number.
+
+**First measurement, and it is cheap.** The energy terms side by side against `pw.x`'s
+`verbosity = 'high'` breakdown (one-electron, Hartree, XC, Ewald, `-TS`): a slab at
+`degauss = 0.005` is the first place a smearing-entropy convention or a vacuum-region XC
+threshold would show, and the breakdown says which term carries it in one run.
+
