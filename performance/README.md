@@ -19,6 +19,31 @@ python3 performance/run_performance.py --max-seconds 300         # a longer per-
 python3 performance/run_performance.py --from-json               # re-typeset, no re-measuring
 ```
 
+## Comparing against Quantum ESPRESSO yourself
+
+If you have `pw.x` built, this runs the same input through both codes and puts
+the numbers side by side:
+
+```bash
+python3 tools/compare_qe.py benchmarks/si8-1k.in
+```
+
+For the whole picture rather than one cell, the systematic sweep described below
+has two named sets: `fast` is ten cases, one per kind of physics, and `complete`
+is twenty-five, adding a size ladder and a sweep across the physics at fixed
+size.
+
+```bash
+tools/run_benchmark.sh              # Quantum ESPRESSO, defumat on a core, a GPU if present
+tools/run_benchmark.sh complete
+```
+
+Both codes are pinned to one core, and a GPU leg is reported against defumat on
+CPU rather than against Quantum ESPRESSO, since only one side of that comparison
+changed. `tools/cluster/submit_benchmark.py` writes the same sweep as Slurm array
+scripts for a cluster, and `PERFORMANCE.md` is the running log of what the
+comparison has read over time.
+
 ## What it measures, and why that way
 
 The project's metric is **single-core defumat against single-core Quantum
