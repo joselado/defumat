@@ -21645,7 +21645,7 @@ halves of the new one.
 * **M2 and its sibling, setup per species label.** The projector columns and the PAW
   one-centre species are shared across labels naming one dataset, keyed on content as
   P73's augmentation is. That was 7.2 s of the 25.8 s that eight labels cost on
-  `si8-paw-1k.in`; a profile put 19.8 s of the rest in `pseudo/potentials.py`'s three
+  `si8-paw-1k.in`; a profile put 19.7 s of the rest in `pseudo/potentials.py`'s three
   per-label radial tables, now shared the same way. **The eight-label constructor goes
   from 33.78 s to 8.37 s against 8.07 s for one label**, one core (`PERFORMANCE.md`), and
   the SCF on it is bit-identical to the old code. Still per label: the atomic-orbital

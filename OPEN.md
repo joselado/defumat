@@ -1569,7 +1569,7 @@ iteration. `deeq` must come back bit-identical -- assert equality, not a toleran
 written as eight labels the constructor was 33.78 s against 8.02 s for one label, one
 core. The two modules named here were 7.2 s of the 25.8 s difference; `pseudo/potentials.py`'s
 local potential, atomic charge and core charge, each a radial transform per label over
-every dense G-vector, were 19.8 s. All three are shared per dataset now, and the build is
+every dense G-vector, were 19.7 s. All three are shared per dataset now, and the build is
 **8.37 s**, with the SCF bit-identical to the old code. `sizing.py` and
 `pseudo/atomic.py` are still per label, which is Part XVII.
 

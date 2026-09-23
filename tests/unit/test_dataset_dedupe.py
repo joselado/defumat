@@ -235,7 +235,7 @@ def test_two_labels_naming_one_file_share_their_radial_tables(silicon, pseudo_di
 
     Each is a radial transform over every dense G-vector, so a label per site
     paid for it once per label: on ``si8-paw-1k.in`` written as eight labels
-    they were 19.8 s of a 26.7 s constructor. A shared entry is the table a
+    they were 19.7 s of a 26.7 s constructor. A shared entry is the table a
     second transform would have produced, so asserting identity asserts both
     the saving and that nothing moved.
     """

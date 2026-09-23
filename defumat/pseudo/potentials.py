@@ -108,7 +108,7 @@ def _per_dataset(pseudos, field: str, transform) -> tuple:
     magnetic site is the standard way to write a noncollinear texture, so
     that was the per-label cost P73 found in the augmentation charge and
     ``OPEN.md`` M2 in the projectors, in a third place: on
-    ``si8-paw-1k.in`` written as eight labels these three tables were 19.8 s of
+    ``si8-paw-1k.in`` written as eight labels these three tables were 19.7 s of
     a 26.7 s constructor, one core (``PLAN.md`` P110).
 
     The key is exactly what the transforms read (:mod:`defumat.pseudo.

@@ -1333,7 +1333,13 @@ reported as \code{fermi\_energy\_up} / \code{fermi\_energy\_down} beside the
 overall \code{homo} and \code{lumo}, which is what \code{iweights} returns.
 Validated on an oxygen atom at \code{tot\_magnetization = 2}, whose four-up /
 two-down filling is the Hund's-rule ground state: \textbf{4.9e-9 Ry} against
-\code{pw.x}.
+\code{pw.x}. A channel the constraint leaves with no electrons runs, as it does in
+\code{pw.x}: it is filled with nothing and reports \code{iweights}' own $-10^{20}$
+as its level, and the fully polarized hydrogen atom at
+\code{tot\_magnetization = 1} lands on \code{pw.x}'s $-0.94606495$~Ry to every
+printed digit. A $|$\code{tot\_magnetization}$|$ larger than the electron count
+is refused, where \code{pw.x} fills the other channel anyway and stops on the
+wrong charge.
 
 \textbf{Magnetic fields and constraints:} a uniform field over the cell, a field
 inside one atom's sphere (through a \code{LOCAL\_MAGNETIC\_FIELDS} card that

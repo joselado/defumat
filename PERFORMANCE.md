@@ -7386,7 +7386,7 @@ eight-label build went from 968 to 911 MB.
 
 **The eight labels cost 25.8 s more than one, and 0.3 s of that is left.** The
 projector columns and the PAW one-centre tensors, which is what M2 named, were
-7.2 s of it; a profile of the build that remained put **19.8 s of 26.7 s** in three
+7.2 s of it; a profile of the build that remained put **19.7 s of 26.7 s** in three
 per-label radial transforms over every dense G-vector, the local potential, the
 atomic charge and the core charge (`pseudo/potentials.py`), which M2 did not name.
 Each is now built once per dataset, keyed on the arrays it reads, and the SCF on the
