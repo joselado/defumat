@@ -16501,6 +16501,12 @@ Neither is a factor of 6.6. **The held field is not the cause.**
 
       B_defumat [Ry] = 2 cb bfieldc = 1.4612e-05 Ry   for bfieldc = 0.002.
 
+  **The sign is minus, and this line had it right in magnitude only** (corrected
+  2026-09-23, P109). Elk's term is `+cb sigma.B`, so a positive field raises the up
+  channel, while this code's energy is `-B . m`: `B_defumat = -2 cb B_Elk`, which is also
+  what `io/elk.py:ELK_FIELD_TO_RY` now applies to the per-atom `bfcmt`. The magnitude
+  argument below is unaffected.
+
   **The table above ran 0.004 Ry, which is 273.75 times that, and `1/cb` is 273.75 to the
   digit** -- the conversion read the number as an energy in Hartree and applied the factor
   of two to Rydberg alone, dropping the coupling constant entirely. So the "6 per cent" the
@@ -17130,6 +17136,21 @@ where `nbnd = 8` sits and `nbnd = 12` does not. The gap stays on the result
 (`UltracellResult.multiplet_gap`) either way. This is the "a check whose null result cannot
 be told from a pass" trap running the other way: a check that fires on the passes is a check
 that gets ignored, and it would have fired on the tutorial notebook's own headline run.
+
+**Every `multiplet_gap` figure in the two paragraphs above measured the wrong pair of
+bands** (found 2026-09-23, P109). It was `eps[nbnd-1] - eps[nbnd-2]`, the spacing of the
+last two *kept* bands, because band `nbnd + 1` was never solved; whether a cut splits a
+multiplet is `eps[nbnd] - eps[nbnd-1]`. The two disagree in both directions: at silicon's
+`Gamma` (`-0.394, 0.499 x3, 0.672 x3, 0.758` Ry) `nbnd = 5` splits `Gamma_15` and read
+0.17 Ry, and `nbnd = 4` cuts in a 0.17 Ry gap and read zero. So the 3.6e-13 eV at
+`nbnd = 8` and the 6e-15, 5e-12 and 4.7e-11 Ry at 32, 48 and 80 say that the last two kept
+bands were degenerate, which is what a complete multiplet at the top of the kept set also
+looks like, and **"cut a multiplet just as exactly" was never measured**. The gap is now
+read across the cut, from a second frozen solve with one band more whose states are
+discarded; the basis stays the `nbnd`-band solve, because taking it from the wider solve
+changed the Davidson subspace and moved the tiled null from one iteration to seven. The
+ladder, `DEGENERATE_CUT = 1e-8` and the `nbnd <= 2 nocc` gate have to be measured again
+under the new definition before either is trusted (`OPEN.md` Part XVI).
 
 **The test that carries that table had a bug of its own, and it is the "a check whose null
 result cannot be told from a pass" trap wearing the opposite mask.** The regression
@@ -21467,4 +21488,76 @@ SCF) never reopening once the inner run plateaus at 5e-5 under a held field.
   controller for P85's reason, which stands.
 * **No `PERFORMANCE.md` pair against Elk yet.** Elk's run was four threads and this
   code's was not pinned; a single-core pair on one Triton node is owed.
+
+### P109 -- A review of the magnetism and the ultracell code: fifteen defects, each with a test that fails on the old code. ✅ DONE for the fifteen; the low-severity three and the re-measurements are in `OPEN.md` Part XVI.
+
+Two review workflows on 2026-09-23, read-only: five finders over the magnetism paths
+(collinear, noncollinear and spin-orbit, fields and constraints, spirals, and the quantities
+built on a magnetic ground state) and four over P88's ultracell, each finding handed to an
+adversarial verifier. Nineteen distinct defects survived and none was refuted; fifteen are
+high or medium and were fixed in `697d0af` and `d36ce8e`, with eight new host-side test
+files, each checked to fail at `697d0af^` -- in the assertions for six, and at import for
+`test_anisotropy_quantization_axis.py` and `test_ultracell_guards.py`, which use names
+that did not exist. The gate after both is 2961 passed, 64 skipped, 0 failed.
+
+**What the numbers were, one line each.** The magnitudes are host-side unless stated, since
+no SCF was run by the review:
+
+* `forces/torque.py:rotated_density` took `|m|` of a four-channel density: a synthetic
+  antiferromagnet with `m_z = +-0.5` rotated onto `x` had `int m_x = 32` where the signed
+  projection the states are built from gives 0. It now reuses `_collinear_axis`.
+* `projwfc/angular_momentum.py` averaged a collinear `<S>` as an axial vector over the
+  spatial group: bcc Fe (`fe-bcc-sfac.in`, 48 operations) gave `S = (0, 0, 1.1) -> 0`.
+  At `nspin = 2` `S_z` is now a site scalar permuted by `irt`, and a collinear `<L>` is
+  completed to zero by time reversal.
+* `workflows/anisotropy.py:_with_quantization_axis` gave every species the same angles:
+  `fe2-afm-soc.in`'s `[[0.5,0,0],[-0.5,0,0]]` became `[[0.5,0,0],[0.5,0,0]]`. It is now a
+  rigid rotation of the texture, `STARTING_MOMENTS` rows included. Every committed
+  anisotropy cell has one magnetic species, which is why nothing saw it.
+* `xc/functional.py:_spin_correlation_energy` clamped `zeta` at `1 - 1e-6` with a
+  `jnp.where`, so the tangent was zero over every saturated point: PBE at
+  `rho = (0.02, 1e-12)`, `|grad rho_up| = 0.01`, gave `v1c_down = -6.29e-3` Ry against
+  +0.532 from `pbec_spin`'s expression at the clamped `zeta`. The energy was unchanged.
+  The value is still clamped and the derivative is QE's, exactly. What it is worth in an
+  SCF is not measured.
+* `constrained_magnetization = 'total direction'` at `nspin = 2` ran with a zero
+  potential and a constant 0.0685 Ry penalty; `tot_magnetization` at `nspin = 1` or with
+  `noncolin` was stored and read by nothing. Both are refused, as `pw.x` refuses them
+  (`add_bfield.f90:177-180`, `input.f90:778-782`).
+* A uniform `B_field` was not in the noncollinear symmetry filter (bcc Fe along `z` with
+  `B_field(1) = 0.01` kept 16 operations, `C_4z` among them), and `LOCAL_MAGNETIC_FIELDS`
+  was not in the collinear one (two H atoms with fields `+-0.05` kept 16, eight of them
+  swapping the atoms). Both now label the sites. The uniform field is a **deliberate
+  departure from `pw.x`**, whose `setup.f90:596` passes the moments alone; it follows
+  Elk's `findsym.f90:109-113`. No committed reference moves, since every `B_field` input in
+  `tests/data/qe` has the field along the moment and `nosym`. `System.with_b_field`
+  rebuilds the k-set, and the magnetoelectric difference now uses it.
+* An `r_m` left unset for a species was 0: a one-point sphere under `'qe'` weights and NaN
+  under `'smooth'`. It now takes `make_pointlists.f90:150-154`'s default.
+* `io/elk.py` converted `bfcmt` by 2 alone: 273.75 times too large and of the wrong sign.
+  It is `-2 cb` now, and P86's line gained the sign. Nothing consumed it.
+* `workflows/spiral.py:heisenberg_exchange` fitted one `J` per vector typed: on a synthetic
+  fcc scan with `q` along `b_3`, `[1,0,0]` returned 0 and `[0,0,1]` returned `3 J1`. Each
+  representative is now expanded into its star, and four members of the star each return
+  `J1` to 1e-10. Notebook 12's chain is unchanged, since the star of `[0,0,1]` there is
+  `+-c` alone.
+* The ultracell's `multiplet_cut` measured the last two kept bands (P88, corrected there).
+* The ultracell never checked that the reference was converged on the folded grid:
+  silicon at `4 2 2` run at `(2,1,1) x (1,1,1)` gave an energy per cell **0.635 Ry** off,
+  with nothing applied, against 1.1e-11 Ry at the matching `kgrid = (2,2,2)`. It is refused
+  now, and `get_ultracell`'s default `kgrid` is the reference's grid over `supercell`. One
+  committed instance: notebook 44's four-cell run, whose screening moves from **6.79 to
+  7.19** on the right grid.
+* Tetrahedra and `'from_input'` occupations reached the ultracell's smeared branch at
+  `degauss = 0` and returned NaN; they are refused.
+
+**The trap this phase adds is its own first ultracell fix.** Measuring the gap across the
+cut by solving `nbnd + 1` bands and keeping `nbnd` of them looked free, since the extra
+band is dropped before anything is built. It is not: the Davidson subspace changes, and on
+the magnetic silicon cell 3 of 13 bands stayed unconverged at two k-points after 100
+steps, the constrained-moment null took **7 iterations instead of 1**, and the spin
+density wave's two cell moments differed by 0.4 per cent where the test allows 0.1. The
+unit tests could not see it, because the eigenvalues they feed are exact; only the slow
+regression file did. The basis is the `nbnd`-band solve again and the extra band comes from
+a second solve, which costs a second frozen diagonalisation per run, unmeasured.
 

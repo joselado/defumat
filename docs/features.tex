@@ -1342,6 +1342,21 @@ inside one atom's sphere (through a \code{LOCAL\_MAGNETIC\_FIELDS} card that
 of the reported total} --- QE prints \code{etcon} and never adds it, and Elk
 excludes its external field's energy by the same convention.
 
+\textbf{A field lowers the symmetry group, and here that includes a uniform
+one.} A uniform \code{B\_field} is an axial vector on every atom, so in a
+noncollinear run it enters the magnetic symmetry filter beside the moments, as
+Elk's \code{findsym} does with \code{bfieldc0}; \code{pw.x} hands its filter
+the moments alone, so a \code{pw.x} run with a field off the moment's axis keeps
+the larger group. On bcc Fe along $z$ with \code{B\_field(1) = 0.01} this drops
+the $C_{4z}$ that maps $B_x$ onto $B_y$, which is what had been averaging the
+canting away. A \code{LOCAL\_MAGNETIC\_FIELDS} card labels its atoms in the
+same way at \code{nspin = 2}, so a staggered field on two otherwise equivalent
+atoms keeps only the operations that do not swap them. To change the field of
+an existing system, use \code{system.with\_b\_field(...)}, which rebuilds the
+k-set with the new group. An \code{r\_m} left unset for a species, or set to
+zero, takes \code{make\_pointlists.f90}'s default radius rather than a sphere of
+radius zero.
+
 \emph{A seed field has no natural size, so the symmetry filter has no scale in
 it.} An infinitesimal field is the standard way to start a texture: small enough
 not to bias the energy, large enough to pick the state. What the magnetic filter
@@ -1406,6 +1421,18 @@ off the axis and QE's zeroed transverse factors on it, plus its literal
 $10^{-14}$ escape field along $x$ --- without which the moment sits at an
 unstable stationary point of its own penalty and never turns
 (\code{add\_bfield.f90:184-192}).
+
+\textbf{Also refused, as \code{pw.x} refuses them:} \code{'total direction'}
+at \code{nspin = 2}, since the total moment of a collinear run has one component
+and its polar angle is $0$ or $180^\circ$, meaning that the penalty is a
+constant with no gradient (\code{add\_bfield.f90:177-180}); and
+\code{tot\_magnetization} at any \code{nspin} other than 2, which is
+\code{pw.x}'s own ``tot\_magnetization requires nspin=2''
+(\code{input.f90:778-782}). Both used to run: the first reported a constant
+constraint energy over an unconstrained state, and the second was stored and
+read by nothing, so an unpolarized or noncollinear run converged with a moment
+different from the one asked for. A noncollinear run holds a total moment with
+\code{constrained\_magnetization = 'total'} instead.
 \end{refuses}
 
 \textbf{Restarting an SCF from the middle} (\code{checkpoint\_dir},
@@ -4157,14 +4184,20 @@ L\rangle \parallel \langle S\rangle$ (Hund's third rule). Driving the moment
 along $z$, $x$ and $y$ gives $|\langle L\rangle| = 0.0364767$ in all three,
 with a spread of 7.3e-11 over the three cubic axes, with nothing imposing that a magnitude is a scalar.
 
-\textbf{A symmetry-reduced k-set works}, and what makes it work is that
-$\langle L\rangle$ and $\langle S\rangle$ are averaged over the group as
-\textbf{axial} vectors --- each operation carrying $\det(R)$ and the
+\textbf{A symmetry-reduced k-set works}, and what makes it work is that, in
+a noncollinear run, $\langle L\rangle$ and $\langle S\rangle$ are averaged over
+the group as \textbf{axial} vectors --- each operation carrying $\det(R)$ and the
 time-reversal sign beside the rotation, the site charge carrying only the atom
 permutation. The distinction is not a refinement: the \emph{polar} average of an
 axial vector is exactly zero on any centrosymmetric crystal, so writing the
 obvious one would return a clean and plausible nothing rather than a wrong
-number.
+number. \textbf{A collinear run is different}, because there the spin is not
+coupled to the lattice: at \code{nspin = 2} the site $\langle S_z\rangle$ is a
+scalar carried from atom to atom by the operations, and averaging it as an axial
+vector under the spatial group gave exactly zero on bcc Fe's 48 operations.
+$\langle L\rangle$ of a collinear run is completed to zero by time reversal,
+since each channel has a real Hamiltonian and $\langle L\rangle_{-\mathbf k} =
+-\langle L\rangle_{\mathbf k}$.
 
 \begin{refuses}
 \textbf{Refuses.} A \textbf{fully-relativistic ultrasoft or
@@ -4481,7 +4514,11 @@ permanently and so has no coupling to switch on. A direction other than the
 system's own \code{angle1}/\code{angle2} needs \code{nosym}: a magnetic
 noncollinear run reduces its k-grid with the \emph{magnetic} symmetry group,
 which depends on where the moment points, so two directions would otherwise be
-sampled on two different wedges. \code{soc\_scale} takes $0$ or $1$
+sampled on two different wedges. A four-component source density that is
+genuinely noncollinear is refused by name, as it already was on the path that
+builds the states: the torque lays the moment down along one axis with its
+sign, and an antiferromagnet keeps its antiparallel regions only because of
+that sign. \code{soc\_scale} takes $0$ or $1$
 and nothing in between: the coupling-free end of the overlap is spin-independent,
 so the anisotropy vanishes identically there whatever else it is, but a blend of
 it with the true overlap partway is not the overlap of any set of projectors and
@@ -5314,8 +5351,13 @@ print(scan.integrated)   # the same curve, from dE/dq along the path
 \end{pycode}
 
 \code{heisenberg\_exchange} fits
-$E(\mathbf q) - E(0) = m^2 \sum_{\mathbf R} J(\mathbf R)\,[1 - \cos(\mathbf q\cdot\mathbf R)]$
-over a set of lattice shells, which is how a spiral scan becomes a spin model.
+$E(\mathbf q) - E(0) = m^2 \sum_{s} J_s \sum_{\mathbf R \in s}[1 - \cos(\mathbf q\cdot\mathbf R)]$,
+one $J_s$ per neighbour shell $s$, which is how a spiral scan becomes a spin
+model. Each shell is named by one representative lattice vector, and the inner
+sum runs over its whole star under the lattice point group (or the
+\code{point\_group} passed in), each $(\mathbf R, -\mathbf R)$ bond counted
+once, so the fitted $J_s$ does not depend on which member of the star was
+typed.
 \code{compute\_spiral\_gradient} gives $dE/d\mathbf q$ on its own.
 
 \textbf{$E(\mathbf q)$ two ways.} With \code{gradients=True} the scan also takes
@@ -5365,7 +5407,10 @@ route reads $|\mathbf q|$ on the host to size its interpolation and running past
 the end of the table is a NaN rather than a clamp, so a tracer cannot go through
 it at all; and spiral relaxation under a magnetic field, whose energy is outside
 the reported total, so the state is stationary for a different functional than
-the one being differentiated.
+the one being differentiated. \code{heisenberg\_exchange} refuses a shell
+vector that is not a nonzero integer lattice vector in crystal coordinates, and
+two representatives of the same star, whose two $J$ would be one parameter and
+leave the fit singular.
 
 \textbf{Warns rather than refuses}: $dE/d\mathbf q$ on an augmented dataset is
 evaluated in \emph{one} pass over the whole $k$ axis whatever \code{k\_batch}
@@ -6084,6 +6129,22 @@ and a cell's own moment sits at the average of the phases inside it. The
 \emph{differences} are the pitch.
 
 \begin{refuses}
+A reference whose k-set is not the unshifted, unreduced
+$\code{supercell} \times \code{kgrid}$ Monkhorst-Pack grid. The tiled unit-cell
+density is a fixed point of the loop only when the unit cell integrated the zone
+over exactly the points the ultracell folds onto, so on any other set the loop
+converges to a different sampling and reports the difference as a modulation:
+0.635~Ry per cell with nothing applied, on silicon converged at \code{4 2 2} and
+folded onto \code{2 1 1}. The check is on the points, so an explicit list that
+is that grid passes, and a symmetry-reduced wedge is refused by name. Left out,
+\code{kgrid} in \code{get\_ultracell} is the reference's grid divided by
+\code{supercell}, which is the one value that passes. Occupations other than
+\code{'fixed'} and \code{'smearing'}: a tetrahedron weight interpolates a band
+across a mesh, and an ultracell state at one $\mathbf k_0$ is a mixture across
+the $N$ folded points, so it is not a band of any mesh (Elk's
+\code{occupyulr} has only a smeared branch), and \code{'from\_input'} has no
+band left to hold its prescribed occupation. Both used to reach the smeared
+branch at \code{degauss = 0} and return NaN.
 Gradient-corrected functionals: the gradient of the
 ultracell density carries the envelope's own gradient, which a per-cell
 evaluation drops (Elk takes that approximation silently; it is refused here).

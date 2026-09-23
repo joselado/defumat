@@ -42,6 +42,11 @@ session's work -- four of `test_magnons.py`'s eight tests fail, all four downstr
 ground state that stops four orders short of its own `conv_thr`, and the same input gives
 the identical energy and accuracy at the commit before that session started.
 
+**Part XVI** is from the review of the magnetism and ultracell code, **2026-09-23**
+(`PLAN.md` P109): fifteen defects fixed the same day, and what is carried here is the three
+low-severity findings, the re-measurements the fixes left owed, and six smaller points
+the reviewers raised about code next to the fixes.
+
 **Part III** is the sweep of **2026-09-12** -- four read-only agents over the package
 looking for **speed and memory** rather than for wrong answers, 23 entries, ordered by
 ease times impact. **Nothing in it was measured and nothing in it is a defect**: each
@@ -5257,4 +5262,82 @@ drift: the -223.13876 quoted in `PERFORMANCE.md` on 2026-09-01 was not this buil
 `verbosity = 'high'` breakdown (one-electron, Hartree, XC, Ewald, `-TS`): a slab at
 `degauss = 0.005` is the first place a smearing-entropy convention or a vacuum-region XC
 threshold would show, and the breakdown says which term carries it in one run.
+
+# Part XVI -- from the magnetism and ultracell review, 2026-09-23 (P109)
+
+The fifteen high and medium defects are closed and listed with their numbers in
+`PLAN.md` P109. What is open is below, in the order a wrong answer costs.
+
+## 1. The slow tests next to the fixes have not run **[opened 2026-09-23]**
+
+Of the fifteen regression files that exercise the changed code, only `test_ultracell.py`
+ran, and its two failures are what `d36ce8e` fixed (both pass now). The other fourteen did
+not: `test_ultracell_augmented`, `test_ultracell_stm`, `test_ultracell_sts`,
+`test_anisotropy`, `test_relaxed_anisotropy`, `test_magnetic_constraints`,
+`test_noncollinear_magnetism`, `test_lsda`, `test_magnetoelectric`,
+`test_spinor_hubbard_symmetry`, `test_noncollinear_gga`, `test_paw_noncollinear`,
+`test_elk_seed`, `test_stress`. About two hours through `tools/run_regression.sh`. The
+ones most likely to move are the anisotropy pair (the rigid rotation must leave the
+single-species Co numbers unchanged to round-off, and a move beyond it means the rotation
+is wrong) and the spin-GGA files (the minority potential of a saturated point changed).
+
+## 2. The ultracell's multiplet ladder was measured under the wrong definition **[opened 2026-09-23]**
+
+`DEGENERATE_CUT = 1e-8`, the `nbnd <= 2 nocc` gate and the P88 ladder (3.6e-13 eV at
+`nbnd = 8`, 6e-15, 5e-12 and 4.7e-11 Ry at 32, 48, 80) were all read off the spacing of
+the last two kept bands (`PLAN.md` P88, the correction paragraph). Re-run the ladder on
+`si-ultracell.in` with the gap across the cut, and decide the threshold and the gate from
+that. The second frozen solve that now supplies band `nbnd + 1` costs a whole extra
+diagonalisation per run; time it on the same ladder and put the pair in `PERFORMANCE.md`.
+`require_the_folded_grid`'s `uniform` branch cannot fire either, because `is_reduced`'s
+weight-spread fallback catches uneven weights first and raises the wedge message;
+harmless, but it is a guard with no case that reaches it.
+
+## 3. The spin-GGA fix is not sized in an SCF **[opened 2026-09-23]**
+
+The minority `v1c` of a saturated point moved from -6.29e-3 to +0.532 Ry pointwise and the
+energy did not move. What that is worth in the empty minority eigenvalues and in the forces
+of a saturated PBE magnet (the H atom of `h-atom-lsda.in` run with PBE is the cheapest cell
+that saturates) has not been measured.
+
+## 4. Three low-severity findings, not fixed **[opened 2026-09-23]**
+
+* **Spin-GGA correlation is evaluated where `|zeta| > 1`.** QE's `gcc_spin` CYCLEs with
+  `sc = v1c = v2c = 0` there (`qe_drivers_gga.f90:1086-1092`); here the value is clamped
+  and kept. At `rho = (0.02, -0.001)`, gradients `(0.01,0,0)` and `(0.002,0,0)`, this code
+  gives `sc = 1.64e-4` Ry/bohr^3 where `pw.x` gives 0. It reaches a point with a slightly
+  negative minority channel, after mixing or from an augmentation charge. The fix is a mask
+  on `|raw zeta| <= 1` in `_spin_correlation_energy`, beside the tangent P109 gated on the
+  same test.
+* **Fixed LSDA occupations refuse an empty channel that `pw.x` runs.**
+  `scf/occupations.py:128` raises when `NINT(count) < 1`; `iweights_only` has no lower
+  bound and leaves that channel's level at `-1e20`. The fully polarized H atom with
+  `occupations = 'fixed'`, `tot_magnetization = 1` is the case.
+* **Per-site `<L>`/`<S>` of a nonmagnetic spin-orbit run on a time-reversal wedge**, from
+  reading only: `_symmetrise_axial` averages over the spatial group with no time-reversal
+  sign, so a noncentrosymmetric crystal whose site group admits an axial vector can report
+  a nonzero moment where time reversal makes it exactly zero. P109 completed the collinear
+  `<L>` to zero; the `nspin = 4`, `domag = false` branch is untouched.
+
+## 5. Smaller points next to the fixes **[opened 2026-09-23]**
+
+* The ultracell's `magnetic_field=` callable enters no symmetry filter. Harmless while the
+  ultracell refuses everything but `nosym`; the same defect class if that refusal is lifted.
+* `System.is_magnetic` ignores a uniform `B_field` when every moment is zero, so such a
+  run never reaches the magnetic filter P109 extended. This is `pw.x`'s `domag`, which is
+  also set from the moments, so it is a decision rather than a defect; write it down or
+  change it.
+* `anisotropy.py:_reference_axis` has two sign conventions: without a card it is species
+  one's angles whatever the sign of its `starting_magnetization`, with one it is the first
+  nonzero row, sign included. A card whose first row is negative and a nonmagnetic species
+  one (an oxide with O first) are the two cases to test.
+* `System.with_spin` carries `tot_magnetization` into `nspin = 1` or 4 unchanged, where the
+  builder now refuses it. Nothing was changed there, since continuation tests may rely on
+  the promotion.
+* `tools/cluster/p57_elk_me.sbatch` and `p57_elk_cr2o3.sbatch` quote `+2 cb`; the sign is
+  `-2 cb` (`PLAN.md` P86, corrected), so a comparison of Elk's task-390 tensor against
+  `alpha` carries a factor of -1.
+* `forces/torque.py`'s docstring still says the traceable and host rotations are compared
+  only in `tests/regression/test_anisotropy.py`; `tests/unit/test_torque_signed_moment.py`
+  now compares them pointwise too.
 
