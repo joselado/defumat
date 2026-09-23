@@ -5320,6 +5320,31 @@ rather than the route to it, it predates this change (the run had never converge
 had never been compared), and it is filed in `OPEN.md` rather than explained here. The
 -223.13876 quoted on 2026-09-01 is not this `pw.x` build's number.
 
+## The relaxed anisotropy against `pw.x`, the same two runs (P87, 2026-09-23)
+
+**Two self-consistent spin-orbit runs, one per cardinal axis, on the same core of this
+workstation one after the other, idle machine.** `tests/data/qe/co-tetragonal-relaxed-mae-{x,z}.in`
+for `pw.x` 7.5 (serial build, `taskset -c 2`, `OMP_NUM_THREADS=1`), and
+`Calculator.get_relaxed_anisotropy(directions="xz", conv_thr=1e-12)` on the base input for
+defumat under the same mask. Both sides start from atomic densities and stop at the same
+threshold, so the same work is timed: a converged ground state per direction, and a
+subtraction.
+
+| | `pw.x` 7.5 | defumat | ratio |
+|---|---|---|---|
+| wall, both directions | **45.7 s** (24.5 + 21.2; QE's own report 24.52 + 21.19) | **33.6 s, 35.7 s** (the two compiled calls; the first, 42.5 s, compiles) | **0.76x** |
+| iterations, x + z | 37 + 32 = 69 | 19 + 21 = 40 | |
+| per iteration | 0.66 s | 0.87 s | 1.3x |
+| E(x) - E(z) | 0.4474 meV | 0.447302 meV | |
+
+**defumat is the faster of the two on this pair, and only because it takes fewer
+iterations**: per iteration it is 1.3 times `pw.x`, inside the band the rest of this file
+records, and the 69 against 40 is P107's Anderson fit (P87 measured 25 and 43 before it).
+Two samples on the compiled side, which is enough for a change expected to move the number
+and not for a claim that two equal numbers are equal. An earlier reading of the same call at
+76.5 and 76.6 s was taken beside a notebook execution and a test file and is discarded, which
+is this file's standing rule about timings next to other work.
+
 ## What a spinor dielectric response costs against `ph.x` (P83)
 
 **The pair, single core each, on an idle machine, both codes on the system BLAS.**

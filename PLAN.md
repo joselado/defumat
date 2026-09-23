@@ -209,9 +209,10 @@ because that is what decides whether it is a session or a phase.
   differences *total* energies of one self-consistent run per direction and therefore
   hands nothing over, so it has no handoff to refuse for and reaches PAW and DFT+U:
   0.447 meV on tetragonal cobalt against the force theorem's **free** energy 0.552, with
-  an identity control that plateaus at **0.011 meV**. What is left of the entry is
-  `average_pp`, which belongs to the *frozen* route, and the fact that neither route has
-  ever been compared with another code.
+  an identity control that plateaus at **0.011 meV**. **The relaxed route now has its
+  `pw.x` pair** (2026-09-23): the same two totals to `pw.x`'s printed eight decimals and
+  0.447302 against 0.4474 meV. What is left of the entry is `average_pp`, which belongs
+  to the *frozen* route, and an external number for the frozen route itself.
 - **The dynamical matrix of an ultrasoft or PAW *metal*** (P39: `addusdynmat`, the
   density's cross derivative, needs both tangents in one `jvp` where P28's weight split
   puts them in two).
@@ -16648,10 +16649,26 @@ told from silence is this project's most-repeated trap.
 
 **What is outstanding.**
 
-* **The `pw.x` pair.** The like-for-like reference is two `pw.x` 7.4.1 SCF runs at
-  `angle1`/`angle2` with `nosym`, differenced by hand -- there is no QE routine, which is
-  what the README's note 19 records. It has not been run, so the 0.447 meV is checked
-  against *this* code's other route and against an identity, not against another code.
+* ~~**The `pw.x` pair.**~~ **Run 2026-09-23, and it agrees with the total energies and
+  not only their difference.** Two serial `pw.x` 7.5 runs on this workstation at
+  `conv_thr = 1e-12`, the committed `co-tetragonal-relaxed-mae-x.in` and `-z.in` (the
+  base input with the direction set and the threshold P87 used), outputs committed as
+  `reference.out.co-tetragonal-relaxed-mae-x` and `-z`:
+
+  | | defumat | `pw.x` 7.5 | difference |
+  |---|---|---|---|
+  | E(x) | -74.4057695967 Ry | -74.40576959 Ry | < 1e-8 Ry (the printed digits) |
+  | E(z) | -74.4058024728 Ry | -74.40580247 Ry | < 1e-8 Ry |
+  | **E(x) - E(z)** | **0.447302 meV** | **0.4474 meV** | < 2e-4 meV, the printed digits |
+  | moment, x / z | 1.785 / 1.784 mu_B | 1.79 / 1.78 | every printed digit |
+  | iterations, x / z | 19 / 21 | 37 / 32 | |
+
+  So the relaxed anisotropy is now checked against another code, at the precision
+  `pw.x` prints, which is **1.4e-4 meV** per total and is below the route's own 0.011
+  meV floor by two orders: the floor is this code's convergence of the identity, not a
+  disagreement with `pw.x`. The iteration counts were 25 and 43 when P87 took them;
+  P107's Anderson fix is what moved them. `tests/regression/test_relaxed_anisotropy.py`
+  asserts the pair.
 * **The PAW cell was run and diverged, and both causes were mine.** It is committed
   because it is the right cell -- a fully-relativistic PAW dataset for a magnetic element,
   the regime the frozen route refuses outright -- and the two mistakes are worth more than

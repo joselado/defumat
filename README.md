@@ -348,7 +348,10 @@ Where the tick is qualified:
   (tasks 28/29) is the full tick and is the same method, down to rotating the
   lattice rather than the moment — which is a neater way of avoiding the
   quantization-axis trap than rebuilding `angle1`/`angle2`, and is the obvious
-  thing to try if that rebuild ever becomes expensive.
+  thing to try if that rebuild ever becomes expensive. **Done that way against
+  `pw.x` 7.5 on tetragonal cobalt**: the two total energies agree to the eight
+  decimals `pw.x` prints and the anisotropy is 0.447302 meV here against 0.4474
+  (`PLAN.md` P87).
 - ¹¹ Elk's `mae.f90` (tasks 28/29) computes a magnetic anisotropy energy, but by
   a **different method**: it re-converges a full ground state for each direction
   of the moment, rotating the lattice rather than the moment. It is not the

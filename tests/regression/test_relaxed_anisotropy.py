@@ -275,3 +275,40 @@ def test_the_unconverged_warning_actually_fires():
         aniso.run_relaxed_direction = saved
 
     assert not result.converged
+
+
+@pytest.mark.slow
+def test_the_relaxed_anisotropy_agrees_with_pw_x():
+    """The external number the relaxed route did not have until 2026-09-23.
+
+    Two serial ``pw.x`` 7.5 runs of the same cell, one per cardinal axis, at the
+    ``conv_thr = 1e-12`` P87's number was taken at, committed as
+    ``co-tetragonal-relaxed-mae-{x,z}.in`` with their outputs beside them. The
+    two cardinal axes of a tetragonal crystal are stationary directions of the
+    anisotropy energy, so ``pw.x`` converges each one where it was put with
+    nothing holding it -- which is what makes a hand-differenced pair the
+    like-for-like reference (there is no QE routine for it, README note 19).
+
+    Measured: both totals agree to the eight decimals ``pw.x`` prints
+    (-74.4057695967 against -74.40576959, -74.4058024728 against -74.40580247),
+    and the anisotropy is 0.447302 meV against 0.4474. The tolerances are the
+    printed precision and nothing looser: 1e-8 Ry per total, rounded, and twice
+    that on the difference.
+    """
+    from defumat.io import read_qe_output
+
+    references = [read_qe_output(Path(f"tests/data/qe/reference.out.co-tetragonal-relaxed-mae-{d}"))
+                  for d in "xz"]
+    calculator = _calculator("co-tetragonal-relaxed-mae.in")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        result = calculator.get_relaxed_anisotropy(
+            directions=XZ, conv_thr=1.0e-12, max_iterations=400)
+    assert result.converged
+    for ours, theirs in zip(result.total_energies, references):
+        assert ours == pytest.approx(theirs.total_energy, abs=1.0e-8)
+    difference = result.difference(0, 1)
+    reference = references[0].total_energy - references[1].total_energy
+    assert difference == pytest.approx(reference, abs=2.0e-8)
+    # The easy axis is c on both sides, which the sign carries.
+    assert difference > 0.0
