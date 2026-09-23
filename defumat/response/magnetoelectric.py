@@ -60,7 +60,6 @@ carries.
 
 from __future__ import annotations
 
-import dataclasses
 from dataclasses import dataclass
 
 import numpy as np
@@ -197,14 +196,11 @@ def magnetoelectric_tensor(
         for sign in (+1.0, -1.0):
             field = base.copy()
             field[axis] += sign * 0.5 * delta
-            # ``b_field`` is a *static* field of the module, so ``tree_at``
-            # cannot reach it -- it walks leaves and a static field is not one.
-            # ``dataclasses.replace`` is the idiom for a frozen module's static
-            # configuration, and it shares every array with the original, so the
-            # six systems here cost one cell between them.
-            moved = dataclasses.replace(
-                system, b_field=tuple(float(v) for v in field)
-            )
+            # ``b_field`` is a *static* field of the module and it enters the
+            # magnetic symmetry filter, so the k-set is rebuilt with the field's
+            # group (:meth:`System.with_b_field`); under ``nosym`` that is the
+            # same full grid at both ends of the difference.
+            moved = system.with_b_field(field)
             options = dict(scf_options)
             if chain and previous is not None:
                 options["starting_from"] = previous

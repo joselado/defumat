@@ -121,8 +121,13 @@ import numpy as np
 from defumat.basis.builder import build_basis
 from defumat.scf.mixing import MIXERS, get_mixer
 from defumat.xc.functional import resolve_functional
-from defumat.scf.occupations import fixed_occupations, smeared_occupations
-from defumat.system.kpoints import for_spin
+from defumat.scf.driver import default_nbnd
+from defumat.scf.occupations import (
+    fixed_occupations,
+    smeared_occupations,
+    spin_electron_counts,
+)
+from defumat.system.kpoints import for_spin, is_reduced
 from defumat.ultracell.energy import (
     total_of,
     ultracell_energy,
@@ -173,10 +178,21 @@ from defumat.units import E2, FPI, RY_TO_EV
 #: *common* high in the empty manifold (``nbnd = 32``, ``48`` and ``80`` all
 #: have one) and harmless there, so the warning it raises is gated on the cut
 #: lying among the low empty bands as well -- see :func:`run_ultracell`.
+#:
+#: **Every figure above was measured under the old definition** of the cut,
+#: ``eps[nbnd-1] - eps[nbnd-2]``, the spacing of the last two *retained* bands,
+#: before the frozen solve carried the band beyond the cut. They are therefore
+#: statements about a multiplet one band below the truncation and not across
+#: it, and the threshold has not been re-measured against the gap
+#: :func:`~defumat.ultracell.hamiltonian.multiplet_cut` now returns.
 DEGENERATE_CUT = 1.0e-8
 
+#: The ``occupations`` values :func:`_occupy` has a branch for. ``None`` is
+#: read as ``'fixed'``, as it is everywhere else.
+ULTRACELL_OCCUPATIONS = ("fixed", "smearing")
+
 __all__ = ["UltracellResult", "run_ultracell", "require_an_ultracell_regime",
-           "DEGENERATE_CUT"]
+           "require_the_folded_grid", "DEGENERATE_CUT", "ULTRACELL_OCCUPATIONS"]
 
 
 @dataclasses.dataclass
@@ -234,8 +250,10 @@ class UltracellResult:
     #: the ultracell box, **charge and magnetization together** -- the number
     #: compared against ``conv_thr``.
     accuracy: float
-    #: The tightest gap the ``nbnd`` truncation opened over the folded k-set,
-    #: in Ry. Small means the basis cut a degenerate multiplet and is arbitrary
+    #: The tightest gap **across** the ``nbnd`` cut over the folded k-set,
+    #: ``min_k (eps[nbnd] - eps[nbnd-1])`` in Ry, from the frozen solve's one
+    #: extra band (:func:`~defumat.ultracell.hamiltonian.multiplet_cut`).
+    #: Small means the basis cut a degenerate multiplet and is arbitrary
     #: there -- which matters where the cut is among the low empty bands the
     #: response is carried by, and was measured not to matter thirty bands up.
     multiplet_gap: float
@@ -420,6 +438,32 @@ def require_an_ultracell_regime(system, pseudos, basis) -> None:
         resolve_functional([p.functional for p in pseudos], system.input_dft),
         bool(getattr(system, "nosource", False)),
     )
+    # **Two occupation schemes reach this loop, and anything else would be
+    # read as the smeared one.** ``_occupy`` has a fixed branch and a smeared
+    # branch and nothing else, and the switch between them is "not fixed", so a
+    # tetrahedron run used to arrive in the smeared branch with ``degauss = 0``
+    # -- ``x = (ef - e) / 0`` -- and came back NaN in every occupation.
+    occupations = getattr(system, "occupations", None)
+    if occupations is not None and str(occupations) not in ULTRACELL_OCCUPATIONS:
+        if str(occupations).startswith("tetrahedra"):
+            raise NotImplementedError(
+                f"the ultracell refuses occupations = {occupations!r}: a "
+                f"tetrahedron weight interpolates each band linearly between "
+                f"the corners of a k-mesh, and the ultracell's N nbnd states at "
+                f"one k0 are mixtures across the N folded points Q, so they are "
+                f"not bands of any mesh the tetrahedra could be drawn on. Elk's "
+                f"occupyulr has only a smeared branch for the same reason. "
+                f"Converge the unit cell with occupations = 'smearing' (or "
+                f"'fixed' for an insulator) and run the ultracell on that"
+            )
+        raise NotImplementedError(
+            f"the ultracell refuses occupations = {occupations!r}: only 'fixed' "
+            f"and 'smearing' reach an implementation here. 'from_input' fixes "
+            f"the occupation of each unit-cell band, and an ultracell state is "
+            f"a mixture of bands across the N folded points Q, so there is no "
+            f"band left to hold a prescribed occupation. Use 'fixed' or "
+            f"'smearing'"
+        )
     if getattr(system, "hubbard", None) is not None:
         raise NotImplementedError(
             "the ultracell refuses DFT+U: the occupation matrix is per atom and "
@@ -488,6 +532,93 @@ def require_an_ultracell_regime(system, pseudos, basis) -> None:
             "own dual. Set ecutrho to 8 to 12 times ecutwfc, which runs",
             stacklevel=2,
         )
+
+
+def require_the_folded_grid(system, supercell, kgrid) -> None:
+    """Refuse a reference whose k-set is not the one the ultracell folds onto.
+
+    The frozen states are computed on ``k0 + Q``, which is the unshifted,
+    unreduced ``supercell * kgrid`` Monkhorst-Pack grid of the unit cell
+    (:func:`~defumat.ultracell.grid.folded_kpoints`), and the tiled reference
+    density is a fixed point of the loop **only** if the unit-cell SCF
+    integrated the zone over those same points with those same weights. On any
+    other set the tiled state is not stationary, the loop converges to a
+    different Brillouin-zone sampling, and the difference comes back as a
+    modulation with nothing applied: silicon converged on ``4 2 2`` and run at
+    ``supercell = (2, 1, 1)``, ``kgrid = (1, 1, 1)`` -- a folded ``2 1 1`` --
+    gave an energy per cell 0.635 Ry off the reference.
+
+    The check is on the **points**, not on the input's ``K_POINTS`` line, so an
+    explicit list that happens to be that grid passes and one that is not is
+    refused whatever it was called: every point, taken modulo a reciprocal
+    lattice vector, must sit on the folded grid, each grid point exactly once,
+    at uniform weight. A set recorded as a symmetry-reduced wedge is refused
+    before that, since its weights stand for points it does not hold.
+    """
+    folded = tuple(int(n) * int(m) for n, m in zip(supercell, kgrid))
+    kpoints = system.kpoints
+    grid = getattr(kpoints, "grid", None)
+    shift = getattr(kpoints, "shift", None)
+    described = (
+        f"K_POINTS automatic {grid[0]} {grid[1]} {grid[2]} "
+        f"{shift[0]} {shift[1]} {shift[2]}"
+        if grid is not None and shift is not None
+        else f"an explicit list of {int(kpoints.nk)} points"
+    )
+    wanted = (f"K_POINTS automatic {folded[0]} {folded[1]} {folded[2]} 0 0 0 "
+              f"with nosym")
+    if is_reduced(kpoints):
+        raise ValueError(
+            f"the ultracell needs the reference converged on the whole "
+            f"supercell * kgrid = {folded} grid, and this one ({described}) is "
+            f"a symmetry-reduced wedge: its weights stand for points the folded "
+            f"set k0 + Q holds explicitly, so the tiled density is not the fixed "
+            f"point the loop reproduces. Converge the unit cell on {wanted}"
+        )
+    crystal = np.asarray(kpoints.crystal(system.cell), dtype=float).reshape(-1, 3)
+    weights = np.asarray(kpoints.weights, dtype=float).reshape(-1)
+    scaled = crystal * np.asarray(folded, dtype=float)
+    indices = np.rint(scaled)
+    on_grid = bool(np.all(np.abs(scaled - indices) < 1.0e-6))
+    distinct = {
+        tuple(int(i) % n for i, n in zip(row, folded)) for row in indices
+    } if on_grid else set()
+    uniform = bool(np.ptp(weights) <= 1.0e-10 * float(np.max(np.abs(weights))))
+    count = int(np.prod(folded))
+    if not (on_grid and uniform and len(crystal) == count and len(distinct) == count):
+        raise ValueError(
+            f"the ultracell's frozen states live on the unshifted supercell * "
+            f"kgrid = {folded} Monkhorst-Pack grid of the unit cell ({count} "
+            f"points), and the reference was converged on {described}, which is "
+            f"not that set. The tiled density is an exact fixed point of the "
+            f"loop only when both integrate the zone over the same points at "
+            f"the same weights; on any other set the loop converges to a "
+            f"different Brillouin-zone sampling and reports the difference as "
+            f"a modulation -- 0.635 Ry per cell with nothing applied, on silicon "
+            f"converged at 4 2 2 and folded onto 2 1 1. Converge the unit cell "
+            f"on {wanted}, or choose kgrid so that supercell * kgrid is the "
+            f"grid it was converged on"
+        )
+
+
+def _kept_bands(system, pseudos, nbnd) -> int:
+    """How many bands per folded k-point the ultracell keeps.
+
+    ``fixed_density_states``'s own resolution, ``nbnd or system.nbnd or
+    default_nbnd(...)``, written out here because the frozen solve is asked for
+    one band more than this and so cannot be left to resolve it.
+    """
+    if nbnd:
+        return int(nbnd)
+    if getattr(system, "nbnd", None):
+        return int(system.nbnd)
+    nelec = float(sum(pseudos[int(t)].z_valence for t in system.structure.types))
+    nelup, neldw = spin_electron_counts(nelec, system.tot_magnetization)
+    return int(default_nbnd(
+        nelec, system.occupations,
+        *((nelup, neldw) if int(system.nspin) == 2 else (None, None)),
+        noncolin=bool(system.noncolin),
+    ))
 
 
 def _box_indices(ultracell: Ultracell, calculation, nk0: int) -> np.ndarray:
@@ -771,7 +902,9 @@ def run_ultracell(
         nbnd: bands per folded k-point. Pass it: this is the one knob the
             method's accuracy depends on, and the insulating default gives no
             empty bands at all, which leaves the envelope nothing to be built
-            from.
+            from. The frozen solve asks for ``nbnd + 1`` and keeps ``nbnd``:
+            the extra band is what the gap across the cut
+            (:attr:`UltracellResult.multiplet_gap`) is measured against.
         external: an applied potential in Ry, either ``(*box)`` on the ultracell
             grid or a callable taking ``(..., 3)`` **unit-cell** crystal
             coordinates -- which run over ``[0, n_i)`` across the ultracell, so
@@ -886,6 +1019,10 @@ def run_ultracell(
         )
     ultracell = Ultracell.build(supercell, basis.dense.grid, precision=system.kpoints.precision)
     k0, folded = folded_kpoints(ultracell, kgrid, cell, precision=system.kpoints.precision)
+    # After the two constructors, so a malformed supercell or kgrid is refused
+    # by their own messages; before the frozen solve, which is the expensive
+    # step a mismatched reference should not pay for.
+    require_the_folded_grid(system, supercell, kgrid)
 
     # A caller-built k-set is a ``for_spin`` boundary: every constructor applies
     # the unpolarized degeneracy factor unconditionally, and a k-set that
@@ -895,8 +1032,16 @@ def run_ultracell(
 
     from defumat.workflows.nscf import fixed_density_states
 
+    # **One band more is solved than is kept**, because whether the truncation
+    # splits a multiplet is a statement about the gap *across* the cut,
+    # ``eps[nbnd] - eps[nbnd-1]``, and band ``nbnd + 1`` is on the far side of
+    # it. It is measured and then dropped before anything is built from the
+    # states, so no array below changes shape. The count kept is the one
+    # ``fixed_density_states`` would have resolved on its own.
+    kept = _kept_bands(system, pseudos, nbnd)
     calculation, folded_system, eigenvalues, wavefunctions = fixed_density_states(
-        system, pseudos, jnp.asarray(reference.density), kpoints=folded, nbnd=nbnd,
+        system, pseudos, jnp.asarray(reference.density), kpoints=folded,
+        nbnd=kept + 1,
         # **The frozen states of a PAW run need the converged ``becsum`` and not
         # only the converged density.** The one-centre potential is a functional
         # of ``becsum`` rather than of ``rho``, so a fixed-density solve handed
@@ -922,13 +1067,17 @@ def run_ultracell(
     npol = int(system.npol)
     nspin_mag = int(system.nspin_mag)
     blocks = 2 if nspin == 2 else 1
-    nbnd = int(eigenvalues.shape[-1])
+    solved = int(eigenvalues.shape[-1])
+    nbnd = solved - 1
     npwx = int(wavefunctions.shape[-1]) // npol
 
-    eigenvalues = np.asarray(eigenvalues).reshape(blocks, nk0, cells, nbnd)
+    eigenvalues = np.asarray(eigenvalues).reshape(blocks, nk0, cells, solved)
+    # Measured on all the solved bands, then the extra one is dropped.
+    gap = multiplet_cut(eigenvalues, nbnd)
+    eigenvalues = eigenvalues[..., :nbnd]
     coefficients = jnp.asarray(wavefunctions).reshape(
-        blocks, nk0, cells, nbnd, npol * npwx
-    )
+        blocks, nk0, cells, solved, npol * npwx
+    )[..., :nbnd, :]
     del wavefunctions
     # **The padding is zeroed here rather than trusted.** Every plane-wave array
     # is padded to a common ``npwx`` and a padded entry points at ``G = 0``, so
@@ -963,8 +1112,10 @@ def run_ultracell(
     # that group -- no more empty bands than occupied ones; the gap itself
     # is on the result either way
     # (:attr:`UltracellResult.multiplet_gap`) and the non-convergence warning
-    # names it, so a high cut is reported without being cried over.
-    gap = multiplet_cut(jnp.asarray(eigenvalues))
+    # names it, so a high cut is reported without being cried over. (Those
+    # gaps are the retained-band spacing the check used to read; see
+    # :data:`DEGENERATE_CUT`.)
+    # ``gap`` was measured above, across the cut, before the extra band went.
     # A spinor band holds **one** electron where a scalar band holds two, so
     # the count of bands the electrons need is ``nelec`` rather than half of it
     # -- the same factor ``for_spin`` takes out of the k-point weights, arriving

@@ -526,9 +526,9 @@ def run_force_theorem(
     becsum = _checked_becsum(becsum, pseudos)
     _refuse_system(system, pseudos, require_spin_orbit, becsum)
     if direction is None:
-        direction = direction_from_angles(system.angle1[0], system.angle2[0])
+        direction = _reference_axis(system)
     else:
-        own = np.asarray(direction_from_angles(system.angle1[0], system.angle2[0]))
+        own = np.asarray(_reference_axis(system))
         wanted = np.asarray(direction, dtype=float)
         wanted = wanted / np.sqrt(np.sum(wanted**2))
         if not system.nosym and np.sum(np.abs(own - wanted)) > DIRECTION_TOL:
@@ -805,8 +805,83 @@ def angles_from_direction(direction) -> tuple:
     )
 
 
+def _reference_axis(system: System) -> tuple:
+    """The direction a system's magnetization is said to point along.
+
+    Species one's ``angle1``/``angle2``, which is the axis QE's
+    ``nc_magnetization_from_lsda`` rotates ``m_z`` onto for the whole cell --
+    unless a ``STARTING_MOMENTS`` card is present, in which case those angles
+    are overridden per atom (:func:`~defumat.system.builder.local_moments`) and
+    say nothing about where the moments are; the axis is then the first atom's
+    nonzero row. Every default direction in this module is this vector, so a
+    call that names no direction is exactly the identity rotation.
+    """
+    if len(system.starting_moments):
+        rows = np.asarray(system.starting_moments, dtype=float).reshape(-1, 3)
+        norms = np.sqrt(np.sum(rows**2, axis=1))
+        nonzero = np.flatnonzero(norms > 1.0e-12)
+        if len(nonzero):
+            row = rows[nonzero[0]] / norms[nonzero[0]]
+            return tuple(float(x) for x in row)
+    return direction_from_angles(system.angle1[0], system.angle2[0])
+
+
+def _rotation_taking(source, target) -> np.ndarray:
+    """The proper rotation that takes the unit vector ``source`` onto ``target``.
+
+    The one about ``source x target`` (Rodrigues), which is the smallest; for
+    ``target = -source`` there is no preferred axis and the rotation by ``pi``
+    about the coordinate axis least aligned with ``source`` is taken, so the
+    choice is deterministic. Host-side: the axis of a noncollinear run is
+    static input, not something a gradient passes through.
+    """
+    a = np.asarray(source, dtype=float)
+    b = np.asarray(target, dtype=float)
+    a = a / np.sqrt(np.sum(a**2))
+    b = b / np.sqrt(np.sum(b**2))
+    axis = np.cross(a, b)
+    sine = float(np.sqrt(np.sum(axis**2)))
+    cosine = float(a @ b)
+    if sine < 1.0e-12:
+        if cosine > 0.0:
+            return np.eye(3)
+        helper = np.zeros(3)
+        helper[int(np.argmin(np.abs(a)))] = 1.0
+        axis = np.cross(a, helper)
+        axis = axis / np.sqrt(np.sum(axis**2))
+        return 2.0 * np.outer(axis, axis) - np.eye(3)
+    axis = axis / sine
+    cross = np.array([
+        [0.0, -axis[2], axis[1]],
+        [axis[2], 0.0, -axis[0]],
+        [-axis[1], axis[0], 0.0],
+    ])
+    return np.eye(3) + sine * cross + (1.0 - cosine) * (cross @ cross)
+
+
+def _clean(vector) -> np.ndarray:
+    """Round-off below 1e-14 set to zero, so that a moment rotated into a
+    plane lies in it exactly and ``fixed_quantization_axis`` sees parallel
+    rows as parallel."""
+    vector = np.asarray(vector, dtype=float)
+    return np.where(np.abs(vector) < 1.0e-14, 0.0, vector)
+
+
 def _with_quantization_axis(system: System, direction) -> System:
-    """The same run with its ``angle1``/``angle2`` pointing along ``direction``.
+    """The same run with its magnetic texture turned rigidly onto ``direction``.
+
+    **A rigid rotation of the whole texture, not one pair of angles for every
+    species.** The rotation is the one taking :func:`_reference_axis` onto
+    ``direction``, and it is applied to every species' ``angle1``/``angle2``
+    and to every row of a ``STARTING_MOMENTS`` card, so the angles between
+    moments are kept: an antiferromagnet stays antiparallel and a canted cell
+    keeps its cant. Until 2026-09-23 this wrote ``(angle1,) * ntyp``, which
+    turned ``fe2-afm-soc.in``'s ``(+0.5, 0, 0), (-0.5, 0, 0)`` into
+    ``(0.5, 0, 0), (0.5, 0, 0)`` -- a ferromagnet -- on every rotation, and
+    left a ``STARTING_MOMENTS`` card untouched, where it overrides the angles
+    and so kept both the seed and the fixed axis on the old direction. This is
+    the operation :func:`~defumat.scf.continuation.nc_magnetization_from_lsda`
+    performs on the density, which maps signed ``m_z`` onto ``+/- direction``.
 
     **Not cosmetic, and this is the trap of the whole phase.** A
     gradient-corrected noncollinear run does not evaluate the functional on
@@ -848,17 +923,16 @@ def _with_quantization_axis(system: System, direction) -> System:
     and therefore not invariant under it -- a response on a reduced k-set, with
     nothing symmetrising it.
     """
-    angle1, angle2 = angles_from_direction(direction)
-    ntyp = len(system.starting_magnetization)
-    wanted = ((angle1,) * ntyp, (angle2,) * ntyp)
-    if (system.angle1, system.angle2) == wanted:
+    own = np.asarray(_reference_axis(system), dtype=float)
+    wanted = np.asarray(direction, dtype=float)
+    wanted = wanted / np.sqrt(np.sum(wanted**2))
+    if np.sum(np.abs(own - wanted)) <= DIRECTION_TOL:
         # Already pointing there -- which is the ordinary case, the direction
-        # having defaulted to the system's own angles. Returned untouched so
+        # having defaulted to the system's own axis. Returned untouched so
         # that a single-direction run never rebuilds its k-points at all.
         return system
     if not system.nosym:
-        own = tuple(np.round(np.asarray(
-            direction_from_angles(system.angle1[0], system.angle2[0])), 6))
+        own = tuple(np.round(own, 6))
         raise ValueError(
             f"turning the quantization axis away from the system's own "
             f"angle1/angle2 ({own}) needs nosym = .true.: a magnetic "
@@ -869,7 +943,34 @@ def _with_quantization_axis(system: System, direction) -> System:
             "with respect to a direction the wedge is not symmetric in. QE's "
             "own force-theorem example sets nosym for this reason"
         )
-    return system.with_spin(angle1=wanted[0], angle2=wanted[1])
+    rotation = _rotation_taking(own, wanted)
+    # Every species, magnetic or not: a species with no moment has angles that
+    # do nothing, and rotating them too keeps the rule one line long. The
+    # magnitudes, signs included, stay on ``starting_magnetization``.
+    count = max(len(system.angle1), len(system.angle2),
+                len(system.starting_magnetization))
+    theta = list(system.angle1) + [0.0] * (count - len(system.angle1))
+    phi = list(system.angle2) + [0.0] * (count - len(system.angle2))
+    angle1, angle2 = [], []
+    for t in range(count):
+        turned = _clean(rotation @ np.asarray(direction_from_angles(theta[t], phi[t])))
+        # A species along the reference axis, or against it, lands on
+        # ``+/- wanted`` itself rather than on its rotated image, so that a
+        # collinear cell -- every committed Co reference -- gets exactly the
+        # angles ``angles_from_direction(wanted)`` it got before the rotation
+        # was written, and not a copy of them one Rodrigues product away.
+        if np.sqrt(np.sum(np.cross(turned, wanted) ** 2)) < 1.0e-12:
+            turned = np.sign(float(turned @ wanted)) * wanted
+        first, second = angles_from_direction(turned)
+        angle1.append(first)
+        angle2.append(second)
+    if len(system.starting_moments):
+        rows = np.asarray(system.starting_moments, dtype=float).reshape(-1, 3)
+        # ``with_moments`` first, ``with_spin`` second: each rebuilds the
+        # k-points from the state it is handed, and the card overrides the
+        # angles in ``local_moments``, so the second rebuild sees both.
+        system = system.with_moments(_clean(rows @ rotation.T))
+    return system.with_spin(angle1=tuple(angle1), angle2=tuple(angle2))
 
 
 def frozen_expectation(
@@ -917,7 +1018,7 @@ def frozen_expectation(
 
     _refuse_system(system, pseudos)
     if direction is None:
-        direction = direction_from_angles(system.angle1[0], system.angle2[0])
+        direction = _reference_axis(system)
     direction = np.asarray(direction, dtype=float)
     direction = tuple(float(x) for x in direction / np.sqrt(np.sum(direction**2)))
     system = _with_quantization_axis(system, direction).with_soc_scale(0.0)
@@ -1298,7 +1399,7 @@ def run_relaxed_direction(
     _refuse_relaxed(system, pseudos, require_spin_orbit)
 
     if direction is None:
-        direction = direction_from_angles(system.angle1[0], system.angle2[0])
+        direction = _reference_axis(system)
     direction = np.asarray(direction, dtype=float)
     direction = tuple(float(x) for x in direction / np.sqrt(np.sum(direction**2)))
     # The same rebuild the force theorem needs, and for the same reason: a GGA

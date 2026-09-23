@@ -50,7 +50,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from defumat.xc.functional import safe_modulus
+from defumat.scf.continuation import _axis, _collinear_axis
 
 __all__ = ["band_energy_at_angle", "rotated_density", "torque_at_angle"]
 
@@ -59,6 +59,10 @@ def rotated_density(density, direction):
     """:func:`~defumat.scf.continuation.nc_magnetization_from_lsda`, traceable.
 
     The same rotation written in ``jnp`` so that ``direction`` may be a tracer.
+    ``density`` may not be: a four-channel one has its axis read on the host by
+    the same ``_collinear_axis`` the original uses, so the two lay the moment
+    down with the same sign at every point.
+
     The original takes its direction through ``np.asarray`` and a ``float()``
     norm, which is right for a workflow argument and cannot be differentiated
     through; it stays as it is rather than being loosened, because it is on
@@ -74,16 +78,25 @@ def rotated_density(density, direction):
         scalar = density[0] - density[1]
     elif channels == 4:
         charge = density[0]
-        # Projected onto the direction it already has, which is what makes this
-        # idempotent on a state that is already noncollinear.
         moment = density[1:4]
-        # **Per point, not per cell.** The guard here used to be a single scalar
-        # norm over the whole grid, which is nonzero as soon as *any* point
-        # carries a moment -- so it protected no individual point, and the
-        # per-point ``**0.5`` behind it kept its infinite derivative at every
-        # vacuum point and at every point ``sym_rho`` averaged to a bit-exact
-        # zero. ``safe_modulus`` masks the sum of squares itself.
-        scalar = safe_modulus(moment)
+        # **Signed, along the axis the states were rotated off.** The states
+        # this energy is evaluated in come from ``nc_magnetization_from_lsda``,
+        # which writes ``m . n`` with ``n`` from ``_collinear_axis`` -- the
+        # dominant eigenvector of ``int m_a m_b``, which an antiferromagnet
+        # does not zero. The potential has to be built from the same rotation.
+        # This branch used to take ``|m|`` per point instead (through
+        # ``safe_modulus``), which agrees only where every point is parallel to
+        # the axis: an antiferromagnet came out ferromagnetic, so the potential
+        # was not the one the states had been diagonalised in. The
+        # axis is read on the host from the *density*, which is a constant of
+        # the derivative -- only ``direction`` is traced -- and a genuinely
+        # noncollinear density is refused there by name, as it is on the path
+        # that built the states. A projection is linear in ``m``, so no
+        # modulus and no guard at a vanishing moment are needed.
+        along = _collinear_axis(density)
+        scalar = jnp.sum(
+            _axis(along or (0.0, 0.0, 1.0), moment.ndim) * moment, axis=0
+        )
     else:
         raise ValueError(
             f"rotated_density wants a magnetic density, got {channels} channels"

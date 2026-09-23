@@ -40,10 +40,20 @@ carries the version):
 * ``ias`` runs species-outer, atom-inner (``init0.f90:78-91``).
 * ``rhoir`` is raw: not multiplied by ``cfunir``, not by ``omega``, in
   e/bohr^3.
-* **Elk is Hartree and defumat is Rydberg**, and only the *potentials* and
-  fields carry the factor of two -- ``vclmt``, ``vxcmt``, ``vsmt``, ``efermi``,
-  ``dlefe``. Densities are e/bohr^3 in both and take no factor at all. The
-  conversion happens here, at the ``io`` boundary, as the project rule requires.
+* **Elk is Hartree and defumat is Rydberg**, and only the *potentials* carry
+  the factor of two -- ``vclmt``, ``vxcmt``, ``vsmt``, ``efermi``, ``dlefe``.
+  Densities are e/bohr^3 in both and take no factor at all. The conversion
+  happens here, at the ``io`` boundary, as the project rule requires.
+* **An external field is not a potential and does not take the factor of two
+  alone.** ``bfcmt`` and ``bfieldc`` are fields in Elk's units, coupled as
+  ``cb sigma.B`` with ``cb = gfacte/(4 solsc)`` (``genbs.f90:15``, and
+  ``energy.f90:77`` for the Zeeman energy), where this code's field is a
+  Rydberg energy conjugate to the magnetization with energy ``-B.m``. So
+  ``B_defumat = -2 cb B_Elk`` (:data:`ELK_FIELD_TO_RY`): the magnitude is
+  ``PLAN.md`` P86's ``2 cb``, and the sign is the one
+  :meth:`defumat.scf.fields.MagneticField.feedback` records against Elk's
+  ``+(g_e/4c) sigma.B``. Reading a field as a Hartree energy is 273.75 times
+  too large, which is P86's defect.
 * ``tshift`` defaults to ``.true.``, which moves the origin onto the inversion
   centre. ``STATE.OUT`` and ``GEOMETRY.OUT`` are in the shifted frame and
   ``elk.in``'s ``atoms`` block is not, which is why the positions are read from
@@ -63,9 +73,32 @@ import numpy as np
 
 __all__ = ["ElkState", "read_elk_state", "read_elk_geometry", "ElkGeometry"]
 
-#: Hartree -> Rydberg. Potentials, ``efermi`` and every magnetic field carry it;
-#: densities and magnetizations do not.
+#: Hartree -> Rydberg. Potentials and ``efermi`` carry it; densities and
+#: magnetizations do not, and an external magnetic field takes
+#: :data:`ELK_FIELD_TO_RY` instead.
 HARTREE_TO_RY = 2.0
+
+#: Elk's electron g-factor and speed of light, ``modmain.f90:1264`` and
+#: ``:1238``, both declared ``parameter``. ``solsc = sol * solscf`` and
+#: ``solscf`` defaults to 1 (``readinput.f90``); a run that scales the speed of
+#: light changes ``cb`` and is not what :data:`ELK_CB` describes.
+ELK_GFACTE = 2.00231930436256
+ELK_SOL = 137.035999084
+
+#: ``cb = gfacte/(4 solsc) = 3.6529e-3``, the coupling of an external field in
+#: Elk: ``genbs.f90`` adds ``cb * (bfcmt + bfieldc)`` to the Kohn-Sham magnetic
+#: field and ``energy.f90`` writes the Zeeman energy with the same constant.
+ELK_CB = ELK_GFACTE / (4.0 * ELK_SOL)
+
+#: An Elk field (``bfcmt``, ``bfieldc``) -> this code's field in Ry.
+#:
+#: Elk's term is ``+cb sigma.B`` in Hartree, so a positive field *raises* the
+#: majority channel; this code's is ``-B.m`` in Rydberg, with ``m`` the same
+#: spin density. Matching the up-down splitting, ``2 cb |B_Elk|`` Ry, gives
+#: ``B_defumat = -2 cb B_Elk``: the magnitude is ``PLAN.md`` P86's, and the sign
+#: is the flip ``MagneticField.feedback`` records for the fixed-spin-moment
+#: update (``B <- B + tau (M - M_fix)`` in Elk, a minus here).
+ELK_FIELD_TO_RY = -HARTREE_TO_RY * ELK_CB
 
 
 @dataclasses.dataclass(frozen=True)
@@ -83,13 +116,14 @@ class ElkGeometry:
     species: tuple[str, ...]
     natoms: tuple[int, ...]
     positions: np.ndarray       # (natmtot, 3), lattice coordinates
-    #: ``(natmtot, 3)``: Elk's per-atom ``bfcmt``, **converted to Ry** like every
-    #: other field this module reads, so that it is already in the unit
-    #: ``System.atomic_b_field`` and the ``LOCAL_MAGNETIC_FIELDS`` card are
-    #: documented in. Elk writes it in its own Hartree units, and storing it raw
-    #: under a module comment promising the conversion is how a future consumer
-    #: would have applied half of Elk's field on a symmetry-breaking seed and a
-    #: factor of two on a constrained one.
+    #: ``(natmtot, 3)``: Elk's per-atom ``bfcmt``, **converted to this code's
+    #: field in Ry** by :data:`ELK_FIELD_TO_RY`, so that it is already in the
+    #: unit ``System.atomic_b_field`` and the ``LOCAL_MAGNETIC_FIELDS`` card are
+    #: documented in. ``bfcmt`` is a field coupled through ``cb`` exactly as
+    #: ``bfieldc`` is (``genbs.f90:37``, ``t1 = cb*(bfcmt + bfieldc)``), so the
+    #: conversion is ``-2 cb`` and not the Hartree factor of two: the latter
+    #: would hand a consumer a field 273.75 times too large, and with the sign
+    #: that favours the moment Elk's field disfavours.
     magnetic_fields: np.ndarray
 
     @property
@@ -148,7 +182,7 @@ def read_elk_geometry(path) -> ElkGeometry:
         natoms=tuple(natoms),
         positions=np.array(positions, dtype=float).reshape(-1, 3),
         magnetic_fields=(
-            np.array(fields, dtype=float).reshape(-1, 3) * HARTREE_TO_RY
+            np.array(fields, dtype=float).reshape(-1, 3) * ELK_FIELD_TO_RY
         ),
     )
 

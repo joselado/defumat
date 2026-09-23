@@ -52,11 +52,12 @@ digit for digit for the same reason. Trends, sum rules and the analytic limits
 are what this is validated on; a comparison against Elk's number is a comparison
 of two decompositions.
 
-**Refused by name.** A *symmetry-reduced* k-set: ``<L>`` and ``<S>`` are
-vectors, and a sum over a wedge is a sum over a wedge -- the axial-vector
-symmetrisation P24 records for a response, one index up and with ``det(R)`` on
-top, is not written here. An unshifted whole grid is closed under the point
-group and is the escape, the same one ``dielectric_tensor`` documents. And a
+**A symmetry-reduced k-set is completed rather than refused** (P82), and the
+rule depends on the regime: at ``nspin = 4`` ``<L>`` and ``<S>`` are axial
+vectors averaged over the magnetic group; at ``nspin = 1, 2`` ``<S_z>`` is a
+site scalar the group permutes, and ``<L>`` on a wedge cut with ``k -> -k`` is
+completed to the exact zero time reversal in each channel gives it
+(:func:`_symmetrise_axial` has the argument). **Refused by name**: a
 **fully-relativistic ultrasoft or PAW** dataset, because the spinor overlap's
 off-diagonal spin blocks are ``qq_so`` and the projection built here applies the
 *scalar* ``S`` to each component -- which is the validated ``projwfc.x`` path in
@@ -352,33 +353,85 @@ def _symmetrise_axial(orbital, spin, charge, calculation):
 
     A reduced k-set sums a wedge, and a wedge sum is only the answer for a
     quantity that is *invariant* under the group. The site charge is; ``<L>``
-    and ``<S>`` are not -- they are **axial** vectors, so the missing part of
-    the zone is put back by averaging over the group with ``det(R)`` and the
+    and ``<S>`` are not, and what they are depends on the spin regime.
+
+    **``nspin = 4``: both are axial vectors**, so the missing part of the zone
+    is put back by averaging over the group with ``det(R)`` and the
     time-reversal sign beside the rotation, which is what
     :func:`~defumat.system.symmetry.symmetrize_atom_cartesian_tensor`'s
-    ``axial`` does.
+    ``axial`` does. Averaging them as polar vectors instead is the trap that
+    route exists for, and it is silent: on a centrosymmetric crystal the polar
+    average of any vector is exactly zero, so ``<L>`` would come back as a
+    clean, plausible zero on every such cell.
 
-    **Averaging them as polar vectors instead is the trap this exists for**, and
-    it is silent: on a centrosymmetric crystal the polar average of any vector
-    is exactly zero, so ``<L>`` would come back as a clean, plausible zero on
-    every such cell. The two routes differ on nothing else.
+    **``nspin = 1, 2``: the spin is not coupled to the lattice, so ``<S>`` is a
+    scalar per site.** Without spin-orbit coupling a spatial operation moves the
+    orbitals and leaves the spin label alone -- which is why
+    :func:`~defumat.system.symmetry.collinear_symmetries` keeps an operation
+    when it *permutes* the signed ``m_z`` pattern, never rotating it. Rotating
+    ``(0, 0, S_z)`` as an axial vector under that group instead averages the
+    moment against every ``C2`` about an in-plane axis and every mirror
+    containing ``z``, which flip it: on bcc iron's 48 operations
+    ``S = (0, 0, 1.1)`` came back ``(0, 0, 0)``. So ``S_z`` is averaged over
+    the atoms each operation maps onto one another, exactly as the charge is,
+    with ``(-1)^t_rev`` and no ``det(R)``. The sign is defensive: the collinear
+    filter discards time-reversed operations (QE's ``colin_mag = 1``), so on
+    every group this code builds today it is ``+1``. ``S_x`` and ``S_y`` are
+    zero by construction, since two collinear channels carry no off-diagonal
+    spin block.
+
+    **``<L>`` at ``nspin = 1, 2`` is exactly zero on the whole zone, and a wedge
+    that used ``k -> -k`` is completed to that zero.** ``L`` is built from the
+    orbitals alone, so under a spatial operation it is a genuine axial vector
+    whatever the spin regime. But each channel is a spinless problem with a
+    real Hamiltonian, so ``psi_{-k} = conj(psi_k)``, the site coefficients go
+    to their conjugates, and with ``L`` purely imaginary on the real harmonics
+    ``<L>_{-k} = -<L>_k``: the pair cancels point by point. ``KPoints.automatic``
+    reduces an ``nspin = 1, 2`` grid with that time reversal unless ``noinv``
+    (``setup.f90``'s ``time_reversal = .NOT. noinv .AND. .NOT. magnetic_sym``),
+    and a wedge that kept ``k`` and dropped ``-k`` holds the uncancelled half,
+    which no spatial average removes on a group without enough rotations to
+    kill a vector -- and the ``nsym = 1`` wedge that time reversal alone halves
+    never reached the spatial average at all. So on such a wedge ``<L>`` is set
+    to the zero the missing half returns it to. The quenching is still a
+    measured check on the whole grid, where nothing is completed and the
+    silicon test reads ``1.7e-16``; under ``noinv`` the spatial ops alone
+    reduced the set, and the axial average is what completes it.
     """
+    from defumat.system.kpoints import is_reduced
     from defumat.system.symmetry import (
         atom_mapping, symmetrize_atom_cartesian_tensor,
     )
 
+    system = calculation.system
     symmetries = calculation.symmetries
-    if symmetries is None or symmetries.nsym <= 1 or not calculation.use_symmetry:
+    grouped = not (
+        symmetries is None or symmetries.nsym <= 1
+        or not calculation.use_symmetry
+    )
+    collinear = calculation.nspin != 4
+
+    if collinear and not bool(getattr(system, "noinv", False)) and is_reduced(
+        system.kpoints
+    ):
+        orbital = np.zeros_like(np.asarray(orbital, dtype=float))
+
+    if not grouped:
         return orbital, spin, charge
 
-    system = calculation.system
     mapping = atom_mapping(system.cell, system.structure, symmetries)
     orbital = symmetrize_atom_cartesian_tensor(
         orbital, system.cell, symmetries, mapping, axial=True
     )
-    spin = symmetrize_atom_cartesian_tensor(
-        spin, system.cell, symmetries, mapping, axial=True
-    )
+    if collinear:
+        # A site scalar: only the permutation acts, and time reversal flips it.
+        flips = np.where(symmetries.t_rev_array() == 1, -1.0, 1.0)
+        spin = np.array(spin, dtype=float)
+        spin[:, 2] = (flips[:, None] * spin[mapping, 2]).mean(axis=0)
+    else:
+        spin = symmetrize_atom_cartesian_tensor(
+            spin, system.cell, symmetries, mapping, axial=True
+        )
     # The charge is a scalar on the atom, so only the permutation acts.
     charge = np.asarray(charge, dtype=float)[mapping].mean(axis=0)
     return orbital, spin, charge

@@ -160,12 +160,14 @@ def ultracell_matrix(
     return 0.5 * (matrix + jnp.conj(matrix).T)
 
 
-def multiplet_cut(eigenvalues: jnp.ndarray, tolerance: float = 1.0e-5) -> float:
-    """The smallest gap the band truncation opens, over the folded k-set.
+def multiplet_cut(eigenvalues: jnp.ndarray, nbnd: int) -> float:
+    """The gap the band truncation falls in, at its tightest over the folded k-set.
 
-    ``min_k (eps[nbnd-1] - eps[nbnd-2])`` in Ry: how far the last retained band
-    is from the first discarded one's neighbour at the point where the cut is
-    tightest.
+    ``min_k (eps[nbnd] - eps[nbnd-1])`` in Ry: the distance from the last
+    retained band to the first discarded one, so ``eigenvalues`` has to carry
+    **at least** ``nbnd + 1`` bands on its last axis -- the frozen solve asks
+    for one band more than it keeps for exactly this reason
+    (:func:`~defumat.ultracell.driver.run_ultracell`).
 
     **Why this is checked rather than assumed.** The ultracell basis is the span
     of the retained states, and a span is invariant under any unitary mixing
@@ -175,8 +177,24 @@ def multiplet_cut(eigenvalues: jnp.ndarray, tolerance: float = 1.0e-5) -> float:
     ``nbnd`` boundary: the answer moves and no symmetry check sees it. The fix
     is to raise ``nbnd`` until the cut falls in a gap, and this is the number
     that says whether it does.
+
+    **The gap has to straddle the cut, and the first form of this did not.**
+    It read ``eps[nbnd-1] - eps[nbnd-2]``, the spacing between the last two
+    *retained* bands, because band ``nbnd`` was never solved. That is a
+    different number and it fails in both directions: silicon at ``Gamma`` is
+    ``-0.394, 0.499 x3, 0.672 x3, 0.758`` Ry, and ``nbnd = 5``, which splits the
+    ``Gamma_15`` triplet, read 0.17 Ry, while ``nbnd = 4``, which cuts in a
+    0.17 Ry gap, read zero.
     """
-    if eigenvalues.shape[-1] < 2:
-        return float("inf")
-    gaps = eigenvalues[..., -1] - eigenvalues[..., -2]
+    eigenvalues = jnp.asarray(eigenvalues)
+    nbnd = int(nbnd)
+    if nbnd < 1:
+        raise ValueError(f"nbnd must be at least 1, got {nbnd}")
+    if eigenvalues.shape[-1] <= nbnd:
+        raise ValueError(
+            f"the gap across an nbnd = {nbnd} cut needs band {nbnd + 1} as "
+            f"well, and only {eigenvalues.shape[-1]} bands were passed: solve "
+            f"one band more than is kept"
+        )
+    gaps = eigenvalues[..., nbnd] - eigenvalues[..., nbnd - 1]
     return float(jnp.min(gaps))

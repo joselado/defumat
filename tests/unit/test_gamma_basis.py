@@ -369,7 +369,6 @@ def test_every_differentiated_magnetization_site_shares_the_one_guard():
         functional.local_spin_frame,
         potential._noncollinear_gradient_correction,
         potential._noncollinear_meta_exchange,
-        torque.rotated_density,
     ]
     for target in guarded:
         source = inspect.getsource(target)

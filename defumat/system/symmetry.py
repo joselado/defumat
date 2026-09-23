@@ -450,7 +450,8 @@ def magnetic_symmetries(
 
 
 def collinear_symmetries(
-    cell: Cell, structure: Structure, symmetries: Symmetries, moments: np.ndarray
+    cell: Cell, structure: Structure, symmetries: Symmetries, moments: np.ndarray,
+    fields=None,
 ) -> Symmetries:
     """``sgam_at_collin``: the same filter for ``nspin = 2``, on a *scalar*.
 
@@ -483,23 +484,67 @@ def collinear_symmetries(
     the run converges cleanly, 6.6 meV above the antiferromagnet, reporting an
     absolute magnetization of 7e-6.
 
+    **A per-atom applied field labels the atoms exactly as a moment does.** A
+    ``LOCAL_MAGNETIC_FIELDS`` card in a collinear run is a signed number per
+    site too (its ``z`` component; ``build_system`` refuses the other two), and
+    an operation that carries a site with field ``+b`` onto one with ``-b`` is
+    not a symmetry of the Hamiltonian the SCF solves, whatever the starting
+    moments say. Filtering by the moments alone kept it: two H atoms with
+    staggered fields ``+-0.05`` and no starting moment kept all 16 operations,
+    8 of which swap the atoms, and the symmetriser then averaged the staggered
+    polarisation the field was applied to create back to zero. An operation is
+    kept only if it maps every site onto one with the same moment **and** the
+    same field. Time reversal would flip both together, and is discarded here
+    for both by the rule above. Elk's ``findsym.f90`` tests ``bfcmt0`` beside
+    the moments for the same reason; ``pw.x`` has no per-atom field card, so
+    there is no QE check to follow.
+
+    The field is compared as a *pattern*, divided by its own largest ``|b_z|``
+    as :func:`_axial_fields` does for the noncollinear filter, because its
+    scale is the user's choice in Rydbergs and a seed field of 1e-8 Ry must cut
+    the same operations a field of 0.05 does. Its floor is
+    ``_VANISHING_FIELD``, ``is_magnetic``'s own. A **uniform** ``B_field(3)`` is
+    the same number on every site and cannot cut a permutation, so it is not
+    passed here.
+
     Args:
         moments: ``(nat, 3)`` cartesian starting moments. Only the ``z``
             component is read, because that is the axis a collinear run has.
+        fields: ``(nat, 3)`` per-atom applied fields (the
+            ``LOCAL_MAGNETIC_FIELDS`` card) or ``None``/``()`` for none. Only
+            the ``z`` component is read, for the same reason.
     """
     if symmetries.nsym <= 1:
         return symmetries
     along_z = np.asarray(moments, dtype=float).reshape(-1, 3)[:, 2]
+    # ``(pattern, tolerance)`` pairs every kept operation must preserve.
+    patterns = []
     # ``sgam_at_collin``'s own threshold, on a magnetization rather than on the
     # field ``_MAGNETIC_TOLERANCE`` is written for.
-    if not np.any(np.abs(along_z) > _COLLINEAR_TOLERANCE):
+    if np.any(np.abs(along_z) > _COLLINEAR_TOLERANCE):
+        patterns.append((along_z, _COLLINEAR_TOLERANCE))
+    if fields is not None and np.size(fields):
+        field_z = np.asarray(fields, dtype=float).reshape(-1, 3)[:, 2]
+        if len(field_z) != structure.nat:
+            raise ValueError(
+                f"a collinear symmetry filter was given {len(field_z)} fields "
+                f"for {structure.nat} atoms"
+            )
+        largest = float(np.max(np.abs(field_z)))
+        if largest >= _VANISHING_FIELD:
+            # Normalised, so the tolerance is the one the noncollinear filter
+            # applies to a normalised pattern.
+            patterns.append((field_z / largest, _MAGNETIC_TOLERANCE))
+    if not patterns:
         return symmetries
     mapping = atom_mapping(cell, structure, symmetries)
 
     kept, translations = [], []
     for s in range(symmetries.nsym):
-        images = along_z[mapping[s]]
-        if np.all(np.abs(images - along_z) < _COLLINEAR_TOLERANCE):
+        if all(
+            np.all(np.abs(values[mapping[s]] - values) < tolerance)
+            for values, tolerance in patterns
+        ):
             kept.append(symmetries.rotations[s])
             translations.append(symmetries.translations[s])
     return Symmetries(rotations=tuple(kept), translations=tuple(translations))

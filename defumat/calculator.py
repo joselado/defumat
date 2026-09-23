@@ -416,6 +416,21 @@ def electrons_defaults(pwin) -> dict:
     return adopted
 
 
+
+def _ultracell_kgrid(system, supercell) -> tuple[int, int, int]:
+    """The ultracell ``kgrid`` that folds back onto the reference's own grid.
+
+    ``supercell * kgrid`` has to be the grid the unit cell was converged on
+    (:func:`~defumat.ultracell.driver.require_the_folded_grid`), so where the
+    reference is an automatic grid divisible by ``supercell`` there is one
+    answer. Anywhere else ``(1, 1, 1)`` is returned and the refusal speaks.
+    """
+    grid = getattr(system.kpoints, "grid", None)
+    cells = tuple(int(n) for n in supercell)
+    if grid is None or any(int(g) % n for g, n in zip(grid, cells)):
+        return (1, 1, 1)
+    return tuple(int(g) // n for g, n in zip(grid, cells))
+
 class Calculator:
     """A system, its pseudopotentials, and every calculation they support.
 
@@ -1391,7 +1406,7 @@ class Calculator:
                                  exclude=SCF_ONLY_OPTIONS)
         )
 
-    def get_ultracell(self, supercell, kgrid=(1, 1, 1), **options):
+    def get_ultracell(self, supercell, kgrid=None, **options):
         """A density or potential modulated over many unit cells at once.
 
         The ultra long-range method (``PLAN.md`` P88, Elk's task 700). A spin
@@ -1403,7 +1418,10 @@ class Calculator:
         cells, so the self-consistency runs on the envelope alone.
 
         ``kgrid`` samples the *ultracell's* Brillouin zone, which is ``N`` times
-        smaller than the unit cell's. ``nbnd`` is the one knob the accuracy
+        smaller than the unit cell's. Left out, it is the reference's own
+        ``K_POINTS`` grid divided by ``supercell``, which is the one choice the
+        loop accepts: the folded set ``supercell * kgrid`` must be the grid the
+        unit cell was converged on, and anything else is refused by name. ``nbnd`` is the one knob the accuracy
         depends on -- it is the size of the variational basis per folded
         k-point, and the answer converges to the real ``N``-cell supercell as it
         grows -- so pass it. ``external`` is an applied potential in Ry over the
@@ -1430,6 +1448,7 @@ class Calculator:
         from defumat.ultracell.driver import run_ultracell
 
         result = self._ground_state("an ultracell calculation")
+        kgrid = _ultracell_kgrid(self.system, supercell) if kgrid is None else kgrid
         merged = self._call_options(run_ultracell, result, options,
                                     exclude=SCF_ONLY_OPTIONS)
         key = {**merged, "supercell": tuple(int(n) for n in supercell),

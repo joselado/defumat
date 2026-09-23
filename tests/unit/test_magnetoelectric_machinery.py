@@ -67,12 +67,13 @@ def test_the_field_is_varied_without_disturbing_anything_else():
     """``b_field`` is *static*, so ``tree_at`` cannot reach it.
 
     ``eqx.tree_at`` walks leaves and a static field is not one, so the obvious
-    idiom raises rather than silently doing nothing. ``dataclasses.replace`` is
-    what a frozen module's static configuration takes, and it shares every array
-    with the original -- the six systems of a tensor cost one cell between them.
+    idiom raises rather than silently doing nothing. ``System.with_b_field`` is
+    what the difference uses: the uniform field enters the magnetic symmetry
+    filter, so it rebuilds the k-set with the field's group, and it shares every
+    other array with the original.
     """
     system = build_system(read_pw_input(CASES / "gaas-magnetoelectric.in"))
-    moved = dataclasses.replace(system, b_field=(0.0, 0.0, 0.15))
+    moved = system.with_b_field((0.0, 0.0, 0.15))
     assert moved.b_field == (0.0, 0.0, 0.15)
     assert system.b_field == (0.0, 0.0, 0.1)      # unchanged
     assert moved.cell is system.cell               # and nothing was rebuilt

@@ -261,26 +261,6 @@ def test_the_geometry_carries_the_scale_factors(tmp_path):
     assert geometry.omega == pytest.approx(24.0)
 
 
-def test_the_per_atom_field_is_read_in_rydberg(tmp_path):
-    """Elk writes ``bfcmt`` in Hartree and this module's unit is Rydberg.
-
-    The field is on the atom line after the position, and it was stored raw
-    under a module comment saying every magnetic field carries the conversion.
-    Nothing consumed it yet, which is what made the inconsistency harmless and
-    also what would have made it silent: the first consumer to wire it into
-    ``System.atomic_b_field``, whose unit is documented as exactly this
-    quantity in Ry, would have applied half of Elk's field.
-    """
-    path = tmp_path / "GEOMETRY.OUT"
-    path.write_text(
-        "avec\n  1.0 0.0 0.0\n  0.0 1.0 0.0\n  0.0 0.0 1.0\n\n"
-        "atoms\n  1 : nspecies\n'Fe.in'\n  1 : natoms\n"
-        "  0.0 0.0 0.0  0.0 0.0 0.5\n"
-    )
-    geometry = read_elk_geometry(path)
-    assert geometry.magnetic_fields == pytest.approx(np.array([[0.0, 0.0, 1.0]]))
-
-
 def test_the_committed_geometry_is_the_cell_the_defumat_input_uses(state):
     """3.0 bohr simple cubic, the origin unshifted for one atom at a corner."""
     assert state.geometry.avec == pytest.approx(np.eye(3) * 3.0, abs=1e-12)

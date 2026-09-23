@@ -88,6 +88,7 @@ from defumat.relax import get_ion_dynamics
 from defumat.relax.bfgs import BFGSSettings
 from defumat.scf.driver import Calculation, SCFResult, run_scf
 from defumat.system.builder import System
+from defumat.system.symmetry import lattice_point_group
 from defumat.workflows.relax import (_scf_loop_options, site_magnetization,
                                      site_moment_report)
 
@@ -323,14 +324,26 @@ def run_spiral_scan(
     )
 
 
-def heisenberg_exchange(scan: SpiralScan, cell, shells) -> np.ndarray:
-    """Fit ``E(q) - E(0) = m^2 sum_R J(R) [1 - cos(q . R)]`` for the ``J(R)``.
+def heisenberg_exchange(scan: SpiralScan, cell, shells, *, point_group=None) -> np.ndarray:
+    """Fit ``E(q) - E(0) = m^2 sum_shells J_s sum_{R in s} [1 - cos(q . R)]`` for the ``J_s``.
 
     Args:
+        cell: the :class:`~defumat.system.cell.Cell` the scan ran in (or its
+            ``at`` array); its lattice point group generates each shell.
         shells: ``(nshell, 3)`` lattice vectors in *crystal* coordinates, one
-            per neighbour shell to fit. The moment is taken from the scan's own
-            converged states, so the ``J`` come out in Ry per pair of unit
-            vectors -- the convention in which ``H = -sum_ij J_ij e_i . e_j``.
+            **representative** per neighbour shell to fit. Each is expanded into
+            its star, so ``[0, 0, 1]`` and ``[1, 0, 0]`` name the same shell of a
+            cubic lattice and give the same ``J``. The moment is taken from the
+            scan's own converged states, so the ``J`` come out in Ry per pair of
+            unit vectors -- the convention in which ``H = -sum_<ij> J_ij e_i . e_j``
+            runs over **pairs**, meaning that ``R`` and ``-R`` are one bond and
+            the sum above runs over one member of each.
+        point_group: the integer rotations (crystal coordinates,
+            ``S a_i = sum_j M_ij a_j``) that generate a shell. Defaults to the
+            lattice's own point group, which is the right one for a Bravais
+            magnet; pass the crystal's ``Symmetries.rotation_array()`` where the
+            basis lowers the symmetry, so that a lattice shell splits into the
+            crystal's inequivalent ones.
 
     A least-squares fit rather than an inversion: the number of ``q`` points is
     usually larger than the number of shells, and the residual is the honest
@@ -339,16 +352,64 @@ def heisenberg_exchange(scan: SpiralScan, cell, shells) -> np.ndarray:
     the ``moments`` column of the scan is there to show.
     """
     q = np.asarray(scan.wavevectors, dtype=float)
-    shells = np.asarray(shells, dtype=float).reshape(-1, 3)
-    # q is in lattice (reciprocal) coordinates and R in crystal coordinates, so
-    # q . R is 2 pi times their dot product -- no metric needed, which is the
-    # convenience those two conventions exist for.
-    phase = 1.0 - np.cos(2.0 * np.pi * (q @ shells.T))
+    representatives = np.asarray(shells, dtype=float).reshape(-1, 3)
+    if point_group is None:
+        at = np.asarray(getattr(cell, "at", cell), dtype=float)
+        point_group = lattice_point_group(at)
+    rotations = [np.asarray(r, dtype=int).reshape(3, 3) for r in point_group]
+
+    # One column per *shell*, not per vector passed in. A scan along one
+    # direction sees only the members of a star with a component along it, so
+    # a single representative made the fitted J depend on which member was
+    # typed: on fcc with q along b_3, [1, 0, 0] gave a column of zeros and
+    # [0, 0, 1] three times the per-bond constant.
+    columns, seen = [], set()
+    for index, vector in enumerate(representatives):
+        integer = np.rint(vector).astype(int)
+        if np.any(np.abs(vector - integer) > 1.0e-8) or not np.any(integer):
+            raise ValueError(
+                f"heisenberg_exchange: shell {index} is {vector.tolist()}, which is "
+                "not a nonzero lattice vector in crystal coordinates; a Heisenberg "
+                "J(R) couples a site to one of its periodic images"
+            )
+        star = _bond_star(integer, rotations)
+        if star & seen:
+            raise ValueError(
+                f"heisenberg_exchange: shell {index} ({integer.tolist()}) is the "
+                "same star as an earlier one, so the two J would be one parameter "
+                "and the fit singular"
+            )
+        seen |= star
+        bonds = np.array(sorted(star), dtype=float)
+        # q is in lattice (reciprocal) coordinates and R in crystal
+        # coordinates, so q . R is 2 pi times their dot product -- no metric
+        # needed, which is the convenience those two conventions exist for.
+        columns.append(np.sum(1.0 - np.cos(2.0 * np.pi * (q @ bonds.T)), axis=1))
+    phase = np.stack(columns, axis=1)
     amplitude = np.linalg.norm(np.asarray(scan.moments), axis=1)
     magnitude = float(np.mean(amplitude[amplitude > 0.0])) if np.any(amplitude) else 1.0
     energies = scan.energies - scan.energies[0]
     solution, *_ = np.linalg.lstsq(phase * magnitude**2, energies, rcond=None)
     return solution
+
+
+def _bond_star(vector: np.ndarray, rotations) -> set:
+    """The bonds of ``vector``'s shell, one member of each ``(R, -R)`` pair.
+
+    A lattice vector in crystal coordinates transforms as a position does,
+    ``n' = n M`` (see :class:`~defumat.system.symmetry.Symmetries`). ``-R`` is
+    added whether or not the group has inversion, since a Heisenberg bond is
+    the same bond read from either end, and the pair is then kept once: the
+    member whose first nonzero component is positive.
+    """
+    orbit = set()
+    for rotation in rotations:
+        image = vector @ rotation
+        for member in (image, -image):
+            leading = member[np.flatnonzero(member)[0]]
+            if leading > 0:
+                orbit.add(tuple(int(v) for v in member))
+    return orbit
 
 
 @dataclass

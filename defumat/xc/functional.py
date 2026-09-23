@@ -664,8 +664,38 @@ class Functional(eqx.Module):
         safe_density = jnp.maximum(jnp.abs(density), RHO_THRESHOLD_GGA)
         # ``gcc_spin`` clamps |zeta| to 1 - rho_threshold_gga before testing it,
         # so a polarization that rounds to exactly 1 is kept rather than cut.
-        zeta = clamp_polarization(
-            (rho[0] - rho[1]) / safe_density, 1.0 - RHO_THRESHOLD_GGA
+        #
+        # The clamp moves the *point* the functional is evaluated at, not the
+        # derivative: ``pbec_spin`` writes ``v1c_up``/``v1c_dw`` analytically,
+        # dzeta/drho terms included, at the clamped zeta (qe_funct_corr_gga.f90
+        # :525-535). A bare ``clamp_polarization`` at a limit below 1 selects a
+        # constant over (1 - 1e-6, 1], so every saturated point lost the
+        # dH/dzeta . dzeta/drho term of the minority v1c -- -6.29e-3 Ry against
+        # QE's +0.532 at rho = (0.02, 1e-12), |grad rho_up| = 0.01 in PBE, with
+        # the energy untouched. So inside the clamp zeta is the raw one, as
+        # before at every order; over (1 - 1e-6, 1], the range ``gcc_spin``
+        # clamps rather than cuts, the value is the clamped one exactly
+        # (``t - stop_gradient(t)`` is zero, not an ulp) and the tangent is
+        # QE's chain factor *at the clamped zeta*, dzeta = ((1 - zeta) drho_up
+        # - (1 + zeta) drho_down) / n -- ``dh0zup``'s ``(1 - zeta)``, which is
+        # 1e-6 rather than the raw point's 0. Beyond |zeta| = 1 the tangent
+        # stays zero.
+        limit = 1.0 - RHO_THRESHOLD_GGA
+        raw = (rho[0] - rho[1]) / safe_density
+        frozen = jax.lax.stop_gradient(raw)
+        clamped = clamp_polarization(frozen, limit)
+        chain = (rho[0] - rho[1] - clamped * density) / jax.lax.stop_gradient(
+            safe_density
+        )
+        zeta = jnp.where(
+            jnp.abs(frozen) <= limit,
+            raw,
+            clamped
+            + jnp.where(
+                jnp.abs(frozen) <= 1.0,
+                chain - jax.lax.stop_gradient(chain),
+                0.0,
+            ),
         )
         active = (density > RHO_THRESHOLD_GGA) & (
             jnp.sqrt(jnp.abs(sigma)) > RHO_THRESHOLD_GGA

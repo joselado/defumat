@@ -318,17 +318,16 @@ class System(eqx.Module):
     def axial_fields(self) -> tuple:
         """Every per-atom axial vector the magnetic symmetry group must respect.
 
-        :attr:`local_moments` and, when there is one, the
-        ``LOCAL_MAGNETIC_FIELDS`` card. Elk's ``findsym.f90`` tests both; a group
-        filtered by the moments alone keeps operations an applied per-atom field
-        breaks, and ``sym_rho`` then averages away the texture that field was
-        applied to create. It lives here for the reason :attr:`local_moments`
-        does -- three call sites need the same rule and must not each invent it.
+        :attr:`local_moments`, the ``LOCAL_MAGNETIC_FIELDS`` card when there is
+        one, and a nonzero uniform ``B_field`` as the same vector on every atom
+        (:func:`axial_vectors` has the rule and the measurement). Elk's
+        ``findsym.f90`` tests all three; a group filtered by the moments alone
+        keeps operations an applied field breaks, and ``sym_rho`` then averages
+        away the texture that field was applied to create. It lives here for the
+        reason :attr:`local_moments` does -- three call sites need the same rule
+        and must not each invent it.
         """
-        moments = self.local_moments
-        if not self.atomic_b_field:
-            return moments
-        return (moments, np.asarray(self.atomic_b_field, dtype=float))
+        return axial_vectors(self.local_moments, self.atomic_b_field, self.b_field)
 
     def with_soc_scale(self, soc_scale: float) -> "System":
         """The same run with the spin-orbit term scaled by ``soc_scale``.
@@ -349,6 +348,29 @@ class System(eqx.Module):
                 "(defumat.pseudo.spinorbit.SpinOrbitCoupling says why)"
             )
         return dataclasses.replace(self, soc_scale=soc_scale)
+
+    def with_b_field(self, b_field) -> "System":
+        """The same run under a different uniform ``B_field``, in Ry.
+
+        **Not a plain field replacement**, which is the difference from
+        :meth:`with_soc_scale`: the uniform field enters the magnetic symmetry
+        filter (:func:`axial_vectors`), so a field off the moment's axis has a
+        smaller group than the run without it, and a k-set reduced with the
+        larger group and a density symmetrised with the smaller one do not
+        describe the same zone. The k-points are therefore rebuilt with the new
+        group, as :meth:`with_spin` rebuilds them for a change of regime; under
+        ``nosym`` that is the same full grid, so a finite difference in the
+        field over a ``nosym`` run is sampled identically at both ends.
+        """
+        field = tuple(float(v) for v in np.asarray(b_field, dtype=float).reshape(3))
+        moved = dataclasses.replace(self, b_field=field)
+        return dataclasses.replace(
+            moved,
+            kpoints=moved._respin_kpoints(
+                moved.nspin, moved.starting_magnetization, moved.angle1,
+                moved.angle2,
+            ),
+        )
 
     def with_spin(
         self,
@@ -581,7 +603,7 @@ class System(eqx.Module):
             per_atom=per_atom,
         )
         fields = np.asarray(self.atomic_b_field, dtype=float)
-        axial = (moments, fields) if self.atomic_b_field else moments
+        axial = axial_vectors(moments, self.atomic_b_field, self.b_field)
         magnetic = is_magnetic(nspin, moments, fields)
         symmetries = find_symmetries(self.cell, self.structure)
         if magnetic:
@@ -590,7 +612,8 @@ class System(eqx.Module):
             )
         elif nspin == 2:
             symmetries = collinear_symmetries(
-                self.cell, self.structure, symmetries, moments
+                self.cell, self.structure, symmetries, moments,
+                fields=self.atomic_b_field,
             )
         rotations = None if self.nosym else symmetries.rotation_array()
         t_rev = None if self.nosym else symmetries.t_rev_array()
@@ -707,10 +730,46 @@ class System(eqx.Module):
             # ``sgam_at_collin``, and it is a *different* filter rather than the
             # same one on a z-only vector -- see :func:`collinear_symmetries`.
             symmetries = collinear_symmetries(
-                self.cell, self.structure, symmetries, self.local_moments
+                self.cell, self.structure, symmetries, self.local_moments,
+                fields=self.atomic_b_field,
             )
         return symmetries
 
+
+
+def axial_vectors(moments, atomic_b_field=(), b_field=(0.0, 0.0, 0.0)):
+    """Every per-atom axial vector a noncollinear magnetic filter must respect.
+
+    ``moments`` alone when nothing else is applied, which is the ordinary case
+    and what :func:`~defumat.system.symmetry.magnetic_symmetries` has always
+    been given; otherwise a tuple of ``(nat, 3)`` arrays, all tested under one
+    choice of ``t_rev``. The order is moments, then ``LOCAL_MAGNETIC_FIELDS``,
+    then the uniform ``B_field`` tiled over the atoms.
+
+    **The uniform field is an axial vector on every atom**, and an operation
+    that rotates it is not a symmetry of a Hamiltonian that contains it. It was
+    left out: bcc Fe, noncollinear, ``starting_magnetization = 0.5`` along z and
+    ``B_field(1) = 0.01`` kept ``nsym = 16``, ``C4z`` among them, which carries
+    ``B_x`` onto ``B_y`` -- so the density was symmetrised with operations the
+    field breaks, and the transverse response the field drives was averaged
+    over directions it does not have. Elk's ``findsym.f90:109-113`` rotates
+    ``bfieldc0`` and tests it before the per-atom fields, which is what is done
+    here. **This is a deliberate departure from pw.x**: ``setup.f90`` imports
+    ``bfield`` and hands ``find_sym`` ``m_loc`` alone (``setup.f90:596``), so a
+    ``pw.x`` run with a field off the moment's axis keeps the larger group.
+
+    A module-level function for the reason :func:`is_magnetic` is one:
+    :func:`build_system` needs it before there is a :class:`System`, and
+    :meth:`System._respin_kpoints` for a regime that is not this one.
+    """
+    moments = np.asarray(moments, dtype=float).reshape(-1, 3)
+    vectors = [moments]
+    if atomic_b_field:
+        vectors.append(np.asarray(atomic_b_field, dtype=float).reshape(-1, 3))
+    uniform = np.asarray(b_field, dtype=float).reshape(3)
+    if np.any(uniform != 0.0):
+        vectors.append(np.tile(uniform, (len(moments), 1)))
+    return vectors[0] if len(vectors) == 1 else tuple(vectors)
 
 
 def is_magnetic(nspin: int, moments, fields=()) -> bool:
@@ -830,6 +889,19 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
             "noncolin = .true.: the constrained quantity is the angle between "
             "the local moment and z, and a collinear moment has no angle. QE "
             "refuses the same combination in add_bfield.f90"
+        )
+    if constrained_magnetization == "total direction" and nspin != 4:
+        # ``i_cons = 6`` (``input.f90:1589-1590``), and ``add_bfield.f90:177-180``
+        # stops on it unless ``noncolin`` with the same message as for
+        # ``i_cons = 2``. The penalty is ``(arccos(m_z/|m|) - theta)^2`` on the
+        # *total* moment, and a collinear total has one component, so ``m_z/|m|``
+        # is +-1 whatever the density does: the constraint is a constant with a
+        # vanishing gradient and the run converges to the unconstrained state.
+        raise ValueError(
+            "constrained_magnetization = 'total direction' requires "
+            "noncolin = .true.: the constrained quantity is the polar angle of "
+            "the total moment, and a collinear moment has no angle. QE refuses "
+            "the same combination in add_bfield.f90 (i_cons = 6)"
         )
     if constrained_magnetization == "atomic texture" and nspin != 4:
         # Not a QE refusal because it is not a QE scheme: the constrained
@@ -1119,8 +1191,11 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
     # helix, where one Ni direction in ``m_loc`` against 15 in the card left
     # ``nsym = 4`` and a cycloid collapsed to collinear in three iterations.
     atomic_fields = _atomic_b_field(pwin, structure.nat)
-    axial = (moments, np.asarray(atomic_fields, dtype=float)) if atomic_fields \
-        else moments
+    # The uniform ``B_field`` enters the same way, as one vector on every atom
+    # (:func:`axial_vectors`, Elk's ``findsym.f90:109-113``).
+    axial = axial_vectors(
+        moments, atomic_fields, pwin.indexed("system", "b_field", 3)
+    )
     magnetic = is_magnetic(nspin, moments, atomic_fields)
     symmetries = find_symmetries(cell, structure)
     if magnetic:
@@ -1130,7 +1205,11 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
         # symmetrised with, or switching the symmetriser off would not rescue
         # the run either -- which is why this is here and not only in
         # ``System.symmetry_group``.
-        symmetries = collinear_symmetries(cell, structure, symmetries, moments)
+        # The ``LOCAL_MAGNETIC_FIELDS`` card labels the sites as the moments do
+        # (see :func:`collinear_symmetries`).
+        symmetries = collinear_symmetries(
+            cell, structure, symmetries, moments, fields=atomic_fields
+        )
     rotations = None if nosym else symmetries.rotation_array()
     kpoints = _build_kpoints(
         pwin, cell, precision, rotations,
@@ -1221,9 +1300,7 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
         atomic_b_field=_atomic_b_field(pwin, structure.nat),
         reducebf=_reducebf(pwin),
         fsm_update=_fsm_update(pwin),
-        integration_radii=tuple(
-            float(v) for v in pwin.indexed("system", "r_m", structure.ntyp)
-        ) if pwin.get("system", "r_m") is not None else (),
+        integration_radii=_integration_radii(pwin, cell, structure),
         local_weights=str(pwin.get("system", "local_weights", "qe")).lower(),
         hubbard=_hubbard(pwin, structure),
         berry=_berry(pwin),
@@ -1474,6 +1551,22 @@ def _check_occupations(pwin: PwInput) -> None:
     lscf = str(
         pwin.get("control", "calculation", "scf")
     ).strip().strip("'\"").lower() not in ("nscf", "bands")
+    # ``input.f90:778-782``, immediately before the fixed-occupation check and
+    # unconditional on ``lscf``: ``two_fermi_energies .AND. .NOT. lsda`` stops.
+    # Here it was stored and then read by nothing, because
+    # ``Calculation.two_fermi_energies`` gates on ``nspin == 2``: an ``nspin =
+    # 1`` or noncollinear run asking for a fixed moment converged to the
+    # unconstrained state and reported success.
+    if _tot_magnetization(pwin) is not None and not lsda:
+        raise ValueError(
+            "tot_magnetization requires nspin = 2: it fixes N_up - N_down by "
+            "giving each collinear channel its own Fermi level, and an "
+            "unpolarized run has one channel while a noncollinear one has no "
+            "up and down channels to split. This is pw.x's own refusal "
+            "(input.f90: 'tot_magnetization requires nspin=2'). For a "
+            "noncollinear moment of fixed size use constrained_magnetization "
+            "= 'total' or 'fsm'"
+        )
     if occupations == "fixed" and lsda and lscf:
         tot_magnetization = pwin.get("system", "tot_magnetization", None)
         if tot_magnetization is None:
@@ -1632,6 +1725,43 @@ def _logical(value) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in (".true.", ".t.", "true", "t")
+
+
+def _integration_radii(pwin: PwInput, cell: Cell, structure: Structure) -> tuple:
+    """``r_m`` per species in bohr, or ``()`` when the input gives none at all.
+
+    **A species the input leaves out gets ``make_pointlists``' default radius,
+    not zero.** ``r_m`` is indexed per species and ``pwin.indexed`` fills an
+    unset index with ``0.0``, so ``r_m(1) = 2.0`` on a two-species cell used to
+    give the second species a sphere of radius zero: under ``'qe'`` weights
+    one grid point at most (the one sitting on the nucleus, if any), so its
+    local moment and any constraint or field on it read nothing, and under
+    ``'smooth'`` a ``0/0`` in the taper and NaN weights. ``make_pointlists.f90``
+    replaces a radius ``r_m(nt) < 1.d-8`` with ``0.5 distmin(nt)/1.2 * 0.99``
+    (lines 150-154), and :func:`defumat.scf.locals.default_radii` is that
+    expression, so an unset or nonpositive entry takes it here.
+
+    The other half of QE's condition -- a radius *larger* than
+    ``distmin/(2 * 1.2)`` is also reset -- is not applied to a radius the input
+    gave: ``r_m`` is an input here and not in ``pw.x``, where the array is only
+    ever the default, and a user who asks for overlapping spheres under
+    ``'smooth'`` weights (a partition of unity) is asking for something that
+    scheme can represent.
+    """
+    if pwin.get("system", "r_m") is None:
+        return ()
+    radii = [float(v) for v in pwin.indexed("system", "r_m", structure.ntyp)]
+    if all(r >= 1.0e-8 for r in radii):
+        return tuple(radii)
+    # Imported here: ``defumat.scf`` imports the driver, which imports this
+    # module (the same cycle ``build_system``'s ``defumat.scf.fields`` import
+    # works around).
+    from defumat.scf.locals import default_radii
+
+    fallback = default_radii(cell, structure)
+    return tuple(
+        float(fallback[nt]) if r < 1.0e-8 else r for nt, r in enumerate(radii)
+    )
 
 
 def _tot_magnetization(pwin: PwInput) -> float | None:

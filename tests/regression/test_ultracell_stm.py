@@ -702,7 +702,7 @@ def test_an_ultracell_result_is_refused_by_name(pseudo_dir):
         run_ultracell_transport(
             calculator.system, calculator.pseudos,
             run_ultracell(calculator.system, calculator.pseudos, scf,
-                          (1, 1, 2), (1, 1, 1), nbnd=12, conv_thr=1e-10),
+                          (1, 1, 2), (2, 2, 1), nbnd=12, conv_thr=1e-10),
             exit_height=0.05, height=0.35, shape=(4, 4))
     with pytest.raises(NotImplementedError, match="divisions along the stacking"):
         run_ultracell_transport(calculator.system, calculator.pseudos, result,
