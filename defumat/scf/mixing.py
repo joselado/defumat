@@ -85,7 +85,13 @@ class Mixer:
     #: driver installs it beside the preconditioner.
     shape = None
 
-    def mix(self, rho_in: np.ndarray, rho_out: np.ndarray) -> np.ndarray:
+    def mix(self, rho_in: np.ndarray, rho_out: np.ndarray, exclude: slice | None = None) -> np.ndarray:
+        """``exclude`` is a part of the packed vector that is mixed but not *fitted*.
+
+        It matters only to a mixer that fits coefficients to its history
+        (:class:`AndersonMixer`); the others take it and ignore it, so the
+        driver can pass it without knowing which mixer it holds.
+        """
         raise NotImplementedError
 
     def step(self, residual: np.ndarray, density: np.ndarray | None = None) -> np.ndarray:
@@ -171,7 +177,7 @@ class Mixer:
 class LinearMixer(Mixer):
     beta: float = 0.7
 
-    def mix(self, rho_in, rho_out):
+    def mix(self, rho_in, rho_out, exclude=None):
         return rho_in + self.step(rho_out - rho_in, rho_in)
 
 
@@ -193,9 +199,41 @@ class AndersonMixer(Mixer):
         self._densities.clear()
         self._residuals.clear()
 
-    def mix(self, rho_in, rho_out):
+    def mix(self, rho_in, rho_out, exclude=None):
+        """One Anderson step; ``exclude`` is left out of the fit and still mixed.
+
+        **What ``exclude`` is for.** The driver passes the ``becsum`` block, and
+        that is ``pw.x``'s rule rather than a choice: ``rho_ddot``
+        (``scf_mod.f90:718``) is the only inner product ``mix_rho`` fits its
+        ``betamix`` in, and it reads the density, ``ns`` and ``tau`` but never
+        ``becsum``. For an ultrasoft run QE does not carry ``becsum`` in
+        ``mix_type`` at all, and for PAW it carries it and fits without it,
+        ``paw_ddot`` being commented out because it is not positive definite.
+
+        **Why it is not cosmetic.** The Gram matrix here is flat, and
+        ``becsum``'s entries are not in the density's units, so nothing fixes
+        how much say each block gets. Measured on ``benchmarks/fe-mag-1k.in``
+        (ultrasoft iron): ``becsum`` is **98 to 99.99 per cent** of the squared
+        residual at every iteration, so the fit was to the projector
+        occupations and the density rode along. Against ``pw.x``'s own optimum
+        over the same history, in ``pw.x``'s metric, those coefficients leave a
+        residual **5.2 times** larger at the median iteration and 32 times at
+        the worst; the density block alone, fitted flat, is within 1.3 of it.
+        That is the flat-against-``1/G^2`` difference item F in
+        ``MAGNETISM-NEXT.md`` suspected, measured to be the smaller of the two
+        by a factor of four at the median. See ``PLAN.md`` P107.
+
+        The excluded block is still combined with the same coefficients, which
+        is what keeps it consistent with the density it belongs to (the
+        driver's ``_mix`` docstring gives the reason).
+        """
         rho_in = np.asarray(rho_in).ravel()
         residual = np.asarray(rho_out).ravel() - rho_in
+        fitted = np.ones(residual.size, dtype=bool)
+        if exclude is not None:
+            fitted[exclude] = False
+            if not fitted.any():
+                fitted[:] = True
 
         self._densities.append(rho_in)
         self._residuals.append(residual)
@@ -233,14 +271,15 @@ class AndersonMixer(Mixer):
         # **1.1e11 -> 2.7e4**, with coefficients identical to every digit. The
         # substitution is exact, so this changes no converged result; it changes
         # which ones are reachable.
-        norms = np.array([float(np.sqrt(r @ r)) for r in self._residuals])
+        fit = [r[fitted] for r in self._residuals]
+        norms = np.array([float(np.sqrt(r @ r)) for r in fit])
         if not np.all(norms > 0.0):
             self.reset()
             return (rho_in + self.step(residual, rho_in)).reshape(
                 np.asarray(rho_out).shape
             )
 
-        gram = np.array([[float(a @ b) for b in self._residuals] for a in self._residuals])
+        gram = np.array([[float(a @ b) for b in fit] for a in fit])
 
         # Normalising removes the conditioning that came from the residuals'
         # *spread*; it cannot remove what comes from their *alignment*, and that
@@ -421,7 +460,7 @@ class AdaptiveMixer(Mixer):
         self._betas = None
         self._previous = None
 
-    def mix(self, rho_in, rho_out):
+    def mix(self, rho_in, rho_out, exclude=None):
         if self.precondition is not None:
             raise ValueError(
                 "mixing_mode = 'adaptive' cannot take a preconditioner: it holds "

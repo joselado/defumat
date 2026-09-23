@@ -434,6 +434,12 @@ def _pack_ns(ns, dtype, real):
     return packed.ravel()
 
 
+#: Put ``becsum`` back into the Anderson fit, which is what this code did before
+#: ``PLAN.md`` P107. Kept only so that the A/B behind that phase can be re-run;
+#: ``pw.x`` never fits on it.
+FIT_BECSUM = False
+
+
 def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None,
          tau_in=None, tau_out=None):
     """One mixing step over the density and, for PAW, DFT+U and a meta-GGA, its companions.
@@ -508,7 +514,13 @@ def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None,
         flat.append(np.asarray(tau_in).ravel())
         flat_out.append(np.asarray(tau_out).ravel())
 
-    mixed = mixer.mix(np.concatenate(flat), np.concatenate(flat_out))
+    # ``becsum`` is mixed with the density's coefficients and kept out of the
+    # fit that chooses them, which is ``rho_ddot``'s rule (see
+    # :meth:`~defumat.scf.mixing.AndersonMixer.mix` for the measurement).
+    becsum_size = sum(np.asarray(b).size for b in becsum_in if b is not None)
+    exclude = (slice(rho.size, rho.size + becsum_size)
+               if becsum_size and not FIT_BECSUM else None)
+    mixed = mixer.mix(np.concatenate(flat), np.concatenate(flat_out), exclude=exclude)
 
     offset = rho.size
     rho_mixed = jnp.asarray(mixed[:offset].reshape(rho.shape))

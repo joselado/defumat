@@ -336,3 +336,50 @@ def test_the_adaptive_mixer_refuses_a_complex_vector():
         mixer.mix(np.zeros(4, dtype=complex), np.ones(4, dtype=complex))
     # The premise, asserted rather than remembered: numpy really does compare.
     assert bool((np.array([1 + 1j]) * np.array([1 + 0j]) >= 0)[0]) is True
+
+
+def test_an_excluded_block_is_mixed_with_the_density_coefficients_and_not_fitted():
+    """``exclude`` is ``rho_ddot``'s rule for ``becsum``: carried, never fitted.
+
+    The tail here is a fixed linear image of the density, scaled a million times
+    larger, which is the shape of the defect (``PLAN.md`` P107: ultrasoft
+    ``becsum`` was 98 per cent and more of the flat residual norm). Three
+    properties, and the third is the one that shows the test can fail:
+
+    * the density part comes out exactly as a mixer that never saw the tail;
+    * the tail comes out as the same linear image of the mixed density, which
+      is what "mixed with the same coefficients" means;
+    * without ``exclude`` the tail takes over the fit and the density moves.
+    """
+    rng = np.random.default_rng(7)
+    size, tail_size = 48, 12
+    image = 1.0e6 * rng.standard_normal((tail_size, size))
+    jacobian = 0.6 * np.eye(size) + 0.05 * rng.standard_normal((size, size))
+    constant = rng.standard_normal(size)
+
+    alone = AndersonMixer(beta=0.3)
+    carried = AndersonMixer(beta=0.3)
+    fitted_on_all = AndersonMixer(beta=0.3)
+    exclude = slice(size, size + tail_size)
+    rho = np.zeros(size)
+    moved = 0.0
+    for _ in range(6):
+        out = jacobian @ rho + constant
+        packed_in = np.concatenate([rho, image @ rho])
+        packed_out = np.concatenate([out, image @ out])
+        reference = alone.mix(rho, out)
+        mixed = carried.mix(packed_in, packed_out, exclude=exclude)
+        polluted = fitted_on_all.mix(packed_in, packed_out)
+        np.testing.assert_allclose(mixed[:size], reference, rtol=1e-12, atol=1e-12)
+        np.testing.assert_allclose(mixed[size:], image @ reference, rtol=1e-9)
+        moved = max(moved, float(np.abs(polluted[:size] - reference).max()))
+        rho = reference
+    assert moved > 1.0e-6, "the tail should have taken over the fit without exclude"
+
+
+def test_every_mixer_accepts_exclude():
+    """The driver passes it without knowing which mixer it holds."""
+    for name in ("linear", "anderson", "adaptive"):
+        mixer = get_mixer(name, beta=0.3)
+        out = mixer.mix(np.zeros(8), np.ones(8), exclude=slice(4, 8))
+        assert np.all(np.isfinite(out))
