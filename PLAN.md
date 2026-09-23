@@ -10540,6 +10540,44 @@ re-converged identical runs before `deltabf` is chosen.
 
 ### P57 — The magnetoelectric tensor. ✅ DONE for the column parallel to the field: the spin, clamped-ion tensor, uncalibrated against another code.
 
+> **Reread 2026-09-23, and the headline number is a residue, not a response.** Three
+> measurements, each of which stands alone:
+>
+> 1. **The column measured is forced to zero by symmetry.** With the field along `z`,
+>    zincblende keeps `S4z` and `C2z` (both leave an axial vector along `z` unchanged),
+>    and for `alpha_ij` with polar `i` and axial `j` either one forces the whole column
+>    `dP/dB_z` to vanish. The allowed entries are `dP_x/dB_y = dP_y/dB_x`, the
+>    transverse columns this code does not converge (the `x`-field ground state
+>    plateaus at an accuracy of 1.3e-9 to 2.7e-9 from iteration 50 to 300 against
+>    `conv_thr = 1e-10`).
+> 2. **It does not converge in the Berry-phase sampling.** At `B_field = 0.01` Ry the
+>    column reads (+5.25, -5.26, -3.99), (+18.1, -18.1, -18.0), (-3.72, +3.73, +4.40)
+>    and (+1.96, -1.96, -1.93) x 1e-7 at `nppstr, transverse` of `6, 2x2`, `12, 2x2`,
+>    `6, 4x4` and `12, 4x4`. A response settles; this changes sign. The raw phases show
+>    why: `C2z` maps `b1` onto `b2`, which agree, and `b3` onto `-(b1 + b2 + b3)`, a
+>    direction no string samples, so the discretisation error is not symmetric. What
+>    the spin-orbit null (3.4e-9) established is that the *whole* response vanishes
+>    without spin-orbit coupling, which it does; it could not see that this component
+>    vanishes with it.
+> 3. **The committed field closes the gap.** The gap falls 27.2 eV per Ry of field
+>    (1.114 eV at zero, 0.842 at 0.01 Ry) and is **-0.247 eV at `B_field = 0.05`**, so
+>    the fixed-occupation insulator P57 differenced is not the ground state there, and
+>    `B0 + delta/2 = 0.06` is further past it.
+>
+> **Elk's task 390 on the same cell is not a reference either** (`tools/cluster/p57_elk_me.sbatch`,
+> job 20410234, the field converted by `2 cb`): its spin-orbit-off null is the same
+> size as its signal (column lengths 0.19, 0.13, 0.25 against 0.62, 0.40, 0.26), its
+> last ground state is nearly metallic (indirect gap 0.0053 Ha, 0.14 eV, total moment
+> 0.43 mu_B, where Elk occupies by smearing), and `magnetoelt.f90` never resets
+> `bfieldc0(j)` after column `j`, so column 3 runs with the first two half-steps still
+> applied (the last state's moment has x:z = 0.166 against 1.37/8.21 = 0.167, in both
+> tasks). The 4x4x4 task moves the spin-orbit tensor by 7x.
+>
+> **So P57 moves to Cr2O3**, where the linear tensor is allowed along the moments --
+> the column this code converges -- with no base field (chosen 2026-09-23). The AlAs
+> tests keep their null and their machinery checks; their `alpha` values are not a
+> physical number and must not be quoted as one.
+
 `defumat/response/magnetoelectric.py`, `Calculator.get_magnetoelectric_tensor`,
 `tests/data/qe/gaas-magnetoelectric.in`, and the two relativistic datasets it
 names. **The physics is not validated, and no README row or `features.tex` entry
