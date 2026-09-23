@@ -22,6 +22,7 @@ this path is a table lookup.
 
 from __future__ import annotations
 
+import hashlib
 from functools import partial
 
 import equinox as eqx
@@ -60,6 +61,73 @@ def projector_channels(pseudo: Pseudopotential) -> list[tuple[int, int, int]]:
     return channels
 
 
+def _content_digest(array) -> tuple | None:
+    """A fingerprint of one tabulated array: its shape, its dtype and a blake2b
+    of its bytes. ``None`` for ``None``, so an absent array and an empty one
+    are told apart.
+
+    The hashing is :func:`defumat.pseudo.augmentation._dataset_key`'s, and it is
+    here rather than there so that this module and :mod:`defumat.paw.onecenter`
+    can key their own setup on it -- ``augmentation`` imports this module, so
+    the helper cannot live on that side of the dependency. The shape and dtype
+    go into the fingerprint as well as the bytes, which costs nothing and means
+    that no key built from these has to carry the lengths separately to be
+    safe.
+
+    **Only ever called on a UPF file's own NumPy arrays**, never on anything
+    built from the cell or the G set. Those are host constants on every path,
+    including inside :meth:`~defumat.scf.driver.Calculation.at_strain`'s trace,
+    where ``build_augmentation`` already hashes ``pseudo.r`` the same way.
+    """
+    if array is None:
+        return None
+    values = np.ascontiguousarray(np.asarray(array))
+    return (
+        values.shape,
+        values.dtype.str,
+        hashlib.blake2b(values.tobytes(), digest_size=16).digest(),
+    )
+
+
+def _projector_dataset_key(pseudo: Pseudopotential) -> tuple:
+    """A fingerprint of everything a species' projector columns are built from.
+
+    Two species that name the same UPF file are the same dataset, and the
+    phase-free half of ``<k+G|beta>`` depends on the dataset and on ``k + G``
+    -- never on which label an atom carries. One species per magnetic site is
+    the standard way to write a noncollinear texture (``angle1``/``angle2`` are
+    per species), and site-resolved DFT+U is the same pattern, so a fifteen-site
+    helix arrives here as fifteen identical datasets and would otherwise build
+    fifteen identical blocks of :attr:`ProjectorCore.columns`.
+
+    **The key is exactly what the columns read and nothing else**:
+    :func:`~defumat.pseudo.formfactors.projector_form_factors` and
+    :func:`~defumat.pseudo.formfactors._origin_integrals` integrate each
+    ``beta[:kkbeta]`` against ``r[:kkbeta]`` with Simpson weights from
+    ``rab[:kkbeta]``, and the channels fix the ``l``, the ``lm`` column and the
+    ``(-i)^l`` phase. ``D_ij`` is not in it, because :func:`_expand_dij` is
+    still called once per atom on that atom's own species, so two species with
+    identical projectors and different ``D`` would share their columns and keep
+    their own coefficients -- which is right.
+
+    **It is not ``augmentation._dataset_key``, which does not hash ``beta``.**
+    That key fingerprints what ``Q_ij(G)`` is built from -- ``r``, ``rab`` and
+    ``qfuncl`` -- and for a norm-conserving dataset ``qfuncl`` is empty, so two
+    norm-conserving datasets on one radial grid with the same ``l`` structure
+    would collide there and share the wrong projectors here. Its ``nl_species``
+    has no meaning for a projector either.
+    """
+    kkbeta = pseudo.kkbeta
+    return (
+        kkbeta,
+        tuple(projector_channels(pseudo)),
+        _content_digest(pseudo.r[:kkbeta]),
+        _content_digest(pseudo.rab[:kkbeta]),
+        tuple(_content_digest(projector.beta[:kkbeta])
+              for projector in pseudo.projectors),
+    )
+
+
 class Projectors(eqx.Module):
     """The projectors ``<k+G|beta>`` and their coefficients ``D``.
 
@@ -83,8 +151,8 @@ class Projectors(eqx.Module):
     #: The phase-free core and the positions, kept only by a **lazy** set. They
     #: are what :meth:`at_k` rebuilds from, and they are ``(nk, npwx, ncs)``
     #: against :attr:`stored`'s ``(nk, npwx, nkb)`` -- smaller by the
-    #: multiplicity of each species, which on a 45-atom cell of two species is
-    #: about twenty.
+    #: multiplicity of each distinct dataset, which on a 45-atom cell of two
+    #: datasets is about twenty however many species labels name them.
     core: "ProjectorCore | None" = None
     positions: jnp.ndarray | None = None
 
@@ -172,13 +240,21 @@ class ProjectorCore(eqx.Module):
     differentiable function of the positions without recomputing the radial
     integrals inside the gradient.
 
-    **Memory.** ``columns`` is ``(nk, npwx, sum_t nh_t)`` complex -- one entry
-    per *species* channel, where ``vkb`` has one per *atom* channel. For a cell
-    with several atoms of the same species it is therefore smaller than the
-    ``vkb`` it builds, by the multiplicity of that species.
+    **Memory.** ``columns`` is ``(nk, npwx, sum_d nh_d)`` complex -- one entry
+    per channel of each distinct *dataset* ``d``, where ``vkb`` has one per
+    *atom* channel. For a cell with several atoms of the same dataset it is
+    therefore smaller than the ``vkb`` it builds, by the multiplicity of that
+    dataset. **A dataset and not a species label**: two labels naming one UPF
+    file share one block of columns (:func:`_projector_dataset_key`), which is
+    what a noncollinear texture written one species per site needs. Before
+    that the sum ran over labels, and fifteen nickel labels built fifteen
+    identical blocks, which is the defect P73 closed for the augmentation
+    charge (``OPEN.md`` Part III, M2).
     """
 
-    #: ``(nk, npwx, ncs)``: the phase-free columns, one per species channel.
+    #: ``(nk, npwx, ncs)``: the phase-free columns, one per channel of each
+    #: distinct dataset. Several species may point at the same ones through
+    #: :attr:`column_of_channel`.
     columns: jnp.ndarray
     #: ``(nk, npwx, 3)``: ``k + G``, which the phase needs.
     kg: jnp.ndarray
@@ -287,23 +363,39 @@ def build_projector_core(
         lmax,
     )
 
-    # Radial form factors, per species: (nbeta, nk * npwx) -> (nk, npwx, nbeta),
-    # concatenated over species so that a channel selects a column by one index.
+    # One entry per distinct *dataset*, not per species label: two labels
+    # naming one UPF file get one block of columns, and the second label's
+    # atoms select from the first's (see :func:`_projector_dataset_key`). The
+    # datasets keep the order in which their first label is declared, so on a
+    # cell with one label per dataset this is the list of species unchanged
+    # and every array below is what it was before the sharing existed.
+    datasets, slot_of, seen = [], [], {}
+    for species, pseudo in enumerate(pseudos):
+        key = _projector_dataset_key(pseudo)
+        if key not in seen:
+            seen[key] = len(datasets)
+            datasets.append(species)
+        slot_of.append(seen[key])
+    dataset_pseudos = tuple(pseudos[species] for species in datasets)
+    dataset_channels = [channels_by_species[species] for species in datasets]
+
+    # Radial form factors, per dataset: (nbeta, nk * npwx) -> (nk, npwx, nbeta),
+    # concatenated over datasets so that a channel selects a column by one index.
     shape = kg_norm.shape
     flat = kg_norm.reshape(-1)
     form_factors = tuple(
-        projector_form_factors(p, flat, cell.volume) for p in pseudos
+        projector_form_factors(p, flat, cell.volume) for p in dataset_pseudos
     )
     radial = _radial_table(form_factors, shape)
     beta_offset = np.cumsum([0] + [f.shape[0] for f in form_factors])
 
-    # One column per *species* channel, in the order the species are declared;
-    # an atom's channels then select from it by index.
+    # One column per *dataset* channel, in the order the datasets were first
+    # declared; an atom's channels then select from it by index.
     beta_of, lm_of, l_of = [], [], []
     column_offset = [0]
-    for species, channels in enumerate(channels_by_species):
+    for slot, channels in enumerate(dataset_channels):
         for nb, l, lm in channels:
-            beta_of.append(beta_offset[species] + nb)
+            beta_of.append(beta_offset[slot] + nb)
             lm_of.append(lm)
             l_of.append(l)
         column_offset.append(len(beta_of))
@@ -317,18 +409,28 @@ def build_projector_core(
     # origin guards drop between them. See :func:`_with_origin_tangent`.
     # ``origin_tangent=False`` is QE's convention and drops it again, which is
     # what a ``ph.x`` comparison on a Gamma-containing mesh is held to.
-    axes, slopes = _origin_slopes(pseudos, channels_by_species, cell.volume)
+    axes, slopes = _origin_slopes(dataset_pseudos, dataset_channels, cell.volume)
     if not origin_tangent:
         axes = ()
     columns = _with_origin_tangent(columns, kg, slopes, axes)
 
     # One row per projector channel, in QE's order: atoms outermost, then the
-    # channels of that atom's species.
+    # channels of that atom's species. The column comes from the species'
+    # *dataset*, and ``D`` from the species itself. Every column is computed
+    # element by element from its own dataset's radial table, and
+    # ``_apply_phases`` gathers columns by index, so a shared column holds the
+    # values each label's own copy would have held and ``vkb`` is unchanged:
+    # a two-label cell gives the same bytes as the same cell written with one
+    # label (``tests/unit/test_dataset_dedupe.py``). What does move is the
+    # order of a reverse-mode sum: the cotangent of a shared column is
+    # accumulated over both labels' atoms before it is carried back to
+    # ``k + G``, where it used to be carried back twice and added there, so a
+    # stress or a spiral ``dE/dq`` on such a cell is reassociated at round-off.
     atom_of, column_of, dij_blocks = [], [], []
     for atom, species in enumerate(structure.types):
         for index in range(len(channels_by_species[species])):
             atom_of.append(atom)
-            column_of.append(column_offset[species] + index)
+            column_of.append(column_offset[slot_of[species]] + index)
         dij_blocks.append(_expand_dij(pseudos[species], channels_by_species[species]))
 
     return ProjectorCore(

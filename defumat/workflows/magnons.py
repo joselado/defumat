@@ -305,12 +305,17 @@ def run_spin_susceptibility(
         # The refusals are checked before the fixed-density run rather than
         # inside it: they are statements about the calculation, and a caller
         # asking for something this cannot do should not first pay for the
-        # bands.
-        require_a_transverse_regime(Calculation(system, pseudos, k_batch=k_batch))
+        # bands. The calculation they read is the one the run then
+        # diagonalises in, where it used to be the first of three builds on
+        # one system (``OPEN.md`` Part III, H3); ``k_batch`` is what the kept
+        # build carried, and the discarded ``_default_nbnd`` one read only
+        # electron counts, which no chunk size touches.
+        calculation = Calculation(system, pseudos, k_batch=k_batch)
+        require_a_transverse_regime(calculation)
         states = fixed_density_states(
             system, pseudos, density,
-            nbnd=nbnd or _default_nbnd(system, pseudos),
-            conv_thr=conv_thr, k_batch=k_batch,
+            nbnd=nbnd or _default_nbnd(calculation),
+            conv_thr=conv_thr, k_batch=k_batch, calculation=calculation,
         )
     calculation, system, eigenvalues, wavefunctions = states
 
@@ -463,10 +468,13 @@ def run_magnon_dispersion(
         system = eqx.tree_at(
             lambda s: s.kpoints, system, _for_spin(kpoints, system)
         )
-    require_a_transverse_regime(Calculation(system, pseudos, k_batch=k_batch))
+    # One build, read by the refusals and then diagonalised in, as in
+    # :func:`run_spin_susceptibility` (``OPEN.md`` Part III, H3).
+    calculation = Calculation(system, pseudos, k_batch=k_batch)
+    require_a_transverse_regime(calculation)
     states = fixed_density_states(
-        system, pseudos, density, nbnd=nbnd or _default_nbnd(system, pseudos),
-        conv_thr=conv_thr, k_batch=k_batch,
+        system, pseudos, density, nbnd=nbnd or _default_nbnd(calculation),
+        conv_thr=conv_thr, k_batch=k_batch, calculation=calculation,
     )
 
     qpoints = np.atleast_2d(np.asarray(qpoints, dtype=float))
@@ -506,16 +514,15 @@ def run_magnon_dispersion(
     )
 
 
-def _default_nbnd(system, pseudos) -> int:
+def _default_nbnd(calculation) -> int:
     """Enough empty states for the spin-flip sum, which is not the optical rule.
 
     Both channels need empty bands here -- the minority ones are where the
     majority electrons go -- so the count is taken off the *larger* of the two
-    channel fillings rather than off half the electrons.
+    channel fillings rather than off half the electrons. The counts are read
+    off the caller's calculation; building one here to read them was a whole
+    constructor for three numbers (``OPEN.md`` Part III, H3).
     """
-    from defumat.scf.driver import Calculation
-
-    calculation = Calculation(system, pseudos)
     # ``nelup``/``neldw`` are ``None`` unless the magnetization is constrained,
     # so the electron count is the fallback rather than the exception.
     counts = [calculation.nelec / 2.0]

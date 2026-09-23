@@ -21,6 +21,7 @@ from defumat.pseudo.formfactors import (
     core_charge_of_g,
     local_potential_of_g,
 )
+from defumat.pseudo.projectors import _content_digest
 from defumat.pseudo.upf import Pseudopotential
 from defumat.system.cell import Cell
 from defumat.system.structure import Structure
@@ -98,13 +99,52 @@ def combine_species(values, structure: Structure, cell: Cell, gvectors: GVectors
     return _contract_species(tuple(values), factors)
 
 
+def _per_dataset(pseudos, field: str, transform) -> tuple:
+    """``transform(p)`` for each species, evaluated once per distinct dataset.
+
+    Two species labels naming one UPF file are one dataset, and each of the
+    three tables below is a radial transform of the dataset alone: two labels
+    got two identical transforms over the whole dense G set. One species per
+    magnetic site is the standard way to write a noncollinear texture, so
+    that was the per-label cost P73 found in the augmentation charge and
+    ``OPEN.md`` M2 in the projectors, in a third place: on
+    ``si8-paw-1k.in`` written as eight labels these three tables were 19.8 s of
+    a 26.7 s constructor, one core (``PLAN.md`` P110).
+
+    The key is exactly what the transforms read (:mod:`defumat.pseudo.
+    formfactors`): the mesh cut ``msh``, ``r``, ``rab`` and the radial array
+    ``field`` up to it, and for the local potential the valence charge its
+    long-range tail is built from. A shared entry is the same object, so
+    nothing moves, and the key never reads anything from the cell or the G
+    set, which is what keeps it valid inside ``at_strain``'s trace.
+    """
+    built: dict = {}
+    tables = []
+    for pseudo in pseudos:
+        msh = pseudo.msh
+        radial = getattr(pseudo, field)
+        key = (
+            msh,
+            _content_digest(pseudo.r[:msh]),
+            _content_digest(pseudo.rab[:msh]),
+            None if radial is None else _content_digest(radial[:msh]),
+            float(pseudo.z_valence) if field == "vloc" else None,
+        )
+        if key not in built:
+            built[key] = transform(pseudo)
+        tables.append(built[key])
+    return tuple(tables)
+
+
 def species_local_potential(
     pseudos: tuple[Pseudopotential, ...], cell: Cell, gvectors: GVectors
 ) -> tuple[jnp.ndarray, ...]:
     """``vloc_t(|G|)`` for each species, before any structure factor."""
     gmod = _gmod(gvectors.cartesian(cell))
     volume = cell.volume
-    return tuple(local_potential_of_g(p, gmod, volume) for p in pseudos)
+    return _per_dataset(
+        pseudos, "vloc", lambda p: local_potential_of_g(p, gmod, volume)
+    )
 
 
 def species_atomic_charge(
@@ -122,7 +162,9 @@ def species_atomic_charge(
     """
     gmod = _gmod(gvectors.cartesian(cell))
     volume = cell.volume
-    return tuple(atomic_charge_of_g(p, gmod, volume) for p in pseudos)
+    return _per_dataset(
+        pseudos, "rho_atom", lambda p: atomic_charge_of_g(p, gmod, volume)
+    )
 
 
 def species_core_charge(
@@ -133,9 +175,10 @@ def species_core_charge(
         return None
     gmod = _gmod(gvectors.cartesian(cell))
     volume = cell.volume
-    return tuple(
-        core_charge_of_g(p, gmod, volume) if p.has_nlcc else jnp.zeros_like(gmod)
-        for p in pseudos
+    return _per_dataset(
+        pseudos, "rho_core",
+        lambda p: core_charge_of_g(p, gmod, volume) if p.has_nlcc
+        else jnp.zeros_like(gmod),
     )
 
 

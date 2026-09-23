@@ -52,7 +52,11 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from defumat.response.piezo import KMESH_STEP, piezoelectric_tensor
+from defumat.response.piezo import (
+    KMESH_STEP,
+    piezoelectric_tensor,
+    require_a_piezoelectric_tensor,
+)
 from defumat.scf import Calculation, run_scf
 from defumat.system.kpoints import KPoints, for_spin
 
@@ -188,6 +192,20 @@ def piezoelectric_kmesh_ladder(
             "last rung is the answer and the last step is the drift, so the "
             "order is part of the result rather than a presentation choice"
         )
+    # **Refused before the first ground state, not after it.** Every rung used
+    # to run its SCF and only then meet the refusal inside
+    # ``piezoelectric_tensor``, so a metal or an ``nspin = 2`` crystal cost one
+    # whole self-consistent run to be told it had never been measured. The
+    # chain reads the input alone, so it is asked here of the first rung: that
+    # rung and not ``system`` itself, because every rung is unshifted whatever
+    # the input asked for and a ``nosym`` run on a shifted input grid is
+    # refused for its shift, which no rung has. The rungs differ from one
+    # another only in the mesh, and ``allow_a_coarse_mesh`` is the exemption
+    # each of them is given below, so one question answers for all of them.
+    require_a_piezoelectric_tensor(
+        _rung(system, meshes[0], wedge), allow_a_coarse_mesh=True,
+        pseudos=pseudos,
+    )
 
     tensors, counts, seconds = [], [], []
     calculation = None

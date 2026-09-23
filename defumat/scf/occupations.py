@@ -68,9 +68,12 @@ def fixed_occupations(
     Returns ``(wg, homo, lumo)``. With ``counts`` the two levels come back **per
     channel**, as ``(2,)`` arrays -- the same widening :func:`smeared_occupations`
     does to its Fermi level, and for the same reason: each channel's highest
-    occupied state is its own ``ef_up`` / ``ef_dw`` in ``iweights``. Raises if the
-    electron count does not fill a whole number of bands, which means the system
-    needs either spin polarisation or smearing.
+    occupied state is its own ``ef_up`` / ``ef_dw`` in ``iweights``. A channel
+    with no electrons in it (the fully polarized hydrogen atom's minority) is
+    filled with nothing and reports :data:`EMPTY_CHANNEL_LEVEL` as its HOMO, which
+    is ``iweights``' own ``-1e20``; see :func:`_fixed_occupations_spin`. Raises if
+    the electron count does not fill a whole number of bands, which means the
+    system needs either spin polarisation or smearing.
     """
     nspin, _, nbnd = eigenvalues.shape
     if counts is not None:
@@ -101,6 +104,17 @@ def fixed_occupations(
     return wg, homo, lumo
 
 
+#: The highest occupied level of a channel that holds no electrons.
+#: ``iweights.f90:51`` initialises ``Ef = -1.0d+20`` and raises it only at a band
+#: with ``wg > 0`` (line 60), so a channel ``iweights_only`` filled with nothing
+#: comes back with exactly this number as its ``ef_up`` or ``ef_dw``. Finite
+#: rather than ``-inf`` because it is QE's value, and because a finite number
+#: survives every place the level goes afterwards -- ``float()``, the
+#: checkpoint's JSON and a formatted print -- while the maximum over the two
+#: channels, which is the reported HOMO, still picks the occupied channel's level.
+EMPTY_CHANNEL_LEVEL = -1.0e20
+
+
 def _fixed_occupations_spin(eigenvalues, weights, counts):
     """``iweights_only`` per spin channel -- ``weights.f90:330-333``.
 
@@ -108,6 +122,45 @@ def _fixed_occupations_spin(eigenvalues, weights, counts):
     ``degspin = 1`` (``iweights_only`` sets it so whenever ``is /= 0``), and each
     reports its own highest occupied level, which is what ``iweights`` returns as
     ``ef_up`` and ``ef_dw``.
+
+    **An empty channel is a run, not a refusal.** ``iweights_only`` fills
+    ``ibnd <= NINT(nelec)/degspin`` and has no lower bound, so a channel with
+    ``NINT(count) = 0`` simply gets no weight at all, and ``iweights`` then leaves
+    its level at :data:`EMPTY_CHANNEL_LEVEL`. That is the fully polarized
+    hydrogen atom, ``nelec = 1`` with ``tot_magnetization = 1``, and any atom
+    whose minority channel the constraint empties. It used to be refused here as
+    something fixed occupations "cannot express", which was a statement about
+    this function and not about the physics. What this changes for the pair of
+    levels:
+
+    * the empty channel's HOMO is ``-1e20`` and never a band energy.
+      ``eigenvalues[channel, :, occupied - 1]`` at ``occupied = 0`` is index
+      ``-1``, the **last** band, so the level has to be a branch and not the
+      formula the occupied channels use -- the formula returns a plausible
+      number, the top of the computed spectrum, rather than an error;
+    * its LUMO is band 0's minimum over k, which is what ``get_homo_lumo``
+      (``print_ks_energies.f90:219-273``) takes for a k-point with ``kbnd = 0``:
+      the lowest state of the empty channel.
+
+    ``pw.x`` never *prints* the sentinel for this case:
+    ``print_ks_ef_homolumo`` writes ``ef_up``/``ef_dw`` only under ``lgauss .OR.
+    ltetra`` and otherwise prints ``get_homo_lumo``'s pair, whose ``ehomo`` skips
+    every k-point with ``kbnd = 0``. It does carry it -- ``weights.f90:173-175``
+    averages the two levels into ``ef`` "to prevent NaN in Ef", and ``dos.f90:205``
+    formats ``ef_up`` and ``ef_dw`` into its header under ``two_fermi_energies``
+    without looking at the occupations -- and here it surfaces as the empty
+    channel's ``SCFResult.fermi_energy_up`` or ``fermi_energy_down``, while
+    ``SCFResult.homo``, the maximum over the two channels, is the occupied
+    channel's level exactly as ``get_homo_lumo`` gives it.
+
+    **A negative count is still refused**, and that is where ``pw.x`` stops as
+    well, one step later. Neither ``set_nelup_neldw`` nor ``setup.f90`` checks
+    a ``tot_magnetization`` larger than the electron count, so ``iweights_only``
+    fills the minority with nothing and the majority with ``NINT(nelup) > nelec``
+    bands, the density integrates to more electrons than the cell has, and
+    ``electrons.f90:1122-1128`` stops the first iteration with "charge is wrong:
+    smearing is needed". Here the same input stops at the fill, with the input
+    variable named.
     """
     nspin, nk, nbnd = eigenvalues.shape
     if nspin != 2:
@@ -117,22 +170,31 @@ def _fixed_occupations_spin(eigenvalues, weights, counts):
 
     occupancies, homos, lumos = [], [], []
     for channel, count in enumerate(counts):
-        # ``NINT``: Fortran rounds half away from zero, which for a positive
-        # electron count is ``floor(n + 1/2)``.
+        # ``eps8``, QE's tolerance on an electron count, so that a zero reached
+        # by arithmetic is still a zero.
+        if float(count) < -1.0e-8:
+            raise ValueError(
+                f"spin channel {channel} is given {count} electrons: "
+                "|tot_magnetization| is larger than the number of electrons, so "
+                "the other channel would be filled with more electrons than the "
+                "cell holds. pw.x fills it anyway and then stops on the density "
+                "('charge is wrong: smearing is needed', electrons.f90); this "
+                "stops at the fill instead. Use |tot_magnetization| <= nelec"
+            )
+        # ``NINT``: Fortran rounds half away from zero, which for a
+        # non-negative electron count is ``floor(n + 1/2)``.
         occupied = int(np.floor(float(count) + 0.5))
         if occupied > nbnd:
             raise ValueError(
                 f"spin channel {channel} holds {count} electrons and so needs "
                 f"{occupied} bands, but only {nbnd} were computed; raise nbnd"
             )
-        if occupied < 1:
-            raise ValueError(
-                f"spin channel {channel} is empty ({count} electrons): a "
-                "tot_magnetization that large leaves a channel with no occupied "
-                "band, which fixed occupations cannot express"
-            )
         occupancies.append(jnp.arange(nbnd) < occupied)
-        homos.append(jnp.max(eigenvalues[channel, :, occupied - 1]))
+        if occupied > 0:
+            homos.append(jnp.max(eigenvalues[channel, :, occupied - 1]))
+        else:
+            # A branch, not ``occupied - 1``: index -1 is the last band.
+            homos.append(EMPTY_CHANNEL_LEVEL)
         lumos.append(
             jnp.min(eigenvalues[channel, :, occupied]) if occupied < nbnd else jnp.nan
         )

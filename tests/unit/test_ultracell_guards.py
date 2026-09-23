@@ -142,9 +142,12 @@ def test_an_explicit_list_is_judged_by_its_points(silicon):
         points, np.ones(len(points)), cell))
     require_the_folded_grid(listed, (8, 1, 1), (1, 2, 2))
 
+    # The right points at unequal weights: the weight spread is what
+    # ``is_reduced`` reads as a wedge, so it is that refusal which fires, and it
+    # is the only uniformity test the guard needs.
     uneven = eqx.tree_at(lambda s: s.kpoints, system, KPoints.from_crystal(
         points, np.linspace(1.0, 2.0, len(points)), cell))
-    with pytest.raises(ValueError, match=r"supercell \* kgrid"):
+    with pytest.raises(ValueError, match="symmetry-reduced wedge"):
         require_the_folded_grid(uneven, (8, 1, 1), (1, 2, 2))
 
 

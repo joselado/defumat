@@ -285,7 +285,8 @@ class System(eqx.Module):
         """
         if not self.noncolin:
             return False
-        return is_magnetic(self.nspin, self.local_moments, self.atomic_b_field)
+        return is_magnetic(self.nspin, self.local_moments, self.atomic_b_field,
+                           self.b_field)
 
     @property
     def nspin_mag(self) -> int:
@@ -604,7 +605,7 @@ class System(eqx.Module):
         )
         fields = np.asarray(self.atomic_b_field, dtype=float)
         axial = axial_vectors(moments, self.atomic_b_field, self.b_field)
-        magnetic = is_magnetic(nspin, moments, fields)
+        magnetic = is_magnetic(nspin, moments, fields, self.b_field)
         symmetries = find_symmetries(self.cell, self.structure)
         if magnetic:
             symmetries = magnetic_symmetries(
@@ -772,16 +773,35 @@ def axial_vectors(moments, atomic_b_field=(), b_field=(0.0, 0.0, 0.0)):
     return vectors[0] if len(vectors) == 1 else tuple(vectors)
 
 
-def is_magnetic(nspin: int, moments, fields=()) -> bool:
+def is_magnetic(nspin: int, moments, fields=(), uniform=(0.0, 0.0, 0.0)) -> bool:
     """``setup.f90``'s ``domag``: does this run carry a magnetization?
 
     ``moments`` is ``(nat, 3)`` -- :func:`local_moments`, which already folds
     the ``STARTING_MOMENTS`` card over the per-species
-    ``starting_magnetization``/``angle1``/``angle2`` -- and ``fields`` the
-    ``LOCAL_MAGNETIC_FIELDS`` card. Elk's ``findsym.f90`` tests both, and so
-    must this: an applied per-atom field breaks operations the moments alone
-    keep, and ``sym_rho`` would then average away the texture the field was
-    applied to create.
+    ``starting_magnetization``/``angle1``/``angle2`` -- ``fields`` the
+    ``LOCAL_MAGNETIC_FIELDS`` card and ``uniform`` the ``B_field``. Elk's
+    ``findsym.f90`` tests all three, and so must this: an applied field breaks
+    operations the moments alone keep, and ``sym_rho`` would then average away
+    the texture the field was applied to create.
+
+    **A uniform field on its own makes the run magnetic, which is a departure
+    from ``pw.x``** (2026-09-23). ``setup.f90:219`` sets ``domag`` from
+    ``starting_magnetization`` alone, and a noncollinear ``pw.x`` input with a
+    ``B_field`` and no starting moment then converges the field-free
+    calculation in silence: ``add_bfield`` writes the field into the
+    magnetization channels and ``vloc_psi_nc`` applies them only
+    ``IF (domag)``. This package refused that input, asking for a seed; now the
+    field makes the run magnetic, as the per-atom card already did, and the
+    comparison against ``pw.x`` for such an input is against the field-free
+    number it prints. **It replaces a seed only where the field-free ground
+    state is nonmagnetic.** A hydrogen atom at ``degauss = 0.2`` (seeded and
+    field-free it decays to 1e-4) takes +0.159 mu_B along ``B_field(3) =
+    0.01``; the same atom at ``degauss = 0.02``, which polarizes on its own,
+    converges to -0.103 mu_B *against* the field, the stationary point near
+    zero moment, 0.052 Ry above the polarized state. A spontaneous magnet still
+    needs a seed of the size of its moment. A collinear run is unaffected,
+    since ``nspin = 2`` refuses a field with no ``starting_magnetization`` at
+    input.
 
     The two thresholds are not the same number and that is deliberate: ``1e-6``
     is QE's on a magnetization, and a *field* is compared against ``1e-12``
@@ -796,9 +816,11 @@ def is_magnetic(nspin: int, moments, fields=()) -> bool:
         return False
     moments = np.asarray(moments, dtype=float)
     fields = np.asarray(fields, dtype=float)
+    uniform = np.asarray(uniform, dtype=float)
     return bool(
         np.any(np.abs(moments) > 1.0e-6)
         or (fields.size and np.any(np.abs(fields) > 1.0e-12))
+        or np.any(np.abs(uniform) > 1.0e-12)
     )
 
 
@@ -1196,7 +1218,9 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
     axial = axial_vectors(
         moments, atomic_fields, pwin.indexed("system", "b_field", 3)
     )
-    magnetic = is_magnetic(nspin, moments, atomic_fields)
+    magnetic = is_magnetic(
+        nspin, moments, atomic_fields, pwin.indexed("system", "b_field", 3)
+    )
     symmetries = find_symmetries(cell, structure)
     if magnetic:
         symmetries = magnetic_symmetries(cell, structure, symmetries, axial)

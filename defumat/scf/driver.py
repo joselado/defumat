@@ -1900,10 +1900,12 @@ class Calculation:
         # ``compute_ux``: the fixed axis a gradient-corrected noncollinear run
         # takes the sign of the magnetization along. ``None`` -- QE's
         # ``lsign = .FALSE.`` -- whenever the starting moments are not all
-        # parallel. A tuple rather than an array because it crosses a ``jit``
-        # boundary as a static argument.
+        # parallel; the uniform field's direction when there is no starting
+        # moment at all and the field alone made the run magnetic. A tuple
+        # rather than an array because it crosses a ``jit`` boundary as a
+        # static argument.
         axis = (
-            fixed_quantization_axis(system.local_moments)
+            fixed_quantization_axis(system.local_moments, system.b_field)
             if self.nspin_mag == 4 and not self.spiral else None
         )
         self.quantization_axis = None if axis is None else tuple(float(v) for v in axis)
@@ -2297,18 +2299,21 @@ class Calculation:
                 "no magnetization for it to act on"
             )
         if self.noncolin and self.nspin_mag != 4:
-            # ``domag`` is decided by ``starting_magnetization`` and by nothing
-            # else (``setup.f90:219``), so a noncollinear run with a field and no
-            # starting moment has ``nspin_mag = 1``: a one-channel density and a
-            # one-channel potential, with nowhere to put a field that is three
-            # components wide. **``pw.x`` does not do this either, and the way it
-            # fails is worse.** It allocates ``rho%of_r`` with ``nspin = 4``
-            # whatever ``domag`` says (``scf_mod.f90:140``), so ``add_bfield``
-            # has channels 2:4 to write into and writes the field there -- and
-            # then ``vloc_psi_nc`` applies the magnetization channels only
-            # ``IF (domag)`` (``vloc_psi_acc.f90:331``), so the field never
-            # reaches a wavefunction. Such a run converges, reports success, and
-            # is the field-free calculation.
+            # Unreachable while ``is_magnetic`` counts every applied field, which
+            # it has since 2026-09-23: a uniform ``B_field`` or a
+            # ``LOCAL_MAGNETIC_FIELDS`` card makes the run magnetic by itself,
+            # so a field always finds four channels. Kept as the guard for the
+            # two rules drifting apart, because what it guards against is
+            # silent: a one-channel density and a one-channel potential, with
+            # nowhere to put a field that is three components wide. ``pw.x``
+            # sets ``domag`` from ``starting_magnetization`` alone
+            # (``setup.f90:219``) and fails worse -- it allocates ``rho%of_r``
+            # with ``nspin = 4`` whatever ``domag`` says (``scf_mod.f90:140``),
+            # so ``add_bfield`` writes the field into channels 2:4, and
+            # ``vloc_psi_nc`` applies them only ``IF (domag)``
+            # (``vloc_psi_acc.f90:331``), so the field never reaches a
+            # wavefunction. Such a run converges, reports success, and is the
+            # field-free calculation.
             raise ValueError(
                 "a magnetic field in a noncollinear run needs a magnetization to "
                 "act on, and this run has none: every starting_magnetization is "

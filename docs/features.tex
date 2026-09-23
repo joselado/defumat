@@ -1353,7 +1353,30 @@ canting away. A \code{LOCAL\_MAGNETIC\_FIELDS} card labels its atoms in the
 same way at \code{nspin = 2}, so a staggered field on two otherwise equivalent
 atoms keeps only the operations that do not swap them. To change the field of
 an existing system, use \code{system.with\_b\_field(...)}, which rebuilds the
-k-set with the new group. An \code{r\_m} left unset for a species, or set to
+k-set with the new group.
+
+\textbf{A field needs no starting moment, on a cell that is not a magnet
+already.} A noncollinear run with a \code{B\_field} and every
+\code{starting\_magnetization} zero is magnetic because of the field, and a
+gradient-corrected functional takes the sign of the magnetization along the
+field. Where the field-free ground state is nonmagnetic this converges to the
+induced moment: a hydrogen atom smeared at \code{degauss = 0.2}, whose seeded
+field-free run decays to $10^{-4}\,\mu_B$, takes $+0.159\,\mu_B$ along a
+\code{B\_field(3) = 0.01}. Where the cell polarizes on its own it does not: the
+same atom at \code{degauss = 0.02} converges to $-0.103\,\mu_B$, against the
+field, which is the stationary point near zero moment that an SCF finds as
+readily as a minimum, 0.052~Ry above the polarized state. A spontaneous magnet
+still wants a seed of the size of the moment it will carry, and the field does
+not choose its sign: a seed of 0.6 along the field reaches $+1.0\,\mu_B$, a seed
+of 0.05 crosses to $-1.0\,\mu_B$ at the same total energy, the field's energy
+being outside the total. This departs from \code{pw.x}, whose \code{domag} reads
+the starting moments alone: it accepts the unseeded input and converges the
+\emph{field-free} calculation, because \code{add\_bfield} writes the field into
+the potential's magnetization channels and \code{vloc\_psi\_nc} applies those
+only \code{IF (domag)}. A comparison against \code{pw.x} for such an input is
+therefore a comparison against no field.
+
+An \code{r\_m} left unset for a species, or set to
 zero, takes \code{make\_pointlists.f90}'s default radius rather than a sphere of
 radius zero.
 
@@ -2033,16 +2056,6 @@ source.
 orbital-resolved variant, the \code{wf}/\code{pseudo} projector sets, and
 noncollinear \code{ns\_nc}; and PAW $+$ GGA $+$ a noncollinear magnetization
 together.
-
-A \textbf{magnetic field in a noncollinear run with no starting moment} is
-refused rather than run. \code{domag} comes from \code{starting\_magnetization}
-and from nothing else (\code{setup.f90}), so such a run has
-\code{nspin\_mag = 1} and a density with no magnetization channels for the field
-to act on. Set \code{starting\_magnetization} for one species --- any nonzero
-value will do, the field decides where the moment goes. Worth knowing:
-\code{pw.x} \emph{accepts} this input and silently drops the field, because
-\code{add\_bfield} writes it into the potential's magnetization channels and
-\code{vloc\_psi\_nc} applies those only \code{IF (domag)}.
 
 The \textbf{residual solver} cannot take a fixed occupation whose filled/empty
 boundary cuts a \textbf{degenerate multiplet} --- which is exactly what an

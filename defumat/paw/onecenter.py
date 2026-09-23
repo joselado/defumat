@@ -61,7 +61,7 @@ from defumat.paw.angular import AngularGrid, build_angular_grid
 from defumat.paw.gradient import onecenter_gradient_correction, radial_derivative
 from defumat.paw.hartree import radial_hartree
 from defumat.pseudo.coupling import harmonic_products
-from defumat.pseudo.projectors import projector_channels
+from defumat.pseudo.projectors import _content_digest, projector_channels
 from defumat.pseudo.radial import simpson_weights
 from defumat.pseudo.upf import Pseudopotential
 from defumat.units import E2, FPI
@@ -730,14 +730,39 @@ def _kinetic_tensor(waves, coefficients, angular, lm_of, r, iraug, nlm):
 
 
 def build_paw(pseudos, structure, functional: Functional, cell=None) -> PawCorrections | None:
-    """Precompute the one-centre tensors. ``None`` if no species is PAW."""
+    """Precompute the one-centre tensors. ``None`` if no species is PAW.
+
+    **One :class:`PawSpecies` per distinct dataset, shared by every species
+    label that names it.** One species per magnetic site is the standard way
+    to write a noncollinear texture, and site-resolved DFT+U is the same
+    pattern, so fifteen nickel sites arrive as fifteen labels naming one file.
+    Built per label, that was fifteen identical ``(nh, nh, nlm, mesh)`` tensor
+    pairs -- ``2 nh^2 nlm mesh x 8`` bytes each, 155.5 MB at ``nh = 18``,
+    ``nlm = 25``, ``mesh = 1200``, so 2.18 GB of duplicates across the
+    fourteen extra labels -- and fifteen calls to ``_build_species``, one of
+    which is 0.93 s of the 1.53 s constructor on the one-species Pt PAW cell
+    (``OPEN.md`` Part III, M2; arithmetic, not a measurement of this change).
+    The object is shared rather than copied, as ``build_augmentation`` shares
+    ``Q_ij(G)`` (P73): :meth:`PawCorrections.energy_and_coefficients` pairs
+    each species with its own atoms and its own ``becsum``, and a
+    :class:`PawSpecies` carries nothing per-label, so the same tensors serving
+    two labels is the same arithmetic as two identical copies. The key is
+    :func:`_paw_dataset_key`.
+    """
     if not any(p.is_paw for p in pseudos):
         return None
 
     types = np.asarray(structure.types)
     species = []
+    built: dict = {}  # dataset fingerprint -> PawSpecies; see _paw_dataset_key
     for pseudo in pseudos:
-        species.append(_build_species(pseudo, functional) if pseudo.is_paw else None)
+        if not pseudo.is_paw:
+            species.append(None)
+            continue
+        key = _paw_dataset_key(pseudo)
+        if key not in built:
+            built[key] = _build_species(pseudo, functional)
+        species.append(built[key])
 
     return PawCorrections(
         species=tuple(species),
@@ -745,6 +770,54 @@ def build_paw(pseudos, structure, functional: Functional, cell=None) -> PawCorre
             tuple(int(a) for a in np.flatnonzero(types == t))
             for t in range(structure.ntyp)
         ),
+    )
+
+
+def _lmax_rho(pseudo: Pseudopotential) -> int:
+    """``l_max_rho`` from the header, or twice the projectors' ``lmax``."""
+    return int(pseudo.header.get("l_max_rho", 2 * pseudo.lmax) or 2 * pseudo.lmax)
+
+
+def _paw_dataset_key(pseudo: Pseudopotential) -> tuple:
+    """A fingerprint of everything :func:`_build_species` reads from a dataset.
+
+    The content and not the file name, for the reason
+    :func:`defumat.pseudo.augmentation._dataset_key` gives: a path can be
+    absent and can lie. The hashing is the same (``_content_digest``), and the
+    tuple is not, because that key covers what ``Q_ij(G)`` is built from --
+    ``r``, ``rab`` and ``qfuncl`` *truncated at* ``kkbeta`` -- while a PAW
+    sphere reads the partial waves, both core charges and the radial grid over
+    the **whole** mesh (the energies are integrated to ``mesh`` and only the
+    ``ddd`` integrals to ``kkbeta``; see :func:`_truncated_weights`), and
+    ``qfuncl`` untruncated. Two datasets that agree inside ``kkbeta`` and
+    differ past it are one dataset for the augmentation charge and two here.
+
+    The functional is not in the key: ``built`` lives for one
+    :func:`build_paw` call, and a call has one functional.
+
+    An incomplete dataset keys on its own identity, so that
+    :func:`_build_species` is reached and raises its own error rather than
+    this failing first on a missing attribute.
+    """
+    paw = pseudo.paw
+    augmentation = pseudo.augmentation
+    if paw is None or augmentation is None or augmentation.qfuncl is None:
+        return ("incomplete", id(pseudo))
+    return (
+        tuple(projector_channels(pseudo)),
+        pseudo.mesh,
+        pseudo.kkbeta,
+        _lmax_rho(pseudo),
+        float(pseudo.dx),
+        paw.cutoff_index,
+        _content_digest(pseudo.r),
+        _content_digest(pseudo.rab),
+        _content_digest(pseudo.rho_core),
+        _content_digest(paw.ae_wfc),
+        _content_digest(paw.ps_wfc),
+        _content_digest(paw.ae_wfc_rel),
+        _content_digest(paw.ae_rho_core),
+        _content_digest(augmentation.qfuncl),
     )
 
 
@@ -764,7 +837,7 @@ def _build_species(pseudo: Pseudopotential, functional: Functional) -> PawSpecie
 
     channels = projector_channels(pseudo)
     nh = len(channels)
-    lmax_rho = int(pseudo.header.get("l_max_rho", 2 * pseudo.lmax) or 2 * pseudo.lmax)
+    lmax_rho = _lmax_rho(pseudo)
     nlm = (lmax_rho + 1) ** 2
     ap = harmonic_products(pseudo.lmax)
     if ap.shape[0] < nlm:

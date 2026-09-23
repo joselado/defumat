@@ -212,24 +212,34 @@ def test_a_continued_run_compares_tau_against_the_densitys_shape():
     assert "expected = (calculation.nspin,)" not in source
 
 
-# --- a field needs a magnetization to act on ---------------------------------
+# --- a field makes the run magnetic ------------------------------------------
 
 
-def test_a_field_without_a_starting_moment_is_refused(pseudo_dir):
-    """``domag`` comes from ``starting_magnetization`` and from nothing else.
+def test_a_field_without_a_starting_moment_makes_the_run_magnetic(pseudo_dir):
+    """A uniform field is a seed, as the per-atom card already was.
 
-    ``pw.x`` accepts this input and the field never reaches a wavefunction:
-    ``add_bfield`` writes it into ``v(:, 2:4)`` and ``vloc_psi_nc`` applies those
-    channels only ``IF (domag)``. So the run converges, reports success, and is
-    the field-free calculation -- which is why this is refused here rather than
-    reproduced.
+    ``pw.x`` sets ``domag`` from ``starting_magnetization`` alone, accepts this
+    input, and the field never reaches a wavefunction: ``add_bfield`` writes it
+    into ``v(:, 2:4)`` and ``vloc_psi_nc`` applies those channels only
+    ``IF (domag)``, so the run is the field-free calculation. This package
+    refused it until 2026-09-23 and now runs it with the field as the seed:
+    four density channels, the field built, time reversal off, and the GGA's
+    sign taken along the field, which is where the induced moment grows.
     """
-    with pytest.raises(ValueError, match="starting_magnetization"):
-        _calculation(pseudo_dir, ", noncolin = .true., b_field(3) = 0.01")
+    calculation = _calculation(pseudo_dir, ", noncolin = .true., b_field(3) = 0.01")
+    system = calculation.system
+    assert system.domag and calculation.nspin_mag == 4
+    assert calculation.magnetic_field is not None
+    assert calculation.quantization_axis == (0.0, 0.0, 1.0)
+    # A field along z keeps the rotations about z and drops the operations
+    # that turn it over; with the same cell unmagnetized, it is a smaller group.
+    plain = _calculation(pseudo_dir, ", noncolin = .true.")
+    assert not plain.system.domag and plain.nspin_mag == 1
+    assert system.symmetry_group().nsym < plain.system.symmetry_group().nsym
 
 
-def test_a_starting_moment_is_the_way_out(pseudo_dir):
-    """The refusal names a one-variable fix, so the fix has to work."""
+def test_a_starting_moment_with_a_field(pseudo_dir):
+    """A seeded moment and a field together, the form ``pw.x`` also runs."""
     calculation = _calculation(
         pseudo_dir,
         ", noncolin = .true., b_field(3) = 0.01, starting_magnetization(1) = 0.1",

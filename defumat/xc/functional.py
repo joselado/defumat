@@ -678,11 +678,32 @@ class Functional(eqx.Module):
         # (``t - stop_gradient(t)`` is zero, not an ulp) and the tangent is
         # QE's chain factor *at the clamped zeta*, dzeta = ((1 - zeta) drho_up
         # - (1 + zeta) drho_down) / n -- ``dh0zup``'s ``(1 - zeta)``, which is
-        # 1e-6 rather than the raw point's 0. Beyond |zeta| = 1 the tangent
-        # stays zero.
+        # 1e-6 rather than the raw point's 0.
+        #
+        # Beyond |zeta| = 1 the point is **cut**, value and every derivative:
+        # ``gcc_spin`` clamps only under ``ABS(zeta) <= 1`` (qe_drivers_gga.f90
+        # :1082-1083), so a raw |zeta| > 1 survives the clamp and meets the
+        # ``ABS(zeta) > 1`` test that CYCLEs with sc = v1c = v2c = 0 (:1086-1092).
+        # A plane-wave density reaches it wherever the minority channel is
+        # slightly negative, after mixing or from an augmentation charge. This
+        # used to clamp that point to 1 - 1e-6 and keep it: PBE at
+        # rho = (0.02, -0.001), grad rho = (0.01, 0, 0) and (0.002, 0, 0), gave
+        # sc = 1.64e-4 Ry/bohr^3 where ``pw.x`` gives 0, and a nonzero v1c and v2c
+        # through the density and the gradient. It is now a conjunct of
+        # ``active``, so the value is masked and ``jax.grad`` of it gives
+        # v1c = v2c = 0 there as QE's CYCLE does. The discarded branch is finite:
+        # density and sigma go to the trash pair and zeta is the constant
+        # +-(1 - 1e-6), at which H and all its partials are finite
+        # ((1 -+ zeta)^(-1/3) is 100, not an infinity), so nothing leaks through
+        # the ``where``. |zeta| == 1 exactly is kept, as QE keeps it, because the
+        # test is on ``> 1``; that is every point of a saturated magnet with its
+        # minority channel exactly zero, and it is the interior branch above.
+        # ``physical`` is the same predicate as the tangent gate inside ``zeta``,
+        # which no longer decides anything at a kept point.
         limit = 1.0 - RHO_THRESHOLD_GGA
         raw = (rho[0] - rho[1]) / safe_density
         frozen = jax.lax.stop_gradient(raw)
+        physical = jnp.abs(frozen) <= 1.0
         clamped = clamp_polarization(frozen, limit)
         chain = (rho[0] - rho[1] - clamped * density) / jax.lax.stop_gradient(
             safe_density
@@ -692,13 +713,15 @@ class Functional(eqx.Module):
             raw,
             clamped
             + jnp.where(
-                jnp.abs(frozen) <= 1.0,
+                physical,
                 chain - jax.lax.stop_gradient(chain),
                 0.0,
             ),
         )
-        active = (density > RHO_THRESHOLD_GGA) & (
-            jnp.sqrt(jnp.abs(sigma)) > RHO_THRESHOLD_GGA
+        active = (
+            physical
+            & (density > RHO_THRESHOLD_GGA)
+            & (jnp.sqrt(jnp.abs(sigma)) > RHO_THRESHOLD_GGA)
         )
         safe_sigma = jnp.where(active, sigma, _SIGMA_TRASH)
         contribution = self.gradient_correlation_spin(

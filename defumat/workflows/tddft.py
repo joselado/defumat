@@ -218,11 +218,18 @@ def run_absorption(
         import equinox as eqx
 
         system = eqx.tree_at(lambda s: s.kpoints, system, kpoints)
-    require_a_sum_over_states_regime(Calculation(system, pseudos, k_batch=k_batch))
+    # The calculation the refusals read is the one the fixed-density run then
+    # diagonalises in, rather than the first of three builds on one system,
+    # two of them discarded (``OPEN.md`` Part III, H3). ``k_batch`` is what the
+    # kept build always carried; the discarded ``_default_nbnd`` build read
+    # only the electron count, which no chunk size touches.
+    calculation = Calculation(system, pseudos, k_batch=k_batch)
+    require_a_sum_over_states_regime(calculation)
 
     calculation, system, eigenvalues, wavefunctions = fixed_density_states(
-        system, pseudos, density, nbnd=nbnd or _default_nbnd(system, pseudos),
+        system, pseudos, density, nbnd=nbnd or _default_nbnd(calculation),
         conv_thr=conv_thr, k_batch=k_batch, ns=ns, becsum=becsum,
+        calculation=calculation,
     )
     nocc = int(round(calculation.nelec / 2))
     nbnd = int(eigenvalues.shape[-1])
@@ -278,17 +285,17 @@ def run_absorption(
     )
 
 
-def _default_nbnd(system, pseudos) -> int:
+def _default_nbnd(calculation) -> int:
     """Four times the occupied count, which is a starting point and not a choice.
 
     There is no way to pick this correctly without looking at the answer, which
     is why :attr:`OpticalSpectrum.static_residual` exists. Four times is enough
     for a static value good to a few parts in a thousand on silicon and is not
-    enough for every system.
+    enough for every system. The electron count is read off the caller's
+    calculation; building one here to read it was a whole constructor for one
+    number (``OPEN.md`` Part III, H3).
     """
-    from defumat.scf.driver import Calculation
-
-    nocc = int(round(Calculation(system, pseudos).nelec / 2))
+    nocc = int(round(calculation.nelec / 2))
     return max(4 * nocc, nocc + 8)
 
 

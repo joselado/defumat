@@ -106,7 +106,16 @@ def run_conductivity(
         system = eqx.tree_at(
             lambda s: s.kpoints, system, for_spin(kpoints, system.nspin)
         )
-    require_a_conductivity_regime(Calculation(system, pseudos, k_batch=k_batch))
+    # **One calculation, built once**, and it is the one the fixed-density run
+    # below diagonalises in. This used to build up to three on the same system
+    # -- one for the refusals, one for ``_default_nbnd`` to read the electron
+    # count off, and the one ``fixed_density_states`` kept -- and each discarded
+    # one was the whole constructor (``OPEN.md`` Part III, H3). ``k_batch`` is
+    # the value the kept build always had; the ``_default_nbnd`` build went
+    # without it, and read only ``nelec`` and ``noncolin``, which no chunk size
+    # touches.
+    calculation = Calculation(system, pseudos, k_batch=k_batch)
+    require_a_conductivity_regime(calculation)
 
     # **One band more than the sum uses**, and it is not an accident of
     # rounding. Where the truncation falls is the difference between an
@@ -117,11 +126,11 @@ def run_conductivity(
     # says which of the two happened is between the last band kept and the
     # first dropped, so it cannot be measured from the sum's own band set. One
     # extra band buys it, and it is one band out of dozens.
-    nbnd = int(nbnd or _default_nbnd(system, pseudos))
+    nbnd = int(nbnd or _default_nbnd(calculation))
     calculation, system, eigenvalues, wavefunctions = fixed_density_states(
         system, pseudos, density, nbnd=nbnd + 1,
         conv_thr=conv_thr, k_batch=k_batch, ns=ns, becsum=becsum, tau=tau,
-        field=field, field_scale=field_scale,
+        field=field, field_scale=field_scale, calculation=calculation,
     )
     eigenvalues = jnp.asarray(eigenvalues)
     if eigenvalues.ndim == 2:
@@ -170,7 +179,7 @@ def run_conductivity(
     )
 
 
-def _default_nbnd(system, pseudos) -> int:
+def _default_nbnd(calculation) -> int:
     """Three times the occupied count, which is a starting point and not a choice.
 
     **A spinor band holds one electron and an unpolarized band holds two**, so
@@ -178,10 +187,11 @@ def _default_nbnd(system, pseudos) -> int:
     -- the same rule ``Calculation.occupations`` calls ``degeneracy``. Getting
     it wrong on a spinor run asks for half the bands and truncates the sum
     silently.
-    """
-    from defumat.scf.driver import Calculation
 
-    calculation = Calculation(system, pseudos)
+    It takes the caller's calculation rather than building its own: both
+    numbers are already on it, and a build here was a whole constructor for
+    two attributes (``OPEN.md`` Part III, H3).
+    """
     degeneracy = 1 if calculation.noncolin else 2
     return max(4, int(np.ceil(3.0 * calculation.nelec / degeneracy)))
 

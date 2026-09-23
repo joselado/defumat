@@ -79,27 +79,48 @@ def test_a_cubic_crystal_admits_no_spontaneous_polarization():
         require_a_nonpolar_crystal(_crystal(case))
 
 
-def _calculation(case: str):
-    """A real ``Calculation``, which is what the guard chain reads."""
+def _input(case: str):
+    """The ``System`` and its pseudopotentials: all the guard chain reads."""
     system = build_system(read_pw_input(CASES / f"{case}.in"))
     pseudos = tuple(
         read_upf(PSEUDO / sp.pseudo_file) for sp in system.structure.species
     )
-    return Calculation(system, pseudos)
+    return system, pseudos
+
+
+def _calculation(case: str):
+    """A real ``Calculation``, for the guards that are still asked of one."""
+    return Calculation(*_input(case))
+
+
+@pytest.fixture
+def no_calculation(monkeypatch):
+    """Make building a ``Calculation`` fail the test outright.
+
+    ``pytest.fail`` raises an outcome rather than an ``Exception``, so neither
+    a ``pytest.raises(NotImplementedError)`` nor a broad ``except`` inside the
+    package can swallow it: a refusal that reaches for a calculation is caught
+    here even when it would otherwise have gone on to raise the right message.
+    """
+    def refuse(*args, **kwargs):
+        pytest.fail("a Calculation was built to refuse a regime the input decides")
+
+    monkeypatch.setattr(Calculation, "__init__", refuse)
 
 
 @pytest.mark.parametrize("case, message", [
     ("si2-us", "ultrasoft"),
     ("al-metal", "metal"),
     ("o-atom-fixed-lsda", "nspin = 2"),
-    # A one-atom hydrogen cell, not the germanene slab this used to build:
-    # the guard reads a ``Calculation`` and refuses on ``noncolin`` alone, so
-    # the cell is incidental to what is asserted -- and constructing the slab
-    # cost 3.6 GB and 11 s for a refusal that fires identically here at 189 MB
-    # and 1.3 s. Both raise the same message, checked rather than assumed.
+    # A one-atom hydrogen cell, not the germanene slab this once used: the
+    # guard refuses on ``noncolin`` alone, so the cell is incidental to what is
+    # asserted. The slab was replaced while each case still built a
+    # ``Calculation`` (3.6 GB and 11 s against 189 MB and 1.3 s); with the
+    # input alone the cost of the cell no longer enters.
     ("h-atom-noncolin", "noncollinear"),
 ])
-def test_the_regimes_this_was_never_run_in_are_refused(case, message):
+def test_the_regimes_this_was_never_run_in_are_refused(case, message,
+                                                       no_calculation):
     """Every one of these would return a number, and none of them is measured.
 
     The guard chain is deliberately made of the *bare* forms: the linear
@@ -111,9 +132,104 @@ def test_the_regimes_this_was_never_run_in_are_refused(case, message):
     carrying a grid below :data:`~defumat.response.piezo.ULTRASOFT_MESH`;
     :func:`test_an_ultrasoft_dataset_is_refused_by_its_mesh_and_paw_outright`
     is where that distinction is asserted rather than incidental.
+
+    **Asked of the input, with building a calculation made to fail.** Each
+    case used to construct a whole ``Calculation`` -- the G sphere, both FFT
+    grids, ``vkb`` and, for the ultrasoft cell, ``Q_ij(G)`` -- so that the
+    guard could read four flags and a symmetry off it (``OPEN.md`` Part III
+    X3). What the guard reads is a property of the ``System`` and the
+    pseudopotentials, and ``no_calculation`` is what says it no longer reaches
+    for anything else.
     """
+    system, pseudos = _input(case)
     with pytest.raises(NotImplementedError, match=message):
-        require_a_piezoelectric_tensor(_calculation(case))
+        require_a_piezoelectric_tensor(system, pseudos=pseudos)
+
+
+def test_the_input_reads_the_way_the_calculation_does():
+    """The guard's view of a ``System`` is the ``Calculation``'s, flag by flag.
+
+    The refusals above are asked of the input, and they are only the same
+    refusals if every attribute the chain reads comes out the same as the
+    constructor's. This is the one test that builds a calculation to say so,
+    on the committed cell where most of those flags are *not* at their
+    default -- a PAW dataset, so ``is_paw`` and ``is_ultrasoft`` both hold,
+    ``nspin = 2``, ``nosym``, and ``K_POINTS gamma``, which the constructor
+    substitutes away for an augmented dataset and the view deliberately does
+    not. A parity check on a cell where everything is ``False`` on both sides
+    would pass whatever either side computed.
+    """
+    from defumat.response.piezo import _Regime
+
+    system, pseudos = _input("o2-paw-afm")
+    view = _Regime.of(system, pseudos)
+    calculation = Calculation(system, pseudos)
+
+    assert view.is_paw and view.is_ultrasoft and view.nspin == 2
+    assert system.kpoints.gamma_only and not view.gamma_only
+    for name in ("nspin", "noncolin", "spiral", "gamma_only",
+                 "two_fermi_energies", "is_ultrasoft", "is_paw", "is_hubbard"):
+        assert getattr(view, name) == getattr(calculation, name), name
+    assert (view.magnetic_field is None) == (calculation.magnetic_field is None)
+    assert view.functional.name == calculation.functional.name
+    assert view.functional.is_meta == calculation.functional.is_meta
+    assert view.system.nosym == calculation.system.nosym
+    assert np.array_equal(view.symmetries.rotation_array(),
+                          calculation.symmetries.rotation_array())
+    # What the guards read off the k-set is untouched by the substitution the
+    # view skips, which is the whole argument for skipping it.
+    for field in ("grid", "shift"):
+        assert getattr(view.system.kpoints, field) == getattr(
+            calculation.system.kpoints, field
+        ), field
+    assert view.system.kpoints.nk == calculation.system.kpoints.nk
+
+
+def test_a_system_without_its_pseudopotentials_is_not_guessed_at():
+    """Half the chain reads the datasets, so a bare ``System`` is refused loudly.
+
+    And a ``Calculation`` passed *with* pseudopotentials is refused too, since
+    it already carries the ones it was built with and two sources for one
+    answer is how the two come apart.
+    """
+    system, pseudos = _input("alas-raman")
+    with pytest.raises(TypeError, match="pseudopotentials"):
+        require_a_piezoelectric_tensor(system)
+    with pytest.raises(TypeError, match="not both"):
+        require_a_piezoelectric_tensor(
+            SimpleNamespace(system=system), pseudos=pseudos
+        )
+
+
+def test_the_calculator_refuses_before_its_implicit_ground_state(no_calculation):
+    """The facade asks the input first, so a metal costs no SCF to be refused.
+
+    ``get_piezoelectric_tensor`` runs a ground state when none is cached, and
+    the refusal used to live only inside the entry point it then called: an
+    aluminium crystal ran its whole self-consistent field and was told
+    afterwards that the tensor of a metal was never measured. With building a
+    calculation made to fail, the old order fails this test and the new one
+    raises the refusal before anything is built.
+    """
+    from defumat import Calculator
+
+    system, pseudos = _input("al-metal")
+    calculator = Calculator(system, pseudos, announce=False)
+    with pytest.raises(NotImplementedError, match="metal"):
+        calculator.get_piezoelectric_tensor()
+
+
+def test_the_ladder_refuses_before_its_first_rung(no_calculation):
+    """The same for the k-mesh ladder, which is a ground state per rung.
+
+    Asked of the first rung rather than of the input's own k-set, because
+    every rung is unshifted whatever the input asked for.
+    """
+    from defumat.workflows.piezo_ladder import piezoelectric_kmesh_ladder
+
+    system, pseudos = _input("al-metal")
+    with pytest.raises(NotImplementedError, match="metal"):
+        piezoelectric_kmesh_ladder(system, pseudos, meshes=(2,))
 
 
 def test_an_unknown_route_is_refused_before_anything_is_solved():

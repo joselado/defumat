@@ -21561,3 +21561,112 @@ unit tests could not see it, because the eigenvalues they feed are exact; only t
 regression file did. The basis is the `nbnd`-band solve again and the extra band comes from
 a second solve, which costs a second frozen diagonalisation per run, unmeasured.
 
+
+### P110 -- Thirteen quick items from `OPEN.md`: two measured decisions, a spin-GGA cut, an empty fixed channel, and four setup costs removed with no number moving. ✅ DONE; the slow references next to the fixes are owed in `OPEN.md` Part XVI item 1.
+
+Picked on 2026-09-23 as the open items whose fix is one file and whose test needs no
+large run. Seven went to a workflow of fourteen agents, one fixer and one read-only
+reviewer per item, which edited code and wrote tests and ran nothing; the rest, the
+two decisions and every measurement below were done in the session. Every new test was
+run against `707ac29`, the commit before, in a separate worktree, and fails there for
+the reason it is about. The gate after all of it is in the commit message.
+
+**What each one was measured at.**
+
+* **Spin-GGA correlation where `|zeta| > 1`** (Part XVI item 4). QE's `gcc_spin` clamps
+  only under `ABS(zeta) <= 1` and CYCLEs with `sc = v1c = v2c = 0` beyond it
+  (`qe_drivers_gga.f90:1082-1092`); this clamped and kept the point. At
+  `rho = (0.02, -0.001)`, gradients `(0.01,0,0)` and `(0.002,0,0)`, `sc` went from
+  1.64e-4 Ry/bohr^3 to 0 and both derivatives with it, for PBE and PBEsol and both
+  signs of `zeta`. `|zeta| = 1` exactly, every point of a saturated magnet, is kept and
+  evaluated as QE keeps it. The four SCF fingerprints below include `fe-mag-1k`, a PBE
+  ultrasoft magnet, and it is bit-identical, so it has no cut point; which committed
+  reference has one is not known, and the two the reviewers named are in Part XVI item 1.
+* **An empty channel under fixed LSDA occupations** (Part XVI item 4). The refusal is
+  gone and the empty channel's level is `iweights`' own -1e20 (`iweights.f90:51`, `:60`),
+  with its HOMO a branch rather than `eigenvalues[..., occupied - 1]`, which at
+  `occupied = 0` is the last band. `h-atom-lsda.in` run with `occupations = 'fixed'`,
+  `tot_magnetization = 1` converges in 8 iterations to **-0.94606495 Ry, `pw.x`'s own
+  -0.94606495** from `reference.out.h-atom-lsda-stress`, with `M = 1.000`,
+  `ef_dw = -1e20`, the reported HOMO the majority 1s at -0.52803 Ry and the LUMO the
+  minority 1s at -0.17939.
+* **The anisotropy workflow's reference axis** (Part XVI item 5, the user's choice of
+  three). It is now where the first magnetic atom's starting moment points, sign
+  included, on both routes: `local_moments` folds the card and the species into one
+  array and the axis is its first row above 1e-6. With no card it used to be species
+  one's angles, so an oxide listed with O first had the axis `z` while the metal's
+  moments lay along `x`, and a direction named along `x` turned them onto `-z`. **Over
+  all 66 committed noncollinear inputs the axis is unchanged**, so no committed
+  anisotropy number can move.
+* **A uniform `B_field` makes a noncollinear run magnetic by itself** (Part XVI item 5,
+  the user's choice of two). `is_magnetic` counts it as it already counted the per-atom
+  card, and with no starting moment a gradient-corrected functional takes its sign
+  along the field. `pw.x` sets `domag` from the moments alone and converges the
+  field-free calculation for such an input. **Over all 245 committed inputs no `domag`
+  changes.** What the field alone does was measured on the hydrogen atom of
+  `h-atom-noncolin.in` with `B_field(3) = 0.01` Ry and no seed, and it depends on
+  whether the cell orders on its own:
+
+  | smearing | seeded, no field | field alone | seed 0.6 along the field | seed 0.05 along it |
+  |---|---|---|---|---|
+  | `degauss = 0.2` | decays to 1.1e-4 mu_B | **+0.159** mu_B | | |
+  | `degauss = 0.5` | | **+0.086** mu_B | | |
+  | `degauss = 0.02` | (polarizes) | **-0.103** mu_B, -0.89416 Ry | +1.000, -0.94606 Ry | **-1.000**, -0.94606 Ry |
+
+  Where the field-free state is nonmagnetic the induced moment lies along the field, which
+  is the check on its sign. Where the atom polarizes on its own, the unseeded run lands on
+  the stationary point near zero moment, against the field: with the field's energy put
+  back, `E - B.M` ranks the three converged states -0.956 (+1), -0.936 (-1) and -0.893
+  (-0.103) Ry, so it is the highest of them, the maximum that `E(m) = a m^2 + b m^4 - B m`
+  with `a < 0` has at `m ~ B/2a`, and an SCF converges on a residual and finds it as
+  readily as a minimum. A seed of 0.01 lands there too, and one of 0.05 crosses to
+  -1.000, which is pre-existing: a seeded magnet's final sign is not the field's to
+  choose. The guide and the docstring say that a spontaneous magnet still wants a seed of
+  the size of its moment.
+* **H3, one `Calculation` per sum-over-states workflow.** `run_conductivity`,
+  `run_absorption`, `run_spin_susceptibility` and `run_magnon_dispersion` built three and
+  kept one, `run_shg` and `run_shift_current` two; each builds one now and threads it to
+  `fixed_density_states`, which refuses a threaded calculation that its `kpoints`,
+  `david` or `k_batch` would contradict. The entry's trap about `k_batch` was a misreading:
+  the discarded build at `conductivity.py:184` was `_default_nbnd`'s, and the kept one
+  always had `k_batch`. Counted by `test_one_calculation_per_workflow.py`; the saving is
+  one or two constructors a call, 1.53 s each on P69's Pt PAW cell, not timed here.
+* **H5, Davidson's collapse projections** computed on every step and used on the
+  collapsing one: moved inside the `cond` branch. **Bit-identical** on `si8-1k`,
+  `si8-us-1k`, `fe-mag-1k` and `si8-paw-1k` written as eight labels, in energy to the
+  last bit, iteration count, the Davidson steps of every iteration, the eigenvalues and
+  the density. Not timed: it is one calbec of an `(nbnd, npwx)` block against `nkb`
+  projectors, it saves only where the predicate is a scalar (one k-point, or
+  `k_batch = 1`, the CPU default), and under a `vmap` over k the `cond` becomes a select
+  that runs both branches as before.
+* **M2 and its sibling, setup per species label.** The projector columns and the PAW
+  one-centre species are shared across labels naming one dataset, keyed on content as
+  P73's augmentation is. That was 7.2 s of the 25.8 s that eight labels cost on
+  `si8-paw-1k.in`; a profile put 19.8 s of the rest in `pseudo/potentials.py`'s three
+  per-label radial tables, now shared the same way. **The eight-label constructor goes
+  from 33.78 s to 8.37 s against 8.07 s for one label**, one core (`PERFORMANCE.md`), and
+  the SCF on it is bit-identical to the old code. Still per label: the atomic-orbital
+  columns (`pseudo/atomic.py`), which the constructor does not build, and `sizing.py`'s
+  projector-core line, which now overstates a cell with duplicate labels.
+* **M3, the Anderson Gram matrix**, kept between calls and extended by one row and
+  column, rebuilt after every reset, a change of the fitted mask and a restored
+  checkpoint that predates it. **`mix()` at a NiBr2-sized 83 MB vector, history 8: 11.30 s
+  to 9.04 s**, one core, the same checksum, which is 1.25x where the arithmetic said 5:
+  the Gram matrix was 2.3 s of the step. The three SCFs above are bit-identical.
+* **X3, the piezoelectric refusals** take a `System` and its pseudopotentials, read
+  through a `_Regime` that transcribes the seven flags `Calculation.__init__` computes,
+  and `Calculator.get_piezoelectric_tensor` and the k-mesh ladder now refuse before any
+  ground state. The four refusal cases build no `Calculation`; a parity test beside them
+  builds one PAW calculation to pin the transcription, so the file costs 20.8 s against
+  20.5 s before and the gate is not cheaper. The parity is pinned on one cell only.
+* **H2** had been closed in `a23b050` (2026-09-20) without its entry being told. And
+  three small ones: `require_the_folded_grid`'s uniformity test could never be the one
+  that fired and is gone, with the test now naming the wedge refusal that does; both
+  `p57_elk_*.sbatch` comments carry the `-2 cb` sign and what it means for a comparison;
+  `torque.py` names the unit test that compares the two rotations.
+
+**What the reviewers raised and was not done**, each now in `OPEN.md`: `sizing.py` and
+`pseudo/atomic.py` per label; `formfactors._origin_integrals`' docstring, which says the
+radial arrays can be tracers inside `at_strain` and they cannot; `_Regime` pinned on one
+cell; the Calculator facade building its own `Calculation` per `get_*` call; and the
+slow references next to the spin-GGA cut, the fixed channel and the shared setup.

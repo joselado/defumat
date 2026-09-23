@@ -7366,3 +7366,40 @@ where it was claimed to matter, and a slab that large has never been run here.
 The trend across the two cells is the only forward-looking thing in them, and it
 is the expected one: the saving appears where the real-space block is a slab's,
 and the cell with more vacuum is the one that gains.
+
+## What a species label and a mixing history paid twice (P110)
+
+Two of the setup costs `OPEN.md` Part III sized by arithmetic, measured on the
+workstation, one core (`taskset -c 5`, `OMP_NUM_THREADS=1`), old code at `707ac29`
+against the working tree, nothing else running.
+
+| what is timed | case | before | after |
+|---|---|---|---|
+| `Calculation(system, pseudos)`, 8 labels naming one PAW file | `si8-paw-1k.in` written as `Si1` ... `Si8` | **33.78 s** | **8.37 s** |
+| the same, one label | `si8-paw-1k.in` | 8.02 s | 8.07 s |
+| `AndersonMixer.mix`, history 8 full and rolling | a synthetic packed vector of 200x240x54x4 doubles, 83 MB | **11.30 s** | **9.04 s** |
+
+The constructor is the median of three calls after a first one in the same process,
+so no row contains a compilation; the mixer is the median of seven steps once the
+history has filled, with the same checksum on both sides. The peak of the
+eight-label build went from 968 to 911 MB.
+
+**The eight labels cost 25.8 s more than one, and 0.3 s of that is left.** The
+projector columns and the PAW one-centre tensors, which is what M2 named, were
+7.2 s of it; a profile of the build that remained put **19.8 s of 26.7 s** in three
+per-label radial transforms over every dense G-vector, the local potential, the
+atomic charge and the core charge (`pseudo/potentials.py`), which M2 did not name.
+Each is now built once per dataset, keyed on the arrays it reads, and the SCF on the
+eight-label cell is bit-identical to the old code in energy, iteration count,
+per-iteration Davidson steps, eigenvalues and density. `pw.x` loops over labels too
+(`init_vloc.f90:62`, `DO nt = 1, ntyp`), so an eight-label `pw.x` input builds eight
+tables as well; its tables are one-dimensional in `|q|` and interpolated, so the
+same duplication costs it far less, and no ratio is taken.
+
+**The mixer gained a factor of 1.25 where the arithmetic said 5.** Caching the Gram
+matrix removes `n^2` of the `n^2 + n` dots, which on this vector is about 2.3 s of
+11.3; the other 9 s of a `mix()` at this size is the rest of the step, the fitted
+copies and the combination over the history, and is the part to look at next if the
+mixer ever shows in a slab's iteration. On two-atom silicon neither number is
+visible. The SCFs on `si8-1k`, `si8-us-1k` and `fe-mag-1k` are bit-identical to the
+old code.

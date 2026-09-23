@@ -32,19 +32,28 @@ CASES = Path(__file__).resolve().parents[1] / "data" / "qe"
 def test_a_run_with_no_magnetization_vector_is_refused():
     """``nspin_mag = 1`` means the field has nothing to act on.
 
-    A noncollinear run whose ``starting_magnetization`` is zero everywhere
-    allocates a *scalar* density -- ``nspin_mag`` is 4 only if the run actually
-    carries a magnetization, which is the distinction ``CLAUDE.md`` insists on
-    -- so the Zeeman term multiplies nothing, all six ground states are
-    identical and the tensor comes out exactly zero. That is the failure this
-    guard exists for: it looks like a symmetry result.
+    A noncollinear run with no starting moment and no applied field allocates
+    a *scalar* density -- ``nspin_mag`` is 4 only if the run actually carries a
+    magnetization, which is the distinction ``CLAUDE.md`` insists on -- so the
+    Zeeman term multiplies nothing, all six ground states are identical and
+    the tensor comes out exactly zero. That is the failure this guard exists
+    for: it looks like a symmetry result.
+
+    **The base field alone is enough to carry one** (2026-09-23): a uniform
+    ``B_field`` makes the run magnetic by itself
+    (:func:`~defumat.system.builder.is_magnetic`), so zeroing the seed moments
+    and keeping the committed ``B_field(3) = 0.1`` still gives four channels.
+    Until then this test zeroed the seeds alone, which is now a working run.
     """
     text = (CASES / "gaas-magnetoelectric.in").read_text()
-    unmagnetized = text.replace(
+    unseeded = text.replace(
         "starting_magnetization(1) = 0.01", "starting_magnetization(1) = 0.0"
     ).replace(
         "starting_magnetization(2) = 0.01", "starting_magnetization(2) = 0.0"
     )
+    assert build_system(parse_pw_input(unseeded)).nspin_mag == 4
+
+    unmagnetized = unseeded.replace("B_field(3) = 0.1", "B_field(3) = 0.0")
     system = build_system(parse_pw_input(unmagnetized))
     assert system.nspin_mag == 1
     with pytest.raises(ValueError, match="nspin_mag"):

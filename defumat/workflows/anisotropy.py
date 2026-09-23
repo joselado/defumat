@@ -105,7 +105,7 @@ from defumat.scf.continuation import (
     direction_from_angles,
     nc_magnetization_from_lsda,
 )
-from defumat.system.builder import System
+from defumat.system.builder import System, local_moments
 from defumat.system.kpoints import KPoints
 from defumat.units import RY_TO_EV
 from defumat.workflows.nscf import fixed_density_states
@@ -808,21 +808,44 @@ def angles_from_direction(direction) -> tuple:
 def _reference_axis(system: System) -> tuple:
     """The direction a system's magnetization is said to point along.
 
-    Species one's ``angle1``/``angle2``, which is the axis QE's
-    ``nc_magnetization_from_lsda`` rotates ``m_z`` onto for the whole cell --
-    unless a ``STARTING_MOMENTS`` card is present, in which case those angles
-    are overridden per atom (:func:`~defumat.system.builder.local_moments`) and
-    say nothing about where the moments are; the axis is then the first atom's
-    nonzero row. Every default direction in this module is this vector, so a
-    call that names no direction is exactly the identity rotation.
+    **Where the first magnetic atom's starting moment points, sign included**,
+    and the same rule whether the moments come from a ``STARTING_MOMENTS`` card
+    or from the per-species ``starting_magnetization``/``angle1``/``angle2``:
+    both are folded into one ``(nat, 3)`` array by
+    :func:`~defumat.system.builder.local_moments`, and the axis is its first row
+    whose length passes ``setup.f90``'s ``domag`` threshold of 1e-6. Every
+    default direction in this module is this vector, so a call that names no
+    direction is exactly the identity rotation, and a named direction means
+    "turn the texture until the first magnetic atom points there".
+
+    Until 2026-09-23 the two routes disagreed. With no card the axis was
+    species one's angles, whatever the sign of its ``starting_magnetization``
+    and whether or not it carried a moment at all, so an oxide listed with O
+    first had the axis ``z`` from O's default angles while the metal's moments
+    lay along ``x``, and a direction named along ``x`` rotated them by 90
+    degrees onto ``-z``. With a card it was the first nonzero row, sign
+    included. The signed rule is the card's, extended to the species.
+
+    The angles are read at ``nspin = 4`` whatever this system's regime, since
+    the axis is a statement about the noncollinear run the texture is turned
+    in, and :func:`~defumat.system.builder.local_moments` puts a collinear
+    run's moments on ``z`` by construction. A cell with no moment anywhere
+    falls back to species one's angles, the only direction it states.
+
+    The sign is a convention and nothing measured depends on it: turning every
+    moment over is time reversal, which leaves a band energy and its
+    derivative in the angle unchanged.
     """
-    if len(system.starting_moments):
-        rows = np.asarray(system.starting_moments, dtype=float).reshape(-1, 3)
-        norms = np.sqrt(np.sum(rows**2, axis=1))
-        nonzero = np.flatnonzero(norms > 1.0e-12)
-        if len(nonzero):
-            row = rows[nonzero[0]] / norms[nonzero[0]]
-            return tuple(float(x) for x in row)
+    rows = local_moments(
+        system.structure, 4, system.starting_magnetization,
+        system.angle1, system.angle2, per_atom=system.starting_moments,
+    )
+    rows = np.asarray(rows, dtype=float).reshape(-1, 3)
+    norms = np.sqrt(np.sum(rows**2, axis=1))
+    nonzero = np.flatnonzero(norms > 1.0e-6)
+    if len(nonzero):
+        row = rows[nonzero[0]] / norms[nonzero[0]]
+        return tuple(float(x) for x in row)
     return direction_from_angles(system.angle1[0], system.angle2[0])
 
 

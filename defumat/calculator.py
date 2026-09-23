@@ -1183,14 +1183,22 @@ class Calculator:
 
     def get_piezoelectric_tensor(self, **options):
         """``e_(k)ij``: the clamped-ion piezoelectric tensor, in C/m^2."""
-        from defumat.response.piezo import piezoelectric_tensor
-
-        result = self._ground_state("the piezoelectric tensor")
-        return piezoelectric_tensor(
-            self.calculation, result,
-            **self._defaults_for(piezoelectric_tensor, options,
-                                 exclude=SCF_ONLY_OPTIONS),
+        from defumat.response.piezo import (
+            piezoelectric_tensor,
+            require_a_piezoelectric_tensor,
         )
+
+        merged = self._defaults_for(piezoelectric_tensor, options,
+                                    exclude=SCF_ONLY_OPTIONS)
+        # Refused on the input, before the implicit SCF rather than after it,
+        # with the same drift and exemption the entry point is about to get.
+        require_a_piezoelectric_tensor(
+            self.system, merged.get("kmesh_drift"),
+            allow_a_coarse_mesh=bool(merged.get("allow_a_coarse_mesh", False)),
+            pseudos=self.pseudos,
+        )
+        result = self._ground_state("the piezoelectric tensor")
+        return piezoelectric_tensor(self.calculation, result, **merged)
 
     def get_piezoelectric_kmesh_ladder(self, **options):
         """``e_(k)ij`` at a ladder of k-meshes, which is the check it has none of.

@@ -194,10 +194,30 @@ class AndersonMixer(Mixer):
     condition_limit: float = 1.0e12
     _densities: list = field(default_factory=list, repr=False)
     _residuals: list = field(default_factory=list, repr=False)
+    #: ``r_i . r_j`` and ``|r_i|`` over the fitted part of every entry of
+    #: ``_residuals``, in the same order: a cache, extended by one row and
+    #: column per call rather than rebuilt (:meth:`_extend_gram`). Arrays, so a
+    #: checkpoint carries them beside the history they describe.
+    _gram: np.ndarray | None = field(default=None, repr=False)
+    _norms: np.ndarray | None = field(default=None, repr=False)
+    #: Which entries of the packed vector the cache was built over. A different
+    #: ``exclude`` is a different inner product, and it rebuilds the cache.
+    _fit_mask: np.ndarray | None = field(default=None, repr=False)
+
+    #: Private, and only for the test that pins the cache to what it replaced:
+    #: ``False`` rebuilds the whole Gram matrix on every call, as before
+    #: ``OPEN.md`` M3. A class attribute rather than a field, so ``get_mixer``
+    #: does not take it and a checkpoint does not carry it (unless it is set on
+    #: an instance, which then writes it like any other bool in ``vars``).
+    _cache_gram = True
 
     def reset(self):
         self._densities.clear()
         self._residuals.clear()
+        self._drop_gram()
+
+    def _drop_gram(self):
+        self._gram = self._norms = self._fit_mask = None
 
     def mix(self, rho_in, rho_out, exclude=None):
         """One Anderson step; ``exclude`` is left out of the fit and still mixed.
@@ -240,6 +260,18 @@ class AndersonMixer(Mixer):
         if len(self._densities) > self.history:
             self._densities.pop(0)
             self._residuals.pop(0)
+            if self._gram is not None and self._norms is not None:
+                # The cache rolls with the history it describes: the entry that
+                # left is the oldest, so its row and column are the leading ones.
+                self._gram, self._norms = self._gram[1:, 1:], self._norms[1:]
+
+        # Every entry's fitted part is still cut out on every call, because the
+        # new row of the Gram matrix needs all of them; what is no longer
+        # recomputed is the rest of the matrix. Extended before the ``n == 1``
+        # return, which costs one dot there and keeps the cache the size of the
+        # history after every call.
+        fit = [r[fitted] for r in self._residuals]
+        gram, norms = self._extend_gram(fit, fitted)
 
         n = len(self._residuals)
         if n == 1:
@@ -271,15 +303,14 @@ class AndersonMixer(Mixer):
         # **1.1e11 -> 2.7e4**, with coefficients identical to every digit. The
         # substitution is exact, so this changes no converged result; it changes
         # which ones are reachable.
-        fit = [r[fitted] for r in self._residuals]
-        norms = np.array([float(np.sqrt(r @ r)) for r in fit])
+        #
+        # The check is over every norm and not only the new one: at ``n == 1``
+        # nothing is checked, so a zero first entry is caught here, at ``n = 2``.
         if not np.all(norms > 0.0):
             self.reset()
             return (rho_in + self.step(residual, rho_in)).reshape(
                 np.asarray(rho_out).shape
             )
-
-        gram = np.array([[float(a @ b) for b in fit] for a in fit])
 
         # Normalising removes the conditioning that came from the residuals'
         # *spread*; it cannot remove what comes from their *alignment*, and that
@@ -289,7 +320,8 @@ class AndersonMixer(Mixer):
         # bound rather than a hope. The cap sits four orders above the worst
         # value ever measured here, so it never fires on anything already
         # working, and it keeps the coefficients' relative error near 1e-4 in
-        # the regime where it does.
+        # the regime where it does. The trimming is per solve: the history, and
+        # the cached Gram matrix beside it, keep every entry.
         keep = n
         while keep > 1:
             trimmed = self._build_overlap(gram, norms, keep)
@@ -340,6 +372,75 @@ class AndersonMixer(Mixer):
             mixed_residual = mixed_residual + c * r
         mixed = mixed_density + self.step(mixed_residual, mixed_density)
         return np.asarray(mixed).reshape(np.asarray(rho_out).shape)
+
+    def _extend_gram(self, fit, fitted):
+        """``(gram, norms)`` over ``fit``, from the cache and the one entry that is new.
+
+        **What is kept, and why.** ``r_i . r_j`` between two entries of the
+        history does not change while both are in it, and each call adds one
+        entry and drops at most one, so rebuilding the matrix is ``n^2 + n``
+        host dots per SCF iteration of which ``n`` are new: 72 against 8 at the
+        default depth of 8, each a pass over ``nspin x n_dense`` doubles. On the
+        NiBr2 grid ``PERFORMANCE.md`` sizes P74 against, one residual is 83 MB,
+        so the matrix streamed 10.6 GB of host memory per iteration and its one
+        new row streams 1.3 GB (``OPEN.md`` M3, arithmetic rather than a
+        timing). The fitted copies are still cut once per entry per call, which
+        is ``n`` passes in both versions. ``pw.x`` rebuilds too, over the upper
+        triangle (``mix_rho.f90:403-425``, ``betamix(i,j) = rho_ddot(df(j),
+        df(i))`` and then ``betamix(j,i) = betamix(i,j)``), so this departs from
+        it in cost and not in arithmetic.
+
+        **Why no number moves.** Every entry is a value the rebuild computed:
+        ``float(fit[i] @ fit[j])`` with ``i`` the older entry, which is the old
+        upper triangle, and the lower triangle filled by copying it rather than
+        by computing ``fit[j] @ fit[i]``. The diagonal is one dot, and the norm
+        is the square root of that same dot, as the old ``float(np.sqrt(r @ r))``
+        was. The norm is kept beside the matrix rather than read off its
+        diagonal, because under a float32 policy ``np.sqrt`` of the float32 dot
+        and of its float64 copy differ in the last bit. What the cache does
+        change is *when* a pair is computed, once, on the fitted copy made in
+        the call it arrived in; that the old code's recomputation on a fresh
+        copy gave the same bits assumes the BLAS returns one dot of two vectors
+        the same wherever they sit in memory.
+
+        **When it is rebuilt from scratch**, which is exactly when it would
+        otherwise describe something other than ``fit``: after :meth:`reset`,
+        which the three restart-on-failure paths in :meth:`mix` go through; when
+        the fitted mask differs from the one it was built over, since that is a
+        different inner product; and when its size is not one short of the
+        history, which is what a checkpoint written before the cache existed
+        restores (a full ``_residuals`` beside ``_gram = None``) and what a
+        partly failed restore leaves. :meth:`_build_overlap`'s trimming needs
+        nothing, because it drops entries from one solve and never from the
+        history.
+        """
+        n = len(fit)
+        if not self._cache_gram:
+            self._drop_gram()
+            norms = np.array([float(np.sqrt(r @ r)) for r in fit])
+            gram = np.array([[float(a @ b) for b in fit] for a in fit])
+            return gram, norms
+
+        cached = 0
+        if (self._gram is not None and self._norms is not None
+                and self._fit_mask is not None
+                and np.shape(self._gram) == (n - 1, n - 1)
+                and np.shape(self._norms) == (n - 1,)
+                and np.array_equal(self._fit_mask, fitted)):
+            cached = n - 1
+        gram = np.empty((n, n))
+        norms = np.empty(n)
+        if cached:
+            gram[:cached, :cached] = self._gram
+            norms[:cached] = self._norms
+        for j in range(cached, n):
+            for i in range(j):
+                gram[i, j] = gram[j, i] = float(fit[i] @ fit[j])
+            square = fit[j] @ fit[j]
+            gram[j, j] = float(square)
+            norms[j] = float(np.sqrt(square))
+        self._gram, self._norms, self._fit_mask = gram, norms, fitted
+        return gram, norms
 
     @staticmethod
     def _build_overlap(gram, norms, keep):

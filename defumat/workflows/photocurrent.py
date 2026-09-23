@@ -81,8 +81,11 @@ def run_shift_current(
         )
     # Checked before the fixed-density run, as ``run_conductivity`` checks its
     # own: a caller asking for something this cannot do should not first pay
-    # for the empty states.
-    require_a_shift_current_regime(Calculation(system, pseudos, k_batch=k_batch))
+    # for the empty states. The calculation the check reads is then the one
+    # the run diagonalises in, where it used to be built a second time
+    # (``OPEN.md`` Part III, H3), with the ``k_batch`` both builds carried.
+    calculation = Calculation(system, pseudos, k_batch=k_batch)
+    require_a_shift_current_regime(calculation)
 
     if nbnd is None:
         raise ValueError(
@@ -99,7 +102,7 @@ def run_shift_current(
     # reason: where the truncation falls matters more than how far out it is.
     calculation, system, eigenvalues, wavefunctions = fixed_density_states(
         system, pseudos, density, nbnd=nbnd + 1,
-        conv_thr=conv_thr, k_batch=k_batch,
+        conv_thr=conv_thr, k_batch=k_batch, calculation=calculation,
     )
     eigenvalues = jnp.asarray(eigenvalues)
     if eigenvalues.ndim == 2:

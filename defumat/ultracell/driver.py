@@ -551,9 +551,13 @@ def require_the_folded_grid(system, supercell, kgrid) -> None:
     The check is on the **points**, not on the input's ``K_POINTS`` line, so an
     explicit list that happens to be that grid passes and one that is not is
     refused whatever it was called: every point, taken modulo a reciprocal
-    lattice vector, must sit on the folded grid, each grid point exactly once,
-    at uniform weight. A set recorded as a symmetry-reduced wedge is refused
-    before that, since its weights stand for points it does not hold.
+    lattice vector, must sit on the folded grid, each grid point exactly once.
+    A set recorded as a symmetry-reduced wedge is refused before that, since its
+    weights stand for points it does not hold, and the same test is what makes
+    the weights uniform: :func:`~defumat.system.kpoints.is_reduced` reads a
+    relative weight spread above 1e-8 as a wedge, so any set that reaches the
+    point check already has equal weights to that tolerance and a second
+    uniformity test here could never be the one that fires.
     """
     folded = tuple(int(n) * int(m) for n, m in zip(supercell, kgrid))
     kpoints = system.kpoints
@@ -576,16 +580,14 @@ def require_the_folded_grid(system, supercell, kgrid) -> None:
             f"point the loop reproduces. Converge the unit cell on {wanted}"
         )
     crystal = np.asarray(kpoints.crystal(system.cell), dtype=float).reshape(-1, 3)
-    weights = np.asarray(kpoints.weights, dtype=float).reshape(-1)
     scaled = crystal * np.asarray(folded, dtype=float)
     indices = np.rint(scaled)
     on_grid = bool(np.all(np.abs(scaled - indices) < 1.0e-6))
     distinct = {
         tuple(int(i) % n for i, n in zip(row, folded)) for row in indices
     } if on_grid else set()
-    uniform = bool(np.ptp(weights) <= 1.0e-10 * float(np.max(np.abs(weights))))
     count = int(np.prod(folded))
-    if not (on_grid and uniform and len(crystal) == count and len(distinct) == count):
+    if not (on_grid and len(crystal) == count and len(distinct) == count):
         raise ValueError(
             f"the ultracell's frozen states live on the unshifted supercell * "
             f"kgrid = {folded} Monkhorst-Pack grid of the unit cell ({count} "

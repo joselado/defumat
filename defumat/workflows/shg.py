@@ -85,8 +85,11 @@ def run_shg(
         )
     # Checked before the fixed-density run, as ``run_shift_current`` checks its
     # own: a caller asking for something this cannot do should not first pay
-    # for the empty states.
-    require_an_shg_regime(Calculation(system, pseudos, k_batch=k_batch))
+    # for the empty states. The calculation the check reads is then the one
+    # the run diagonalises in, where it used to be built a second time
+    # (``OPEN.md`` Part III, H3), with the ``k_batch`` both builds carried.
+    calculation = Calculation(system, pseudos, k_batch=k_batch)
+    require_an_shg_regime(calculation)
 
     if nbnd is None:
         raise ValueError(
@@ -101,6 +104,7 @@ def run_shg(
     calculation, system, eigenvalues, wavefunctions = fixed_density_states(
         system, pseudos, density, nbnd=nbnd + 1,
         conv_thr=conv_thr, k_batch=k_batch, becsum=becsum,
+        calculation=calculation,
     )
     eigenvalues = jnp.asarray(eigenvalues)
     if eigenvalues.ndim == 2:

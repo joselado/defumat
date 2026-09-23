@@ -24,9 +24,10 @@ import warnings
 
 import numpy as np
 
+from defumat.batching import resolve_k_batch
 from defumat.pseudo.upf import Pseudopotential
 from defumat.scf.driver import Calculation, default_nbnd
-from defumat.solvers.davidson import ETHR_MIN
+from defumat.solvers.davidson import DAVID_NDIM, ETHR_MIN
 from defumat.system.builder import System
 from defumat.system.cell import Cell
 from defumat.system.kpoints import KPoints, for_spin as kpoints_for_spin
@@ -94,6 +95,7 @@ def fixed_density_states(
     field_scale: float | None = None,
     david: int | None = None,
     kcart: np.ndarray | None = None,
+    calculation: Calculation | None = None,
 ):
     """Diagonalise once at every k-point of ``system`` with ``density`` fixed.
 
@@ -151,7 +153,27 @@ def fixed_density_states(
     by a Zeeman term the ground state does not have. **This has no ``pw.x``
     counterpart**: ``reducebf`` is Elk's, and QE's ``i_cons = 3`` field is
     likewise a converged quantity rather than a namelist variable.
+
+    ``calculation`` is a :class:`~defumat.scf.driver.Calculation` the caller
+    has already built from exactly this ``system`` and ``pseudos``, used in
+    place of the one this function would otherwise build. It exists for the
+    sum-over-states workflows (``OPEN.md`` Part III, H3), which built one to
+    check their refusals *before* paying for the empty states and then threw
+    it away while this built the same object again: the whole
+    constructor a second time, both G sets, both FFT grids, the symmetry
+    search, the local potential and the projector core. One constructor is
+    1.53 s, 87 per cent of the call, on P69's one-atom Pt PAW cell. The
+    object threaded through is the one this function would have built, so
+    nothing downstream of it moves. Because it is already built, the three
+    arguments that shape a build have nothing left to decide, and a
+    disagreement with it is refused rather than settled one way in silence:
+    ``kpoints`` at all (it would move ``system`` to another k-set than the
+    calculation's arrays are on), a ``david`` other than the calculation's
+    own, and a ``k_batch`` that resolves to a different chunk size from the
+    calculation's.
     """
+    if calculation is not None:
+        _require_a_matching_calculation(calculation, kpoints, k_batch, david)
     if kpoints is not None:
         # **``for_spin`` at the boundary, and this is the one that gets missed.**
         # Every ``KPoints`` constructor applies the unpolarized spin degeneracy
@@ -171,7 +193,8 @@ def fixed_density_states(
             lambda s: s.kpoints, system, kpoints_for_spin(kpoints, system.nspin)
         )
 
-    calculation = Calculation(system, pseudos, k_batch=k_batch, david=david)
+    if calculation is None:
+        calculation = Calculation(system, pseudos, k_batch=k_batch, david=david)
     if kcart is not None:
         calculation = calculation.at_kcart(jnp.asarray(kcart))
     nbnd = nbnd or system.nbnd or default_nbnd(
@@ -255,6 +278,43 @@ def fixed_density_states(
         hamiltonians, nbnd, None, ethr, return_steps=True)
     _say_what_did_not_converge(steps, notcnv, ethr, conv_thr, nbnd)
     return calculation, system, np.asarray(eigenvalues), wavefunctions
+
+
+def _require_a_matching_calculation(calculation, kpoints, k_batch, david) -> None:
+    """Refuse a threaded ``calculation`` that the other arguments contradict.
+
+    Each of the three would have shaped the build this replaces, so each is
+    either redundant with the calculation or in conflict with it, and a
+    conflict has no right answer to pick silently. ``kpoints`` is refused
+    outright rather than compared: the calculation's plane-wave spheres,
+    ``|k+G|^2`` and ``vkb(k)`` are already on its own k-set, and moving it is
+    :meth:`~defumat.scf.driver.Calculation.at_kpoints`'s job, which the caller
+    can do before handing it over.
+    """
+    if kpoints is not None:
+        raise ValueError(
+            "fixed_density_states was given both a calculation and kpoints: the "
+            "calculation's plane-wave spheres and projectors are already built "
+            "on its own k-set. Build it on the k-set wanted, or move it there "
+            "with Calculation.at_kpoints, and pass kpoints = None"
+        )
+    # Compared as the eigensolver will read them, so that ``david = 4`` beside a
+    # calculation built at ``None`` -- which *is* 4 -- is agreement.
+    built_at = DAVID_NDIM if calculation.david is None else int(calculation.david)
+    if david is not None and int(david) != built_at:
+        raise ValueError(
+            f"fixed_density_states was given david = {david} with a calculation "
+            f"built at david = {built_at}: the Davidson subspace is "
+            "fixed when the calculation is built, so pass david = None or build "
+            "the calculation with the value wanted"
+        )
+    if resolve_k_batch(k_batch) != calculation.k_batch:
+        raise ValueError(
+            f"fixed_density_states was given k_batch = {k_batch!r} with a "
+            f"calculation built at k_batch = {calculation.k_batch!r}: the chunk "
+            "size is fixed when the calculation is built, so pass the same "
+            "k_batch to both"
+        )
 
 
 def _say_what_did_not_converge(steps, notcnv, ethr, conv_thr, nbnd) -> None:

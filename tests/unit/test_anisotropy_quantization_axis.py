@@ -103,3 +103,47 @@ def test_the_own_direction_is_the_identity(afm):
     assert _with_quantization_axis(afm, _reference_axis(afm)) is afm
     card = afm.with_moments([[0.0, 0.5, 0.0], [0.0, -0.5, 0.0]])
     assert _with_quantization_axis(card, (0.0, 1.0, 0.0)) is card
+
+
+# -- the reference axis is where the first magnetic atom points ---------------
+
+def test_a_nonmagnetic_species_one_does_not_set_the_axis(afm):
+    """An oxide listed with O first: the axis is the metal's, not O's ``z``.
+
+    Species one carries no moment and keeps its default angles, which point
+    along ``z``; species two points along ``x``. The old rule read species
+    one's angles and so called ``z`` the system's own direction, and a force
+    theorem asked for ``x`` then turned the metal's ``x`` moment onto ``-z``.
+    """
+    oxide = afm.with_spin(starting_magnetization=(0.0, 0.5),
+                          angle1=(0.0, 90.0), angle2=(0.0, 0.0))
+    np.testing.assert_allclose(oxide.local_moments,
+                               [[0.0, 0.0, 0.0], [0.5, 0.0, 0.0]], atol=1.0e-12)
+    np.testing.assert_allclose(_reference_axis(oxide), (1.0, 0.0, 0.0),
+                               atol=1.0e-12)
+    # The moment already points along x, so asking for x changes nothing.
+    assert _with_quantization_axis(oxide, (1.0, 0.0, 0.0)) is oxide
+
+
+def test_one_texture_has_one_axis_with_or_without_a_card(afm):
+    """The same moments, written per species and as a card, give one axis.
+
+    Both species' ``starting_magnetization`` negative puts atom one along
+    ``-x`` and atom two along ``+x``. The card route always took the first
+    nonzero row with its sign, and the species route dropped the sign.
+    """
+    flipped = afm.with_spin(starting_magnetization=(-0.5, -0.5))
+    texture = [[-0.5, 0.0, 0.0], [0.5, 0.0, 0.0]]
+    np.testing.assert_allclose(flipped.local_moments, texture, atol=1.0e-12)
+    card = afm.with_moments(texture)
+    np.testing.assert_allclose(_reference_axis(flipped), (-1.0, 0.0, 0.0),
+                               atol=1.0e-12)
+    np.testing.assert_allclose(_reference_axis(flipped), _reference_axis(card),
+                               atol=1.0e-12)
+
+    # A named direction is where atom one ends up, on both routes.
+    for system in (flipped, card):
+        turned = _with_quantization_axis(system, (0.0, 0.0, 1.0))
+        np.testing.assert_allclose(turned.local_moments,
+                                   [[0.0, 0.0, 0.5], [0.0, 0.0, -0.5]],
+                                   atol=1.0e-12)

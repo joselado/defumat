@@ -380,7 +380,7 @@ def _noncollinear_xc(density: jnp.ndarray, cell: Cell, functional: Functional):
     return v, energy
 
 
-def fixed_quantization_axis(moments: np.ndarray) -> np.ndarray | None:
+def fixed_quantization_axis(moments: np.ndarray, field=None) -> np.ndarray | None:
     """``compute_ux``: a fixed axis to take the sign of the magnetization along.
 
     A gradient-corrected noncollinear run resolves the density onto the local
@@ -394,12 +394,24 @@ def fixed_quantization_axis(moments: np.ndarray) -> np.ndarray | None:
     Returns the unit axis, or ``None`` when the starting moments are not all
     parallel (QE's ``lsign = .FALSE.``), in which case ``|m|`` is used and the
     kink is accepted -- there is no single axis to take a sign along.
+
+    ``field`` is the uniform ``B_field``, read only when **no** atom has a
+    starting moment. That run is magnetic because of the field alone
+    (:func:`~defumat.system.builder.is_magnetic`), which ``compute_ux`` never
+    meets since ``pw.x`` does not run it, and the moment it carries is induced
+    along the field, so the field's direction is the axis the sign is taken
+    along. Without it such a run would take ``|m|`` and its kinks wherever the
+    induced moment changes sign.
     """
     moments = np.asarray(moments, dtype=float)
     norms = np.linalg.norm(moments, axis=1)
     nonzero = np.flatnonzero(norms > 1.0e-12)
     if not len(nonzero):
-        return None
+        if field is None:
+            return None
+        field = np.asarray(field, dtype=float).reshape(3)
+        strength = float(np.linalg.norm(field))
+        return field / strength if strength > 1.0e-12 else None
     axis = moments[nonzero[0]] / norms[nonzero[0]]
     for index in nonzero[1:]:
         direction = moments[index] / norms[index]

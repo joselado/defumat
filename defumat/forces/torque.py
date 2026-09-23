@@ -66,8 +66,10 @@ def rotated_density(density, direction):
     The original takes its direction through ``np.asarray`` and a ``float()``
     norm, which is right for a workflow argument and cannot be differentiated
     through; it stays as it is rather than being loosened, because it is on
-    P58's validated path. The two are checked against each other on concrete
-    inputs in ``tests/regression/test_anisotropy.py``.
+    P58's validated path. The two are checked against each other pointwise, on
+    a signed antiferromagnetic density and along several axes, in
+    ``tests/unit/test_torque_signed_moment.py``, and on the concrete inputs of
+    ``tests/regression/test_anisotropy.py``.
     """
     density = jnp.asarray(density)
     direction = jnp.asarray(direction)

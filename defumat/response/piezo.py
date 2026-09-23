@@ -498,9 +498,140 @@ def require_a_measured_dataset(calculation, drift=None,
     )
 
 
+@dataclass(frozen=True)
+class _Regime:
+    """The regime a ``System`` will run in, read off it and its pseudopotentials.
+
+    **What the refusals below read, and nothing else**, so that
+    :func:`require_a_piezoelectric_tensor` can answer from the input rather
+    than from a built :class:`~defumat.scf.driver.Calculation`. Every guard in
+    the chain duck-types its argument by attribute -- the spin regime, the
+    occupations and the k-set off ``system``, the symmetry off ``symmetries``,
+    which kind of dataset off ``is_ultrasoft``/``is_paw`` -- and none of them
+    reads the G sphere, either FFT grid, ``vkb`` or ``Q_ij(G)``, which are what
+    the constructor spends its time and memory on.
+
+    **Each field is the expression ``Calculation.__init__`` computes it with**,
+    so that the two cannot disagree on any ``System`` a calculation can be
+    built from. Three of them are not the builder called and tested for
+    ``None``, and each is that builder's own early return transcribed: ``is_ultrasoft``
+    is :func:`~defumat.pseudo.augmentation.build_augmentation`'s, which runs
+    over the *atoms'* species, and ``is_paw`` is
+    :func:`~defumat.paw.onecenter.build_paw`'s, which runs over every species
+    given -- the two are written differently there and are not unified here.
+    ``magnetic_field`` is ``_build_magnetic_field``'s early return and carries
+    only **whether** there is a field or a constrained moment (``True``) or
+    not (``None``): the rest of that method builds integration spheres on the
+    dense grid, and every guard asks ``is not None`` and nothing more.
+
+    ``system`` is the input as given, **without** the ``K_POINTS gamma``
+    substitution the constructor makes when it cannot consume the half-sphere
+    storage. That substitution is ``dataclasses.replace(kpoints,
+    gamma_only=False)`` (:func:`~defumat.scf.driver._without_gamma_storage`),
+    so the shift, the grid and the count -- everything a guard here reads off
+    the set -- are the same either way, and making it would only issue the
+    warning the calculation built afterwards issues again. ``gamma_only``
+    itself is the constructor's own predicate.
+    """
+
+    system: object
+    symmetries: object
+    functional: object
+    nspin: int
+    noncolin: bool
+    spiral: bool
+    gamma_only: bool
+    two_fermi_energies: bool
+    is_ultrasoft: bool
+    is_paw: bool
+    is_hubbard: bool
+    magnetic_field: object
+
+    @classmethod
+    def of(cls, system, pseudos) -> "_Regime":
+        """Build it the way ``Calculation.__init__`` builds each attribute."""
+        from defumat.hubbard.manifold import build_hubbard_setup
+        from defumat.scf.driver import gamma_storage_is_consumable
+        from defumat.xc.functional import resolve_functional
+
+        pseudos = tuple(pseudos)
+        nspin = int(system.nspin)
+        noncolin = bool(system.noncolin)
+        field = not (
+            system.constrained_magnetization == "none"
+            and not np.asarray(system.b_field, dtype=float).any()
+            and not system.atomic_b_field
+        )
+        return cls(
+            system=system,
+            symmetries=system.symmetry_group(),
+            functional=resolve_functional(
+                [pseudo.functional for pseudo in pseudos], system.input_dft
+            ).with_meta_coefficient(getattr(system, "mbj_c", None)),
+            nspin=nspin,
+            noncolin=noncolin,
+            spiral=bool(system.spiral),
+            gamma_only=gamma_storage_is_consumable(system, pseudos),
+            two_fermi_energies=(
+                nspin == 2 and system.tot_magnetization is not None
+            ),
+            is_ultrasoft=any(
+                pseudos[t].is_ultrasoft for t in system.structure.types
+            ),
+            is_paw=any(pseudo.is_paw for pseudo in pseudos),
+            # The builder rather than ``system.hubbard is not None``: a card
+            # whose parameters are all zero resolves to ``None`` there, and
+            # that is the case where the two would disagree.
+            is_hubbard=build_hubbard_setup(
+                system.hubbard, system.structure, pseudos, noncolin=noncolin
+            ) is not None,
+            magnetic_field=True if field else None,
+        )
+
+
 def require_a_piezoelectric_tensor(calculation, drift=None,
-                                   allow_a_coarse_mesh: bool = False) -> None:
-    """Everything that makes the mixed derivative above not be the answer."""
+                                   allow_a_coarse_mesh: bool = False,
+                                   *, pseudos=None) -> None:
+    """Everything that makes the mixed derivative above not be the answer.
+
+    ``calculation`` is a :class:`~defumat.scf.driver.Calculation`, or a
+    :class:`~defumat.system.builder.System` when ``pseudos`` is given, and
+    **the second form is the one to refuse with.** Nothing in this chain reads
+    what a calculation builds; it reads the spin regime, the occupations, the
+    k-set, the symmetry and which kind of dataset each species is, and all of
+    those are properties of the input (:class:`_Regime`). A refusal that had to
+    allocate the calculation it was refusing was a refusal at the wrong
+    boundary (``OPEN.md`` Part III X3): a caller holding only the input --
+    :meth:`~defumat.calculator.Calculator.get_piezoelectric_tensor`,
+    :func:`~defumat.workflows.piezo_ladder.piezoelectric_kmesh_ladder` -- now
+    refuses before it runs a ground state rather than after one.
+
+    ``pseudos`` is keyword-only because ``drift`` is the second positional
+    argument (:func:`piezoelectric_tensor` passes it that way), and a tuple of
+    pseudopotentials slid into its place would not fail.
+
+    **What the ``System`` form does not do is the constructor's own
+    refusals** -- a fully-relativistic dataset without ``lspinorb``, a spiral
+    with symmetry, a functional with no spin-polarized form, a field on an
+    ``nspin = 1`` run. Those are still met when the calculation is built, so
+    for a ``System`` no calculation can be built from, this may name a
+    refusal of its own where the constructor would have named another; for
+    every other ``System`` the two forms raise the same one.
+    """
+    if pseudos is not None:
+        if hasattr(calculation, "system"):
+            raise TypeError(
+                "pass a Calculation, or a System together with its "
+                "pseudopotentials, and not both: a Calculation already "
+                "carries the pseudopotentials it was built with"
+            )
+        calculation = _Regime.of(calculation, pseudos)
+    elif not hasattr(calculation, "system"):
+        raise TypeError(
+            "a System needs its pseudopotentials to be refused on (pass "
+            "pseudos=...): whether the dataset is ultrasoft or PAW, and "
+            "which functional runs, are read off them"
+        )
     require_a_symmetrisable_response(calculation)
     # Bare, not ``metals=True``/``spin_polarized=True``: the *solve* runs for a
     # metal and for two spin channels, and this assembly on top of it has been

@@ -4,15 +4,20 @@
 # has never had.
 #
 # **The field is converted, not copied.** Elk adds `cb * bfieldc` to the
-# Kohn-Sham field with `cb = g_e/(4c) = 3.6529e-3` (`genbs.f90`), and matching the
-# up-down splitting against this code's `-B . m` in Rydberg gives
-# `B_defumat = 2 cb bfieldc` (`PLAN.md` P86). The defumat input carries
-# `B_field(3) = 0.05` Ry with a step `delta = 0.02` Ry, so Elk gets
+# Kohn-Sham field with `cb = g_e/(4c) = 3.6529e-3` (`genbs.f90`), and its term is
+# `+cb sigma.B` where this code's energy is `-B . m`, so matching the up-down
+# splitting in Rydberg gives `B_defumat = -2 cb bfieldc` (`PLAN.md` P86, whose
+# sign was corrected on 2026-09-23, after this job ran). The defumat input
+# carries `B_field(3) = 0.05` Ry with a step `delta = 0.02` Ry; the magnitudes are
 #
-#     bfieldc = 0.05 / (2 cb) = 6.84370     deltabf = 0.02 / (2 cb) = 2.73748
+#     |bfieldc| = 0.05 / (2 cb) = 6.84370   deltabf = 0.02 / (2 cb) = 2.73748
 #
-# and its tensor, which is d(dipole per cell)/d(bfieldc) in Cartesian e.bohr, is
-# this code's alpha (e/bohr^2 per Ry) times the cell volume times 2 cb.
+# and the `bfieldc` below is **+6.84370, the field reversed** against the defumat
+# input, which is how job 20410234 ran and is left as it ran, since P57 has
+# moved to Cr2O3 and this cell is not a reference. Elk's tensor is
+# d(dipole per cell)/d(bfieldc) in Cartesian e.bohr, so it is this code's alpha
+# (e/bohr^2 per Ry) times the cell volume times **-2 cb**, taken at the opposite
+# base field.
 #
 #   task 0   ngridk 2 2 2, spin-orbit on       -- the matched grid
 #   task 1   ngridk 4 4 4, spin-orbit on       -- is Elk's own tensor converged?

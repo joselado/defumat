@@ -638,10 +638,31 @@ def davidson_eigensolver(
         # so the retained block is diag(energies) against the identity.
         full = nbase + nbnd > nvecx
         blank = jnp.zeros_like(hc_raw)
-        evc_becp, evc_becq = project(evc)
-        psi, hpsi, becp, becq, active, nbase, hc_raw, sc_raw = jax.lax.cond(
-            full,
-            lambda: (
+
+        def refresh():
+            # **The retained block's projections are computed here, inside the
+            # branch that consumes them, and nowhere else.** They were taken
+            # unconditionally just above the ``cond``, which is one calbec of
+            # an ``(nbnd, npwx)`` block against ``nkb`` projectors per step,
+            # thrown away on every step that does not collapse: two in three
+            # on a cold start at ``DAVID_NDIM = 4``, and all of them on a
+            # seeded solve that settles in fewer than ``DAVID_NDIM`` steps,
+            # which is the usual SCF iteration past the first. ``cegterg``
+            # rebuilds ``spsi`` inside the refresh too (``cegterg.f90:614-629``,
+            # under the ``IF`` at ``:580-581``). The expression and its
+            # operands are unchanged, only where it is evaluated moved; a
+            # norm-conserving run, whose projections are zero-width, is
+            # unaffected either way.
+            #
+            # The saving needs the predicate to be a scalar. Under a ``vmap``
+            # over k, ``full`` is batched and the ``cond`` lowers to a
+            # ``select_n`` over both branches, so this runs on every step
+            # there exactly as before -- no gain and no loss. That is the same
+            # rule :func:`_every_k` applies to ``narrow``, and it holds on the
+            # same routes: a single k-point, or ``k_batch = 1``, the CPU
+            # default (:func:`~defumat.batching.map_axis`).
+            evc_becp, evc_becq = project(evc)
+            return (
                 jnp.zeros_like(psi).at[:nbnd].set(evc),
                 jnp.zeros_like(hpsi).at[:nbnd].set(hevc),
                 jnp.zeros_like(becp).at[:nbnd].set(evc_becp),
@@ -650,7 +671,11 @@ def davidson_eigensolver(
                 nbnd,
                 blank.at[:nbnd, :nbnd].set(jnp.diag(energies.astype(dtype))),
                 blank.at[:nbnd, :nbnd].set(jnp.eye(nbnd, dtype=dtype)),
-            ),
+            )
+
+        psi, hpsi, becp, becq, active, nbase, hc_raw, sc_raw = jax.lax.cond(
+            full,
+            refresh,
             lambda: (psi, hpsi, becp, becq, active, nbase, hc_raw, sc_raw),
         )
 

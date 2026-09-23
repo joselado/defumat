@@ -47,6 +47,11 @@ the identical energy and accuracy at the commit before that session started.
 low-severity findings, the re-measurements the fixes left owed, and six smaller points
 the reviewers raised about code next to the fixes.
 
+**Part XVII** is what the quick-items session of **2026-09-23** (`PLAN.md` P110) left:
+thirteen items closed across Parts III and XVI, each with a test checked to fail on the old
+code or a bit-identity against it, and four entries raised by its reviewers and
+measurements, the largest a transcription of the constructor's flags pinned on one cell.
+
 **Part III** is the sweep of **2026-09-12** -- four read-only agents over the package
 looking for **speed and memory** rather than for wrong answers, 23 entries, ordered by
 ease times impact. **Nothing in it was measured and nothing in it is a defect**: each
@@ -1291,7 +1296,14 @@ dense grid, so `si8-paw-pbe-1k` at 0.841 s/iteration is where to take it.
 LDA number was recorded with -- on an `nspin = 1` and an `nspin = 2` input. `etxc` and the
 total energy must be bit-identical.
 
-### H2. The strain kernel issues nine calls where the loop above it already knows six suffice
+### H2. The strain kernel issues nine calls where the loop above it already knows six suffice **[closed 2026-09-20 in `a23b050`; found closed 2026-09-23]**
+
+**Closed, and this entry was not told.** `a23b050` ("one duplicate") made the kernel loop in
+`response/strain.py` key its evaluations on the unordered pair, so `[b, a]` reuses `[a, b]`
+and six `jvp`s run where nine did. The precondition this entry asked to assert is argued in
+the comment there rather than asserted: `strain_tangent` returns `(E_ab + E_ba)/2` and
+`orthogonality_states` writes `out[a, b]` and `out[b, a]` as one object, so the transposed
+pair is the same computation rather than an equal one. No timing was taken.
 
 `defumat/response/strain.py:507`. The kernel loop runs `for a in range(3), b in range(3)`
 on a `symmetrised` array whose `[a,b]` and `[b,a]` entries are the same object, so **three
@@ -1315,7 +1327,15 @@ discarded-primal kernels.
 **Measure.** Any strain-response input through `tools/benchmark.py`; the elastic/strain
 stage line. The tensor must be bit-identical.
 
-### H3. Five sum-over-states workflows build two or three `Calculation`s and discard all but one
+### H3. Five sum-over-states workflows build two or three `Calculation`s and discard all but one **[closed 2026-09-23, `PLAN.md` P110]**
+
+**Closed, and the count is what the test measures.** Six workflows, not five:
+`run_magnon_dispersion` had the same shape. Each builds one `Calculation` and threads it to
+`fixed_density_states`, which refuses a threaded one its `kpoints`, `david` or `k_batch`
+would contradict. The `k_batch` trap below was a misreading: the discarded build at
+`:184` was `_default_nbnd`'s, and the kept one always carried `k_batch`. The wall clock was
+not taken; the bound below still stands as the size of it. The Calculator facade still
+builds its own per `get_*` call, which is Part XVII.
 
 `defumat/workflows/conductivity.py:109` and `:175`. `run_conductivity` builds **three**
 `Calculation` objects on one system: one so `_default_nbnd` can read `nelec` and
@@ -1370,7 +1390,13 @@ k-points is where it would show.
 **Measure.** P71's silicon q-phonon through `tools/benchmark.py`; the dynamical matrix
 bit-identical.
 
-### H5. Davidson computes the collapse's projections on every step, and uses them on one in three
+### H5. Davidson computes the collapse's projections on every step, and uses them on one in three **[closed 2026-09-23, `PLAN.md` P110, bit-identical and not timed]**
+
+**Moved inside the branch, and four SCFs are bit-identical** (`si8-1k`, `si8-us-1k`,
+`fe-mag-1k`, and `si8-paw-1k` as eight labels): energy to the last bit, iteration count,
+the Davidson steps of every iteration, eigenvalues and density. Not timed. The saving
+exists only where the predicate is a scalar, one k-point or `k_batch = 1`; under a `vmap`
+over k the `cond` lowers to a select over both branches, as it did before.
 
 `defumat/solvers/davidson.py:531`. `evc_becp, evc_becq = project(evc)` runs
 unconditionally, immediately before the `lax.cond(full, ...)` at `:532` that is its only
@@ -1537,7 +1563,15 @@ collects. The cell that figure comes from is collinear; the number should be tak
 breakdown, `JAX_LOG_COMPILES=1` and a `jax.profiler` trace to count dispatches in one
 iteration. `deeq` must come back bit-identical -- assert equality, not a tolerance.
 
-### M2. Two modules still build their setup per species *label* rather than per dataset
+### M2. Two modules still build their setup per species *label* rather than per dataset **[closed 2026-09-23, `PLAN.md` P110, together with a third module the entry missed]**
+
+**Closed, and the measurement found the larger half elsewhere.** On `si8-paw-1k.in`
+written as eight labels the constructor was 33.78 s against 8.02 s for one label, one
+core. The two modules named here were 7.2 s of the 25.8 s difference; `pseudo/potentials.py`'s
+local potential, atomic charge and core charge, each a radial transform per label over
+every dense G-vector, were 19.8 s. All three are shared per dataset now, and the build is
+**8.37 s**, with the SCF bit-identical to the old code. `sizing.py` and
+`pseudo/atomic.py` are still per label, which is Part XVII.
 
 `defumat/pseudo/projectors.py:180` and `defumat/paw/onecenter.py:540`. Both loop over
 `pseudos`, which is one entry per species **label**, with no `_dataset_key` check of the
@@ -1570,7 +1604,12 @@ pseudos)` on each in a fresh process with `/usr/bin/time -v` for the peak. The e
 time should fall to the one-label time. Correctness is object identity plus an unchanged
 total energy.
 
-### M3. The Anderson mixer rebuilds the whole `n^2` Gram matrix each iteration, when one residual is new
+### M3. The Anderson mixer rebuilds the whole `n^2` Gram matrix each iteration, when one residual is new **[closed 2026-09-23, `PLAN.md` P110, at 1.25x rather than 7x]**
+
+**Closed, and the gain is a fifth of the arithmetic.** `mix()` alone on an 83 MB packed
+vector with the history full: **11.30 s to 9.04 s**, median of seven steps, one core, the
+same checksum. The Gram matrix was 2.3 s of the step and the other 9 s is the rest of
+`mix()`, which this entry did not size. Three SCFs are bit-identical.
 
 `defumat/scf/mixing.py:163`. `gram = [[float(a @ b) for b in residuals] for a in
 residuals]`, preceded by a fresh norm per history entry. At `history = 8` that is **72 host
@@ -2077,7 +2116,13 @@ file with `DEFUMAT_TEST_MEM_MAX=12G tools/run_regression.sh <file>` and read the
 the summary line, one file at a time and nothing else on the machine. This is the entry
 most likely to pay for itself, given that Part I item 2 is still open.
 
-### X3. A refusal test in the fast gate builds four full `Calculation`s to check four static guards
+### X3. A refusal test in the fast gate builds four full `Calculation`s to check four static guards **[closed 2026-09-23, `PLAN.md` P110, at the right boundary and not cheaper]**
+
+**The guard takes a `System` and its pseudopotentials now**, and the Calculator facade
+and the k-mesh ladder refuse before their first ground state. The four refusal cases
+build nothing; the parity test that pins the transcribed flags against a real
+`Calculation` builds one PAW cell, so the file is 20.8 s against 20.5 s before. The
+parity is pinned on one cell, which is Part XVII.
 
 `tests/unit/test_piezo_machinery.py:97`. Four parametrized cases each construct a real
 `Calculation` -- G-vector enumeration, both FFT grids, the projector core and `vkb`, and
@@ -5281,6 +5326,16 @@ ones most likely to move are the anisotropy pair (the rigid rotation must leave 
 single-species Co numbers unchanged to round-off, and a move beyond it means the rotation
 is wrong) and the spin-GGA files (the minority potential of a saturated point changed).
 
+**P110 adds to what is owed here**, and none of it ran: the spin-GGA cut beyond
+`|zeta| = 1` can move a reference only toward `pw.x`, and the two the reviewers named are
+`fe-noncolin-pbe-stress` in `test_noncollinear_gga.py` (its noncollinear route builds
+`(n +- |m|)/2` with no clamp, as QE's `compute_rho` does, so it can reach `|zeta| > 1`) and
+`o-paw-spin-pbe` in `test_lsda.py` (a PAW sphere's radial minority channel); a move away
+from `pw.x` would be a defect in the cut. The shared per-dataset setup reaches
+`test_stress.py`, `test_uspp.py`, `test_paw_noncollinear.py` and the two spiral files,
+and the one-`Calculation` workflows reach `test_conductivity.py`, `test_tddft.py`,
+`test_shg.py`, `test_photocurrent.py` and `test_magnons.py`.
+
 ## 2. The ultracell's multiplet ladder was measured under the wrong definition **[opened 2026-09-23]**
 
 `DEGENERATE_CUT = 1e-8`, the `nbnd <= 2 nocc` gate and the P88 ladder (3.6e-13 eV at
@@ -5291,7 +5346,10 @@ that. The second frozen solve that now supplies band `nbnd + 1` costs a whole ex
 diagonalisation per run; time it on the same ladder and put the pair in `PERFORMANCE.md`.
 `require_the_folded_grid`'s `uniform` branch cannot fire either, because `is_reduced`'s
 weight-spread fallback catches uneven weights first and raises the wedge message;
-harmless, but it is a guard with no case that reaches it.
+harmless, but it is a guard with no case that reaches it. **That last point is closed
+2026-09-23 (`PLAN.md` P110)**: the branch is gone, the docstring says the wedge test is what
+makes the weights uniform, and `test_ultracell_guards.py` now asserts that the uneven set is
+refused with the wedge message, so the reasoning is held by a test.
 
 ## 3. The spin-GGA fix is not sized in an SCF **[opened 2026-09-23]**
 
@@ -5302,14 +5360,15 @@ that saturates) has not been measured.
 
 ## 4. Three low-severity findings, not fixed **[opened 2026-09-23]**
 
-* **Spin-GGA correlation is evaluated where `|zeta| > 1`.** QE's `gcc_spin` CYCLEs with
+* **[closed 2026-09-23, `PLAN.md` P110]** **Spin-GGA correlation is evaluated where `|zeta| > 1`.** QE's `gcc_spin` CYCLEs with
   `sc = v1c = v2c = 0` there (`qe_drivers_gga.f90:1086-1092`); here the value is clamped
   and kept. At `rho = (0.02, -0.001)`, gradients `(0.01,0,0)` and `(0.002,0,0)`, this code
   gives `sc = 1.64e-4` Ry/bohr^3 where `pw.x` gives 0. It reaches a point with a slightly
   negative minority channel, after mixing or from an augmentation charge. The fix is a mask
   on `|raw zeta| <= 1` in `_spin_correlation_energy`, beside the tangent P109 gated on the
   same test.
-* **Fixed LSDA occupations refuse an empty channel that `pw.x` runs.**
+* **[closed 2026-09-23, `PLAN.md` P110: -0.94606495 Ry against `pw.x`'s -0.94606495]**
+  **Fixed LSDA occupations refuse an empty channel that `pw.x` runs.**
   `scf/occupations.py:128` raises when `NINT(count) < 1`; `iweights_only` has no lower
   bound and leaves that channel's level at `-1e20`. The fully polarized H atom with
   `occupations = 'fixed'`, `tot_magnetization = 1` is the case.
@@ -5323,21 +5382,66 @@ that saturates) has not been measured.
 
 * The ultracell's `magnetic_field=` callable enters no symmetry filter. Harmless while the
   ultracell refuses everything but `nosym`; the same defect class if that refusal is lifted.
-* `System.is_magnetic` ignores a uniform `B_field` when every moment is zero, so such a
+* **[closed 2026-09-23, `PLAN.md` P110, changed rather than written down]**
+  `System.is_magnetic` ignores a uniform `B_field` when every moment is zero, so such a
   run never reaches the magnetic filter P109 extended. This is `pw.x`'s `domag`, which is
   also set from the moments, so it is a decision rather than a defect; write it down or
   change it.
-* `anisotropy.py:_reference_axis` has two sign conventions: without a card it is species
+* **[closed 2026-09-23, `PLAN.md` P110: the first magnetic atom's signed moment on both
+  routes]** `anisotropy.py:_reference_axis` has two sign conventions: without a card it is species
   one's angles whatever the sign of its `starting_magnetization`, with one it is the first
   nonzero row, sign included. A card whose first row is negative and a nonmagnetic species
   one (an oxide with O first) are the two cases to test.
 * `System.with_spin` carries `tot_magnetization` into `nspin = 1` or 4 unchanged, where the
   builder now refuses it. Nothing was changed there, since continuation tests may rely on
   the promotion.
-* `tools/cluster/p57_elk_me.sbatch` and `p57_elk_cr2o3.sbatch` quote `+2 cb`; the sign is
+* **[closed 2026-09-23, comments only]** `tools/cluster/p57_elk_me.sbatch` and `p57_elk_cr2o3.sbatch` quote `+2 cb`; the sign is
   `-2 cb` (`PLAN.md` P86, corrected), so a comparison of Elk's task-390 tensor against
   `alpha` carries a factor of -1.
-* `forces/torque.py`'s docstring still says the traceable and host rotations are compared
+* **[closed 2026-09-23]** `forces/torque.py`'s docstring still says the traceable and host rotations are compared
   only in `tests/regression/test_anisotropy.py`; `tests/unit/test_torque_signed_moment.py`
   now compares them pointwise too.
 
+
+# Part XVII -- left by the quick-items session, 2026-09-23 (P110)
+
+Raised by the reviewers of P110's fixes, or found by its measurements, and not done.
+In the order a wrong answer costs.
+
+## 1. `_Regime` transcribes seven flags from `Calculation.__init__` and is pinned on one cell **[opened 2026-09-23]**
+
+`response/piezo.py:_Regime` reads `gamma_only`, the functional, the Hubbard setup, the
+field, `two_fermi_energies`, `is_ultrasoft` and `is_paw` the way the constructor does, so
+the piezoelectric refusals can fire before one is built. `test_piezo_machinery.py` checks
+the two agree on one PAW cell, where the Hubbard setup, the field, `noncolin` and a spiral
+are all absent on both sides, so an edit to the constructor on one of those could drift
+silently. The better fix is one regime view that the constructor itself uses; the cheaper
+one is the parity test on a Hubbard cell and a field cell.
+
+## 2. `sizing.py` sums the projector core over labels **[opened 2026-09-23]**
+
+`sizing.py:535` still counts `ncs` per species label, so on a cell with duplicate labels it
+now overstates the projector core that P110 shares per dataset, and it has no line at all for
+the PAW one-centre tensors (`2 nh^2 nlm mesh x 8` bytes per distinct PAW dataset). Count
+distinct datasets with `_projector_dataset_key` and `_paw_dataset_key`.
+
+## 3. Three more setups per label, or described wrongly **[opened 2026-09-23]**
+
+* `pseudo/atomic.py:90-120` builds the atomic-orbital columns per species label with the
+  pattern P110 removed from the projectors. The constructor does not call it, so it is not
+  in P110's 33.78 s; DFT+U and the projected DOS do.
+* `formfactors._origin_integrals`' docstring (lines 245-251) says `pseudo.r`, `rab` and
+  `beta` arrive as tracers inside `at_strain`, which is its reason for using `jnp`. They
+  cannot: `Pseudopotential` is not a pytree and is built once from NumPy arrays.
+* `tests/unit/test_velocity_locality.py:285` builds `_origin_slopes` over one entry per
+  label and applies it to `core.columns`, one block per dataset; it passes because
+  `si2-nosym` has one label. `batching.py:583`'s comment still says one column per
+  species channel.
+
+## 4. The Calculator facade builds its own `Calculation` per `get_*` call **[opened 2026-09-23]**
+
+H3 took the discarded builds out of the workflows, and a workflow can now take a built
+`Calculation`, but the facade does not pass it one, because moving a cached calculation to
+another k-set goes through `at_kpoints`, which drops `projectors = "rebuild"` and so is not a
+bit-identical substitute. Also the same shape: `nesting.py:100` through `run_nscf`, and the
+ultracell calling `fixed_density_states` and `fixed_density_bands` with identical arguments.

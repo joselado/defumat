@@ -179,9 +179,10 @@ def magnetoelectric_tensor(
         raise ValueError(
             "a magnetoelectric tensor needs a run that carries a magnetization "
             f"vector (nspin_mag = 4), and this one has nspin_mag = "
-            f"{system.nspin_mag}. A noncollinear run whose starting_magnetization "
-            "is zero everywhere allocates no magnetic density, so the field has "
-            "nothing to couple to and every polarization comes out identical"
+            f"{system.nspin_mag}. A noncollinear run with no starting moment and "
+            "no applied field allocates no magnetic density, so the field has "
+            "nothing to couple to and every polarization comes out identical. "
+            "Set a base B_field or a starting_magnetization"
         )
 
     phase_derivative = np.zeros((3, 3))
