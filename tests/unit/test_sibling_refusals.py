@@ -575,3 +575,33 @@ def test_the_conductivity_forwards_tau_to_both_potential_builds():
     # so there is nothing here for it to drop. Asserting that keeps the set
     # honest if it ever grows one.
     assert "calculation.potential(" not in inspect.getsource(nesting)
+
+
+def test_the_magnetoelectric_ground_states_take_the_inputs_mixing(monkeypatch):
+    """``get_magnetoelectric_tensor`` hands the input's ``mixing_beta`` to its SCFs.
+
+    The six ground states are ``run_scf`` calls inside the workflow, and before
+    this they received ``scf_options`` alone, so every one ran at the driver's
+    default mixing whatever the input said (``PLAN.md`` P57, Cr2O3).
+    """
+    import defumat.scf.driver as driver
+    from defumat import Calculator
+
+    seen = {}
+
+    class Stop(Exception):
+        pass
+
+    def recording(system, pseudos, **options):
+        seen.update(options)
+        raise Stop
+
+    monkeypatch.setattr(driver, "run_scf", recording)
+    calculator = Calculator.from_file(
+        "tests/data/qe/alas-magnetoelectric.in", pseudo_dir="tests/data/pseudo",
+        announce=False)
+    try:
+        calculator.get_magnetoelectric_tensor(directions=(2,))
+    except Stop:
+        pass
+    assert seen.get("mixing_beta") == 0.7
