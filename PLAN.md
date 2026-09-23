@@ -21569,7 +21569,10 @@ large run. Seven went to a workflow of fourteen agents, one fixer and one read-o
 reviewer per item, which edited code and wrote tests and ran nothing; the rest, the
 two decisions and every measurement below were done in the session. Every new test was
 run against `707ac29`, the commit before, in a separate worktree, and fails there for
-the reason it is about. The gate after all of it is in the commit message.
+the reason it is about. The gate on `1fc95b8` is 3012 passed, 64 skipped, 0 failed, in
+848 s at a peak of 6.7 GB; the one failure the first gate run found was
+`test_magnetoelectric_machinery.py` asserting the old field rule, and it now asserts both
+halves of the new one.
 
 **What each one was measured at.**
 
