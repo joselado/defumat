@@ -5731,8 +5731,44 @@ anyone's, and landing in `pw.x`'s basin is like-for-like only once the metric is
 `rho_ddot`'s. Even then the literature does not promise the same basin, so a test that
 asserts one DFT+U energy should seed the occupations or compare the lowest of a small scan.
 
-**What that leaves.** The DFT+U state is the defect, and it is `1705a0a`'s: the old fit
-reaches `pw.x`'s solution and the new one does not. The Hartree terms, the ultracell and
+**`rho_ddot`'s fit, written and measured the same evening (`1fba737`, `PLAN.md` P113), and
+what it showed about the nickel cell.** The Anderson fit now runs in `pw.x`'s inner
+product by default (`driver.RHO_DDOT_FIT`). Each cell at its own input settings through
+`Calculator.get_scf()`, iterations with the fit in `rho_ddot`, with the flat fit on the
+density (P107's), and in `pw.x` (P107's column):
+
+| cell | `rho_ddot` | flat | `pw.x` |
+|---|---|---|---|
+| `fe-mag-1k` | 11 | 11 | 12 |
+| `fe-noncolin-pbe-stress` | 17 | 15 | 19 |
+| `fe-unstable` | 27 | 23 | 23 |
+| `fe-unstable-nonmagnetic` | 19 | 16 | 20 |
+| `si8-us-1k` | 9 | 9 | 8 |
+| `ni-ldau-1k` | 8 | 8 | 8 |
+| `si8-paw-1k` | 9 | 8 | 9 |
+| `o-paw-spin` | 8 | 8 | 8 |
+| `co-slab-forcetheorem-sr` | **24** | 30 | 24 |
+| `ni-kind1-force`, `conv_thr = 1e-12` | 100, **not converged** | 79 | 98 |
+
+On the nine ordinary cells the new fit tracks `pw.x` cell by cell (132 iterations in all
+against 131) where the flat one is a little faster (128), and the converged energies of the
+two fits agree at the inputs' `conv_thr`. **It does not bring the nickel cell to `pw.x`'s
+solution, and nothing tried does.** At the input's own `conv_thr = 1e-12` the flat fit
+converges to **-170.9997723 Ry with traces 4.961 and 4.201**, a *third* self-consistent state
+(and the value P111 recorded for this cell); `rho_ddot`'s fit heads for the same state
+and stops at 100 iterations at accuracy 3.7e-9; the old flat fit with `becsum` in does the
+same (100 iterations, -170.9997857, accuracy 3.3e-7). So the cell has at least three
+solutions, `pw.x`'s -171.00025089 (4.891 and 4.343) the lowest, and the old code reached
+`pw.x`'s only on the test's `conv_thr = 1e-8` route, where the `ethr` schedule differs:
+**path luck, which `1705a0a` changed**, exactly as Meredig et al. describe. The mixer is
+Anderson where `pw.x`'s is modified Broyden, so a matched metric does not make the paths
+the same.
+
+**What that leaves.** The DFT+U cell is a landscape with at least three minima, and which
+one a run reaches depends on the path, `conv_thr` included; the old fit reached `pw.x`'s on
+one route and not on another, so no mixer setting here is a fix, and the test that caught it
+needs its occupations seeded or a lowest-of-several comparison, which is what the literature
+recommends. The Hartree terms, the ultracell and
 the platinum count are stop-point readings that moved with the path, and each passed at
 `98468d4`. The directional spread belongs to the `soc_scale = 0` reduction, whatever the
 mixer does. **Do not loosen the six tests**: the one that looked like a tolerance on a
