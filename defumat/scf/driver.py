@@ -116,6 +116,7 @@ from defumat.scf.ewald import build_ewald
 from defumat.scf.mixing import (
     DENSITY_DEPENDENT,
     PRECONDITIONED,
+    AndersonMixer,
     get_mixer,
     kerker_preconditioner,
     local_tf_preconditioner,
@@ -144,6 +145,9 @@ from defumat.scf.potential import (
     scf_accuracy,
     scf_accuracy_split,
     tau_accuracy,
+    rho_ddot_vector,
+    tau_ddot_vector,
+    ns_ddot_vector,
     v_of_rho,
 )
 from defumat.scf.residual_split import becsum_residual, residual_bins
@@ -202,6 +206,10 @@ _accuracy_split = jax.jit(scf_accuracy_split)
 #: transform whatever happens, so fusing saves no FFT, and leaving that function
 #: untouched is what guarantees a non-meta run does not move by an ulp.
 _tau_accuracy = jax.jit(tau_accuracy)
+#: ``rho_ddot``'s terms as vectors, for the Anderson fit (:func:`_rho_ddot_metric`).
+_rho_ddot_vector = jax.jit(rho_ddot_vector)
+_tau_ddot_vector = jax.jit(tau_ddot_vector)
+_ns_ddot_vector = jax.jit(ns_ddot_vector)
 
 
 #: Where ``ethr`` starts, from ``PW/src/setup.f90``: the starting potential is a
@@ -436,8 +444,45 @@ def _pack_ns(ns, dtype, real):
 
 #: Put ``becsum`` back into the Anderson fit, which is what this code did before
 #: ``PLAN.md`` P107. Kept only so that the A/B behind that phase can be re-run;
-#: ``pw.x`` never fits on it.
+#: ``pw.x`` never fits on it. It acts only on the flat fit, which runs when
+#: :data:`RHO_DDOT_FIT` is off: ``rho_ddot`` has no ``becsum`` term to put back.
 FIT_BECSUM = False
+
+#: Fit the Anderson coefficients in ``rho_ddot``'s inner product, as ``pw.x``
+#: does (``PLAN.md`` P113). ``False`` restores the flat fit on the packed vector
+#: this code used before, and is kept so that the A/B can be re-run.
+RHO_DDOT_FIT = True
+
+
+def _rho_ddot_metric(calculation):
+    """``(drho, dns, dtau) -> F`` whose dot products are ``rho_ddot``, for :attr:`Mixer.metric`.
+
+    The same three terms, in the same order, as the residual solver's
+    ``accuracy_of`` and the loop's ``accuracy``: the density's Hartree and
+    magnetization halves over the dense set, ``ns_ddot`` under a Hubbard term
+    and ``tauk_ddot`` under a meta-GGA. ``F(r) . F(r)`` is that ``accuracy`` to
+    round-off, which ``tests/unit/test_rho_ddot_fit.py`` holds.
+    """
+    gvectors, cell = calculation.basis.dense, calculation.system.cell
+    u_metric = None
+    if calculation.is_hubbard:
+        u_metric = jnp.asarray(calculation.hubbard_coefficients["u_metric"])
+        if bool(jnp.any(u_metric < 0)):
+            raise ValueError(
+                "a negative Hubbard U makes ns_ddot indefinite, so it is not an "
+                "inner product the Anderson fit can use; set driver.RHO_DDOT_FIT "
+                "= False to fit flat instead"
+            )
+
+    def metric(drho, dns, dtau):
+        parts = [_rho_ddot_vector(drho, gvectors, cell)]
+        if dns is not None:
+            parts.append(_ns_ddot_vector(dns, u_metric))
+        if dtau is not None:
+            parts.append(_tau_ddot_vector(dtau, gvectors, cell))
+        return np.asarray(jnp.concatenate(parts))
+
+    return metric
 
 
 def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None,
@@ -466,17 +511,16 @@ def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None,
     (:class:`~defumat.scf.residual.Residual`), so the two routes now agree with
     each other as well as with ``pw.x``.
 
-    **The inner product is Euclidean and QE's is not**, and that is a
-    pre-existing deviation this block inherits rather than introduces.
+    **The inner product is ``rho_ddot``'s**, since 2026-09-24 (``PLAN.md`` P113):
     ``mix_rho.f90:409-413`` builds Broyden's ``betamix`` from ``rho_ddot``, so
-    ``pw.x`` mixes in the same weighted metric it converges in; the mixer here
-    uses a plain Gram matrix on the packed real-space vector. For ``tau`` the
-    two agree up to a constant, by Parseval on a G-independent weight; the whole
-    difference is the charge half's ``1/G^2``, which is what Kerker is for and
-    which already leaves the trailing block at plain ``beta``. Measured on
-    ``si2-tb09.in``, ``|tau|_2 / |rho|_2 = 0.81``, so appending it raw gives it
-    comparable say in the least squares rather than either dominating or
-    vanishing.
+    ``pw.x`` fits in the same weighted metric it converges in, and the mixer here
+    now does too, through :attr:`~defumat.scf.mixing.Mixer.metric`, which the
+    driver installs and this function evaluates on the structured residual. It
+    was a plain Gram matrix on the packed real-space vector before, with
+    ``becsum`` first in it (P107 took it out) and the charge's ``1/G^2`` never
+    in it; a DFT+U nickel cell then converged to a second self-consistent state
+    5.2e-3 Ry above ``pw.x``'s (``OPEN.md`` Part XIX). A mixer with no metric
+    installed still fits flat, with ``becsum`` excluded unless ``FIT_BECSUM``.
 
     Two costs to state. The history doubles for a meta run, one dense-grid array
     per entry becoming two (``MEMORY-AUDIT.md`` D3, where the Anderson history
@@ -520,7 +564,20 @@ def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None,
     becsum_size = sum(np.asarray(b).size for b in becsum_in if b is not None)
     exclude = (slice(rho.size, rho.size + becsum_size)
                if becsum_size and not FIT_BECSUM else None)
-    mixed = mixer.mix(np.concatenate(flat), np.concatenate(flat_out), exclude=exclude)
+    metric = getattr(mixer, "metric", None)
+    fit = None
+    if metric is not None:
+        # The residual in ``rho_ddot``'s inner product, from its structured
+        # parts rather than off the packed vector, so no offset can disagree
+        # with the packing above. ``becsum`` has no term in it, which is what
+        # ``exclude`` was approximating, so ``FIT_BECSUM`` does nothing here.
+        fit = metric(
+            jnp.asarray(rho_out) - jnp.asarray(rho),
+            None if ns_in is None else jnp.asarray(ns_out) - jnp.asarray(ns_in),
+            None if tau_in is None else jnp.asarray(tau_out) - jnp.asarray(tau_in),
+        )
+    mixed = mixer.mix(np.concatenate(flat), np.concatenate(flat_out), exclude=exclude,
+                      fit=fit)
 
     offset = rho.size
     rho_mixed = jnp.asarray(mixed[:offset].reshape(rho.shape))
@@ -4887,9 +4944,22 @@ def _solve_residual(
                 **({} if warmup_mixing.lower() in DENSITY_DEPENDENT
                    else {"nelec": calculation.nelec}),
             )
+        warm_metric = (_rho_ddot_metric(calculation)
+                       if RHO_DDOT_FIT and isinstance(warm_mixer, AndersonMixer) else None)
         for _ in range(warmup):
             fx, wavefunctions = residual.step(x0, wavefunctions)
-            x0 = np.asarray(warm_mixer.mix(x0, np.asarray(fx, dtype=float)), dtype=float)
+            fit = None
+            if warm_metric is not None:
+                # The residual's own layout, unpacked: ``unpack`` is linear, so
+                # the parts of the difference are the differences of the parts.
+                drho, _, dns, dtau = residual.unpack(np.asarray(fx, dtype=float) - x0)
+                fit = warm_metric(
+                    jnp.asarray(drho),
+                    None if dns is None else jnp.asarray(dns),
+                    None if dtau is None else jnp.asarray(dtau),
+                )
+            x0 = np.asarray(warm_mixer.mix(x0, np.asarray(fx, dtype=float), fit=fit),
+                            dtype=float)
         options["steps_already_taken"] = warmup
 
     result = solver(
@@ -5397,6 +5467,12 @@ def run_scf(
             **({} if mixing_mode.lower() in DENSITY_DEPENDENT
                else {"nelec": calculation.nelec}),
         )
+
+    if RHO_DDOT_FIT and isinstance(mixer, AndersonMixer):
+        # Beside the preconditioner and for the same reason: it needs the
+        # G-vectors, which ``get_mixer`` does not have. Only Anderson fits
+        # coefficients, so only it is handed one; ``_mix`` evaluates it.
+        mixer.metric = _rho_ddot_metric(calculation)
 
     previous_energy, history = None, []
     # The occupations the *next* iteration's per-band thresholds are built from

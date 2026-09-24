@@ -55,7 +55,7 @@ from defumat.xc.functional import (
 
 __all__ = ["Potential", "v_of_rho", "hartree", "exchange_correlation",
            "gradient_correction", "meta_exchange", "scf_accuracy", "scf_accuracy_terms", "scf_accuracy_split",
-           "tau_accuracy",
+           "tau_accuracy", "rho_ddot_vector", "tau_ddot_vector", "ns_ddot_vector",
            "total_charge",
            "with_core", "as_potential_components",
            "DEFAULT_FUNCTIONAL"]
@@ -271,6 +271,71 @@ def tau_accuracy(residual_r: jnp.ndarray, gvectors: GVectors, cell: Cell):
     weight = E2 * FPI / (2.0 * jnp.pi) ** 2
     contribution = jnp.sum(jnp.real(jnp.conj(residual_g) * residual_g))
     return 0.5 * cell.volume * weight * contribution
+
+
+def _as_reals(parts) -> jnp.ndarray:
+    """Complex pieces as one real vector, real parts then imaginary parts."""
+    z = jnp.concatenate([jnp.ravel(p) for p in parts])
+    return jnp.concatenate([jnp.real(z), jnp.imag(z)])
+
+
+def rho_ddot_vector(residual_r: jnp.ndarray, gvectors: GVectors, cell: Cell) -> jnp.ndarray:
+    """``F`` with ``F(a) . F(b) = rho_ddot(a, b)`` on the density: :func:`scf_accuracy` as a dot.
+
+    Every term of ``rho_ddot`` (``PW/src/scf_mod.f90:718-851``) is diagonal in
+    G, so the bilinear form is a Euclidean dot of two weighted transforms:
+    ``sqrt(0.5 Omega e2 4 pi / G^2)`` on the charge with ``G = 0`` dropped, and
+    ``sqrt(0.5 Omega e2 4 pi / (2 pi)^2)`` on the magnetization with ``G = 0``
+    kept. ``F(r) . F(r)`` is :func:`scf_accuracy` of the same residual to
+    round-off, which is what makes this the inner product the Anderson fit
+    should use: ``pw.x`` fits its ``betamix`` in the same ``rho_ddot`` it stops
+    on (``mix_rho.f90:403-425``), so the mixer and ``conv_thr`` agree about which
+    errors are large. Over the dense set, as :func:`scf_accuracy` is; ``pw.x``
+    stops at the smooth sphere for both.
+    """
+    residual_g = r_to_g(residual_r, gvectors.fft_index)
+    g2 = gvectors.kinetic(cell)
+    inverse = jnp.where(g2 > 1e-12, 1.0 / jnp.where(g2 > 1e-12, g2, 1.0), 0.0)
+    doubled = 2.0 if gvectors.gamma_only else 1.0
+    charge = jnp.sqrt(doubled * 0.5 * cell.volume * E2 * FPI * inverse) * total_charge(residual_g)
+    if residual_g.shape[0] == 1:
+        return _as_reals([charge])
+    magnetization = (
+        residual_g[1:] if residual_g.shape[0] == 4
+        else (residual_g[0] - residual_g[1])[None]
+    )
+    weight = 0.5 * cell.volume * E2 * FPI / (2.0 * jnp.pi) ** 2
+    if gvectors.gamma_only:
+        # Half the sphere is stored, and ``G = 0`` is its own partner, so every
+        # other component counts twice (``scf_accuracy_terms``'s branch).
+        scale = jnp.full(magnetization.shape[-1], 2.0).at[0].set(1.0)
+        magnetization = magnetization * jnp.sqrt(weight * scale)
+    else:
+        magnetization = magnetization * jnp.sqrt(weight)
+    return _as_reals([charge, magnetization])
+
+
+def tau_ddot_vector(residual_r: jnp.ndarray, gvectors: GVectors, cell: Cell) -> jnp.ndarray:
+    """``F`` with ``F(a) . F(b) = tauk_ddot(a, b)``: :func:`tau_accuracy` as a dot, same spin form."""
+    residual_g = r_to_g(residual_r, gvectors.fft_index)
+    if residual_g.shape[0] == 2:
+        residual_g = jnp.stack(
+            [residual_g[0] + residual_g[1], residual_g[0] - residual_g[1]]
+        )
+    weight = 0.5 * cell.volume * E2 * FPI / (2.0 * jnp.pi) ** 2
+    return _as_reals([jnp.sqrt(weight) * residual_g])
+
+
+def ns_ddot_vector(residual: jnp.ndarray, u_metric: jnp.ndarray) -> jnp.ndarray:
+    """``F`` with ``F(a) . F(b) = ns_ddot(a, b)``: ``sqrt(U/2)`` per site, doubled at ``nspin = 1``.
+
+    ``residual`` is ``(nspin, nat, m, m)`` as :func:`~defumat.hubbard.energy.ns_ddot`
+    takes it, and ``u_metric`` its per-site ``U/2``.
+    """
+    scale = jnp.sqrt(u_metric)[None, :, None, None]
+    if residual.shape[0] == 1:
+        scale = jnp.sqrt(2.0) * scale
+    return _as_reals([scale * residual])
 
 
 def exchange_correlation(

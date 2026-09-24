@@ -451,7 +451,7 @@ _MIXER_DERIVED = frozenset({
     # silently ignored a caller who changed it. What the adaptive mixer *does*
     # carry across a resume is its evolved per-component state (``_betas``,
     # ``_previous``), which is stored like any other array.
-    "beta", "beta_max", "history", "condition_limit", "precondition",
+    "beta", "beta_max", "history", "condition_limit", "precondition", "metric",
 })
 
 

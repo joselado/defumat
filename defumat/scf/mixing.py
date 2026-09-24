@@ -85,12 +85,23 @@ class Mixer:
     #: driver installs it beside the preconditioner.
     shape = None
 
-    def mix(self, rho_in: np.ndarray, rho_out: np.ndarray, exclude: slice | None = None) -> np.ndarray:
+    #: ``(drho, dns, dtau) -> F`` with ``F(a) . F(b)`` the ``rho_ddot`` of two
+    #: residuals, installed by the driver beside the preconditioner because it
+    #: needs the G-vectors (:func:`~defumat.scf.driver._rho_ddot_metric`).
+    #: ``None`` keeps the flat inner product over the packed vector. Only a mixer
+    #: that fits coefficients reads it; the driver's ``_mix`` evaluates it and
+    #: hands the vector to :meth:`mix` as ``fit``.
+    metric = None
+
+    def mix(self, rho_in: np.ndarray, rho_out: np.ndarray, exclude: slice | None = None,
+            fit: np.ndarray | None = None) -> np.ndarray:
         """``exclude`` is a part of the packed vector that is mixed but not *fitted*.
 
-        It matters only to a mixer that fits coefficients to its history
-        (:class:`AndersonMixer`); the others take it and ignore it, so the
-        driver can pass it without knowing which mixer it holds.
+        ``fit`` is this residual in the inner product the fit should use
+        (:attr:`metric`), in place of the packed vector itself. Both matter only
+        to a mixer that fits coefficients to its history
+        (:class:`AndersonMixer`); the others take them and ignore them, so the
+        driver can pass them without knowing which mixer it holds.
         """
         raise NotImplementedError
 
@@ -177,8 +188,15 @@ class Mixer:
 class LinearMixer(Mixer):
     beta: float = 0.7
 
-    def mix(self, rho_in, rho_out, exclude=None):
+    def mix(self, rho_in, rho_out, exclude=None, fit=None):
         return rho_in + self.step(rho_out - rho_in, rho_in)
+
+
+def _same_fit(cached, fitted) -> bool:
+    """Whether a cached Gram matrix was built in the inner product now asked for."""
+    if isinstance(cached, str) or isinstance(fitted, str):
+        return isinstance(cached, str) and isinstance(fitted, str) and cached == fitted
+    return np.array_equal(cached, fitted)
 
 
 @dataclass
@@ -201,8 +219,19 @@ class AndersonMixer(Mixer):
     _gram: np.ndarray | None = field(default=None, repr=False)
     _norms: np.ndarray | None = field(default=None, repr=False)
     #: Which entries of the packed vector the cache was built over. A different
-    #: ``exclude`` is a different inner product, and it rebuilds the cache.
-    _fit_mask: np.ndarray | None = field(default=None, repr=False)
+    #: ``exclude`` is a different inner product, and it rebuilds the cache. The
+    #: string ``"metric"`` when it was built over :attr:`_fits` instead.
+    _fit_mask: np.ndarray | str | None = field(default=None, repr=False)
+    #: Each entry of ``_residuals`` in the fit's inner product (``mix``'s
+    #: ``fit``), rolled and reset with it. Empty when no metric is installed.
+    #: **This is the memory the metric costs**: a fit vector holds the dense
+    #: sphere's complex coefficients as reals, about ``pi/6`` of the box twice
+    #: over, so it is the size of a residual to within five per cent and the
+    #: history's resident set doubles (``OPEN.md`` S2 sizes it at 3.18 GB on the
+    #: 157-atom slab without them). Kept rather than recomputed because each
+    #: one is an FFT of a whole residual, and the new row of the Gram matrix
+    #: needs all of them every call; ``history`` is the dial.
+    _fits: list = field(default_factory=list, repr=False)
 
     #: Private, and only for the test that pins the cache to what it replaced:
     #: ``False`` rebuilds the whole Gram matrix on every call, as before
@@ -214,13 +243,22 @@ class AndersonMixer(Mixer):
     def reset(self):
         self._densities.clear()
         self._residuals.clear()
+        self._fits.clear()
         self._drop_gram()
 
     def _drop_gram(self):
         self._gram = self._norms = self._fit_mask = None
 
-    def mix(self, rho_in, rho_out, exclude=None):
+    def mix(self, rho_in, rho_out, exclude=None, fit=None):
         """One Anderson step; ``exclude`` is left out of the fit and still mixed.
+
+        **With ``fit``, the fit is in that inner product and ``exclude`` is
+        moot.** ``fit`` is this residual as :attr:`Mixer.metric` maps it, whose
+        dot products are ``rho_ddot``'s: the Hartree energy of the charge, the
+        flat magnetization and ``tau`` terms, ``U/2`` on ``ns`` and nothing on
+        ``becsum``. That is ``pw.x``'s own fit (``mix_rho.f90:403-425``) and not
+        an approximation to it, so the paragraphs below describe the flat path,
+        which is what runs when no metric is installed.
 
         **What ``exclude`` is for.** The driver passes the ``becsum`` block, and
         that is ``pw.x``'s rule rather than a choice: ``rho_ddot``
@@ -249,17 +287,29 @@ class AndersonMixer(Mixer):
         """
         rho_in = np.asarray(rho_in).ravel()
         residual = np.asarray(rho_out).ravel() - rho_in
-        fitted = np.ones(residual.size, dtype=bool)
-        if exclude is not None:
-            fitted[exclude] = False
-            if not fitted.any():
-                fitted[:] = True
+        if fit is not None:
+            if len(self._fits) != len(self._residuals):
+                # A history written without fit vectors -- a checkpoint from
+                # before the metric, or a mixer driven both ways -- cannot be
+                # fitted in this inner product, so it restarts here.
+                self.reset()
+            fitted = "metric"
+        else:
+            fitted = np.ones(residual.size, dtype=bool)
+            if exclude is not None:
+                fitted[exclude] = False
+                if not fitted.any():
+                    fitted[:] = True
 
         self._densities.append(rho_in)
         self._residuals.append(residual)
+        if fit is not None:
+            self._fits.append(np.asarray(fit).ravel())
         if len(self._densities) > self.history:
             self._densities.pop(0)
             self._residuals.pop(0)
+            if self._fits:
+                self._fits.pop(0)
             if self._gram is not None and self._norms is not None:
                 # The cache rolls with the history it describes: the entry that
                 # left is the oldest, so its row and column are the leading ones.
@@ -269,8 +319,11 @@ class AndersonMixer(Mixer):
         # new row of the Gram matrix needs all of them; what is no longer
         # recomputed is the rest of the matrix. Extended before the ``n == 1``
         # return, which costs one dot there and keeps the cache the size of the
-        # history after every call.
-        fit = [r[fitted] for r in self._residuals]
+        # history after every call. With a metric the fit vectors are stored.
+        if fit is not None:
+            fit = self._fits
+        else:
+            fit = [r[fitted] for r in self._residuals]
         gram, norms = self._extend_gram(fit, fitted)
 
         n = len(self._residuals)
@@ -426,7 +479,7 @@ class AndersonMixer(Mixer):
                 and self._fit_mask is not None
                 and np.shape(self._gram) == (n - 1, n - 1)
                 and np.shape(self._norms) == (n - 1,)
-                and np.array_equal(self._fit_mask, fitted)):
+                and _same_fit(self._fit_mask, fitted)):
             cached = n - 1
         gram = np.empty((n, n))
         norms = np.empty(n)
@@ -561,7 +614,7 @@ class AdaptiveMixer(Mixer):
         self._betas = None
         self._previous = None
 
-    def mix(self, rho_in, rho_out, exclude=None):
+    def mix(self, rho_in, rho_out, exclude=None, fit=None):
         if self.precondition is not None:
             raise ValueError(
                 "mixing_mode = 'adaptive' cannot take a preconditioner: it holds "
