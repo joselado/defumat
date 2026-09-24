@@ -21682,3 +21682,76 @@ halves of the new one.
 radial arrays can be tracers inside `at_strain` and they cannot; `_Regime` pinned on one
 cell; the Calculator facade building its own `Calculation` per `get_*` call; and the
 slow references next to the spin-GGA cut, the fixed channel and the shared setup.
+
+### P111 -- Five more quick items from `OPEN.md`: a Kramers zero, two sizing lines, the atomic orbitals per dataset, and `with_spin`'s fixed moment. ✅ DONE; the slow references of P109 and P110 are still owed in `OPEN.md` Part XVI item 1.
+
+Picked on 2026-09-24 as the items P110 left whose fix is one file and whose test needs no
+SCF. A workflow of thirteen agents did them, one fixer and one read-only reviewer per
+item, with a revision where the reviewer blocked (three of five), and ran nothing; every
+test was run afterwards in the session, and each new file against `20f82b2`, the commit
+before, in a separate worktree, where it fails for the reason it is about. Three
+existing tests the new rules broke were routed by the reviewers and adjusted in the same
+commit (`test_sizing.py`, `test_calculator.py`, `test_state_across_boundaries.py`).
+The gate on `6431503` is **3047 passed, 64 skipped, 0 failed, in 881 s at a peak of
+6.3 GB** (`test_textured_symmetry.py`, as before), 35 tests more than P110's.
+
+**What each one was measured at.**
+
+* **The site `<L>` and `<S>` of a nonmagnetic spinor run** (Part XVI item 4). With no
+  magnetization the ground state is time-reversal symmetric, so each state at `k` has a
+  Kramers partner at `-k` with both vectors reversed, and on a wedge cut with `k -> -k`
+  (`setup.f90`'s `time_reversal = .NOT. noinv .AND. .NOT. magnetic_sym`) both are now
+  set to zero at every site, before the spatial average. That average carries no
+  time-reversed operation for a nonmagnetic group, so on a noncentrosymmetric cell it
+  left the uncancelled half, and at `nsym = 1` it was never reached: the old code
+  returned a stub's 0.03 in `L` and 0.10 in `S` unchanged, on a P1 cell and on a `{E, I}`
+  cell, since inversion leaves an axial vector alone. `magnetic_sym` is read as
+  `is_magnetic` at the calculation's `nspin`, which is `System.domag` on a real spinor
+  run and keeps `test_site_spin_collinear_symmetry.py`'s spinor stand-ins as they were. A
+  magnetic spinor run, a `noinv` wedge and the full grid are untouched. **No SCF is behind
+  the zero** (`OPEN.md` Part XVIII item 1).
+* **`sizing.py`'s projector core and the PAW one-centre tensors** (Part XVII item 2).
+  `ncs` is counted over distinct datasets with the build's own `_projector_dataset_key`:
+  on two labels on one file the old code reported 1638400 B where the build holds
+  819200. The one-centre line is new and resident, since `Calculation` keeps the
+  tensors for every iteration's `_paw_onecenter`, and it reads
+  `n_t nh^2 nlm mesh` real words per distinct dataset with
+  `n_t = 2 + [ae_wfc_rel] + 2 [meta]`, held against `build_paw`'s own `.nbytes` for an
+  LDA, a `tb09` and a relativistic case. `OPEN.md`'s `2 nh^2 nlm mesh x 8` is the
+  scalar, non-meta case. It depends on the dataset alone, so on the two-atom PAW silicon
+  cell it is the largest line (10.5 MB against `Q_ij(G)`'s 6.1), which is what
+  `test_sizing.py`'s largest-line assertion had to be narrowed for; on a slab
+  `Q_ij(G)` grows past it with `ngm`. About 0.9 GB for a fully-relativistic Pt dataset.
+* **The atomic-orbital columns per dataset** (Part XVII item 3). `atomic_wavefunctions`
+  runs one radial transform per distinct dataset, keyed by a new `_atomic_dataset_key`
+  (the projector key reads no orbital, so it could not be reused), and builds one block
+  of columns per dataset channel where the old code built one per atom. The output is
+  byte-identical to a transcription of the old assembly on `si-1k.in` and on a
+  two-dataset cell, and on a two-label cell the transform runs once where it ran twice.
+  **The one number that moves is a reverse-mode sum's order**: the DFT+U stress on
+  `ni-kind1-force.in` (two atoms, one dataset) moves by 2.2e-19 Ry/bohr^3 on a largest
+  component of 1.24e-3, relative 1.7e-16, with the SCF energy bit-identical at
+  -170.999772299920323 Ry on both codes. The two docstrings that gave a traced
+  pseudopotential as the reason for `jnp` in `_origin_integrals` and `_origin_slopes` now
+  say that nothing there is ever a tracer and that `jnp` is kept for the slopes' bytes.
+* **`System.with_spin` and `tot_magnetization`** (Part XVI item 5, the user's choice of
+  three: dropped with a warning). Leaving `nspin = 2`, a carried fixed moment is dropped
+  and a `RuntimeWarning` says it is released; a new `tot_magnetization` keyword supplies
+  one, an explicit `None` drops it silently, and passing one to a target of 1 or 4 is
+  refused. Entering `nspin = 2` in an SCF under `occupations = 'fixed'` without one is
+  refused with the builder's own message, and so is a fractional one there, `nscf` and
+  `bands` exempt as in `input.f90`. Through a `Calculator` promotion from 2 to 4,
+  `continuation._check_fields`' release warning now fires, which it never did, since the
+  target used to carry the same constraint. No caller relied on the carry-over; two
+  tests took silicon's default fixed occupations into `nspin = 2` with no moment and now
+  pass `tot_magnetization = 0`.
+* **The piezoelectric regime view** (Part XVII item 1, the cheaper fix). The parity
+  against `Calculation` now runs on six more cells, one for each flag the PAW pair left
+  at its default: `ni-ldau-nospin` for `is_hubbard` (and the first with symmetry on), the
+  same with `U = 0.0` for the card the builder resolves to no Hubbard term,
+  `h2-texture-120` for a constrained noncollinear moment, `alas-magnetoelectric-nosoc`
+  for a uniform `B_field` (slow), `h-chain-spiral` and `o-atom-fixed-lsda`. Each asserts
+  its flag off the default before the parity is read, and none disagreed. The longest
+  new gate case is 4.1 s.
+
+**What the reviewers raised and was not done** is `OPEN.md` Part XVIII.

@@ -52,6 +52,11 @@ thirteen items closed across Parts III and XVI, each with a test checked to fail
 code or a bit-identity against it, and four entries raised by its reviewers and
 measurements, the largest a transcription of the constructor's flags pinned on one cell.
 
+**Part XVIII** is what the second quick-items session of **2026-09-24** (`PLAN.md` P111)
+left: five items closed across Parts XVI and XVII, and four entries from its reviewers, the
+largest that the zero it puts on a nonmagnetic spinor's site moments has no SCF behind it,
+because no committed input can carry one.
+
 **Part III** is the sweep of **2026-09-12** -- four read-only agents over the package
 looking for **speed and memory** rather than for wrong answers, 23 entries, ordered by
 ease times impact. **Nothing in it was measured and nothing in it is a defect**: each
@@ -5321,7 +5326,12 @@ not: `test_ultracell_augmented`, `test_ultracell_stm`, `test_ultracell_sts`,
 `test_anisotropy`, `test_relaxed_anisotropy`, `test_magnetic_constraints`,
 `test_noncollinear_magnetism`, `test_lsda`, `test_magnetoelectric`,
 `test_spinor_hubbard_symmetry`, `test_noncollinear_gga`, `test_paw_noncollinear`,
-`test_elk_seed`, `test_stress`. About two hours through `tools/run_regression.sh`. The
+`test_elk_seed`, `test_stress`. About two hours through `tools/run_regression.sh`.
+**One of them has now run**: on 2026-09-24 a 27-file run of this list, P110's reach and
+the four piezoelectric files was started at `20f82b2` and stopped by the user after the
+first, `test_ultracell.py`, **22 passed in 905 s at a 3.9 GB peak**. The other 26 are
+still owed, and P111 adds to them nothing a slow file reaches beyond what P110 did,
+except the DFT+U stress, measured in its entry. The
 ones most likely to move are the anisotropy pair (the rigid rotation must leave the
 single-species Co numbers unchanged to round-off, and a move beyond it means the rotation
 is wrong) and the spin-GGA files (the minority potential of a saturated point changed).
@@ -5375,7 +5385,7 @@ that saturates) has not been measured.
   `scf/occupations.py:128` raises when `NINT(count) < 1`; `iweights_only` has no lower
   bound and leaves that channel's level at `-1e20`. The fully polarized H atom with
   `occupations = 'fixed'`, `tot_magnetization = 1` is the case.
-* **Per-site `<L>`/`<S>` of a nonmagnetic spin-orbit run on a time-reversal wedge**, from
+* **[closed 2026-09-24, `PLAN.md` P111]** **Per-site `<L>`/`<S>` of a nonmagnetic spin-orbit run on a time-reversal wedge**, from
   reading only: `_symmetrise_axial` averages over the spatial group with no time-reversal
   sign, so a noncentrosymmetric crystal whose site group admits an axial vector can report
   a nonzero moment where time reversal makes it exactly zero. P109 completed the collinear
@@ -5395,7 +5405,8 @@ that saturates) has not been measured.
   one's angles whatever the sign of its `starting_magnetization`, with one it is the first
   nonzero row, sign included. A card whose first row is negative and a nonmagnetic species
   one (an oxide with O first) are the two cases to test.
-* `System.with_spin` carries `tot_magnetization` into `nspin = 1` or 4 unchanged, where the
+* **[closed 2026-09-24, `PLAN.md` P111, the user's choice of three: dropped with a
+  warning]** `System.with_spin` carries `tot_magnetization` into `nspin = 1` or 4 unchanged, where the
   builder now refuses it. Nothing was changed there, since continuation tests may rely on
   the promotion.
 * **[closed 2026-09-23, comments only]** `tools/cluster/p57_elk_me.sbatch` and `p57_elk_cr2o3.sbatch` quote `+2 cb`; the sign is
@@ -5411,7 +5422,7 @@ that saturates) has not been measured.
 Raised by the reviewers of P110's fixes, or found by its measurements, and not done.
 In the order a wrong answer costs.
 
-## 1. `_Regime` transcribes seven flags from `Calculation.__init__` and is pinned on one cell **[opened 2026-09-23]**
+## 1. `_Regime` transcribes seven flags from `Calculation.__init__` and is pinned on one cell **[opened 2026-09-23; the cheaper fix done 2026-09-24, `PLAN.md` P111]**
 
 `response/piezo.py:_Regime` reads `gamma_only`, the functional, the Hubbard setup, the
 field, `two_fermi_energies`, `is_ultrasoft` and `is_paw` the way the constructor does, so
@@ -5419,16 +5430,19 @@ the piezoelectric refusals can fire before one is built. `test_piezo_machinery.p
 the two agree on one PAW cell, where the Hubbard setup, the field, `noncolin` and a spiral
 are all absent on both sides, so an edit to the constructor on one of those could drift
 silently. The better fix is one regime view that the constructor itself uses; the cheaper
-one is the parity test on a Hubbard cell and a field cell.
+one is the parity test on a Hubbard cell and a field cell. **The cheaper one is done**:
+six more cells, one per flag, each asserted off its default before the parity is read.
+What is left is the better fix, and the `atomic_b_field` half of the field test, which no
+committed input reaches.
 
-## 2. `sizing.py` sums the projector core over labels **[opened 2026-09-23]**
+## 2. `sizing.py` sums the projector core over labels **[closed 2026-09-24, `PLAN.md` P111]**
 
 `sizing.py:535` still counts `ncs` per species label, so on a cell with duplicate labels it
 now overstates the projector core that P110 shares per dataset, and it has no line at all for
 the PAW one-centre tensors (`2 nh^2 nlm mesh x 8` bytes per distinct PAW dataset). Count
 distinct datasets with `_projector_dataset_key` and `_paw_dataset_key`.
 
-## 3. Three more setups per label, or described wrongly **[opened 2026-09-23]**
+## 3. Three more setups per label, or described wrongly **[closed 2026-09-24, `PLAN.md` P111, all three]**
 
 * `pseudo/atomic.py:90-120` builds the atomic-orbital columns per species label with the
   pattern P110 removed from the projectors. The constructor does not call it, so it is not
@@ -5448,3 +5462,49 @@ H3 took the discarded builds out of the workflows, and a workflow can now take a
 another k-set goes through `at_kpoints`, which drops `projectors = "rebuild"` and so is not a
 bit-identical substitute. Also the same shape: `nesting.py:100` through `run_nscf`, and the
 ultracell calling `fixed_density_states` and `fixed_density_bands` with identical arguments.
+
+
+# Part XVIII -- left by the second quick-items session, 2026-09-24 (P111)
+
+Raised by the reviewers of P111's five fixes, and not done. In the order a wrong answer
+costs.
+
+## 1. The nonmagnetic spinor site moment has no SCF behind its zero **[opened 2026-09-24]**
+
+P111's zeroing is held by stub tests on a P1 and a `{E, I}` cell, and no committed input
+can carry an SCF test: every nonmagnetic spin-orbit input uses a fully-relativistic
+ultrasoft or PAW dataset, which `angular_momenta` refuses, and the fully-relativistic
+norm-conserving datasets with atomic wavefunctions (I, Ni) appear only in magnetic inputs.
+The candidate is three iodine atoms in a P1 cell, `K_POINTS automatic 2 2 1 1 1 0`,
+`ecutwfc = 25`, smeared, run once with `_symmetrise_axial` replaced by the identity (the
+raw wedge sum, which should be well above round-off) and once as it is (zero). Three atoms
+because two identical atoms always have an inversion centre at their midpoint, and a
+centrosymmetric cell is zero on both codes. Beside it: `nosym` here gives the whole grid
+where `pw.x` still halves it with `k -> -k` unless `noinv`, which only `builder.py`'s
+`nosym_evc` row says.
+
+## 2. Two sizing gaps next to the one-centre line **[opened 2026-09-24]**
+
+The one-centre tensors are built in float64 whatever the precision policy
+(`paw/onecenter.py:_build_species` never reads it), while the new line uses the policy's
+real size, so under `single` it reports half of what is resident. Not reachable from an
+input today. And `docs/features.tex`'s list of what the floor covers (around line 499)
+names neither the augmentation lines nor this one.
+
+## 3. `with_spin`'s rules are not the builder's in two places **[opened 2026-09-24]**
+
+The builder refuses an SCF at `nspin = 2` with neither a starting magnetization nor a
+`tot_magnetization` (`input.f90:1506`); `with_spin` cannot repeat the check, because
+`System` keeps only the starting tuple and cannot tell an explicit 0.0 from an absent
+value. And the drop warning points one frame short through the `Calculator`, at
+`calculator.py`'s forwarding line, since equinox's `BoundMethod` adds a frame and the
+package walks no frames.
+
+## 4. Small points **[opened 2026-09-24]**
+
+* The first-declared-order dataset loop now exists three times (`build_projector_core`,
+  `atomic_wavefunctions`, and inline in `test_velocity_locality.py`); one helper in
+  `projectors.py` returning `(datasets, slot_of)` would remove the copies.
+* `scf/driver.py:_build_hubbard_projectors`' docstring says `kcart` is for `at_strain`
+  alone, but `at_kcart` passes one too (forward mode only, so no gradient is affected).
+
