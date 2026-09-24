@@ -589,9 +589,10 @@ def _origin_slopes(pseudos, channels_by_species, volume):
     ``si-epsilon-unshifted`` against 1.01 ms like this. That is not where the
     correction's cost is -- precomputing the whole thing saves 5 ms of 125 --
     and it is written this way because the flat form is also the clearer one.
-    The integrals cannot go on the host, although every number in them is
-    tabulated: a stress derivative traces the whole calculation,
-    pseudopotentials included (see
+    The integrals stay in ``jnp`` although every number in them is tabulated
+    and none is ever a tracer, since a pseudopotential is not a pytree: what
+    keeps them there is that their bytes, and every velocity tangent at
+    ``k + G = 0``, do not move (see
     :func:`~defumat.pseudo.formfactors._origin_integrals`).
     """
     root = float(np.sqrt(3.0 / (4.0 * np.pi)))

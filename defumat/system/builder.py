@@ -42,7 +42,8 @@ __all__ = ["System", "build_system", "system_from_file", "local_moments",
 
 
 #: "the caller did not say", where ``None`` is a value a caller can mean --
-#: dropping a ``STARTING_MOMENTS`` card is exactly that.
+#: dropping a ``STARTING_MOMENTS`` card is exactly that, and so is releasing a
+#: ``tot_magnetization`` (:meth:`System.with_spin`).
 _UNSET = object()
 
 
@@ -109,7 +110,10 @@ class System(eqx.Module):
     starting_moments: tuple = eqx.field(static=True, default=())
     #: ``tot_magnetization``: constrain ``N_up - N_dw`` instead of letting the
     #: two channels share one Fermi level. ``None`` -- QE's -10000 sentinel --
-    #: means unconstrained.
+    #: means unconstrained. Only ever set at ``nspin = 2``, the one regime with
+    #: two collinear channels to fill: the input refuses it anywhere else, and
+    #: :meth:`with_spin` drops it on the way out of that regime rather than
+    #: carrying it.
     tot_magnetization: float | None = eqx.field(static=True, default=None)
     #: ``nosym``: use no symmetry at all. Not an optimisation switch -- an input
     #: whose occupations break the crystal's symmetry (an atom with one of its
@@ -382,6 +386,7 @@ class System(eqx.Module):
         angle1=None,
         angle2=None,
         nbnd: int | None = None,
+        tot_magnetization=_UNSET,
     ) -> "System":
         """The same crystal in another spin regime, with its k-points rebuilt.
 
@@ -408,10 +413,44 @@ class System(eqx.Module):
         two; pass it explicitly to override. A band path is left alone -- its
         weights mean nothing and it is not what an SCF runs on.
 
+        **``tot_magnetization`` is the one input variable that does not carry
+        over**, because it means something only at ``nspin = 2``: it fixes
+        ``N_up - N_down`` by giving each collinear channel its own Fermi level,
+        and an unpolarized run has one channel while a noncollinear one has no
+        up and down channels to split, which is why ``pw.x`` refuses it anywhere
+        else (``input.f90:781-782``). Leaving ``nspin = 2`` therefore **drops**
+        it, with a ``RuntimeWarning``, and the constraint is released: a run
+        continued from the constrained state starts on a density the constraint
+        held and relaxes from it. It used to be carried unchanged, into a
+        ``System`` no input can produce, and
+        :attr:`~defumat.scf.driver.Calculation.two_fermi_energies` then read it
+        as absent, so the moment was released with nothing said -- and
+        :func:`defumat.scf.continuation._check_fields`, whose job is to say
+        exactly that when a converged moment is carried across, stayed silent
+        too, because the target appeared to hold the same constraint as the
+        source.
+
+        The other direction needs a value the source may not have:
+        ``occupations = 'fixed'`` at ``nspin = 2`` in an SCF is refused without
+        one (``input.f90:784-800``), since nothing else says how the electrons
+        divide between the channels. The ``tot_magnetization`` keyword supplies
+        it. Left out, it keeps what the system has (and drops it outside
+        ``nspin = 2``, as above); an explicit ``None`` drops it without a
+        warning; and a value passed with a target other than ``nspin = 2`` is
+        **refused rather than dropped**, because dropping is for what was
+        carried and not for what was asked. The keyword takes the value it is
+        given: QE's ``-10000`` sentinel for "unset" is read as such by the
+        input parser (``_tot_magnetization``) and not here, where ``None`` is
+        the way to say it.
+
         Everything else is carried over unchanged, including the fields and the
-        constraints, so a regime change does not quietly drop them. The result
-        goes through the same consistency checks the input does: ``lspinorb``
-        without ``noncolin`` is refused here as it is there.
+        other constraints, so a regime change does not quietly drop them. The
+        result goes through the same consistency checks the input does, in the
+        input's own words: ``lspinorb`` without ``noncolin`` is refused here as
+        it is there, and so is a ``tot_magnetization`` outside ``nspin = 2``,
+        fixed LSDA occupations without one, and a fractional one under them.
+        ``nscf`` and ``bands`` runs are exempt from the last two, as they are
+        in ``input.f90``, since they fill nothing.
         """
         nspin = int(self.nspin if nspin is None else nspin)
         if nspin not in (1, 2, 4):
@@ -448,6 +487,74 @@ class System(eqx.Module):
             factor = (2 if nspin == 4 else 1) / (2 if self.nspin == 4 else 1)
             nbnd = int(round(self.nbnd * factor))
 
+        # ``tot_magnetization``: asked for, carried, or released. A value the
+        # caller passed is a request and is held to ``input.f90``'s rules; a
+        # value the system carries into a regime without two collinear
+        # channels has nothing left to fix and is dropped, with a warning
+        # emitted only once nothing below can still refuse the result.
+        asked = tot_magnetization is not _UNSET
+        if asked:
+            moment = None if tot_magnetization is None else float(tot_magnetization)
+            if moment is not None and nspin != 2:
+                remedy = (" For a noncollinear moment of fixed size use "
+                          "constrained_magnetization = 'total' or 'fsm'"
+                          if nspin == 4 else "")
+                raise ValueError(
+                    f"{_NEEDS_LSDA} It was passed to with_spin together with "
+                    f"nspin = {nspin}, so it is refused rather than dropped: a "
+                    "value the system already carries is released with a "
+                    "warning on the way out of nspin = 2, but one asked for "
+                    "here would be a constraint the run silently does not "
+                    f"apply.{remedy}"
+                )
+        else:
+            moment = self.tot_magnetization if nspin == 2 else None
+        released = (not asked and nspin != 2
+                    and self.tot_magnetization is not None)
+
+        lscf = str(self.calculation).strip().strip("'\"").lower() not in (
+            "nscf", "bands")
+        if self.occupations == "fixed" and nspin == 2 and lscf:
+            if moment is None:
+                raise ValueError(
+                    f"{_FIXED_NEEDS_MOMENT} Pass an integer tot_magnetization "
+                    "to with_spin, or give the system occupations = 'smearing' "
+                    "first to let a shared Fermi level decide"
+                )
+            if abs(moment - round(moment)) > 1.0e-8:
+                raise ValueError(_FIXED_NEEDS_INTEGER.format(value=moment))
+
+        kpoints = self._respin_kpoints(nspin, magnetization, angle1, angle2)
+        if released:
+            if nspin == 4:
+                why = ("a noncollinear run has no up and down channels to "
+                       "split")
+                after = (", and when the converged moment itself is carried "
+                         "across, run_scf warns separately that it is the "
+                         "constraint's rather than the functional's. "
+                         "constrained_magnetization = 'total' or 'fsm' is the "
+                         "noncollinear way to hold a moment's size")
+            else:
+                why = "an unpolarized run has one channel and no moment"
+                after = ""
+            warnings.warn(
+                f"tot_magnetization = {float(self.tot_magnetization):g} is "
+                f"dropped on the way into nspin = {nspin}: {why}, so the fixed "
+                "N_up - N_down has no meaning there and the constraint is "
+                "released rather than carried. A run continued from the "
+                "constrained state starts on a density the constraint held and "
+                f"relaxes from it{after}. Pass tot_magnetization=None to drop "
+                "it without this warning",
+                RuntimeWarning,
+                # 3, not 2: ``System`` is an ``eqx.Module``, whose
+                # ``__getattribute__`` wraps every bound method in equinox's
+                # ``BoundMethod``, and its ``__call__`` is one frame between
+                # this one and the caller. Through ``Calculator.with_spin``
+                # this lands on that method's forwarding line, one frame
+                # short of the script; only a frame walk gets both routes.
+                stacklevel=3,
+            )
+
         # ``dataclasses.replace`` rather than ``eqx.tree_at``: most of what
         # changes here is a *static* field, which is not in the pytree at all.
         return dataclasses.replace(
@@ -458,7 +565,8 @@ class System(eqx.Module):
             angle1=angle1,
             angle2=angle2,
             nbnd=nbnd,
-            kpoints=self._respin_kpoints(nspin, magnetization, angle1, angle2),
+            tot_magnetization=moment,
+            kpoints=kpoints,
         )
 
     def with_moments(self, per_atom) -> "System":
@@ -1510,6 +1618,32 @@ _OCCUPATIONS = (
     "tetrahedra_opt", "tetrahedra-opt",
 )
 
+#: ``input.f90:778-800``'s ``tot_magnetization`` rules, in the words both
+#: :func:`build_system` and :meth:`System.with_spin` refuse them in. Each
+#: caller finishes the sentence with its own remedy, since an input sets the
+#: variable and ``with_spin`` takes it as a keyword; the rule is written once,
+#: so a regime change and an input file cannot drift into two versions of it.
+_NEEDS_LSDA = (
+    "tot_magnetization requires nspin = 2: it fixes N_up - N_down by "
+    "giving each collinear channel its own Fermi level, and an "
+    "unpolarized run has one channel while a noncollinear one has no "
+    "up and down channels to split. This is pw.x's own refusal "
+    "(input.f90: 'tot_magnetization requires nspin=2')."
+)
+_FIXED_NEEDS_MOMENT = (
+    "occupations = 'fixed' with nspin = 2 needs tot_magnetization: "
+    "the two channels are filled independently and nothing else says "
+    "how many electrons each gets. This is pw.x's own refusal "
+    "(input.f90: 'fixed occupations and lsda need "
+    "tot_magnetization')."
+)
+_FIXED_NEEDS_INTEGER = (
+    "occupations = 'fixed' with nspin = 2 needs an integer "
+    "tot_magnetization, and this one is {value}: each channel fills "
+    "a whole number of bands, so a fractional split has no fixed "
+    "occupation to express it. pw.x refuses the same input"
+)
+
 
 def _check_occupations(pwin: PwInput) -> None:
     """``set_occupations.f90``'s two checks, neither of which was made here.
@@ -1583,36 +1717,22 @@ def _check_occupations(pwin: PwInput) -> None:
     # unconstrained state and reported success.
     if _tot_magnetization(pwin) is not None and not lsda:
         raise ValueError(
-            "tot_magnetization requires nspin = 2: it fixes N_up - N_down by "
-            "giving each collinear channel its own Fermi level, and an "
-            "unpolarized run has one channel while a noncollinear one has no "
-            "up and down channels to split. This is pw.x's own refusal "
-            "(input.f90: 'tot_magnetization requires nspin=2'). For a "
-            "noncollinear moment of fixed size use constrained_magnetization "
-            "= 'total' or 'fsm'"
+            f"{_NEEDS_LSDA} For a noncollinear moment of fixed size use "
+            "constrained_magnetization = 'total' or 'fsm'"
         )
     if occupations == "fixed" and lsda and lscf:
         tot_magnetization = pwin.get("system", "tot_magnetization", None)
         if tot_magnetization is None:
             raise ValueError(
-                "occupations = 'fixed' with nspin = 2 needs tot_magnetization: "
-                "the two channels are filled independently and nothing else says "
-                "how many electrons each gets. This is pw.x's own refusal "
-                "(input.f90: 'fixed occupations and lsda need "
-                "tot_magnetization'). Set an integer tot_magnetization, or use "
-                "occupations = 'smearing' to let a shared Fermi level decide"
+                f"{_FIXED_NEEDS_MOMENT} Set an integer tot_magnetization, or "
+                "use occupations = 'smearing' to let a shared Fermi level decide"
             )
         # QE requires an integer ``tot_charge`` here too; that half of its check
         # is unreachable, because a charged cell is refused outright by
         # ``_refuse_unimplemented_switches`` whatever the occupations are.
         value = float(tot_magnetization)
         if abs(value - round(value)) > 1.0e-8:
-            raise ValueError(
-                "occupations = 'fixed' with nspin = 2 needs an integer "
-                f"tot_magnetization, and this one is {value}: each channel fills "
-                "a whole number of bands, so a fractional split has no fixed "
-                "occupation to express it. pw.x refuses the same input"
-            )
+            raise ValueError(_FIXED_NEEDS_INTEGER.format(value=value))
 
 
 def _check_calculation(pwin: PwInput) -> None:

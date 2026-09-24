@@ -97,8 +97,8 @@ def test_the_augmentation_charge_is_sized_and_is_the_largest_term(pseudo_dir):
     117.55 GB measured peak, with each of the setup allocations larger than the
     whole reported total. The augmentation charge is counted exactly here --
     against the array a real ``Calculation`` allocated, not against a formula
-    written twice -- and on a PAW cell it is already bigger than everything the
-    SCF holds put together.
+    written twice -- and on a PAW cell it is already bigger than every line
+    that grows with the cell.
     """
     calculator = _calculator(SILICON_PAW, pseudo_dir)
     estimate = estimate_size(calculator.system, calculator.pseudos)
@@ -115,8 +115,16 @@ def test_the_augmentation_charge_is_sized_and_is_the_largest_term(pseudo_dir):
         == built.augmentation.phases.nbytes
     )
 
-    # It is the largest single line, and the Bessel transient is larger still.
-    assert counted == max(estimate.arrays.values())
+    # It is the largest line that grows with the cell, and the Bessel transient
+    # is larger still. The PAW one-centre tensors are left out of the max: they
+    # are ``nh^2 nlm mesh`` per dataset, set by the pseudopotential and not by
+    # the cell, so on this two-atom cell they outweigh ``Q_ij(G)`` where on a
+    # slab ``Q_ij(G)`` grows with ``ngm`` past them.
+    largest = max(
+        size for name, size in estimate.arrays.items()
+        if name != "PAW one-centre (nh,nh,nlm,mesh)"
+    )
+    assert counted == largest
     assert estimate.setup_transient > counted
 
 

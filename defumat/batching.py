@@ -569,8 +569,6 @@ def sum_bands(fn, xs, *, batch: int | None | str = "default"):
 # where the wavefunction store lives -- QE's ``get_buffer``/``save_buffer``
 # ---------------------------------------------------------------------------
 
-#: The two places the store can be. ``"device"`` is this package's own history
-#: and is what a CPU wants; ``"host"`` is QE's buffer.
 #: Whether ``<k+G|beta>`` is held for every k-point or rebuilt one at a time.
 #:
 #: ``vkb`` is ``(nk, npwx, nkb)`` and is **resident for the whole run**: on the
@@ -580,9 +578,10 @@ def sum_bands(fn, xs, *, batch: int | None | str = "default"):
 #: projector storage is one k-point's however many there are.
 #:
 #: ``rebuild`` is that: the ``ProjectorCore`` stays resident, which is
-#: ``(nk, npwx, ncs)`` with one column per *species* channel rather than per
-#: *atom* channel -- about twenty times smaller on a 45-atom cell of two
-#: species -- and each k-point's ``(npwx, nkb)`` is formed on demand.
+#: ``(nk, npwx, ncs)`` with one column per channel of each distinct *dataset*
+#: rather than per *atom* channel -- about twenty times smaller on a 45-atom
+#: cell of two datasets, however many species labels name them (P110) -- and
+#: each k-point's ``(npwx, nkb)`` is formed on demand.
 #:
 #: **The saving is in the resident set, which is what makes it different from
 #: the other dials**: `k_batch` and `band_batch` bound what is in *flight*, and
@@ -622,6 +621,8 @@ def resolve_projectors(requested: str | None = "default") -> str:
     return value
 
 
+#: The two places the store can be. ``"device"`` is this package's own history
+#: and is what a CPU wants; ``"host"`` is QE's buffer.
 WFC_STORES = ("device", "host")
 
 

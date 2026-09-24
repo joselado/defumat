@@ -25,8 +25,14 @@ cells small enough to build.
 
 **The byte figures are a floor and say so.** They cover the arrays whose size is
 a function of the basis -- the wavefunctions, the projectors, the eigensolver's
-subspace, the fields on the two grids -- which is what decides whether a run
-starts. They do not cover XLA's own scratch, the temporaries of a fused kernel,
+subspace, the fields on the two grids -- and the two setup products the run
+keeps, the augmentation charge ``Q_ij(G)`` and, on a PAW dataset, the
+one-centre tensors, which is what decides whether a run starts. The second is a
+function of the datasets alone, ``nh^2 nlm mesh`` per distinct dataset whatever
+the cell, so it can be the largest line on a two-atom cell and is small beside
+``Q_ij(G)``, which grows with ``ngm``, on a slab. Both are counted per distinct
+*dataset* rather than per species label, which is what the setup holds (P73,
+P110). They do not cover XLA's own scratch, the temporaries of a fused kernel,
 or the autodiff tape of a derivative that has not been asked for; a reverse-mode
 force carries intermediates this cannot see. Read the total as "at least this",
 which is the direction that makes it useful.
@@ -530,9 +536,25 @@ def estimate_size(
             noncolin=(nspin == 4),
         )
     nkb = sum(len(projector_channels(pseudos[t])) for t in structure.types)
-    # ``ncs`` is ``nkb``'s per-*species* counterpart: what ``ProjectorCore``
-    # holds, and what the ``rebuild`` route pays instead of ``vkb``.
-    ncs = sum(len(projector_channels(pseudo)) for pseudo in pseudos)
+    # ``ncs`` is ``nkb``'s per-*dataset* counterpart: what ``ProjectorCore``
+    # holds, and what the ``rebuild`` route pays instead of ``vkb``. **A dataset
+    # and not a species label**: two labels naming one UPF file -- an
+    # antiferromagnet's ``Fe1``/``Fe2``, or a noncollinear texture written one
+    # species per site -- share one block of columns (P110), and summed over
+    # labels this line reported that block once per label for a run that holds
+    # it once. The key is ``build_projector_core``'s own function rather than a
+    # restatement of it, so the two cannot disagree about what "the same
+    # dataset" is. Like the build, it runs over every species declared, whether
+    # or not an atom carries it, and is empty when no atom has a projector
+    # (the build's ``nkb == 0`` branch).
+    from defumat.pseudo.projectors import _projector_dataset_key
+
+    ncs, projector_datasets = 0, set()
+    for pseudo in (pseudos if nkb else ()):
+        key = _projector_dataset_key(pseudo)
+        if key not in projector_datasets:
+            projector_datasets.add(key)
+            ncs += len(projector_channels(pseudo))
 
     from defumat.solvers.davidson import DAVID_NDIM
 
@@ -694,6 +716,51 @@ def estimate_size(
                 nqx * pseudo.kkbeta * zr for pseudo, _, _ in datasets
             )
 
+    # **The PAW one-centre tensors**, the ``becsum -> r^2 rho_lm`` maps of
+    # :class:`~defumat.paw.onecenter.PawSpecies`. ``Calculation.__init__``
+    # keeps them as ``self.paw`` and ``_paw_onecenter`` takes them as an
+    # argument at every SCF iteration, so they are **resident** for the life of
+    # the run and belong in the floor, not in the setup transient. What one
+    # dataset holds is read off ``_build_species``: ``density_ae`` and
+    # ``density_ps`` always, ``density_rel`` when the dataset is fully
+    # relativistic (the Dirac small component's ``pfunc_rel``), and
+    # ``kinetic_ae``/``kinetic_ps`` under a meta-GGA, each ``(nh, nh, nlm,
+    # mesh)``, so
+    #
+    #     n_t nh^2 nlm mesh zr,    n_t = 2 + [ae_wfc_rel] + 2 [meta-GGA],
+    #
+    # with ``nlm = (l_max_rho + 1)^2`` from the header and ``mesh`` the whole
+    # radial mesh rather than ``kkbeta``, because the energies are integrated to
+    # the end of it. ``OPEN.md``'s ``2 nh^2 nlm mesh x 8`` is the scalar-
+    # relativistic, non-meta case of this. Counted per distinct dataset with
+    # ``build_paw``'s own key, for the reason ``ncs`` is (P110).
+    #
+    # Left out: each dataset's seven ``(mesh,)`` radial vectors, which are
+    # ``7 / (n_t nh^2 nlm)`` of the tensors -- 0.6 per cent on the smallest
+    # committed PAW dataset (``nh = 8``, ``nlm = 9``) and falling as ``nh^2``
+    # grows -- its angular quadrature's tables, tens of kB, and the sphere
+    # workspace inside ``_paw_onecenter``, an XLA temporary this module cannot
+    # see for the same reason it cannot see the eigensolver's. The bytes
+    # are ``zr``, as on every real line here, but ``_build_species`` builds
+    # through NumPy and does not read the precision policy, so under ``single``
+    # the tensors it allocates are still float64 and this line is half of them.
+    from defumat.paw.onecenter import _lmax_rho, _paw_dataset_key
+
+    onecentre_bytes, paw_datasets = 0, set()
+    for pseudo in pseudos:
+        if not pseudo.is_paw:
+            continue
+        key = _paw_dataset_key(pseudo)
+        if key in paw_datasets:
+            continue
+        paw_datasets.add(key)
+        nh = len(projector_channels(pseudo))
+        relativistic = pseudo.paw is not None and pseudo.paw.ae_wfc_rel is not None
+        tensors = 2 + int(relativistic) + 2 * int(functional.is_meta)
+        nlm = (_lmax_rho(pseudo) + 1) ** 2
+        onecentre_bytes += tensors * nh * nh * nlm * pseudo.mesh * zr
+    if onecentre_bytes:
+        arrays["PAW one-centre (nh,nh,nlm,mesh)"] = onecentre_bytes
 
     # The eigensolver's own XLA temp buffer -- see the module docstring. The
     # FFT term is on the **smooth** grid, which is the box ``h_psi`` transforms

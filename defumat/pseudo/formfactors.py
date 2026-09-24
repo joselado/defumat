@@ -242,13 +242,36 @@ def _origin_integrals(pseudo: Pseudopotential) -> jnp.ndarray:
     rebuilds the projectors inside a ``jvp`` once per velocity call and the
     dispatch count here is paid on a hot differentiable path.
 
-    **JAX and not numpy, although every array here is tabulated in a file.**
-    A stress derivative goes through ``Calculation.at_strain``, which sends the
-    whole calculation -- the pseudopotentials with it -- through a ``jvp``, so
-    ``pseudo.r``, ``pseudo.rab`` and every ``beta`` arrive as tracers with a
-    zero tangent. ``np.asarray`` of one of those is a
-    ``TracerArrayConversionError``, which is the same reason
-    :func:`projector_form_factors` is written in ``jnp``.
+    **Nothing this reads is ever a tracer, so nothing forces** ``jnp`` **here.**
+    Every array is a NumPy array from the UPF file, on every path:
+    :class:`~defumat.pseudo.upf.Pseudopotential` is a frozen dataclass and not
+    a pytree, so it crosses a ``jit`` or a ``grad`` as a closed-over constant,
+    and ``Calculation.at_strain`` hands ``self.pseudos`` to its builders
+    untouched. The witness is on this function's own path: inside that trace,
+    ``build_projector_core`` fingerprints each dataset with
+    ``projectors._projector_dataset_key``, which is ``np.asarray`` of
+    ``pseudo.r``, ``pseudo.rab`` and every ``beta``, a few lines before it
+    reaches this function through ``_origin_slopes``, and it could not do that
+    if any of them were a tracer. What a stress derivative traces is the cell,
+    and the volume enters outside this function, in
+    :func:`projector_origin_slopes` and in ``projectors._origin_slopes``, where
+    ``4 pi / sqrt(Omega)`` is traced under ``at_strain`` and carries no
+    tangent on the velocity ``jvp``. So the reason :func:`projector_form_factors` is
+    written in ``jnp``, a traced ``omega`` and a traced ``q``, does not reach
+    here, and a version written wholly in NumPy would run on every path.
+
+    **It stays** ``jnp`` **so that its bytes do not move**: NumPy's matmul and
+    XLA's dot need not sum in the same order, and every velocity tangent at
+    ``k + G = 0`` is built from these slopes. The one constraint is to be all
+    one or all the other. A *mixed* form, NumPy applied to a ``jnp``
+    intermediate, is what most likely failed the stress leg of the
+    bit-identity check that commit 5a8d267 describes: the stress gradient is
+    ``jax.jit(jax.grad(...))`` (``stress/autodiff.py``'s ``_energy_gradient``),
+    and under a ``jit`` a ``jnp`` operation is staged even on constant
+    arguments, so ``np.asarray`` of its result is a
+    ``TracerArrayConversionError`` although nothing upstream is traced. That
+    mechanism is inferred from how JAX stages a ``jit`` and from the commit
+    message, which blames traced pseudopotentials; it has not been reproduced.
     """
     cutoff = pseudo.kkbeta
     if not pseudo.projectors:

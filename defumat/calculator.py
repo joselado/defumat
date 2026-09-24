@@ -2102,6 +2102,11 @@ class Calculator:
         the converged **charge** and take the moment from the seed regardless,
         which is how a *different* magnetic state is reached from the same
         charge, and ``"none"`` to start unpolarized.
+
+        ``options`` go to :meth:`~defumat.system.builder.System.with_spin`,
+        ``tot_magnetization`` among them: a fixed moment carried out of
+        ``nspin = 2`` is dropped with a warning, and one is needed to enter
+        ``nspin = 2`` under ``occupations = 'fixed'``.
         """
         system = self.system.with_spin(nspin, **options)
         return self._derived(system, seed=True, magnetization=magnetization)

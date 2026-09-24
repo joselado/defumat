@@ -366,7 +366,8 @@ def test_a_derived_calculator_shares_the_pseudos_and_the_options(pseudo_dir):
 
 def test_with_spin_promotes_into_the_targets_regime(silicon):
     silicon.get_scf()
-    polarized = silicon.with_spin(2, starting_magnetization=(0.3,))
+    polarized = silicon.with_spin(2, starting_magnetization=(0.3,),
+                                  tot_magnetization=0)
     assert polarized.system.nspin == 2
     assert polarized.scf_result is None
     assert polarized.starting_state is silicon.scf_result

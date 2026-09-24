@@ -154,8 +154,10 @@ def test_for_spin_puts_the_degeneracy_back_on_a_demotion():
     # come back to where they started.
     text = _SILICON.replace("K_POINTS automatic\n 2 2 2 0 0 0", "K_POINTS gamma")
     gamma = build_system(parse_pw_input(text))
-    promoted = gamma.with_spin(2, starting_magnetization=[0.3])
-    demoted = promoted.with_spin(1, starting_magnetization=[0.0])
+    promoted = gamma.with_spin(2, starting_magnetization=[0.3],
+                                tot_magnetization=0)
+    demoted = promoted.with_spin(1, starting_magnetization=[0.0],
+                                tot_magnetization=None)
     sums = [float(np.asarray(s.kpoints.weights).sum())
             for s in (gamma, promoted, demoted)]
     assert sums == pytest.approx([2.0, 1.0, 2.0])

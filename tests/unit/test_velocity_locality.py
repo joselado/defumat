@@ -276,15 +276,28 @@ def test_the_correction_adds_exactly_zero_to_every_primal(pseudo_dir):
     """
     from defumat import Calculator
     from defumat.pseudo.projectors import (
-        _origin_slopes, _with_origin_tangent, projector_channels)
+        _origin_slopes, _projector_dataset_key, _with_origin_tangent,
+        projector_channels)
 
     calculator = Calculator.from_file(
         CASES / "si2-nosym.in", pseudo_dir=pseudo_dir, announce=False)
     calculation = calculator.calculation
     core = calculation.projector_core
+    # ``core.columns`` holds one block per distinct *dataset* and not one per
+    # species label, so the slopes are built over the same list, in the order
+    # ``build_projector_core`` makes it: each dataset once, where its first
+    # label is declared. On ``si2-nosym`` the two lists coincide, one label
+    # naming one file, but a list per label would give a cell with two labels
+    # on one file twice as many slopes as it has columns.
+    datasets, seen = [], set()
+    for pseudo in calculator.pseudos:
+        key = _projector_dataset_key(pseudo)
+        if key not in seen:
+            seen.add(key)
+            datasets.append(pseudo)
     axes, slopes = _origin_slopes(
-        calculator.pseudos,
-        [projector_channels(p) for p in calculator.pseudos],
+        tuple(datasets),
+        [projector_channels(p) for p in datasets],
         calculation.system.cell.volume,
     )
     out = np.asarray(_with_origin_tangent(core.columns, core.kg, slopes, axes))

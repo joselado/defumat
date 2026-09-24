@@ -4204,8 +4204,8 @@ along $z$, $x$ and $y$ gives $|\langle L\rangle| = 0.0364767$ in all three,
 with a spread of 7.3e-11 over the three cubic axes, with nothing imposing that a magnitude is a scalar.
 
 \textbf{A symmetry-reduced k-set works}, and what makes it work is that, in
-a noncollinear run, $\langle L\rangle$ and $\langle S\rangle$ are averaged over
-the group as \textbf{axial} vectors --- each operation carrying $\det(R)$ and the
+a magnetic noncollinear run, $\langle L\rangle$ and $\langle S\rangle$ are
+averaged over the group as \textbf{axial} vectors --- each operation carrying $\det(R)$ and the
 time-reversal sign beside the rotation, the site charge carrying only the atom
 permutation. The distinction is not a refinement: the \emph{polar} average of an
 axial vector is exactly zero on any centrosymmetric crystal, so writing the
@@ -4216,7 +4216,13 @@ scalar carried from atom to atom by the operations, and averaging it as an axial
 vector under the spatial group gave exactly zero on bcc Fe's 48 operations.
 $\langle L\rangle$ of a collinear run is completed to zero by time reversal,
 since each channel has a real Hamiltonian and $\langle L\rangle_{-\mathbf k} =
--\langle L\rangle_{\mathbf k}$.
+-\langle L\rangle_{\mathbf k}$. A \textbf{nonmagnetic spinor run} is completed to zero in
+the same way, and for both vectors: with no magnetization the ground state is
+time-reversal symmetric, so every state at $\mathbf k$ has a Kramers partner at
+$-\mathbf k$ with $\langle L\rangle$ and $\langle S\rangle$ reversed, and on a
+wedge cut with $\mathbf k \to -\mathbf k$ both are set to zero at every site.
+The spatial average alone does not do it on a noncentrosymmetric cell, or at
+$n_{\rm sym} = 1$, where it returned the uncancelled half of the zone.
 
 \begin{refuses}
 \textbf{Refuses.} A \textbf{fully-relativistic ultrasoft or

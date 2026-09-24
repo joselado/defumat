@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from defumat.io.pwin import read_pw_input
+from defumat.io.pwin import parse_pw_input, read_pw_input
 from defumat.pseudo import read_upf
 from defumat.response.piezo import (
     VOIGT,
@@ -79,9 +79,22 @@ def test_a_cubic_crystal_admits_no_spontaneous_polarization():
         require_a_nonpolar_crystal(_crystal(case))
 
 
-def _input(case: str):
-    """The ``System`` and its pseudopotentials: all the guard chain reads."""
-    system = build_system(read_pw_input(CASES / f"{case}.in"))
+def _input(case: str, edit: tuple[str, str] | None = None):
+    """The ``System`` and its pseudopotentials: all the guard chain reads.
+
+    ``edit`` is one ``(old, new)`` replacement in the committed file's text,
+    for a case that is a committed cell with one value changed. ``old`` has to
+    be in the file, so an edit that stops matching fails here rather than
+    quietly handing back the committed cell under the edited case's name.
+    """
+    if edit is None:
+        pwin = read_pw_input(CASES / f"{case}.in")
+    else:
+        old, new = edit
+        text = (CASES / f"{case}.in").read_text()
+        assert old in text, f"{case}.in no longer carries {old!r}"
+        pwin = parse_pw_input(text.replace(old, new))
+    system = build_system(pwin)
     pseudos = tuple(
         read_upf(PSEUDO / sp.pseudo_file) for sp in system.structure.species
     )
@@ -151,13 +164,15 @@ def test_the_input_reads_the_way_the_calculation_does():
 
     The refusals above are asked of the input, and they are only the same
     refusals if every attribute the chain reads comes out the same as the
-    constructor's. This is the one test that builds a calculation to say so,
-    on the committed cell where most of those flags are *not* at their
+    constructor's. This is the first of two tests that build a calculation to
+    say so, on the committed cell where most of those flags are *not* at their
     default -- a PAW dataset, so ``is_paw`` and ``is_ultrasoft`` both hold,
     ``nspin = 2``, ``nosym``, and ``K_POINTS gamma``, which the constructor
     substitutes away for an augmented dataset and the view deliberately does
     not. A parity check on a cell where everything is ``False`` on both sides
-    would pass whatever either side computed.
+    would pass whatever either side computed, and the flags this cell does
+    leave at their default are taken one cell each by
+    :func:`test_the_input_reads_the_way_the_calculation_does_off_the_defaults`.
     """
     from defumat.response.piezo import _Regime
 
@@ -167,6 +182,11 @@ def test_the_input_reads_the_way_the_calculation_does():
 
     assert view.is_paw and view.is_ultrasoft and view.nspin == 2
     assert system.kpoints.gamma_only and not view.gamma_only
+    _assert_the_view_reads_like_the_calculation(view, calculation)
+
+
+def _assert_the_view_reads_like_the_calculation(view, calculation):
+    """Every attribute the guard chain reads, compared between the two."""
     for name in ("nspin", "noncolin", "spiral", "gamma_only",
                  "two_fermi_energies", "is_ultrasoft", "is_paw", "is_hubbard"):
         assert getattr(view, name) == getattr(calculation, name), name
@@ -183,6 +203,73 @@ def test_the_input_reads_the_way_the_calculation_does():
             calculation.system.kpoints, field
         ), field
     assert view.system.kpoints.nk == calculation.system.kpoints.nk
+
+
+@pytest.mark.parametrize("case, edit, off_its_default", [
+    # DFT+U, and the first parity cell with the symmetry switched on: one fcc
+    # nickel atom on a shifted 4 4 4 grid without ``nosym``, so the run
+    # symmetrises with the rotation lists being compared and the k-set is the
+    # wedge they reduced.
+    pytest.param("ni-ldau-nospin", None,
+                 lambda view: view.is_hubbard and not view.system.nosym
+                 and view.symmetries.nsym > 1,
+                 id="hubbard"),
+    # The same cell with its one U set to zero and nothing else changed. The
+    # card is still there, so ``system.hubbard`` is not ``None``, and the
+    # builder resolves it to ``None`` because no parameter is nonzero: this is
+    # the case ``_Regime.of`` calls the builder for rather than testing the
+    # card, and the one where the two tests would disagree.
+    pytest.param("ni-ldau-nospin", ("U Ni-3d 3.0", "U Ni-3d 0.0"),
+                 lambda view: view.system.hubbard is not None
+                 and not view.is_hubbard,
+                 id="hubbard-card-at-zero"),
+    # A constrained moment on a noncollinear pair, and no applied field: the
+    # ``constrained_magnetization`` term of the view's field test alone.
+    pytest.param("h2-texture-120", None,
+                 lambda view: view.noncolin
+                 and view.magnetic_field is not None
+                 and view.system.constrained_magnetization != "none",
+                 id="constrained-noncollinear"),
+    # A uniform ``B_field`` and no constraint: the other term of the same test.
+    # Of the three committed cells carrying one, the one without spin-orbit
+    # coupling, and still two ultrasoft PBE species on eight spinor k-points,
+    # hence outside the gate.
+    pytest.param("alas-magnetoelectric-nosoc", None,
+                 lambda view: view.magnetic_field is not None
+                 and np.asarray(view.system.b_field, dtype=float).any()
+                 and view.system.constrained_magnetization == "none",
+                 id="uniform-field", marks=pytest.mark.slow),
+    pytest.param("h-chain-spiral", None,
+                 lambda view: view.spiral and view.noncolin,
+                 id="spiral"),
+    # ``nspin = 2`` with ``tot_magnetization``: one Fermi level per channel.
+    pytest.param("o-atom-fixed-lsda", None,
+                 lambda view: view.two_fermi_energies,
+                 id="two-fermi-energies"),
+])
+def test_the_input_reads_the_way_the_calculation_does_off_the_defaults(
+        case, edit, off_its_default):
+    """The same parity, on one cell per flag the PAW cell leaves at its default.
+
+    The PAW oxygen pair above carries no Hubbard term, no field, no spinor
+    and no spiral, and has one Fermi level, so on that cell the view and
+    the constructor agree on those five flags whatever either computes for
+    them: an edit to ``Calculation.__init__`` on any one of them would drift
+    away from :class:`~defumat.response.piezo._Regime` without a test noticing
+    (``OPEN.md`` Part XVII item 1). Each cell here is chosen for the flag its
+    id names, and ``off_its_default`` asserts **on the view, before the
+    comparison**, that the flag really is off its default there, so a cell that
+    stops carrying it fails as such rather than turning into a second pass
+    over defaults. The zero-U case reads the other way round: what is off its
+    default there is the card, and what both sides must say is that there is
+    no Hubbard term.
+    """
+    from defumat.response.piezo import _Regime
+
+    system, pseudos = _input(case, edit)
+    view = _Regime.of(system, pseudos)
+    assert off_its_default(view), case
+    _assert_the_view_reads_like_the_calculation(view, Calculation(system, pseudos))
 
 
 def test_a_system_without_its_pseudopotentials_is_not_guessed_at():

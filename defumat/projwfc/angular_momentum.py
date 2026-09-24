@@ -53,11 +53,13 @@ are what this is validated on; a comparison against Elk's number is a comparison
 of two decompositions.
 
 **A symmetry-reduced k-set is completed rather than refused** (P82), and the
-rule depends on the regime: at ``nspin = 4`` ``<L>`` and ``<S>`` are axial
-vectors averaged over the magnetic group; at ``nspin = 1, 2`` ``<S_z>`` is a
-site scalar the group permutes, and ``<L>`` on a wedge cut with ``k -> -k`` is
-completed to the exact zero time reversal in each channel gives it
-(:func:`_symmetrise_axial` has the argument). **Refused by name**: a
+rule depends on the regime: on a magnetic ``nspin = 4`` run ``<L>`` and
+``<S>`` are axial vectors averaged over the magnetic group, and on a
+nonmagnetic one a wedge cut with ``k -> -k`` is completed to the exact zero
+Kramers pairing gives both; at ``nspin = 1, 2`` ``<S_z>`` is a site scalar the
+group permutes, and ``<L>`` on a wedge cut with ``k -> -k`` is completed to
+the exact zero time reversal in each channel gives it (:func:`_symmetrise_axial`
+has the argument). **Refused by name**: a
 **fully-relativistic ultrasoft or PAW** dataset, because the spinor overlap's
 off-diagonal spin blocks are ``qq_so`` and the projection built here applies the
 *scalar* ``S`` to each component -- which is the validated ``projwfc.x`` path in
@@ -397,7 +399,52 @@ def _symmetrise_axial(orbital, spin, charge, calculation):
     measured check on the whole grid, where nothing is completed and the
     silicon test reads ``1.7e-16``; under ``noinv`` the spatial ops alone
     reduced the set, and the axial average is what completes it.
+
+    **``nspin = 4`` with no magnetization (``domag = .false.``): ``<L>`` and
+    ``<S>`` are both exactly zero on the whole zone, by Kramers, and a wedge
+    cut with ``k -> -k`` is completed to that zero.** A spin-orbit Hamiltonian
+    is not real, so the argument above does not carry over as it stands; what
+    carries over is time reversal itself, ``T = i sigma_y K``, which commutes
+    with ``H`` when the density is a scalar (``nspin_mag = 1``) and nothing in
+    the potential is odd under it. ``T psi_nk`` is then the Kramers partner at
+    ``-k``, at the same energy and so with the same ``wg``. The orbitals are
+    real and their Löwdin set at ``-k`` is the conjugate of the set at ``k``,
+    so the partner's site coefficients are ``i sigma_y`` acting on the
+    conjugates of ``psi``'s, its site density matrix is the time-reversed one,
+    and ``L`` (purely imaginary on the real harmonics) and ``sigma`` both
+    change sign under it: ``<L>_{-k} = -<L>_k`` and ``<S>_{-k} = -<S>_k``, band
+    by band. What differs from the collinear case is only that ``S`` is odd
+    here too, where ``S_z`` of a collinear channel is even under ``k -> -k``,
+    so both vectors are zeroed where there only ``<L>`` was; the charge is even
+    in both regimes and is left alone. ``KPoints.automatic`` reduces such a
+    grid with ``k -> -k`` unless ``noinv``, because ``setup.f90``'s
+    ``magnetic_sym = noncolin .AND. domag`` is false, and the axial average
+    cannot put the missing half back: the nonmagnetic group carries no
+    time-reversed operation (``t_rev`` is zero throughout), so no term of the
+    average carries the sign the Kramers partner does. On a centrosymmetric cell that is
+    harmless, since inversion times time reversal pairs each state with a
+    partner at the *same* ``k`` on the inversion-image site and the average
+    over the pair returns the zero anyway; on a noncentrosymmetric cell whose
+    site group admits an axial vector the uncancelled half survives it, and at
+    ``nsym = 1`` (a P1 cell, whose wedge time reversal alone halves) the
+    function used to return before averaging at all. So both are set to zero
+    *before* the spatial average, whose average of zero is zero.
+
+    The rule is the one the k-set was reduced with and not a second one:
+    ``is_magnetic`` at the regime the calculation is in, which is ``domag``
+    for a spinor run and false for a collinear one, so that
+    ``time_reversal = .NOT. noinv .AND. .NOT. magnetic_sym`` reads here exactly
+    as ``build_system`` applied it. Under ``noinv`` a nonmagnetic spinor wedge
+    was cut by the rotations alone, the axial average completes it, and the
+    value stays a measured near-zero; on the full grid, which is what
+    ``nosym`` gives here (a departure from ``pw.x``, whose ``nosym`` still
+    halves with ``k -> -k``), nothing is completed and the value is the
+    measured cancellation between each state and its Kramers partner at
+    ``-k``, to the eigensolver's convergence. A **magnetic** spinor run is
+    untouched: its grid was reduced without ``k -> -k``, its group carries the
+    ``t_rev`` sign, and the axial average above is the whole completion.
     """
+    from defumat.system.builder import is_magnetic
     from defumat.system.kpoints import is_reduced
     from defumat.system.symmetry import (
         atom_mapping, symmetrize_atom_cartesian_tensor,
@@ -411,10 +458,19 @@ def _symmetrise_axial(orbital, spin, charge, calculation):
     )
     collinear = calculation.nspin != 4
 
-    if collinear and not bool(getattr(system, "noinv", False)) and is_reduced(
-        system.kpoints
-    ):
+    # ``setup.f90``'s ``time_reversal = .NOT. noinv .AND. .NOT. magnetic_sym``,
+    # with ``magnetic_sym`` false at ``nspin = 1, 2`` by construction.
+    magnetic_sym = is_magnetic(
+        calculation.nspin, system.local_moments,
+        system.atomic_b_field, system.b_field,
+    )
+    time_reversal = not bool(getattr(system, "noinv", False)) and not magnetic_sym
+    if time_reversal and is_reduced(system.kpoints):
         orbital = np.zeros_like(np.asarray(orbital, dtype=float))
+        if not collinear:
+            # Kramers: ``S`` is odd under ``T`` as well, where a collinear
+            # channel's ``S_z`` is not.
+            spin = np.zeros_like(np.asarray(spin, dtype=float))
 
     if not grouped:
         return orbital, spin, charge

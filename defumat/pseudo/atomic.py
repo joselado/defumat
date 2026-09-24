@@ -29,6 +29,7 @@ from defumat.pseudo.formfactors import atomic_form_factors
 from defumat.pseudo.projectors import (
     _angular_part,
     _apply_phases,
+    _content_digest,
     _radial_table,
     _species_columns,
 )
@@ -65,6 +66,47 @@ def atomic_channels(pseudo: Pseudopotential) -> list[tuple[int, int, int]]:
     return channels
 
 
+def _atomic_dataset_key(pseudo: Pseudopotential) -> tuple:
+    """A fingerprint of everything a species' atomic-orbital columns are built from.
+
+    The counterpart of :func:`~defumat.pseudo.projectors._projector_dataset_key`
+    for ``<k+G|chi>``, and for the same reason: two species labels naming one
+    UPF file are one dataset, the phase-free half of an atomic orbital depends
+    on the dataset and on ``k + G`` and never on the label, and one label per
+    magnetic site (``angle1``/``angle2``, a site-resolved ``HUBBARD`` card)
+    would otherwise pay one radial transform per label for identical tables.
+
+    **It cannot be the projector key, which never reads an orbital.** That key
+    hashes ``beta`` over ``r[:kkbeta]``, while
+    :func:`~defumat.pseudo.formfactors.atomic_form_factors` integrates
+    ``PP_PSWFC`` over QE's 10-bohr ``msh``, so under it two datasets with the
+    same projectors and different orbitals would share the wrong columns, and a
+    difference in ``r`` or ``rab`` between ``kkbeta`` and ``msh`` would not be
+    seen at all. It is written here rather than beside the projector key
+    because this is the one build that reads it.
+
+    **The key is exactly what the columns read**: the cut ``msh``, ``r`` and
+    ``rab`` up to it, every kept orbital's ``chi`` up to it, and the channels,
+    which fix the ``l``, the ``lm`` column, the ``i^l`` phase and which orbitals
+    a negative occupation drops. The occupations themselves are not in it and
+    neither is ``j``, because nothing in the columns reads them: the spinor
+    blocks that read ``j`` (:func:`spinor_orbital_blocks`, and DFT+U's
+    ``_spinor_channels``) are built atom by atom from each atom's own species,
+    on the output of :func:`atomic_wavefunctions` rather than on its columns.
+    """
+    msh = pseudo.msh
+    return (
+        msh,
+        tuple(atomic_channels(pseudo)),
+        _content_digest(pseudo.r[:msh]),
+        _content_digest(pseudo.rab[:msh]),
+        # ``atomic_form_factors`` slices ``chi[: len(r[:msh])]``, which is
+        # ``chi[:msh]`` because ``msh`` never exceeds the mesh.
+        tuple(_content_digest(orbital.chi[:msh])
+              for orbital in pseudo.orbitals if orbital.occupation >= 0.0),
+    )
+
+
 def count_atomic_wavefunctions(
     pseudos: tuple[Pseudopotential, ...], structure: Structure
 ) -> int:
@@ -97,26 +139,79 @@ def atomic_wavefunctions(
         kpoints.cartesian(cell) if kcart is None else kcart, lmax
     )
 
+    # One entry per distinct *dataset*, not per species label, exactly as
+    # ``build_projector_core`` does it: two labels naming one UPF file get one
+    # radial transform and one block of columns, and the second label's atoms
+    # select from the first's (see :func:`_atomic_dataset_key`). The datasets
+    # keep the order in which their first label is declared, so on a cell with
+    # one label per dataset this is the list of species unchanged.
+    datasets, slot_of, seen = [], [], {}
+    for species, pseudo in enumerate(pseudos):
+        key = _atomic_dataset_key(pseudo)
+        if key not in seen:
+            seen[key] = len(datasets)
+            datasets.append(species)
+        slot_of.append(seen[key])
+
     shape = kg_norm.shape
     flat = kg_norm.reshape(-1)
     form_factors = tuple(
-        atomic_form_factors(p, flat, cell.volume) for p in pseudos
+        atomic_form_factors(pseudos[species], flat, cell.volume)
+        for species in datasets
     )
     radial = _radial_table(form_factors, shape)
-    offset = np.cumsum([0] + [f.shape[0] for f in form_factors])
+    chi_offset = np.cumsum([0] + [f.shape[0] for f in form_factors])
 
-    chi_of, lm_of, l_of, atom_of = [], [], [], []
-    for atom, species in enumerate(structure.types):
+    # One column per *dataset* channel, in the order the datasets were first
+    # declared. This is narrower than the build it replaces on every cell and
+    # not only on one with repeated labels: that build made one column per
+    # *atom* channel and handed ``_apply_phases`` ``arange``, so two atoms of
+    # one species already had two copies of each column.
+    chi_of, lm_of, l_of = [], [], []
+    column_offset = [0]
+    for slot, species in enumerate(datasets):
         for nb, l, lm in channels_by_species[species]:
-            chi_of.append(offset[species] + nb)
+            chi_of.append(chi_offset[slot] + nb)
             lm_of.append(lm)
             l_of.append(l)
-            atom_of.append(atom)
+        column_offset.append(len(chi_of))
 
-    # The same assembly as the projectors, with i^l in place of (-i)^l. The
-    # columns are built per *atom* channel here rather than per species channel:
-    # the atomic orbitals are a starting guess built once, so there is nothing
-    # to be saved by keeping the phase separable.
+    # One row per atomic orbital, atoms outermost and then the channels of that
+    # atom's species, which is QE's ``natomwfc`` order and the order every
+    # consumer indexes (``spinor_orbital_blocks``' ``start``, DFT+U's manifold
+    # columns, ``projwfc``'s labels). The column comes from the atom's dataset.
+    atom_of, column_of = [], []
+    for atom, species in enumerate(structure.types):
+        for index in range(len(channels_by_species[species])):
+            atom_of.append(atom)
+            column_of.append(column_offset[slot_of[species]] + index)
+
+    # The same assembly as the projectors, with i^l in place of (-i)^l. Every
+    # column is computed element by element from its own dataset's radial
+    # table and ``_apply_phases`` gathers columns by index, so the output holds
+    # the bytes the per-atom build held, and a cell written with two labels on
+    # one dataset gives the bytes of the same cell written with one
+    # (``tests/unit/test_atomic_columns_per_dataset.py`` checks both).
+    #
+    # What moves is the order of a reverse-mode sum, and **its scope is wider
+    # than the projectors'**, because the build this replaces was per atom and
+    # not per label: on every cell with two or more atoms on one dataset, one
+    # label or several, those atoms' cotangents are now summed at the gather in
+    # ``_apply_phases`` and multiplied by the column's other factors once, where
+    # each used to be multiplied by them and scatter-added into ``radial`` and
+    # ``ylm`` on its own -- ``(g_0 + g_1) b`` against ``g_0 b + g_1 b``, the
+    # same sum at round-off. The one reverse-mode consumer is the DFT+U stress:
+    # ``Calculation.at_strain`` rebuilds ``wfcU`` at a traced ``kcart`` through
+    # ``_build_hubbard_projectors``, under ``stress/autodiff.py``'s
+    # ``_energy_gradient``, which is ``jax.jit(jax.grad(...))``. The one DFT+U
+    # stress a test asserts, ``ni-ldau-stress``, has one atom and cannot see it.
+    # Three things do not move at all: the primal; the DFT+U force, since the
+    # positions enter only through the phases and the gathered columns are the
+    # same bytes; and a forward-mode derivative (``at_kcart``'s ``jvp``,
+    # ``_term_gradients``' ``jacfwd``), whose tangent is carried through the
+    # gather element by element. A spin spiral, the other rebuild at a traced
+    # ``k`` that is differentiated in reverse, refuses DFT+U outright
+    # (``Calculation._setup_hubbard``).
     columns = _species_columns(
         ylm,
         radial,
@@ -130,7 +225,7 @@ def atomic_wavefunctions(
         structure.positions,
         planewaves.mask,
         jnp.asarray(atom_of),
-        jnp.arange(len(atom_of)),
+        jnp.asarray(column_of),
     )
     return jnp.transpose(wfc, (0, 2, 1)).astype(cell.precision.complex)
 
