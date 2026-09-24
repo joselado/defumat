@@ -5698,6 +5698,39 @@ that one flag.
   ones to eight decimals in both directions, at a printed accuracy of 6.5e-13 and
   4.1e-13.
 
+**Which block the fit sees, measured on the same cell.** With `becsum` out of the flat
+fit the density carries 95 to 99 per cent of the squared residual and `ns` 3 to 5 per
+cent, at every iteration; with it in, `becsum` carries 10 to 83 per cent (not the 98 it
+carries on ultrasoft iron). So `ns` does not take over when `becsum` leaves, and the two
+paths differ only in whether `becsum` shares the fit with the density.
+
+**What the literature says, read the same day** (two reading agents, papers' bodies where
+open). *Which DFT+U minimum a run reaches is a property of the path, and the mixer is a
+documented selector*: Meredig et al., PRB 82, 195128 (2010) list "even electronic mixing
+parameters" beside U, the starting occupations, the geometry and enforced symmetry, with a
+CeO2 case in which only the mixing parameters changed, and "a single calculation will only
+find a single local minimum" (Ponet, Di Lucente, Marzari, npj Comput. Mater. 10, 151,
+2024). A gap of 35 meV per Ni site is the size of orbital-configuration variants within one
+spin state (UO2's first metastable state is 25 meV per formula unit, Freyss et al., Psi-k
+Highlight 113; 0.0027 Ry in Quantum ESPRESSO, Payami, arXiv:2108.12758), and nobody has
+enumerated the minima of Ni metal. *Every scheme that states its fit metric puts its blocks
+in one physical unit or balances them explicitly*: `pw.x`'s `rho_ddot` is an energy in Ry,
+4 pi e2/G^2 on the charge over the smooth sphere only, a flat `e2 fpi/tpi2` on the
+magnetization and `tau`, `U/2` on `ns` (`scf_mod.f90:718-999`), and no `becsum` at all for
+an ultrasoft dataset; Marks and Luke (arXiv:0801.3098) balance an LAPW vector's blocks
+adaptively and Marks (arXiv:2104.04384) asks that density-matrix terms be "physically
+consistent" with fixed scales; ABINIT and GPAW leave the PAW `rho_ij` out of the fit by
+default, and the one physical weight proposed for it, the all-electron minus pseudo
+one-centre Hartree form, is indefinite, which is why `pw.x` commented it out. No code makes
+a block's place in the fit depend on the functional. *The recommended protocol for DFT+U is
+a lowest-state search*: start from each plausible occupation (occupation-matrix control,
+`starting_ns_eigenvalue`, `mixing_fixed_ns`), release it, keep the lowest.
+
+So the flat metric, with `becsum` in or out, is this code's own and neither `pw.x`'s nor
+anyone's, and landing in `pw.x`'s basin is like-for-like only once the metric is
+`rho_ddot`'s. Even then the literature does not promise the same basin, so a test that
+asserts one DFT+U energy should seed the occupations or compare the lowest of a small scan.
+
 **What that leaves.** The DFT+U state is the defect, and it is `1705a0a`'s: the old fit
 reaches `pw.x`'s solution and the new one does not. The Hartree terms, the ultracell and
 the platinum count are stop-point readings that moved with the path, and each passed at
