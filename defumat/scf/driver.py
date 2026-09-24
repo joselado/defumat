@@ -578,6 +578,71 @@ def _newd(potential, fft_index, dij, augmentation):
     return dij[None] + jnp.stack(blocks)
 
 
+@jax.jit
+def _newd_noncollinear_integrals(potential_g, augmentation, transverse_g=None,
+                                 cross_augmentation=None):
+    """``int V_c Q_ij`` for each component of a spinor potential, as block matrices.
+
+    The first of ``newd_us``'s three steps (see
+    :meth:`Calculation._noncollinear_coefficients`), in one kernel: the
+    per-component, per-species contraction and the scatter of each atom's
+    ``(nh, nh)`` block into ``(nkb, nkb)``, which run eagerly were ``nspin_mag``
+    times ``ntyp`` kernels and ``nat`` scatters apiece.
+
+    ``potential_g`` holds one dense-sphere vector per component, and ``None``
+    for the two a spin spiral carries in ``transverse_g`` instead: that pair is
+    integrated against the displaced table ``cross_augmentation`` as the one
+    complex field ``W = V_x + i V_y``, and its two real rows are left zero here.
+    With ``W`` the ``up, down`` block is
+    ``D^{up,down}_ij = conj(Omega sum_G conj(q~_ij(G)) W(G))``, the adjoint of
+    what :func:`_addusdens_spiral` builds, as it has to be, because the
+    augmentation energy is a single bilinear ``sum_c int V_c n_c^aug`` that both
+    of them are halves of. Returns ``(components, cross)``, ``cross`` being
+    ``None`` without a spiral.
+
+    **The transforms and everything after the scatter stay with the caller**,
+    so that nothing here is arithmetic that ran outside a kernel before: the
+    contractions are the per-species kernels the eager path already called, and
+    the rest is placement. Inside a trace ``r_to_g``'s ``1/(n1 n2 n3)`` becomes
+    a compile-time constant, and a fused ``+ ddd_paw`` can contract with the
+    kernels' ``volume *`` into one multiply-add, so either one moved in here is
+    free to round differently from the eager loop this replaced -- which is
+    also why this is not :func:`_newd`'s shape.
+    """
+    nkb = augmentation.nkb
+    components = jnp.stack([
+        jnp.zeros((nkb, nkb))
+        if channel_g is None
+        else augmentation.block_matrix(augmentation.integrals(channel_g))
+        for channel_g in potential_g
+    ])
+    if cross_augmentation is None:
+        return components, None
+    cross = jnp.conj(
+        cross_augmentation.block_matrix(
+            cross_augmentation.cross_integrals(transverse_g)
+        )
+    )
+    return components, cross
+
+
+@partial(jax.jit, static_argnames=("nspin_mag",))
+def _paw_block_matrices(augmentation, blocks, nspin_mag: int):
+    """``ddd_paw`` per density component, as the ``(nkb, nkb)`` matrices ``H`` takes.
+
+    Placement only -- each atom's block into a matrix of zeros -- so the
+    numbers are the ones :func:`_paw_onecenter` returned, placed in one
+    dispatch rather than ``nspin_mag x nat`` of them. Kept apart from that
+    kernel so its compiled radial terms are exactly what they were.
+    """
+    return jnp.stack([
+        augmentation.block_matrix(
+            tuple(None if b is None else b[spin] for b in blocks)
+        )
+        for spin in range(nspin_mag)
+    ])
+
+
 @partial(jax.jit, static_argnames=("grid",))
 def _addusdens(rho_r, fft_index, grid, augmentation, becsum_):
     """The augmentation charge, added to the density on the dense grid.
@@ -3227,12 +3292,7 @@ class Calculation:
         energy, blocks = _paw_onecenter(
             self.paw, becsum_, meta_c, self.quantization_axis
         )
-        return energy, jnp.stack([
-            self.augmentation.block_matrix(
-                tuple(None if b is None else b[spin] for b in blocks)
-            )
-            for spin in range(self.nspin_mag)
-        ])
+        return energy, _paw_block_matrices(self.augmentation, blocks, self.nspin_mag)
 
     def becsum(self, wavefunctions, weights) -> tuple:
         """``becsum`` for every ultrasoft species, or ``()`` when there are none."""
@@ -3326,43 +3386,34 @@ class Calculation:
             return self.dvan_so
         dense = self.basis.dense
         spiral_cross = self.cross_augmentation is not None and potential.shape[0] == 4
-        components = jnp.stack([
-            jnp.zeros((self.augmentation.nkb, self.augmentation.nkb))
-            if spiral_cross and channel in (1, 2)
-            else self.augmentation.block_matrix(
-                self.augmentation.integrals(
-                    r_to_g(potential[channel], dense.fft_index)
-                )
-            )
+        # ``D^{up,down}`` of a spiral is the one block whose two projectors sit
+        # at different k-points, so its pair of components goes through the
+        # displaced table as ``W = V_x + i V_y`` rather than through the
+        # resident one; :func:`_newd_noncollinear_integrals` has the rest.
+        potential_g = tuple(
+            None if spiral_cross and channel in (1, 2)
+            else r_to_g(potential[channel], dense.fft_index)
             for channel in range(potential.shape[0])
-        ])
+        )
+        transverse_g = None
+        if spiral_cross:
+            transverse_g = (r_to_g(potential[1], dense.fft_index)
+                            + 1j * r_to_g(potential[2], dense.fft_index))
+        components, cross = _newd_noncollinear_integrals(
+            potential_g, self.augmentation, transverse_g,
+            self.cross_augmentation if spiral_cross else None,
+        )
         if ddd_paw is not None:
             components = components + ddd_paw
-        cross = None
         if spiral_cross:
-            # ``D^{up,down}``, the one block whose two projectors sit at
-            # different k-points. It is the adjoint of what
-            # :func:`_addusdens_spiral` builds, and it has to be, because the
-            # augmentation energy is a single bilinear
-            # ``sum_c int V_c n_c^aug`` that both of them are halves of: with
-            # ``W = V_x + i V_y`` on the displaced table,
-            # ``D^{up,down}_ij = conj(Omega sum_G conj(q~_ij(G)) W(G))``.
-            #
             # PAW's one-centre transverse term is **not** displaced and is not
-            # part of this. It is the ordinary ``D_x - i D_y`` of the two real
-            # components, which is why ``ddd_paw`` is added above, in the
-            # channels this branch zeroed, and folded in below rather than
-            # rebuilt here. The one-centre terms live inside a sphere around
-            # one atom, where the spiral's ``e^{-i q.r}`` is the atom's own
+            # part of ``cross``. It is the ordinary ``D_x - i D_y`` of the two
+            # real components, which is why ``ddd_paw`` is added above, in the
+            # channels the spiral zeroed, and folded in here rather than
+            # rebuilt. The one-centre terms live inside a sphere around one
+            # atom, where the spiral's ``e^{-i q.r}`` is the atom's own
             # constant phase and the radial energy depends on ``|m|``, so they
             # carry no wavevector at all.
-            potential_g = (r_to_g(potential[1], dense.fft_index)
-                           + 1j * r_to_g(potential[2], dense.fft_index))
-            cross = jnp.conj(
-                self.cross_augmentation.block_matrix(
-                    self.cross_augmentation.cross_integrals(potential_g)
-                )
-            )
             cross = cross + (components[1] - 1j * components[2])
         return _newd_noncollinear(
             components, self.dvan_so, self.fcoef_matrix, self.system.soc_scale,

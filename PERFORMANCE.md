@@ -7403,3 +7403,34 @@ copies and the combination over the history, and is the part to look at next if 
 mixer ever shows in a slab's iteration. On two-atom silicon neither number is
 visible. The SCFs on `si8-1k`, `si8-us-1k` and `fe-mag-1k` are bit-identical to the
 old code.
+
+## Three bit-identical edits, and two that bought time with memory (P112)
+
+Five of `OPEN.md` Part III's entries, measured on the workstation, one core
+(`taskset -c 3`, `DEFUMAT_THREADS=1`, `OMP_NUM_THREADS=1`), kernel cache off on both
+sides, old code at `93d882f` against the working tree, nothing else running. Times are
+second calls in one process, one sample each, so a change under about 10 per cent is not
+resolved; the compiled temporaries are `memory_analysis()` and do not have that problem.
+
+| entry | what is measured | case | before | after |
+|---|---|---|---|---|
+| S4 | compiled temporary of the autodiff stress's gradient | `si2-us-1k.in` | **2534 MB** | **881 MB** |
+| S4 | compiled temporary of the forward kernel, `L = 2` | `si2-us-1k.in` | 61.8 MB | 21.0 MB |
+| S4 | process peak of the A/B script | `si2-us-1k.in` | 6.63 GB | 5.35 GB |
+| S4 | autodiff stress, second call | `si2-us-1k.in` | 4.42 s | 3.38 s |
+| M1 | SCF, second call, 16 iterations | `o2-paw-texture.in` | **64.58 s** | **56.20 s** |
+| S5 | compiled temporary of `matrix_elements` | `si2-nosym.in`, `k_batch = 1` | 345 MB | 336 MB |
+| H4 | the screening kernel, one call | P71's 20^3 LDA grid | 1.91 ms | 0.77 ms |
+| H4 | the q-phonon at `L` | P71's cell | 280.5 s | 291.6 s |
+| H7 | the six columns of `C_ijkl` | `si-electrostriction.in` | 2.67 s | 1.10 to 1.30 s |
+
+S4, S5 and M1 are bit-identical in every result and landed. **H4 and H7 did not**: each
+buys its time by holding a linearisation across calls, and what that holds is 177 grids'
+worth for a PBE response (H4) and 330 MB on a two-atom cell against an estimate of 3.5 MB
+(H7), with shapes that grow with the grid or with `ngm`. H4's kernel is 2.5 times faster
+and no solve moves; H7's stage is 2.1 times faster. `OPEN.md` keeps both open with the
+numbers, and the patches are not in the repository.
+
+**No reference pair is taken here**: none of the five is a feature taken from QE or Elk,
+and each is a change to this code's own arithmetic that must leave the number QE agrees
+with unchanged, which the A/B shows directly.

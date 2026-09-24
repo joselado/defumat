@@ -1374,7 +1374,24 @@ one `get_absorption` and one `get_optical_conductivity` in a fresh process, one 
 nothing else running. The count should be 3 before and 1 after; the number to compare is
 the workflow's wall clock.
 
-### H4. Four screening kernels re-linearise `v_of_rho` at a point that never moves
+### H4. Four screening kernels re-linearise `v_of_rho` at a point that never moves **[measured 2026-09-24, `PLAN.md` P112: round-off, no solve faster, and not landed]**
+
+**One `jax.linearize` per solve was written and measured, and left out.** On P71's
+q-phonon at `L`, the Gamma dynamical matrix, the dielectric tensor with Born charges and
+the strain response of `si-electrostriction.in`, one core against `93d882f`: every
+iteration count is unchanged, the first kernel application differs by 2e-16 relative, and
+the converged results by at most **8.7e-13** relative (the Gamma frequencies), 1.6e-15 in
+the q-phonon frequencies and 1.9e-14 in the Born charges, so it is round-off and not the
+bit-identity the entry expected. The kernel call itself goes from **1.91 to 0.77 ms** on
+the 20^3 LDA grid and 11.4 to 7.7 ms on PBE at 24^3; the solves, single samples, read
+280.5 against 291.6 s, 203.8 against 203.9, 118.6 against 108.5 and 257.5 against 260.7,
+which is the entry's own arithmetic (0.2 s of a solve) confirmed as invisible. **What it
+costs is what the linearisation holds between calls**: 3.4 MB on the LDA cell, 54 grids'
+worth, and **19.5 MB on PBE silicon, 177 grids' worth**, resident for the whole
+Sternheimer loop where six `jvp` calls streamed it. On a slab's dense grid that is tens of
+GB for a GGA response, which is exactly the regime the entry named as the one where the
+gain would show. It does not land without a bound on that set.
+
 
 `defumat/response/phononq.py:464`, and the same shape at `phonon.py:621`,
 `efield.py:523`, `strain.py:507`. `induced_potential_at_q` splits the complex response
@@ -1451,7 +1468,22 @@ the fix.
 `benchmarks/si128-1k.in`, `al-slab.in` and `si8-1k.in`, and see how it scales with `nat`.
 Then count the calls in one `Calculation` build (expect 2).
 
-### H7. Six columns of the elastic tensor each re-evaluate the identical primal
+### H7. Six columns of the elastic tensor each re-evaluate the identical primal **[measured 2026-09-24, `PLAN.md` P112: 2.1x faster, and not landed, because its memory gate is out by two orders]**
+
+**One `jax.linearize` shared by the six columns was written and measured, and left out.**
+On `si-electrostriction.in` (norm-conserving silicon, eight k-points, one core, second
+calls) the tensor takes **1.30 and 1.10 s shared against 2.67 s** as six `jvp` calls, and
+agrees with them to 2.9e-17 on 1.4e-2 in one process. The cost is what the linearisation
+keeps for the six columns: **891 residual arrays, 329.8 MB**, on a cell whose two stacked
+band fields -- the only term the patch's `ELASTIC_MAX_BYTES` gate counted -- are 3.5 MB,
+and the process peak rose from 2010.8 to 2427.0 MB. The largest residuals are `(1520, 359)`
+radial tables, a `(G, mesh)` shape, so they grow with the cell where the gate's estimate
+does not, and on a sixteen-atom cell a gate at 2 GiB would pass several GB. The patch is
+kept outside the repository; what it needs before landing is a gate that counts what the
+linearisation actually holds (or the radial transforms under `jax.checkpoint`, as S4's
+now are), measured on a cell with a real `ngm`.
+
+
 
 `defumat/response/elastic.py:200`. `gradient = jax.grad(energy)` is built once, and the
 `VOIGT` loop then calls `jax.jvp(gradient, (zero, psi), ...)` six times **at the same
@@ -1542,7 +1574,18 @@ count is a property of the mixer, which is where this entry already put it, and 
 
 ## M. Contained, but each needs the right input before it means anything
 
-### M1. The noncollinear `newd` runs entirely outside `jit`, where the collinear one thirty lines above is inside it
+### M1. The noncollinear `newd` runs entirely outside `jit`, where the collinear one thirty lines above is inside it **[closed 2026-09-24, `PLAN.md` P112, bit-identical]**
+
+**Both assemblies are module-level jitted helpers now** (`_newd_noncollinear_integrals`,
+`_paw_block_matrices`), and on `o2-paw-texture.in` (two PAW oxygen atoms, noncollinear,
+`nspin_mag = 4`) and `o-chain-spiral-paw.in` every compared array is bit-identical against
+`93d882f`: the SCF energy, density, eigenvalues, `deeq`, `becsum`, `ddd_paw`, the forces,
+and three derivatives through the change (`int3`, `d(deeq)/d(tau)`, `d(ddd_paw)/d(becsum)`,
+and the spiral's `int3` through the displaced table). The second SCF on the oxygen pair
+takes **56.20 s against 64.58 s**, 3.51 against 4.04 s an iteration over 16, one sample
+each on one core; `bismuthene-soc-small`, where the entry's bound lives, was not timed.
+
+
 
 `defumat/scf/driver.py:2581`. `_noncollinear_coefficients` is a Python list comprehension
 over the `nspin_mag` potential components, each doing an eager dense-grid `r_to_g`, an
@@ -1761,7 +1804,20 @@ consumer is `_aug_chunk`, which already walks G in blocks.
 form (`ngm / (n1+n2+n3)` = 3878). 4.6 MB on `si8-us-1k`: **a slab finding, the same shape
 P73 had.**
 
-### S4. The augmentation's Bessel intermediate is the one radial transform with no chunk
+### S4. The augmentation's Bessel intermediate is the one radial transform with no chunk **[closed 2026-09-24, `PLAN.md` P112, bit-identical in every result]**
+
+**`_qrad_kernel` walks `|G|` in blocks of at most `formfactors.CHUNK`** under a rematted
+`lax.scan`, and on `benchmarks/si2-us-1k.in` (three blocks) the total energy, the
+eigenvalues, `qrad`, `Q_ij(G)`, the stress and every one of its terms are bit-identical
+against `93d882f`; one reverse-mode entry of the bare kernel differs by 4e-21 on 2e-3. The
+compiled temporary of the forward kernel at `L = 2` goes from **61.8 to 21.0 MB**, and of
+the autodiff stress's gradient from **2534 to 881 MB**, which is the reverse-mode half the
+entry did not claim; the process peak goes from 6.63 to 5.35 GB and the second stress call
+from 4.42 to 3.38 s (one sample each, one core, kernel cache off). `sizing.py`'s transient
+line still models the whole `(ngm, kkbeta)` block, so it now overstates this by
+`ngm / CHUNK`.
+
+
 
 `defumat/pseudo/augmentation.py:303`. `_qrad_kernel` forms `(ngm, kkbeta)` and hands it to
 `spherical_bessel`, whose body builds five arrays at that shape before the einsum reduces
@@ -1776,7 +1832,19 @@ without touching the derivative. Both are wanted; neither substitutes for the ot
 **Gain (arithmetic).** 319 MB -> 36 MB on `si8-us-1k`, a factor of `ngm/4096 = 8.9`. At
 the 2 GiB gate with `nh = 8`, ~18.4 GB -> 36 MB.
 
-### S5. `matrix_elements` stacks a second whole copy of the wavefunctions before contracting it away
+### S5. `matrix_elements` stacks a second whole copy of the wavefunctions before contracting it away **[closed 2026-09-24, `PLAN.md` P112, bit-identical; the saving is not shown at scale]**
+
+**The contraction is inside the k map** for `matrix_elements`, `generalised_matrix_elements`
+and `second_matrix_elements` (the conductivity and SHG moved onto the second in
+`fafa11c`), and every compared array is bit-identical against `93d882f` on three cells:
+norm-conserving silicon at `k_batch = 1` with the optical conductivity and TDDFT's
+`chi_0` downstream, ultrasoft silicon under `vmap` with two outer derivatives through the
+change, and a spinor at `k_batch = 5`. **What is not measured is the saving**: the
+stacked intermediate is `nspin nk nbnd npwx npol x 16` bytes, about 2 MB on these cells,
+and the compiled temporary moved from 345 to 336 MB. The entry's 1.0 GB on P51's spinor
+nickel is still arithmetic.
+
+
 
 `defumat/response/velocity.py:301`. For each cartesian axis,
 `einsum("skmg,skng->skmn", psi.conj(), self.apply(psi, axis))`. `apply` runs through

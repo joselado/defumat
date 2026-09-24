@@ -54,6 +54,7 @@ import numpy as np
 
 from defumat.basis.gvectors import GVectors, modulus
 from defumat.pseudo.coupling import harmonic_products
+from defumat.pseudo.formfactors import CHUNK
 from defumat.pseudo.harmonics import real_spherical_harmonics
 from defumat.pseudo.projectors import projector_channels
 from defumat.pseudo.radial import simpson_weights, spherical_bessel
@@ -433,22 +434,63 @@ def radial_augmentation_transforms(
 def _qrad_kernel(q, r, weights, functions, prefactor, l):
     """``4 pi / Omega int dr j_l(q r) [r^2 Q^l(r)]`` for a stack of ``Q``.
 
-    **This is where a stress evaluation's memory goes.** The intermediate is
-    ``(ngm, kkbeta)`` -- 36257 by ~1100 on eight-atom ultrasoft silicon, so 300
-    MB, with the temporaries inside ``spherical_bessel`` on top and one of them
-    per ``L``. Evaluated forward they are transient; differentiated in
-    **reverse** mode, as the stress differentiates them (P11), they are all live
-    at once, and the peak working set goes to 11 GB against the SCF's 0.9.
-    ``jax.checkpoint`` here was tried and measured to be worth nothing -- the
-    intermediates are spread across the radial kernels rather than concentrated
-    in this one -- so what is recorded is the measurement and the fix that has
-    not been written: a ``custom_jvp`` carrying ``dF/d|G|`` in closed form, so
-    that the transform tapes a vector of length ``ngm`` instead of a matrix.
-    See `PERFORMANCE.md`.
+    **The intermediate is ``(nq, kkbeta)``, and on the stored route ``nq`` is
+    ``ngm``** -- 36257 by 841 on eight-atom ultrasoft silicon
+    (``Si.pz-n-rrkjus_psl``), so 244 MB per array, with the temporaries inside
+    ``spherical_bessel`` on top and one such set per ``L``. Above
+    :data:`~defumat.pseudo.formfactors.CHUNK` values of ``q`` it is therefore
+    built a chunk of rows at a time, the bound ``pseudo/formfactors.py`` puts
+    on its four transforms and for the same reason: ``(chunk, kkbeta)`` is 27
+    MB on that cell. Those walk their chunks in a Python loop, every chunk of
+    which is taped under a gradient; this one walks them in a ``lax.scan``
+    with a rematted body, which bounds the tape as well. The table on
+    the knots (:func:`_qrad_table`) has 2533 at ``ecutrho = 160`` and crosses
+    the bound only above about 419 Ry; a single-``q`` caller never does. Every
+    row is independent and its sum over the mesh keeps its length, so the chunk
+    is a loop bound over an exact sum.
+
+    **The scan body is rematted**, because a scan under ``jax.grad`` stacks
+    every chunk's residuals, which is the whole ``(ngm, kkbeta)`` set again on
+    the tape; with the remat the tape holds the ``q`` chunks and the backward
+    pass recomputes one chunk at a time. The earlier null for
+    ``jax.checkpoint`` here (11.0 GB against 10.7 on the eight-atom stress,
+    `PERFORMANCE.md` P11) was a remat of the *unchunked* kernel, whose
+    recomputation rebuilds the whole ``(ngm, kkbeta)`` array at once, so it
+    moved the same array to another phase of the pass and says nothing about a
+    chunked body. What the reverse stress peak is with this body has not been
+    measured. The alternative that shrinks the tape without recomputing
+    anything is still the ``custom_jvp`` carrying ``dF/d|G|`` in closed form.
     """
+    nq = q.shape[0]
+    if nq <= CHUNK:
+        return prefactor * _qrad_block(q, r, weights, functions, l)
+
+    # As few chunks as the bound allows, and those as even as possible, so the
+    # padding is under one row per chunk rather than up to a whole chunk. A
+    # padded row is ``q = 0``, where both the value and the derivative of
+    # ``spherical_bessel`` are finite, and it is sliced off before anything
+    # reads it.
+    nchunks = -(-nq // CHUNK)
+    chunk = -(-nq // nchunks)
+    padded = jnp.pad(q, (0, nchunks * chunk - nq)).reshape(nchunks, chunk)
+
+    @jax.checkpoint
+    def body(carry, block):
+        return carry, _qrad_block(block, r, weights, functions, l)
+
+    _, blocks = jax.lax.scan(body, None, padded)  # (nchunks, nf, chunk)
+    values = jnp.moveaxis(blocks, 0, 1).reshape(functions.shape[0], -1)[:, :nq]
+    # ``prefactor`` is applied outside the scan, as it was to the whole array:
+    # under a strain it is a tracer, and this keeps its cotangent one sum over
+    # ``(nf, nq)`` rather than a sum of per-chunk sums.
+    return prefactor * values
+
+
+def _qrad_block(q, r, weights, functions, l):
+    """:func:`_qrad_kernel` without its prefactor, on one block of ``q``."""
     argument = q[:, None] * r[None, :]
     bessel = spherical_bessel(l, argument)  # (nq, mesh)
-    return prefactor * jnp.einsum("fm,qm,m->fq", functions, bessel, weights)
+    return jnp.einsum("fm,qm,m->fq", functions, bessel, weights)
 
 
 

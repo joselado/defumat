@@ -21759,3 +21759,43 @@ The gate on `6431503` is **3047 passed, 64 skipped, 0 failed, in 881 s at a peak
   2.17 GB against 32.0 s at 3.22 GB without, one sample each.
 
 **What the reviewers raised and was not done** is `OPEN.md` Part XVIII.
+
+### P112 -- Three of `OPEN.md` Part III's edits land bit-identical, two buy time with memory and do not, and the owed slow set is run. ✅ DONE; the six failures it found are `OPEN.md` Part XIX, all from `1705a0a`.
+
+Picked on 2026-09-24 as the Part III entries whose own text says the arithmetic does not
+move: H4, H7, M1, S5 and S4, five items with disjoint files. A workflow of twelve agents,
+one fixer and one read-only reviewer per item and one revision (H7), edited and ran
+nothing; each fixer wrote an A/B script, and every script was run afterwards in the
+session against `93d882f` in a separate worktree, one core, kernel cache off, including
+the derivative that passes through each change and not only a primal energy. Beside it,
+Part XVI item 1's 35 owed slow files ran on Triton (`OPEN.md` Part XIX). The gate on the
+landed three is **3047 passed, 64 skipped, 0 failed, in 965 s at a peak of 6.2 GB**, the same count as P111's.
+
+**What each one was measured at** (the timings are `PERFORMANCE.md`, P112).
+
+* **S4, the augmentation's Bessel transform chunked over `|G|`.** `_qrad_kernel` walks
+  the dense set in blocks of at most `formfactors.CHUNK` under a rematted `lax.scan`; on
+  `si2-us-1k.in` the energy, eigenvalues, `qrad`, `Q_ij(G)`, the stress and every one of
+  its terms are bit-identical, and the compiled temporary of the stress's gradient falls
+  from 2534 to 881 MB. The reverse-mode half is the larger saving and was not what the
+  entry claimed. `sizing.py`'s transient line still models the unchunked block.
+* **S5, the velocity matrix elements contracted inside the k map**, for all three
+  element builders. Bit-identical on norm-conserving, ultrasoft and spinor silicon with
+  the conductivity, TDDFT's `chi_0` and two outer derivatives downstream; the saving is
+  `nspin nk nbnd npwx npol x 16` bytes, about 2 MB there, so it is not shown at a scale
+  that matters.
+* **M1, the noncollinear `newd` and PAW's block tail jitted.** Bit-identical on a PAW
+  oxygen texture and an augmented spiral in the SCF, the forces and three derivatives
+  through the change; the SCF's second call is 56.2 s against 64.6 s.
+* **H4, one linearisation of the screening kernel per solve: not landed.** Round-off
+  (8.7e-13 at most) rather than bit, the kernel 2.5 times faster and no solve faster, at
+  a resident 177 grids for a PBE response.
+* **H7, one linearisation shared by the elastic tensor's six columns: not landed.** 2.1
+  times faster and 2.9e-17 from the six calls, at 330 MB of residuals on a two-atom cell
+  that its own gate estimated at 3.5 MB.
+
+**The lesson the two refusals share** is that `jax.linearize` is a trade of memory for
+time whose memory side is the whole residual set of the function linearised, and a gate
+written from the one term the author thought of is out by two orders; the only
+measurement that answers it is counting the residuals the linearisation holds, which both
+A/B scripts did and both fixers' estimates did not.

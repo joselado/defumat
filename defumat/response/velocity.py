@@ -55,6 +55,19 @@ calls for that reason -- a ``jacfwd`` over all three would hold three tangents
 at once, and ``vkb`` is the largest ``k``-indexed array a calculation has after
 the wavefunctions themselves.
 
+The matrix elements add nothing of the states' size to that. They contract the
+bra **inside** the k map (:func:`_elements_over_kpoints`), so ``map_k`` stacks
+one ``(nbnd, nbnd)`` block per k-point and per output of the ``jvp``. Applying
+the operator first and contracting afterwards stacks every output at the full
+width of the states instead, ``nspin nk nbnd npwx npol`` complex numbers each,
+and an eager ``jvp`` materialises its primal beside its tangent: two such
+copies for :meth:`VelocityOperator.matrix_elements`, four for
+:meth:`VelocityOperator.generalised_matrix_elements` and
+:meth:`VelocityOperator.second_matrix_elements`, each made only to be
+contracted away (``OPEN.md`` S5). At ``k_batch = None`` the body runs over the
+whole axis at once and forms those arrays anyway, so the saving there is only
+that none of them outlives the contraction.
+
 **Degeneracies.** Nothing here differentiates an eigendecomposition (rule D4).
 :meth:`VelocityOperator.band_velocities` is a diagonal expectation value, which
 is wrong inside a degenerate manifold in the same way any diagonal element is --
@@ -252,23 +265,27 @@ class VelocityOperator:
         """
         return self._tangent(psi, direction, overlap=None)
 
-    def _tangent(self, psi, direction, overlap):
+    def _tangent(self, psi, direction, overlap, contract=False):
         psi = jnp.asarray(psi)
         tangent = jnp.broadcast_to(
             jnp.asarray(direction, dtype=self.kcart.dtype), self.kcart.shape
         )
         _, out = jax.jvp(
-            lambda kc: self._operator(psi, kc, overlap),
+            lambda kc: self._operator(psi, kc, overlap, contract),
             (self.kcart,),
             (jnp.asarray(tangent),),
         )
         return out
 
-    def _operator(self, psi, kcart, overlap):
+    def _operator(self, psi, kcart, overlap, contract=False):
         """``H|psi>``, ``S|psi>``, or both, at every k-point, as a function of ``kcart``.
 
         ``overlap = None`` returns the pair, which is what
-        :meth:`both` differentiates in one pass.
+        :meth:`both` differentiates in one pass. ``contract = True`` returns
+        ``<psi_m|H|psi_n>`` (or ``S``) instead, ``(nspin, nk, nbnd, nbnd)``,
+        contracted inside the k map. ``psi`` is not a function of ``kcart``, so
+        the bra carries no tangent and the ``jvp`` of this is the contraction
+        of the ``jvp`` of the full-width form.
         """
         moved = self.calculation.at_kcart(kcart)
         hubbard = (
@@ -276,10 +293,11 @@ class VelocityOperator:
         )
         hamiltonians = moved.hamiltonian(self.v_scf, self.ddd_paw, hubbard)
         batch = self.calculation.k_batch
+        walk = _elements_over_kpoints if contract else over_kpoints
 
         def applied(want_overlap):
             return jnp.stack([
-                over_kpoints(ham, psi[spin], batch, want_overlap)
+                walk(ham, psi[spin], batch, want_overlap)
                 for spin, ham in enumerate(hamiltonians)
             ])
 
@@ -296,10 +314,14 @@ class VelocityOperator:
         degenerate manifold: a Kubo sum contracts off-diagonal elements and the
         eigensolver's arbitrary rotation inside a manifold cancels between the
         two factors (rule D4).
+
+        It is ``einsum("skmg,skng->skmn", psi.conj(), self.apply(psi, a))``
+        with the contraction moved inside the k map, which is the same product
+        and never holds ``dH/dk|psi>`` for more than the k-points in flight.
         """
         psi = jnp.asarray(psi)
         return jnp.stack([
-            jnp.einsum("skmg,skng->skmn", psi.conj(), self.apply(psi, axis))
+            self._tangent(psi, axis, overlap=False, contract=True)
             for axis in _CARTESIAN
         ])
 
@@ -386,9 +408,11 @@ class VelocityOperator:
         gap = energies[..., None, :] - energies[..., :, None]   # [n, m] = e_m - e_n
         blocks = []
         for axis in _CARTESIAN:
-            derivative, overlap = self.both(psi, axis)
-            element = jnp.einsum("skmg,skng->skmn", psi.conj(), derivative)
-            moving = jnp.einsum("skmg,skng->skmn", psi.conj(), overlap)
+            # :meth:`both`'s pair, contracted inside the k map as
+            # :meth:`matrix_elements` is.
+            element, moving = self._tangent(
+                psi, axis, overlap=None, contract=True
+            )
             element = element - energies[..., None, :] * moving
             connection = self.augmentation_connection(psi, axis)
             if connection is not None:
@@ -414,6 +438,9 @@ class VelocityOperator:
         (:mod:`defumat.response.photocurrent`) -- which has no such term to
         lose: it is the second derivative of ``H``, not of a solution of ``H``.
         """
+        return self._second_tangent(psi, first, second, contract=False)
+
+    def _second_tangent(self, psi, first, second, contract):
         def broadcast(direction):
             return jnp.broadcast_to(
                 jnp.asarray(direction, dtype=self.kcart.dtype), self.kcart.shape
@@ -423,7 +450,8 @@ class VelocityOperator:
 
         def inner(kcart):
             _, out = jax.jvp(
-                lambda kc: self._operator(psi, kc, False), (kcart,), (second,)
+                lambda kc: self._operator(psi, kc, False, contract),
+                (kcart,), (second,),
             )
             return out
 
@@ -443,8 +471,11 @@ class VelocityOperator:
         blocks: dict[tuple[int, int], jnp.ndarray] = {}
         for a in range(3):
             for b in range(a, 3):
-                applied = self.apply_second(psi, _CARTESIAN[a], _CARTESIAN[b])
-                blocks[(a, b)] = jnp.einsum("skmg,skng->skmn", psi.conj(), applied)
+                # :meth:`apply_second` contracted inside the k map, so neither
+                # ``jvp`` stacks an output as wide as the states.
+                blocks[(a, b)] = self._second_tangent(
+                    psi, _CARTESIAN[a], _CARTESIAN[b], contract=True
+                )
         return jnp.stack([
             jnp.stack([blocks[(min(a, b), max(a, b))] for b in range(3)])
             for a in range(3)
@@ -487,6 +518,26 @@ def over_kpoints(hamiltonian, states, batch, overlap: bool = False):
     apply = hamiltonian.apply_s if overlap else hamiltonian.apply
     indices = jnp.arange(states.shape[0])
     return map_k(lambda ik: apply(states[ik], ik), indices, batch=batch)
+
+
+def _elements_over_kpoints(hamiltonian, states, batch, overlap: bool = False):
+    """``<psi_m|H|psi_n>`` (or ``S``) at every k-point, ``(nk, nbnd, nbnd)``.
+
+    :func:`over_kpoints` with the bra contracted inside the mapped body, so
+    what ``map_k`` stacks is one ``(nbnd, nbnd)`` block per k-point rather than
+    an ``H|psi>`` as wide as the states. For a caller that wants only the
+    projection that output is a second copy of the wavefunctions, made to be
+    contracted away; for the Sternheimer right-hand sides that call
+    :func:`over_kpoints` it is the answer, and they keep it.
+    """
+    apply = hamiltonian.apply_s if overlap else hamiltonian.apply
+
+    def one(ik):
+        block = states[ik]
+        return jnp.einsum("mg,ng->mn", block.conj(), apply(block, ik))
+
+    indices = jnp.arange(states.shape[0])
+    return map_k(one, indices, batch=batch)
 
 
 def band_velocities(calculation, result, kpoints=None, nbnd=None,
