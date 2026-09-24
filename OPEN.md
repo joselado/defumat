@@ -61,8 +61,10 @@ because no committed input can carry one.
 Five of the six that failed are attributed by an A/B on the same nodes to one commit,
 `1705a0a` (P107's Anderson change); the sixth, the no-spin-orbit directional spread, is
 platform-sensitive at `conv_thr = 1e-12`, jumping at the same commit on the workstation
-and passing there on Triton. None is from P109 to P111. What the change did is measured;
-why it moves an energy at a given `dr2` is not.
+and passing there on Triton. None is from P109 to P111. The one that matters is a DFT+U
+nickel cell that now converges 5.2e-3 Ry above `pw.x`'s solution, in a second
+self-consistent state; the directional spread turns out to belong to the `soc_scale = 0`
+reduction, whose total sits 51 Ry from both of its neighbours.
 
 **Part III** is the sweep of **2026-09-12** -- four read-only agents over the package
 looking for **speed and memory** rather than for wrong answers, 23 entries, ordered by
@@ -5595,7 +5597,7 @@ package walks no frames.
 
 # Part XIX -- the owed slow set on Triton, 2026-09-24
 
-## 1. Five failures from `1705a0a` and one platform-sensitive, and the reason is not known **[opened 2026-09-24]**
+## 1. Five failures from `1705a0a` and one platform-sensitive: a DFT+U cell lands in a solution `pw.x` does not reach **[opened 2026-09-24, measured the same day]**
 
 Part XVI item 1's list, 35 files, ran on `batch-milan` at `93d882f` (jobs 20429733 and
 20429734, `tools/cluster/owed.sbatch`, `DEFUMAT_CACHE_DIR=off`, the QE tree from the group
@@ -5663,11 +5665,42 @@ reported total is `pw.x`'s expression on the iteration that is compared. Both ce
 were looked at carry a dense-only shell (`ecutrho = 8 ecutwfc`), which is where to look
 next, together with the magnetization half of `dr2`.
 
-**What to measure, in order.** (1) On the promotion, whether the -170.995 state is a
-stationary point: continue it at `conv_thr = 1e-12` and see whether it stays or falls to
--171.00025, and compare its occupation traces with the source's. (2) On the cobalt x
-direction, the trajectory of the total against `accuracy` with `FIT_BECSUM = True` and
-`False` from the same start, which is the A/B the flag was kept for. (3) Whether `pw.x`'s
-own total at `conv_thr = 1e-12` on the same cell is within `accuracy` of its 1e-14 value;
-if it is not either, the promise is QE's and the tests are asking for more than it gives.
-Until then, **do not loosen the six tests**: five of them are what caught this.
+**The three measurements, taken the same day on the workstation at `31d46ce`.**
+`FIT_BECSUM` is the driver's switch back to the old fit, so each pair below differs in
+that one flag.
+
+* **The Hubbard promotion is two self-consistent states, and `pw.x` is in the other
+  one.** The 5.2e-3 Ry is already in the *collinear* source, `ni-kind1-force.in`
+  (`U = 4`, `J = 0.9`, two Ni atoms, ultrasoft): with `becsum` out of the fit it
+  converges in 51 iterations to **-170.9950212 Ry** with d-shell traces 4.884 up and
+  4.390 down per atom, and with it in the fit in 42 to **-171.0002509** with 4.891 and
+  4.343. Each holds when continued to `conv_thr = 1e-12` (179 and 32 iterations, to
+  -170.99502124 and -171.00025089), so neither is a stop point. **`pw.x` on the same
+  input converges in 98 iterations to -171.00025089 Ry with traces 4.89099 and 4.34268**
+  (it then stops in `force_hub`, which has no forces with a `J`), the with-fit state to
+  every printed digit. So since `1705a0a` this cell lands in a higher, less polarised
+  solution that `pw.x` does not reach, with no warning; the promoted spinor inherits it,
+  and the test catches it only because a fresh spinor run still finds the lower one.
+* **The cobalt spread is not the mixer; it is the `soc_scale = 0` reduction.** With
+  spin-orbit coupling on, both settings of the flag give totals at `conv_thr = 1e-12`
+  equal to their 1e-14 values to 1e-12 Ry and to `pw.x`'s printed eight decimals
+  (-74.405769597 and -74.405802473 Ry, against -74.40576959 and -74.40580247), in 14
+  iterations without the fit, 21 to 23 with it, and 32 to 37 for `pw.x`. The
+  scalar-relativistic partner `Co.pbe-nd-rrkjus` is as tight (-74.280223208 Ry at both
+  thresholds, 15 iterations). **The reduced dataset's total is -125.698 Ry, 51 Ry from
+  both**, and it is the one of the three whose total moves at first order in the residual
+  (the 9.2e-8 and 2.3e-6 above). A total that far from both neighbours and that loose at
+  a small residual reads as an energy expression that is not the functional the reduced
+  Hamiltonian is stationary for; that is a lead for Part XIV item 7's floor as well, and
+  it is not measured. `pw.x` has no counterpart to compare: `average_pp` refuses a fully
+  relativistic dataset without `lspinorb`.
+* **`pw.x`'s own estimate is tight on this cell**: its totals at 1e-12 equal its 1e-14
+  ones to eight decimals in both directions, at a printed accuracy of 6.5e-13 and
+  4.1e-13.
+
+**What that leaves.** The DFT+U state is the defect, and it is `1705a0a`'s: the old fit
+reaches `pw.x`'s solution and the new one does not. The Hartree terms, the ultracell and
+the platinum count are stop-point readings that moved with the path, and each passed at
+`98468d4`. The directional spread belongs to the `soc_scale = 0` reduction, whatever the
+mixer does. **Do not loosen the six tests**: the one that looked like a tolerance on a
+continuation is the one that found a wrong ground state.
