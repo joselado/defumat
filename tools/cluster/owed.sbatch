@@ -49,7 +49,10 @@ FILES=(test_ldau_flavours test_noncollinear_hubbard_resume test_ten_site \
        test_spinor_pdos test_continuation)
 FILE=${FILES[$SLURM_ARRAY_TASK_ID]}
 
-WORK=/scratch/work/ladovj1/calculations/defumat-owed
+# Overridable so that an A/B at another commit (DEFUMAT_REPO pointing at a
+# worktree) writes beside this run rather than into it: the runner skips a file
+# already named in its summary, so a shared directory would run nothing.
+WORK=${DEFUMAT_OWED_WORK:-/scratch/work/ladovj1/calculations/defumat-owed}
 REPO=${DEFUMAT_REPO:-/scratch/work/ladovj1/apps/defumat-jobs}
 VENV=/scratch/work/ladovj1/calculations/pypresso-gpu/venv
 
