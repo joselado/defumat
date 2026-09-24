@@ -7429,7 +7429,8 @@ buys its time by holding a linearisation across calls, and what that holds is 17
 worth for a PBE response (H4) and 330 MB on a two-atom cell against an estimate of 3.5 MB
 (H7), with shapes that grow with the grid or with `ngm`. H4's kernel is 2.5 times faster
 and no solve moves; H7's stage is 2.1 times faster. `OPEN.md` keeps both open with the
-numbers, and the patches are not in the repository.
+numbers, and the patches are the local branches `p112-h4-linearize-kernel` and
+`p112-h7-linearize-elastic`.
 
 **No reference pair is taken here**: none of the five is a feature taken from QE or Elk,
 and each is a change to this code's own arithmetic that must leave the number QE agrees

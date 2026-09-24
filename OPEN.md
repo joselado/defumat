@@ -57,10 +57,12 @@ left: five items closed across Parts XVI and XVII, and four entries from its rev
 largest that the zero it puts on a nonmagnetic spinor's site moments has no SCF behind it,
 because no committed input can carry one.
 
-**Part XIX** is the owed slow set run on Triton, **2026-09-24**: 35 files, 29 clean,
-and every one of the six that failed is attributed by an A/B on the same nodes to one
-commit, `1705a0a` (P107's Anderson change), and to none of P109 to P111. What the change
-did to those six is measured; why it moves an energy at a given `dr2` is not.
+**Part XIX** is the owed slow set run on Triton, **2026-09-24**: 35 files, 29 clean.
+Five of the six that failed are attributed by an A/B on the same nodes to one commit,
+`1705a0a` (P107's Anderson change); the sixth, the no-spin-orbit directional spread, is
+platform-sensitive at `conv_thr = 1e-12`, jumping at the same commit on the workstation
+and passing there on Triton. None is from P109 to P111. What the change did is measured;
+why it moves an energy at a given `dr2` is not.
 
 **Part III** is the sweep of **2026-09-12** -- four read-only agents over the package
 looking for **speed and memory** rather than for wrong answers, 23 entries, ordered by
@@ -1390,7 +1392,8 @@ costs is what the linearisation holds between calls**: 3.4 MB on the LDA cell, 5
 worth, and **19.5 MB on PBE silicon, 177 grids' worth**, resident for the whole
 Sternheimer loop where six `jvp` calls streamed it. On a slab's dense grid that is tens of
 GB for a GGA response, which is exactly the regime the entry named as the one where the
-gain would show. It does not land without a bound on that set.
+gain would show. It does not land without a bound on that set; the patch is the local branch
+`p112-h4-linearize-kernel`.
 
 
 `defumat/response/phononq.py:464`, and the same shape at `phonon.py:621`,
@@ -1479,7 +1482,7 @@ band fields -- the only term the patch's `ELASTIC_MAX_BYTES` gate counted -- are
 and the process peak rose from 2010.8 to 2427.0 MB. The largest residuals are `(1520, 359)`
 radial tables, a `(G, mesh)` shape, so they grow with the cell where the gate's estimate
 does not, and on a sixteen-atom cell a gate at 2 GiB would pass several GB. The patch is
-kept outside the repository; what it needs before landing is a gate that counts what the
+the local branch `p112-h7-linearize-elastic`; what it needs before landing is a gate that counts what the
 linearisation actually holds (or the radial transforms under `jax.checkpoint`, as S4's
 now are), measured on a cell with a real `ngm`.
 
@@ -1815,7 +1818,7 @@ the autodiff stress's gradient from **2534 to 881 MB**, which is the reverse-mod
 entry did not claim; the process peak goes from 6.63 to 5.35 GB and the second stress call
 from 4.42 to 3.38 s (one sample each, one core, kernel cache off). `sizing.py`'s transient
 line still models the whole `(ngm, kkbeta)` block, so it now overstates this by
-`ngm / CHUNK`.
+`ngm / CHUNK`; **that line is still open**, and it errs on the safe side.
 
 
 
@@ -5592,7 +5595,7 @@ package walks no frames.
 
 # Part XIX -- the owed slow set on Triton, 2026-09-24
 
-## 1. Six failures, all from `1705a0a`, and the reason is not known **[opened 2026-09-24]**
+## 1. Five failures from `1705a0a` and one platform-sensitive, and the reason is not known **[opened 2026-09-24]**
 
 Part XVI item 1's list, 35 files, ran on `batch-milan` at `93d882f` (jobs 20429733 and
 20429734, `tools/cluster/owed.sbatch`, `DEFUMAT_CACHE_DIR=off`, the QE tree from the group
@@ -5642,9 +5645,10 @@ iterations, accuracy 8.76e-13) and **2.3e-6 Ry** after it (18 iterations, accura
 9.48e-13); the z direction goes from 55 iterations to 20 and from 2.1e-8 to 1.2e-7. In
 the last three iterations after the change the total moves by about 2e-6 Ry per
 iteration while `accuracy` falls from 4.5e-11 to 9.5e-13. So the run now reaches
-`dr2 < conv_thr` sooner and further from the converged total, and even before the change
-the total at `dr2 = 9e-13` was four orders further out than a quantity second order in
-the residual would be.
+`dr2 < conv_thr` sooner and further from the converged total. `accuracy` understated the
+energy error by five orders before the change (9.2e-8 Ry at 8.8e-13) and by six after it
+(2.3e-6 at 9.5e-13), and whether `pw.x`'s own estimate is that loose on a smeared magnet
+is item (3) below.
 
 **What it is not.** The exclusion slice is right: `_mix` packs the density, then
 `becsum`, then `ns`, then `tau`, and the slice covers `becsum` alone, so `ns` stays in
@@ -5652,7 +5656,10 @@ the fit as `rho_ddot` has it. And it is **not `becsum` lagging**, although `becs
 residual at the stop is 3.5e-4 after the change against 1.7e-4 before: for an ultrasoft
 dataset the mixed `becsum` reaches nothing the Hamiltonian is built from
 (`Calculation.onecenter` returns zero without PAW, and `becsum_state` otherwise feeds only
-the checkpoint, the report and the result), so it cannot move the total. Both cells that
+the checkpoint, the report and the result), so it cannot move the total. Nor is it a
+missing `descf`: at convergence `pw.x` evaluates every term on the unmixed output density
+and sets `descf = 0` (`electrons.f90:1004-1007`), which is what `run_scf` does, so the
+reported total is `pw.x`'s expression on the iteration that is compared. Both cells that
 were looked at carry a dense-only shell (`ecutrho = 8 ecutwfc`), which is where to look
 next, together with the magnetization half of `dr2`.
 

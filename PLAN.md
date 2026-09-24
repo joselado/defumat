@@ -21760,7 +21760,7 @@ The gate on `6431503` is **3047 passed, 64 skipped, 0 failed, in 881 s at a peak
 
 **What the reviewers raised and was not done** is `OPEN.md` Part XVIII.
 
-### P112 -- Three of `OPEN.md` Part III's edits land bit-identical, two buy time with memory and do not, and the owed slow set is run. ✅ DONE; the six failures it found are `OPEN.md` Part XIX, all from `1705a0a`.
+### P112 -- Three of `OPEN.md` Part III's edits land bit-identical, two buy time with memory and do not, and the owed slow set is run. ✅ DONE; the six failures it found are `OPEN.md` Part XIX, five from `1705a0a` and one platform-sensitive.
 
 Picked on 2026-09-24 as the Part III entries whose own text says the arithmetic does not
 move: H4, H7, M1, S5 and S4, five items with disjoint files. A workflow of twelve agents,
