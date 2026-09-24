@@ -11,6 +11,7 @@ measurement sees.
 from pathlib import Path
 from types import SimpleNamespace
 
+import jax
 import numpy as np
 import pytest
 
@@ -30,6 +31,16 @@ pytestmark = [pytest.mark.unit]
 
 CASES = Path(__file__).resolve().parents[1] / "data" / "qe"
 PSEUDO = Path(__file__).resolve().parents[1] / "data" / "pseudo"
+
+
+@pytest.fixture(autouse=True)
+def _drop_compiled_code():
+    """Drop the compiled code after each test, which ``CLAUDE.md`` asks of a file
+    that builds more than about three cells: the parity checks below build a
+    ``Calculation`` on eight, and XLA keeps every executable for the life of the
+    process."""
+    yield
+    jax.clear_caches()
 
 
 def _crystal(case: str):

@@ -21731,7 +21731,9 @@ The gate on `6431503` is **3047 passed, 64 skipped, 0 failed, in 881 s at a peak
   **The one number that moves is a reverse-mode sum's order**: the DFT+U stress on
   `ni-kind1-force.in` (two atoms, one dataset) moves by 2.2e-19 Ry/bohr^3 on a largest
   component of 1.24e-3, relative 1.7e-16, with the SCF energy bit-identical at
-  -170.999772299920323 Ry on both codes. The two docstrings that gave a traced
+  -170.999772299920323 Ry on both codes. The same cell written as `Ni1`/`Ni2` on the one
+  file, which is the case the item is about, gives -170.999772299922853 Ry on both codes
+  and moves the stress by 1.7e-16 Ry/bohr^3 (2.5e-11 kbar) on 1.24e-3, relative 1.4e-13. The two docstrings that gave a traced
   pseudopotential as the reason for `jnp` in `_origin_integrals` and `_origin_slopes` now
   say that nothing there is ever a tracer and that `jnp` is kept for the slopes' bytes.
 * **`System.with_spin` and `tot_magnetization`** (Part XVI item 5, the user's choice of
@@ -21752,6 +21754,8 @@ The gate on `6431503` is **3047 passed, 64 skipped, 0 failed, in 881 s at a peak
   `h2-texture-120` for a constrained noncollinear moment, `alas-magnetoelectric-nosoc`
   for a uniform `B_field` (slow), `h-chain-spiral` and `o-atom-fixed-lsda`. Each asserts
   its flag off the default before the parity is read, and none disagreed. The longest
-  new gate case is 4.1 s.
+  new gate case is 4.1 s. Building eight cells, the file now drops its compiled code
+  after each test, as a file past three cells must: its gate half reads 44.4 s at
+  2.17 GB against 32.0 s at 3.22 GB without, one sample each.
 
 **What the reviewers raised and was not done** is `OPEN.md` Part XVIII.

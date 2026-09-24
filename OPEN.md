@@ -5330,8 +5330,15 @@ not: `test_ultracell_augmented`, `test_ultracell_stm`, `test_ultracell_sts`,
 **One of them has now run**: on 2026-09-24 a 27-file run of this list, P110's reach and
 the four piezoelectric files was started at `20f82b2` and stopped by the user after the
 first, `test_ultracell.py`, **22 passed in 905 s at a 3.9 GB peak**. The other 26 are
-still owed, and P111 adds to them nothing a slow file reaches beyond what P110 did,
-except the DFT+U stress, measured in its entry. The
+still owed, and the rerun needs a fresh output directory (that run's was removed, since
+the runner skips a file already in its summary). **P111 adds to them**: its atomic
+orbitals reach every DFT+U path, the projected DOS and the starting wavefunctions, and
+`with_spin` reaches continuation, so `test_ldau.py`, `test_ldau_flavours.py`,
+`test_noncollinear_hubbard_resume.py`, `test_spinor_projection_symmetry.py`,
+`test_ten_site.py`, `test_pdos.py`, `test_noncollinear_pdos.py`, `test_spinor_pdos.py`
+and `test_continuation.py` are owed too. What stands behind "bit-identical" there is two
+SCF A/Bs on `ni-kind1-force.in`, one label and two labels on one dataset, both with the
+energy identical to the last digit and the stress moved at round-off (`PLAN.md` P111). The
 ones most likely to move are the anisotropy pair (the rigid rotation must leave the
 single-species Co numbers unchanged to round-off, and a move beyond it means the rotation
 is wrong) and the spin-GGA files (the minority potential of a saturated point changed).
