@@ -5824,7 +5824,8 @@ stopped.
 
 ## 2. What P115 left: a diverged PAW leg to rerun, and a refusal whose reason it removed **[opened 2026-09-25]**
 
-* **`ni-tetragonal-relaxed-mae-paw.in`'s `soc_scale = 0` leg diverged** (`PLAN.md`, the
+* **[closed 2026-09-25, `PLAN.md` P119: at 75/480 Ry it converges in 22 and 24 iterations]**
+  **`ni-tetragonal-relaxed-mae-paw.in`'s `soc_scale = 0` leg diverged** (`PLAN.md`, the
   PAW handoff phase: 200 iterations to an accuracy of 5.2e+02 Ry in 910 s, at a 2x2x2
   k-grid and `conv_thr = 1e-8`). That leg ran the non-variational reduction on a
   fully-relativistic PAW dataset, whose one-centre terms read `becsum` directly, so it may
@@ -5835,7 +5836,10 @@ stopped.
   three cores, both at `41cc1fa` (P115 in, the small component still on) and with P117,
   so the reduced PAW functional converges on this cell. What that does not say is what
   the full `75/480` cutoff does, which is the run still owed.
-* **A fully-relativistic PAW leg at `soc_scale = 0` has a direction floor of 5e-10 Ry**
+* **[measured 2026-09-25, `PLAN.md` P119: 7.20e-6 meV at `1e-14` on 40/320, and 3.9e-9 meV at
+  the dataset's own 75/480, so the floor belongs to the truncated cutoff; its mechanism is
+  open and is worth a session only if a half-cutoff PAW anisotropy is ever wanted]**
+  **A fully-relativistic PAW leg at `soc_scale = 0` has a direction floor of 5e-10 Ry**
   (`PLAN.md` P117). On tetragonal nickel at 40 Ry and a `2 2 2` mesh, `E(x) - E(z)` reads
   -6.8e-6 meV at `conv_thr = 1e-10` and +7.3e-6 meV at `1e-12`: the same size, the sign
   flipped, where ultrasoft cobalt reaches 1.9e-10 meV on the same route. The one-centre
@@ -5873,7 +5877,10 @@ stopped.
   which puts `spinor_ultracell_deeq` at `Q_d = 0` equal to `_newd_noncollinear` at 0,
   0.5 and 1. A difference away from zero, where the written-out lower block is what
   differs, is still covered by no test at `soc_scale = 0`.
-* **P116's `v2` at a negative density is measured in four energies and nothing else.**
+* **[closed 2026-09-25, `PLAN.md` P119: the PBE slab and its LDA twin differ from `pw.x` by the
+  same 7e-5 Ry in the one-electron and Hartree terms and the same 4e-8 to 6e-8 Ry/bohr^3 in
+  the stress, so the flip is below both; the graphene bilayer has no negative point]**
+  **P116's `v2` at a negative density is measured in four energies and nothing else.**
   The gradient correction's potential is the derivative of the signed energy, so `v2`
   flips sign at a negative vacuum point where `pw.x`'s (`xc_wrapper_gga.f90:227-232`)
   does not. A total is second order in that and cannot show it; the stress is where it
@@ -5889,6 +5896,22 @@ stopped.
   twin's (`bismuthene-soc-small-lda.in`) would bound the first-order effect with no new
   `pw.x` run.
 
+
+## 3. `frozen_expectation`'s first-order term is missing a piece that is not zero **[opened 2026-09-25, `PLAN.md` P119]**
+
+`workflows/anisotropy.py:frozen_expectation` evaluates `delta dvan_so - eps delta qq_so` at
+the frozen coupling-free states and leaves out `newd_so`'s sandwich against its spin trace,
+the exchange field's augmentation dressed by `fcoef`. Measured with the total local
+potential: **+1.26e-2 meV** in every direction on the cubic smoke cell, where the two terms
+it has read 1e-6, and **1.79e-3 meV of first-order anisotropy** on tetragonal cobalt
+(+1.1407e-2 along x, +0.9622e-2 along z) against the force theorem's 0.552 meV. So the
+recorded "+/-0.000001 meV" and the "factor of 3e5 between the two orders" in the module
+docstring, the function's docstring and `PLAN.md` near line 10801 are of the partial
+operator, and `test_anisotropy.py`'s check that the term is under 1e-3 meV would fail on the
+whole one. **What to do**: add the term, which is `_newd_noncollinear` at 1 and 0 on
+`calculation.coefficients`' own potential and one more `_spinor_projector_energies`
+call, then correct the three sentences and the test's bound to the measured numbers. What
+the term is physically, and why the quenched moment does not remove it, is open.
 
 # Part XX -- from the seeded NiBr2 ultracell, reported 2026-09-25
 

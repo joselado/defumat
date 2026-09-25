@@ -22180,3 +22180,112 @@ fix has a test that was run against the old code first.
 
 **Verified** on the workstation: the gate 3085 passed, 64 skipped, 0 failed in 16:18, at a
 peak of 5.8 GB in `test_textured_symmetry.py`, the gate's usual place.
+
+### P119 -- The measurements the review left, run: two claims fall, four checks close, and the frozen first-order term is not zero. ✅ DONE for the runs; the `frozen_expectation` term is a code change and is `OPEN.md`'s.
+
+Every item of `MEASUREMENTS-NEXT.md`, run on the workstation one at a time at the current
+tree (`e1371f7`), `pw.x` serial from the vendored build. Each result is stated against the
+sentence it tests.
+
+**The fully-relativistic PAW nickel leg at `soc_scale = 0`** (`ni-tetragonal-relaxed-mae-paw.in`,
+2x2x2, x against z, `run_relaxed_anisotropy`):
+
+| cutoff (Ry) | `conv_thr` | `E(x) - E(z)` | iterations x / z |
+|---|---|---|---|
+| 40/320 | 1e-10 | -6.8e-6 meV | |
+| 40/320 | 1e-12 | +7.33e-6 meV | |
+| 40/320 | 1e-14 | +7.20e-6 meV | 58 / 77 |
+| 75/480 (the dataset's own) | 1e-10 | -7.24e-4 meV | 22 / 24 |
+| 75/480 | 1e-12 | +1.84e-6 meV | 39 / 81 |
+| 75/480 | 1e-14 | **+3.9e-9 meV** | 47 / 99 |
+
+So the 5e-10 Ry floor at half the cutoff is real, the same at `1e-12` and `1e-14` with
+the totals unchanged to ten decimals, and it is gone at the dataset's own cutoff, where
+the identity holds to 2.8e-13 Ry, ultrasoft cobalt's level. The floor belongs to running a
+semicore PAW dataset at half its suggested cutoff and not to the reduced functional; what
+in it is not spin-rotation invariant at a truncated cutoff is not identified. **The
+full-cutoff leg that diverged before P115 converges now**, 22 and 24 iterations in 165 s at
+`1e-10`, and at `1e-14` both directions sit at -429.0837814923 Ry, so the PAW anisotropy on
+this cell is open to a coupled run.
+
+**The seeded nickel DFT+U state is a state of `pw.x`'s functional too.** `pw.x` from the
+test's own seed (`pw.x`'s converged eigenvalues of its unseeded state) lands at
+-170.99977120 Ry, traces 4.953 / 4.215, 72 iterations at `mixing_beta = 0.3`: the third of
+the four states the test lists (-170.9997723, 4.961 / 4.201). Seeded at this code's
+converged eigenvalues instead, at `mixing_beta = 0.1` (0.3 wandered at an accuracy of
+0.03 Ry for 100 iterations), it converges in 36 iterations to **-171.00255270 Ry**, traces
+4.9725 / 4.1786, which is this code's -171.0025527096 to `pw.x`'s printed digits. The pin
+is right; which state a seed reaches is the path's, in both codes.
+
+**`dr2` against `pw.x`'s first printed accuracy**: 0.06390477 against 0.06340640 Ry on
+`pw_scf/scf-kcrys` (7.9e-3 relative) and 0.92027331 against 0.91975683 on `pw_lsda/lsda`
+(5.6e-4). A convention error in the charge or magnetization weight would be a factor of
+two or four, so there is none; the rest is what a first diagonalisation at `ethr = 1e-2`
+leaves, and from the third iteration the two mixers' paths differ.
+
+**The sign of `v2` at negative points (P116) is invisible in the energy terms and the
+stress.** `bismuthene-soc-small` has 9554 active negative points (`rho < -1e-6`, `sigma >
+1e-10`, of 164025; minimum -2.3e-4). Against `pw.x`, the PBE cell and its LDA twin, which
+has no gradient correction, differ in the same way:
+
+| against `pw.x` | PBE | LDA |
+|---|---|---|
+| total | -7.3e-9 Ry | -7.1e-9 Ry |
+| one-electron | -6.81e-5 Ry | -6.89e-5 Ry |
+| Hartree | +7.77e-5 Ry | +7.90e-5 Ry |
+| xc | -9.6e-6 Ry | -1.0e-5 Ry |
+| stress xx = yy | +4e-8 Ry/bohr^3 | +3.4e-8 Ry/bohr^3 |
+| stress zz | +5e-8 Ry/bohr^3 | +5.8e-8 Ry/bohr^3 |
+
+(`pw.x` with `tstress = .true.`, -0.02388127 and -0.02383464 PBE, -0.02386693 and
+-0.02374880 LDA, eight printed decimals.) The PBE and LDA columns agree to about 1e-6 Ry
+on every term and to the printed digits on the stress, so the flip moves nothing either
+can see, and the 7e-5 Ry exchange between the one-electron and Hartree terms belongs to
+something both functionals share. That is also the likely home of `bi10-soc`'s 5.1e-5 and
+5.9e-5, which P116 left unattributed. The graphene bilayer, `graphene-bilayer-d2`, has
+**no** negative point at all (minimum +7.5e-6 on 32400 points), so `test_dispersion.py`'s
+PBE stress is a null for this.
+
+**The GGA response kernel at negative points** (`bismuthene-epsilon-us-soc.in`, 9710 active
+negative points). At the first iteration's in-plane response density,
+`<drho|(K_new - K_old) drho> / <drho|K drho>` is **3.2e-5**, the kernel's action moving by
+up to 1.39 of 25.9 pointwise; the first iteration takes 148 s on eight cores. The full
+epsilon at the current tree is **17.732233153 in-plane against `ph.x`'s 17.732384482**,
+1.5e-4 or 8.5e-6 relative, out of plane 1.407071366, in 15 iterations and 1095 s: the
+first number on this cell, which had not finished in 70 minutes before. The A/B with the
+old signed gate gave 17.729288708 (-3.1e-3), and **it is confounded**: the gate was
+patched for the whole `dielectric_tensor` call, which rebuilds the unperturbed potential
+and Hamiltonian from the density (`response/efield.py`, the `calculation.potential` and
+`hamiltonian` calls), so it changed `H0` at fixed new-gate wavefunctions as well as the
+kernel. It does not isolate the kernel and is not the before-P116 number either. The two
+clean runs are the gate patched inside the kernel's `jvp` alone, and the whole response
+at `f3984b7` on its own `PYTHONPATH`.
+
+**`frozen_expectation`'s missing term is not zero.** At the frozen states, with the total
+local potential (`v_scf` plus `vltot`, rebuilt coefficients equal to `calc.coefficients`
+exactly), `sum w <psi|beta>(newd_so(1) - newd_so(0))<beta|psi>`:
+
+| cell | direction | the two terms it has | the `newd_so` term | spread of the sum |
+|---|---|---|---|---|
+| cubic smoke cell | x, y, z | +3.2e-6, -1.1e-6, -4.5e-6 meV | +1.2601e-2, +1.2606e-2, +1.2609e-2 meV | 8.9e-8 meV |
+| tetragonal Co (`co-tetragonal-relaxed-mae.in`) | x, z | +9e-7, +1.3e-6 meV | +1.1407e-2, +0.9622e-2 meV | **1.79e-3 meV** |
+
+So the first-order term of the whole spin-orbit operator is 1.26e-2 meV on the cubic cell,
+isotropic as symmetry requires, and on tetragonal cobalt it carries a first-order
+anisotropy of 1.8e-3 meV against the force theorem's 0.552. The quenched-orbital-moment
+argument covers the bare `dvan_so` and the overlap and not this term, which is the
+exchange field's augmentation dressed by `fcoef`; its physics is open. The recorded
+"+/-0.000001 meV" and "a factor of 3e5 between the two orders" (above, and
+`workflows/anisotropy.py`'s two docstrings) are of the partial operator.
+
+**The metric fit's high-G share** on `ni-kind1-force.in`: above `|G|^2 = 100` Ry the
+accuracy carries 2.2e-4, 3.6e-4 and 2.2e-3 of itself at iterations 2, 5 and 10, and one
+off-diagonal Gram entry -3.1e-4, 2.0e-4 and 2.9e-3. The dense set against `pw.x`'s smooth
+sphere is a few tenths of a per cent of the fit, so P113's comparison stands on that count.
+
+**Part III on more than one core** (`benchmarks/si8-us-1k.in`, the tree against `93d882f`):
+`Q_ij(G)`, the energy, the eigenvalues and the stress are bit-identical pinned to one core
+and unpinned. One core against many moves the eigenvalues by 5.3e-15 and the stress by
+1.8e-17 identically in both trees, which is XLA's threading. The tabulated route forced
+(`DEFUMAT_AUG_MAX_BYTES=0`, `o2-paw-texture.in`, `TabulatedAugmentation`, 8 iterations to
+-80.506231699686 Ry) is bit-identical too, energy, eigenvalues and `becsum`.

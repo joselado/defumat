@@ -6,7 +6,17 @@ left is below, and every item on it is a run: each says what it settles, the inp
 call, the number that decides it, and what it costs. They are ordered by what a wrong
 answer would cost, and the first four need nothing but the workstation.
 
+**All of it was run on 2026-09-25, on the workstation, one run at a time** (`PLAN.md`
+P119, which has every number). What is left is two things that are not runs: the term
+`frozen_expectation` leaves out, which is not zero and is `OPEN.md` Part XIX item 3, and
+the mechanism of the half-cutoff nickel floor. Each section below keeps its plan and says
+in one line what the run gave.
+
 ## The nickel PAW floor at `soc_scale = 0`
+
+**Result**: real at 40/320 Ry (7.20e-6 meV at `1e-14`, the same as at `1e-12`), and gone
+at the dataset's own 75/480 (3.9e-9 meV), so it belongs to the truncated cutoff.
+
 
 The question is whether the 5e-10 Ry left between x and z on a fully-relativistic PAW
 nickel leg is the reduced functional or an energy not yet converged. What we have is
@@ -41,6 +51,11 @@ quadrature under the noncollinear gradient; `onecenter_species` at the *converge
 
 ## The GGA response kernel at negative density points
 
+**Result**: the ratio is 3.2e-5. The full epsilon at the current tree is 17.732233153
+against `ph.x`'s 17.732384482, 1.5e-4. The old-gate A/B patched the gate for the whole
+call, `H0` included, so it is confounded; the clean A/B is still to run.
+
+
 P116 moved the ground state toward `pw.x` by keeping negative vacuum points in the
 gradient correction, and because the kernel here is one `jvp` of `v_of_rho` it moved the
 kernel too: at an active negative point (`rho + rho_core < -1e-6`, `sigma > 1e-10`) it is
@@ -60,6 +75,10 @@ The full epsilon did not finish in 70 minutes here, which is why step 2 exists.
 
 ## `frozen_expectation`'s missing term
 
+**Result**: not zero. +1.26e-2 meV in every direction on the cubic smoke cell, and a
+first-order anisotropy of 1.79e-3 meV on tetragonal cobalt; `OPEN.md` Part XIX item 3.
+
+
 `frozen_expectation` evaluates `delta dvan_so - eps delta qq_so` and leaves out `newd_so`'s
 sandwich against its spin trace, `F B F - T(B)`, which on an ultrasoft dataset is part of
 the first-order operator. Its recorded +/-0.000001 meV was taken on the ultrasoft
@@ -72,6 +91,10 @@ first order too; a number above 1e-3 meV would say otherwise. Minutes.
 
 ## `dr2` against `pw.x`'s printed accuracy
 
+**Result**: 7.9e-3 relative on `scf-kcrys` and 5.6e-4 on `lsda`, so no convention error;
+the parser and gate test are not written.
+
+
 Nothing pins `scf_accuracy` itself against `pw.x`: the tests of `rho_ddot`'s transform
 share `total_charge`, `kinetic`, `E2`, `FPI` and the spin branching with it, so a
 convention error in any of those passes on both sides. The first iteration starts from
@@ -83,6 +106,12 @@ accuracy with `pw.x`'s first "estimated scf accuracy" on `pw_scf/scf-kcrys` (0.0
 home. Seconds per cell.
 
 ## Smaller checks, each a sentence in the record away from a number
+
+**Results**: `pw.x` reaches the seeded nickel state from this code's eigenvalues
+(-171.00255270 Ry); the high-G share is 2e-4 to 3e-3; the graphene bilayer has no negative
+point; the PBE and LDA bismuthene terms differ from `pw.x` alike, to about 1e-6 Ry; and Part
+III is bit-identical on any core count and on the tabulated route.
+
 
 - **The seeded nickel DFT+U state.** `test_noncollinear_hubbard_resume.py` pins a seeded
   collinear source at -171.0025527 Ry that no reference code has produced; `pw.x` was run
@@ -110,6 +139,11 @@ home. Seconds per cell.
   was never A/B'd.
 
 ## On Triton
+
+**Results**, both run on the workstation instead: the full-cutoff nickel leg converges and
+its identity holds to 3.9e-9 meV at `1e-14`; the PBE stress agrees with `pw.x` as well as
+the LDA control does, 4e-8 to 6e-8 Ry/bohr^3.
+
 
 - **The nickel PAW leg at its own cutoff.** `ni-tetragonal-relaxed-mae-paw.in` at 75/480 Ry
   diverged at `soc_scale = 0` before P115 (200 iterations to an accuracy of 5.2e+02 Ry).
