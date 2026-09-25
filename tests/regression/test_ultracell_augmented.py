@@ -810,12 +810,21 @@ def test_an_augmented_ultracell_runs_through_the_radial_table(
 
     Measured here, with the modulation applied so that every Q-difference
     carries weight: through the table against off it, the total is 3.90e-10 Ry
-    apart collinear and 3.94e-10 spinor, both in ten iterations either way, and
-    the induced density agrees to 3.5e-10 of its own maximum collinear and
-    2.8e-9 spinor. **That 3.9e-10 is the radial interpolation and not the
+    apart collinear and 3.94e-10 spinor, both in the same number of iterations
+    either way. **That 3.9e-10 is the radial interpolation and not the
     ultracell**, which is asserted rather than said: the unit cell's own SCF
     moves by the same amount between the two routes, so the ``N`` displaced
     tables add nothing to it.
+
+    **The induced density is first order in the residual where the total is
+    second order, so its bound is set by the threshold.** Collinear it agrees to
+    3.5e-10 of its own maximum. Spinor it read 2.8e-9 when this was written, and
+    6.0e-7 at the same ``conv_thr = 1e-11`` after the Anderson fit changed
+    (``1705a0a``), with the energies unmoved; at 1e-13 it is **6.65e-8**, ten
+    times smaller for a hundredfold smaller residual, which is the square-root
+    scaling of a stopping point and not of the interpolation. So the spinor
+    branch runs at 1e-13 and holds the density at three times that measurement
+    (``OPEN.md`` Part XIX, 2026-09-25).
     """
     modulation = _modulation((2, 1, 1))
     energies, iterations, induced, seeds = [], [], [], []
@@ -828,9 +837,9 @@ def test_an_augmented_ultracell_runs_through_the_radial_table(
             kwargs = dict(nbnd=12, conv_thr=1e-10, states_conv_thr=1e-10)
         else:
             calculator = _spinor(tmp_path, pseudo_dir, "paw")
-            scf = calculator.get_scf(conv_thr=1e-11, nbnd=24)
+            scf = calculator.get_scf(conv_thr=1e-13, nbnd=24)
             kgrid = (1, 2, 2)
-            kwargs = dict(nbnd=32, conv_thr=1e-11, states_conv_thr=1e-11,
+            kwargs = dict(nbnd=32, conv_thr=1e-13, states_conv_thr=1e-13,
                           max_iterations=60)
         assert scf.converged
         seeds.append(float(scf.total_energy))
@@ -848,7 +857,8 @@ def test_an_augmented_ultracell_runs_through_the_radial_table(
     assert abs(energies[0] - energies[1]) < 1.0e-8
     scale = np.abs(induced[0]).max()
     assert scale > 1.0e-4  # the modulation is what makes the check discriminate
-    assert np.abs(induced[0] - induced[1]).max() < 1.0e-8 * scale
+    density_bound = 1.0e-8 if regime == "collinear" else 2.0e-7
+    assert np.abs(induced[0] - induced[1]).max() < density_bound * scale
     # The whole difference is the frozen states', carried in from the unit
     # cell's own SCF: the displaced tables add nothing to it.
     assert abs((energies[0] - energies[1]) - (seeds[0] - seeds[1])) < 1.0e-11

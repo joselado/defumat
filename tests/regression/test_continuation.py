@@ -218,18 +218,22 @@ def test_platinum_switches_spin_orbit_coupling_on():
     ``average_pp`` refuses to j-average one (``PW/src/average_pp.f90``) and this
     code refuses the same combination. So the projector counts differ, and the
     continuation carries the density while re-seeding ``becsum`` from the
-    target's own dataset. It still saves half the iterations, because the charge
-    is what they were spent on.
+    target's own dataset. It still saves iterations, because the charge is what
+    they were spent on, though fewer than it did: since P107 took ``becsum`` out
+    of the Anderson fit the fresh run is fast too, and measured on 2026-09-25 the
+    two take 7 and 7 at ``conv_thr = 1e-9``, 8 and 7 at 1e-11, and **9 and 7 at
+    1e-12**, the threshold this test runs at so that the saving is resolved
+    rather than tied (``OPEN.md`` Part XIX).
     """
     scalar = _input(GENERATED / "pt-paw-scalar.in")
     spinor = _input(QE_ROOT / "test-suite" / "pw_spinorbit" / "spinorbit-paw.in")
     sr = (read_upf(f"{PSEUDO}/Pt.pbe-n-kjpaw_psl.0.1.UPF"),)
     fr = (read_upf(f"{PSEUDO}/Pt.rel-pbe-n-kjpaw_psl.0.1.UPF"),)
 
-    converged = run_scf(scalar, sr, conv_thr=1e-9)
-    fresh = run_scf(spinor, fr, conv_thr=1e-9)
+    converged = run_scf(scalar, sr, conv_thr=1e-12)
+    fresh = run_scf(spinor, fr, conv_thr=1e-12)
     with pytest.warns(RuntimeWarning, match="different pseudopotential"):
-        continued = run_scf(spinor, fr, conv_thr=1e-9, starting_from=converged)
+        continued = run_scf(spinor, fr, conv_thr=1e-12, starting_from=converged)
     _report("Pt scalar -> spin-orbit", fresh, continued)
     assert continued.total_energy == pytest.approx(fresh.total_energy, abs=SAME_SOLUTION_RY)
     assert continued.iterations < fresh.iterations

@@ -83,6 +83,16 @@ SCF_CASES = [
 #: the looser density-dependent one, because both sides ran to 1e-10.
 TIGHT_TERMS = {"si10-us", "si10-paw", "si10-paw-pbe"}
 
+#: This code's ``conv_thr`` per case; 1e-10 where absent, which is what every
+#: reference was generated at. ``si10-us`` runs tighter because its terms are held
+#: to ``USPP_TERM_RY`` and 1e-10 does not deliver that on this side: measured
+#: 2026-09-25, this code's Hartree term is 5.453049484 Ry at 1e-10 and 5.453059936
+#: at 1e-13, against ``pw.x``'s 5.45305984 at 1e-10 and 5.45305980 at 1e-13. So the
+#: reference is converged to 4e-8 and this side was 1.0e-5 short of it, exactly
+#: the bound, which a change of the mixer's path (``1705a0a``) was enough to cross;
+#: at 1e-13 the two are 9.6e-8 apart.
+CONV_THR = {"al10-metal-tetra": 1.0e-8, "si10-us": 1.0e-13}
+
 #: The displaced cell, where the forces and the stress are not zero. All three
 #: run on a **4x4x4** grid; see ``test_the_two_codes_reduce_an_unclosed_grid_
 #: differently`` for what a 4x4x1 one does instead.
@@ -126,7 +136,7 @@ def _converged(case: str, pseudo_dir: Path, origin_tangent: bool = True):
     system = build_system(read_pw_input(CASES / f"{case}.in"))
     pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species)
     calculation = Calculation(system, pseudos, origin_tangent=origin_tangent)
-    conv = 1.0e-8 if case == "al10-metal-tetra" else 1.0e-10
+    conv = CONV_THR.get(case, 1.0e-10)
     result = run_scf(system, pseudos, calculation=calculation, conv_thr=conv,
                      max_iterations=200)
     return system, calculation, result

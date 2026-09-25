@@ -45,7 +45,8 @@ The cases build on each other and each isolates one thing:
   above exist -- see ``TOTAL_RY``.
 
 References are regenerated with the vendored ``pw.x`` at ``conv_thr = 1e-10``
-(``tools/generate_reference.py``). The committed benchmarks are QE 6.1 runs
+(``tools/generate_reference.py``), and the three ``pw_lsda`` ones at 1e-13, on both
+sides, for the reason ``CONV_THR`` gives. The committed benchmarks are QE 6.1 runs
 stopped at 1e-6, where the printed energy *terms* are only good to about 1e-4 Ry
 and comparing against them would measure QE's stopping point.
 """
@@ -150,6 +151,15 @@ EIGENVALUE_EV_BY_DIRECTORY = {"pw_pawatom": 1e-2}
 #: moves its own answer by 5.8e-7 Ry between ``mixing_ndim = 8`` and ``4``.
 TOTAL_RY = {"pw_pawatom": 2e-5}
 
+#: ``conv_thr`` per directory, on both sides; 1e-10 where absent. **The nickel cases
+#: run at 1e-13 because at 1e-10 their terms are two stopping points, not two
+#: answers.** Measured 2026-09-25 on ``lsda.in``: between 1e-10 and 1e-13 this code's
+#: Hartree term moves by 2.0e-5 Ry and ``pw.x``'s by 5.2e-6, so at 1e-10 the two are
+#: 2.6e-5 apart, past ``TERM_RY``, and at 1e-13 they are **9.9e-7** apart. Where a
+#: 1e-10 run stops inside that 2e-5 is decided by the mixer's path, which is why the
+#: case passed before ``1705a0a`` and failed after it (``OPEN.md`` Part XIX).
+CONV_THR = {"pw_lsda": 1e-13}
+
 
 def _input_path(directory, name: str, qe_testsuite: Path) -> Path:
     return GENERATED / name if directory is None else qe_testsuite / directory / name
@@ -175,7 +185,8 @@ def _converged(directory, name: str, qe_testsuite: Path, pseudo_dir: Path):
         # that substitution has its own test in test_isolated_atom.
         warnings.simplefilter("ignore", UserWarning)
         result = run_scf(
-            system, pseudos, conv_thr=1e-10, max_iterations=300, mixing_beta=beta
+            system, pseudos, conv_thr=CONV_THR.get(directory, 1e-10),
+            max_iterations=300, mixing_beta=beta,
         )
     return system, pseudos, result
 

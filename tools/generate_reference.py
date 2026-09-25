@@ -65,6 +65,18 @@ PW_X = Path(os.environ.get("PW_X", QE_ROOT / "bin" / "pw.x"))
 #: inputs ask for; see ``run_case``.
 RESTAMPED_CONV_THR = 1.0e-10
 
+#: Restamped cases held to a tighter threshold than :data:`RESTAMPED_CONV_THR`,
+#: because a test compares their printed energy *terms* at a tolerance 1e-10 does
+#: not deliver. Measured 2026-09-25 on ``pw_lsda/lsda.in``: ``pw.x``'s Hartree term
+#: moves by 5.2e-6 Ry between 1e-10 and 1e-13, and this code's by 2.0e-5, so at
+#: 1e-10 the two codes are 2.6e-5 apart and at 1e-13 they are 9.9e-7 apart
+#: (``test_lsda.py``'s ``CONV_THR``, ``PLAN.md`` P114).
+RESTAMPED_CONV_THR_BY_CASE = {
+    "pw_lsda/lsda.in": 1.0e-13,
+    "pw_lsda/lsda-tot_magnetization.in": 1.0e-13,
+    "pw_lsda/lsda-nelup+neldw.in": 1.0e-13,
+}
+
 RESTAMPED = [
     "pw_scf/scf.in",
     "pw_scf/scf-kauto.in",
@@ -460,7 +472,8 @@ def main(argv=None) -> int:
 
     todo = [(case, reference_path(case), None) for case in inputs]
     todo += [
-        (QE_ROOT / "test-suite" / rel, restamped_path(rel), RESTAMPED_CONV_THR)
+        (QE_ROOT / "test-suite" / rel, restamped_path(rel),
+         RESTAMPED_CONV_THR_BY_CASE.get(rel, RESTAMPED_CONV_THR))
         for rel in RESTAMPED
         if not wanted or Path(rel).stem in wanted
     ]
