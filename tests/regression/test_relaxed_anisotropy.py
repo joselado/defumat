@@ -61,16 +61,22 @@ def test_without_spin_orbit_coupling_every_direction_has_the_same_energy():
         )
     assert result.converged
     spread = abs(result.difference(0, 1)) * RY_TO_EV * 1000.0
-    # **The bound is the measured residue of the reduction, not of the route.**
-    # The route itself is exact to 3.5e-09 meV, which the scalar-relativistic
-    # test below asserts; what is left here is what ``soc_scale = 0`` does not
-    # quite remove from a *fully-relativistic* dataset. See that test for the
-    # attribution and `OPEN.md` Part XIV item 7 for the numbers.
-    assert spread < 2.0e-2, (
+    # Measured at 1.9e-10 meV, the scalar-relativistic partner's order (the
+    # test below). Until `PLAN.md` P115 it was a floor of 1.1e-2 meV that no
+    # ``conv_thr`` removed: the reduction built ``becsum`` with the full
+    # ``fcoef`` sandwich, which ties the spin to the orbital index.
+    assert spread < 1.0e-6, (
         f"no spin-orbit coupling, so the two directions must have the same "
-        f"total energy; they differ by {spread:.3e} meV, which is past the "
-        f"1.16e-2 meV the soc_scale = 0 reduction is known to leave"
+        f"total energy; they differ by {spread:.3e} meV"
     )
+    # **The total is the guard the spread cannot be.** The reduction that left
+    # that floor was not the derivative of its own energy either, and it put
+    # the total at -125.698 Ry: 51 Ry below the coupled run, with 8.97 of the
+    # nine electrons on the atom. Switching the coupling off costs 0.44 mRy on
+    # this cell (-74.405364571 Ry against pw.x's coupled -74.40580247), so a
+    # mRy is room for the coupling energy and none for that.
+    for total in result.total_energies:
+        assert total == pytest.approx(-74.40580247, abs=1.0e-3)
 
 
 @pytest.mark.slow
@@ -80,27 +86,16 @@ def test_the_same_identity_is_exact_on_the_scalar_relativistic_partner():
     The test above runs a **fully-relativistic** dataset with
     ``soc_scale = 0``, so it asserts two things at once: that the route does
     not depend on the moment direction, and that switching the coupling off in
-    ``dvan_so``, ``qq_so`` and ``fcoef`` leaves nothing behind. Only the first
-    is the route's, and separating them is what says which one is imperfect.
+    every ``fcoef`` sandwich leaves nothing behind. Only the first is the
+    route's, and separating them is what says which one is imperfect.
 
     ``Co.pbe-nd-rrkjus`` is the matched scalar-relativistic partner of
     ``Co.rel-pbe-nd-rrkjus``: same element, same functional, same generation,
     and **no** ``dvan_so``, ``qq_so`` or ``fcoef`` to reduce. On it the identity
-    is exact to **3.5e-09 meV**, seven orders below the relativistic dataset's
-    **1.16e-2 meV** at the same ``conv_thr``, so the route is sound and the
-    residue is the reduction's alone.
-
-    Three things it is *not*, each ruled out by measurement rather than by
-    argument: it is not the k-set, the cell being ``nosym``; it is not the
-    gradient-corrected functional's quantization axis, which is the suspect the
-    test above names, because forcing ``input_dft = 'pz'`` gives 9.3e-2 meV
-    against PBE's 8.1e-2 at the same settings; and it is not one of the audit
-    fixes, the relativistic number being bit-identical at ``ffc2593``.
-
-    It is also **mostly convergence** above that floor, which is why this file
-    asks for 1e-12 rather than the 1e-10 it used to: the relativistic spread
-    reads 6.7e-2, 8.1e-2, 1.16e-2 and 1.11e-2 meV at ``conv_thr`` of 1e-8,
-    1e-10, 1e-12 and 1e-14, so it falls by seven and then stops.
+    is exact to **3.5e-09 meV**. The relativistic dataset stopped on a floor of
+    **1.1e-2 meV** at every ``conv_thr`` from 1e-12 down until `PLAN.md` P115,
+    and this test is what localised that floor to the reduction; it now reads
+    1.9e-10 there as well.
     """
     from defumat.workflows.anisotropy import run_relaxed_anisotropy
 

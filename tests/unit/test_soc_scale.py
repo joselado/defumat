@@ -5,17 +5,20 @@ reason -- "to enhance the effect of spin-orbit coupling in order to accurately
 determine the magnetic anisotropy energy". ``pw.x`` has no counterpart.
 
 A pseudopotential has no additive ``xi L.S`` operator to scale, so what the knob
-interpolates along has to be chosen, and **the choice is different for the two
-kinds of object it has to act on**. That is the whole content of this file:
+interpolates along has to be chosen. **It is one rule, the spin trace of the
+``fcoef`` sandwich, applied to every spin-independent matrix the sandwich
+dresses**, and that is the content of this file:
 
-* ``dvan_so`` and ``qq_so`` are built from spin-*independent* radial data, so
-  everything spin-dependent in ``dvan_so`` is the coupling and a spin trace
-  removes exactly it;
-* ``deeq`` and ``qq_so`` are ``fcoef`` **sandwiches**, and for those the
-  coupling is the dressing -- their scalar limit is ``fcoef = identity``. For
-  ``deeq`` a spin trace would remove the *exchange field* instead, switching
-  off the magnet rather than the coupling; for ``qq_so`` it would leave a
-  metric that is not the overlap of anything.
+* ``dvan_so`` and ``qq_so`` are sandwiches of spin-*independent* radial data, so
+  everything spin-dependent in them is the coupling and a spin trace removes
+  exactly it;
+* ``newd_so`` sandwiches the potential's integrals, which carry the exchange
+  field, so the trace is taken **one Pauli component at a time**: tracing the
+  whole block would switch off the magnet, and collapsing the sandwich to
+  ``fcoef = identity`` instead (what this code did until `PLAN.md` P115) gives
+  the potential a different dressing from the overlap;
+* ``becsum`` takes the transpose of that map, which is what makes the density
+  the one whose energy the reduced Hamiltonian is the derivative of.
 """
 
 import numpy as np
@@ -136,3 +139,139 @@ def test_the_system_carries_it_without_moving_the_k_points():
     for bad in (-1.0, 0.5, 2.0):
         with pytest.raises(ValueError, match="only 0 and 1"):
             system.with_soc_scale(bad)
+
+
+# The reduction of the **density** and of ``newd_so`` (`PLAN.md` P115). Before
+# it, ``soc_scale = 0`` spin-traced ``dvan_so`` and ``qq_so``, built ``becsum``
+# with the full ``fcoef`` sandwich, and collapsed ``newd_so`` to the plain
+# recombination: three dressings, so the Hamiltonian was not the derivative of
+# the energy it reported. Each identity below failed on that code.
+
+
+def _spin_density(nh, seed):
+    """``B[k, s, l, t] = sum_n <psi_n|beta_k s><beta_l t|psi_n>`` for random states."""
+    rng = np.random.default_rng(seed)
+    amplitudes = rng.normal(size=(2 * nh, 7)) + 1j * rng.normal(size=(2 * nh, 7))
+    return (amplitudes.conj() @ amplitudes.T).reshape(nh, 2, nh, 2)
+
+
+def _symmetric(nh, seed, count=None):
+    rng = np.random.default_rng(seed)
+    shape = (nh, nh) if count is None else (count, nh, nh)
+    values = rng.normal(size=shape)
+    return 0.5 * (values + np.swapaxes(values, -1, -2))
+
+
+def _becsum(coupling, spin_density, nspin_mag, scale):
+    import jax.numpy as jnp
+
+    from defumat.pseudo.spinorbit import becsum_transform
+
+    return np.asarray(becsum_transform(
+        jnp.asarray(coupling.fcoef), jnp.asarray(spin_density)[None], nspin_mag,
+        soc_scale=scale,
+    ))[:, 0]
+
+
+@pytest.mark.parametrize("scale", [0.0, 1.0])
+def test_the_augmentation_charge_is_the_overlap_the_eigenproblem_normalises_by(scale):
+    """``sum_ij qq_ij becsum_ij = sum <psi|beta> qq_so <beta|psi>``, at both ends.
+
+    The left side is the charge the density carries; the right is what the
+    generalised eigenproblem sets to one per state. At ``soc_scale = 0`` the
+    old ``becsum`` kept the full sandwich while ``qq_so`` was spin-traced, and
+    the cobalt cell's density integrated to 8.99999859 of 9.
+    """
+    pseudo = _pseudo(RELATIVISTIC)
+    coupling = SpinOrbitCoupling(pseudo, scale)
+    qq = _symmetric(pseudo.nh, seed=11)
+    spin_density = _spin_density(pseudo.nh, seed=12)
+
+    carried = float(np.sum(qq * _becsum(coupling, spin_density, 1, scale)[0]))
+    overlap = np.einsum("klst,kslt->", coupling.qq_so(qq), spin_density)
+    assert carried == pytest.approx(float(np.real(overlap)), rel=1e-12)
+
+
+@pytest.mark.parametrize("scale", [0.0, 1.0])
+def test_newd_is_the_derivative_of_the_augmentation_energy(scale):
+    """``sum_c int V_c rho_aug,c`` differentiated by the occupations is ``newd_so``.
+
+    ``E = sum_c sum_ij deeq_c,ij becsum_c,ij(B)`` is linear in ``B``, so its
+    derivative is the matrix ``D`` with ``E = Re sum D[s,t,k,l] B[k,s,l,t]``, and
+    that has to be what :func:`_newd_noncollinear` returns (less ``dvan_so``).
+    A Hamiltonian that is not this derivative converges to a state its own
+    total is first order in, which is what the reduced cobalt cell did.
+    """
+    import jax.numpy as jnp
+
+    from defumat.scf.driver import _newd_noncollinear, _spin_block_diagonal
+
+    pseudo = _pseudo(RELATIVISTIC)
+    coupling = SpinOrbitCoupling(pseudo, scale)
+    deeq = _symmetric(pseudo.nh, seed=21, count=4)
+    spin_density = _spin_density(pseudo.nh, seed=22)
+
+    energy = float(np.sum(deeq * _becsum(coupling, spin_density, 4, scale)))
+    fcoef = jnp.asarray(_spin_block_diagonal([coupling.fcoef]))
+    zero = jnp.zeros_like(fcoef)
+    potential = np.asarray(_newd_noncollinear(jnp.asarray(deeq), zero, fcoef, scale))
+    paired = float(np.real(np.einsum("stkl,kslt->", potential, spin_density)))
+    assert energy == pytest.approx(paired, rel=1e-12)
+
+
+def _rotated(spin_density, angle, axis):
+    """``B`` of the same states with every spinor turned by one SU(2) rotation."""
+    sigma = {
+        "x": np.array([[0, 1], [1, 0]], dtype=complex),
+        "y": np.array([[0, -1j], [1j, 0]]),
+    }[axis]
+    u = np.cos(angle / 2) * np.eye(2) - 1j * np.sin(angle / 2) * sigma
+    return np.einsum("sa,kalb,tb->kslt", u.conj(), spin_density, u)
+
+
+def test_the_reduced_density_does_not_know_where_the_spin_points():
+    """At ``soc_scale = 0`` a global spin rotation leaves the charge and ``|m|`` alone.
+
+    That is the identity behind the directional degeneracy: the charge
+    component of ``becsum`` does not move and the three magnetization
+    components rotate as a vector. The full sandwich fails it, because
+    ``fcoef`` ties the spin to the orbital index, which is asserted too so that
+    the check is shown to fire.
+    """
+    pseudo = _pseudo(RELATIVISTIC)
+    spin_density = _spin_density(pseudo.nh, seed=31)
+    turned = _rotated(spin_density, 1.1, "y")
+
+    zero = SpinOrbitCoupling(pseudo, 0.0)
+    before, after = _becsum(zero, spin_density, 4, 0.0), _becsum(zero, turned, 4, 0.0)
+    np.testing.assert_allclose(after[0], before[0], atol=1e-12 * np.abs(before[0]).max())
+    np.testing.assert_allclose(
+        np.einsum("cij,ckl->ijkl", after[1:], after[1:]),
+        np.einsum("cij,ckl->ijkl", before[1:], before[1:]),
+        atol=1e-11 * np.abs(before).max() ** 2,
+    )
+
+    one = SpinOrbitCoupling(pseudo, 1.0)
+    moved = _becsum(one, turned, 4, 1.0)[0] - _becsum(one, spin_density, 4, 1.0)[0]
+    assert np.abs(moved).max() > 1e-3 * np.abs(before[0]).max()
+
+
+def test_the_spin_traced_sandwich_is_the_spin_trace_of_the_overlap():
+    """:func:`spin_traced_sandwich` on ``qq`` is :func:`spin_trace` of ``transform_qq_so``.
+
+    One map for the overlap, the bare ``D``, ``newd_so`` and (transposed) the
+    density, so this ties the new helper to the rule ``qq_so`` already followed.
+    """
+    import jax.numpy as jnp
+
+    from defumat.pseudo.spinorbit import spin_traced_sandwich
+    from defumat.scf.driver import _spin_block_diagonal
+
+    pseudo = _pseudo(RELATIVISTIC)
+    coupling = SpinOrbitCoupling(pseudo, 0.0)
+    qq = _symmetric(pseudo.nh, seed=41)
+    fcoef = jnp.asarray(_spin_block_diagonal([coupling.fcoef]))
+    np.testing.assert_allclose(
+        np.asarray(spin_traced_sandwich(fcoef, jnp.asarray(qq, dtype=fcoef.dtype))),
+        coupling.qq_so(qq)[:, :, 0, 0], atol=1e-13,
+    )

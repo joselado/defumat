@@ -692,7 +692,7 @@ def _tiled_becsum(becsum, cells: int) -> tuple:
 
 
 def _ultracell_becsum(becp, vectors, occupations, augmentation, blocks, nk0,
-                      nspin_mag: int, fcoef=None) -> tuple:
+                      nspin_mag: int, fcoef=None, soc_scale: float = 1.0) -> tuple:
     """``becsum`` by Q-difference, accumulated over the blocks and over ``k0``.
 
     The spin axis is the block index, because a collinear ultracell solves one
@@ -712,7 +712,7 @@ def _ultracell_becsum(becp, vectors, occupations, augmentation, blocks, nk0,
                 values = spinor_ultracell_becsum(
                     becp[block, ik], vectors[block][ik],
                     jnp.asarray(occupations[block][ik]), augmentation,
-                    fcoef, int(nspin_mag),
+                    fcoef, int(nspin_mag), soc_scale=soc_scale,
                 )
                 if totals is None:
                     totals = [
@@ -1378,6 +1378,7 @@ def run_ultracell(
                     tuple(so.fcoef for so in calculation.spin_orbit)
                     if npol == 2 else None
                 ),
+                soc_scale=float(system.soc_scale),
             )
             charge, augmentation_residual = ultracell_augmentation_charge(
                 becsum_out, augmentation, grid, nspin_mag

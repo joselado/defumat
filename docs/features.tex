@@ -4440,11 +4440,18 @@ the band energy over atomic orbitals, resolved by atom, $\ell$, $m$ and spin,
 which is what says \emph{which} orbitals supply the anisotropy; comparing its
 total against $E_{\text{band}}$ measures the spilling.
 
-\code{soc\_scale} scales the spin-orbit part of the nonlocal potential and the
-overlap while keeping the same dataset and the same k-points. At $0$ the
-anisotropy is exactly zero, which is the control for the whole calculation:
-without the coupling the Hamiltonian is invariant under a global spin rotation,
-so a band energy \emph{cannot} depend on where the moment points.
+\code{soc\_scale} scales the spin-orbit part of the nonlocal potential, the
+overlap and the augmentation charge while keeping the same dataset and the same
+k-points. At $0$ every one of them is replaced by the spin trace of its
+spin-orbit form, $\tfrac12\sum_{s s'} F^{s s'} M F^{s' s}$ for each
+spin-independent matrix $M$ the coefficients $F$ dress, the density's
+\code{becsum} included, so the reduced Hamiltonian is the derivative of the
+energy it reports. At $0$ the anisotropy is exactly zero, which is the control
+for the whole calculation: without the coupling the Hamiltonian is invariant
+under a global spin rotation, so a band energy \emph{cannot} depend on where the
+moment points. On tetragonal cobalt the two directions of a self-consistent
+total agree to $2\times10^{-10}$~meV, and switching the coupling off costs
+$0.44$~mRy of the total.
 
 \textbf{A PAW dataset needs one file rather than two, and \code{becsum} beside
 the density.} A PAW Hamiltonian's one-centre coefficients $D^{1}_{ij}$ are a

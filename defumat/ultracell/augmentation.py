@@ -72,7 +72,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.pseudo.augmentation import _aug_max_bytes, build_augmentation
-from defumat.pseudo.spinorbit import becsum_transform
+from defumat.pseudo.spinorbit import becsum_transform, spin_traced_sandwich
 from defumat.system.cell import Cell
 from defumat.ultracell.grid import Ultracell
 
@@ -289,8 +289,9 @@ def spinor_ultracell_deeq(components, fcoef, soc_scale: float = 1.0):
             ``_spin_block_diagonal``). For a scalar-relativistic species it is
             the identity on each diagonal spin block and the sandwich collapses
             to the plain recombination.
-        soc_scale: Elk's ``socscf``, interpolating between the plain
-            recombination and the sandwiched one.
+        soc_scale: Elk's ``socscf``, 0 or 1: the spin-traced sandwich
+            (:func:`~defumat.pseudo.spinorbit.spin_traced_sandwich`) or the
+            sandwich itself.
 
     Returns ``(N, 2, 2, nkb, nkb)`` complex.
 
@@ -325,15 +326,16 @@ def spinor_ultracell_deeq(components, fcoef, soc_scale: float = 1.0):
     blocks = blocks.astype(fcoef.dtype)
     # (2, 2, N, nkb, nkb) -> (N, 2, 2, nkb, nkb), the difference index leading
     # so that ``deeq[difference]`` gathers it the way the scalar path does.
-    plain = jnp.moveaxis(blocks, 2, 0)
     dressed = jnp.einsum(
         "asij,stdjk,tbkl->dabil", fcoef, blocks, fcoef, optimize=True
     )
     if soc_scale != 1.0:
-        # The scale is on the *coupling* and not on the exchange field, which is
-        # what ``blocks`` carries; ``scf/driver.py``'s ``_newd_noncollinear``
-        # has the measurement behind that distinction.
-        dressed = plain + soc_scale * (dressed - plain)
+        # The spin trace of the sandwich one Pauli component at a time, so the
+        # exchange field that ``blocks`` carries survives and the coupling goes;
+        # ``scf/driver.py``'s ``_newd_noncollinear`` has the measurement behind
+        # that, and why ``blocks`` itself is not the coupling-free limit.
+        reduced = jnp.moveaxis(spin_traced_sandwich(fcoef, blocks), 2, 0)
+        dressed = reduced + soc_scale * (dressed - reduced)
     return dressed
 
 
@@ -481,7 +483,7 @@ def ultracell_becsum(becp, vectors, weights, augmentation: UltracellAugmentation
 
 
 def spinor_ultracell_becsum(becp, vectors, weights, augmentation, fcoef,
-                            nspin_mag: int):
+                            nspin_mag: int, soc_scale: float = 1.0):
     """``add_becsum_so`` resolved by Q-difference, per species.
 
     Args:
@@ -494,6 +496,9 @@ def spinor_ultracell_becsum(becp, vectors, weights, augmentation, fcoef,
             ``augmentation.species_channels``.
         nspin_mag: 4 for a magnetic run, 1 for a spin-orbit run carrying no
             magnetization.
+        soc_scale: passed to :func:`~defumat.pseudo.spinorbit.becsum_transform`,
+            whose coupling-free map is the transpose of the one
+            :func:`spinor_ultracell_deeq` applies.
 
     Returns one ``(N, nspin_mag, nat_t, nh_t, nh_t)`` complex array per species,
     or ``None`` where the species is norm-conserving -- the layout the collinear
@@ -531,6 +536,7 @@ def spinor_ultracell_becsum(becp, vectors, weights, augmentation, fcoef,
             )
             blocks.append(becsum_transform(
                 coefficients, spin_density, int(nspin_mag), real=False,
+                soc_scale=soc_scale,
             ))
         values.append(jnp.stack(blocks, axis=0))
     return tuple(values)

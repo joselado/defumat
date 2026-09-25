@@ -64,7 +64,10 @@ platform-sensitive at `conv_thr = 1e-12`, jumping at the same commit on the work
 and passing there on Triton. None is from P109 to P111. The one that matters is a DFT+U
 nickel cell that now converges 5.2e-3 Ry above `pw.x`'s solution, in a second
 self-consistent state; the directional spread turns out to belong to the `soc_scale = 0`
-reduction, whose total sits 51 Ry from both of its neighbours.
+reduction, whose total sat 51 Ry from both of its neighbours. **All six are closed by
+2026-09-25** (`PLAN.md` P113 to P115): four stop points given their own `conv_thr`, the
+nickel test seeded, and the reduction made variational, which takes the spread to 1.9e-10
+meV. What the last fix left is item 2.
 
 **Part III** is the sweep of **2026-09-12** -- four read-only agents over the package
 looking for **speed and memory** rather than for wrong answers, 23 entries, ordered by
@@ -5332,7 +5335,7 @@ item 3.
   that one test at 1e-15, three iterations more, for 23x margin; `test_stm.py` is 12
   passed.
 
-## 7. A cell with no spin-orbit coupling broke its own directional degeneracy by 0.108 meV **[attributed 2026-09-22: it is the `soc_scale = 0` reduction, and the route is exact without it]**
+## 7. A cell with no spin-orbit coupling broke its own directional degeneracy by 0.108 meV **[attributed 2026-09-22: it is the `soc_scale = 0` reduction, and the route is exact without it; closed 2026-09-25, `PLAN.md` P115: 1.9e-10 meV]**
 
 `test_relaxed_anisotropy.py::test_without_spin_orbit_coupling_every_direction_has_the_same_energy`
 failed with the two directions **1.079e-01 meV** apart. Without spin-orbit coupling the
@@ -5369,6 +5372,14 @@ the floor itself**: 1.16e-2 meV of residue in the reduction, on a *tetragonal* c
 `pseudo/spinorbit.py`'s own record measured "0.000000" for the same identity on **hexagonal**
 cobalt -- which is this project's "which components the validation cell allows" habit one
 more time, and is where to start.
+
+**Closed 2026-09-25 (`PLAN.md` P115).** The floor was `becsum`. The reduction built it with
+the full `fcoef` sandwich, which ties the spin to the orbital index and so is not invariant
+under a global spin rotation, while `newd_so` and the overlap used two other dressings.
+With the spin trace applied to all four sandwiches the spread is 1.933e-10 meV at
+`conv_thr` 1e-12 and 1e-14, and the test asserts 1e-6 meV. The "0.000000" on hexagonal
+cobalt was a force-theorem number at a frozen density, where `becsum` is never rebuilt, so
+that route could not show it.
 
 # Part XV -- from the Anderson fit, 2026-09-23 (P107)
 
@@ -5597,7 +5608,7 @@ package walks no frames.
 
 # Part XIX -- the owed slow set on Triton, 2026-09-24
 
-## 1. Five failures from `1705a0a` and one platform-sensitive: a DFT+U cell lands in a solution `pw.x` does not reach **[opened 2026-09-24; five closed 2026-09-25, `PLAN.md` P113 and P114; the `soc_scale = 0` spread open]**
+## 1. Five failures from `1705a0a` and one platform-sensitive: a DFT+U cell lands in a solution `pw.x` does not reach **[opened 2026-09-24; closed 2026-09-25, `PLAN.md` P113 to P115]**
 
 Part XVI item 1's list, 35 files, ran on `batch-milan` at `93d882f` (jobs 20429733 and
 20429734, `tools/cluster/owed.sbatch`, `DEFUMAT_CACHE_DIR=off`, the QE tree from the group
@@ -5779,3 +5790,33 @@ the platinum count are stop-point readings that moved with the path, and each pa
 `98468d4`. The directional spread belongs to the `soc_scale = 0` reduction, whatever the
 mixer does. **Do not loosen the six tests**: the one that looked like a tolerance on a
 continuation is the one that found a wrong ground state.
+
+**The spread is closed 2026-09-25 (`PLAN.md` P115), and the lead above was right.** The
+reduction dressed four `fcoef` sandwiches three ways: `dvan_so` and `qq_so` spin-traced,
+`newd_so` collapsed to `fcoef = identity`, and `becsum` left on the full sandwich. The
+Hamiltonian was therefore not the derivative of the energy it reported, and it collapsed
+the cobalt cell (8.97 of 9 electrons on the atom, the Fermi level at -2.44 Ry against
++0.50). With one spin trace for all four, the reduced total is -74.405364568 Ry, 0.44 mRy
+above the coupled run. The x total at 1e-12 equals its 1e-14 value to 1e-12 Ry, where it was
+2.3e-6 off, and the spread is **1.933e-10 meV** at both thresholds. The first-order
+looseness recorded under "What `1705a0a` did to the stop point" belonged to the reduction
+and not to the mixer: `1705a0a` only changed where a run of a non-variational functional
+stopped.
+
+## 2. What P115 left: a diverged PAW leg to rerun, and a refusal whose reason it removed **[opened 2026-09-25]**
+
+* **`ni-tetragonal-relaxed-mae-paw.in`'s `soc_scale = 0` leg diverged** (`PLAN.md`, the
+  PAW handoff phase: 200 iterations to an accuracy of 5.2e+02 Ry in 910 s, at a 2x2x2
+  k-grid and `conv_thr = 1e-8`). That leg ran the non-variational reduction on a
+  fully-relativistic PAW dataset, whose one-centre terms read `becsum` directly, so it may
+  have been this defect rather than the cell. It is a lead and not a measurement. Rerun
+  the leg (on Triton; the cell's header asks for an idle machine) before trying a third
+  cell for the PAW anisotropy.
+* **The refusal of an intermediate `soc_scale` rests on a measurement taken with the old
+  reduction** (-132 meV at 0.25 and -102 at 0.5 where the answer is under a meV,
+  `pseudo/spinorbit.py`). Its stated reason, that a blended overlap is not a usable
+  metric, no longer holds: the traced overlap is the coupled one averaged over global spin
+  rotations, so a blend of the two is a convex combination of two positive definite
+  operators. The consistent blend of all four sandwiches is a variational functional at
+  every scale, and it would give the `lambda^2` law P58 could not measure. The refusal
+  stays until a blend is measured.

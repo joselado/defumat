@@ -54,6 +54,7 @@ __all__ = [
     "build_spin_orbit",
     "pauli_blocks",
     "becsum_transform",
+    "spin_traced_sandwich",
 ]
 
 #: ``lmaxx`` in ``upflib/upf_params.f90``. ``rot_ylm`` is built once at this
@@ -330,9 +331,11 @@ class SpinOrbitCoupling:
         # coupling lives in the spin structure of ``dvan_so``, which is built
         # from spin-*independent* radial data, so everything spin-dependent in
         # it is the coupling and :func:`spin_trace` removes exactly that. The
-        # same rule applies to :meth:`qq_so` and the **opposite** one to
-        # ``newd_so``'s sandwich, whose input carries the exchange field --
-        # see :func:`defumat.scf.driver._newd_noncollinear`.
+        # same rule applies to :meth:`qq_so`, to ``newd_so``'s sandwich one
+        # Pauli component at a time (its input carries the exchange field),
+        # and, transposed, to ``becsum`` -- :func:`spin_traced_sandwich`. All
+        # four have to follow it together or the Hamiltonian is not the
+        # derivative of the energy (`PLAN.md` P115).
         #
         # Two other decompositions were tried and each fails the identity that
         # ``soc_scale = 0`` must give **exactly zero** anisotropy. They are
@@ -349,7 +352,10 @@ class SpinOrbitCoupling:
         # dataset needs: **1082 meV** on the cobalt slab where the answer is
         # zero. Every one of these failures is silent -- covariance still holds
         # algebraically at zero, so a wrong operator shows up as a large number
-        # rather than as an error.
+        # rather than as an error. Both were measured with ``becsum`` still
+        # built from the full sandwich and ``newd_so`` collapsed to ``fcoef =
+        # identity``, which is itself inconsistent (P115), so they rule out
+        # those operators in that company and no more.
         coupled = self._expanded_dij()[:, :, None, None] * full
         self.dvan_scalar = spin_trace(coupled)
         self.dvan_so = (
@@ -412,7 +418,11 @@ class SpinOrbitCoupling:
         eigenproblem stops being well posed and the iterative solver lands
         somewhere different for each direction. Covariance still holds
         *algebraically* at ``soc_scale = 0``, which is why the failure shows up
-        as a large number rather than as an error.
+        as a large number rather than as an error. (That 169 meV was taken with
+        ``becsum`` on the full sandwich, so the density and the overlap
+        disagreed there as well; the spin trace is also what charge
+        conservation asks for once ``becsum`` is reduced by the transposed map,
+        :func:`becsum_transform`.)
         """
         full = self._sandwich({(0, 0): qq, (1, 1): qq})
         if self.soc_scale == 1.0:
@@ -547,13 +557,40 @@ def build_spin_orbit(pseudos: tuple[Pseudopotential, ...], soc_scale: float = 1.
 
 # --- the same transforms, on device --------------------------------------------
 #
+def spin_traced_sandwich(fcoef, matrix):
+    """The coupling-free half of ``newd_so``'s sandwich: ``T(M)``.
+
+    ``T(M) = (1/2) sum_{s1 s} F^{s1 s} M F^{s s1}``, the spin trace of
+    ``sum_s F^{s1 s} (M x 1) F^{s s2}``, applied to one spin-independent matrix
+    ``M`` over the projector channels. ``fcoef`` is in the assembled
+    ``(2, 2, nkb, nkb)`` layout (``scf/driver.py``'s ``_spin_block_diagonal``),
+    and any leading axes of ``matrix`` ride along, so a Pauli-resolved stack
+    ``(2, 2, ..., nkb, nkb)`` is mapped block by block.
+
+    This is what ``soc_scale = 0`` does to **every** ``fcoef`` sandwich:
+    :func:`spin_trace` of ``transform_qq_so`` is ``T(qq)`` and of ``dvan_so`` is
+    ``T`` of ``dion`` with the unzeroed coefficients, and ``newd_so``'s integrals
+    take ``T`` one Pauli component at a time, so the exchange field survives and
+    only the coupling goes. For a scalar-relativistic species ``F`` is the
+    identity on each spin block and ``T`` is the identity. On a matrix diagonal
+    in ``m`` within a shell it is the weight ``(2j + 1) / (2 (2l + 1))``, which is
+    ``average_pp``'s; on the crystal-field part of ``int V Q_ij`` it also mixes
+    ``m``, through ``L . sigma``, and that is still exactly the spin trace.
+    """
+    import jax.numpy as jnp
+
+    return 0.5 * jnp.einsum("auij,...jk,uakl->...il", fcoef, matrix, fcoef,
+                            optimize=True)
+
+
 # ``fcoef`` is host-side setup, but ``becsum`` is rebuilt from the wavefunctions
 # every SCF iteration and has to stay inside the compiled region. The two live
 # together so that the contraction is written once and the index order cannot
 # drift between the setup version and the traced one.
 
 
-def becsum_transform(fcoef, becsum_nc, nspin_mag: int, real: bool = True):
+def becsum_transform(fcoef, becsum_nc, nspin_mag: int, real: bool = True,
+                     soc_scale: float = 1.0):
     """``add_becsum_so`` for a whole species at once, in JAX.
 
     Args:
@@ -569,6 +606,17 @@ def becsum_transform(fcoef, becsum_nc, nspin_mag: int, real: bool = True):
             *opposite* difference rather than in the same array. Taking the real
             part there keeps every zero-difference number right, including the
             tiled null, and silently halves the rest.
+        soc_scale: 1 for ``add_becsum_so``; 0 for the coupling-free reduction,
+            which takes the four plain Pauli traces of the spin-density matrix
+            and maps them with the **transpose** of :func:`spin_traced_sandwich`.
+            That is the one map that makes this ``becsum`` the density of the
+            Hamiltonian ``soc_scale = 0`` builds: its charge integral is
+            ``<psi|S - 1|psi>`` with the spin-traced ``qq_so``, and its
+            derivative with respect to the occupations is the spin-traced
+            ``newd_so`` (:func:`defumat.scf.driver._newd_noncollinear`). The
+            ``fcoef`` sandwich above is neither, and it is not invariant under a
+            global spin rotation either, since ``fcoef`` couples the spin to the
+            orbital index (`PLAN.md` P115).
 
     Returns ``(nspin_mag, nat, nh, nh)``, real unless ``real`` is false: the
     projector occupations in the representation the augmentation charge and the
@@ -582,11 +630,19 @@ def becsum_transform(fcoef, becsum_nc, nspin_mag: int, real: bool = True):
     import jax.numpy as jnp
 
     sigma = jnp.asarray(_PAULI[:1] if nspin_mag == 1 else _PAULI, dtype=fcoef.dtype)
-    # F[kh, ih, is1, s] B[na, kh, is1, lh, is2] F[jh, lh, t, is2], summed over
-    # kh, lh, is1, is2 and the (s, t) pair the Pauli matrix selects.
-    transformed = jnp.einsum(
-        "cst,kias,nkalb,jltb->cnij", sigma, fcoef, becsum_nc, fcoef, optimize=True
-    )
+    if soc_scale == 1.0:
+        # F[kh, ih, is1, s] B[na, kh, is1, lh, is2] F[jh, lh, t, is2], summed over
+        # kh, lh, is1, is2 and the (s, t) pair the Pauli matrix selects.
+        transformed = jnp.einsum(
+            "cst,kias,nkalb,jltb->cnij", sigma, fcoef, becsum_nc, fcoef, optimize=True
+        )
+    else:
+        # The plain Pauli traces, which is the whole of ``add_becsum_nc``, and
+        # then T^T: (1/2) sum_{a u} F[kh, ih, a, u] P[kh, lh] F[jh, lh, u, a].
+        plain = jnp.einsum("cst,nisjt->cnij", sigma, becsum_nc, optimize=True)
+        transformed = 0.5 * jnp.einsum(
+            "kiau,cnkl,jlua->cnij", fcoef, plain, fcoef, optimize=True
+        )
     if real:
         transformed = jnp.real(transformed)
     # QE stores the packed upper triangle with the off-diagonal entries doubled;

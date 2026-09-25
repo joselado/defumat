@@ -96,7 +96,11 @@ from defumat.pseudo.potentials import (
 )
 from defumat.pseudo.projectors import build_projector_core, projector_channels
 from defumat.pseudo.upf import Pseudopotential
-from defumat.pseudo.spinorbit import becsum_transform, build_spin_orbit
+from defumat.pseudo.spinorbit import (
+    becsum_transform,
+    build_spin_orbit,
+    spin_traced_sandwich,
+)
 from defumat.batching import (
     fetch_wavefunctions, map_k, park_wavefunctions, resolve_band_batch,
     resolve_k_batch, resolve_projectors, resolve_wfc_store,
@@ -837,21 +841,28 @@ def _newd_noncollinear(deeq_components, dvan_so, fcoef, soc_scale: float = 1.0,
     blocks = blocks.astype(fcoef.dtype)
     dressed = jnp.einsum("asij,stjk,tbkl->abil", fcoef, blocks, fcoef, optimize=True)
     if soc_scale != 1.0:
-        # ``soc_scale`` here is **not** the spin trace that scales ``dvan_so``
-        # and ``qq_so``, and the difference is the trap. Those two are built
-        # from spin-*independent* radial data, so everything spin-dependent in
-        # them is spin-orbit coupling. ``blocks`` is not: it carries
-        # ``m . sigma``, the **exchange field**, which is the magnetism itself,
-        # and spin-tracing here would switch off the magnet rather than the
-        # coupling. What ``fcoef`` adds is the whole of the coupling, and its
-        # scalar limit is ``fcoef = identity``, where the sandwich collapses to
-        # ``blocks`` -- precisely ``newd_nc_acc``'s plain recombination.
+        # ``soc_scale = 0`` takes the spin trace of the sandwich **one Pauli
+        # component at a time**, :func:`~defumat.pseudo.spinorbit.
+        # spin_traced_sandwich`. Spin-tracing the whole of ``dressed`` would
+        # switch off the magnet, since ``blocks`` carries ``m . sigma``, the
+        # exchange field; mapping each component leaves the exchange field
+        # and removes only what ``fcoef`` couples to the orbital index.
         #
-        # **Leaving this unscaled is silent**, because ``dvan_so`` carries the
-        # coupling too and switching only *it* off still looks like it worked:
-        # measured at -6.7 meV of residual anisotropy at ``soc_scale = 0`` on
-        # the cobalt slab, where the answer is exactly zero.
-        dressed = blocks + soc_scale * (dressed - blocks)
+        # **Two other choices are silent, and both were here.** Leaving the
+        # sandwich unscaled keeps the coupling in the potential while
+        # ``dvan_so`` loses it: -6.7 meV of anisotropy on the cobalt slab,
+        # where the answer is zero. Collapsing it to ``blocks`` (``fcoef =
+        # identity``) gives every channel pair of a shell the full integral,
+        # both ``j`` shells of ``l = 2`` included, where the spin-traced
+        # overlap and density weight them by 0.4 and 0.6 and couple no pair
+        # across ``j``: the Hamiltonian was then not the derivative of the
+        # energy it reported, and on one-atom tetragonal cobalt it put 8.97 of
+        # 9 electrons on the atom and the total at -125.70 Ry against -74.28
+        # for the scalar-relativistic partner (`PLAN.md` P115). This map and
+        # :func:`~defumat.pseudo.spinorbit.becsum_transform`'s are transposes
+        # of each other, which is what makes the pair variational.
+        reduced = spin_traced_sandwich(fcoef, blocks)
+        dressed = reduced + soc_scale * (dressed - reduced)
     return dvan_so + dressed
 
 
@@ -3395,6 +3406,7 @@ class Calculation:
                     jnp.asarray(self.spin_orbit[t].fcoef).astype(block.dtype),
                     block,
                     self.nspin_mag,
+                    soc_scale=float(self.system.soc_scale),
                 )
             )
         return tuple(values)

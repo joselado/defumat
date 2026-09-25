@@ -10957,6 +10957,10 @@ sandwich takes the **opposite** rule -- its scalar limit is `fcoef = identity`,
 where the sandwich collapses to `newd_nc_acc`'s plain recombination -- because
 its input is *not* spin-independent: it carries `m . sigma`, the exchange field,
 and spin-tracing there switches off the magnet rather than the coupling.
+**(Superseded by P115:** the identity collapse left `newd_so` with a different
+dressing from the overlap and the density, and the reduction was not variational. The
+rule now is the spin trace of the sandwich one Pauli component at a time, which keeps
+the exchange field, with `becsum` taking the transposed map.)
 
 **Three other decompositions were tried and each fails the identity that
 `soc_scale = 0` must give exactly zero anisotropy.** They are written down
@@ -19912,7 +19916,8 @@ both are held fixed. Then the route follows -- **one** file run twice, `soc_scal
 the self-consistent leg and 1 for the one-shot, so that both legs share a projector set by
 construction and `becsum` crosses by shape. `soc_scale` keeps `nh` and `fcoef` untouched
 and blends only `dvan_so` and `qq_so` toward their spin trace, which is what makes this
-work where `average_pp` cannot.
+work where `average_pp` cannot. (Since P115 it also reduces `newd_so` and `becsum` by the
+same spin trace, which the first leg needs in order to be variational.)
 
 `becsum` is rotated onto the requested direction with the density, and it is handed the
 **density** to read the old axis off rather than reading its own. That is
@@ -21884,3 +21889,78 @@ three that read the regenerated references or share the nickel cell): `test_lsda
 passed, `test_ten_site` 27, `test_ultracell_augmented` 21, `test_continuation` 4,
 `test_noncollinear_hubbard_resume` 3, `test_stress` 25 and `test_pdos` 57, **192 passed and
 0 failed**, the largest peak 11.6 GB.
+
+### P115 -- `soc_scale = 0` reduced four `fcoef` sandwiches three different ways; one spin trace for all four makes it variational and exact. ✅ DONE; `OPEN.md` Part XIX item 1 and Part XIV item 7 are closed.
+
+**What was wrong.** A fully-relativistic dataset dresses four spin-independent matrices with
+the same `fcoef` sandwich: the bare `dion` (`dvan_so`), the augmentation integrals `qq`
+(`qq_so`), the potential's integrals `int V_c Q_ij` (`newd_so`) and, transposed, the
+projector occupations (`add_becsum_so`). P58's `soc_scale = 0` replaced the first two by
+their spin trace, collapsed the third to `fcoef = identity` (the plain `newd_nc`
+recombination) and left the fourth on the full sandwich. With three dressings the density
+the Hamiltonian is built from is not the density whose energy is reported, so the
+Hamiltonian is not the derivative of that energy. On a `d` shell the identity collapse
+also gives both `j` shells the full integral on every channel pair, where the traced
+overlap weights them by 0.4 and 0.6 and couples no pair across `j`, so the augmented
+region is roughly twice as attractive as the overlap says.
+
+**The rule now.** For every spin-independent matrix `M` the sandwich dresses, `soc_scale =
+0` takes `T(M) = (1/2) sum_{s s'} F^{s s'} M F^{s' s}`, the spin trace of `F (M x 1) F`
+(`pseudo/spinorbit.py:spin_traced_sandwich`). `newd_so` applies it to each Pauli component
+of the potential separately, so the exchange field survives, and `becsum_transform` takes
+the plain Pauli traces of the spin-density matrix and maps them with `T` transposed, which
+is what makes the pair variational. `dvan_so` and `qq_so` were already `T` (their
+`spin_trace`), so they do not move. The reduced dataset is then an ordinary
+scalar-relativistic one, with the same `beta`, `D^(0)` equal to `T(dion)` and one augmentation
+function `T(Q_ij)` in all four spin components. That is also why nothing else has to change
+downstream. On a matrix diagonal in `m` within a shell, `T` is the weight `(2j+1)/(2(2l+1))`
+that `average_pp` uses. The unit cell and the ultracell (`spinor_ultracell_deeq`,
+`spinor_ultracell_becsum`) take the same map.
+
+**Three identities on the real dataset** (`Co.rel-pbe-nd-rrkjus`, random Hermitian
+occupations, `tests/unit/test_soc_scale.py`), before and after:
+
+| identity | old reduction | new |
+|---|---|---|
+| charge the density carries against `sum <psi|beta> qq_so <beta|psi>` | 100.110 against 106.522 | equal to 1e-12 |
+| `sum_c deeq_c . becsum_c` against `Re sum D_newd . B` | -174.94 against -1044.83 | equal to 1e-12 |
+| charge component moved by a global spin rotation | 6.93 | 3.6e-15 |
+
+The third identity is also asserted to fail for the full sandwich, so it is known to fire.
+
+**The cobalt cell** (`co-tetragonal-relaxed-mae.in`, tetragonal, ultrasoft, 3x3x2 `nosym`,
+magnetization along `z`, `conv_thr = 1e-8`):
+
+| | old `soc_scale = 0` | new `soc_scale = 0` | `soc_scale = 1` |
+|---|---|---|---|
+| total energy (Ry) | -125.698255 | **-74.405364568** | -74.405802472 |
+| integrated charge | 8.999998591 | 8.99999999997 | 9.00000000000 |
+| charge on the site | 8.974 | 7.340 | 7.340 |
+| cell moment (mu_B) | 1.000 | 1.787 | 1.784 |
+| Hartree (Ry) | 41.98 | 17.197 | 17.197 |
+| Fermi level (Ry) | -2.435 | 0.499 | 0.500 |
+| iterations | 14 | 11 | 11 |
+
+So the old reduction was a collapsed state: charge pulled onto the atom, a Fermi level 3 Ry
+low, and a total 51 Ry below both neighbours. The new one sits **0.44 mRy** above the
+coupled run, which is the size a spin-orbit energy of a 3d magnet should have. The
+scalar-relativistic partner `Co.pbe-nd-rrkjus` gives -74.280 Ry, a different dataset.
+
+**The directional identity** (`run_relaxed_anisotropy`, x against z): the spread is
+**1.933e-10 meV** at `conv_thr` 1e-12 and 1e-14 alike, in 14/14 and 15/16 iterations,
+against the old 1.1e-2 meV floor that no threshold removed (and 3.99e-2 at 1e-12 after
+`1705a0a`). The x total at 1e-12 equals its 1e-14 value to **1e-12 Ry**, where it was 9.2e-8
+before `1705a0a` and 2.3e-6 after, so the energy is second order in the residual again.
+**The first-order looseness `OPEN.md` Part XIX recorded was this, and not the mixer.** The
+test now asserts 1e-6 meV and pins both totals within 1 mRy of the coupled -74.40580247,
+which the old collapse misses by 51 Ry.
+
+**What the older records measured in that company.** P58's three failed decompositions (2.2,
+1082 and 169 meV) and the -6.7 meV of an unscaled `newd_so` were all taken with `becsum` on
+the full sandwich, so each was one inconsistent operator among others. They stand as
+measurements of what was tried; they do not show that those operators fail on their own.
+The same applies to the refusal of an intermediate `soc_scale` (-132 meV at 0.25): it was
+measured on the inconsistent reduction. The overlap it worried about is a convex combination
+of the traced overlap (itself the average of the coupled one over global spin rotations, so
+positive definite) and the coupled one, so it stays positive definite at every scale. The
+refusal is kept, and it is `OPEN.md`'s to reopen with a measurement.

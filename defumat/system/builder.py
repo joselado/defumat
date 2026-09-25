@@ -156,8 +156,9 @@ class System(eqx.Module):
     #: ``pw.x`` has one executable and needs the flag to branch -- and is read
     #: so that QE's own force-theorem inputs run unchanged.
     lforcet: bool = eqx.field(static=True, default=False)
-    #: ``soc_scale``: switches the spin-orbit part of the nonlocal potential
-    #: and the overlap off (``0``) or on (``1``) while keeping the same
+    #: ``soc_scale``: switches the spin-orbit part of the nonlocal potential,
+    #: the overlap and the augmentation charge off (``0``) or on (``1``) while
+    #: keeping the same
     #: fully-relativistic dataset -- Elk's ``socscf`` (manual 5.118) restricted
     #: to its two ends. It is what lets the force theorem's coupling-off
     #: control run on **one** file rather than on a matched scalar/relativistic
@@ -339,7 +340,8 @@ class System(eqx.Module):
 
         A plain field replacement rather than a
         :meth:`with_spin`-style rebuild, and that is the point: ``soc_scale``
-        touches only ``dvan_so`` and ``qq_so``, so the cell, the symmetry group
+        touches only the ``fcoef`` sandwiches (``dvan_so``, ``qq_so``,
+        ``newd_so`` and ``becsum``), so the cell, the symmetry group
         and above all the **k-points** are untouched. Two runs that differ only
         in this are therefore sampled identically, which is what makes the
         anisotropy vanish *identically* at ``soc_scale = 0`` rather than
