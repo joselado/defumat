@@ -21890,7 +21890,7 @@ passed, `test_ten_site` 27, `test_ultracell_augmented` 21, `test_continuation` 4
 `test_noncollinear_hubbard_resume` 3, `test_stress` 25 and `test_pdos` 57, **192 passed and
 0 failed**, the largest peak 11.6 GB.
 
-### P115 -- `soc_scale = 0` reduced four `fcoef` sandwiches three different ways; one spin trace for all four makes it variational and exact. ✅ DONE; `OPEN.md` Part XIX item 1 and Part XIV item 7 are closed.
+### P115 -- `soc_scale = 0` reduced four `fcoef` sandwiches three different ways; one spin trace for all four makes it variational and exact. ✅ DONE; `OPEN.md` Part XIX item 1 and Part XIV item 7 are closed, and Part XV item 1 is found closed by P110.
 
 **What was wrong.** A fully-relativistic dataset dresses four spin-independent matrices with
 the same `fcoef` sandwich: the bare `dion` (`dvan_so`), the augmentation integrals `qq`
@@ -21964,3 +21964,27 @@ measured on the inconsistent reduction. The overlap it worried about is a convex
 of the traced overlap (itself the average of the coupled one over global spin rotations, so
 positive definite) and the coupled one, so it stays positive definite at every scale. The
 refusal is kept, and it is `OPEN.md`'s to reopen with a measurement.
+
+**Verified at `a9eb343`** on the workstation: `test_relaxed_anisotropy` 3 passed,
+`test_anisotropy` 14 and `test_orbital_magnetization` 5, the three slow files that run
+`soc_scale = 0` (`tools/run_regression.sh`, largest peak 5.1 GB); the gate 3070 passed, 64
+skipped, 0 failed in 15:10.
+
+**Found in passing: the Co(0001) film's 1.6e-5 Ry (`OPEN.md` Part XV item 1) was closed by
+P110 and nobody noticed.** P113's table already had the film at -223.1388442373 Ry against
+`pw.x`'s -223.13884423. An A/B on `co-slab-forcetheorem-sr.in` at its own settings
+(`Calculator.get_scf()`, `DEFUMAT_CACHE_DIR=off`, each worktree on its own `PYTHONPATH`)
+attributes it:
+
+| tree | iterations | total (Ry) | XC (Ry) |
+|---|---|---|---|
+| `707ac29`, before P110 | 30 | -223.1388279276 | -98.606391961 |
+| `707ac29` plus P110's `xc/functional.py` change alone | 30 | -223.1388442371 | -98.606415920 |
+| `1fc95b8`, P110 | 30 | -223.1388442373 | -98.606415848 |
+
+The change is the spin-GGA cut: `gcc_spin` drops a point with `|zeta| > 1`, which a slab
+reaches in its vacuum wherever the minority channel of the mixed density is slightly
+negative, and this code used to clamp such a point and keep it. The film carried 1.6e-5 Ry
+of it; `fe-noncolin-pbe-stress`, the bulk cell P110 checked, carried none, which is why
+the fix was recorded as moving no number.
+

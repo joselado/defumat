@@ -5383,7 +5383,7 @@ that route could not show it.
 
 # Part XV -- from the Anderson fit, 2026-09-23 (P107)
 
-## 1. The Co(0001) film converges 1.6e-5 Ry above `pw.x` **[opened 2026-09-23]**
+## 1. The Co(0001) film converges 1.6e-5 Ry above `pw.x` **[opened 2026-09-23; closed 2026-09-25, found fixed by P110's spin-GGA cut, `PLAN.md` P115]**
 
 `tests/data/qe/co-slab-forcetheorem-sr.in` (three layers, `Co.pbe-nd-rrkjus.UPF`,
 `nspin = 2`, Marzari-Vanderbilt at `degauss = 0.005`, `mixing_mode = 'local-TF'`) had
@@ -5401,6 +5401,13 @@ drift: the -223.13876 quoted in `PERFORMANCE.md` on 2026-09-01 was not this buil
 `verbosity = 'high'` breakdown (one-electron, Hartree, XC, Ewald, `-TS`): a slab at
 `degauss = 0.005` is the first place a smearing-entropy convention or a vacuum-region XC
 threshold would show, and the breakdown says which term carries it in one run.
+
+**Closed 2026-09-25: it was the vacuum-region XC threshold, and P110 had already fixed it.**
+The film now converges to -223.1388442373 Ry, `pw.x`'s -223.13884423 to its printed
+digits. An A/B across P110 (`1fc95b8`) gives -223.1388279276 before and -223.1388442373
+after, in 30 iterations each, and P110's `xc/functional.py` change applied alone to the
+older tree gives -223.1388442371. That change is `gcc_spin`'s cut of points with
+`|zeta| > 1`, which the film reaches in its vacuum. `PLAN.md` P115 has the table.
 
 # Part XVI -- from the magnetism and ultracell review, 2026-09-23 (P109)
 
