@@ -22097,10 +22097,11 @@ So the defect is gone, by a factor of 1100, and what is left is a **floor** rath
 convergence: the spread keeps its size from `conv_thr = 1e-10` to `1e-12` and changes
 sign, while the totals themselves moved by 1.7e-9 Ry. It is 5e-10 Ry, against the
 1.4e-14 Ry (1.9e-10 meV) ultrasoft cobalt reaches on the same route, so something else in
-this leg is not exactly invariant. It is not the one-centre energy, which the unit test
-holds invariant to 1e-11 Ry at a random `becsum`, and it is not the GGA quantization
-axis, which `fixed_quantization_axis` takes from the rotated starting moments; the floor
-is carried in `OPEN.md` Part XIX item 2. Removing the term also lowers the reduced total by 7.9e-6 Ry, which is
+this leg is not exactly invariant. What is known about it: the unit test holds the
+one-centre energy invariant to 1e-11 Ry at a random `becsum`, not at the converged one,
+and each direction builds its own GGA quantization axis, since `run_relaxed_direction`
+rotates the system through `_with_quantization_axis` before `run_scf` reads
+`fixed_quantization_axis` off it. The floor is carried in `OPEN.md` Part XIX item 2. Removing the term also lowers the reduced total by 7.9e-6 Ry, which is
 what the small component's magnetization was worth on this cell. Both old and new legs
 converged, where the full-cutoff leg `OPEN.md` Part XIX item 2 records diverged before
 P115; at this cutoff that says the reduced PAW functional is now well behaved, and it does

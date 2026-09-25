@@ -5834,9 +5834,10 @@ stopped.
 * **A fully-relativistic PAW leg at `soc_scale = 0` has a direction floor of 5e-10 Ry**
   (`PLAN.md` P117). On tetragonal nickel at 40 Ry and a `2 2 2` mesh, `E(x) - E(z)` reads
   -6.8e-6 meV at `conv_thr = 1e-10` and +7.3e-6 meV at `1e-12`: the same size, the sign
-  flipped, where ultrasoft cobalt reaches 1.9e-10 meV on the same route. It is not the
-  one-centre energy (exactly invariant at a random `becsum`) and not the GGA axis (taken
-  from the rotated moments). Candidates, none measured: the smearing's Fermi level, the
+  flipped, where ultrasoft cobalt reaches 1.9e-10 meV on the same route. The one-centre
+  energy is exactly invariant at a random `becsum` (not checked at the converged one),
+  and each direction builds its own GGA axis from its rotated moments
+  (`_with_quantization_axis`). Candidates, none measured: the smearing's Fermi level, the
   PAW `becsum` symmetrisation on a `nosym` run, and the sphere's angular quadrature under
   the noncollinear gradient. The cheapest split is the same run with `x` twice, which
   says whether the floor is direction at all or run-to-run.
