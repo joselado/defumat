@@ -21849,4 +21849,6 @@ source starts from `starting_ns_eigenvalue` at `pw.x`'s converged values and rea
 -171.0025527 in 48 iterations, the promotion reproduces it in 3 against a fresh spinor
 run's 33, and the assertion that pinned the promoted run to the fresh one's basin at
 `abs = 1e-4`, which its own comment said should not be pinned, is now that the promoted
-state is not above the fresh one. 2 minutes at 2.5 GB for the test alone.
+state is not above the fresh one. 2 minutes at 2.5 GB for the test alone. The gate on
+`693529d` is **3064 passed, 64 skipped, 0 failed, in 974 s at a peak of 6.0 GB**, P112's
+3047 and the metric's 17 unit tests.
