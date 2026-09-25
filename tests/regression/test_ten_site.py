@@ -75,9 +75,10 @@ SCF_CASES = [
 ]
 
 #: ``bi10-soc`` and ``ni10-ldau`` are not in that list and have a test each
-#: instead: the spin-orbit case because it is the one that does not reach
-#: ``TOTAL_ENERGY_RY`` and needs its bound stated, and the DFT+U case because
-#: what is worth asserting there is the occupation matrix as well as the energy.
+#: instead: the spin-orbit case because its spinor shapes and symmetry are worth
+#: asserting on their own (it also used to be the one that missed
+#: ``TOTAL_ENERGY_RY``, until P116), and the DFT+U case because what is worth
+#: asserting there is the occupation matrix as well as the energy.
 
 #: Cases whose energy terms are compared at the ultrasoft tolerance rather than
 #: the looser density-dependent one, because both sides ran to 1e-10.
@@ -526,17 +527,13 @@ def test_spin_orbit_coupling_at_ten_sites(pseudo_dir):
     assert calculation.symmetries.nsym == 8
     assert int(calculation.basis.dense.ngm) == reference.ngm_dense
 
-    # **This is the one case in the set that does not reach TOTAL_ENERGY_RY**,
-    # and the bound says what was measured rather than what was hoped for:
-    # 1.9e-4 Ry on a total of -1477.737, which is 1.3e-7 relative. The
-    # signature is two slightly different converged densities -- the
-    # one-electron and Hartree terms are 3.4e-3 and 3.6e-3 apart and cancel
-    # into the total -- on a cell with 150 occupied spinor bands, 30 empty ones
-    # and a 216-point axis. The Ewald term, which depends on no density at all,
-    # agrees to 4.6e-9, so it is not the geometry or the units. It is named as
-    # an open question in `PLAN.md` P28b rather than explained away here.
-    assert result.total_energy == pytest.approx(reference.total_energy, abs=5e-4)
-    assert result.fermi_energy * RY_TO_EV == pytest.approx(reference.fermi_energy, abs=1e-3)
+    # This was the one case in the set that did not reach TOTAL_ENERGY_RY: 1.9e-4
+    # Ry, with the one-electron and Hartree terms 3.4e-3 apart, an open question
+    # in `PLAN.md` P28b. It was the gradient correction gated on the signed
+    # density in the cell's vacuum (P116), five times bismuthene's 3.5e-5. It
+    # now agrees to 2.2e-8 Ry and the Fermi level to 8.9e-5 eV.
+    assert result.total_energy == pytest.approx(reference.total_energy, abs=TOTAL_ENERGY_RY)
+    assert result.fermi_energy * RY_TO_EV == pytest.approx(reference.fermi_energy, abs=FERMI_EV)
 
 
 # ---------------------------------------------------------------------------

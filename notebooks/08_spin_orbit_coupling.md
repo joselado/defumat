@@ -65,10 +65,10 @@ print(comparison_table(rows, fmt="{:.9f}",
                        headers=("dataset", "defumat [Ry]", "pw.x", "difference")))
 ```
 
-    dataset          defumat [Ry]            pw.x  difference
+    dataset           defumat [Ry]            pw.x  difference
     ultrasoft, LDA   -69.491529507   -69.491529520     1.3e-08
     ultrasoft, PBE   -90.199533906   -90.199533910     3.8e-09
-    PAW, PBE        -753.342691622  -753.342691630     8.4e-09
+    PAW, PBE        -753.342691622  -753.342691630     8.5e-09
 
 
 Three datasets, three ways of carrying $j$, and the agreement is the same in all
@@ -78,16 +78,22 @@ a spinor band holds one electron and not a pair.
 Platinum has both an inversion centre and time-reversal symmetry, and those two
 together force every level to stay doubly degenerate however strong the coupling
 is. That is Kramers' theorem, and it is a statement the calculation has to
-satisfy rather than one it is told:
+satisfy rather than one it is told. The check runs over the levels that hold
+electrons: the nearly empty ones at the top carry no charge and are converged
+less tightly, so their pairs are only as degenerate as that looser convergence.
+Over the filled levels:
 
 
 ```python
 levels = np.asarray(platinum.eigenvalues)
-print("largest splitting within a Kramers pair, over every k-point:  %.1e eV"
-      % (np.abs(levels[:, 0::2] - levels[:, 1::2]).max() * RY_TO_EV))
+weights = np.asarray(platinum.occupations)
+filled = weights / weights[:, :1] >= 0.01   # levels holding at least 1% of an electron
+split = np.abs(levels[:, 0::2] - levels[:, 1::2]) * RY_TO_EV
+print("largest splitting within a Kramers pair, over every filled level:  %.1e eV"
+      % split[filled[:, 0::2] & filled[:, 1::2]].max())
 ```
 
-    largest splitting within a Kramers pair, over every k-point:  1.1e-13 eV
+    largest splitting within a Kramers pair, over every filled level:  2.5e-12 eV
 
 
 ## Bismuthene, where the gap *is* the coupling
@@ -123,10 +129,10 @@ for tag in ("nosoc", "soc"):
              scf[tag].total_energy, gap))
 ```
 
-     nosoc   nspin=1 npol=1   E = -296.198423399 Ry   smallest direct gap 0.1361 eV
+     nosoc   nspin=1 npol=1   E = -296.198389843 Ry   smallest direct gap 0.1362 eV
 
 
-       soc   nspin=4 npol=2   E = -295.610317533 Ry   smallest direct gap 0.6295 eV
+       soc   nspin=4 npol=2   E = -295.610282417 Ry   smallest direct gap 0.6296 eV
 
 
 

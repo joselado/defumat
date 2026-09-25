@@ -4835,7 +4835,7 @@ the FFT dimensions and the G-vector count agree exactly on every one of them.
 | `h10-chain-noncolin` | the same state as spinors | 4.4e-9 | 2.9e-4 | equals the collinear total both sides |
 | `c10-graphite-d2` | Grimme D2, five layers | 3.2e-10 | 5e-5 (bar the empty top band) | dispersion term 6e-9, force 4.1e-7 |
 | `ni10-ldau` | DFT+U, ten `ns` matrices | 1.8e-8 | 5.4e-5 | `m` 5.9036 against 5.90 |
-| `bi10-soc` | spin-orbit, 150 spinor bands | **1.9e-4** | 1.6e-2 | the one that does not close; see below |
+| `bi10-soc` | spin-orbit, 150 spinor bands | **1.9e-4** (2.2e-8 since P116) | 1.6e-2 | the one that did not close; see below |
 | `si10-nc-force` | one atom displaced | 2.2e-9 | 5.4e-5 | force 2.4e-7, stress 4.8e-9 |
 | `si10-us-force` | the same, `addusforce` | 6.3e-9 | 5.7e-5 | force 7.9e-7, stress 9.4e-8 |
 | `si10-paw-force` | the same, PAW | 9.8e-9 | 5.3e-5 | force 4.8e-7, stress 9.6e-8 |
@@ -4858,6 +4858,10 @@ one-electron and Hartree terms are 3.4e-3 and 3.6e-3 apart and cancel into the t
 the Ewald term, which depends on no density at all, agrees to 4.6e-9. What it is not: a
 geometry, a unit, a k-set or a grid. The test asserts the bound that was measured (5e-4 Ry)
 rather than one that was hoped for, and this is the open item the phase leaves behind.
+**(Closed by P116: 2.2e-8 Ry.** It was the gradient correction gated on the signed
+density over the cell's vacuum, five times bismuthene's 3.5e-5, and "two slightly
+different converged densities" was exactly that. The one-electron and Hartree terms now
+agree to 5e-5 and 6e-5.)
 
 **Two more things ten sites cost, both stated rather than fixed.** The *memory*: a force and
 a stress on the displaced cell at 24 k-points peak at 1.5 GB norm-conserving and **16 GB**
@@ -21993,7 +21997,7 @@ of it; `fe-noncolin-pbe-stress`, the bulk cell P110 checked, carried none, which
 the fix was recorded as moving no number.
 
 
-### P116 -- The gradient correction was gated on the signed density; `pw.x` gates `|rho|` and keeps a negative point with its sign flipped. ✅ DONE; `OPEN.md` Part XII item 1 is closed.
+### P116 -- The gradient correction was gated on the signed density; `pw.x` gates `|rho|` and keeps a negative point with its sign flipped. ✅ DONE; `OPEN.md` Part XII item 1 and P28b's `bi10-soc` are closed.
 
 **What `pw.x` does.** For an unpolarized density (`nspin = 1`, and `nspin = 4` without a
 magnetization) `gradcorr` calls `xc_gcx`, which hands `gcxc` the absolute value
@@ -22034,3 +22038,15 @@ stopped short of reading the gate against the source. The tests that carried it
 the spin-orbit energy difference is asserted at 1e-7 where it was 1e-5.
 `tests/unit/test_xc.py` pins the rule point by point against transcribed `pbex`/`pbec`:
 at a negative density the energy is minus the positive one and `v1` is the same.
+
+**It also closes P28b's open item.** `bi10-soc`, ten bismuth atoms in bismuthene's vacuum,
+sat 1.9e-4 Ry from `pw.x` with its one-electron and Hartree terms 3.4e-3 apart, which is
+five times the two-atom cell's offset. On Triton (job 20455328, `batch-milan`, at
+`7efbc3d`, through `test_ten_site`'s own helper) it converges in 18 iterations to
+-1477.737065072 Ry against -1477.737065050, **2.2e-8**. The one-electron and Hartree
+terms agree to 5.1e-5 and 5.9e-5 and the Fermi level to 8.9e-5 eV, at a peak of 2.97 GB
+in 8 minutes. The test now holds it to `TOTAL_ENERGY_RY` and `FERMI_EV`.
+
+**Verified** on the workstation at `7efbc3d`: `test_spinorbit` 27 passed (the bismuthene
+totals at 1e-6) and `test_topology` 5, largest peak 7.7 GB; the gate 3075 passed, 64
+skipped, 0 failed in 18:22.
