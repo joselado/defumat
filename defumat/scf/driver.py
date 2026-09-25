@@ -470,7 +470,8 @@ def _rho_ddot_metric(calculation):
     ``accuracy_of`` and the loop's ``accuracy``: the density's Hartree and
     magnetization halves over the dense set, ``ns_ddot`` under a Hubbard term
     and ``tauk_ddot`` under a meta-GGA. ``F(r) . F(r)`` is that ``accuracy`` to
-    round-off, which ``tests/unit/test_rho_ddot_fit.py`` holds.
+    round-off, which ``tests/unit/test_rho_ddot_fit.py`` holds for each vector
+    and for this assembly (``test_the_assembled_metric_is_the_loops_accuracy``).
     """
     gvectors, cell = calculation.basis.dense, calculation.system.cell
     u_metric = None
@@ -3216,10 +3217,14 @@ class Calculation:
                 #
                 # **This is the one expensive thing on a path that is otherwise
                 # arithmetic**: the radial Bessel transforms run inside every
-                # gradient evaluation rather than once per wavevector, and in
-                # reverse mode their ``(ngm, kkbeta)`` intermediates are live
-                # at once (``_qrad_kernel``). It is the cost ``dE/dq`` pays for
-                # an augmented dataset and it is measured in `PLAN.md` P96.
+                # gradient evaluation rather than once per wavevector. Above
+                # ``formfactors.CHUNK`` values of ``|G - q|``, which is every
+                # augmented spiral cell in the tree, ``_qrad_kernel`` runs them
+                # as a rematted scan, so reverse mode holds ``(chunk, kkbeta)``
+                # at a time rather than ``(ngm, kkbeta)`` (`PLAN.md` P112); the
+                # displaced ``Q_ij(G - q)``, its harmonics and phases are still
+                # ``ngm``-long on the tape. It is the cost ``dE/dq`` pays for an
+                # augmented dataset, measured in `PLAN.md` P96 before the chunking.
                 if isinstance(self.cross_augmentation, TabulatedAugmentation):
                     # The tabulated branch reads ``|shift|`` on the host, to
                     # extend its radial table by that much -- running past the
@@ -5492,6 +5497,19 @@ def run_scf(
         # G-vectors, which ``get_mixer`` does not have. Only Anderson fits
         # coefficients, so only it is handed one; ``_mix`` evaluates it.
         mixer.metric = _rho_ddot_metric(calculation)
+        if mixer._residuals and len(mixer._fits) != len(mixer._residuals):
+            # A history restored from a flat-fit checkpoint has no fit vectors,
+            # and the first ``mix`` drops it (``AndersonMixer.mix``). Said here,
+            # beside "mixer history restored", which would otherwise be the
+            # last word on it.
+            warnings.warn(
+                f"the mixer history restored from {mixing_from} was written with "
+                f"the flat fit and cannot be fitted in rho_ddot's inner product, so "
+                f"it will be dropped at the first mix. The density is unaffected -- "
+                f"this costs the iterations the saved history would have saved, and "
+                f"nothing else",
+                RuntimeWarning, stacklevel=2,
+            )
 
     previous_energy, history = None, []
     # The occupations the *next* iteration's per-band thresholds are built from

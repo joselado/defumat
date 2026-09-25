@@ -1018,6 +1018,15 @@ def frozen_expectation(
     piece is there because an ultrasoft eigenproblem is generalised and the
     metric is perturbed too, so first-order perturbation theory carries it.
 
+    **One term of the first-order operator is not in it.** On an ultrasoft or
+    PAW dataset the coupled Hamiltonian at a frozen potential also differs from
+    the reduced one by ``newd_so``'s sandwich against its spin trace,
+    ``F B F - T(B)`` (``scf/driver.py:_newd_noncollinear`` at 1 against 0), and
+    that difference is not evaluated here. The number below is on the ultrasoft
+    ``Co.rel-pbe-nd-rrkjus``, so it is the expectation value of the other two
+    terms; the quenched-moment argument says the third vanishes at first order
+    as well, and that has not been measured (``AUDIT-2026-09-25.md``).
+
     **This is the calculation the force theorem is often assumed to be, and it
     returns essentially zero for every direction** -- +/-0.000001 meV on a
     one-atom cobalt cell, direction-independent to 1.9e-6 meV, where the force

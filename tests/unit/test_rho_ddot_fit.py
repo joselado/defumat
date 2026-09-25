@@ -4,7 +4,11 @@
 (``mix_rho.f90:403-425``). Here that inner product is written as a transform
 ``F`` whose Euclidean dots are ``rho_ddot``, so the identity that checks it is
 ``F(r) . F(r) == accuracy(r)``, against the functions the convergence test
-already uses and which share no code with the transform beyond the FFT.
+already uses. They share more than the FFT with the transform: ``total_charge``,
+``gvectors.kinetic``, ``E2``, ``FPI`` and the spin branching, so a convention
+error in any of those passes here on both sides. Nothing here pins
+``scf_accuracy`` itself against ``pw.x``: the first iteration's "estimated scf
+accuracy" in the committed references would, and no test reads it yet.
 """
 
 from pathlib import Path
@@ -191,3 +195,89 @@ def test_mix_hands_the_metric_vector_to_the_mixer():
     rho_out = jnp.ones((1, 2, 2, 2))
     driver._mix(mixer, rho, rho_out, (None,), (None,))
     np.testing.assert_array_equal(seen["fit"], np.full(8, 3.0))
+
+
+def test_a_flat_checkpoint_resumed_with_the_metric_warns_that_its_history_goes(
+    tmp_path, monkeypatch
+):
+    """The history is dropped, which is right; that it is dropped is said.
+
+    ``run_scf`` prints "mixer history restored" when it pours a checkpoint's
+    history into the mixer, and a flat-fit history then has no fit vectors, so
+    the first ``mix`` with the metric on resets it. Until 2026-09-25 nothing but
+    a code comment said so, while the load-failure branch beside it warns about
+    the same cost.
+    """
+    import warnings
+
+    from defumat import Calculator
+    from defumat.scf import driver
+
+    source = Path(__file__).resolve().parents[2] / "benchmarks" / "si-1k.in"
+    calculator = Calculator.from_file(
+        source, pseudo_dir=Path(__file__).resolve().parents[1] / "data" / "pseudo",
+        announce=False,
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        driver.run_scf(calculator.system, calculator.pseudos, mixing_mode="plain",
+                       checkpoint_dir=tmp_path, max_iterations=3,
+                       conv_thr=1.0e-14)
+
+    monkeypatch.setattr(driver, "RHO_DDOT_FIT", True)
+    with pytest.warns(RuntimeWarning, match="written with the flat fit"):
+        driver.run_scf(calculator.system, calculator.pseudos, mixing_mode="plain",
+                       checkpoint_dir=tmp_path, max_iterations=1,
+                       conv_thr=1.0e-14)
+
+
+def _calculation(name):
+    from defumat import Calculator
+
+    here = Path(__file__).resolve().parents[1] / "data"
+    return Calculator.from_file(here / "qe" / name, pseudo_dir=here / "pseudo",
+                                announce=False).calculation
+
+
+@pytest.mark.parametrize("name, part", [("ni-kind1-force.in", "ns"),
+                                        ("si2-tb09.in", "tau")])
+def test_the_assembled_metric_is_the_loops_accuracy(name, part):
+    """``_rho_ddot_metric`` concatenates the parts in the loop's order and with its data.
+
+    The vectors above are checked one at a time; this is the assembly the mixer
+    is handed: the dense set, the cell, ``u_metric`` read off the Hubbard
+    coefficients, and the charge, ``ns`` and ``tau`` blocks in one vector whose
+    self-dot is the ``accuracy`` the loop converges on.
+    """
+    from defumat.scf import driver
+
+    calculation = _calculation(name)
+    dense, cell = calculation.basis.dense, calculation.system.cell
+    rng = np.random.default_rng(42)
+    shape = np.shape(calculation.starting_density())
+    drho = rng.normal(size=shape) * 1e-3
+    dns = dtau = None
+    expected = float(driver._accuracy(jnp.asarray(drho), dense, cell))
+    if part == "ns":
+        dns = rng.normal(size=np.shape(calculation.starting_ns())) * 1e-2
+        expected += float(calculation.ns_accuracy(jnp.asarray(dns)))
+    else:
+        dtau = rng.normal(size=shape) * 1e-3
+        expected += float(driver._tau_accuracy(jnp.asarray(dtau), dense, cell))
+
+    vector = driver._rho_ddot_metric(calculation)(drho, dns, dtau)
+    assert float(vector @ vector) == pytest.approx(expected, rel=1e-12)
+
+
+def test_a_negative_u_is_refused_as_a_metric():
+    """``ns_ddot`` with a negative ``U`` is indefinite, so it is no inner product."""
+    import copy
+
+    from defumat.scf import driver
+
+    calculation = copy.copy(_calculation("ni-kind1-force.in"))
+    coefficients = dict(calculation.hubbard_coefficients)
+    coefficients["u_metric"] = -np.abs(np.asarray(coefficients["u_metric"])) - 1e-3
+    calculation.hubbard_coefficients = coefficients
+    with pytest.raises(ValueError, match="negative Hubbard U"):
+        driver._rho_ddot_metric(calculation)

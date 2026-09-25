@@ -569,7 +569,10 @@ def spin_traced_sandwich(fcoef, matrix):
 
     This is what ``soc_scale = 0`` does to **every** ``fcoef`` sandwich:
     :func:`spin_trace` of ``transform_qq_so`` is ``T(qq)`` and of ``dvan_so`` is
-    ``T`` of ``dion`` with the unzeroed coefficients, and ``newd_so``'s integrals
+    ``T`` of ``dion`` restricted to ``lm_i == lm_j``, both with the **zeroed**
+    coefficients (to 4.4e-16 on ``Co.rel-pbe-nd-rrkjus``; the unzeroed ones miss
+    by 4.8, since they sum ``dion`` over the radial pairs of a shell, and dropping
+    the ``lm`` rule misses by 1.6), and ``newd_so``'s integrals
     take ``T`` one Pauli component at a time, so the exchange field survives and
     only the coupling goes. For a scalar-relativistic species ``F`` is the
     identity on each spin block and ``T`` is the identity. On a matrix diagonal
@@ -616,7 +619,10 @@ def becsum_transform(fcoef, becsum_nc, nspin_mag: int, real: bool = True,
             ``newd_so`` (:func:`defumat.scf.driver._newd_noncollinear`). The
             ``fcoef`` sandwich above is neither, and it is not invariant under a
             global spin rotation either, since ``fcoef`` couples the spin to the
-            orbital index (`PLAN.md` P115).
+            orbital index (`PLAN.md` P115). Between the two the result is
+            ``reduced + soc_scale (full - reduced)``, the blend ``dvan_so``,
+            ``qq_so`` and ``newd_so`` take, so the density stays the adjoint of
+            the Hamiltonian at a scale the constructor still refuses.
 
     Returns ``(nspin_mag, nat, nh, nh)``, real unless ``real`` is false: the
     projector occupations in the representation the augmentation charge and the
@@ -630,19 +636,28 @@ def becsum_transform(fcoef, becsum_nc, nspin_mag: int, real: bool = True,
     import jax.numpy as jnp
 
     sigma = jnp.asarray(_PAULI[:1] if nspin_mag == 1 else _PAULI, dtype=fcoef.dtype)
-    if soc_scale == 1.0:
+    full = reduced = None
+    if soc_scale != 0.0:
         # F[kh, ih, is1, s] B[na, kh, is1, lh, is2] F[jh, lh, t, is2], summed over
         # kh, lh, is1, is2 and the (s, t) pair the Pauli matrix selects.
-        transformed = jnp.einsum(
+        full = jnp.einsum(
             "cst,kias,nkalb,jltb->cnij", sigma, fcoef, becsum_nc, fcoef, optimize=True
         )
-    else:
+    if soc_scale != 1.0:
         # The plain Pauli traces, which is the whole of ``add_becsum_nc``, and
         # then T^T: (1/2) sum_{a u} F[kh, ih, a, u] P[kh, lh] F[jh, lh, u, a].
         plain = jnp.einsum("cst,nisjt->cnij", sigma, becsum_nc, optimize=True)
-        transformed = 0.5 * jnp.einsum(
+        reduced = 0.5 * jnp.einsum(
             "kiau,cnkl,jlua->cnij", fcoef, plain, fcoef, optimize=True
         )
+    if full is None:
+        transformed = reduced
+    elif reduced is None:
+        transformed = full
+    else:
+        # The adjoint of newd_so's blend, reduced + s (dressed - reduced), and
+        # the same blend dvan_so and qq_so take.
+        transformed = reduced + soc_scale * (full - reduced)
     if real:
         transformed = jnp.real(transformed)
     # QE stores the packed upper triangle with the off-diagonal entries doubled;

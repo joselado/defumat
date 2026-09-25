@@ -5854,20 +5854,40 @@ stopped.
   rotations, so a blend of the two is a convex combination of two positive definite
   operators. The consistent blend of all four sandwiches is a variational functional at
   every scale, and it would give the `lambda^2` law P58 could not measure. The refusal
-  stays until a blend is measured.
+  stays until a blend is measured. **The code would now compute that blend** (review of
+  2026-09-25): `becsum_transform` took the `soc_scale = 0` map at every scale below 1
+  while the other three blended linearly, which put the charge 3 per cent and the
+  augmentation energy 24 per cent off their identities at 0.5; it blends too now, and
+  `test_soc_scale.py` holds both identities at 0, 0.5 and 1. The PAW small component is
+  scaled linearly as well (P117), which is the term's strength rather than a blend of two
+  energies.
 * **The ultracell's `soc_scale = 0` branch is transcribed and not run.**
   `spinor_ultracell_deeq` and `spinor_ultracell_becsum` take the same map as the unit
   cell, through the tested `spin_traced_sandwich` and `becsum_transform`, but no test or
   measurement puts an ultracell at `soc_scale = 0`. The check is a tiled null: an
   ultracell of the reduced cobalt cell with no field reproducing the unit cell's
-  -74.405364568 Ry per cell.
+  -74.405364568 Ry per cell. **That null sees only the `becsum` half** (review of
+  2026-09-25): with no difference potential `deeq = T(0) = 0` whatever the map. The
+  `deeq` half is now held by a unit identity instead,
+  `test_soc_scale.py::test_the_ultracells_deeq_at_zero_difference_is_the_unit_cells`,
+  which puts `spinor_ultracell_deeq` at `Q_d = 0` equal to `_newd_noncollinear` at 0,
+  0.5 and 1. A difference away from zero, where the written-out lower block is what
+  differs, is still covered by no test at `soc_scale = 0`.
 * **P116's `v2` at a negative density is measured in four energies and nothing else.**
   The gradient correction's potential is the derivative of the signed energy, so `v2`
   flips sign at a negative vacuum point where `pw.x`'s (`xc_wrapper_gga.f90:227-232`)
   does not. A total is second order in that and cannot show it; the stress is where it
   would show first, since `stress/analytic.py`'s `stres_gradcorr` transcription and the
-  `jax.grad` stress both read `v2`. The check is a `pw.x` stress on a nonmagnetic PBE slab
-  such as `bismuthene-soc-small`, which no test takes.
+  `jax.grad` stress both read `v2`, so their agreement cannot test it. The check is a
+  `pw.x` stress on a nonmagnetic PBE slab whose density goes negative, such as
+  `bismuthene-soc-small`, which no test takes. `test_dispersion.py` does take a `pw.x`
+  stress on a PBE slab, `graphene-bilayer-d2`, and it is not this check: norm-conserving
+  carbon with no core charge goes negative only through the Fourier truncation, and
+  whether it has any active negative point (`rho < -1e-6`, `sigma > 1e-10`) is a count on
+  its converged density that has not been taken. A pass there is a null until that count
+  is nonzero. The same cell's one-electron and Hartree terms against `pw.x` beside the LDA
+  twin's (`bismuthene-soc-small-lda.in`) would bound the first-order effect with no new
+  `pw.x` run.
 
 
 # Part XX -- from the seeded NiBr2 ultracell, reported 2026-09-25

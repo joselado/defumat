@@ -457,8 +457,10 @@ def _qrad_kernel(q, r, weights, functions, prefactor, l):
     `PERFORMANCE.md` P11) was a remat of the *unchunked* kernel, whose
     recomputation rebuilds the whole ``(ngm, kkbeta)`` array at once, so it
     moved the same array to another phase of the pass and says nothing about a
-    chunked body. What the reverse stress peak is with this body has not been
-    measured. The alternative that shrinks the tape without recomputing
+    chunked body. With this body the compiled temporary of the stress's
+    gradient on ``si2-us-1k.in`` falls from 2534 to 881 MB (`PLAN.md` P112);
+    the eight-atom cell the figures above are for has not been re-measured.
+    The alternative that shrinks the tape without recomputing
     anything is still the ``custom_jvp`` carrying ``dF/d|G|`` in closed form.
     """
     nq = q.shape[0]

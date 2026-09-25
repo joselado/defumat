@@ -21836,7 +21836,14 @@ takes 79. Energies agree with the flat fit's at each input's `conv_thr`. **It is
 default** (`driver.RHO_DDOT_FIT = False`, the user's choice of three): slower under
 Anderson, no fix for the cell it was written for, and kept for a port of `pw.x`'s
 modified Broyden, whose metric it is. With it off the SCF is the flat path exactly
-(`fe-mag-1k`, 11 iterations, -55.57426463493598 Ry on both).
+(`fe-mag-1k`, 11 iterations, -55.57426463493598 Ry on both). **It is `pw.x`'s inner
+product and not quite `pw.x`'s fit** (review of 2026-09-25): it runs over the whole dense
+set where `pw.x` fits only `G < ngms` and mixes the rest linearly (`mix_rho.f90:132`,
+`scf_mod.f90:549-552`), its `nspin = 2` `tau` weight is four times `tauk_ddot`'s by
+design, and it combines by Anderson rather than modified Broyden, so the nickel
+comparison above is between two different fits on a cell whose dual is 8. The share of
+the Gram matrix above `4 ecutwfc` on that cell is what would say whether the first
+difference matters there, and it has not been measured.
 
 **What the nickel cell turned out to be: four self-consistent states within 7.5e-3 Ry**,
 each stable to `conv_thr = 1e-12`, per atom's d traces up/down:
@@ -22013,11 +22020,18 @@ energy; `v2` is left unsigned too, which is not.
 density, and its docstring said that was `qe_drivers_gga.f90`'s rule, so every negative
 point was dropped. A plane-wave density goes slightly negative in a vacuum (the
 augmentation charge and the core correction are not positive definite, and a truncated
-Fourier series rings), so every earlier GGA case, all dense bulk crystals, was blind to
-it, and a slab was not. Now the gate is on `|rho|`, the energy carries the sign, and the
-potential is the derivative of that signed energy: `v1` equals `pw.x`'s, and `v2`
-flips sign at a negative point where `pw.x`'s does not. The cells below show that
-difference is below the LDA floor. The PAW one-centre branch takes `|rho|` before the
+Fourier series rings), so the earlier GGA cases with a `pw.x` reference were blind to
+it: the bulk crystals have no vacuum, and the PBE graphene slabs (`graphene-bilayer`,
+`-d2`, `graphene-monolayer`) are norm-conserving carbon with no core charge, whose
+density can go negative only through the Fourier truncation and is not known to have an
+active negative point (a count on the converged density would say; review of
+2026-09-25). A bismuth slab has both a core correction and an augmentation charge. Now
+the gate is on `|rho|`, the energy carries the sign, and the potential is the derivative
+of that signed energy: `v1` equals `pw.x`'s, and `v2` flips sign at a negative point
+where `pw.x`'s does not. The cells below are converged totals, which see that difference
+only at second order, so they bound it there and nowhere else: the eigenvalues, the
+forces and the stress see it at first order and none of them is measured against `pw.x`
+on these cells (`OPEN.md` Part XIX item 2). The PAW one-centre branch takes `|rho|` before the
 functional exactly as `paw_onecenter.f90:780` does, so it does not change. The
 spin-polarized path is `gcx_spin`/`gcc_spin`'s own and is untouched.
 
@@ -22122,3 +22136,47 @@ peak of 7.5 GB in the new unit test, which built two `nh = 34` species at once. 
 and 16 s on its own, above the gate's five-second line and not a reference number, so it is
 marked `slow` and builds the species one at a time; the other twelve tests of
 `test_soc_scale.py` stay in the gate.
+
+### P118 -- The review's quick fixes: the `becsum` blend, a warning on a dropped mixer history, three tests, and nine sentences. ✅ DONE; what is left of the review is measurements, in `AUDIT-2026-09-25.md`.
+
+Every entry of the review of 2026-09-25 that was an edit rather than a measurement. Each code
+fix has a test that was run against the old code first.
+
+* **`becsum_transform` blends between its two ends** (`pseudo/spinorbit.py`). It took the
+  `soc_scale = 0` map at every scale below 1 while `dvan_so`, `qq_so` and `newd_so` took
+  `reduced + s (coupled - reduced)`. The two identities that tie the density to the
+  Hamiltonian, the charge `sum qq becsum = <psi|S - 1|psi>` and `newd` as the derivative of
+  the augmentation energy, now run at 0, 0.5 and 1; on the old code they fail at 0.5 by
+  3 per cent (106.522 against 103.316) and 24 per cent (-284.83 against -229.88). The
+  scale is still refused as an input, so no run moves, and at 0 and 1 the code path is the
+  old one. It matters for `OPEN.md` Part XIX item 2, which plans to measure a blend.
+* **A flat-fit mixer history resumed with the metric on is dropped with a warning**
+  (`scf/driver.py`, beside the metric install). The drop was right and silent, under a
+  "mixer history restored" line; the test resumes a three-iteration `si-1k` checkpoint
+  with `RHO_DDOT_FIT` patched on and fails on the old driver with "DID NOT WARN".
+* **The assembled metric is tested** (`test_rho_ddot_fit.py`): `_rho_ddot_metric`'s
+  self-dot is the loop's accuracy to 1e-12 on `ni-kind1-force.in` (with `ns`) and on
+  `si2-tb09.in` (with `tau`), and the negative-U refusal fires. Its docstring had said the
+  file held this, and the file had tested each vector alone.
+* **The `dvan_so` identity is measured and pinned** (`test_soc_scale.py`). `T` of `dion`
+  restricted to `lm_i == lm_j`, with the **zeroed** `fcoef`, is the traced `dvan_so` to
+  4.4e-16 on `Co.rel-pbe-nd-rrkjus`; the unzeroed coefficients miss by 4.8 and dropping the
+  `lm` rule by 1.6, and the test asserts all three. The docstring had the unzeroed one.
+* **The ultracell's `soc_scale = 0` `deeq` is tested at zero difference**: equal to the
+  unit cell's `_newd_noncollinear` at 0, 0.5 and 1 to 1e-13 relative, where the scale-0
+  ultracell against the scale-1 unit cell differs by 1.55 on 2.41, so the check separates
+  them. The tiled null `OPEN.md` proposed cannot see this half.
+* **Sentences corrected**, none of them moving a number: `AndersonMixer.mix` called the
+  metric fit `pw.x`'s own and it is `pw.x`'s inner product with three stated differences
+  (the dense set, the `tau` weight, Anderson), and P113 says the same; the test module's
+  anchor shares `total_charge`, `kinetic`, `E2`, `FPI` and the spin branching with the
+  transform, not only the FFT; the spiral `dE/dq` cost comment and `_qrad_kernel`'s
+  docstring predate P112's chunking; P116 said its totals showed the `v2` difference below
+  the floor, which a converged total cannot show at first order, and called every earlier
+  GGA case a bulk crystal when the graphene slabs are PBE; `OPEN.md`'s owed stress bullet
+  now names `test_dispersion.py` and why it is not the check; the nickel promotion test no
+  longer calls its pin the lowest state known; and `frozen_expectation` says which term of
+  the first-order operator it leaves out.
+
+**Verified** on the workstation: the gate 3085 passed, 64 skipped, 0 failed in 16:18, at a
+peak of 5.8 GB in `test_textured_symmetry.py`, the gate's usual place.

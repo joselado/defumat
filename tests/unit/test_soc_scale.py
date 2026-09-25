@@ -173,26 +173,49 @@ def _becsum(coupling, spin_density, nspin_mag, scale):
     ))[:, 0]
 
 
-@pytest.mark.parametrize("scale", [0.0, 1.0])
+def _coupling(pseudo, scale):
+    """The coupling at ``scale``, and at a scale the constructor refuses, its ``fcoef``.
+
+    ``fcoef`` does not depend on the scale, so the coupled end serves for it.
+    """
+    return SpinOrbitCoupling(pseudo, scale if scale in (0.0, 1.0) else 1.0)
+
+
+def _qq_so(pseudo, qq, scale):
+    """``qq_so`` at ``scale``: ``scalar + scale (full - scalar)``, which is what
+    :meth:`SpinOrbitCoupling.qq_so` computes, written out for a scale the
+    constructor refuses so that the other three sandwiches can be held to it."""
+    if scale in (0.0, 1.0):
+        return SpinOrbitCoupling(pseudo, scale).qq_so(qq)
+    scalar = SpinOrbitCoupling(pseudo, 0.0).qq_so(qq)
+    full = SpinOrbitCoupling(pseudo, 1.0).qq_so(qq)
+    return scalar + scale * (full - scalar)
+
+
+# 0.5 is refused as an input (the overlap's blend is not a set of projectors'),
+# and it is kept here because OPEN.md Part XIX item 2 plans to lift that refusal:
+# the four sandwiches have to be one blend for the measurement to mean anything.
+@pytest.mark.parametrize("scale", [0.0, 0.5, 1.0])
 def test_the_augmentation_charge_is_the_overlap_the_eigenproblem_normalises_by(scale):
     """``sum_ij qq_ij becsum_ij = sum <psi|beta> qq_so <beta|psi>``, at both ends.
 
     The left side is the charge the density carries; the right is what the
     generalised eigenproblem sets to one per state. At ``soc_scale = 0`` the
     old ``becsum`` kept the full sandwich while ``qq_so`` was spin-traced, and
-    the cobalt cell's density integrated to 8.99999859 of 9.
+    the cobalt cell's density integrated to 8.99999859 of 9. Between the ends
+    ``becsum`` ignored the scale and took the reduced map.
     """
     pseudo = _pseudo(RELATIVISTIC)
-    coupling = SpinOrbitCoupling(pseudo, scale)
+    coupling = _coupling(pseudo, scale)
     qq = _symmetric(pseudo.nh, seed=11)
     spin_density = _spin_density(pseudo.nh, seed=12)
 
     carried = float(np.sum(qq * _becsum(coupling, spin_density, 1, scale)[0]))
-    overlap = np.einsum("klst,kslt->", coupling.qq_so(qq), spin_density)
+    overlap = np.einsum("klst,kslt->", _qq_so(pseudo, qq, scale), spin_density)
     assert carried == pytest.approx(float(np.real(overlap)), rel=1e-12)
 
 
-@pytest.mark.parametrize("scale", [0.0, 1.0])
+@pytest.mark.parametrize("scale", [0.0, 0.5, 1.0])
 def test_newd_is_the_derivative_of_the_augmentation_energy(scale):
     """``sum_c int V_c rho_aug,c`` differentiated by the occupations is ``newd_so``.
 
@@ -207,7 +230,7 @@ def test_newd_is_the_derivative_of_the_augmentation_energy(scale):
     from defumat.scf.driver import _newd_noncollinear, _spin_block_diagonal
 
     pseudo = _pseudo(RELATIVISTIC)
-    coupling = SpinOrbitCoupling(pseudo, scale)
+    coupling = _coupling(pseudo, scale)
     deeq = _symmetric(pseudo.nh, seed=21, count=4)
     spin_density = _spin_density(pseudo.nh, seed=22)
 
@@ -276,6 +299,63 @@ def test_the_spin_traced_sandwich_is_the_spin_trace_of_the_overlap():
         coupling.qq_so(qq)[:, :, 0, 0], atol=1e-13,
     )
 
+
+
+def test_the_spin_traced_sandwich_of_dion_is_the_traced_bare_d():
+    """The bare ``D`` is ``T`` of ``dion`` with the ``lm`` rule and the zeroed ``fcoef``.
+
+    ``dvan_so`` is built from the **unzeroed** coefficients and ``dion`` with no
+    ``lm`` rule (``init_us_1.f90``'s order), so which ``F`` and which ``dion``
+    the reduced form is ``T`` of is not obvious, and the helper's docstring had
+    it the wrong way round. The other two combinations are asserted to miss, so
+    that the check is shown to tell them apart.
+    """
+    import jax.numpy as jnp
+
+    from defumat.pseudo.spinorbit import _channel_table, _fcoef, spin_traced_sandwich
+    from defumat.scf.driver import _spin_block_diagonal
+
+    pseudo = _pseudo(RELATIVISTIC)
+    coupling = SpinOrbitCoupling(pseudo, 0.0)
+    indv, _, nhtolm, _ = _channel_table(pseudo)
+    dion = pseudo.dij[np.ix_(indv, indv)]
+    with_rule = np.where(nhtolm[:, None] == nhtolm[None, :], dion, 0.0)
+    traced = np.asarray(coupling.dvan_scalar)[:, :, 0, 0]
+
+    def sandwich(fcoef, matrix):
+        blocks = jnp.asarray(_spin_block_diagonal([fcoef]))
+        return np.asarray(spin_traced_sandwich(blocks, jnp.asarray(matrix, dtype=blocks.dtype)))
+
+    np.testing.assert_allclose(sandwich(coupling.fcoef, with_rule), traced, atol=1e-13)
+    assert np.abs(sandwich(_fcoef(pseudo), with_rule) - traced).max() > 1e-2
+    assert np.abs(sandwich(coupling.fcoef, dion) - traced).max() > 1e-2
+
+
+@pytest.mark.parametrize("scale", [0.0, 0.5, 1.0])
+def test_the_ultracells_deeq_at_zero_difference_is_the_unit_cells(scale):
+    """``spinor_ultracell_deeq`` at ``Q_d = 0`` is ``_newd_noncollinear``, at every scale.
+
+    The ultracell's ``soc_scale = 0`` branch takes the same map as the unit
+    cell's and no SCF runs it. The tiled null ``OPEN.md`` Part XIX item 2
+    proposes cannot see it either, since a tiled null has no difference
+    potential and ``deeq = T(0) = 0`` whatever the map; this is the identity
+    that can, at the one difference where the two must agree. With real
+    symmetric components the ultracell's written-out lower block and the unit
+    cell's conjugate transpose are the same matrix.
+    """
+    import jax.numpy as jnp
+
+    from defumat.scf.driver import _newd_noncollinear, _spin_block_diagonal
+    from defumat.ultracell.augmentation import spinor_ultracell_deeq
+
+    pseudo = _pseudo(RELATIVISTIC)
+    fcoef = jnp.asarray(_spin_block_diagonal([_coupling(pseudo, scale).fcoef]))
+    components = _symmetric(pseudo.nh, seed=51, count=4)
+    ultracell = np.asarray(spinor_ultracell_deeq(
+        jnp.asarray(components)[:, None], fcoef, scale))[0]
+    unit = np.asarray(_newd_noncollinear(
+        jnp.asarray(components), jnp.zeros_like(fcoef), fcoef, scale))
+    np.testing.assert_allclose(ultracell, unit, atol=1e-13 * np.abs(unit).max())
 
 PAW_RELATIVISTIC = "Ni.rel-pbe-spn-kjpaw_psl.1.0.0.UPF"
 

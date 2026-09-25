@@ -256,9 +256,15 @@ class AndersonMixer(Mixer):
         moot.** ``fit`` is this residual as :attr:`Mixer.metric` maps it, whose
         dot products are ``rho_ddot``'s: the Hartree energy of the charge, the
         flat magnetization and ``tau`` terms, ``U/2`` on ``ns`` and nothing on
-        ``becsum``. That is ``pw.x``'s own fit (``mix_rho.f90:403-425``) and not
-        an approximation to it, so the paragraphs below describe the flat path,
-        which is what runs when no metric is installed.
+        ``becsum``. That is ``pw.x``'s inner product (``mix_rho.f90:403-425``),
+        and the fit differs from ``pw.x``'s in three ways that are stated rather
+        than hidden: it runs over the whole dense set, where ``pw.x`` fits only
+        ``G < ngms`` and mixes the rest linearly (``mix_rho.f90:132``,
+        ``scf_mod.f90:549-552``); at ``nspin = 2`` the ``tau`` weight is four
+        times ``tauk_ddot``'s, deliberately (:func:`~defumat.scf.potential.tau_accuracy`);
+        and the combination is Anderson's rather than modified Broyden's. The
+        paragraphs below describe the flat path, which is what runs when no
+        metric is installed.
 
         **What ``exclude`` is for.** The driver passes the ``becsum`` block, and
         that is ``pw.x``'s rule rather than a choice: ``rho_ddot``
