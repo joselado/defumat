@@ -449,9 +449,14 @@ def _pack_ns(ns, dtype, real):
 FIT_BECSUM = False
 
 #: Fit the Anderson coefficients in ``rho_ddot``'s inner product, as ``pw.x``
-#: does (``PLAN.md`` P113). ``False`` restores the flat fit on the packed vector
-#: this code used before, and is kept so that the A/B can be re-run.
-RHO_DDOT_FIT = True
+#: does (``PLAN.md`` P113). **Off by default, on a measurement**: over P107's nine
+#: benchmark cells it takes 132 iterations against the flat fit's 128 and
+#: ``pw.x``'s 131, tracking ``pw.x`` cell by cell, and on the nickel DFT+U cell
+#: at ``conv_thr = 1e-12`` it stops at 100 unconverged where the flat fit takes
+#: 79; it was written to bring that cell to ``pw.x``'s solution and does not,
+#: because the cell has four minima and the path decides (``OPEN.md`` Part XIX).
+#: Kept for a port of ``pw.x``'s modified Broyden, whose metric this is.
+RHO_DDOT_FIT = False
 
 
 def _rho_ddot_metric(calculation):
@@ -511,16 +516,15 @@ def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None,
     (:class:`~defumat.scf.residual.Residual`), so the two routes now agree with
     each other as well as with ``pw.x``.
 
-    **The inner product is ``rho_ddot``'s**, since 2026-09-24 (``PLAN.md`` P113):
+    **The inner product is Euclidean by default and QE's is not.**
     ``mix_rho.f90:409-413`` builds Broyden's ``betamix`` from ``rho_ddot``, so
-    ``pw.x`` fits in the same weighted metric it converges in, and the mixer here
-    now does too, through :attr:`~defumat.scf.mixing.Mixer.metric`, which the
-    driver installs and this function evaluates on the structured residual. It
-    was a plain Gram matrix on the packed real-space vector before, with
-    ``becsum`` first in it (P107 took it out) and the charge's ``1/G^2`` never
-    in it; a DFT+U nickel cell then converged to a second self-consistent state
-    5.2e-3 Ry above ``pw.x``'s (``OPEN.md`` Part XIX). A mixer with no metric
-    installed still fits flat, with ``becsum`` excluded unless ``FIT_BECSUM``.
+    ``pw.x`` fits in the same weighted metric it converges in; the mixer here
+    fits a plain Gram matrix on the packed real-space vector, with ``becsum``
+    left out since P107. ``rho_ddot``'s own fit is written and installed when
+    :data:`RHO_DDOT_FIT` is set, and this function then evaluates
+    :attr:`~defumat.scf.mixing.Mixer.metric` on the structured residual and
+    hands it to the mixer. It is off because it measured slower than the flat
+    fit under Anderson (``PLAN.md`` P113), not because it is wrong.
 
     Two costs to state. The history doubles for a meta run, one dense-grid array
     per entry becoming two (``MEMORY-AUDIT.md`` D3, where the Anderson history

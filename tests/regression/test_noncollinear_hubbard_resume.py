@@ -73,37 +73,65 @@ PROMOTION = "tests/data/qe/ni-kind1-force.in"
 TEXTURE = "tests/data/qe/ni-ldau-noncol.in"
 
 
+#: ``pw.x``'s converged occupation eigenvalues on this cell, per atom and ascending,
+#: spin 1 then spin 2 (its own printout at ``conv_thr = 1e-12``): the seed the
+#: collinear source starts from, so that which minimum it reaches is chosen and not
+#: left to the path.
+SEED = {1: (0.912, 0.991, 0.992, 0.998, 0.998), 2: (0.599, 0.841, 0.896, 1.0, 1.0)}
+
+
+def _seeded(text):
+    """``text`` with ``starting_ns_eigenvalue`` set to :data:`SEED` for species 1."""
+    lines = "".join(f"    starting_ns_eigenvalue({m + 1}, {spin}, 1) = {value}\n"
+                    for spin, values in SEED.items() for m, value in enumerate(values))
+    seeded = text.replace("    nosym = .true.\n", "    nosym = .true.\n" + lines, 1)
+    assert seeded != text
+    return seeded
+
+
 def test_a_collinear_hubbard_state_promotes_into_a_spinor_run(pseudo_dir):
     """The staged route into a hard magnet, which the same refusal closed.
 
     Converge the collinear run, hand it to the noncollinear one as
     ``starting_from``, and the occupation matrix's two channels become the two
     diagonal spin blocks of the spinor one, with the moments free to cant from
-    there. Measured on nickel with ``U = 4``, ``J = 0.9``:
+    there. **The collinear source is seeded**, because this cell has at least
+    four self-consistent states within 7.5e-3 Ry and which one an unseeded run
+    reaches depends on the path, ``conv_thr`` and the mixer's fit included
+    (``OPEN.md`` Part XIX, 2026-09-24): -171.0025527 (traces 4.973 up, 4.179
+    down per atom), -171.0002509 (4.891, 4.343, where ``pw.x`` lands unseeded),
+    -170.9997723 (4.961, 4.201) and -170.9950212 (4.884, 4.390). Seeded at
+    ``pw.x``'s own converged eigenvalues the source reaches the lowest of them,
+    which is occupation-matrix control doing what Meredig et al. and Dorado et
+    al. say it does. Measured on nickel with ``U = 4``, ``J = 0.9``:
 
-        collinear         42 iterations   -171.0002508525 Ry
-        spinor, fresh     78 iterations   -171.0002443437 Ry
-        spinor, promoted   4 iterations   -171.0002508585 Ry
+        collinear, seeded   48 iterations   -171.0025527096 Ry
+        spinor, fresh       33 iterations   -171.0002508828 Ry
+        spinor, promoted     3 iterations   -171.0025527104 Ry
 
-    **Four iterations against seventy-eight** is the feature. The assertion on
-    the energy is against the *collinear* run and not the fresh spinor one,
-    because those two are not the same state: no cant develops here, so the
-    promoted run is P62b's collinear-as-spinor identity reached through the
-    continuation instead of from scratch, and it agrees to **6e-9 Ry**. The
-    fresh spinor run lands 6.5e-6 Ry **higher**, with off-diagonal spin traces
-    of -1e-5 -- a slightly canted neighbouring minimum that 78 iterations from
-    ``initial_ns_noncollinear`` found and the promotion stepped over. Holding
-    the two spinor runs to each other would be pinning which minimum a
-    from-scratch start happens to fall into.
+    **The promotion reproduces its source in three iterations** against the
+    fresh run's thirty-three, which is the feature. The fresh spinor run starts
+    from ``initial_ns_noncollinear``, unseeded, and falls into ``pw.x``'s state;
+    holding the two spinor runs to each other would pin which minimum a
+    from-scratch start happens to fall into, which is what this test did until
+    ``1705a0a`` moved it. What is asserted instead is the physics that survives
+    a change of path: the promoted state is the source's, and it is at least as
+    low as whatever the fresh start finds.
     """
     from pathlib import Path
 
     text = Path(PROMOTION).read_text()
-    collinear = Calculator.from_text(text, pseudo_dir, announce=False)
+    collinear = Calculator.from_text(_seeded(text), pseudo_dir, announce=False)
     source = run_scf(collinear.system, collinear.pseudos, conv_thr=1e-8,
                      max_iterations=80, verbose=False)
     assert source.converged, source.accuracy
     assert np.asarray(source.ns).shape[0] == 2
+    # The seed reaches the lowest state known on this cell. If a change of path
+    # moves a *seeded* run to another minimum, that is worth knowing by name.
+    assert source.total_energy == pytest.approx(-171.0025527, abs=1e-6), (
+        f"the seeded collinear source converged to {source.total_energy:.7f} Ry, "
+        "not the -171.0025527 Ry state the seed reached when measured"
+    )
 
     spinor = Calculator.from_text(
         text.replace("nspin = 2", "noncolin = .true."), pseudo_dir,
@@ -138,9 +166,13 @@ def test_a_collinear_hubbard_state_promotes_into_a_spinor_run(pseudo_dir):
         f"fresh run's {fresh.iterations}; a promotion that saves nothing is not "
         f"being used"
     )
-    # Both are the same physics; which local minimum a from-scratch spinor start
-    # falls into is not something to pin.
-    assert promoted.total_energy == pytest.approx(fresh.total_energy, abs=1e-4)
+    # Which local minimum a from-scratch spinor start falls into is not pinned;
+    # that the seeded state is not above it is the physics that survives.
+    assert promoted.total_energy <= fresh.total_energy + 1e-6, (
+        f"the promoted state {promoted.total_energy:.7f} Ry lies above the fresh "
+        f"spinor run's {fresh.total_energy:.7f} Ry, so the seed no longer reaches "
+        "the lowest known state"
+    )
 
 
 def _shell_moment(ns):

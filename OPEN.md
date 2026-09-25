@@ -5764,11 +5764,15 @@ solutions, `pw.x`'s -171.00025089 (4.891 and 4.343) the lowest, and the old code
 Anderson where `pw.x`'s is modified Broyden, so a matched metric does not make the paths
 the same.
 
-**What that leaves.** The DFT+U cell is a landscape with at least three minima, and which
-one a run reaches depends on the path, `conv_thr` included; the old fit reached `pw.x`'s on
-one route and not on another, so no mixer setting here is a fix, and the test that caught it
-needs its occupations seeded or a lowest-of-several comparison, which is what the literature
-recommends. The Hartree terms, the ultracell and
+**What that leaves.** The DFT+U cell is a landscape with at least **four** minima: seeded
+at `pw.x`'s own converged eigenvalues, the collinear source reaches -171.0025527 Ry,
+2.3e-3 below `pw.x`'s state (`PLAN.md` P113 has the table). No mixer setting is a fix, the
+flat fit stays the default with `rho_ddot`'s available, and the promotion test is now seeded
+and asserts that the promoted state is not above a fresh one (**closed 2026-09-25**).
+**Still open**: the four stop-point failures, the three LSDA Hartree terms, `si10-us`'s,
+the spinor ultracell and the platinum iteration count, each of which moved with the path at
+its input's `conv_thr` and passed at `98468d4`; the project's remedy is that a test on a
+derived quantity states its own `conv_thr` and says what it measured there. The Hartree terms, the ultracell and
 the platinum count are stop-point readings that moved with the path, and each passed at
 `98468d4`. The directional spread belongs to the `soc_scale = 0` reduction, whatever the
 mixer does. **Do not loosen the six tests**: the one that looked like a tolerance on a

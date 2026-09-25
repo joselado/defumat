@@ -21799,3 +21799,54 @@ time whose memory side is the whole residual set of the function linearised, and
 written from the one term the author thought of is out by two orders; the only
 measurement that answers it is counting the residuals the linearisation holds, which both
 A/B scripts did and both fixers' estimates did not.
+
+### P113 -- `rho_ddot`'s fit, written, measured and left off; the nickel DFT+U cell has four minima and its promotion test is seeded. ✅ DONE; four stop-point failures from `1705a0a` are still open in `OPEN.md` Part XIX.
+
+Picked on 2026-09-24 after the owed slow set (P112) put a DFT+U nickel cell 5.2e-3 Ry above
+`pw.x`'s solution, and after two reading agents found that every scheme stating its fit
+metric puts its blocks in one physical unit, `pw.x`'s being `rho_ddot`, where this code's
+flat Gram matrix over the packed real-space vector is nobody's.
+
+**What was written** (`1fba737`). `rho_ddot` is diagonal in G, so it is a transform
+`F` whose Euclidean dots are the form (`scf/potential.py`: `rho_ddot_vector`,
+`tau_ddot_vector`, `ns_ddot_vector`): `sqrt(0.5 Omega e2 4 pi/G^2)` on the charge without
+`G = 0`, `sqrt(0.5 Omega e2 4 pi/(2 pi)^2)` on the magnetization and `tau` with it,
+`sqrt(U/2)` on `ns` (times `sqrt 2` at one channel), nothing on `becsum`. The driver
+installs it on an Anderson mixer beside the preconditioner (`Mixer.metric`), `_mix`
+evaluates it on the structured residual, and the mixer fits on the stored vectors, which
+double the history's resident set. `F(r).F(r)` is the loop's own `accuracy` to 1e-12 at
+one, two and four channels and `F(a).F(b)` its polarisation
+(`tests/unit/test_rho_ddot_fit.py`, 18 tests).
+
+**What it measured**, each cell at its own input settings, against the flat fit and
+P107's `pw.x` column: 132 iterations over the nine ordinary cells against 128 and 131,
+tracking `pw.x` cell by cell (the Co(0001) film 24 against 30 and 24), and on
+`ni-kind1-force` at `conv_thr = 1e-12` **100 iterations unconverged** where the flat fit
+takes 79. Energies agree with the flat fit's at each input's `conv_thr`. **It is off by
+default** (`driver.RHO_DDOT_FIT = False`, the user's choice of three): slower under
+Anderson, no fix for the cell it was written for, and kept for a port of `pw.x`'s
+modified Broyden, whose metric it is. With it off the SCF is the flat path exactly
+(`fe-mag-1k`, 11 iterations, -55.57426463493598 Ry on both).
+
+**What the nickel cell turned out to be: four self-consistent states within 7.5e-3 Ry**,
+each stable to `conv_thr = 1e-12`, per atom's d traces up/down:
+
+| energy (Ry) | traces | reached by |
+|---|---|---|
+| **-171.0025527** | 4.973 / 4.179 | this code seeded at `pw.x`'s own converged eigenvalues |
+| -171.0002509 | 4.891 / 4.343 | `pw.x` unseeded (98 iterations); this code at `conv_thr = 1e-8` before `1705a0a`; a fresh spinor run |
+| -170.9997723 | 4.961 / 4.201 | this code at `conv_thr = 1e-12`, flat fit with or without `becsum` and `rho_ddot`'s |
+| -170.9950212 | 4.884 / 4.390 | this code at `conv_thr = 1e-8` since `1705a0a` |
+
+So `pw.x` does not reach the lowest state either, the minimum reached depends on the
+path (the `ethr` schedule through `conv_thr`, and the mixer), and `1705a0a` changed which
+basin one route falls into rather than breaking anything. That is the literature's
+account exactly (Meredig et al., PRB 82, 195128; Ponet, Di Lucente, Marzari 2024), and
+its remedy, occupation-matrix control, is what found the lowest state.
+
+**The promotion test is seeded** (`test_noncollinear_hubbard_resume.py`): the collinear
+source starts from `starting_ns_eigenvalue` at `pw.x`'s converged values and reaches
+-171.0025527 in 48 iterations, the promotion reproduces it in 3 against a fresh spinor
+run's 33, and the assertion that pinned the promoted run to the fresh one's basin at
+`abs = 1e-4`, which its own comment said should not be pinned, is now that the promoted
+state is not above the fresh one. 2 minutes at 2.5 GB for the test alone.
