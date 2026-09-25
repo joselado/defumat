@@ -25,7 +25,7 @@ Adding a functional is a new component in :mod:`defumat.xc.lda` or
   ``gradcorr`` multiplies ``grad rho`` by before taking the divergence.
 
 **The thresholds are part of the functional, not an implementation detail.**
-XClib evaluates nothing where ``rho <= 1e-6`` or ``|grad rho|^2 <= 1e-10`` in
+XClib evaluates nothing where ``|rho| <= 1e-6`` or ``|grad rho|^2 <= 1e-10`` in
 the GGA drivers -- both the energy *and* both potentials are set to zero there,
 and the cut is at a density six orders of magnitude larger than the LDA one.
 That is not a rounding-level choice: a plane-wave density has low-density
@@ -407,8 +407,8 @@ class Functional(eqx.Module):
         how XClib's GGA routines return it and how ``gradcorr`` integrates it;
         the local slots above are per electron, also following QE.
         """
-        active, safe_rho, safe_sigma = _sanitise(rho, sigma)
-        return jnp.where(active, self._gradient_energy(safe_rho, safe_sigma), 0.0)
+        active, safe_rho, safe_sigma, sign = _sanitise(rho, sigma)
+        return jnp.where(active, sign * self._gradient_energy(safe_rho, safe_sigma), 0.0)
 
     def gradient_potentials(self, rho: jnp.ndarray, sigma: jnp.ndarray):
         """``(v1, v2)``: QE's ``v1x + v1c`` and ``v2x + v2c``.
@@ -416,13 +416,20 @@ class Functional(eqx.Module):
         ``v1`` is what adds to the local potential; ``v2`` is what multiplies
         ``grad rho`` to form the vector field whose divergence is subtracted.
         """
-        active, safe_rho, safe_sigma = _sanitise(rho, sigma)
+        active, safe_rho, safe_sigma, sign = _sanitise(rho, sigma)
 
         def total(r, s):
-            return jnp.sum(jnp.where(active, self._gradient_energy(r, s), 0.0))
+            return jnp.sum(jnp.where(active, sign * self._gradient_energy(r, s), 0.0))
 
-        v1, dsigma = jax.grad(total, argnums=(0, 1))(safe_rho, safe_sigma)
-        return v1, 2.0 * dsigma
+        # The derivative with respect to the signed density: ``r`` is ``|rho|``,
+        # so ``d|rho|/drho = sign`` multiplies back and ``v1`` is ``e'(|rho|)``
+        # at every point, which is ``v1x`` as ``gcxc`` returns it. ``v2`` keeps
+        # the sign, and there this is the derivative of the energy where
+        # ``pw.x``'s ``v2x`` is not: ``xc_gcx`` signs ``sx`` and ``sc`` and
+        # leaves ``v2x``/``v2c`` unsigned (``xc_wrapper_gga.f90:227-232``).
+        # Measured on the one cell where it can matter, `PLAN.md` P116.
+        dr, dsigma = jax.grad(total, argnums=(0, 1))(safe_rho, safe_sigma)
+        return sign * dr, 2.0 * dsigma
 
     def _gradient_energy(self, rho, sigma):
         return self.gradient_exchange(rho, sigma) + self.gradient_correlation(rho, sigma)
@@ -749,18 +756,26 @@ def _spin_channels(rho):
 
 
 def _sanitise(rho, sigma):
-    """QE's gate, and inputs the masked branch can be differentiated at.
+    """QE's gate, inputs the masked branch can be differentiated at, and the sign.
 
-    The test is on the *signed* density and the functional then sees its
-    absolute value, both as in ``qe_drivers_gga.f90``.
+    The test is on ``|rho|``, and a point with a **negative** density above the
+    threshold is kept with its energy's sign flipped: ``xc_gcx`` hands ``gcxc``
+    ``rh = ABS(rho)`` (``xc_wrapper_gga.f90:219``), ``gcxc`` gates that on
+    ``rho_threshold_gga`` (``qe_drivers_gga.f90:110``), and the wrapper then
+    multiplies ``sx`` and ``sc`` by ``SIGN(1, rho)`` (``:229-231``). A slab's
+    vacuum is where a plane-wave density goes slightly negative, and gating on
+    the signed density instead dropped those points: 3e-5 Ry on bismuthene,
+    `PLAN.md` P116. Returns ``(active, |rho|, sigma, sign)``, the last two
+    masked.
     """
     rho = jnp.asarray(rho)
     sigma = jnp.asarray(sigma)
-    active = (rho > RHO_THRESHOLD_GGA) & (sigma > SIGMA_THRESHOLD_GGA)
+    active = (jnp.abs(rho) > RHO_THRESHOLD_GGA) & (sigma > SIGMA_THRESHOLD_GGA)
     return (
         active,
         jnp.where(active, jnp.abs(rho), _RHO_TRASH),
         jnp.where(active, sigma, _SIGMA_TRASH),
+        jnp.where(rho < 0, -1.0, 1.0).astype(rho.dtype),
     )
 
 

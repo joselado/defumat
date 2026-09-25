@@ -1557,8 +1557,9 @@ degeneracy holds to 4e-8 eV. That pair costs 11 minutes of SCF and 10 of bands p
 run at a peak of **9.4 GB** — which it manages at all only because of the k-loop
 (P10): batched over all 19 k-points it was killed at 12.7 GB and still climbing.
 
-**Its total energy agrees to 3.5e-5 Ry, not the 1e-8 the platinum cases reach, and the
-cause is measured rather than argued.** The control is `bismuthene-soc-small-lda`: the same
+**Its total energy agreed to 3.5e-5 Ry, not the 1e-8 the platinum cases reach, and the
+cause is measured rather than argued.** (P116 found it in the gate: `|rho|` rather than
+the signed density. Both totals now agree to under 1e-8.) The control is `bismuthene-soc-small-lda`: the same
 cell, the same fully-relativistic dataset, the same grids, the same k-points and the same
 spinor path, with `input_dft = 'PZ'` switching the gradient correction off — and it agrees
 to **7.1e-9 Ry**, four orders better. What is left is therefore the gradient correction
@@ -21991,3 +21992,45 @@ negative, and this code used to clamp such a point and keep it. The film carried
 of it; `fe-noncolin-pbe-stress`, the bulk cell P110 checked, carried none, which is why
 the fix was recorded as moving no number.
 
+
+### P116 -- The gradient correction was gated on the signed density; `pw.x` gates `|rho|` and keeps a negative point with its sign flipped. ✅ DONE; `OPEN.md` Part XII item 1 is closed.
+
+**What `pw.x` does.** For an unpolarized density (`nspin = 1`, and `nspin = 4` without a
+magnetization) `gradcorr` calls `xc_gcx`, which hands `gcxc` the absolute value
+`rh = ABS(rho)` (`XClib/xc_wrapper_gga.f90:219`). `gcxc` drops a point where that is at
+most `rho_threshold_gga = 1e-6` or `|grad rho|^2` is at most 1e-10 (`qe_drivers_gga.f90:110`),
+and the wrapper then multiplies `sx` and `sc` by `SIGN(1, rho)` (`:229-231`). So a point
+whose density is **negative** and above the threshold in magnitude is kept, and its
+energy is minus the energy at `|rho|`. `v1` is unsigned, which is the derivative of that
+energy; `v2` is left unsigned too, which is not.
+
+**What this code did.** `xc/functional.py:_sanitise` tested `rho > 1e-6` on the signed
+density, and its docstring said that was `qe_drivers_gga.f90`'s rule, so every negative
+point was dropped. A plane-wave density goes slightly negative in a vacuum (the
+augmentation charge and the core correction are not positive definite, and a truncated
+Fourier series rings), so every earlier GGA case, all dense bulk crystals, was blind to
+it, and a slab was not. Now the gate is on `|rho|`, the energy carries the sign, and the
+potential is the derivative of that signed energy: `v1` equals `pw.x`'s, and `v2`
+flips sign at a negative point where `pw.x`'s does not. The cells below show that
+difference is below the LDA floor. The PAW one-centre branch takes `|rho|` before the
+functional exactly as `paw_onecenter.f90:780` does, so it does not change. The
+spin-polarized path is `gcx_spin`/`gcc_spin`'s own and is untouched.
+
+**The number.** Each cell at its own input settings, before (`f3984b7`, a worktree on its
+own `PYTHONPATH`) and after, against `pw.x`:
+
+| cell | before | after | iterations |
+|---|---|---|---|
+| `bismuthene-nosoc-small` (PBE, `nspin = 1`) | -3.356e-5 Ry | **-3.0e-9** | 9, 9 |
+| `bismuthene-soc-small` (PBE, spinor, no moment) | -3.512e-5 Ry | **-7.3e-9** | 8, 8 |
+| `bismuthene-epsilon-us-soc` (against -295.59282302) | -3.54e-5 Ry | **-1e-9** | 11, 11 |
+| `bismuthene-soc-small-lda` (the control, no gradient correction) | -7.1e-9 Ry | -7.1e-9 | 8, 8 |
+
+So the whole offset was the gate, and what is left is the LDA control's 7e-9 floor. The
+old record read the control correctly, as putting the offset in "the gradient correction
+over the vacuum, where XClib's thresholds decide whether a point contributes", and then
+stopped short of reading the gate against the source. The tests that carried it
+(`test_spinorbit.py`'s `VACUUM_GGA_TOTAL_RY = 1e-4`) now assert `TOTAL_ENERGY_RY = 1e-6`, and
+the spin-orbit energy difference is asserted at 1e-7 where it was 1e-5.
+`tests/unit/test_xc.py` pins the rule point by point against transcribed `pbex`/`pbec`:
+at a negative density the energy is minus the positive one and `v1` is the same.

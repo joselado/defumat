@@ -9,7 +9,9 @@
 !
 ! So the offset belongs to the gradient correction evaluated over the two
 ! thirds of this cell that are vacuum -- where XClib's thresholds decide whether
-! a point contributes at all (PLAN.md, P13 trap 2) -- and not to P14. Using the
+! a point contributes at all (PLAN.md, P13 trap 2) -- and not to P14. PLAN.md
+! P116 found it: the gate was on the signed density, where XClib gates |rho|
+! and keeps a negative point with its sign flipped. Using the
 ! PBE dataset under LDA is not a physical calculation and is not meant to be;
 ! both codes are asked for the same unphysical thing.
  &control

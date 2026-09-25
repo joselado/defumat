@@ -327,27 +327,18 @@ def test_a_relativistic_dataset_without_lspinorb_is_refused(qe_testsuite, pseudo
 # 12x12x1 -- are committed beside them with their own references, and are what
 # notebook 08 and PLAN.md quote; they are far too slow for a test.
 #
-# **On the total-energy tolerance.** These two agree with QE to ~3e-5 Ry rather
-# than the ~1e-8 every other case here reaches, and the cause is measured rather
-# than assumed: the *same* cell run under LDA (``bismuthene-soc-small-lda``,
-# same dataset, same grids, same k-points, same spinor path, ``input_dft =
-# 'PZ'``) agrees to 7e-9 Ry -- see the test at the end of this file. What is
-# left is the
-# gradient correction evaluated over the two thirds of this cell that are
-# vacuum, where XClib's thresholds decide whether a point contributes at all.
-# It is a property of P13 and of the geometry, not of spin-orbit coupling: the
-# collinear ``nosoc`` run shows the identical offset with the identical sign
-# pattern across the terms, and the *difference* between the two runs -- which is
-# the physical claim -- agrees with QE to 1.6e-6 Ry. Every PBE case validated
-# before this one was a dense bulk crystal, which is why no earlier test could
-# reach it.
+# **On the total-energy tolerance.** These two agreed with QE to ~3e-5 Ry rather
+# than the ~1e-8 every other case here reaches, until `PLAN.md` P116 found the
+# cause: the gradient correction was gated on the *signed* density, where
+# XClib gates ``|rho|`` and flips the sign of a negative point's energy, and the
+# two thirds of this cell that are vacuum are where a plane-wave density goes
+# slightly negative. They now agree to 3.0e-9 (``nosoc``) and 7.3e-9 (``soc``),
+# the floor the LDA control below has always shown, so the total is held to
+# the same ``TOTAL_ENERGY_RY`` as every other case.
 
 #: ``(tag, occupied bands)``. A spinor band holds one electron, a spin-degenerate
 #: one holds two, and bismuthene has 30 valence electrons in the cell.
 BISMUTHENE = [("soc", 30), ("nosoc", 15)]
-
-#: See the note above. Not a claim about this code's accuracy in general.
-VACUUM_GGA_TOTAL_RY = 1e-4
 
 #: How many of the topmost bands neither code converges, per case. Measured
 #: rather than guessed -- the per-band disagreement with QE over the whole path
@@ -404,7 +395,7 @@ def test_bismuthene_total_energy(tag, occupied, pseudo_dir):
 
     assert scf.converged
     assert (system.nspin == 4) == (tag == "soc")
-    assert scf.total_energy == pytest.approx(reference.total_energy, abs=VACUUM_GGA_TOTAL_RY)
+    assert scf.total_energy == pytest.approx(reference.total_energy, abs=TOTAL_ENERGY_RY)
     # Geometry alone, so this one has no excuse.
     assert scf.energy_terms["ewald"] == pytest.approx(
         reference.energy_terms["ewald"], abs=ENERGY_TERM_RY
@@ -412,11 +403,11 @@ def test_bismuthene_total_energy(tag, occupied, pseudo_dir):
 
 
 def test_the_energy_spin_orbit_costs_matches_reference(pseudo_dir):
-    """The *difference* the coupling makes, where the vacuum offset cancels.
+    """The *difference* the coupling makes, which is the physical claim.
 
-    Both runs carry the same systematic error from the gradient correction in
-    the vacuum (see the note above), and it is the same to five figures, so the
-    difference between them is a far sharper comparison than either total.
+    It was the sharper comparison while both totals carried the vacuum offset
+    (see the note above), which cancelled to 1.6e-6 Ry between them. With the
+    offset gone each total is at 1e-8, and so is the difference.
     """
     _skip_without_references()
     mine, theirs = [], []
@@ -424,7 +415,7 @@ def test_the_energy_spin_orbit_costs_matches_reference(pseudo_dir):
         _, scf, _, _ = _bismuthene(tag, pseudo_dir)
         mine.append(scf.total_energy)
         theirs.append(read_qe_output(GENERATED / f"reference.out.bismuthene-{tag}-small").total_energy)
-    assert (mine[0] - mine[1]) == pytest.approx(theirs[0] - theirs[1], abs=1e-5)
+    assert (mine[0] - mine[1]) == pytest.approx(theirs[0] - theirs[1], abs=1e-7)
 
 
 @pytest.mark.parametrize(("tag", "occupied"), BISMUTHENE)
@@ -502,14 +493,15 @@ def test_kramers_degeneracy_on_the_bismuthene_path(pseudo_dir):
 
 
 def test_the_same_cell_under_lda_has_no_such_offset(pseudo_dir):
-    """The control that localises bismuthene's 3e-5 Ry to the functional.
+    """The control that localised bismuthene's old 3e-5 Ry to the functional.
 
     Everything is held fixed except the gradient correction: the same
     fully-relativistic dataset, the same 20 Ry / dual 8 grids, the same 6x6x1
     k-grid, the same noncollinear spinor path with ``lspinorb``. Only
-    ``input_dft = 'PZ'`` differs, and the agreement with QE improves by four
-    orders of magnitude. That is what makes the offset a property of P13's
-    thresholds over this cell's vacuum rather than of P14.
+    ``input_dft = 'PZ'`` differs, and it agreed with QE four orders better than
+    the PBE pair did, which put the offset in P13's gate over this cell's vacuum
+    rather than in P14. P116 then found the gate's defect; the PBE pair now
+    sits at this control's 7e-9.
 
     Running a PBE dataset under LDA is not a physical calculation, and both
     codes are asked for the same unphysical thing -- which is the point: the
@@ -525,9 +517,6 @@ def test_the_same_cell_under_lda_has_no_such_offset(pseudo_dir):
     reference = read_qe_output(reference_path)
     assert scf.converged
     assert scf.total_energy == pytest.approx(reference.total_energy, abs=TOTAL_ENERGY_RY)
-    # ...and it is four orders better than the PBE pair above, not merely inside
-    # a loose tolerance.
-    assert abs(scf.total_energy - reference.total_energy) < 0.01 * VACUUM_GGA_TOTAL_RY
 
 
 # --------------------------------------------------------------------------

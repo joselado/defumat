@@ -224,13 +224,14 @@ def test_the_pbe_family_differs_only_in_its_constants(name):
 
 
 def test_the_gradient_correction_is_gated_exactly_where_quantum_espresso_gates_it():
-    """``rho <= 1e-6`` or ``sigma <= 1e-10`` contributes nothing at all.
+    """``|rho| <= 1e-6`` or ``sigma <= 1e-10`` contributes nothing at all.
 
     The LDA threshold is 1e-10, four orders of magnitude smaller; using it here
     would evaluate the gradient terms in the tail of the density where QE does
-    not, and no amount of convergence would recover the difference.
+    not, and no amount of convergence would recover the difference. The gate is
+    on ``|rho|``, so a negative density above it is **kept** (the test below).
     """
-    rho = jnp.array([1e-7, 1e-5, 1e-5, 0.0, -1e-3])
+    rho = jnp.array([1e-7, 1e-5, 1e-5, 0.0, -1e-7])
     sigma = jnp.array([1e-6, 1e-11, 1e-6, 1e-6, 1e-6])
     active = np.array([False, False, True, False, False])
 
@@ -240,6 +241,35 @@ def test_the_gradient_correction_is_gated_exactly_where_quantum_espresso_gates_i
         assert np.all(np.isfinite(array))
         assert np.all(array[~active] == 0.0)
     assert energy[active] != 0.0 and v1[active] != 0.0 and v2[active] != 0.0
+
+
+@pytest.mark.parametrize(("rho", "sigma"), GRADIENT_POINTS)
+def test_a_negative_density_contributes_with_its_sign_flipped(rho, sigma):
+    """``pw.x``'s rule for a negative density above the gate, point by point.
+
+    ``xc_gcx`` evaluates ``gcxc`` at ``|rho|`` and multiplies ``sx`` and ``sc``
+    by ``SIGN(1, rho)`` (``XClib/xc_wrapper_gga.f90:219-231``), so the energy at
+    ``-rho`` is minus the energy at ``rho`` and ``v1`` is the same, which is the
+    derivative of that. ``v2`` is where the two codes part: ``pw.x`` leaves it
+    unsigned, and here it is the derivative of the signed energy, so it flips.
+    A slab's vacuum is where a density is slightly negative; gating on the signed
+    density dropped these points and was worth 3e-5 Ry on bismuthene (P116).
+    """
+    energy = E2 * (_qe_pbex(rho, sigma)[0] + _qe_pbec(rho, sigma)[0])
+    v1 = E2 * (_qe_pbex(rho, sigma)[1] + _qe_pbec(rho, sigma)[1])
+    v2 = E2 * (_qe_pbex(rho, sigma)[2] + _qe_pbec(rho, sigma)[2])
+
+    got = float(PBE.gradient_energy(jnp.array([-rho]), jnp.array([sigma]))[0])
+    got_v1, got_v2 = PBE.gradient_potentials(jnp.array([-rho]), jnp.array([sigma]))
+    assert got == pytest.approx(-energy, rel=1e-12)
+    assert float(got_v1[0]) == pytest.approx(v1, rel=1e-10)
+    assert float(got_v2[0]) == pytest.approx(-v2, rel=1e-10)
+
+    # And v1 is the derivative with respect to the signed density.
+    derivative = jax.grad(
+        lambda r: PBE.gradient_energy(r[None], jnp.array([sigma]))[0]
+    )(jnp.asarray(-rho))
+    assert float(derivative) == pytest.approx(v1, rel=1e-10)
 
 
 def test_the_gradient_correction_vanishes_for_a_uniform_density():

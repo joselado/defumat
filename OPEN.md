@@ -3865,7 +3865,7 @@ which is the reading this failure already rules out.
 
 # Part XII -- from the augmented spinor response, 2026-09-17 (P98)
 
-## 1. Bismuthene's ground-state energy sits 3.5e-5 Ry from `pw.x` where AlAs sits at 2e-9 **[opened 2026-09-17]**
+## 1. Bismuthene's ground-state energy sits 3.5e-5 Ry from `pw.x` where AlAs sits at 2e-9 **[opened 2026-09-17; closed 2026-09-25, `PLAN.md` P116: 1e-9]**
 
 `bismuthene-epsilon-us-soc.in`, the cell P98 added so that a heavier element could resolve
 the `fcoef` dressing of the augmentation terms: two bismuth atoms in a honeycomb with
@@ -3893,6 +3893,14 @@ different places, and a second heavy relativistic ultrasoft cell without vacuum.
 **It does not touch P98's claims.** The dielectric comparisons of that phase are on AlAs,
 where the ground states agree to the printed digit; bismuthene enters it only as the cell
 whose A/B says how much the spin dressing of the augmentation terms is worth.
+
+**Closed 2026-09-25 (`PLAN.md` P116): it was the vacuum, and specifically the gate.** The
+gradient correction was gated on the signed density, where XClib gates `|rho|` and keeps a
+negative point with its energy's sign flipped. This cell now converges to -295.592823019
+Ry against `pw.x`'s -295.59282302, in the same 11 iterations. The test-sized pair is at
+3.0e-9 and 7.3e-9, the floor of its LDA control. The control and the collinear offset were
+already on record in `tests/regression/test_spinorbit.py` and `PLAN.md` P14, which is
+where this entry should have started.
 
 # Part XIII -- from the 2026-09-18 audit fixes
 
