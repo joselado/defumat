@@ -7,9 +7,9 @@ call, the number that decides it, and what it costs. They are ordered by what a 
 answer would cost, and the first four need nothing but the workstation.
 
 **All of it was run on 2026-09-25, on the workstation, one run at a time** (`PLAN.md`
-P119, which has every number). What is left is two things that are not runs: the term
-`frozen_expectation` leaves out, which is not zero and is `OPEN.md` Part XIX item 3, and
-the mechanism of the half-cutoff nickel floor. Each section below keeps its plan and says
+P119, which has every number). What is left is one thing that is not a run, the
+mechanism of the half-cutoff nickel floor; the term `frozen_expectation` left out, which
+is not zero, was added in P120. Each section below keeps its plan and says
 in one line what the run gave.
 
 ## The nickel PAW floor at `soc_scale = 0`
@@ -78,6 +78,7 @@ The full epsilon did not finish in 70 minutes here, which is why step 2 exists.
 
 **Result**: not zero. +1.26e-2 meV in every direction on the cubic smoke cell, and a
 first-order anisotropy of 1.79e-3 meV on tetragonal cobalt; `OPEN.md` Part XIX item 3.
+Added in P120.
 
 
 `frozen_expectation` evaluates `delta dvan_so - eps delta qq_so` and leaves out `newd_so`'s

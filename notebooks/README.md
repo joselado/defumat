@@ -295,6 +295,11 @@ taken through `tools/export_notebooks.sh`, which does not pin the thread pool, w
 was taken on one core. The table entry stays at 30 s because that is the single-core number
 the caption promises.
 
+`36` re-executed in **114 s** on 2026-09-25 against the 244 s in the table, after its
+first-order cell was corrected and a prose cell added. That pair is not a delta for the same
+reason: the 114 s went through `tools/export_notebooks.sh`, unpinned, and the table entry
+stays until it is re-measured on one core.
+
 `43` reads 173 s on 2026-09-15 with its starting-guess section in it, against the 240 s
 recorded before that section existed. **The pair is not a delta.** The new section is two
 SCF runs on the four-atom chain and cannot be worth a negative 67 s; what the two numbers

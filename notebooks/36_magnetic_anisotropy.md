@@ -35,10 +35,7 @@ mae = scalar.get_anisotropy(spinor, directions="xz")
 print(f"easy axis {mae.easy_axis}, anisotropy {mae.anisotropy_mev:.4f} meV")
 ```
 
-    An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
-
-
-    easy axis (0.0, 0.0, 1.0), anisotropy 1.2352 meV
+    easy axis (0.0, 0.0, 1.0), anisotropy 1.2353 meV
 
 
 The easy axis comes out along `c`, and the crystal pays about a
@@ -47,11 +44,14 @@ milli-electronvolt to lie in the basal plane instead.
 ## Why it has to be a diagonalisation
 
 The tempting shortcut is to freeze the wavefunctions as well and simply take the
-expectation value of the spin-orbit term once. That returns **zero**, for a
-reason worth knowing: spin-orbit coupling first appears as the orbital moment
-dotted into the spin direction, and in a magnet without spin-orbit coupling the
-orbital moment is quenched by the crystal field. There is nothing for the spin
-direction to talk to.
+expectation value of the spin-orbit term once. That gives almost none of the
+anisotropy, for a reason worth knowing: spin-orbit coupling first appears as the
+orbital moment dotted into the spin direction, and in a magnet without spin-orbit
+coupling the orbital moment is quenched by the crystal field, so that part is
+zero. What is left is small, and it is the exchange field seen through the
+pseudopotential's separate channels for `j = l + 1/2` and `j = l - 1/2`, which
+couples the spin to the shape of the orbitals rather than to their orbital
+moment. A quenched orbital moment does not remove that.
 
 The anisotropy is second order in the coupling. What produces it is the
 repulsion between levels that the coupling causes, and only a diagonalisation
@@ -64,12 +64,21 @@ from defumat.units import RY_TO_EV
 first = [scalar.get_first_order_soc(spinor, direction=d) * RY_TO_EV * 1000
          for d in [(1, 0, 0), (0, 0, 1)]]
 print(f"first order, in-plane and along c: {first[0]:+.6f}, {first[1]:+.6f} meV")
-print(f"force theorem on the same density: {mae.anisotropy_mev:.6f} meV")
+print(f"first-order anisotropy:            {first[0] - first[1]:.6f} meV")
+print(f"force theorem, free energy:        {mae.free_anisotropy_mev:.6f} meV")
 ```
 
-    first order, in-plane and along c: -0.000001, +0.000002 meV
-    force theorem on the same density: 1.235151 meV
+    first order, in-plane and along c: +0.011408, +0.009623 meV
+    first-order anisotropy:            0.001785 meV
+    force theorem, free energy:        0.552291 meV
 
+
+The first-order term moves both directions up by about a hundredth of a
+milli-electronvolt, and the part that differs between them is a few
+thousandths, the same easy axis and about 0.3 per cent of the anisotropy the
+diagonalisation gives. It is set against the free energy rather than the band
+energy because a first-order shift at fixed occupations is a shift of the free
+energy; the section on the torque below comes back to the difference.
 
 ## The control: switch the coupling off
 
@@ -94,7 +103,7 @@ for coupling in (1.0, 0.0):
     coupling 1: spread 1.235e+00 meV
 
 
-    coupling 0: spread 1.933e-08 meV
+    coupling 0: spread 1.571e-10 meV
 
 
 
@@ -112,7 +121,7 @@ fig.tight_layout()
 
 
     
-![png](36_magnetic_anisotropy_files/36_magnetic_anisotropy_6_0.png)
+![png](36_magnetic_anisotropy_files/36_magnetic_anisotropy_7_0.png)
     
 
 
@@ -145,8 +154,8 @@ print(f"K from the band-energy difference {mae.anisotropy_mev:+.4f} meV")
 ```
 
     K from the torque at 45 deg      +0.5523 meV
-    K from the free-energy difference +0.5522 meV
-    K from the band-energy difference +1.2352 meV
+    K from the free-energy difference +0.5523 meV
+    K from the band-energy difference +1.2353 meV
 
 
 ## Against Quantum ESPRESSO
@@ -194,8 +203,8 @@ print(f"easy axis {relaxed.easy_axis}, moments ended "
 
 ```
 
-    frozen density, band energy   1.2352 meV
-    frozen density, free energy   0.5522 meV
+    frozen density, band energy   1.2353 meV
+    frozen density, free energy   0.5523 meV
     relaxed density               0.4473 meV
     easy axis (0.0, 0.0, 1.0), moments ended 0.000 degrees from where they started
 

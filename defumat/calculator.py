@@ -1913,8 +1913,8 @@ class Calculator:
     def get_first_order_soc(self, spinor, direction=None, **options):
         """The spin-orbit term's expectation value at coupling-free states.
 
-        The calculation :meth:`get_anisotropy` is often assumed to be, and it
-        returns essentially zero -- see
+        The calculation :meth:`get_anisotropy` is often assumed to be, and its
+        anisotropy is a fraction of a per cent of the diagonalisation's -- see
         :func:`defumat.workflows.anisotropy.frozen_expectation`.
         """
         from defumat.workflows.anisotropy import frozen_expectation

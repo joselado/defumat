@@ -17,8 +17,9 @@ accident:
 2. **A cubic crystal has no anisotropy between its cubic axes.** Nothing in
    the code imposes that; it comes out of the k-sum.
 
-3. **The first-order term is zero**, which is the reason this phase is a
-   diagonalisation and not an expectation value.
+3. **The first-order term is small**, a fraction of a per cent of the
+   anisotropy, which is the reason this phase is a diagonalisation and not an
+   expectation value.
 
 4. **QE's own committed force-theorem example**, ``PP/examples/
    ForceTheorem_example`` -- a 3-layer Co(0001) slab, PRB 90, 205409 (2014),
@@ -394,35 +395,126 @@ def test_an_intermediate_soc_scale_is_refused():
         soc.system.with_soc_scale(0.5)
 
 
+def test_the_first_order_operator_is_the_coupled_hamiltonian_minus_the_reduced_one():
+    """What ``frozen_expectation`` evaluates is ``H(1) - H(0)``, entry by entry.
+
+    The operator used to be written as a list of the terms ``soc_scale``
+    touches, and the list was one short: ``newd_so``'s sandwich of ``int V Q``
+    against its spin trace was missing, worth 1.26e-2 meV on the cubic cell and
+    1.79e-3 meV of anisotropy on tetragonal cobalt (``PLAN.md`` P119, P120).
+    So the check is not a value but an identity against the two Hamiltonians
+    themselves: at any magnetized potential, the operator's nonlocal part must
+    equal a coupled ``Calculation``'s ``coefficients`` minus the reduced one's,
+    and its overlap part the difference of their ``qq_so``. A term either
+    Hamiltonian gains later and the operator does not fails it.
+
+    The potential is the atomic superposition's, which is magnetized along
+    ``z`` by ``starting_magnetization``, so the exchange components the missing
+    term lives in are nonzero, and the last assertion is that the guard would
+    fire: without the ``newd_so`` term the difference is far outside the
+    tolerance.
+    """
+    import jax.numpy as jnp
+
+    from defumat.scf.driver import Calculation
+    from defumat.scf.potential import as_potential_components
+    from defumat.workflows.anisotropy import _first_order_operator
+
+    soc = Calculator.from_text(_SMOKE_SOC, pseudo_dir=GENERATED.parent / "pseudo",
+                               announce=False)
+    reduced = Calculation(soc.system.with_soc_scale(0.0), soc.pseudos)
+    coupled = Calculation(soc.system, soc.pseudos)
+    assert reduced.nspin_mag == 4
+
+    total = reduced.potential(reduced.starting_density()).v_scf + (
+        as_potential_components(reduced.vltot, reduced.nspin_mag)
+    )
+    assert float(jnp.abs(total[1:]).max()) > 1.0e-3, "the potential must be magnetized"
+
+    delta_d, delta_qq = _first_order_operator(reduced, total)
+    expected_d = np.asarray(coupled.coefficients(total) - reduced.coefficients(total))
+    expected_qq = np.asarray(coupled.qq_so - reduced.qq_so)
+    scale = np.abs(expected_d).max()
+    np.testing.assert_allclose(np.asarray(delta_d), expected_d, rtol=0, atol=1.0e-13 * scale)
+    np.testing.assert_allclose(np.asarray(delta_qq), expected_qq, rtol=0,
+                               atol=1.0e-13 * np.abs(expected_qq).max())
+
+    # The guard fires: the bare coefficients' difference alone, which is what
+    # the operator was before P120, misses by more than the whole operator's
+    # largest entry -- 1.42 against 0.149 on this potential, the bare and the
+    # augmentation differences each being ten times their sum.
+    bare_only = np.asarray(coupled.dvan_so - reduced.dvan_so)
+    assert np.abs(bare_only - expected_d).max() > scale
+
+
 @pytest.mark.slow
-def test_the_first_order_term_is_zero_and_the_diagonalisation_is_not():
-    """Why this is a diagonalisation and not an expectation value.
+def test_the_first_order_term_is_isotropic_on_a_cubic_cell():
+    """Freezing the states and taking the coupling's expectation value once.
 
-    Freezing the wavefunctions as well as the density and taking the
-    spin-orbit term's expectation value once -- the calculation the force
-    theorem is often assumed to be -- gives **no anisotropy at all**, because
-    the coupling enters at first order as ``xi <L> . n`` and the orbital
-    moment of a scalar-relativistic collinear state is quenched (P48 measured
-    it at 1.7e-16). The anisotropy is second order, and what supplies it is
-    the repulsion between levels that a diagonalisation performs.
+    That is the calculation the force theorem is often assumed to be, and on a
+    cubic cell its value must not depend on the direction, since every axis is
+    related to every other by a symmetry. It does not vanish: +1.2605e-2 meV in
+    each direction at ``conv_thr = 1e-10``, all of it from the exchange
+    components of ``newd_so``'s sandwich, which a quenched orbital moment does
+    not remove (``frozen_expectation``'s docstring has the argument).
 
-    Both numbers come from the same cell and the same density, so the ratio
-    between them is the statement: 1.9e-6 meV of first-order spread against
-    0.597 meV from the force theorem, a factor of 3e5.
+    **The isotropy bound is the one that must be tight.** Taking the sandwich
+    on ``v_scf`` without ``vltot`` gives a spread of 1.2e-5 meV where the right
+    potential gives 1.1e-7, so a bound of 1e-6 separates the two and a looser
+    one would pass either.
     """
     scalar, scf = _smoke_pair()
     soc = Calculator.from_text(_SMOKE_SOC, pseudo_dir=GENERATED.parent / "pseudo")
     first = [
         frozen_expectation(soc.system, soc.pseudos, scf.density, direction=d)
+        * RY_TO_EV * 1000
         for d in [(1, 0, 0), (0, 1, 0), (0, 0, 1)]
     ]
-    spread = (max(first) - min(first)) * RY_TO_EV * 1000
-    assert spread == pytest.approx(0.0, abs=1.0e-4), (
+    spread = max(first) - min(first)
+    assert spread < 1.0e-6, (
         f"the first-order term acquired a direction dependence of {spread:.3e} meV"
     )
-    # ... and it is the *term itself* that vanishes, not only its anisotropy,
-    # which is the quenched orbital moment showing through.
-    assert max(abs(e) for e in first) * RY_TO_EV * 1000 < 1.0e-3
+    assert first[0] == pytest.approx(1.2605e-2, abs=5.0e-6)
+
+
+@pytest.mark.slow
+def test_the_first_order_anisotropy_is_a_fraction_of_a_per_cent_of_the_diagonalisation():
+    """Why this is a diagonalisation and not an expectation value.
+
+    On tetragonal cobalt the first-order term does carry an anisotropy, and it
+    is 1.79e-3 meV (+1.1408e-2 along ``x``, +0.9623e-2 along ``z``) against
+    0.552 meV of free-energy anisotropy from the force theorem on the same
+    density: the anisotropy is second order in the coupling to 0.3 per cent,
+    and what supplies it is the repulsion between levels a diagonalisation
+    performs. The first-order term is compared with the **free** energy
+    because it is ``dF/d(soc_scale)`` at frozen occupations; the band energy's
+    anisotropy on this cell is 1.235 meV.
+
+    Both at ``conv_thr = 1e-10`` on the scalar-relativistic leg, which is
+    tighter than the committed input's 1e-9 and is where the numbers above
+    were measured.
+    """
+    directory = GENERATED.parent / "pseudo"
+    scalar = Calculator.from_file(GENERATED / "co-tetragonal-anisotropy-sr.in",
+                                  pseudo_dir=directory, announce=False,
+                                  conv_thr=1.0e-10)
+    _, spinor = _tetragonal()
+    scf = scalar.get_scf()
+    along_x, along_z = (
+        frozen_expectation(spinor.system, spinor.pseudos, scf.density, direction=d)
+        * RY_TO_EV * 1000
+        for d in [(1, 0, 0), (0, 0, 1)]
+    )
+    first_order = along_x - along_z
+    assert first_order == pytest.approx(1.785e-3, abs=2.0e-5)
+
+    energies = run_anisotropy(spinor.system, spinor.pseudos, scf.density,
+                              directions="xz")
+    free = energies.free_energies * RY_TO_EV * 1000
+    second_order = free[0] - free[1]
+    assert second_order == pytest.approx(0.5523, abs=1.0e-3)
+    # the same sign, and three hundred times smaller
+    assert 0.0 < first_order < 1.0e-2 * second_order
 
 
 @pytest.mark.slow

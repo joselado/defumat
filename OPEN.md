@@ -67,7 +67,8 @@ self-consistent state; the directional spread turns out to belong to the `soc_sc
 reduction, whose total sat 51 Ry from both of its neighbours. **All six are closed by
 2026-09-25** (`PLAN.md` P113 to P115): four stop points given their own `conv_thr`, the
 nickel test seeded, and the reduction made variational, which takes the spread to 1.9e-10
-meV. What the last fix left is item 2.
+meV. What the last fix left is item 2. Item 3, a term `frozen_expectation` left out, was
+opened by P119 and is closed by P120.
 
 **Part XX** is from the NiBr2 session, reported **2026-09-25** and not reproduced here: a
 seeded ultracell leans toward its reference cell's moment whichever way that moment points,
@@ -5897,7 +5898,7 @@ stopped.
   `pw.x` run.
 
 
-## 3. `frozen_expectation`'s first-order term is missing a piece that is not zero **[opened 2026-09-25, `PLAN.md` P119]**
+## 3. `frozen_expectation`'s first-order term is missing a piece that is not zero **[opened 2026-09-25, `PLAN.md` P119; closed 2026-09-25, `PLAN.md` P120]**
 
 `workflows/anisotropy.py:frozen_expectation` evaluates `delta dvan_so - eps delta qq_so` at
 the frozen coupling-free states and leaves out `newd_so`'s sandwich against its spin trace,
@@ -5912,6 +5913,15 @@ whole one. **What to do**: add the term, which is `_newd_noncollinear` at 1 and 
 `calculation.coefficients`' own potential and one more `_spinor_projector_energies`
 call, then correct the three sentences and the test's bound to the measured numbers. What
 the term is physically, and why the quenched moment does not remove it, is open.
+
+**Closed 2026-09-25 (`PLAN.md` P120).** The term is in, and a gate test holds the operator
+equal to the coupled `Calculation`'s coefficients minus the reduced one's, to 1.1e-16,
+where the old operator misses by 1.42. `frozen_expectation` now reads +1.2605e-2 meV along
+every cubic axis, spread 1.1e-7, and 1.785e-3 meV of anisotropy on tetragonal cobalt
+against the force theorem's 0.552. Splitting the sandwich's input puts all of it in the
+exchange components; the charge half is 1e-6 meV like the other two terms. That fits the
+time-reversal argument in P120: the quenched moment annuls a spin part whose orbital
+factor is time-odd, and the exchange term's orbital factor is time-even.
 
 # Part XX -- from the seeded NiBr2 ultracell, reported 2026-09-25
 

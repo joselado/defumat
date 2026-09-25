@@ -4406,14 +4406,24 @@ the band energy is a functional of $\rho$ alone, so
 \end{equation*}
 exactly, and the whole calculation is one diagonalisation per direction.
 
-\textbf{The cheaper thing gives zero.} Freezing the wavefunctions as well and
-taking $\langle\psi|H_{\text{SOC}}|\psi\rangle$ once returns no anisotropy at
-all: the coupling enters at first order as $\xi\,\langle \mathbf L\rangle\cdot
-\mathbf n$, and the orbital moment of a scalar-relativistic collinear state is
-quenched. The anisotropy is second order in the coupling, and what supplies it
-is the repulsion between levels that a diagonalisation performs and an
-expectation value does not. \code{frozen\_expectation} computes that vanishing
-term anyway.
+\textbf{The cheaper thing gives almost none of it.} Freezing the wavefunctions
+as well and taking $\langle\psi|H_{\text{SOC}}|\psi\rangle$ once, at the
+coupling-free states, gives the first-order term, and the coupling enters there
+as $\xi\,\langle \mathbf L\rangle\cdot\mathbf n$, which vanishes because the
+orbital moment of a scalar-relativistic collinear state is quenched. What
+survives is the exchange field's augmentation charge seen through the
+$j$-resolved projectors, the spin times a time-even orbital tensor, which a
+quenched state does not remove: on tetragonal cobalt it is $1.79\times10^{-3}$~meV
+of anisotropy with the easy axis along $c$, against $0.552$~meV of free-energy
+anisotropy from the diagonalisation on the same density, and on a cubic cell it
+is the same $1.26\times10^{-2}$~meV along every axis. So the anisotropy is
+second order in the coupling to about $0.3$ per cent, and what supplies it is
+the repulsion between levels that a diagonalisation performs and an expectation
+value does not. \code{get\_first\_order\_soc(spinor, direction=)} computes the
+first-order term, $\sum w\,\langle\psi|\delta D - \varepsilon\,\delta
+S|\psi\rangle$ with $\delta D$ and $\delta S$ the coupled nonlocal coefficients
+and overlap minus the reduced ones at the same potential, which is the
+derivative of the free energy with respect to \code{soc\_scale} at $0$.
 
 \textbf{Two pseudopotential files, one density.} The first leg runs with a
 scalar-relativistic dataset and the one-shot leg with the fully-relativistic
@@ -4460,7 +4470,8 @@ rotation. Left on at $0$ it gave tetragonal nickel
 ($\texttt{Ni.rel-pbe-spn-kjpaw\_psl}$, $40$~Ry, a $2\times2\times2$ mesh)
 $8.3\times10^{-3}$~meV between $x$ and $z$; switched off with the rest, the two
 agree to $7\times10^{-6}$~meV at \code{conv\_thr = 1e-12}, a residue that
-does not fall further with \code{conv\_thr} and whose source is still open.
+does not fall further with \code{conv\_thr} and belongs to the truncated cutoff:
+at the dataset's own $75/480$~Ry the two agree to $3.9\times10^{-9}$~meV.
 
 \textbf{A PAW dataset needs one file rather than two, and \code{becsum} beside
 the density.} A PAW Hamiltonian's one-centre coefficients $D^{1}_{ij}$ are a

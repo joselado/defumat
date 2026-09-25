@@ -3465,6 +3465,23 @@ class Calculation:
         """
         if not self.is_ultrasoft:
             return self.dvan_so
+        components, cross = self._noncollinear_components(potential, ddd_paw)
+        return _newd_noncollinear(
+            components, self.dvan_so, self.fcoef_matrix, self.system.soc_scale,
+            cross,
+        )
+
+    def _noncollinear_components(self, potential, ddd_paw=None):
+        """Steps 1 and 2 of :meth:`_noncollinear_coefficients`, before the spin transform.
+
+        ``(components, cross)``: the ``(nspin_mag, nkb, nkb)`` scalar integrals
+        ``int V_c Q_ij``, ``ddd_paw`` already added, and a spiral's ready-made
+        ``up, down`` block (``None`` otherwise). Kept apart so that a caller
+        who needs the sandwich at another ``soc_scale`` than the run's --
+        :func:`~defumat.workflows.anisotropy.frozen_expectation`, which takes
+        the coupled operator minus the reduced one at the same potential --
+        reaches the integrals through the same door the SCF does.
+        """
         dense = self.basis.dense
         spiral_cross = self.cross_augmentation is not None and potential.shape[0] == 4
         # ``D^{up,down}`` of a spiral is the one block whose two projectors sit
@@ -3496,10 +3513,7 @@ class Calculation:
             # constant phase and the radial energy depends on ``|m|``, so they
             # carry no wavevector at all.
             cross = cross + (components[1] - 1j * components[2])
-        return _newd_noncollinear(
-            components, self.dvan_so, self.fcoef_matrix, self.system.soc_scale,
-            cross,
-        )
+        return components, cross
 
     def augmented(self, rho_r: jnp.ndarray, becsum_) -> jnp.ndarray:
         """``addusdens``: the augmentation charge added to a real-space density.

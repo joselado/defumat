@@ -10801,6 +10801,11 @@ supplies it is the *repulsion between levels* a diagonalisation performs.
 as a number: on a one-atom cobalt cell it is **+/-0.000001 meV**, direction-
 independent to **1.9e-6 meV**, where the force theorem on the same density and
 the same cell gives **0.597 meV** -- a factor of 3e5 between the two orders.
+**(Superseded by P120:** those figures are of a partial operator, `newd_so`'s sandwich
+against its spin trace having been left out. With it the term is +1.26e-2 meV along every
+axis of the cubic smoke cell, and on tetragonal cobalt it carries 1.79e-3 meV of
+first-order anisotropy against 0.552 meV of free-energy anisotropy from the force theorem,
+so 0.3 per cent rather than zero. The 0.597 meV has no cell in the record and is dropped.)
 
 **`pw.x` has this and it is undocumented in the places one looks first.**
 `lforcet` is in `INPUT_PW.txt` (line 1536) and in no test-suite case, but
@@ -22181,7 +22186,7 @@ fix has a test that was run against the old code first.
 **Verified** on the workstation: the gate 3085 passed, 64 skipped, 0 failed in 16:18, at a
 peak of 5.8 GB in `test_textured_symmetry.py`, the gate's usual place.
 
-### P119 -- The measurements the review left, run: two claims fall, four checks close, and the frozen first-order term is not zero. ✅ DONE for the runs; the `frozen_expectation` term is a code change and is `OPEN.md`'s.
+### P119 -- The measurements the review left, run: two claims fall, four checks close, and the frozen first-order term is not zero. ✅ DONE for the runs; the `frozen_expectation` term is a code change, made in P120.
 
 Every item of `MEASUREMENTS-NEXT.md`, run on the workstation one at a time at the current
 tree (`e1371f7`), `pw.x` serial from the vendored build. Each result is stated against the
@@ -22282,7 +22287,9 @@ anisotropy of 1.8e-3 meV against the force theorem's 0.552. The quenched-orbital
 argument covers the bare `dvan_so` and the overlap and not this term, which is the
 exchange field's augmentation dressed by `fcoef`; its physics is open. The recorded
 "+/-0.000001 meV" and "a factor of 3e5 between the two orders" (above, and
-`workflows/anisotropy.py`'s two docstrings) are of the partial operator.
+`workflows/anisotropy.py`'s two docstrings) are of the partial operator. P120 adds the
+term, corrects the three sentences, and splits it, which puts all of it in the exchange
+components.
 
 **The metric fit's high-G share** on `ni-kind1-force.in`: above `|G|^2 = 100` Ry the
 accuracy carries 2.2e-4, 3.6e-4 and 2.2e-3 of itself at iterations 2, 5 and 10, and one
@@ -22295,3 +22302,92 @@ and unpinned. One core against many moves the eigenvalues by 5.3e-15 and the str
 1.8e-17 identically in both trees, which is XLA's threading. The tabulated route forced
 (`DEFUMAT_AUG_MAX_BYTES=0`, `o2-paw-texture.in`, `TabulatedAugmentation`, 8 iterations to
 -80.506231699686 Ry) is bit-identical too, energy, eigenvalues and `becsum`.
+
+### P120 -- `frozen_expectation` takes the whole first-order operator: its anisotropy is 0.3 per cent of the force theorem's, not zero. ✅ DONE.
+
+`workflows/anisotropy.py` (`frozen_expectation` and the new `_first_order_operator`),
+`Calculation._noncollinear_components` (steps 1 and 2 of `_noncollinear_coefficients`,
+extracted with no change of arithmetic), `tests/regression/test_anisotropy.py`,
+`docs/features.tex`, notebook 36. Closes `OPEN.md` Part XIX item 3.
+
+The first-order term is `sum w <psi|dD - eps dS|psi>` at the coupling-free states, with
+`dD` and `dS` the coupled nonlocal coefficients and overlap minus the reduced ones at the
+same potential. `soc_scale` blends all three sandwiches linearly, so this is
+`dF/d(soc_scale)` at 0 at frozen occupations, `F` the free energy. P58 wrote `dD` as
+`dvan_so`'s traceless half alone and left out `newd_so`'s sandwich of `int V_c Q_ij`
+against its spin trace, which P119 measured. It is now in, taken on the total local
+potential `v_scf + vltot` through the `_noncollinear_components` the SCF itself calls, with
+`fcoef` from the coupled set so that the identity below can tell the two sets apart. The
+added arrays are one `(4, nkb, nkb)` stack and two `(2, 2, nkb, nkb)` matrices, and the
+added work one potential build and one contraction beside a diagonalisation.
+
+**The operator is held against the two Hamiltonians rather than against a list of terms.**
+`test_the_first_order_operator_is_the_coupled_hamiltonian_minus_the_reduced_one` builds a
+coupled and a reduced `Calculation` on the cubic smoke cell and compares them at the atomic
+superposition's potential, which is magnetized (largest `|V_m|` 0.33 Ry): `dD` equals the
+coupled `coefficients(total)` minus the reduced one to 1.1e-16 on a largest entry of
+0.149, `dS` equals the difference of their `qq_so` to 0.0, and the operator as it was
+before, the bare difference alone, misses by 1.42. The bare and the augmentation
+differences are each about ten times their sum. 7 s, in the gate; a term that either
+Hamiltonian gains and the operator does not fails it.
+
+**Measured** at `conv_thr = 1e-10` on the scalar-relativistic leg and on the
+fixed-density solve, with the new term split by zeroing the input components of its
+sandwich:
+
+| cell | direction | `frozen_expectation` (meV) | charge half of `newd_so` | exchange half |
+|---|---|---|---|---|
+| cubic smoke cell | x | +1.260465e-2 | -2.97e-6 | +1.260450e-2 |
+| | y | +1.260461e-2 | +1.08e-6 | +1.260462e-2 |
+| | z | +1.260454e-2 | +4.35e-6 | +1.260456e-2 |
+| tetragonal Co (`co-tetragonal-anisotropy-*.in`) | x | +1.140817e-2 | -9.1e-7 | +1.140809e-2 |
+| | z | +0.962316e-2 | -1.16e-6 | +0.962301e-2 |
+
+The cubic spread is 1.1e-7 meV (P119 read 8.9e-8 on the same states, the difference being
+the eigensolver's threshold). On tetragonal cobalt the first-order anisotropy is **1.785e-3
+meV**, `z` lower, against **0.552291 meV** of free-energy anisotropy (1.235263 in the band
+energy) from `run_anisotropy` on the same density: the same easy axis, and 0.32 per cent.
+The reduced side rebuilt with the coupled set's `fcoef` equals `Calculation.coefficients`
+at the same potential to 0.0 in every direction.
+
+**The split says which part the quenched moment covers.** The bare `dvan_so` and the
+overlap together (P119's column: +3.2e-6, -1.1e-6, -4.5e-6 meV on the cubic cell) and the
+charge half are each at 1e-6 meV and nearly cancel, and each is anisotropic by about 8e-6
+meV on the cubic cell where their sum is not: only the whole `D` is symmetric, not its
+bare and screened parts separately. The exchange half carries all of the rest. The
+argument that fits both cells, and it is an argument rather than a third measurement: an
+operator that is time-even as a whole has a spin part `sigma . O` with `O` time-odd in the
+orbitals, like `L`, and the real orbitals of a collinear state without the coupling annul
+it, which covers `dvan_so`, `qq_so` and the charge half. The exchange term is time-odd as a
+whole, so its `O` is time-even, of rank 0 and 2, and survives. With the field and the spin
+both along `n` it is a quadratic form `n . K . n`, whose trace is the cubic cell's
+isotropic 1.26e-2 meV and whose traceless part is the tetragonal cell's uniaxial 1.8e-3. By
+`spin_trace`'s completeness argument the sandwich would equal its trace if the two `j`
+shells shared a radial function, so the term is the dataset's `j` splitting as the
+exchange field sees it.
+
+**Tests.** The cubic test bounds the spread at 1e-6 meV, the bound that separates the right
+potential (1.1e-7) from `v_scf` without `vltot` (1.2e-5, P119); the old bound of 1e-4
+passed both, and the old assertion that the term itself is below 1e-3 meV is replaced by
+its value, 1.2605e-2 +/- 5e-6. A new slow test holds the tetragonal first-order anisotropy
+at 1.785e-3 +/- 2e-5 meV, the free-energy anisotropy at 0.5523 +/- 1e-3, and the ratio
+below one per cent with the same sign. The two slow tests and the `nosym` guard test run in
+57 s.
+
+**The documents.** The module and function docstrings, `Calculator.get_first_order_soc`,
+`docs/features.tex` ("The cheaper thing gives almost none of it"), and notebook 36, whose
+first-order cell now prints `+0.011408, +0.009623` meV and sets the difference against the
+free energy; it re-executes in 114 s. The re-execution moved two numbers the notebook had
+not been rerun for since P115: the coupling-off spread from 1.933e-8 to 1.571e-10 meV, and
+the band-energy anisotropy from 1.2352 to 1.2353 meV. The guide's sentence calling the PAW
+nickel floor open now carries P119's 3.9e-9 meV at 75/480 Ry.
+
+**Not done.** PAW stays refused in `frozen_expectation`: its one-centre coefficients carry
+`soc_scale` through the small component (P117), and the function takes no `becsum`. The
+0.597 meV the old docstrings quoted as the force theorem "on the same density" of "a
+one-atom cobalt cell" has no cell attached anywhere in the record, and on the cubic smoke
+cell the anisotropy between axes is zero by symmetry, so it is dropped rather than
+corrected.
+
+**Verified** on the workstation, on this phase's code: the gate 3086 passed, 64 skipped, 0 failed in
+15:12, one more than P118's 3085, which is the structural test.

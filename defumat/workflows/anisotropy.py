@@ -23,17 +23,21 @@ Jansen, PRB 38, 8022 (1988); Daalderop, Kelly and Schuurmans, PRB 41, 11919
 
 **What is *not* enough, and it is the reason this is a diagonalisation.** The
 obvious cheaper thing -- freeze the wavefunctions too and take the one-shot
-expectation value ``<psi|H_SOC|psi>`` -- gives **zero anisotropy**, not a small
-one. Spin-orbit coupling enters at first order as ``xi <L> . n``, and the
-orbital moment of a scalar-relativistic collinear state is quenched: this
-package measures it at 1.7e-16 (:mod:`defumat.projwfc.angular_momentum`). The
+expectation value ``<psi|H_SOC|psi>`` -- gives almost none of the anisotropy.
+Spin-orbit coupling enters at first order as ``xi <L> . n``, and the orbital
+moment of a scalar-relativistic collinear state is quenched: this package
+measures it at 1.7e-16 (:mod:`defumat.projwfc.angular_momentum`). The
 anisotropy is second order in the coupling, and what supplies it is the
 *repulsion between levels* that the diagonalisation performs and an expectation
-value does not. :func:`frozen_expectation` computes that vanishing first-order
-term anyway, because a number measured to be zero is worth more than an
-argument about why it should be: **+/-0.000001 meV** on a one-atom cobalt cell,
-direction-independent to **1.9e-6 meV**, where the force theorem on the same
-density gives **0.597 meV**.
+value does not. :func:`frozen_expectation` computes the first-order term
+anyway, because a number measured is worth more than an argument about why it
+should be small, and the number is **not** the argument's zero: on tetragonal
+cobalt it carries **1.79e-3 meV** of anisotropy, with the diagonalisation's
+sign, where the force theorem on the same density gives **0.552 meV** of
+free-energy anisotropy -- a factor of 300 between the two orders. The part that
+couples to ``<L>`` does vanish, to 1e-6 meV; what survives is the exchange
+field's augmentation seen through the ``j``-resolved projectors, which a
+quenched state does not remove (the function's docstring has the split).
 
 **How QE spreads it over three runs, and what each contributes.**
 
@@ -1013,40 +1017,59 @@ def frozen_expectation(
 
         E1(n) = sum_occ w [ <psi| dV_NL |psi> - eps <psi| dS |psi> ],
 
-    with ``dV_NL`` and ``dS`` the spin-*traceless* halves of ``dvan_so`` and
-    ``qq_so`` (:func:`~defumat.pseudo.spinorbit.spin_trace`). The ``eps dS``
-    piece is there because an ultrasoft eigenproblem is generalised and the
-    metric is perturbed too, so first-order perturbation theory carries it.
-
-    **One term of the first-order operator is not in it.** On an ultrasoft or
-    PAW dataset the coupled Hamiltonian at a frozen potential also differs from
-    the reduced one by ``newd_so``'s sandwich against its spin trace,
-    ``F B F - T(B)`` (``scf/driver.py:_newd_noncollinear`` at 1 against 0), and
-    that difference is not evaluated here. The number below is on the ultrasoft
-    ``Co.rel-pbe-nd-rrkjus``, so it is the expectation value of the other two
-    terms; the quenched-moment argument says the third vanishes at first order
-    as well, and that has not been measured (``AUDIT-2026-09-25.md``).
+    with ``dV_NL`` and ``dS`` the coupled Hamiltonian's nonlocal coefficients
+    and overlap minus the reduced ones, at the same frozen potential. On an
+    ultrasoft dataset ``dV_NL`` has two pieces: the spin-*traceless* half of
+    ``dvan_so`` (:func:`~defumat.pseudo.spinorbit.spin_trace`), and
+    ``newd_so``'s sandwich of the augmentation integrals against its spin
+    trace, ``F B F - T(B)`` (``scf/driver.py:_newd_noncollinear`` at 1 against
+    0), taken on the **total** local potential the states were computed in.
+    ``dS`` is the traceless half of ``qq_so``, and the ``eps dS`` piece is there
+    because an ultrasoft eigenproblem is generalised and the metric is perturbed
+    too. ``soc_scale`` blends all three linearly, so ``E1`` is exactly the
+    derivative of the free energy with respect to ``soc_scale`` at zero, by
+    Hellmann-Feynman at frozen occupations. A norm-conserving dataset has the
+    first piece alone.
 
     **This is the calculation the force theorem is often assumed to be, and it
-    returns essentially zero for every direction** -- +/-0.000001 meV on a
-    one-atom cobalt cell, direction-independent to 1.9e-6 meV, where the force
-    theorem on the same density gives 0.597 meV.** Spin-orbit coupling enters
-    at first order as ``xi <L> . n``, and the orbital moment of a
-    scalar-relativistic collinear state is quenched -- 1.7e-16 as this package
-    measures it (:mod:`defumat.projwfc.angular_momentum`). A magnetic
-    anisotropy is second order in the coupling, and what supplies it is the
-    *repulsion between levels* that a diagonalisation performs and an
-    expectation value does not. Hence :func:`run_force_theorem`.
+    is small rather than zero.** Measured at ``conv_thr = 1e-10``
+    (``PLAN.md`` P120): on tetragonal cobalt (``co-tetragonal-anisotropy-*.in``)
+    it is +1.1408e-2 meV along ``x`` and +0.9623e-2 along ``z``, so 1.79e-3 meV
+    of first-order anisotropy with the easy axis along ``c``, where
+    :func:`run_force_theorem` on the same density gives 0.552 meV of free-energy
+    anisotropy (1.235 in the band energy). On the cubic smoke cell it is
+    +1.2605e-2 meV in every direction, isotropic to 1.1e-7 meV as symmetry
+    requires.
 
-    It is a function rather than a footnote because a number that has been
-    measured to be zero is a stronger statement than an argument that it should
-    be, and because the ``soc_scale`` knob is what makes it well posed: a
-    pseudopotential has no additive ``xi L.S`` operator to take the expectation
-    value *of*, only the part of ``dvan_so`` that a spin trace does not keep.
+    **Which part survives the quenched orbital moment, measured by splitting
+    the sandwich's input.** The bare ``dvan_so`` and the overlap together, and
+    the charge component of ``newd_so`` on its own, are each at 1e-6 meV and
+    nearly cancel; the exchange components carry all of the rest. The
+    reason is time reversal. An operator that is time-even as a whole has a
+    spin-dependent part ``sigma . O`` with ``O`` time-odd in the orbitals, like
+    ``L``, and a collinear state without spin-orbit coupling has real orbitals,
+    so ``<O>`` vanishes: that is the argument, and it covers the first three.
+    The exchange field's term is time-odd as a whole, so ``O`` is time-even,
+    ranks 0 and 2, and real orbitals do not annul it; with the field and the
+    spin both along ``n`` the result is a quadratic form ``n . K . n``, whose
+    trace is the cubic cell's isotropic shift and whose traceless part is the
+    tetragonal cell's uniaxial term. By the completeness argument in
+    :func:`~defumat.pseudo.spinorbit.spin_trace` the sandwich would equal its
+    trace if the two ``j`` shells shared a radial function, so the term is the
+    dataset's ``j`` splitting seen by the exchange field. That is an argument
+    fitted to two cells, not a third measurement.
+
+    It is a function rather than a footnote because a measured number is a
+    stronger statement than an argument about its size -- the argument said
+    zero, and it held for three of the four terms -- and because the
+    ``soc_scale`` knob is what makes it well posed: a pseudopotential has no
+    additive ``xi L.S`` operator to take the expectation value *of*, only the
+    parts of its coefficients that a spin trace does not keep. PAW is refused
+    with the rest of :func:`_refuse_system`: its one-centre terms carry
+    ``soc_scale`` too (``build_paw``'s small component) and are not in ``E1``.
     """
     from defumat.forces.energy import _spinor_projector_energies
-    from defumat.pseudo.spinorbit import build_spin_orbit
-    from defumat.scf.driver import _spin_block_diagonal
+    from defumat.scf.potential import as_potential_components
 
     _refuse_system(system, pseudos)
     if direction is None:
@@ -1061,33 +1084,71 @@ def frozen_expectation(
     )
     wg, _ = calculation.occupations(jnp.asarray(eigenvalues))
 
-    types = system.structure.types
-    coupled = build_spin_orbit(pseudos, 1.0)
-    free = build_spin_orbit(pseudos, 0.0)
-    delta_dvan = jnp.asarray(
-        _spin_block_diagonal([coupled[t].dvan_so for t in types])
-    ) - jnp.asarray(_spin_block_diagonal([free[t].dvan_so for t in types]))
-
-    delta_qq = None
-    if calculation.qq_so is not None:
-        augmentation = calculation.augmentation
-
-        def species_qq(t: int) -> np.ndarray:
-            nh = pseudos[t].nh
-            values = np.asarray(augmentation.qq[t])
-            return values if values.shape == (nh, nh) else np.zeros((nh, nh))
-
-        delta_qq = jnp.asarray(
-            _spin_block_diagonal([coupled[t].qq_so(species_qq(t)) for t in types])
-        ) - jnp.asarray(
-            _spin_block_diagonal([free[t].qq_so(species_qq(t)) for t in types])
-        )
-
+    # The potential the states were computed in, and it is the **total** local
+    # potential, the one ``Calculation.hamiltonian`` hands ``coefficients``
+    # (``set_vrs``): ``v_scf`` alone leaves ``vltot`` out of the charge
+    # component of ``newd_so``'s integrals and moves the cubic cell's spread
+    # from 1e-7 meV to 1.2e-5.
+    total = calculation.potential(rotated).v_scf + as_potential_components(
+        calculation.vltot, calculation.nspin_mag
+    )
+    delta_d, delta_qq = _first_order_operator(calculation, total)
     nonlocal_, overlap = _spinor_projector_energies(
         jnp.asarray(wavefunctions), calculation.projectors.vkb,
-        delta_dvan, delta_qq, jnp.asarray(wg), jnp.asarray(eigenvalues),
+        delta_d, delta_qq, jnp.asarray(wg), jnp.asarray(eigenvalues),
     )
     return float(nonlocal_ - overlap)
+
+
+def _first_order_operator(calculation, total) -> tuple:
+    """``(dV_NL, dS)``: the coupled spinor coefficients minus the reduced ones.
+
+    ``calculation`` is the ``soc_scale = 0`` one and ``total`` the local
+    potential its Hamiltonian was built at. ``dV_NL`` is ``dvan_so``'s
+    traceless half plus, on an augmented dataset, ``newd_so``'s sandwich of
+    ``int V_c Q_ij`` against its spin trace; ``dS`` is ``qq_so``'s traceless
+    half, and ``None`` without augmentation. The two together are the whole of
+    what ``soc_scale`` changes in an ultrasoft Hamiltonian at a frozen
+    potential, which ``test_anisotropy.py`` holds entry by entry against a
+    coupled ``Calculation``'s own ``coefficients`` and ``qq_so`` -- the check a
+    missing term fails, and ``newd_so``'s was missing until P120.
+    """
+    from defumat.pseudo.spinorbit import build_spin_orbit
+    from defumat.scf.driver import _newd_noncollinear, _spin_block_diagonal
+
+    pseudos = calculation.pseudos
+    types = calculation.system.structure.types
+    coupled = build_spin_orbit(pseudos, 1.0)
+    free = build_spin_orbit(pseudos, 0.0)
+    delta_d = jnp.asarray(
+        _spin_block_diagonal([coupled[t].dvan_so for t in types])
+    ) - jnp.asarray(_spin_block_diagonal([free[t].dvan_so for t in types]))
+    if calculation.qq_so is None:
+        return delta_d, None
+
+    augmentation = calculation.augmentation
+
+    def species_qq(t: int) -> np.ndarray:
+        nh = pseudos[t].nh
+        values = np.asarray(augmentation.qq[t])
+        return values if values.shape == (nh, nh) else np.zeros((nh, nh))
+
+    delta_qq = jnp.asarray(
+        _spin_block_diagonal([coupled[t].qq_so(species_qq(t)) for t in types])
+    ) - jnp.asarray(
+        _spin_block_diagonal([free[t].qq_so(species_qq(t)) for t in types])
+    )
+    # ``fcoef`` is the same zeroed array at both scales; taking it from the
+    # coupled set rather than from ``calculation`` is what lets that test tell
+    # the two apart if it ever stops being true.
+    components, _ = calculation._noncollinear_components(total)
+    fcoef = jnp.asarray(_spin_block_diagonal([coupled[t].fcoef for t in types]))
+    bare = jnp.zeros_like(fcoef)
+    delta_d = delta_d + (
+        _newd_noncollinear(components, bare, fcoef, 1.0)
+        - _newd_noncollinear(components, bare, fcoef, 0.0)
+    )
+    return delta_d, delta_qq
 
 
 @dataclass
