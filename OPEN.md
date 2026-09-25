@@ -5597,7 +5597,7 @@ package walks no frames.
 
 # Part XIX -- the owed slow set on Triton, 2026-09-24
 
-## 1. Five failures from `1705a0a` and one platform-sensitive: a DFT+U cell lands in a solution `pw.x` does not reach **[opened 2026-09-24, measured the same day]**
+## 1. Five failures from `1705a0a` and one platform-sensitive: a DFT+U cell lands in a solution `pw.x` does not reach **[opened 2026-09-24; five closed 2026-09-25, `PLAN.md` P113 and P114; the `soc_scale = 0` spread open]**
 
 Part XVI item 1's list, 35 files, ran on `batch-milan` at `93d882f` (jobs 20429733 and
 20429734, `tools/cluster/owed.sbatch`, `DEFUMAT_CACHE_DIR=off`, the QE tree from the group
@@ -5769,10 +5769,12 @@ at `pw.x`'s own converged eigenvalues, the collinear source reaches -171.0025527
 2.3e-3 below `pw.x`'s state (`PLAN.md` P113 has the table). No mixer setting is a fix, the
 flat fit stays the default with `rho_ddot`'s available, and the promotion test is now seeded
 and asserts that the promoted state is not above a fresh one (**closed 2026-09-25**).
-**Still open**: the four stop-point failures, the three LSDA Hartree terms, `si10-us`'s,
-the spinor ultracell and the platinum iteration count, each of which moved with the path at
-its input's `conv_thr` and passed at `98468d4`; the project's remedy is that a test on a
-derived quantity states its own `conv_thr` and says what it measured there. The Hartree terms, the ultracell and
+**The four stop-point failures are closed 2026-09-25** (`PLAN.md` P114): the three LSDA
+Hartree terms and `si10-us`'s run at 1e-13 and agree with `pw.x` to 9.9e-7 and 9.6e-8 Ry,
+the platinum continuation runs at 1e-12 and saves 2 iterations of 9, and the spinor
+ultracell runs at 1e-13 with its density bound set from the measurement there; all seven
+affected files pass on Triton, 192 tests. **What is left of this item** is the directional
+spread, which belongs to the `soc_scale = 0` reduction and its 51 Ry total. The Hartree terms, the ultracell and
 the platinum count are stop-point readings that moved with the path, and each passed at
 `98468d4`. The directional spread belongs to the `soc_scale = 0` reduction, whatever the
 mixer does. **Do not loosen the six tests**: the one that looked like a tolerance on a

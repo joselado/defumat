@@ -21852,3 +21852,35 @@ run's 33, and the assertion that pinned the promoted run to the fresh one's basi
 state is not above the fresh one. 2 minutes at 2.5 GB for the test alone. The gate on
 `693529d` is **3064 passed, 64 skipped, 0 failed, in 974 s at a peak of 6.0 GB**, P112's
 3047 and the metric's 17 unit tests.
+
+### P114 -- Four tests given the `conv_thr` their quantity needs, measured on both sides. ✅ DONE; `OPEN.md` Part XIX's stop-point failures are closed, and the `soc_scale = 0` lead is what is left of it.
+
+Six tests had failed since `1705a0a` changed the Anderson fit's path (`OPEN.md` Part XIX),
+and none was a defect: each held a quantity that is first order in the density residual
+to a bound its threshold did not deliver, so where a run stopped decided the result. The
+remedy is the one `CLAUDE.md`'s traps section already names, a threshold stated per test
+with what was measured there, and no bound was loosened except where the measurement
+showed the old one had rested on a coincidence.
+
+| test | quantity | at the old threshold | at the new | change |
+|---|---|---|---|---|
+| `test_lsda`, three `pw_lsda` cases | Hartree term against `pw.x` | 2.6e-5 Ry at 1e-10 | **9.9e-7** at 1e-13 | both sides to 1e-13, references regenerated |
+| `test_ten_site[si10-us]` | Hartree term against `pw.x` | 1.0e-5 Ry at 1e-10 | **9.6e-8** at 1e-13 | this side to 1e-13; the reference is converged to 4e-8 |
+| `test_continuation`, platinum | iterations continued against fresh | 7 against 7 at 1e-9 | **7 against 9** at 1e-12 | the test to 1e-12 |
+| `test_ultracell_augmented[spinor]` | induced density, table against direct | 6.0e-7 of its maximum at 1e-11 | **6.65e-8** at 1e-13 | the branch to 1e-13, bound 2e-7 |
+
+On the nickel cells both codes were still moving at 1e-10, this one's Hartree term by
+2.0e-5 Ry and `pw.x`'s by 5.2e-6 on the way to 1e-13, so the three references were
+regenerated there through a per-case threshold in `tools/generate_reference.py`
+(`RESTAMPED_CONV_THR_BY_CASE`). The platinum continuation's saving grows with the
+threshold (8 against 7 at 1e-11) and is smaller than the docstring's "half the
+iterations", because P107 made the fresh run fast too. The ultracell's density difference
+falls tenfold for a hundredfold smaller residual, the square-root scaling of a stopping
+point, while the energy difference stays at the radial interpolation's 3.94e-10 Ry; the
+2.8e-9 it was written against was two paths that happened to stop together.
+
+**Verified on Triton** (job 20450302, `batch-milan`, at `37235e1`, the four files and the
+three that read the regenerated references or share the nickel cell): `test_lsda` 55
+passed, `test_ten_site` 27, `test_ultracell_augmented` 21, `test_continuation` 4,
+`test_noncollinear_hubbard_resume` 3, `test_stress` 25 and `test_pdos` 57, **192 passed and
+0 failed**, the largest peak 11.6 GB.
