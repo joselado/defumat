@@ -280,6 +280,7 @@ def test_the_spin_traced_sandwich_is_the_spin_trace_of_the_overlap():
 PAW_RELATIVISTIC = "Ni.rel-pbe-spn-kjpaw_psl.1.0.0.UPF"
 
 
+@pytest.mark.slow
 def test_the_paw_sphere_does_not_know_where_the_spin_points_at_zero():
     """The small component's magnetization is coupling, so ``soc_scale = 0`` removes it.
 
@@ -289,15 +290,18 @@ def test_the_paw_sphere_does_not_know_where_the_spin_points_at_zero():
     dependence of its own; the check here is that the one-centre energy of a
     non-spherical collinear ``becsum`` does not move when the moment is turned,
     and that at ``soc_scale = 1`` it does, so that the check is shown to fire.
+
+    Slow, and not for the reason a test usually is: one ``nh = 34`` species is
+    2.6 GB and 16 s built on its own, and in the gate's process it raised the
+    peak to 7.5 GB (2026-09-25), so the two species are built one at a time.
     """
     from defumat.paw.onecenter import _build_species, onecenter_species
+    from defumat.pseudo.projectors import projector_channels
     from defumat.xc.functional import resolve_functional
 
     pseudo = _pseudo(PAW_RELATIVISTIC)
     functional = resolve_functional([pseudo.functional])
-    zero = _build_species(pseudo, functional, 0.0)
-    one = _build_species(pseudo, functional, 1.0)
-    nh = zero.nh
+    nh = len(projector_channels(pseudo))
     rng = np.random.default_rng(7)
     a = rng.normal(size=(nh, nh)) * 0.15
     charge = a @ a.T + np.diag(rng.uniform(0.2, 1.0, nh))
@@ -310,8 +314,11 @@ def test_the_paw_sphere_does_not_know_where_the_spin_points_at_zero():
                 for u in (np.array([0.0, 0.0, 1.0]), np.array([1.0, 0.0, 0.0])))
         return x - z
 
-    assert zero.density_rel is None
+    zero = _build_species(pseudo, functional, 0.0)
+    assert zero.nh == nh and zero.density_rel is None
     assert abs(turned(zero)) < 1e-11
+    del zero
 
+    one = _build_species(pseudo, functional, 1.0)
     assert one.density_rel is not None
     assert abs(turned(one)) > 1e-6  # 7.5e-6 Ry, 0.10 meV

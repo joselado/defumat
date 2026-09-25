@@ -22080,7 +22080,7 @@ one-centre XC while the code applies it in both, is corrected.
 **The number.** On one sphere of `Ni.rel-pbe-spn-kjpaw_psl.1.0.0.UPF` (`nh = 34`), with a
 random non-spherical collinear `becsum` turned rigidly from z to x, the one-centre energy
 moved by **0.10 meV** with the tensor present and by exactly 0 with it removed; that is
-now `tests/unit/test_soc_scale.py::test_the_paw_sphere_does_not_know_where_the_spin_points_at_zero`,
+now `tests/unit/test_soc_scale.py::test_the_paw_sphere_does_not_know_where_the_spin_points_at_zero` (slow),
 which also asserts that the tensor is present and moves the energy at `soc_scale = 1`, so
 the check is shown to fire. On a converged state, `ni-tetragonal-relaxed-mae-paw.in` at
 `ecutwfc = 40`, `ecutrho = 320` and a `2 2 2` mesh (half the dataset's own cutoff and the
@@ -22101,7 +22101,12 @@ this leg is not exactly invariant. What is known about it: the unit test holds t
 one-centre energy invariant to 1e-11 Ry at a random `becsum`, not at the converged one,
 and each direction builds its own GGA quantization axis, since `run_relaxed_direction`
 rotates the system through `_with_quantization_axis` before `run_scf` reads
-`fixed_quantization_axis` off it. The floor is carried in `OPEN.md` Part XIX item 2. Removing the term also lowers the reduced total by 7.9e-6 Ry, which is
+`fixed_quantization_axis` off it. The same leg run along `x` twice at `1e-12` gives
+-428.5780730778 Ry both times, bit-identical, so the floor is not run-to-run scatter. What
+that cannot separate is a direction dependence of the reduced functional at 5e-10 Ry from
+two SCF paths not converged in *energy* to that level (the totals moved by 1.7e-9 Ry from
+`1e-10` to `1e-12`); a run at `1e-14` would. The floor is carried in `OPEN.md` Part XIX
+item 2. Removing the term also lowers the reduced total by 7.9e-6 Ry, which is
 what the small component's magnetization was worth on this cell. Both old and new legs
 converged, where the full-cutoff leg `OPEN.md` Part XIX item 2 records diverged before
 P115; at this cutoff that says the reduced PAW functional is now well behaved, and it does
@@ -22111,3 +22116,9 @@ not yet say what the full-cutoff leg does.
 identity is the check. At an intermediate scale the tensor is scaled linearly, which is the
 term's strength and not a blend of two energies, and that is a definition to revisit with
 the rest of the intermediate-scale refusal (`OPEN.md` Part XIX item 2).
+
+**Verified** on the workstation: the gate 3076 passed, 64 skipped, 0 failed in 18:53, at a
+peak of 7.5 GB in the new unit test, which built two `nh = 34` species at once. It is 2.6 GB
+and 16 s on its own, above the gate's five-second line and not a reference number, so it is
+marked `slow` and builds the species one at a time; the other twelve tests of
+`test_soc_scale.py` stay in the gate.

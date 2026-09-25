@@ -5839,8 +5839,10 @@ stopped.
   and each direction builds its own GGA axis from its rotated moments
   (`_with_quantization_axis`). Candidates, none measured: the smearing's Fermi level, the
   PAW `becsum` symmetrisation on a `nosym` run, and the sphere's angular quadrature under
-  the noncollinear gradient. The cheapest split is the same run with `x` twice, which
-  says whether the floor is direction at all or run-to-run.
+  the noncollinear gradient. **The same run with `x` twice is bit-identical**
+  (-428.5780730778 Ry both), so it is not run-to-run scatter. The next split is `1e-14`:
+  a spread that stays at 5e-10 Ry is the functional, one that falls is two SCF paths not
+  yet converged in energy, since the totals moved by 1.7e-9 Ry from `1e-10` to `1e-12`.
 * **The refusal of an intermediate `soc_scale` rests on a measurement taken with the old
   reduction** (-132 meV at 0.25 and -102 at 0.5 where the answer is under a meV,
   `pseudo/spinorbit.py`). Its stated reason, that a blended overlap is not a usable
