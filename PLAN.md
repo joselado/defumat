@@ -21914,8 +21914,11 @@ is what makes the pair variational. `dvan_so` and `qq_so` were already `T` (thei
 scalar-relativistic one, with the same `beta`, `D^(0)` equal to `T(dion)` and one augmentation
 function `T(Q_ij)` in all four spin components. That is also why nothing else has to change
 downstream. On a matrix diagonal in `m` within a shell, `T` is the weight `(2j+1)/(2(2l+1))`
-that `average_pp` uses. The unit cell and the ultracell (`spinor_ultracell_deeq`,
-`spinor_ultracell_becsum`) take the same map.
+that `average_pp` uses. On `Co.rel-pbe-nd-rrkjus` the diagonal of `T(1)` reads 1 on
+both `s` projectors, 1/3 and 2/3 on the `p` shells and 0.4 and 0.6 on the `d` shells, to
+12 digits. The ultracell (`spinor_ultracell_deeq`, `spinor_ultracell_becsum`) takes the
+same map, but **that branch is transcribed and not run**: nothing in the gate or the slow
+set puts an ultracell at `soc_scale = 0`, so only the shared helper is tested.
 
 **Three identities on the real dataset** (`Co.rel-pbe-nd-rrkjus`, random Hermitian
 occupations, `tests/unit/test_soc_scale.py`), before and after:

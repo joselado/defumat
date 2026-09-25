@@ -5827,3 +5827,9 @@ stopped.
   operators. The consistent blend of all four sandwiches is a variational functional at
   every scale, and it would give the `lambda^2` law P58 could not measure. The refusal
   stays until a blend is measured.
+* **The ultracell's `soc_scale = 0` branch is transcribed and not run.**
+  `spinor_ultracell_deeq` and `spinor_ultracell_becsum` take the same map as the unit
+  cell, through the tested `spin_traced_sandwich` and `becsum_transform`, but no test or
+  measurement puts an ultracell at `soc_scale = 0`. The check is a tiled null: an
+  ultracell of the reduced cobalt cell with no field reproducing the unit cell's
+  -74.405364568 Ry per cell.
