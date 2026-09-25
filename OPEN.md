@@ -5841,3 +5841,10 @@ stopped.
   measurement puts an ultracell at `soc_scale = 0`. The check is a tiled null: an
   ultracell of the reduced cobalt cell with no field reproducing the unit cell's
   -74.405364568 Ry per cell.
+* **P116's `v2` at a negative density is measured in four energies and nothing else.**
+  The gradient correction's potential is the derivative of the signed energy, so `v2`
+  flips sign at a negative vacuum point where `pw.x`'s (`xc_wrapper_gga.f90:227-232`)
+  does not. A total is second order in that and cannot show it; the stress is where it
+  would show first, since `stress/analytic.py`'s `stres_gradcorr` transcription and the
+  `jax.grad` stress both read `v2`. The check is a `pw.x` stress on a nonmagnetic PBE slab
+  such as `bismuthene-soc-small`, which no test takes.

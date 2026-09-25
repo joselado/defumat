@@ -2518,7 +2518,10 @@ Typeset with the figure in `performance/gpu-sweep.tex`; raw numbers in
 † **The bismuth rows are a pre-existing defumat/QE difference, not a GPU one.**
 `PLAN.md` records exactly 1.9e-4 Ry for `bi10-soc` as "the one that does not
 close", and QE 7.5 and 7.2 agree with each other to 1e-8 on that case, so it is
-not a version effect either. The GPU reproduces it.
+not a version effect either. The GPU reproduces it. **(Closed by `PLAN.md` P116**: the
+gradient correction was gated on the signed density over the vacuum, and `bi10-soc` now
+agrees to 2.2e-8 Ry on the CPU. The `bi20-soc` row, twice the offset, is the same
+defect by its size and has not been re-measured.)
 
 **Every non-spin-orbit case agrees to 4.6e-09 Ry or better, and those figures
 reproduce the *CPU* agreements already in `PLAN.md`** — 1.9e-9 on `al10-metal`,

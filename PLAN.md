@@ -22027,7 +22027,7 @@ own `PYTHONPATH`) and after, against `pw.x`:
 |---|---|---|---|
 | `bismuthene-nosoc-small` (PBE, `nspin = 1`) | -3.356e-5 Ry | **-3.0e-9** | 9, 9 |
 | `bismuthene-soc-small` (PBE, spinor, no moment) | -3.512e-5 Ry | **-7.3e-9** | 8, 8 |
-| `bismuthene-epsilon-us-soc` (against -295.59282302) | -3.54e-5 Ry | **-1e-9** | 11, 11 |
+| `bismuthene-epsilon-us-soc` (against -295.59282302) | -3.54e-5 Ry | **+1e-9** | 11, 11 |
 | `bismuthene-soc-small-lda` (the control, no gradient correction) | -7.1e-9 Ry | -7.1e-9 | 8, 8 |
 
 So the whole offset was the gate, and what is left is the LDA control's 7e-9 floor. The
