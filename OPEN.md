@@ -69,6 +69,10 @@ reduction, whose total sat 51 Ry from both of its neighbours. **All six are clos
 nickel test seeded, and the reduction made variational, which takes the spread to 1.9e-10
 meV. What the last fix left is item 2.
 
+**Part XX** is from the NiBr2 session, reported **2026-09-25** and not reproduced here: a
+seeded ultracell leans toward its reference cell's moment whichever way that moment points,
+so the converged state keeps a bias the seed warning describes as a cost in iterations.
+
 **Part III** is the sweep of **2026-09-12** -- four read-only agents over the package
 looking for **speed and memory** rather than for wrong answers, 23 entries, ordered by
 ease times impact. **Nothing in it was measured and nothing in it is a defect**: each
@@ -5864,3 +5868,75 @@ stopped.
   would show first, since `stress/analytic.py`'s `stres_gradcorr` transcription and the
   `jax.grad` stress both read `v2`. The check is a `pw.x` stress on a nonmagnetic PBE slab
   such as `bismuthene-soc-small`, which no test takes.
+
+
+# Part XX -- from the seeded NiBr2 ultracell, reported 2026-09-25
+
+## 1. A seeded ultracell leans toward the reference's moment, and the seed warning's advice turns the lean into a cone **[opened 2026-09-25]**
+
+Measured in the NiBr2 session at `44de8c0` on a clean tree and reported here rather than
+taken here, like the 54-iteration figure `ultracell/seed.py` already quotes from it. The
+setup is that project's `calculations/ultracell_nibr2` (`uc_common.sh`, `CASE=paw`,
+`BFCMT=1`, `SEED=1`, LDA forced): a three-cell helix at 120 degrees per cell, seeded as
+`stack([cos, sin, 0])`, and the only difference between the two runs is `angle1` of the
+reference unit cell. Jobs 20459041 and 20459424 on `gpu-debug`; the run directories are
+`NiBr2_ultracell/paw-b1-n3-seed1-chk0925-gpudbg` and `paw-b1-n3-seed1-refz-chk0925-gpudbg`,
+and `texture_check.py` there reads the Ni harmonics of `m_x + i m_y` over the cells relative
+to the helix component.
+
+| reference moment | `nbnd` | uniform in-plane moment / helix | Ni step (should be 120) | tilt out of plane | seed warning |
+|---|---|---|---|---|---|
+| along `+x` (in the helix plane) | 40 / 56 / 80 | 0.32 / 0.27 / 0.19 | 94 to 172 deg | 0 | fires |
+| along `+z` (the helix axis) | 40 / 56 | 4e-4 | 120.00 | +24.5 / +21.5 deg on every Ni | silent |
+
+With the reference along `z` the box `m_z / |m_q|` is 0.98 and 0.85, while the reference
+cell itself stayed on `z` (0.005 deg after its SCF). At the production size, the 15-cell
+run with the reference along `x` (`paw-b1-n15-seed1-d8-gpu`) keeps a uniform in-plane
+moment of 0.144 and 0.115 of the helix at `nbnd` 96 and 128, against **9e-5** in Elk's
+converged supercell, falling roughly as `nbnd^-0.8`.
+
+**The seed is exact, so the lean grows in the SCF.** A second job (20459819,
+`check_seed_axis.py`: the `z` reference, three cells, one iteration of linear mixing at
+`beta = 1e-8`, `seeded_becsum` intercepted) read the seeded state before anything moved.
+The grid moments are `(+1.2670, +0.0004, 0)`, `(-0.6338, +1.0971, +0.0003)` and
+`(-0.6333, -1.0975, -0.0003)`, tilts 0.000 and +-0.014 deg. On the spheres the component
+norms over `ij` go from `(0.505, 0.505, 0.630)` to `(0.630, 0.505, 0.505)` in cell 0, the
+`x <-> z` swap of a quarter turn about `y`, and to `(0.539, 0.601, 0.505)` in the
+120-degree cell, which is `sqrt(0.75 0.505^2 + 0.25 0.630^2)` and
+`sqrt(0.25 0.505^2 + 0.75 0.630^2)` to three figures. So `seeded_becsum` applies the
+rotation rigidly, and the 21 to 25 degree cone is grown by the basis.
+
+**Why it is a wrong answer rather than a slow one.** A uniform component, in the plane or
+along the axis, breaks the time reversal times half-period translation that a coplanar
+helix has, so the charge picks up a harmonic at `q` (through `m_0 . m_q` in the plane, and
+through spin-orbit coupling for the cone) where the symmetric state has it only at `2q`. In
+NiBr2 that moves the dI/dV onto `q`, where Elk's ratio of the `2q` to the `q` harmonic is
+15. Across the 15-cell ladder the charge at `q` falls in exactly the ratio the net moment
+does, x0.80 from `nbnd` 96 to 128. `ultracell/seed.py`'s docstring and
+`warn_if_the_seed_leaves_the_closed_sector` describe a seed outside the closed sector as
+"not wrong", costing iterations (290 against 14 on four cells of hydrogen, 54 on the
+15-cell helix), and advise converging the reference along the axis the texture turns about. On
+this cell the converged state keeps the bias at practical `nbnd`, and following the advice
+moves it from in-plane to out-of-plane rather than removing it.
+
+**A direction, and why it is plausible.** The frozen basis is the reference cell's states,
+which are eigenstates of `sigma . e_0` without spin-orbit coupling: majority orbitals with
+spin up along `e_0`, minority with spin down. Turning a moment off `e_0` needs a majority
+orbital with the *other* spin, which the basis does not have, so the basis prefers `+e_0`
+and a truncated solve leans toward it; that is a lean that falls with `nbnd` as it does
+here. The NiBr2 session suggests a basis **closed under time reversal**: the reference's
+states together with their Kramers partners, equivalently the `+e_0` and `-e_0`
+references together. Without spin-orbit coupling that basis is the orbitals times both
+spinors, which is invariant under any global spin rotation, so no direction along or
+against `e_0` is preferred and the lean has nothing to come from; with spin-orbit coupling
+it at least removes the preference between `+e_0` and `-e_0`, which is what the uniform
+component and the cone both are. The cost is a basis twice as large, so twice the memory
+of the frozen states and about eight times the dense subspace solve.
+
+**What to do, and how to know it worked.** Not decided. The cheapest discriminating run is
+the three-cell `z` reference at `nbnd = 40` with the Kramers-closed basis: the tilt should
+fall from 24.5 deg to the noise, and the `x` reference's uniform in-plane moment from 0.32
+toward Elk's 9e-5 at the same `nbnd`. A basis that removes the lean only at `nbnd` where
+the old one had also nearly lost it is not evidence; the comparison is at equal basis
+*size* too, the old basis at `nbnd = 80` against the closed one at 40. Beside it, the seed
+docstring and the warning should stop describing the cost as iterations alone.
