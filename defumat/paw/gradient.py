@@ -199,11 +199,14 @@ def _noncollinear_gradient(rho_lm, rho_rad, core, paw, axis, with_small=False):
        ``s (v_up - v_dw)/2 m-hat`` in the other three, then one last projection
        onto the multipoles the caller wants.
 
-    **Not reproduced: ``add_small_mag``.** A fully-relativistic dataset's small
-    component carries magnetization of its own, and QE folds it in here and in
-    ``compute_pot_nonc``. The *local* part of this package's one-centre XC does
-    not fold it in either, so leaving it out keeps the two halves consistent;
-    putting it in one and not the other would be worse than in neither.
+    **``add_small_mag`` is in both halves.** A fully-relativistic dataset's
+    small component carries magnetization of its own, and QE folds it in here
+    and in ``compute_pot_nonc``. The caller has already added it to
+    ``rho_rad`` (:func:`defumat.paw.onecenter.onecenter_species`), so the
+    gradient is taken of the corrected density, and ``with_small`` hands back
+    the radial vector potential its share of ``ddd`` is built from. At
+    ``soc_scale = 0`` the dataset carries no small-component tensor and
+    ``with_small`` is false.
     """
     nlm = paw.nlm
     r2 = paw.r2

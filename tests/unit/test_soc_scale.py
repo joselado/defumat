@@ -275,3 +275,43 @@ def test_the_spin_traced_sandwich_is_the_spin_trace_of_the_overlap():
         np.asarray(spin_traced_sandwich(fcoef, jnp.asarray(qq, dtype=fcoef.dtype))),
         coupling.qq_so(qq)[:, :, 0, 0], atol=1e-13,
     )
+
+
+PAW_RELATIVISTIC = "Ni.rel-pbe-spn-kjpaw_psl.1.0.0.UPF"
+
+
+def test_the_paw_sphere_does_not_know_where_the_spin_points_at_zero():
+    """The small component's magnetization is coupling, so ``soc_scale = 0`` removes it.
+
+    A fully-relativistic PAW dataset's small component carries magnetization
+    along the radial direction, ``-2 (m . r) r`` on the sphere, which ties the
+    spin to the lattice. With it left on, a coupling-free run has a direction
+    dependence of its own; the check here is that the one-centre energy of a
+    non-spherical collinear ``becsum`` does not move when the moment is turned,
+    and that at ``soc_scale = 1`` it does, so that the check is shown to fire.
+    """
+    from defumat.paw.onecenter import _build_species, onecenter_species
+    from defumat.xc.functional import resolve_functional
+
+    pseudo = _pseudo(PAW_RELATIVISTIC)
+    functional = resolve_functional([pseudo.functional])
+    zero = _build_species(pseudo, functional, 0.0)
+    one = _build_species(pseudo, functional, 1.0)
+    nh = zero.nh
+    rng = np.random.default_rng(7)
+    a = rng.normal(size=(nh, nh)) * 0.15
+    charge = a @ a.T + np.diag(rng.uniform(0.2, 1.0, nh))
+
+    def becsum(direction):
+        return np.concatenate([charge[None], 0.4 * np.multiply.outer(direction, charge)])
+
+    def turned(paw):
+        z, x = (float(onecenter_species(paw, becsum(u), axis=None)[0])
+                for u in (np.array([0.0, 0.0, 1.0]), np.array([1.0, 0.0, 0.0])))
+        return x - z
+
+    assert zero.density_rel is None
+    assert abs(turned(zero)) < 1e-11
+
+    assert one.density_rel is not None
+    assert abs(turned(one)) > 1e-6  # 7.5e-6 Ry, 0.10 meV

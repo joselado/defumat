@@ -4451,7 +4451,16 @@ for the whole calculation: without the coupling the Hamiltonian is invariant
 under a global spin rotation, so a band energy \emph{cannot} depend on where the
 moment points. On tetragonal cobalt the two directions of a self-consistent
 total agree to $2\times10^{-10}$~meV, and switching the coupling off costs
-$0.44$~mRy of the total.
+$0.44$~mRy of the total. On a fully-relativistic PAW dataset it also scales the
+magnetization the Dirac small component carries on each sphere,
+$-2(\mathbf m_{\text{s}}\cdot\hat{\mathbf r})\,\hat{\mathbf r}$, which is the
+spin reflected about the radial direction and so ties the spin to the lattice as
+the coupling does; its charge is left alone, being invariant under a spin
+rotation. Left on at $0$ it gave tetragonal nickel
+($\texttt{Ni.rel-pbe-spn-kjpaw\_psl}$, $40$~Ry, a $2\times2\times2$ mesh)
+$8.3\times10^{-3}$~meV between $x$ and $z$; switched off with the rest, the two
+agree to $7\times10^{-6}$~meV at \code{conv\_thr = 1e-12}, a residue that
+does not fall further with \code{conv\_thr} and whose source is still open.
 
 \textbf{A PAW dataset needs one file rather than two, and \code{becsum} beside
 the density.} A PAW Hamiltonian's one-centre coefficients $D^{1}_{ij}$ are a

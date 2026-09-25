@@ -107,7 +107,9 @@ class PawSpecies(eqx.Module):
     #: unless the dataset is fully relativistic. The *small* component of the
     #: Dirac partial waves carries magnetization of its own, and it enters the
     #: all-electron sphere alone -- there is no pseudo counterpart, because
-    #: there is no small component to pseudize.
+    #: there is no small component to pseudize. Scaled by ``soc_scale`` and
+    #: ``None`` at ``soc_scale = 0``: its magnetization is tied to the radial
+    #: direction on the sphere, which is spin-orbit coupling (``PLAN.md`` P117).
     density_rel: jnp.ndarray | None = None
 
 
@@ -729,7 +731,9 @@ def _kinetic_tensor(waves, coefficients, angular, lm_of, r, iraug, nlm):
     return jnp.asarray(tensor)
 
 
-def build_paw(pseudos, structure, functional: Functional, cell=None) -> PawCorrections | None:
+def build_paw(
+    pseudos, structure, functional: Functional, cell=None, soc_scale: float = 1.0
+) -> PawCorrections | None:
     """Precompute the one-centre tensors. ``None`` if no species is PAW.
 
     **One :class:`PawSpecies` per distinct dataset, shared by every species
@@ -761,7 +765,7 @@ def build_paw(pseudos, structure, functional: Functional, cell=None) -> PawCorre
             continue
         key = _paw_dataset_key(pseudo)
         if key not in built:
-            built[key] = _build_species(pseudo, functional)
+            built[key] = _build_species(pseudo, functional, soc_scale)
         species.append(built[key])
 
     return PawCorrections(
@@ -792,8 +796,8 @@ def _paw_dataset_key(pseudo: Pseudopotential) -> tuple:
     ``qfuncl`` untruncated. Two datasets that agree inside ``kkbeta`` and
     differ past it are one dataset for the augmentation charge and two here.
 
-    The functional is not in the key: ``built`` lives for one
-    :func:`build_paw` call, and a call has one functional.
+    The functional and ``soc_scale`` are not in the key: ``built`` lives for
+    one :func:`build_paw` call, and a call has one of each.
 
     An incomplete dataset keys on its own identity, so that
     :func:`_build_species` is reached and raises its own error rather than
@@ -821,7 +825,9 @@ def _paw_dataset_key(pseudo: Pseudopotential) -> tuple:
     )
 
 
-def _build_species(pseudo: Pseudopotential, functional: Functional) -> PawSpecies:
+def _build_species(
+    pseudo: Pseudopotential, functional: Functional, soc_scale: float = 1.0
+) -> PawSpecies:
     paw = pseudo.paw
     augmentation = pseudo.augmentation
     if paw is None or augmentation is None or augmentation.qfuncl is None:
@@ -877,9 +883,21 @@ def _build_species(pseudo: Pseudopotential, functional: Functional) -> PawSpecie
     coefficients = ap[:nlm, lm_of[:, None], lm_of[None, :]]  # (nlm, nh, nh)
 
     density_ae = np.einsum("lij,ijr->ijlr", coefficients, pfunc[beta_of][:, beta_of])
+    # The small component's *magnetization* is scaled with the coupling, and
+    # its *charge*, added into ``pfunc`` above, is not. The magnetization is
+    # the spin reflected about the radial direction, ``-2 (m . r) r`` on the
+    # sphere (:func:`small_component_coupling`), so it ties the spin to the
+    # lattice: left on at ``soc_scale = 0`` it gives a coupling-free run a
+    # direction dependence of its own, 0.10 meV from x to z on one Ni sphere
+    # of ``Ni.rel-pbe-spn-kjpaw_psl`` at a random non-spherical ``becsum``, and
+    # exactly zero with it off (``PLAN.md`` P117). The charge is invariant
+    # under a spin rotation and has nothing to switch. The term is linear in
+    # the tensor and ``ddd`` reads the same tensor, so scaling it scales the
+    # term and its chain rule together, and the run stays variational. QE has
+    # no ``soc_scale``; at 1 this is ``with_small_so`` unchanged.
     density_rel = (
-        None if paw.ae_wfc_rel is None
-        else jnp.asarray(np.einsum(
+        None if paw.ae_wfc_rel is None or soc_scale == 0.0
+        else jnp.asarray(soc_scale * np.einsum(
             "lij,ijr->ijlr", coefficients, pfunc_rel[beta_of][:, beta_of]
         ))
     )

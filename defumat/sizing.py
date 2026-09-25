@@ -755,7 +755,11 @@ def estimate_size(
             continue
         paw_datasets.add(key)
         nh = len(projector_channels(pseudo))
-        relativistic = pseudo.paw is not None and pseudo.paw.ae_wfc_rel is not None
+        # ``density_rel`` is not built at ``soc_scale = 0`` (P117).
+        relativistic = (
+            pseudo.paw is not None and pseudo.paw.ae_wfc_rel is not None
+            and system.soc_scale != 0.0
+        )
         tensors = 2 + int(relativistic) + 2 * int(functional.is_meta)
         nlm = (_lmax_rho(pseudo) + 1) ** 2
         onecentre_bytes += tensors * nh * nh * nlm * pseudo.mesh * zr

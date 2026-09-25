@@ -5826,7 +5826,20 @@ stopped.
   fully-relativistic PAW dataset, whose one-centre terms read `becsum` directly, so it may
   have been this defect rather than the cell. It is a lead and not a measurement. Rerun
   the leg (on Triton; the cell's header asks for an idle machine) before trying a third
-  cell for the PAW anisotropy.
+  cell for the PAW anisotropy. **Half of it is now run** (`PLAN.md` P117): at `40/320` Ry
+  on the same `2 2 2` mesh the leg converges at `conv_thr = 1e-10` in about 10 minutes on
+  three cores, both at `41cc1fa` (P115 in, the small component still on) and with P117,
+  so the reduced PAW functional converges on this cell. What that does not say is what
+  the full `75/480` cutoff does, which is the run still owed.
+* **A fully-relativistic PAW leg at `soc_scale = 0` has a direction floor of 5e-10 Ry**
+  (`PLAN.md` P117). On tetragonal nickel at 40 Ry and a `2 2 2` mesh, `E(x) - E(z)` reads
+  -6.8e-6 meV at `conv_thr = 1e-10` and +7.3e-6 meV at `1e-12`: the same size, the sign
+  flipped, where ultrasoft cobalt reaches 1.9e-10 meV on the same route. It is not the
+  one-centre energy (exactly invariant at a random `becsum`) and not the GGA axis (taken
+  from the rotated moments). Candidates, none measured: the smearing's Fermi level, the
+  PAW `becsum` symmetrisation on a `nosym` run, and the sphere's angular quadrature under
+  the noncollinear gradient. The cheapest split is the same run with `x` twice, which
+  says whether the floor is direction at all or run-to-run.
 * **The refusal of an intermediate `soc_scale` rests on a measurement taken with the old
   reduction** (-132 meV at 0.25 and -102 at 0.5 where the answer is under a meV,
   `pseudo/spinorbit.py`). Its stated reason, that a blended overlap is not a usable

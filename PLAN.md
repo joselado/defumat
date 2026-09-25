@@ -21918,7 +21918,8 @@ is what makes the pair variational. `dvan_so` and `qq_so` were already `T` (thei
 `spin_trace`), so they do not move. The reduced dataset is then an ordinary
 scalar-relativistic one, with the same `beta`, `D^(0)` equal to `T(dion)` and one augmentation
 function `T(Q_ij)` in all four spin components. That is also why nothing else has to change
-downstream. On a matrix diagonal in `m` within a shell, `T` is the weight `(2j+1)/(2(2l+1))`
+downstream, **except on a fully-relativistic PAW dataset**, whose small component's
+magnetization on the sphere is coupling too and was left on until P117. On a matrix diagonal in `m` within a shell, `T` is the weight `(2j+1)/(2(2l+1))`
 that `average_pp` uses. On `Co.rel-pbe-nd-rrkjus` the diagonal of `T(1)` reads 1 on
 both `s` projectors, 1/3 and 2/3 on the `p` shells and 0.4 and 0.6 on the `d` shells, to
 12 digits. The ultracell (`spinor_ultracell_deeq`, `spinor_ultracell_becsum`) takes the
@@ -22050,3 +22051,62 @@ in 8 minutes. The test now holds it to `TOTAL_ENERGY_RY` and `FERMI_EV`.
 **Verified** on the workstation at `7efbc3d`: `test_spinorbit` 27 passed (the bismuthene
 totals at 1e-6) and `test_topology` 5, largest peak 7.7 GB; the gate 3075 passed, 64
 skipped, 0 failed in 18:22.
+
+### P117 -- `soc_scale = 0` left the small component's magnetization on a fully-relativistic PAW sphere; it is scaled with the coupling now. ✅ DONE; found by the review of 2026-09-25 (`AUDIT-2026-09-25.md`).
+
+**What was left on.** A fully-relativistic PAW dataset carries the Dirac small component
+(`PP_AEWFC_REL`), and its magnetization enters the all-electron sphere as
+`-2 (m_small . r) r` (`add_small_mag`, `paw_onecenter.f90:166`, here
+`paw/onecenter.py:small_component_coupling`), the spin reflected about the radial
+direction. That term ties the spin to the lattice, so it is spin-orbit coupling in the
+sense `soc_scale` means, and P115's reduction did not reach it: `onecenter_species` gated
+it on `nspin == 4` alone, QE's gate, and nothing in `defumat/paw/` read `soc_scale`. The
+functional stayed consistent, since `ddd` reads the same tensor, but the reduced run had a
+direction dependence of its own, and P115's sentence that the reduced dataset "is then an
+ordinary scalar-relativistic one" was false for PAW. A scalar-relativistic PAW dataset has
+no `PP_AEWFC_REL`, so the oxygen identity in the guide (3.1e-10 meV over five directions)
+never saw it.
+
+**The rule now.** `build_paw` takes the run's `soc_scale` and `_build_species` scales the
+small-component tensor `density_rel` by it, `None` at 0. The term is linear in that tensor
+and `ddd`'s chain-rule contraction reads the same tensor, so the term and its derivative
+scale together and the run stays variational at any scale. The small component's
+**charge**, which `_build_species` adds into `pfunc`, is not scaled: it is invariant under a
+spin rotation and has nothing to switch. At `soc_scale = 1` the tensor is multiplied by 1.0
+and is bit-identical. `sizing.py` stops counting the tensor at 0. The stale docstring in
+`paw/gradient.py`, which said `add_small_mag` was reproduced in neither half of the
+one-centre XC while the code applies it in both, is corrected.
+
+**The number.** On one sphere of `Ni.rel-pbe-spn-kjpaw_psl.1.0.0.UPF` (`nh = 34`), with a
+random non-spherical collinear `becsum` turned rigidly from z to x, the one-centre energy
+moved by **0.10 meV** with the tensor present and by exactly 0 with it removed; that is
+now `tests/unit/test_soc_scale.py::test_the_paw_sphere_does_not_know_where_the_spin_points_at_zero`,
+which also asserts that the tensor is present and moves the energy at `soc_scale = 1`, so
+the check is shown to fire. On a converged state, `ni-tetragonal-relaxed-mae-paw.in` at
+`ecutwfc = 40`, `ecutrho = 320` and a `2 2 2` mesh (half the dataset's own cutoff and the
+identity holds at any cutoff, so the cheaper cell is enough), `run_relaxed_anisotropy` with
+`soc_scale = 0` along x and z, one run per code on three cores each:
+
+| code | `conv_thr` | `E(x)` Ry | `E(z)` Ry | `E(x) - E(z)` |
+|---|---|---|---|---|
+| before (`41cc1fa`, a worktree on its own `PYTHONPATH`) | 1e-10 | -428.5780652216 | -428.5780658314 | **+8.30e-3 meV** |
+| after | 1e-10 | -428.5780730795 | -428.5780730790 | -6.8e-6 meV |
+| after | 1e-12 | -428.5780730778 | -428.5780730783 | +7.3e-6 meV |
+
+So the defect is gone, by a factor of 1100, and what is left is a **floor** rather than
+convergence: the spread keeps its size from `conv_thr = 1e-10` to `1e-12` and changes
+sign, while the totals themselves moved by 1.7e-9 Ry. It is 5e-10 Ry, against the
+1.4e-14 Ry (1.9e-10 meV) ultrasoft cobalt reaches on the same route, so something else in
+this leg is not exactly invariant. It is not the one-centre energy, which the unit test
+holds invariant to 1e-11 Ry at a random `becsum`, and it is not the GGA quantization
+axis, which `fixed_quantization_axis` takes from the rotated starting moments; the floor
+is carried in `OPEN.md` Part XIX item 2. Removing the term also lowers the reduced total by 7.9e-6 Ry, which is
+what the small component's magnetization was worth on this cell. Both old and new legs
+converged, where the full-cutoff leg `OPEN.md` Part XIX item 2 records diverged before
+P115; at this cutoff that says the reduced PAW functional is now well behaved, and it does
+not yet say what the full-cutoff leg does.
+
+**Not done.** QE has no `soc_scale`, so no `pw.x` run checks the reduced PAW leg; the
+identity is the check. At an intermediate scale the tensor is scaled linearly, which is the
+term's strength and not a blend of two energies, and that is a definition to revisit with
+the rest of the intermediate-scale refusal (`OPEN.md` Part XIX item 2).

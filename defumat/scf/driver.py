@@ -1890,7 +1890,10 @@ class Calculation:
         # PAW adds the one-centre corrections on top of everything ultrasoft
         # does. They depend on ``becsum`` and on nothing else that changes, so
         # like ``newd`` they are rebuilt once per SCF iteration.
-        self.paw = build_paw(self.pseudos, system.structure, self.functional)
+        self.paw = build_paw(
+            self.pseudos, system.structure, self.functional,
+            soc_scale=system.soc_scale,
+        )
 
         # The spin-orbit coefficients: ``fcoef`` per species and, assembled over
         # the atoms, the two block matrices the spinor Hamiltonian takes --
