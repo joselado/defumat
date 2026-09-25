@@ -52,8 +52,9 @@ quadrature under the noncollinear gradient; `onecenter_species` at the *converge
 ## The GGA response kernel at negative density points
 
 **Result**: the ratio is 3.2e-5. The full epsilon at the current tree is 17.732233153
-against `ph.x`'s 17.732384482, 1.5e-4. The old-gate A/B patched the gate for the whole
-call, `H0` included, so it is confounded; the clean A/B is still to run.
+against `ph.x`'s 17.732384482, 1.5e-4 below it; at `f3984b7`, before P116, it was
+17.732643332, 2.6e-4 above. P116 moved it toward `ph.x` and across it. The kernel-only
+A/B, which would attribute the remaining 1.5e-4, is not run.
 
 
 P116 moved the ground state toward `pw.x` by keeping negative vacuum points in the

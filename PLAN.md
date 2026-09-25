@@ -22257,9 +22257,15 @@ old signed gate gave 17.729288708 (-3.1e-3), and **it is confounded**: the gate 
 patched for the whole `dielectric_tensor` call, which rebuilds the unperturbed potential
 and Hamiltonian from the density (`response/efield.py`, the `calculation.potential` and
 `hamiltonian` calls), so it changed `H0` at fixed new-gate wavefunctions as well as the
-kernel. It does not isolate the kernel and is not the before-P116 number either. The two
-clean runs are the gate patched inside the kernel's `jvp` alone, and the whole response
-at `f3984b7` on its own `PYTHONPATH`.
+kernel. It does not isolate the kernel and is not the before-P116 number either. **The
+clean A/B** is the whole calculation at `f3984b7`, P116's parent, on its own
+`PYTHONPATH`: ground state -295.5928583949 Ry (the 3.5e-5 below `pw.x` P116 removed) and
+epsilon **17.732643332** in-plane, 1.407179629 out of plane, 15 iterations. So P116
+moved the in-plane epsilon by -4.1e-4, from +2.6e-4 above `ph.x` to 1.5e-4 below it, 1.5e-5
+to 8.5e-6 relative: toward `ph.x` and across it, by less than the review's reading of
+`ph.x`'s kernel suggested it might move away. What is left, 1.5e-4, is not attributed;
+the gate patched inside the kernel's `jvp` alone would say whether `ph.x`'s zeroing of
+the kernel at negative points is part of it.
 
 **`frozen_expectation`'s missing term is not zero.** At the frozen states, with the total
 local potential (`v_scf` plus `vltot`, rebuilt coefficients equal to `calc.coefficients`
