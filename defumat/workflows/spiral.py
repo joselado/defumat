@@ -92,7 +92,7 @@ from defumat.system.symmetry import lattice_point_group
 from defumat.workflows.relax import (_scf_loop_options, site_magnetization,
                                      site_moment_report)
 
-__all__ = ["SpiralScan", "run_spiral_scan", "heisenberg_exchange",
+__all__ = ["SpiralScan", "run_spiral_scan", "heisenberg_exchange", "unfold_spiral_density",
            "SpiralRelaxResult", "relax_spiral_q"]
 
 #: The trust radius of an *ionic* step is a length in bohr and QE's defaults say
@@ -701,3 +701,78 @@ def _first_step_scale(optimizer, gradient, settings: BFGSSettings) -> float:
     if length < 1.0e-30:
         return 1.0
     return settings.trust_radius_ini / length
+
+
+def unfold_spiral_density(density, spiral_q, multiples, shape) -> np.ndarray:
+    """A commensurate spiral's density, laid out on the supercell it repeats in.
+
+    A spiral run keeps its magnetization in the frame that turns with ``q``
+    (``scf/density.py``): the charge and ``m_z`` are the laboratory ones, and the
+    transverse pair is ``m'_+ = m'_x + i m'_y = 2 conj(U_up) U_dn`` of the
+    periodic parts. With the up component at ``k + q/2`` and the down at
+    ``k - q/2`` the laboratory pair is ``m_+ = m'_+ exp(-i q . r)``, so the
+    moment turns by ``-q . R`` from a cell to the next. When ``q . M`` is an
+    integer vector for the supercell multiples ``M``, that phase is a supercell
+    reciprocal-lattice vector, ``K = -q * M``, and the whole unfolding is done in
+    reciprocal space: every unit-cell Fourier component ``(h, k, l)`` goes to
+    the supercell's ``(M1 h, M2 k, M3 l)``, and ``m'_+``'s are shifted by ``K``
+    as well. Nothing is interpolated, so a band-limited density comes out
+    exactly, provided ``shape`` holds every component (checked).
+
+    Args:
+        density: ``(4, n1, n2, n3)``, the spiral run's rotating-frame density.
+        spiral_q: ``q`` in lattice coordinates of the unit cell (``spiral_q``).
+        multiples: the supercell's ``(M1, M2, M3)`` in units of the unit cell.
+        shape: the supercell's dense grid ``(N1, N2, N3)``.
+
+    Returns the ``(4, N1, N2, N3)`` laboratory-frame density of the supercell.
+    Without spin-orbit coupling it is the supercell's stationary density
+    whenever the spiral's is the unit cell's, because the generalized Bloch
+    theorem is exact at a commensurate ``q``.
+    """
+    density = np.asarray(density)
+    if density.shape[0] != 4:
+        raise ValueError(
+            f"a spiral's density has four channels, got {density.shape[0]}"
+        )
+    multiples = np.asarray(multiples, dtype=int).reshape(3)
+    shift = -np.asarray(spiral_q, dtype=float).reshape(3) * multiples
+    if np.max(np.abs(shift - np.round(shift))) > 1.0e-8:
+        raise ValueError(
+            f"q = {tuple(spiral_q)} is not commensurate with the supercell "
+            f"{tuple(multiples)}: q * M = {tuple(-shift)} is not an integer "
+            "vector, so the spiral does not repeat in it"
+        )
+    shift = np.round(shift).astype(int)
+    small = np.asarray(density.shape[1:])
+    shape = tuple(int(n) for n in shape)
+    scale = float(np.prod(shape)) / float(np.prod(small))
+
+    def frequencies(n):
+        return np.fft.fftfreq(n, d=1.0 / n).astype(int)
+
+    h, k, l = np.meshgrid(*(frequencies(n) for n in small), indexing="ij")
+
+    def place(field, offset):
+        coefficients = np.fft.fftn(field) * scale
+        target = np.stack([h * multiples[0], k * multiples[1],
+                           l * multiples[2]]) + offset.reshape(3, 1, 1, 1)
+        for axis, size in enumerate(shape):
+            # ``fftfreq``'s range on ``size`` points, the Nyquist included.
+            if (np.min(target[axis]) < -(size // 2)
+                    or np.max(target[axis]) > (size - 1) // 2):
+                raise ValueError(
+                    f"the supercell grid {shape} is too coarse along axis "
+                    f"{axis} for the unit cell's {tuple(small)} unfolded "
+                    f"{tuple(multiples)} times: a component would alias"
+                )
+        out = np.zeros(shape, dtype=complex)
+        index = tuple(np.mod(target[axis], shape[axis]) for axis in range(3))
+        np.add.at(out, index, coefficients)
+        return np.fft.ifftn(out)
+
+    none = np.zeros(3, dtype=int)
+    charge = np.real(place(density[0], none))
+    along_z = np.real(place(density[3], none))
+    transverse = place(density[1] + 1j * density[2], shift)
+    return np.stack([charge, np.real(transverse), np.imag(transverse), along_z])

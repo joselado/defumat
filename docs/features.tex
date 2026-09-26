@@ -424,6 +424,7 @@ says so (\code{tests/unit/test\_facade\_documentation.py}).
 \code{get\_anisotropy} & the magnetocrystalline anisotropy \\
 \code{get\_torque} & the magnetic torque, and $K$ from one angle \\
 \code{get\_orientation\_torque} & the torque on a whole texture, three components \\
+\code{get\_relaxed\_orientation} & the easy orientation of a texture, by BFGS in the rotation \\
 \code{get\_first\_order\_soc} & the spin-orbit expectation at coupling-free states \\
 \code{get\_force\_theorem} & one direction of the anisotropy: its band energy alone \\
 \addlinespace
@@ -4585,10 +4586,44 @@ print(vector.direction, vector.along_moment)     # where the moment points; ~0
 \noindent The orientation is given as a matrix and read back as ZYZ Euler angles
 (\code{vector.euler\_angles}), but nothing is differentiated in the angles: at
 $\beta=0$ the angles $\alpha$ and $\gamma$ are the same rotation, and that is an
-easy axis along $z$. What this is for is relaxing the orientation of a texture,
-the easy axis of a magnet or the plane of a spiral, which is planned in
-\code{ORIENTATION-NEXT.md}; a four-component source whose moments are not
-collinear is refused for now, by name.
+easy axis along $z$. The source may be a four-component density whose moments
+are not collinear, a commensurate spiral in a supercell for instance, and it is
+then turned as it is, with the system's \code{angle1}/\code{angle2} describing it.
+Two checks that share no automatic differentiation with the torque: the closed
+form
+\begin{equation*}
+  \boldsymbol\tau = \int \mathbf m_{\rm out}(\mathbf r)\times\mathbf B(\mathbf r)\,\mathrm d\mathbf r ,
+\end{equation*}
+the frozen exchange field acting on the magnetization of the states solved with
+the coupling, which agrees with it to $1.7\times10^{-12}$ on ultrasoft cobalt;
+and turning the lattice by $R^{-1}$ under fixed spins in place of turning the
+spins by $R$, which agrees to $4\times10^{-11}$ once the eigensolver's floor is
+lowered, and to $10^{-6}$ at the default floor, which is the torque's
+resolution there (about $10^{-10}$~Ry per radian).
+
+\textbf{Relaxing the orientation.} \code{get\_relaxed\_orientation} is the
+structural relaxation with the rotation as the coordinate: at each step one
+diagonalisation with the coupling at the frozen source density turned rigidly,
+the free energy and the torque above, and a step of the same BFGS the atoms
+use, in the rotation vector about the start, so a length is an angle in
+radians. It returns the easy axis of a magnet, or the plane (and phase) of a
+spiral in a supercell.
+
+\begin{pycode}
+start = rotation_from_euler(0.4, 0.9, -0.3)      # 51.6 degrees off c, oblique
+relaxed = scalar.get_relaxed_orientation(spinor, rotation=start, curvature=True)
+print(relaxed.converged, relaxed.direction)      # -> True, (~0, ~0, 1): the c axis
+print(relaxed.curvature_eigenvalues)             # -> [~0, 2K1, 2K1] Ry/rad^2
+\end{pycode}
+
+\noindent Start it off every symmetry element: an orientation a symmetry fixes
+has no torque, whether it is an easy axis or a hard one, and a relaxation
+started there reports convergence without having searched (it warns). The
+curvature, a central difference of the torque, is what tells a minimum from a
+saddle; one of its eigenvalues is zero for a collinear texture, the turn about
+the moment itself. The gradient threshold sits above the torque's noise, and
+the energy minimised is the free energy $\sum w\varepsilon - TS$, for the reason
+above.
 
 \begin{refuses}
 \textbf{Refuses.} \textbf{PAW without \code{becsum}}, and \textbf{PAW on the

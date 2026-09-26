@@ -22581,7 +22581,7 @@ spin-orbit coupling that direction is free and the closed basis no longer pushes
 66.2, -42.0 and -50.9 degrees against 27.5, 62.3, -40.5 and -48.1, 0.30 mRy lower in
 `E + field`, in 78 iterations against 53, the manifold being exactly flat now.
 
-### P122 -- The torque on a whole texture: every spin turned by one rotation, three generators at once. 🚧 STEP 1 OF 6 DONE (`ORIENTATION-NEXT.md`); the noncollinear source, the relaxation and the in-loop rotation are open.
+### P122 -- The torque on a whole texture: every spin turned by one rotation, three generators at once. 🚧 STEPS 1 TO 3 OF 6 IN (`ORIENTATION-NEXT.md`); the helix numbers are on Triton, and the in-loop rotation (Route C) is open.
 
 `defumat/forces/torque.py` (`rotate_texture`, `cross_matrix`, `rotation_near`,
 `band_energy_at_rotation`, `orientation_torque`, and `_band_energy` and
@@ -22632,3 +22632,65 @@ direction can ask for.
 
 **Cost.** 41 s for the whole front-door call on the workstation, one core not pinned,
 including the scalar SCF and the first compilation; the three slow tests together 80 s.
+
+**Step 2, a noncollinear source, and the two checks that share no automatic
+differentiation with the torque** (`_reference_texture`, `_is_collinear`; three slow tests
+in `tests/regression/test_anisotropy.py` at an oblique orientation of tetragonal cobalt,
+ZYZ angles `(0.4, 0.9, -0.3)`, where all three components are live):
+
+| check | value |
+|---|---|
+| closed form `integral of m_out x B` (`exchange_torque` on the output density and the frozen potential) against `jax.grad` | 1.7e-12 relative, ultrasoft, with the augmentation in `m_out` |
+| free energy, spins turned by `R` against the lattice turned by `R^-1` (`System.with_cell`) | 1.3e-15 Ry |
+| torque, the same pair, `tau = R tau'` | 2.0e-6 at `ethr = 1.1e-12`, 1.05e-6 at the floor `ETHR_MIN = 1e-13`, 1.5e-10 at 1.1e-16 and 4.1e-11 at 1e-17 with the floor lowered |
+| torque with `soc_scale = 0`, against 4.0e-5 with the coupling | 1.3e-10 Ry/rad |
+
+**The torque's resolution is the eigensolver's floor, and that is the step's finding.** The
+energy is second order in the eigenvectors' error and agrees to 1e-15 at any threshold; a
+gradient at frozen states is first order in it, so at the default floor the torque carries
+about 7e-11 Ry per radian of noise on this cell (the torque itself moved by that much
+between `ethr = 1e-13` and `1e-17`), and a one-shot `conv_thr` of 1e-12 and 1e-14 give
+identical torques because both reach the floor. The coupling-off control sits at the same
+level. So a relaxation's gradient threshold belongs above about 1e-10, which is harmless
+against cobalt's 4e-5, and the lattice-rotation test lowers the floor for itself.
+
+**The helix source comes from the spiral, not from the supercell.** The four-cell 90-degree
+helix of tetragonal cobalt (`co-helix4-nosoc.in`) holds its angles to 0.05 degrees and
+2.103 mu_B per site but never converges: 100 iterations limit-cycling near 1e-7 Ry under
+plain mixing, Thomas-Fermi mixing, a smearing of 0.05, and in LDA, where the site moments
+drift apart in pairs (2.1545, 2.1542 against 2.1528, 2.1530). It is an unstable stationary
+point of a strong ferromagnet. The same helix by the generalized Bloch theorem in the
+one-atom cell (`co-helix4-spiral.in`) converges in 19 iterations to 4.8e-11 in 36 s,
+because the theorem imposes the helix's symmetry, and `workflows/spiral.py:
+unfold_spiral_density` lays it on the supercell in reciprocal space: every component
+`(h, k, l)` to `(h, k, 4l)`, the transverse pair shifted by `K = -q M`, since with the up
+component at `k + q/2` the laboratory moment is `m'_+ exp(-i q . r)` (the opposite sense to
+the module docstring's `Rot_z(q . R)`, which no run could see without the coupling). Two
+traps on the way: the spiral's unshifted grid samples the supercell at `kz = 1/2`, so the
+supercell needs `3 3 1 0 0 1`, without which the two disagree by 4.8 per cent; and the two
+then still disagree by 0.49 per cent in the magnetization and 7e-5 Ry in the eigenvalues
+at potentials equal to 2e-13, which is `OPEN.md` Part XXI item 1 and does not touch the
+torque, whose source only has to be a texture.
+
+**Step 3, the relaxation** (`relax_orientation`, `RelaxedOrientation`, `OrientationStep`,
+`Calculator.get_relaxed_orientation`; `test_the_orientation_relaxes_onto_the_easy_axis`,
+slow, 6.5 minutes). BFGS from `relax/bfgs.py` on the chart `R(x) = exp([x]x) R_start`, the
+identity as its metric so a length is an angle, the chart's gradient `J(x)^T` times the
+torque's (`_left_jacobian`, checked to second order), trust radii 0.2, 0.5 and 1e-4 rad,
+`hessian_scale` from the first step as in `relax_spiral_q`, and the free energy handed to
+the line search. On tetragonal cobalt from `(0.4, 0.9, -0.3)`, 51.6 degrees off `c`:
+
+| quantity | value |
+|---|---|
+| one-shots to converge (`grad_conv_thr = 1e-8`, `etot_conv_thr = 1e-9`) | 8, the largest free gradient going 3.6e-5, 3.7e-5, 3.0e-5, 1.1e-5, 2.5e-6, 4.3e-8, 2.0e-8, 7.9e-9 |
+| final direction | `(-1.06e-4, 8.9e-5, 1.0)`, 0.008 degrees from `c` |
+| curvature eigenvalues (central difference of the torque, step 0.02 rad) | -3.8e-13 (the turn about the moment), 7.914859e-5 and 7.914889e-5 Ry/rad^2 (the two tilts, equal to 4e-6 by the four-fold axis) |
+| `K1 = curvature / 2`, and `K2` from the 45-degree torque's `K1 + K2 = 4.0595e-5` | 3.957e-5 Ry (0.538 meV), 1.02e-6 Ry (0.014 meV) |
+| free energy gained over the relaxation | 2.4595e-5 Ry, against `K1 sin^2 + K2 sin^4` at the start, 2.466e-5: 0.3 per cent |
+| wall clock, 14 one-shots with their gradients | 407 s on the workstation, one process |
+
+The last row but one is a check that shares nothing with the gradient: the energy the
+relaxation gained is a difference of two free energies, `K1` a second derivative at the end
+and `K2` a first derivative at 45 degrees, and the three agree. **The chart is recentred
+past 2 rad and a start already below `grad_conv_thr` warns**, because an orientation a
+symmetry fixes has no torque whether it is easy or hard.

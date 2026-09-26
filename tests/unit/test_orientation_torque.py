@@ -181,3 +181,59 @@ def test_a_turn_about_the_reference_axis_moves_the_other_moment():
 def test_the_identity_returns_the_system_untouched():
     system = _canted()
     assert _with_rotation(system, np.eye(3)) is system
+
+
+def test_the_chart_s_jacobian_carries_a_left_turn_to_the_chart():
+    """``exp([x + d]x) = exp([J d]x) exp([x]x)``, so ``dF/dx = J^T g``.
+
+    The relaxation's gradient in its chart is the torque's pulled back through
+    this, so an error here would be a wrong force with the right energy.
+    Checked to second order in ``d`` at a generic ``x``, and at the origin, where
+    ``J`` is the identity and its series takes over from the quotients.
+    """
+    from defumat.workflows.anisotropy import _exp_rotation, _left_jacobian
+
+    x = np.array([0.3, -0.7, 1.1])
+    for d in (1e-4 * np.array([0.2, 0.5, -0.4]), 1e-6 * np.array([-1.0, 0.3, 0.8])):
+        lhs = _exp_rotation(x + d)
+        rhs = _exp_rotation(_left_jacobian(x) @ d) @ _exp_rotation(x)
+        assert np.abs(lhs - rhs).max() < 10 * np.dot(d, d) + 1e-14
+    np.testing.assert_allclose(_left_jacobian(np.zeros(3)), np.eye(3), atol=0)
+    np.testing.assert_allclose(_left_jacobian(np.array([2e-5, 0.0, 0.0])),
+                               _left_jacobian(np.array([2e-4, 0.0, 0.0])),
+                               atol=2e-4)
+    rotation = _exp_rotation(x)
+    np.testing.assert_allclose(rotation @ rotation.T, np.eye(3), atol=1e-15)
+
+
+def test_an_unfolded_spiral_turns_by_minus_q_dot_r_from_cell_to_cell():
+    """``m_+ = m'_+ exp(-i q . r)`` with the up component at ``k + q/2``.
+
+    A rotating-frame density that is uniform, with its transverse moment along
+    ``x``, unfolded four times along ``z`` at ``q = -1/4``: the charge tiles, and
+    the moment turns by ``+90`` degrees per cell, so it points along ``x``, ``y``,
+    ``-x``, ``-y`` at the four cell origins. ``q = +1/4`` turns it the other way.
+    """
+    from defumat.workflows.spiral import unfold_spiral_density
+
+    rotating = np.zeros((4, 4, 4, 5))
+    rotating[0] = 1.0
+    rotating[1] = 0.7
+    lab = unfold_spiral_density(rotating, (0.0, 0.0, -0.25), (1, 1, 4), (4, 4, 20))
+    np.testing.assert_allclose(lab[0], 1.0, atol=1e-14)
+    expected = [(1, 0), (0, 1), (-1, 0), (0, -1)]
+    for cell, (x, y) in enumerate(expected):
+        np.testing.assert_allclose(lab[1:3, 0, 0, 5 * cell], [0.7 * x, 0.7 * y],
+                                   atol=1e-14)
+    other = unfold_spiral_density(rotating, (0.0, 0.0, 0.25), (1, 1, 4), (4, 4, 20))
+    np.testing.assert_allclose(other[1:3, 0, 0, 5], [0.0, -0.7], atol=1e-14)
+
+
+def test_an_incommensurate_or_aliased_unfolding_is_refused():
+    from defumat.workflows.spiral import unfold_spiral_density
+
+    rotating = np.zeros((4, 4, 4, 5))
+    with pytest.raises(ValueError, match="not commensurate"):
+        unfold_spiral_density(rotating, (0.0, 0.0, 0.3), (1, 1, 4), (4, 4, 20))
+    with pytest.raises(ValueError, match="too coarse"):
+        unfold_spiral_density(rotating, (0.0, 0.0, -0.25), (1, 1, 4), (4, 4, 12))

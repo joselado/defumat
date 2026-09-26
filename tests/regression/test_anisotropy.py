@@ -1121,6 +1121,164 @@ def test_turning_the_texture_leaves_the_hartree_and_xc_energies_alone():
     assert float(second.etxc) == pytest.approx(float(first.etxc), abs=1.0e-12)
 
 
+#: An orientation off every symmetry element of tetragonal cobalt, so that all
+#: three components of the torque are nonzero and none is a symmetry's zero.
+OBLIQUE = (0.4, 0.9, -0.3)
+
+
+def _oblique_states(conv_thr=1.0e-10, turn_the_lattice=False):
+    """``(calculation, states, weights, eigenvalues, levels, texture, rotation)``.
+
+    The one-shot states at :data:`OBLIQUE`. With ``turn_the_lattice`` the spins
+    stay where the source had them and the **lattice** is turned by the inverse
+    rotation instead, which is the same relative orientation reached by code
+    that shares nothing with ``_with_rotation`` or ``rotate_texture``'s ``R``.
+    """
+    import jax.numpy as jnp
+
+    from defumat.forces.torque import rotate_texture
+    from defumat.workflows.anisotropy import (
+        _reference_axis,
+        _reference_texture,
+        _with_rotation,
+        rotation_from_euler,
+    )
+    from defumat.workflows.nscf import fixed_density_states
+
+    scalar, spinor = _tetragonal()
+    scf = scalar.get_scf()
+    rotation = rotation_from_euler(*OBLIQUE)
+    texture = _reference_texture(scf.density, _reference_axis(spinor.system))
+    if turn_the_lattice:
+        at = np.asarray(spinor.system.cell.at)
+        system, applied = spinor.system.with_cell(at @ rotation), np.eye(3)
+    else:
+        system, applied = _with_rotation(spinor.system, rotation), rotation
+    calculation, system, eigenvalues, states = fixed_density_states(
+        system, spinor.pseudos, rotate_texture(texture, applied), conv_thr=conv_thr)
+    weights, levels = calculation.occupations(jnp.asarray(eigenvalues))
+    return calculation, states, weights, eigenvalues, levels, texture, applied
+
+
+@pytest.mark.slow
+def test_the_torque_is_the_exchange_field_acting_on_the_coupled_magnetization():
+    """``tau = integral of m_out x B``, with no automatic differentiation in it.
+
+    Only the exchange field carries the rotation, and ``B[R rho] = R B[rho]``,
+    so ``dF/dw_a = integral of m_out . (e_a x B)``: the frozen field acting on
+    the magnetization of the states solved with the coupling, which leans off
+    it by exactly what the coupling does. ``exchange_torque`` integrates it from
+    the output density and the potential alone. On an ultrasoft dataset the
+    output density must carry its augmentation for this to hold, since
+    ``D_ij`` enters the band energy as ``integral of V Q_ij``. Measured at
+    1.7e-12 relative, all three components live.
+    """
+    from defumat.forces.torque import orientation_torque, rotate_texture
+    from defumat.scf.spin_torque import exchange_torque
+
+    calculation, states, weights, _, _, texture, rotation = _oblique_states()
+    torque = orientation_torque(calculation, states, weights, texture, rotation)
+    output = calculation.density(states, weights)
+    potential = calculation.potential(rotate_texture(texture, rotation), 1.0, None)
+    closed = np.asarray(exchange_torque(output, potential.v_scf,
+                                        calculation.system.cell).total)
+
+    assert np.min(np.abs(torque)) > 1.0e-7, "a component is a symmetry's zero"
+    np.testing.assert_allclose(closed, torque, rtol=1.0e-9, atol=1.0e-15)
+
+
+@pytest.mark.slow
+def test_turning_the_lattice_is_turning_the_spins_the_other_way(monkeypatch):
+    """The same relative orientation by two routes that share no rotation code.
+
+    Turning every spin by ``R`` in a fixed lattice is the same calculation as
+    turning the lattice (and the atoms, whose crystal coordinates stay) by
+    ``R^-1`` under fixed spins, so the free energies are equal and the torques
+    are related by ``tau = R tau'``. It is Elk's own way of changing the
+    orientation (``mae.f90`` rotates ``avec``).
+
+    **The torque's agreement is set by the eigensolver, not by the rotation.**
+    The energies agree to 1.3e-15 Ry at any threshold, being second order in the
+    eigenvectors' error, while a gradient at frozen states is first order in it:
+    at the default floor ``ETHR_MIN = 1e-13`` the torques agree to 1.05e-6
+    relative and stop improving (a one-shot ``conv_thr`` of 1e-12 and 1e-14
+    both reach the floor), and with the floor lowered they agree to 1.5e-10 at
+    ``ethr = 1.1e-16`` and 4.1e-11 at 1e-17. So the floor is lowered here, and
+    the default floor's torque noise, about 7e-11 Ry per radian on this cell,
+    is the resolution a relaxation's gradient threshold has to sit above.
+    """
+    import defumat.workflows.nscf as nscf
+    from defumat.forces.torque import orientation_torque
+
+    monkeypatch.setattr(nscf, "ETHR_MIN", 1.0e-17)
+    energies, torques = [], []
+    for turn_the_lattice in (False, True):
+        calculation, states, weights, eigenvalues, levels, texture, applied = (
+            _oblique_states(conv_thr=1.0e-16, turn_the_lattice=turn_the_lattice))
+        energies.append(float(np.sum(np.asarray(weights) * np.asarray(eigenvalues)))
+                        + float(levels.get("smearing", 0.0)))
+        torques.append(orientation_torque(calculation, states, weights, texture,
+                                          applied))
+    from defumat.workflows.anisotropy import rotation_from_euler
+
+    rotation = rotation_from_euler(*OBLIQUE)
+    assert energies[1] == pytest.approx(energies[0], abs=1.0e-12)
+    np.testing.assert_allclose(rotation @ torques[1], torques[0], rtol=0,
+                               atol=1.0e-9 * np.linalg.norm(torques[0]))
+
+
+@pytest.mark.slow
+def test_without_the_coupling_the_torque_on_a_texture_vanishes():
+    """``soc_scale = 0`` on the same file: every component zero, beside a live one.
+
+    Without the coupling the Hamiltonian at ``R rho`` is the one at ``rho``
+    conjugated by a spin rotation, so the band energy does not depend on ``R``
+    and neither does anything derived from it. The zero is read against the
+    same torque with the coupling on, so that it is seen to be a zero and not a
+    silence: 1.3e-10 against 4.0e-5 Ry per radian, which is the default
+    eigensolver floor's noise (see the lattice test above).
+    """
+    from defumat.workflows.anisotropy import rotation_from_euler, run_orientation_torque
+
+    scalar, spinor = _tetragonal()
+    scf = scalar.get_scf()
+    rotation = rotation_from_euler(*OBLIQUE)
+    live = run_orientation_torque(spinor.system, spinor.pseudos, scf.density,
+                                  rotation=rotation)
+    off = run_orientation_torque(spinor.system, spinor.pseudos, scf.density,
+                                 rotation=rotation, soc_scale=0.0)
+    assert np.linalg.norm(live.torque) > 1.0e-5
+    assert np.linalg.norm(off.torque) < 2.0e-5 * np.linalg.norm(live.torque)
+
+
+@pytest.mark.slow
+def test_the_orientation_relaxes_onto_the_easy_axis():
+    """Tetragonal cobalt from an oblique start lands on ``c``, the easy axis.
+
+    ``ORIENTATION-NEXT.md`` step 3. Started 51.6 degrees from ``c`` with every
+    component of the torque live, the BFGS in the rotation vector converges on
+    ``c``, which P60 and P87 both have as the easy axis. The curvature there is
+    the second number: one eigenvalue is the turn about the moment, which moves
+    nothing, and the other two are the tilts, equal by the four-fold axis, and
+    ``2 K1`` for ``E = K1 sin^2 + K2 sin^4``, where the 45-degree torque reads
+    ``K1 + K2``; their difference is ``K2``.
+    """
+    from defumat.workflows.anisotropy import rotation_from_euler
+
+    scalar, spinor = _tetragonal()
+    relaxed = scalar.get_relaxed_orientation(
+        spinor, rotation=rotation_from_euler(*OBLIQUE), curvature=True)
+
+    assert relaxed.converged
+    assert abs(relaxed.direction[2]) > 1.0 - 1.0e-6
+    eigenvalues = relaxed.curvature_eigenvalues
+    tilts = eigenvalues[1:]
+    assert abs(eigenvalues[0]) < 1.0e-3 * tilts.min()
+    assert tilts[1] == pytest.approx(tilts[0], rel=1.0e-3)
+    # 2 K1 against the 45-degree torque's K1 + K2 = 4.059e-5 Ry.
+    assert 0.5 * tilts.mean() == pytest.approx(4.059e-5, rel=0.2)
+
+
 def test_the_rotation_plane_must_be_orthogonal():
     scalar, spinor = _tetragonal()
     with pytest.raises(ValueError, match="orthogonal"):

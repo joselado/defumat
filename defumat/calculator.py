@@ -1928,6 +1928,25 @@ class Calculator:
             merged["rotation"] = rotation
         return run_orientation_torque(system, pseudos, result.density, **merged)
 
+    def get_relaxed_orientation(self, spinor, rotation=None, **options):
+        """The orientation of the texture at which the torque on it vanishes.
+
+        The easy axis of a magnet, the plane of a spiral: a BFGS relaxation in
+        the rotation of every spin together -- see
+        :func:`defumat.workflows.anisotropy.relax_orientation`.
+        """
+        from defumat.workflows.anisotropy import relax_orientation
+
+        result = self._ground_state("the orientation relaxation")
+        system, pseudos, leg = _spinor_leg(spinor)
+        merged = self._defaults_for(relax_orientation, options,
+                                    exclude=_SPINOR_LEG_OPTIONS)
+        for name, value in leg.items():
+            merged.setdefault(name, value)
+        if rotation is not None:
+            merged["rotation"] = rotation
+        return relax_orientation(system, pseudos, result.density, **merged)
+
     def get_first_order_soc(self, spinor, direction=None, **options):
         """The spin-orbit term's expectation value at coupling-free states.
 

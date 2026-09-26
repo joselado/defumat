@@ -128,6 +128,9 @@ __all__ = [
     "run_orientation_torque",
     "rotation_from_euler",
     "euler_from_rotation",
+    "OrientationStep",
+    "RelaxedOrientation",
+    "relax_orientation",
     "RelaxedDirection",
     "RelaxedAnisotropy",
     "run_relaxed_direction",
@@ -1375,6 +1378,36 @@ def _checked_rotation(rotation) -> np.ndarray:
     return rotation
 
 
+def _reference_texture(density, own) -> jnp.ndarray:
+    """The four-channel texture at the reference orientation, the one ``R = 1`` means.
+
+    A collinear source, two channels or four, has its moment laid along the
+    system's own axis ``own`` with its sign, exactly as the force theorem lays
+    it, so that a collinear run here is P58's and P60's rotation. A
+    four-channel source whose moments are **not** collinear is already a
+    texture in the orientation it converged in, and is returned as it is:
+    there is no axis to read off it, and :func:`rotate_texture` needs none.
+    """
+    density = jnp.asarray(density)
+    if density.shape[0] == 4 and not _is_collinear(density):
+        return density
+    return nc_magnetization_from_lsda(density, own)
+
+
+def _is_collinear(density) -> bool:
+    """Whether a four-channel magnetization lies along one axis.
+
+    ``_collinear_axis``'s test, the two smaller eigenvalues of
+    ``M_ab = integral of m_a m_b`` against the largest, asked as a question
+    rather than raised as a refusal.
+    """
+    from defumat.scf.continuation import TRANSVERSE_TOL
+
+    moment = np.asarray(jnp.real(jnp.asarray(density)[1:4])).reshape(3, -1)
+    values = np.linalg.eigvalsh(moment @ moment.T)
+    return float(values[0] + values[1]) <= TRANSVERSE_TOL * float(values[2])
+
+
 @dataclass
 class OrientationTorque:
     """``-dF/dw`` for a rigid rotation of the whole texture, at one orientation."""
@@ -1448,9 +1481,11 @@ def run_orientation_torque(
 
     ``density`` is the source's, converged **without** spin-orbit coupling, as
     :func:`run_force_theorem` takes it, and everything that function refuses is
-    refused here for the same reasons. A four-component source whose moments
-    are not collinear is refused by name for now (``ORIENTATION-NEXT.md``
-    step 2 lifts it).
+    refused here for the same reasons. It may be a four-component density whose
+    moments are not collinear -- a commensurate spiral in a supercell, a canted
+    antiferromagnet -- which is turned as it is (:func:`_reference_texture`),
+    with the system's ``angle1``/``angle2`` describing it, since those are what
+    ``_with_rotation`` turns with it.
     """
     from defumat.forces.torque import (
         band_energy_at_rotation,
@@ -1464,11 +1499,7 @@ def run_orientation_torque(
     rotation = _checked_rotation(rotation)
 
     own = _reference_axis(system)
-    # The texture at the reference orientation, the one ``R = 1`` means: the
-    # collinear moment laid along the system's own axis with its sign, exactly
-    # as the force theorem lays it (and a four-component source is read off its
-    # own axis, which refuses one that is not collinear).
-    texture = nc_magnetization_from_lsda(density, own)
+    texture = _reference_texture(density, own)
     turned = _with_rotation(system, rotation)
     calculation, turned, eigenvalues, wavefunctions = fixed_density_states(
         turned, pseudos, rotate_texture(texture, rotation), nbnd=nbnd,
@@ -1491,6 +1522,272 @@ def run_orientation_torque(
         band_energy_check=check,
         entropy=float(levels.get("smearing", 0.0)),
         fermi_energy=levels.get("fermi_energy"),
+    )
+
+
+#: Trust radii of the orientation relaxation, in **radians**: the rotation
+#: vector is the coordinate, so a length in it is an angle. The first step is a
+#: steepest-descent step of ``INI`` (about 11 degrees), no step turns the
+#: texture by more than ``MAX`` (about 29 degrees), and ``MIN`` is where QE's
+#: line search gives up. Chosen as angles rather than inherited from the
+#: atoms' bohr, which have no meaning here.
+ORIENTATION_TRUST_INI = 0.2
+ORIENTATION_TRUST_MAX = 0.5
+ORIENTATION_TRUST_MIN = 1.0e-4
+
+#: How far the chart ``R(x) = exp([x]x) R_start`` is followed before it is
+#: re-centred on the current orientation, in radians. The exponential map is a
+#: good chart up to ``|x| < pi``, and its Jacobian degenerates as ``|x|``
+#: approaches it, so the optimizer is restarted well before.
+ORIENTATION_CHART_LIMIT = 2.0
+
+
+def _exp_rotation(vector) -> np.ndarray:
+    """``exp([x]x)``, Rodrigues' formula, on the host (nothing differentiates it)."""
+    vector = np.asarray(vector, dtype=float)
+    angle = float(np.linalg.norm(vector))
+    if angle < 1.0e-14:
+        return np.eye(3)
+    axis = vector / angle
+    cross = np.array([
+        [0.0, -axis[2], axis[1]],
+        [axis[2], 0.0, -axis[0]],
+        [-axis[1], axis[0], 0.0],
+    ])
+    return np.eye(3) + np.sin(angle) * cross + (1.0 - np.cos(angle)) * cross @ cross
+
+
+def _left_jacobian(vector) -> np.ndarray:
+    """``J`` with ``exp([x + d]x) = exp([J d]x) exp([x]x)`` to first order in ``d``.
+
+    So ``dF/dx = J^T g`` for a gradient ``g`` taken, as :func:`run_orientation_torque`
+    takes it, for a turn applied on the left of the current orientation.
+    ``J = 1 + (1 - cos t)/t^2 [x]x + (t - sin t)/t^3 [x]x^2`` with ``t = |x|``,
+    and its series below ``t = 1e-4``, where the two quotients lose digits.
+    """
+    vector = np.asarray(vector, dtype=float)
+    angle = float(np.linalg.norm(vector))
+    cross = np.array([
+        [0.0, -vector[2], vector[1]],
+        [vector[2], 0.0, -vector[0]],
+        [-vector[1], vector[0], 0.0],
+    ])
+    if angle < 1.0e-4:
+        first, second = 0.5 - angle**2 / 24.0, 1.0 / 6.0 - angle**2 / 120.0
+    else:
+        first = (1.0 - np.cos(angle)) / angle**2
+        second = (angle - np.sin(angle)) / angle**3
+    return np.eye(3) + first * cross + second * cross @ cross
+
+
+@dataclass
+class OrientationStep:
+    """One point of an orientation relaxation."""
+
+    index: int
+    rotation: np.ndarray
+    #: ``sum w eps - TS`` of the one-shot, Ry: what the optimizer minimises.
+    free_energy: float
+    #: ``(3,)`` Ry per radian, cartesian.
+    torque: np.ndarray
+    #: Where the reference axis points at this orientation.
+    direction: tuple
+    #: The largest free component of the gradient in the chart, Ry per radian.
+    max_gradient: float
+
+
+@dataclass
+class RelaxedOrientation:
+    """The orientation a texture's free energy is stationary at, and how it got there."""
+
+    converged: bool
+    #: The last orientation evaluated, relative to the system's own texture.
+    rotation: np.ndarray
+    #: The one-shot at :attr:`rotation`.
+    torque: OrientationTorque
+    steps: list
+    optimizer_failed: bool = False
+    #: ``(3, 3)`` Ry per radian^2 from a central difference of the torque about
+    #: the final orientation, when asked for; the symmetrised Hessian of ``F`` in
+    #: the space frame. Positive on the live generators at a minimum.
+    curvature: np.ndarray | None = None
+
+    @property
+    def direction(self) -> tuple:
+        """Where the reference axis points: the easy axis, for a collinear magnet."""
+        return self.torque.direction
+
+    @property
+    def euler_angles(self) -> tuple:
+        return euler_from_rotation(self.rotation)
+
+    @property
+    def free_energies(self) -> np.ndarray:
+        return np.array([step.free_energy for step in self.steps])
+
+    @property
+    def curvature_eigenvalues(self) -> np.ndarray | None:
+        """The curvature's eigenvalues, Ry per radian^2: all non-negative at a minimum.
+
+        A collinear texture has one zero among them, the turn about its own
+        moment, which moves nothing.
+        """
+        if self.curvature is None:
+            return None
+        return np.linalg.eigvalsh(self.curvature)
+
+
+def relax_orientation(
+    system: System,
+    pseudos: tuple[Pseudopotential, ...],
+    density: jnp.ndarray,
+    rotation=None,
+    *,
+    nbnd: int | None = None,
+    conv_thr: float = 1.0e-10,
+    etot_conv_thr: float = 1.0e-9,
+    grad_conv_thr: float = 1.0e-8,
+    nstep: int = 30,
+    free=(1, 1, 1),
+    curvature: bool = False,
+    curvature_step: float = 0.02,
+    ion_dynamics: str | None = None,
+    k_batch: int | None | str = "default",
+    soc_scale: float | None = None,
+    verbose: bool = False,
+) -> RelaxedOrientation:
+    """Turn the whole texture until the torque on it vanishes: the easy orientation.
+
+    ``ORIENTATION-NEXT.md`` Route A, the relaxation. Each step is
+    :func:`run_orientation_torque` at the current orientation, one
+    diagonalisation with the coupling at the frozen source density turned
+    rigidly, and the free energy and torque it returns go to the same BFGS the
+    atoms use, as :func:`~defumat.workflows.spiral.relax_spiral_q` hands it the
+    spiral wavevector. The coordinate is the rotation vector ``x`` of the chart
+    ``R(x) = exp([x]x) R_start``, the metric is the identity, so a length is an
+    angle in radians, and the gradient in the chart is ``J(x)^T`` times the
+    torque's (:func:`_left_jacobian`). The chart is re-centred on the current
+    orientation, losing the Hessian, if ``|x|`` passes
+    :data:`ORIENTATION_CHART_LIMIT`.
+
+    Args:
+        rotation: the starting orientation, relative to the system's own
+            texture (:func:`rotation_from_euler` builds one). **Start off every
+            symmetry element**: an orientation a symmetry fixes has no torque
+            whether it is an easy axis or a hard one, and a relaxation started
+            there reports convergence without moving. A start whose torque is
+            already below ``grad_conv_thr`` is warned about for that reason.
+        etot_conv_thr, grad_conv_thr: in Ry and Ry per radian, and both must
+            hold, as in a ``pw.x`` relaxation. The gradient threshold's floor is
+            the torque's own noise, set by the eigensolver's floor
+            ``ETHR_MIN = 1e-13`` at about 1e-10 Ry per radian on tetragonal
+            cobalt (P122); 1e-8 is an angle of about 1e-4 rad against a
+            curvature of ``2 K1 = 8e-5`` Ry per radian^2.
+        free: a cartesian mask on the chart's gradient, as ``if_pos`` is on a
+            force. A collinear texture needs none: the turn about its own
+            moment has no torque, so the optimizer never moves along it.
+        curvature: add a central difference of the torque about the final
+            orientation, six more one-shots, so that a minimum is told from a
+            saddle (:attr:`RelaxedOrientation.curvature_eigenvalues`).
+
+    The energy minimised is the free energy ``sum w eps - TS`` and not the band
+    energy, because the torque is the free energy's derivative and a line
+    search on the other would see an energy inconsistent with its gradient
+    (P60 measured the entropy at 55 per cent of the band energy's slope on
+    tetragonal cobalt at ``degauss = 0.02``).
+    """
+    from defumat.relax.bfgs import BFGSSettings
+    from defumat.relax.registry import get_ion_dynamics
+    from defumat.workflows.spiral import _first_step_scale
+
+    start = _checked_rotation(rotation)
+    free = np.asarray(free, dtype=float).reshape(3)
+
+    def fresh_optimizer():
+        settings = BFGSSettings(
+            trust_radius_max=ORIENTATION_TRUST_MAX,
+            trust_radius_ini=ORIENTATION_TRUST_INI,
+            trust_radius_min=ORIENTATION_TRUST_MIN,
+        )
+        optimizer = get_ion_dynamics(ion_dynamics)(
+            at=np.eye(3), energy_thr=etot_conv_thr, grad_thr=grad_conv_thr,
+            settings=settings,
+        )
+        return optimizer, settings
+
+    def one_shot(orientation):
+        return run_orientation_torque(
+            system, pseudos, density, rotation=orientation, nbnd=nbnd,
+            conv_thr=conv_thr, k_batch=k_batch, soc_scale=soc_scale,
+        )
+
+    optimizer, settings = fresh_optimizer()
+    chart = np.zeros(3)
+    first_in_chart = True
+    steps: list[OrientationStep] = []
+    converged = False
+    for index in range(1, nstep + 1):
+        orientation = _exp_rotation(chart) @ start
+        result = one_shot(orientation)
+        gradient = (_left_jacobian(chart).T @ result.gradient) * free
+        max_gradient = float(np.max(np.abs(gradient)))
+        if index == 1 and max_gradient < grad_conv_thr:
+            warnings.warn(
+                f"the starting orientation already has a torque below "
+                f"grad_conv_thr ({max_gradient:.2e} Ry/rad): an orientation a "
+                "symmetry of the crystal fixes has no torque whether it is an "
+                "easy axis or a hard one, so this reports convergence without "
+                "having searched. Start off every symmetry element, or pass "
+                "curvature=True to see which it is",
+                stacklevel=2,
+            )
+        if first_in_chart:
+            # No curvature is known yet, so the first step is steepest descent
+            # of the trust radius's length, as ``relax_spiral_q`` makes it.
+            settings.hessian_scale = _first_step_scale(optimizer, gradient, settings)
+            first_in_chart = False
+        moved, converged = optimizer.step(
+            chart.reshape(1, 3), result.free_energy, -gradient.reshape(1, 3),
+        )
+        steps.append(OrientationStep(
+            index=index,
+            rotation=orientation,
+            free_energy=result.free_energy,
+            torque=np.asarray(result.torque),
+            direction=result.direction,
+            max_gradient=max_gradient,
+        ))
+        if verbose:
+            d = result.direction
+            print(f"orientation step {index:3d}   axis = ({d[0]:8.5f}, "
+                  f"{d[1]:8.5f}, {d[2]:8.5f})   F = {result.free_energy:18.10f} Ry"
+                  f"   max |dF/dx| = {max_gradient:.3e}", flush=True)
+        if converged or optimizer.failed:
+            break
+        chart = np.asarray(optimizer.to_crystal(moved), dtype=float).reshape(3)
+        if np.linalg.norm(chart) > ORIENTATION_CHART_LIMIT:
+            start = _exp_rotation(chart) @ start
+            chart = np.zeros(3)
+            optimizer, settings = fresh_optimizer()
+            first_in_chart = True
+
+    hessian = None
+    if curvature:
+        columns = []
+        for axis in np.eye(3):
+            plus = one_shot(_exp_rotation(curvature_step * axis) @ orientation)
+            minus = one_shot(_exp_rotation(-curvature_step * axis) @ orientation)
+            columns.append((plus.gradient - minus.gradient) / (2.0 * curvature_step))
+        hessian = np.asarray(columns).T
+        hessian = 0.5 * (hessian + hessian.T)
+
+    return RelaxedOrientation(
+        converged=bool(converged and not optimizer.failed),
+        rotation=orientation,
+        torque=result,
+        steps=steps,
+        optimizer_failed=bool(optimizer.failed),
+        curvature=hessian,
     )
 
 

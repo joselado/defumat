@@ -1,0 +1,38 @@
+! **The four-cell cobalt helix of `co-helix4-nosoc.in`, in its one-atom cell**, by
+! the generalized Bloch theorem: the source density of `ORIENTATION-NEXT.md` step 2.
+!
+! The tetragonal cell of `co-tetragonal-anisotropy-sr.in` with `spiral_q` a quarter
+! of the reciprocal vector along c, so the moment turns by 90 degrees from one cell
+! to the next, and the k-grid `3 3 4` so that its sampling is exactly that of the
+! supercell's `3 3 1`. The sign of q is chosen for the handedness: with the up
+! component at k + q/2 the laboratory moment turns as exp(-i q . r) from the
+! rotating-frame one, so q = -1/4 lays the moments along x, y, -x, -y as the
+! supercell input does.
+!
+! **Why the helix comes from here and not from the supercell.** The supercell SCF
+! limit-cycles near 1e-7 Ry for 100 iterations under plain mixing, Thomas-Fermi
+! mixing and a wider smearing, and does so in LDA as well, with the site moments
+! drifting apart in pairs: the 90-degree helix of a strong ferromagnet is an
+! unstable stationary point, and in the supercell nothing forbids the mode it is
+! unstable along. The generalized Bloch theorem imposes the helix's symmetry, so
+! here it is a fixed point the SCF can reach, and it is exact for this commensurate
+! q, which is what makes its unfolded density the supercell's stationary density.
+&control
+   calculation = 'scf'
+/
+&system
+   ibrav = 6, celldm(1) = 4.60, celldm(3) = 1.30, nat = 1, ntyp = 1,
+   noncolin = .true., nosym = .true., ecutwfc = 20.0, ecutrho = 160.0,
+   occupations = 'smearing', smearing = 'mv', degauss = 0.02,
+   starting_magnetization(1) = 0.6, angle1(1) = 90.0, angle2(1) = 0.0,
+   spiral_q(1) = 0.0, spiral_q(2) = 0.0, spiral_q(3) = -0.25,
+/
+&electrons
+   conv_thr = 1.0e-10
+/
+ATOMIC_SPECIES
+Co 58.933 Co.pbe-nd-rrkjus.UPF
+ATOMIC_POSITIONS crystal
+Co 0.0 0.0 0.0
+K_POINTS automatic
+3 3 4 0 0 0

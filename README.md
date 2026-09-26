@@ -319,6 +319,10 @@ model describes the surface. `calc.get_spiral_scan(wavevectors)`, notebook
   [36](notebooks/36_magnetic_anisotropy.ipynb). With every spin turned by one
   rotation it is a vector, the torque for the three generators at once,
   `calc.get_orientation_torque(spinor, rotation=R)`.
+- **Easy orientation of a magnetic texture**, relaxed rather than scanned: every
+  spin turned by one rotation, and BFGS in the rotation vector on that torque,
+  from a state converged without the coupling. The easy axis of a magnet, and the
+  plane of a spiral in a supercell. `calc.get_relaxed_orientation(spinor)`.
 - **Source-free exchange-correlation field, and the torque it exerts**: the
   longitudinal part of $\mathbf B_{xc}$ projected out so that
   $\nabla\cdot\mathbf B_{xc} = 0$, the one thing that lets a local functional
@@ -599,6 +603,7 @@ note, the routine or task in the other code's source, is in
 | **Magnetocrystalline anisotropy**, by the force theorem | `calc.get_anisotropy(spinor)` | ✓ | (✓)⁷ |
 | **Relaxed magnetocrystalline anisotropy** | `calc.get_relaxed_anisotropy()` | (✓)⁸ | ✓ |
 | **Magnetic torque** | `calc.get_torque(spinor)`, `calc.get_orientation_torque(spinor)` | | |
+| **Easy orientation of a magnetic texture**, relaxed | `calc.get_relaxed_orientation(spinor)` | (✓)⁸ | (✓)⁷ |
 | **Source-free exchange-correlation field**, and its torque | `calc.get_exchange_torque()` | | ✓ |
 | **Magnons** and the transverse spin susceptibility | `calc.get_magnon_dispersion(qpoints, frequencies)` | (✓)⁹ | ✓ |
 | **Dielectric constant** and **Born effective charges** | `calc.get_dielectric_tensor()` | ✓ | ✓ |
@@ -643,10 +648,13 @@ Where a tick is qualified, in one sentence each; the routines behind them are in
 - ⁶ Elk has no orbital magnetization by the modern theory; its moments are
   integrals of the magnetization over the muffin tins and the interstitial.
 - ⁷ Elk's `mae` re-converges a ground state per direction, which is the relaxed
-  row's method and not the force theorem.
+  row's method and not the force theorem. Its lowest direction is the easy axis
+  of a collinear cell, found by a scan over directions rather than by a
+  relaxation, and it cannot turn a noncollinear texture.
 - ⁸ `pw.x` can converge a spin-orbit run per direction and print its total
   energy, but has no routine that sets the directions up, holds the k-set fixed
-  and reports how far a moment drifted.
+  and reports how far a moment drifted. Its `lforcet` turns a collinear density
+  onto one direction per run, with no torque and so no relaxation.
 - ⁹ turboMagnon propagates a response vector and never forms $\chi_0$, so there
   is no Dyson equation and no pole; Elk's tasks 330 and 331 do exactly this.
 - ¹⁰ `ph.x` refuses a gradient-corrected functional here, where this does not.

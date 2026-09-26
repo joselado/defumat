@@ -6058,3 +6058,41 @@ axis by about 1e-7 rad). The first measurement is the supercell's site-resolved 
 directions at convergence, then the same run seeded exactly along `z`, where
 `(1,1,1)/sqrt(3)` rounding cannot enter. The test asserts the ultracell's transverse part
 below 1e-6 (2.6e-7 at 8 bands, 3e-9 at 32) and bounds the 32-band component ratio at 1.4.
+
+# Part XXI -- from the orientation torque's helix, 2026-09-26 (P122)
+
+## 1. An ultrasoft spin spiral and its unfolded supercell disagree at 7e-5 Ry, and more at a lower cutoff **[opened 2026-09-26]**
+
+Found while building the source for `ORIENTATION-NEXT.md` step 2. The four-cell cobalt
+helix converged in its one-atom cell by the generalized Bloch theorem
+(`co-helix4-spiral.in`: tetragonal cobalt, `Co.pbe-nd-rrkjus.UPF`, `ecutwfc = 20`,
+`ecutrho = 160`, `q = -b3/4`, `3 3 4` grid, 19 iterations to 4.8e-11) and unfolded onto
+the supercell (`unfold_spiral_density`, `co-helix4-nosoc.in`, `3 3 1 0 0 1`, the grid
+that samples the same points; with the unshifted grid the mismatch below is 4.8 per cent
+and is only sampling). A diagonalisation without the coupling in the supercell at the
+unfolded density should return that density and the spiral's spectrum. It does not:
+
+| quantity | ecutrho 160 | ecutrho 80 (no separate smooth grid) |
+|---|---|---|
+| local potential, unfolded against built from the unfolded density | 2e-13 Ry, all four channels | |
+| output magnetization against input, relative | 4.9e-3 | 3.8e-2 |
+| output charge against input, relative | 3.4e-5 | 1.2e-3 |
+| eigenvalues, supercell against the union of the four folded spiral k-points | up to 7.3e-5 Ry | about 3e-3 Ry (matching less careful) |
+| band energy, supercell against four spiral cells | +5.0e-4 Ry | |
+
+Ruled out: the sense of the phase (the opposite sign gives 23 per cent), the band count
+(64 against 44 changes nothing), the local potential (the first row), the sampling (the
+shifted grid), and the smooth grid's cut (the mismatch grows when there is no smooth
+grid). What is left is the nonlocal side of an ultrasoft dataset, the transverse `D_ij`
+and augmentation built from the displaced table `Q_ij(G - q)` in the spiral against the
+resident one on four atoms in the supercell, and the growth with a falling cutoff points
+at a truncation shell (`|G| < G_rho` in the rotating frame is `|G' + q| < G_rho` in the
+supercell's labelling). **It contradicts P95's 1.65e-9 Ry** for the same identity on the
+oxygen chain, so the first thing to find is what differs: GGA against LDA, a 3D cell with
+in-plane k-points against a chain at `Gamma`, cobalt's harder augmentation. The cheap
+discriminator is a norm-conserving dataset, where there is no augmentation to displace.
+
+**What it does not affect.** Route A's torque on the helix uses the unfolded density as a
+frozen source and only needs it to be a texture, not an exact stationary point: the
+internal torques of a texture that is not quite stationary cancel in the net rotation,
+since exchange conserves the total spin. The helix numbers of P122 are read that way.

@@ -1,0 +1,55 @@
+! **A four-cell spin helix of tetragonal cobalt, without spin-orbit coupling**: the
+! supercell of `ORIENTATION-NEXT.md` step 2, whose one-shot partner with the coupling
+! is `co-helix4-soc.in`. **Its own SCF is not the source**, which comes from
+! `co-helix4-spiral.in` unfolded onto this cell (`unfold_spiral_density`).
+!
+! The one-atom tetragonal cell of `co-tetragonal-anisotropy-sr.in` (a = 4.60 bohr,
+! c/a = 1.30, easy axis along c) stacked four times along c, with the moments turning
+! by 90 degrees from one cell to the next in the ab plane: a proper screw whose plane
+! normal is c. Without the coupling it is stationary by symmetry: inversion through a
+! site combined with a spin rotation by pi about that site's moment maps the helix
+! onto itself and fixes that site, so each site's torque would lie along its own
+! moment, which an exchange torque cannot.
+!
+! **Why this SCF is not used.** It limit-cycles near 1e-7 Ry for 100 iterations under
+! plain mixing, Thomas-Fermi mixing and a smearing of 0.05, and in LDA as well, the
+! site moments drifting apart in pairs: the helix is an unstable stationary point of
+! a strong ferromagnet, and nothing in the supercell forbids the mode it is unstable
+! along. It is kept as the system the unfolded density is diagonalised in.
+!
+! **The grid is shifted along c, `3 3 1 0 0 1`, and that is not a choice.** The spiral
+! puts its up component at k + q/2, so its unshifted `3 3 4` grid samples this
+! supercell at kz = 1/2, not at Gamma; with the unshifted `3 3 1` the two runs sample
+! different points and disagree by 4.8 per cent in the magnetization.
+!
+! Four species rather than a STARTING_MOMENTS card, so that `_with_rotation` turns
+! each one's angles; the scalar-relativistic `Co.pbe-nd-rrkjus.UPF` in a
+! noncollinear run, which is legal and is the source leg of the two-file route.
+&control
+   calculation = 'scf'
+/
+&system
+   ibrav = 6, celldm(1) = 4.60, celldm(3) = 5.20, nat = 4, ntyp = 4,
+   noncolin = .true., nosym = .true., ecutwfc = 20.0, ecutrho = 160.0,
+   occupations = 'smearing', smearing = 'mv', degauss = 0.02,
+   starting_magnetization(1) = 0.6, angle1(1) = 90.0, angle2(1) = 0.0,
+   starting_magnetization(2) = 0.6, angle1(2) = 90.0, angle2(2) = 90.0,
+   starting_magnetization(3) = 0.6, angle1(3) = 90.0, angle2(3) = 180.0,
+   starting_magnetization(4) = 0.6, angle1(4) = 90.0, angle2(4) = 270.0,
+/
+&electrons
+   conv_thr = 1.0e-9
+   mixing_beta = 0.3
+/
+ATOMIC_SPECIES
+Co1 58.933 Co.pbe-nd-rrkjus.UPF
+Co2 58.933 Co.pbe-nd-rrkjus.UPF
+Co3 58.933 Co.pbe-nd-rrkjus.UPF
+Co4 58.933 Co.pbe-nd-rrkjus.UPF
+ATOMIC_POSITIONS crystal
+Co1 0.0 0.0 0.00
+Co2 0.0 0.0 0.25
+Co3 0.0 0.0 0.50
+Co4 0.0 0.0 0.75
+K_POINTS automatic
+3 3 1 0 0 1
