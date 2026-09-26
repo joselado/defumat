@@ -6029,3 +6029,32 @@ before this run. **What was still owed was
 the run above on NiBr2**, where spin-orbit coupling is on and the partners remove only the
 preference between `+e_0` and `-e_0`; it needs that project's inputs on Triton. The
 default stays off until it has been measured.
+
+## 2. A noncollinear supercell under a scalar modulation keeps a transverse magnetization of 2e-5 **[opened 2026-09-26, `PLAN.md` P121]**
+
+Found through `test_the_noncollinear_ultracell_converges_to_the_supercell`, and it is the
+**reference's** residue, not the ultracell's. Two cells of hydrogen with the moment along
+`(1,1,1)/sqrt(3)` under a scalar modulation, against a real two-atom supercell run through
+`run_scf`. Without spin-orbit coupling the exact response of a collinear state to a scalar
+perturbation is longitudinal, so the modulated magnetization perpendicular to the moment
+should vanish. In the ultracell it does: 3.0e-9 of the longitudinal amplitude on the
+Kramers-closed basis and 9.7e-9 on the old one, at 32 bands. **In the supercell it is
+2.0e-5**, identical at `conv_thr = 1e-10` and `1e-12`, so it is a fixed point of that SCF
+rather than a stop point. The old basis's own error against the supercell, 2.4e-4, hid it
+as a 2 per cent spread between the three components; the closed basis, at 2e-5, reads it as
+28 per cent. On the way there, and each ruled out in the ultracell: a rigid rotation (7.7e-7
+rad, the angle between the two references), a degenerate band cut (the same at 35 bands,
+where the cut falls in a gap), the frozen states' accuracy (identical at
+`states_conv_thr = 1e-10`), and the reversed solve (identical with the partners built as
+the exact spin rotation of the reference's states).
+
+**What is open is whether a collinear-symmetric noncollinear SCF should have such a fixed
+point.** Candidates: a transverse canting between the two atoms that is physical only if
+something in the supercell breaks the collinear symmetry (it should not, with nothing but a
+scalar potential), a noncollinear-LDA or mixing detail that is symmetric in exact
+arithmetic and not at 2e-5, or the seed (both atoms start at `(1,1,1)/sqrt(3)` through
+`angle1`/`angle2` in degrees, `54.735610` and `45.0`, so the seed itself is off the exact
+axis by about 1e-7 rad). The first measurement is the supercell's site-resolved moment
+directions at convergence, then the same run seeded exactly along `z`, where
+`(1,1,1)/sqrt(3)` rounding cannot enter. The test asserts the ultracell's transverse part
+below 1e-6 (2.6e-7 at 8 bands, 3e-9 at 32) and bounds the 32-band component ratio at 1.4.

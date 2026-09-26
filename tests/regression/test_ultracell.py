@@ -1471,6 +1471,18 @@ def test_a_uniform_vector_field_is_the_unit_cell_under_the_same_field(
     a large ``nbnd``. It is kept because the recorded ladder was measured there
     and because the monotone fall is itself the evidence that those bands carry
     no weight: a basis corrupted at the top would not converge to the reference.
+
+    **On the Kramers-closed basis, the default since P121, there is no ladder**:
+    without spin-orbit coupling that span contains the rotated states exactly,
+    so the answer is right at every ``nbnd``, 7.5e-7 and 1.0e-6 at 16 and 32
+    bands with ``E + field`` equal to twelve digits. Reading that needs both
+    runs converged in *direction*, which ``conv_thr = 1e-11`` does not deliver
+    on a flat manifold: the reference stopped 2.5e-2 degrees (4.4e-4 rad) short
+    of the field there and reaches 5.6e-5 degrees at 1e-13, and that stop point
+    was the 4.17e-4 floor the closed basis first read. The old basis's ladder is
+    kept below as its control, asked for by ``kramers_pairs=False``: 1.9e-2,
+    7.4e-3 and 1.9e-3 at 16, 32 and 64 bands, its frame pinned to the
+    reference's direction until the basis can turn it.
     """
     kgrid = (2, 2, 2)
     calculator = _noncollinear(tmp_path, pseudo_dir, (1, 1, 1), kgrid,
@@ -1486,7 +1498,7 @@ def test_a_uniform_vector_field_is_the_unit_cell_under_the_same_field(
         " occupations='smearing'")
     path.write_text(text)
     held = Calculator.from_file(path, pseudo_dir=pseudo_dir)
-    reference = held.get_scf(conv_thr=1e-11, nbnd=16)
+    reference = held.get_scf(conv_thr=1e-13, nbnd=16)
     assert reference.converged
 
     volume = float(calculator.system.cell.volume)
@@ -1495,10 +1507,27 @@ def test_a_uniform_vector_field_is_the_unit_cell_under_the_same_field(
     assert m_ref @ np.asarray(field) > 0
     direction = m_ref / np.linalg.norm(m_ref)
     expected = np.asarray(field) / np.linalg.norm(field)
-    assert direction == pytest.approx(expected, abs=2e-3)
+    assert direction == pytest.approx(expected, abs=1e-5)
 
     def uniform(x):
         return np.broadcast_to(np.asarray(field), x.shape[:-1] + (3,))
+
+    exact = reference.total_energy + reference.field_energy
+    # The default, Kramers-closed basis: the unit cell under the field at every
+    # rung, to the two runs' own stop points.
+    for nbnd in (16, 32):
+        result = run_ultracell(
+            calculator.system, calculator.pseudos, scf, (1, 1, 1), kgrid,
+            nbnd=nbnd, conv_thr=1e-13, states_conv_thr=1e-8,
+            mixing_beta=0.3, max_iterations=150, magnetic_field=uniform,
+        )
+        assert result.converged
+        moment = result.cell_moments()[0]
+        error = float(np.linalg.norm(moment - m_ref) / np.linalg.norm(m_ref))
+        assert error < 1e-5, (nbnd, error)
+        assert (result.total_energy + result.field_energy
+                == pytest.approx(exact, abs=1e-8))
+        jax.clear_caches()
 
     errors, energies = [], []
     for nbnd in (16, 32, 64):
@@ -1506,6 +1535,7 @@ def test_a_uniform_vector_field_is_the_unit_cell_under_the_same_field(
             calculator.system, calculator.pseudos, scf, (1, 1, 1), kgrid,
             nbnd=nbnd, conv_thr=1e-11, states_conv_thr=1e-8,
             mixing_beta=0.3, max_iterations=150, magnetic_field=uniform,
+            kramers_pairs=False,
         )
         assert result.converged
         moment = result.cell_moments()[0]
@@ -1530,7 +1560,6 @@ def test_a_uniform_vector_field_is_the_unit_cell_under_the_same_field(
     # pair; this is the one where a sign living in a transverse component could
     # hide, because ``m_y`` is a twentieth of ``m_x`` here.
     free = [total + field_energy for total, field_energy in energies]
-    exact = reference.total_energy + reference.field_energy
     assert free == sorted(free, reverse=True), free
     for nbnd, value in zip((16, 32, 64), free):
         assert value > exact, (
@@ -1568,6 +1597,20 @@ def test_the_noncollinear_ultracell_converges_to_the_supercell(
     rad on this cell, so the alignment is a no-op; the check is here because the
     failure it guards against would look like a wrong number rather than a wrong
     answer.
+
+    **On the Kramers-closed basis, the default since P121**, every component is
+    ten times closer at 32 bands (1.45e-5, 2.06e-5, 2.63e-5 and 2.21e-5 for the
+    charge and ``m_x, m_y, m_z``, against 2.35e-4 to 2.45e-4 on the old basis),
+    and the three magnetic components then disagree by 28 per cent. **That is
+    the reference's and not the ultracell's**: the supercell carries a
+    transverse modulated magnetization of 2.0e-5 of the longitudinal one, which
+    the old basis's error hid as a 2 per cent spread, while the ultracell's own
+    is 3.0e-9 on the closed basis and 9.7e-9 on the old (``OPEN.md`` Part XX
+    item 2). So the physics the component check stood in for is asserted
+    directly, the ultracell's response staying longitudinal to 1e-6 (2.6e-7 at 8
+    bands, 3e-9 at 32); the 10 per
+    cent check stays where the error is above 1e-4, which is where a wrong
+    component order would show, and the top rung is bounded at what it reads.
     """
     shape, kgrid = (2, 1, 1), (2, 2, 2)
     folded = tuple(n * m for n, m in zip(shape, kgrid))
@@ -1615,6 +1658,16 @@ def test_the_noncollinear_ultracell_converges_to_the_supercell(
             miller = np.stack(np.meshgrid(*axes, indexing="ij"),
                               axis=-1).reshape(-1, 3).astype(int)
         rho_u = np.asarray(result.density)
+        # Without spin-orbit coupling a scalar perturbation of a collinear state
+        # leaves it collinear: the modulated magnetization perpendicular to the
+        # moment, against the one along it.
+        m = rho_u[1:]
+        e = m.reshape(3, -1).sum(axis=1)
+        e = e / np.linalg.norm(e)
+        perpendicular = m - np.tensordot(e, m, axes=(0, 0))[None] * e[:, None, None, None]
+        transverse = (np.abs(np.fft.fftn(perpendicular, axes=(1, 2, 3))).max()
+                      / np.abs(np.fft.fftn(m, axes=(1, 2, 3))).max())
+        assert transverse < 1e-6, (nbnd, transverse)
         errors.append([
             float(np.abs(_fourier(rho_u[c], grid_u, miller)
                          - _fourier(rho_sup[c], grid_sup, miller)).max()
@@ -1629,9 +1682,10 @@ def test_the_noncollinear_ultracell_converges_to_the_supercell(
     for component in range(4):
         column = [row[component] for row in errors]
         assert column == sorted(column, reverse=True), (component, column)
-    for row in errors:
+    for row in errors[:2]:
         assert max(row[1:]) / min(row[1:]) < 1.1, row
-    assert max(errors[0]) < 3e-3 and max(errors[-1]) < 5e-4, errors
+    assert max(errors[-1][1:]) / min(errors[-1][1:]) < 1.4, errors[-1]
+    assert max(errors[0]) < 3e-3 and max(errors[-1]) < 5e-5, errors
 
 
 #: A helix as a real supercell: ``n`` species pointing at one UPF, because
@@ -1805,11 +1859,13 @@ def test_a_seeded_helix_keeps_the_pitch_it_was_given(tmp_path, pseudo_dir):
 
     amplitudes, energies, cones = [], [], []
     for nbnd in (16, 24):
+        # The reference's states alone: this test is the record of what that
+        # basis charges, which the Kramers-closed default removes.
         result = run_ultracell(
             calculator.system, calculator.pseudos, scf, shape, kgrid,
             nbnd=nbnd, seed_magnetization=helix, conv_thr=1e-10,
             states_conv_thr=1e-8, mixing_beta=0.3, max_iterations=300,
-            david=None if nbnd < 24 else 2,
+            david=None if nbnd < 24 else 2, kramers_pairs=False,
         )
         assert result.converged
         moments = np.asarray(result.cell_moments())

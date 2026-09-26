@@ -881,7 +881,7 @@ def run_ultracell(
     state_batch: int | None = 1,
     keep_states: bool = True,
     verbose: bool = False,
-    kramers_pairs: bool = False,
+    kramers_pairs: bool | None = None,
 ) -> UltracellResult:
     """Converge a modulation over ``supercell`` unit cells.
 
@@ -961,17 +961,24 @@ def run_ultracell(
             case; ``False`` drops them once it is over.
         kramers_pairs: add each frozen state's Kramers partner to the basis,
             the states of the reference with its magnetization reversed
-            (:mod:`defumat.ultracell.kramers`). Noncollinear only. The basis
-            the loop otherwise expands in prefers the reference's own
-            direction, so a texture that turns away from it leans back toward
-            it: on four cells of hydrogen at ``nbnd = 16`` a cone of 10.64
-            degrees with the reference along the helix axis, and a distorted
-            helix with a uniform moment along the reference when it lies in
-            the helix plane. With the partners the cone and the uniform moment
-            are zero in both arrangements and the energy is 1.3e-6 Ry per cell
-            above the supercell at ``nbnd = 8``, where the old basis is
-            4.37e-4 at ``nbnd = 16`` and 1.56e-4 at 32. It costs a second
-            frozen solve and a basis of up to ``2 nbnd`` per folded k-point.
+            (:mod:`defumat.ultracell.kramers`). **On by default for a
+            magnetized noncollinear reference** (``nspin_mag = 4``), off for
+            everything else, where there is nothing to add: a collinear
+            channel's partner is the other channel and a nonmagnetic spinor
+            reference is already closed. ``False`` asks for the reference's
+            states alone. That basis prefers the reference's own direction,
+            so a texture that turns away from it leans back toward it: on
+            four cells of hydrogen at ``nbnd = 16`` a cone of 10.64 degrees
+            with the reference along the helix axis, and a distorted helix
+            with a uniform moment along the reference when it lies in the
+            helix plane; on three cells of NiBr2 with spin-orbit coupling a
+            uniform moment of 0.415 and 0.300 of the helix at ``nbnd = 40``.
+            With the partners it is zero on hydrogen and 1.3e-4 on NiBr2 in
+            both arrangements, and the hydrogen energy is 1.3e-6 Ry per cell
+            above the supercell at ``nbnd = 8``, where the reference's states
+            alone give 4.37e-4 at ``nbnd = 16`` and 1.56e-4 at 32. It costs a
+            second frozen solve and a basis of up to ``2 nbnd`` per folded
+            k-point, so ``nbnd`` buys twice the states it does without it.
 
     **Two thresholds set the floor and neither of them is this one.** The frozen
     states are eigenstates of the density the *unit-cell* SCF stopped at, and
@@ -1005,12 +1012,21 @@ def run_ultracell(
 
     basis = build_basis(system)
     require_an_ultracell_regime(system, pseudos, basis)
+    magnetized_spinor = int(system.nspin) == 4 and int(system.nspin_mag) == 4
+    if kramers_pairs is None:
+        kramers_pairs = magnetized_spinor
     if kramers_pairs and int(system.nspin) != 4:
         raise ValueError(
             f"kramers_pairs closes a noncollinear basis under time reversal, "
             f"and this unit cell has nspin = {system.nspin}: a collinear "
             f"channel's partner is the other channel, which the basis already "
             f"holds, so there is nothing to add"
+        )
+    if kramers_pairs and not magnetized_spinor:
+        raise ValueError(
+            "kramers_pairs on a noncollinear cell that carries no "
+            "magnetization: its states already come in Kramers pairs, so the "
+            "basis is closed under time reversal and there is nothing to add"
         )
     # **The frozen states are only a basis if they are eigenstates of a
     # converged density**, and nothing below this line would notice if they

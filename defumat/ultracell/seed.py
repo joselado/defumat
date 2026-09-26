@@ -68,7 +68,8 @@ the reference in the helix plane converged in 23 iterations to steps of 94, 74
 and 84 degrees where 90 was seeded, with a uniform moment of 0.069 along the
 reference. Inside the sector the basis still charges a cone toward ``e_0``,
 10.64 degrees at ``nbnd = 16``. **All three are the basis preferring
-``+e_0``**, and ``run_ultracell(kramers_pairs=True)`` removes the preference
+``+e_0``**, and the Kramers-closed basis, ``run_ultracell``'s default for a
+magnetized noncollinear reference, removes the preference
 (:mod:`defumat.ultracell.kramers`): each of those runs then converges in 10
 iterations to 90 degrees with no cone and no uniform moment.
 :func:`warn_if_the_seed_leaves_the_closed_sector` measures the first two and
@@ -237,9 +238,10 @@ def warn_if_the_seed_leaves_the_closed_sector(seed, axis: np.ndarray) -> float:
     global rotation, 3.5e-9 Ry) turned about ``e_0``. With the reference in the
     helix plane it converged in 23 iterations to a **wrong** texture: steps of
     94, 74 and 84 degrees where 90 was seeded and a uniform moment of 0.069
-    along the reference. ``run_ultracell(kramers_pairs=True)`` closes the basis
-    under time reversal and prefers no axis, and this function is then not
-    called: the same two runs converge in 10 iterations to 90 degrees.
+    along the reference. The Kramers-closed basis, ``run_ultracell``'s default
+    for a magnetized noncollinear reference, prefers no axis, and this function
+    is then not called: the same two runs converge in 10 iterations to 90
+    degrees. It is reached only by ``kramers_pairs=False``.
 
     With ``lspinorb`` no axis closes the sector at all, since a spin-orbit
     Hamiltonian's eigenstates are eigenstates of no ``sigma . n``. The warning
@@ -277,12 +279,13 @@ def warn_if_the_seed_leaves_the_closed_sector(seed, axis: np.ndarray) -> float:
             f"texture leaning toward the reference (the same cell with the "
             f"reference in the helix plane: steps of 94, 74 and 84 degrees "
             f"where 90 was seeded, and a uniform moment along the reference). "
-            f"Pass kramers_pairs=True, which adds each frozen state's Kramers "
-            f"partner and prefers no direction: both runs then converge in 10 "
-            f"iterations to 90 degrees. Otherwise converge the unit cell with "
-            f"its moment along the axis the texture is to turn about, and write "
-            f"the seed about that axis, which still leaves a cone toward it "
-            f"(10.64 degrees at nbnd = 16). With spin-orbit coupling no "
+            f"This run asked for kramers_pairs=False; the default adds each "
+            f"frozen state's Kramers partner and prefers no direction, and both "
+            f"runs then converge in 10 iterations to 90 degrees. On this basis, "
+            f"converge the unit cell with its moment along the axis the texture "
+            f"is to turn about and write the seed about that axis, which still "
+            f"leaves a cone toward it (10.64 degrees at nbnd = 16). With "
+            f"spin-orbit coupling no "
             f"axis closes the sector and that flat manifold is gapped, so the "
             f"traversal may not be charged (a 15-cell NiBr2 PAW helix in this "
             f"arrangement took 54 iterations), but the lean is: that run kept "

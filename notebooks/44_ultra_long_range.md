@@ -141,7 +141,7 @@ paw_core = deep.energy_terms['one_center_paw']; print(f'inside the spheres: {paw
     [defumat] an ultracell calculation: no ground state cached, running the SCF first (conv_thr = 1e-12). Call get_scf() to do this explicitly.
 
 
-    /u/40/ladovj1/data/Documents/programs/claude/defumat/defumat/ultracell/driver.py:982: UserWarning: this ultracell runs an ultrasoft or PAW dataset at ecutrho = 4 ecutwfc, which is the input's own default rather than the dual such a dataset wants. At 4 the augmentation charge is represented on the wavefunction grid: the run is self-consistent and a comparison against a supercell at the same cutoffs is still like for like, but the absolute energy is not converged in ecutrho and cannot be compared against a pw.x number taken at the dataset's own dual. Set ecutrho to 8 to 12 times ecutwfc, which runs
+    /u/40/ladovj1/data/Documents/programs/claude/defumat/defumat/ultracell/driver.py:1014: UserWarning: this ultracell runs an ultrasoft or PAW dataset at ecutrho = 4 ecutwfc, which is the input's own default rather than the dual such a dataset wants. At 4 the augmentation charge is represented on the wavefunction grid: the run is self-consistent and a comparison against a supercell at the same cutoffs is still like for like, but the absolute energy is not converged in ecutrho and cannot be compared against a pw.x number taken at the dataset's own dual. Set ecutrho to 8 to 12 times ecutwfc, which runs
       require_an_ultracell_regime(system, pseudos, basis)
 
 
@@ -242,7 +242,7 @@ print(f'eight unit cells, {wave.iterations} iterations; largest cell moment '
     [defumat] an ultracell calculation: no ground state cached, running the SCF first (conv_thr = 1e-10). Call get_scf() to do this explicitly.
 
 
-    /u/40/ladovj1/data/Documents/programs/claude/defumat/defumat/ultracell/driver.py:1050: UserWarning: the fixed-density solve did not converge at 14 of 64 k-points: up to 2 of 32 bands are unsettled and the worst k-point took 100 Davidson steps, at ethr = 1.3e-07 (from conv_thr = 1.0e-05). There is no later iteration to fix this -- the density is fixed -- so these wavefunctions are what every quantity built on them will use. Loosen conv_thr (ethr is 0.1 x conv_thr / nelec, QE's setup.f90 rule) before raising the iteration budget: a threshold the solve cannot reach costs the whole budget at every k-point and is where an overlap loses positivity
+    /u/40/ladovj1/data/Documents/programs/claude/defumat/defumat/ultracell/driver.py:1098: UserWarning: the fixed-density solve did not converge at 14 of 64 k-points: up to 2 of 32 bands are unsettled and the worst k-point took 100 Davidson steps, at ethr = 1.3e-07 (from conv_thr = 1.0e-05). There is no later iteration to fix this -- the density is fixed -- so these wavefunctions are what every quantity built on them will use. Loosen conv_thr (ethr is 0.1 x conv_thr / nelec, QE's setup.f90 rule) before raising the iteration budget: a threshold the solve cannot reach costs the whole budget at every k-point and is where an overlap loses positivity
       calculation, folded_system, eigenvalues, wavefunctions = fixed_density_states(
 
 
@@ -323,7 +323,7 @@ print(f'{helix.iterations} iterations; the moment points', np.round(angles, 1),
     [defumat] an ultracell calculation: no ground state cached, running the SCF first (conv_thr = 1e-11). Call get_scf() to do this explicitly.
 
 
-    53 iterations; the moment points [ 27.5  62.3 -40.5 -48.1] degrees, out of plane by 6e-07
+    78 iterations; the moment points [ 28.2  66.2 -42.  -50.9] degrees, out of plane by 2e-06
 
 
 

@@ -6005,9 +6005,11 @@ print(ulr.magnetization.shape)    # (3, *box): m_x, m_y, m_z on the grid
 returns $(N,)$ for a collinear one, and \code{magnetization} likewise becomes the
 three cartesian components on the box. Neither needs a sphere or a radius: the
 cells tile the ultracell exactly, so the partition is the geometry. On the cell
-above the four moments come back at $27^\circ$, $62^\circ$, $-41^\circ$ and
-$-48^\circ$ in the plane the field turns in, with nothing out of that plane ---
-so they follow the field, but by less than the $90^\circ$ per cell it asks for.
+above the four moments come back at $28^\circ$, $66^\circ$, $-42^\circ$ and
+$-51^\circ$ in the plane the field turns in, with nothing out of that plane
+beyond $2\times10^{-6}$ (on the reference's states alone, $27^\circ$, $62^\circ$,
+$-40^\circ$ and $-48^\circ$, $0.30$~mRy higher in \code{E + field}), so they
+follow the field, but by less than the $90^\circ$ per cell it asks for.
 That is not a convergence failure: a hydrogen lattice at $5.5$~bohr is a close-
 packed ferromagnet whose inter-cell exchange is far larger than a $0.01$~Ry
 field, and what the run is measuring is the stiffness of the magnet against a
@@ -6022,9 +6024,10 @@ restoring force and the self-consistent solution sits in a nearly flat manifold
 rather than at a point. The mixer has to \emph{traverse} that manifold to reach
 the place the field pins, and \code{mixing\_beta} is how fast it travels.
 
-On the four-cell hydrogen ultracell above, every run given 300 iterations: at a
-$0.01$~Ry turning field every \code{beta} converges to the same state and the
-best is $0.5$ (36 iterations, against 48 at $0.7$ and 115 at $0.2$). At
+On the four-cell hydrogen ultracell above, on the reference's states alone,
+every run given 300 iterations: at a $0.01$~Ry turning field every \code{beta}
+converges to the same state and the best is $0.5$ (36 iterations, against 48 at
+$0.7$ and 115 at $0.2$). At
 $0.002$~Ry --- a field five times weaker, pinning the direction five times less
 --- \code{beta = 0.7} converges in \textbf{263} iterations and \code{beta =
 0.3} does \emph{not converge in 300}, its residual sitting between $2\times
@@ -6033,7 +6036,10 @@ $0.002$~Ry --- a field five times weaker, pinning the direction five times less
 
 So a slow noncollinear run wants more iterations, or a stronger field to pin the
 direction with --- not a smaller \code{mixing\_beta}. The run says so by name
-when it fails to converge.
+when it fails to converge. \textbf{The default basis makes the manifold exactly
+flat}, since it prefers no direction where the reference's states alone prefer
+their own: the $0.01$~Ry run at \code{beta = 0.3} takes 78 iterations on it
+against 53 on the old basis, to a state $0.30$~mRy lower.
 
 \textbf{What a noncollinear run is checked against.} At $N=1$ a uniform vector
 field is the same physics as an ordinary SCF with \code{B\_field(1:3)}, which
@@ -6049,10 +6055,16 @@ $6.6\times10^{-3}$ at 40, $1.5\times10^{-3}$ at 64, $4.5\times10^{-4}$ at 96 and
 $1.6\times10^{-4}$ at 128 --- monotone, and a factor of 116 across the range. What is converging is the
 \emph{transverse} component: $m_x$ is right to $1.5\times10^{-3}$ at the first
 rung, and $m_y$ walks $0.0601, 0.0634, 0.0691, 0.0694, 0.0732, 0.0740$ towards
-the reference's $0.0743$.
+the reference's $0.0743$. That ladder is the reference's states alone. On the
+default basis there is none: without spin-orbit coupling the closed span holds
+the rotated states exactly, and the moment is right to $7.5\times10^{-7}$ at
+\code{nbnd = 16} with \code{E + field} equal to twelve digits. Reading that
+needs the reference converged in \emph{direction}, which a flat manifold makes
+slow: at \code{conv\_thr = 1e-11} it stops $2.5\times10^{-2}$ degrees short of
+$\hat{\mathbf B}$, and at \code{1e-13} it is within $5.6\times10^{-5}$.
 
-\textbf{Expect to need more bands than a collinear run, by about a factor of
-two.} A spinor state holds one electron and lives in a space of
+\textbf{On the reference's states alone, expect to need more bands than a
+collinear run, by about a factor of two.} A spinor state holds one electron and lives in a space of
 $2\,\code{npwx}$, so a given \code{nbnd} is half as complete a basis as the same
 number would be for one collinear channel. The ladder above is at 37 per cent of
 the basis at \code{nbnd = 128}, which is where stage 1's charge ladder was at
@@ -6065,7 +6077,10 @@ opposite spin channel, which the exchange splitting puts far away.
 \textbf{Seeding a texture, and which axis to write the seed about.}
 \code{seed\_magnetization} takes a vector here, so the seed turns the moment
 rather than scaling it, and a helix of pitch $N$ cells is the case to have in
-mind. Such a helix is invariant under a translation by one cell followed by a
+mind. This paragraph and the three after it describe the reference's states
+alone, \code{kramers\_pairs=False}; the default basis, closed under time
+reversal and described after them, removes the preferred axis, the canting and
+the lean they measure. Such a helix is invariant under a translation by one cell followed by a
 spin rotation of $360/N$ about its own axis, and the self-consistent map
 commutes with both --- so that sector is closed and a run started in it stays in
 it. \textbf{In the truncated problem it is closed only if the basis is}, and the
@@ -6160,10 +6175,12 @@ is not a scaling, so read the warning as advice and not as a forecast.
 time reversal.} All three are the basis preferring the reference's own
 direction: its majority orbitals carry spin along $+\hat{\mathbf e}_0$ only, so
 turning a moment away needs a majority orbital with the other spinor, which the
-basis does not have. \code{kramers\_pairs=True} adds each frozen state's Kramers
-partner, the states of the reference with its magnetization reversed, from a
-second fixed-density solve, and diagonalises the reference Hamiltonian in the
-union once, before the loop. Without spin-orbit coupling that span is the
+basis does not have. \code{kramers\_pairs}, \textbf{on by default for a
+magnetized noncollinear reference}, adds each frozen state's Kramers partner,
+the states of the reference with its magnetization reversed, from a second
+fixed-density solve, and diagonalises the reference Hamiltonian in the union
+once, before the loop; \code{kramers\_pairs=False} asks for the reference's
+states alone, which is what every noncollinear number before it was. Without spin-orbit coupling that span is the
 orbitals times both spinors, which prefers no direction at all. On the same four
 cells of hydrogen, at the same 16 states per folded k-point:
 
@@ -6187,7 +6204,8 @@ many each folded k-point kept. Those small directions are the ones that matter,
 the differences between the majority and the minority orbitals, and a floor of
 $10^{-2}$ keeps the closure and loses the accuracy ($+1.96\times10^{-4}$). It
 costs a second frozen solve and a basis of up to twice \code{nbnd}, so four times
-the matrix. With spin-orbit coupling the partners remove only the preference
+the matrix, so \code{nbnd} buys twice the states it does without it. With
+spin-orbit coupling the partners remove only the preference
 between $+\hat{\mathbf e}_0$ and $-\hat{\mathbf e}_0$, and on NiBr2 that is
 enough: a three-cell PAW helix at \code{nbnd = 40} keeps a uniform moment of
 $1.3\times10^{-4}$ of its length in both frames, the order of Elk's
@@ -6208,7 +6226,8 @@ def helix(x):
                      np.zeros_like(phase)], axis=-1)
 
 ulr = cal.get_ultracell(supercell=(4, 1, 1), kgrid=(1, 2, 2), nbnd=24,
-                        seed_magnetization=helix, mixing_beta=0.3)
+                        seed_magnetization=helix, mixing_beta=0.3,
+                        kramers_pairs=False)   # the reference's states alone
 
 m = ulr.cell_moments()
 print(ulr.iterations)                              # 14
@@ -6216,10 +6235,9 @@ print(np.degrees(np.arctan2(m[:, 1], m[:, 0])))    # 35.32 125.32 -144.68 -54.68
 print(np.linalg.norm(m, axis=1))                   # 0.33687 on all four
 print(m.mean(axis=0))                              # [0, 0, 0.036926]: the remnant
 
-# the same helix on a basis closed under time reversal, a third of the size
+# the default, a basis closed under time reversal, at a third of the size
 closed = cal.get_ultracell(supercell=(4, 1, 1), kgrid=(1, 2, 2), nbnd=8,
-                           seed_magnetization=helix, mixing_beta=0.3,
-                           kramers_pairs=True)
+                           seed_magnetization=helix, mixing_beta=0.3)
 m = closed.cell_moments()
 print(closed.iterations)                           # 11
 print(np.degrees(np.diff(np.unwrap(np.arctan2(m[:, 1], m[:, 0])))))  # 90 90 90
@@ -6234,8 +6252,9 @@ and a cell's own moment sits at the average of the phases inside it. The
 \emph{differences} are the pitch.
 
 \begin{refuses}
-\code{kramers\_pairs} on a collinear cell, whose one channel's partner is the
-other channel and is already in the basis.
+\code{kramers\_pairs=True} on a collinear cell, whose one channel's partner is
+the other channel and is already in the basis, and on a nonmagnetic spinor
+cell, whose states already come in Kramers pairs.
 A reference whose k-set is not the unshifted, unreduced
 $\code{supercell} \times \code{kgrid}$ Monkhorst-Pack grid. The tiled unit-cell
 density is a fixed point of the loop only when the unit cell integrated the zone

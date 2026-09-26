@@ -22539,3 +22539,40 @@ so `q / 2q` reads 0.66 and 0.64 where the old runs read 0.09 to 1.62, and at 1e-
 is below what `conv_thr = 1e-8` resolves. Whether a three-cell helix with spin-orbit
 coupling carries charge at `q` at all, and what the `2q` harmonic converges to, needs a
 tighter `conv_thr` or the 15-cell cell against Elk's 2q/q of 15.
+
+**The default, 2026-09-26, at the user's decision.** `kramers_pairs=None` now means on for a
+magnetized noncollinear reference (`nspin_mag = 4`) and off otherwise; `True` on a collinear
+cell or a nonmagnetic spinor cell is refused by name, since both are already closed, and
+`False` is the reference's states alone, which every earlier noncollinear number used. The
+places that document the old basis on purpose ask for it: the canting table of
+`test_a_seeded_helix_keeps_the_pitch_it_was_given`, the first helix of notebook 46 and of the
+guide's snippet, and the old-basis control in the uniform-field test. On the new default the
+slow sets of `test_ultracell.py` (25), `test_ultracell_stm.py` (11), `test_ultracell_sts.py`
+(13) and `test_ultracell_augmented.py` (21, ultrasoft and PAW spinors included) pass, after
+two tests were rewritten for what they found:
+
+- **`test_a_uniform_vector_field_is_the_unit_cell_under_the_same_field`**, `N = 1`, the unit
+  cell under the same field as the reference. The closed basis first read a floor of
+  4.17e-4, and it was **the reference's stop point**: at `conv_thr = 1e-11` the SCF under
+  the field stops 2.5e-2 degrees (4.4e-4 rad) short of the field on the flat manifold, and
+  at 1e-13 it is within 5.6e-5. Against that reference the closed basis is right at every
+  rung, 7.5e-7 and 1.0e-6 at 16 and 32 bands with `E + field` equal to twelve digits, since
+  without spin-orbit coupling the closed span holds the rotated states exactly. The old
+  basis's ladder (1.9e-2, 7.4e-3, 1.9e-3 at 16, 32 and 64) had hidden the stop point and is
+  kept as the control.
+- **`test_the_noncollinear_ultracell_converges_to_the_supercell`**: at 32 bands the closed
+  basis is ten times closer to the supercell (1.45e-5 to 2.6e-5 against 2.35e-4 to
+  2.45e-4) and its three magnetic components disagree by 28 per cent where the old basis's
+  agreed to 2. **The residue is the supercell's**: its modulated magnetization carries a
+  transverse part of 2.0e-5 of the longitudinal one, identical at `conv_thr = 1e-10` and
+  1e-12, where the ultracell's is 3.0e-9 on the closed basis and 9.7e-9 on the old. Ruled
+  out on the ultracell side on the way: a rigid rotation, a degenerate cut, the frozen
+  states' accuracy, and the reversed solve (the same with the partners built as the exact
+  spin rotation). The test now asserts the ultracell's transverse part below 1e-6 (2.6e-7,
+  1.2e-8 and 3.0e-9 at 8, 16 and 32 bands); the supercell's is `OPEN.md` Part XX item 2.
+
+The turning-field helix of notebook 44 and the guide, a field averaging to zero on a stiff
+ferromagnet, keeps its uniform moment along the reference on both bases, because without
+spin-orbit coupling that direction is free and the closed basis no longer pushes it: 28.2,
+66.2, -42.0 and -50.9 degrees against 27.5, 62.3, -40.5 and -48.1, 0.30 mRy lower in
+`E + field`, in 78 iterations against 53, the manifold being exactly flat now.

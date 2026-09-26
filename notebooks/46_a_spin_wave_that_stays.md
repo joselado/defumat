@@ -141,8 +141,10 @@ def texture(x):                                 # 90 degrees per cell about `axi
     phase = 2 * np.pi * x[..., 0] / 4
     return np.cos(phase)[..., None] * u + np.sin(phase)[..., None] * v
 
+# built from the unit cell's own states alone, which is not the default
 helix = spinor.get_ultracell(supercell=(4, 1, 1), kgrid=(1, 2, 2), nbnd=16,
-                             seed_magnetization=texture, mixing_beta=0.3)
+                             seed_magnetization=texture, mixing_beta=0.3,
+                             kramers_pairs=False)
 
 moments = helix.cell_moments()
 turned = np.unwrap(np.arctan2(moments @ v, moments @ u))
@@ -211,7 +213,10 @@ the unit cell is the same orbital with its spin flipped, which is a state of the
 unit cell with its moment reversed. Handed both sets, the long cell has nothing
 to prefer.
 
-Eight bands of each make the same number of states as the sixteen-band run above.
+This is what the calculation does by default for a magnet whose moment is free to
+turn, and the run above asked for the unit cell's states alone to show what it
+removes. Eight bands of each make the same number of states as the sixteen-band
+run above.
 
 
 ```python

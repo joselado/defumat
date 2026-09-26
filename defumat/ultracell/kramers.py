@@ -13,7 +13,10 @@ reference) with the reference in the helix plane; in NiBr2 it is a uniform
 in-plane moment of 0.32 of the helix on three cells at ``nbnd = 40`` and 0.144
 on fifteen at 96, where Elk's supercell has 9e-5.
 
-**The fix is to add each state's Kramers partner**, which removes the
+**The fix is to add each state's Kramers partner**, and it is
+``run_ultracell``'s default for a magnetized noncollinear reference
+(``kramers_pairs=None``; ``False`` asks for the reference's states alone). It
+removes the
 preference between ``+e_0`` and ``-e_0`` because time reversal maps one onto
 the other. The partners of the states at ``k`` are the time-reversed states at
 ``-k``, and those are the eigenstates at ``k`` of the reference with its
