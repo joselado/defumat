@@ -22788,10 +22788,15 @@ of 6.7e-5 at the start; the helix's own torque is 3.7e-6 and points the other wa
 gradient's immunity to a source that is not quite stationary does not extend to the *sign*
 of an anisotropy this small, and the source is the unfolded spiral that sits 0.49 per cent
 off its own supercell fixed point in the magnetization (`OPEN.md` Part XXI item 1). **The
-confirmation owed** is Route C on the helix supercell, seeded with the unfolded density, or
-Route A again once that item is closed; if it holds, the anisotropy of a 90-degree cobalt
-helix is a property of the helix's band structure and not the ferromagnet's constant averaged
-over its moments.
+confirmation, run** (Triton job 20479521, four cores, the helix supercell self-consistent with
+the coupling, seeded with the unfolded density turned to the start): Route C returns the
+plane's normal to `c` from 28.6 degrees (0.054 degrees after 200 iterations) and from 80
+degrees (0.078), neither run reaching `conv_thr` (6e-8 and 1.3e-7, the supercell's own
+limit cycle), while the plain SCF from 28.6 degrees *converges* in 76 iterations to 8e-9 with
+the plane still at 28.6 degrees and a torque of 1.7e-5 on it, which is the blind spot of `dr2`
+on a texture. So the basal plane holds with the density free to respond: the anisotropy of a
+90-degree cobalt helix is a property of the helix's band structure and not the ferromagnet's
+constant averaged over its moments.
 
 **PAW, both routes** (2026-09-26, asked for on the day). A PAW Hamiltonian carries its
 potential twice, on the grid from the density and on the spheres as `ddd_paw` from `becsum`,
