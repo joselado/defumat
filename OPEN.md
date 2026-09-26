@@ -5961,6 +5961,14 @@ norms over `ij` go from `(0.505, 0.505, 0.630)` to `(0.630, 0.505, 0.505)` in ce
 120-degree cell, which is `sqrt(0.75 0.505^2 + 0.25 0.630^2)` and
 `sqrt(0.25 0.505^2 + 0.75 0.630^2)` to three figures. So `seeded_becsum` applies the
 rotation rigidly, and the 21 to 25 degree cone is grown by the basis.
+**A rigid rotation of a coupled `becsum` is exact only at `soc_scale = 0`** (P122,
+2026-09-26): with spin-orbit coupling the fully-relativistic `becsum` keeps only the blocks
+diagonal in `j`, and `becsum(U psi)` differs from `R becsum(psi)` by 4.6e-2 relative on PAW
+nickel, against 2.8e-16 without the coupling. The reference cell here is coupled, so the
+seeded sphere half is off by that order from the `becsum` of the rotated states. Read by the
+NiBr2 session as a start error rather than the source of the lean, since the grid half is in
+plane to 0.014 degrees and the cone grows during the SCF; it would matter only if the SCF has
+two fixed points, a planar helix and a cone, and the start picks between them.
 
 **Why it is a wrong answer rather than a slow one.** A uniform component, in the plane or
 along the axis, breaks the time reversal times half-period translation that a coplanar
