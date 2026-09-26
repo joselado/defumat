@@ -52,6 +52,6 @@ echo "commit: $(git -C "$REPO" rev-parse HEAD)"
 python3 -c "import jax; print('jax', jax.__version__, jax.devices())"
 
 python3 -u tools/cluster/nibr2_orientation.py "$TASK" "$WORK/$TASK" \
-        --pseudo-dir "$PSEUDO"
+        --pseudo-dir "$PSEUDO" --one-shot-conv-thr "${ONESHOT_CONV_THR:-1e-10}"
 echo "exit $?"
 echo "=== done ==="; date

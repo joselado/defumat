@@ -83,6 +83,12 @@ def main() -> None:
     parser.add_argument("outdir", type=Path)
     parser.add_argument("--pseudo-dir", required=True)
     parser.add_argument("--max-iterations", type=int, default=400)
+    # The one-shots' threshold. 1e-10 over 72 electrons asks Davidson for
+    # ethr = 1.4e-13, which it did not reach at the steep start's third
+    # orientation (up to 103 of 120 bands unsettled after 100 steps, the energy
+    # noisy and BFGS stalled); 1e-8 is ethr = 1.4e-11, far below what a torque of
+    # 1e-5 Ry/rad needs.
+    parser.add_argument("--one-shot-conv-thr", type=float, default=1.0e-10)
     arguments = parser.parse_args()
     arguments.outdir.mkdir(parents=True, exist_ok=True)
 
@@ -124,6 +130,7 @@ def main() -> None:
         relaxed = relax_orientation(calculator.system, calculator.pseudos,
                                     source.density, rotation=start,
                                     becsum=source.becsum, curvature=True,
+                                    conv_thr=arguments.one_shot_conv_thr,
                                     verbose=True)
         normals = [(step.rotation @ seeded_normal).tolist() for step in relaxed.steps]
         record["relax"] = {
