@@ -22885,15 +22885,21 @@ iterations, with a net moment of 0.22 mu_B per cell appearing, **and then conver
 iterations to `dr2` = 1.1e-9, the torque 5.2e-8 under its 1e-7 threshold, the plane's normal
 0.11 degrees from the layer normal, the net moment back to 0.015 mu_B per cell and 1.26 mu_B on
 each Ni. So Route C on PAW reaches the same plane as Route A self-consistently with the
-coupling on this cell, and the PAW nickel failure above belongs to nickel's nearly flat
-in-plane mode rather than to PAW.
+coupling on this cell. **That run was commit `0e4ca5e`**: `becsum` turned through the states
+and no step below the torque threshold, but neither the trust region nor the secant kept
+across recoveries, which came after (`2f75cba`) and have not run on NiBr2; the convergence
+is not theirs. The PAW nickel failure above is therefore nickel's rather than PAW's, most
+likely its nearly flat in-plane mode.
 
 **The bulk cell, one layer per cell at the real spacing of 11.515 bohr** (AA rather than bulk
 NiBr2's ABC stacking, one k-point along the stacking, at the user's request; job 20480321):
 the source at `soc_scale = 0` in 42 iterations with 1.259 mu_B per Ni, then Route A from the
 same two starts, **both again with the plane in the layer**, 6 and 8 one-shots. The tilt
-curvature is **1.0151e-4 Ry/rad^2 per cell, 2.2 times the monolayer's**, the phase -2.1e-7;
-the energies gained, 1.165e-5 and 4.931e-5 Ry, stand in the ratio 4.23 against 4.22, and `K`
-from them, 5.07e-5, is half the curvature again. So stacking the layers doubles the plane
-anisotropy and leaves the answer alone. Each task took 7 to 8 minutes on one GPU at an 8.1 GB
+curvature is **1.0151e-4 Ry/rad^2 per cell**, the phase -2.1e-7; the energies gained,
+1.165e-5 and 4.931e-5 Ry, stand in the ratio 4.23 against 4.22, and `K` from them, 5.07e-5,
+is half the curvature again. What the runs establish is the direction, the same as the
+monolayer's. The curvature is 2.2 times the monolayer's, and that factor is a report rather
+than a measurement of interlayer coupling: it compares an isolated layer with an AA-stacked
+bulk of the same in-plane cell and the same `1 3 1` grid, and how much of it is the coupling
+between layers and how much the bromine's changed surroundings is not separated. Each task took 7 to 8 minutes on one GPU at an 8.1 GB
 host peak, against 13 to 19 minutes for the monolayer.

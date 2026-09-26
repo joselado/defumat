@@ -7514,3 +7514,11 @@ the difference being executables accumulated one per orientation, since each ori
 new calculation. The one-shot's own peak on this cell has not been isolated from that, so the
 24 GB the job script now asks for bounds an accumulation that no longer happens, and can come
 down once one one-shot is measured alone.
+
+**PAW has no pair here.** `pw.x` has no torque and no PAW force theorem (`potinit.f90:98`
+refuses the handoff), so there is nothing to time it against. The figures there are: the
+three slow tests of `tests/regression/test_orientation_paw.py` in 8.5 minutes on the
+workstation (a source SCF at `soc_scale = 0` and three one-shots of PAW nickel at 40/320 Ry),
+and on Triton, one GPU each, the NiBr2 relaxations of the three-cell helix in 13 to 19 minutes
+for the monolayer (a 19 GB host peak) and 7 to 8 minutes for the AA bulk (8.1 GB), each
+including its source SCF and six one-shots for the curvature.

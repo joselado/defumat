@@ -6106,6 +6106,9 @@ plain SCF from the same start wanders at 1e-6 to 1e-8. Tried and measured (`PLAN
 turning `becsum` through the states (needed, and it closed a residual of 0.1 to 5e-3), a
 trust region on the step (the steps shrank to 0.2 degrees; `dr2` did not follow), and
 dropping the mixer's history after a step (worse). The same code converges on cobalt
-(ultrasoft) and on the NiBr2 helix (PAW), so the suspect is nickel's nearly flat in-plane
-anisotropy, along which any step is a large perturbation for a small gain; freezing the flat
-generator, as the plan proposed for a spiral's phase, is the next thing to try.
+(ultrasoft) and on the NiBr2 helix (PAW, at `0e4ca5e`, before the trust region), so the
+suspect is nickel's nearly flat in-plane anisotropy, along which any step is a large
+perturbation for a small gain; freezing the flat generator, as the plan proposed for a
+spiral's phase, is the next thing to try. **The affine turn of the mixer's history is the
+PAW default on the evidence of one cell**: it did not converge nickel either, the reset was
+worse there, and NiBr2 converged with it; there is no run in which it has been shown to help.
