@@ -22875,8 +22875,20 @@ at the minimum, 2.34e-5. The first attempt at the 80-degree start stalled after 
 steps: at the one-shot's `conv_thr = 1e-10` Davidson was asked for `ethr = 1.4e-13` over 72
 electrons and left up to 103 of 120 bands unsettled at one orientation, which made the energy
 noisy and BFGS stop; at `conv_thr = 1e-8` it converged. Route C on the same cell (the version
-before the trust region) hovered at a torque of 4e-6 and `dr2` of 1e-7 to 1e-6 after 90
-iterations, with a net moment of 0.22 mu_B per cell appearing, which is the PAW Route C problem
-above and is not read as physics. **The bulk cell, one layer per cell at the real spacing of
-11.515 bohr** (AA rather than bulk NiBr2's ABC), is running (job 20480321) at the user's
-request, about four times cheaper per step than the monolayer's 46 bohr.
+before the trust region) hovered at a torque of 4e-6 and `dr2` of 1e-7 to 1e-6 at 90
+iterations, with a net moment of 0.22 mu_B per cell appearing, **and then converged**: 195
+iterations to `dr2` = 1.1e-9, the torque 5.2e-8 under its 1e-7 threshold, the plane's normal
+0.11 degrees from the layer normal, the net moment back to 0.015 mu_B per cell and 1.26 mu_B on
+each Ni. So Route C on PAW reaches the same plane as Route A self-consistently with the
+coupling on this cell, and the PAW nickel failure above belongs to nickel's nearly flat
+in-plane mode rather than to PAW.
+
+**The bulk cell, one layer per cell at the real spacing of 11.515 bohr** (AA rather than bulk
+NiBr2's ABC stacking, one k-point along the stacking, at the user's request; job 20480321):
+the source at `soc_scale = 0` in 42 iterations with 1.259 mu_B per Ni, then Route A from the
+same two starts, **both again with the plane in the layer**, 6 and 8 one-shots. The tilt
+curvature is **1.0151e-4 Ry/rad^2 per cell, 2.2 times the monolayer's**, the phase -2.1e-7;
+the energies gained, 1.165e-5 and 4.931e-5 Ry, stand in the ratio 4.23 against 4.22, and `K`
+from them, 5.07e-5, is half the curvature again. So stacking the layers doubles the plane
+anisotropy and leaves the answer alone. Each task took 7 to 8 minutes on one GPU at an 8.1 GB
+host peak, against 13 to 19 minutes for the monolayer.

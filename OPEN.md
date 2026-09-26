@@ -6096,3 +6096,16 @@ discriminator is a norm-conserving dataset, where there is no augmentation to di
 frozen source and only needs it to be a texture, not an exact stationary point: the
 internal torques of a texture that is not quite stationary cancel in the net rotation,
 since exchange conserves the total spin. The helix numbers of P122 are read that way.
+
+## 2. Route C does not reach `conv_thr` on PAW nickel **[opened 2026-09-26]**
+
+`run_scf(rotate_moments=True)` on fully-relativistic PAW nickel (`ni-tetragonal-relaxed-mae-paw.in`
+at 40/320 Ry, seeded 45 degrees off `c`) turns the moment into the basal plane on every
+variant tried and then sits at `dr2` between 1e-5 and 2e-4 for as long as it is run, where the
+plain SCF from the same start wanders at 1e-6 to 1e-8. Tried and measured (`PLAN.md` P122):
+turning `becsum` through the states (needed, and it closed a residual of 0.1 to 5e-3), a
+trust region on the step (the steps shrank to 0.2 degrees; `dr2` did not follow), and
+dropping the mixer's history after a step (worse). The same code converges on cobalt
+(ultrasoft) and on the NiBr2 helix (PAW), so the suspect is nickel's nearly flat in-plane
+anisotropy, along which any step is a large perturbation for a small gain; freezing the flat
+generator, as the plan proposed for a spiral's phase, is the next thing to try.

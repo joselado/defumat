@@ -1,8 +1,10 @@
 # Relaxing the orientation of a magnetic texture under spin-orbit coupling
 
 A plan recorded on 2026-09-26. **Steps 1 to 4 are done as `PLAN.md` P122** (the torque, a
-noncollinear source, the relaxation and Route C), the same day; the helix measurements are
-the Triton job that entry names, and steps 5 and 6 are open. We will now see what the
+noncollinear source, the relaxation and Route C), the same day, with PAW added to both routes;
+**step 5 is done for the three-cell NiBr2 approximant** (the helix's plane lies in the layer, in
+the monolayer and in the AA bulk, by Route A from two starts and by Route C); step 6 is open,
+and so is Route C on PAW nickel, whose flat in-plane mode keeps it from converging. We will now see what the
 coordinate is, why a spin rotation is not an atomic position and what that changes for a
 calculation that already carries the coupling, the two routes to build (one from a state
 without the coupling, one inside a self-consistent run with it) and a third that was
