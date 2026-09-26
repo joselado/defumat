@@ -47,7 +47,8 @@ def peak_gib() -> float:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("task", choices=("checks", "relax"))
+    parser.add_argument("task", choices=("checks", "relax", "routec", "plain",
+                                         "routec-near"))
     parser.add_argument("--out", required=True)
     parser.add_argument("--pseudo-dir", default=str(ROOT / "tests/data/pseudo"))
     arguments = parser.parse_args()
@@ -129,6 +130,53 @@ def main() -> None:
                                      rotation=rotation, soc_scale=0.0)
         record["torque_soc_scale_0"] = np.asarray(off.torque).tolist()
         print("soc_scale 0", off.torque, flush=True)
+    elif arguments.task in ("routec", "plain", "routec-near"):
+        # The helix self-consistently **with** the coupling, from the unfolded
+        # spiral turned to the start: does the plane's normal return to ``c``
+        # when the density is free to respond, as Route A says it does at frozen
+        # density? The supercell's SCF without the coupling limit-cycled near
+        # 1e-7 Ry, the helix being an unstable stationary point, so the run may
+        # not reach ``conv_thr``; the orientation's trajectory is recorded every
+        # iteration and is the measurement either way.
+        from defumat.scf.driver import run_scf
+
+        start = rotation
+        if arguments.task == "routec-near":
+            start = rotation_from_euler(0.3, np.radians(80.0), 0.2)
+        record["start_euler"] = list(map(float, (0.3, np.radians(80.0), 0.2))
+                                     if arguments.task == "routec-near" else START)
+        text = SPINOR.read_text().replace("calculation = 'nscf'", "calculation = 'scf'")
+        text = text.replace(" lforcet = .true.,", "")
+        coupled = Calculator.from_text(text, pseudo_dir=arguments.pseudo_dir,
+                                       announce=False)
+        turned_system = _with_rotation(coupled.system, start)
+        seed = rotate_texture(
+            _reference_texture(density, _reference_axis(coupled.system)), start)
+        clock = time.time()
+        result = run_scf(
+            turned_system, coupled.pseudos, starting_density=seed,
+            conv_thr=1.0e-8, max_iterations=200, verbose=True,
+            rotate_moments=(arguments.task != "plain"), torque_conv_thr=1.0e-8,
+        )
+        normals, torques, accuracies, lengths = [], [], [], []
+        for entry in result.history:
+            moments = np.asarray(entry["site_moments"])
+            values, vectors = np.linalg.eigh(moments.T @ moments)
+            normal = vectors[:, 0] * np.sign(vectors[2, 0] or 1.0)
+            normals.append(normal.tolist())
+            torques.append(list(entry.get("orientation_torque", [np.nan] * 3)))
+            accuracies.append(float(entry["accuracy"]))
+            lengths.append(np.linalg.norm(moments, axis=1).tolist())
+        tilt = [float(np.degrees(np.arccos(min(1.0, abs(n[2]))))) for n in normals]
+        record["scf_coupled"] = {
+            "seconds": time.time() - clock, "iterations": int(result.iterations),
+            "converged": bool(result.converged), "accuracy": float(result.accuracy),
+            "total_energy": float(result.total_energy),
+            "normal_tilt_from_c_deg": tilt, "normals": normals, "torques": torques,
+            "accuracies": accuracies, "site_moment_lengths": lengths,
+        }
+        print("tilt of the normal from c, every tenth iteration:",
+              [round(t, 3) for t in tilt[::10]], flush=True)
     else:
         clock = time.time()
         relaxed = relax_orientation(system, pseudos, density,

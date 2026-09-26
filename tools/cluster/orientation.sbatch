@@ -6,7 +6,12 @@
 #   0  checks: the torque at an oblique orientation, its central difference
 #      from two separate one-shots per component, the closed form
 #      integral of m_out x B, and the torque with the coupling off;
-#   1  relax: the relaxation from the same start, with the curvature at the end.
+#   1  relax: the relaxation from the same start, with the curvature at the end;
+#   2  routec: the helix self-consistently with the coupling, the moments turned
+#      by the torque after every mix, from the same start;
+#   3  plain: the same run without the turn, the control;
+#   4  routec-near: Route C from the plane's normal at 80 degrees off c.
+# Submit 2-4 with --array=2-4 --time=04:00:00.
 #
 # ---- the #SBATCH values ----
 #
@@ -40,7 +45,7 @@ export MKL_NUM_THREADS=1 OMP_NUM_THREADS=1
 export JAX_PLATFORMS=cpu
 export PYTHONPATH="$REPO"
 
-TASKS=(checks relax)
+TASKS=(checks relax routec plain routec-near)
 INDEX=${SLURM_ARRAY_TASK_ID:-0}
 TASK=${TASKS[$INDEX]}
 
