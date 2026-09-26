@@ -52,6 +52,8 @@ from dataclasses import dataclass, field
 from functools import partial
 
 import equinox as eqx
+import os
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -6498,6 +6500,10 @@ def run_scf(
                         if calculation.is_paw else rotate_texture(b, turn))
                     for b in becsum_state
                 )
+                # On PAW the shift is measured on the current states and is
+                # exact for the newest entry only. Dropping the history instead
+                # was measured and is worse (PAW nickel: ``dr2`` swinging up to
+                # 5e-3 after each reset, against 2e-4 turning it).
                 mixer.rotate_history(
                     turn_packed,
                     lambda vector: turn_packed(vector, shifted=False),

@@ -26,7 +26,15 @@ inside a texture are held by exchange and converge as they always did.
 along ``-G``, and a 3x3 BFGS in the rotation vector builds ``H`` from the torques
 after it, skipping a pair whose ``s . y`` is not positive, since early on the
 density's own convergence changes ``G`` as much as the rotation does. Every step
-is bounded by ``trust`` and none is taken while ``dr2`` is above ``start``.
+is bounded by a trust angle and none is taken while ``dr2`` is above ``start``.
+
+**The trust angle adapts**, which is what a nearly flat direction needs. On PAW
+nickel the moment went in-plane, where the anisotropy is nearly flat, BFGS's
+inverse Hessian was large along it, and a torque of a few 1e-6 asked for more
+than the bound every time: two full 5.7-degree steps took ``dr2`` from 2.4e-6 to
+1.7e-4, where it sat for twenty iterations. So the bound halves whenever the
+torque has not fallen since the last step, down to ``trust / 64``, and grows back
+by half as much again while it keeps falling, up to ``trust``.
 
 **Without the coupling nothing happens by construction**, not because ``G`` is
 small: it is zero only for exact eigenstates, and dividing the solver's noise by
@@ -128,14 +136,23 @@ class OrientationStepper:
         self.previous_step = None
         self.total = np.eye(3)
         self.steps = 0
+        #: The current bound on a step, radians; ``trust`` is its ceiling.
+        self.radius = self.trust
 
     def propose(self, gradient, accuracy: float):
         gradient = np.asarray(gradient, dtype=float).reshape(3)
         if accuracy > self.start:
-            # A pair across an iteration without a step is not a secant.
-            self.previous_gradient = self.previous_step = None
+            # The last step is kept across the iterations the density needs to
+            # recover from it: the torque once it has recovered, against the
+            # torque before the step, is the secant with the density relaxed,
+            # which is the curvature that matters, and the trust update needs
+            # the same pair.
             return None
         if self.previous_step is not None:
+            if np.linalg.norm(gradient) >= np.linalg.norm(self.previous_gradient):
+                self.radius = max(self.radius / 2.0, self.trust / 64.0)
+            else:
+                self.radius = min(self.radius * 1.5, self.trust)
             s = self.previous_step
             y = gradient - self.previous_gradient
             sy = float(s @ y)
@@ -155,8 +172,8 @@ class OrientationStepper:
         else:
             step = -self.inverse_hessian @ gradient
         length = float(np.linalg.norm(step))
-        if length > self.trust:
-            step *= self.trust / length
+        if length > self.radius:
+            step *= self.radius / length
         self.previous_gradient = gradient
         self.previous_step = step
         self.total = rotation_matrix(step) @ self.total

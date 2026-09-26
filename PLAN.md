@@ -22741,7 +22741,11 @@ the torque is zero by the four-fold axis, and **the drift pair says it is a stab
 of the loop left alone**: a plain SCF from the converged density converges in 8 iterations and
 stays at 0.0023 degrees with a torque of 9.8e-10, and from the same density turned 5 degrees
 off `c` it turns back, 5.0, 3.8, 2.9, 2.2 degrees every ten iterations and converged at 0.026
-degrees after 73, the torque falling from -6.0e-6 to -2.5e-8. Both are asserted in the test. The run along `c` records a torque of 1e-17, zero by the four-fold axis. Refused
+degrees after 73, the torque falling from -6.0e-6 to -2.5e-8. **The second half is not
+reproducible as a budget**: after the trust-region change of the PAW work, from a Route C end
+state a hair apart, the same plain SCF ended 4.4 degrees off `c`, unconverged, after 150, which
+is the soft mode doing what Route C exists to stop. The test asserts the restoring torque and
+that it ends nearer `c` than it started, not how near. The run along `c` records a torque of 1e-17, zero by the four-fold axis. Refused
 by name: no coupling or `soc_scale = 0` (the torque is then the solver's noise and a step
 divided by a vanishing curvature would move on it), PAW (the one-centre field is not in the
 torque), a spiral, a Hubbard U (`ns` would have to turn), a field or a constraint, and a run
@@ -22833,3 +22837,46 @@ flat, BFGS's inverse Hessian is large there, and it keeps taking the full 5.7-de
 each of which kicks the density. **Owed**: a step bounded by the curvature it has measured, or
 the flat direction frozen, as the plan proposed for a spiral's phase. Route A has no such
 issue, and it is what the NiBr2 production runs use.
+
+**Route C on PAW nickel, two more attempts, both recorded and neither enough.** (a) A trust
+region on the step: the bound halves when the torque has not fallen since the last step, down
+to `trust / 64`, and grows by half again while it falls; and the secant is kept across the
+iterations the density needs to recover, since the torque after recovery against the one
+before the step is the curvature with the density relaxed. The steps shrank from 5.7 to 0.2
+degrees as meant, and the moment reached the plane (89 to 90 degrees off `c` in every run),
+but `dr2` stayed between 1e-5 and 2e-4 for the eighty iterations after the steps had stopped.
+Both are kept: they are right, and cobalt converges with them as before. (b) Dropping the
+mixer's history after each PAW step instead of turning it: worse, `dr2` swinging to 5e-3 after
+each reset. So the turned history stays. **What is established**: PAW nickel's easy plane is
+the basal one on every run of either route; what is not is a Route C run on it that reaches
+`conv_thr`, and the plain SCF from 45 degrees does not reach it either (1e-6 to 1e-8,
+wandering).
+
+**NiBr2, the three-cell helix of the monolayer** (Triton jobs 20480146 and 20480239, one GPU
+each; the NiBr2 ultracell project's cell and fully-relativistic PAW datasets, LDA,
+`ecutwfc = 45`, `ecutrho = 360`, `1 3 1` k-points, the moments seeded 120 degrees apart in the
+layer plane, `tools/cluster/nibr2_orientation.py`). Route A: the supercell at `soc_scale = 0`
+converges in 24 iterations to 9.9e-11 with 1.27 mu_B per Ni and no net moment, a stable helix
+unlike cobalt's; then the relaxation with the coupling from the plane's normal tilted 28.65
+and 80 degrees off the layer normal:
+
+| start | one-shots | the normal's tilt per step (degrees) | free energy gained (Ry per cell) |
+|---|---|---|---|
+| 28.65 degrees | 5 | 28.65, 17.19, 4.58, 0.37, 0.02 | 5.37e-6 |
+| 80 degrees | 8 | 80.0, 68.5, 55.9, 37.0, 8.67, 3.99, 0.05, 0.01 | 2.29e-5 |
+
+**Both land with the plane in the layer**, the in-plane cycloid it was seeded as, and the
+curvature at the end is the same from both to four digits: 4.674e-5 and 4.676e-5 Ry/rad^2 for
+the two tilts and -5e-8 for the phase, flat as the three-fold axis makes it. **Three numbers
+that share nothing agree**: the energies gained stand in the ratio 4.26 against
+`sin^2(80)/sin^2(28.65)` = 4.22, so the tilt energy is `K sin^2(beta)`, and `K` from the
+energies (2.34e-5 Ry per three-Ni cell, about 0.11 meV per Ni) is half the curvature measured
+at the minimum, 2.34e-5. The first attempt at the 80-degree start stalled after three good
+steps: at the one-shot's `conv_thr = 1e-10` Davidson was asked for `ethr = 1.4e-13` over 72
+electrons and left up to 103 of 120 bands unsettled at one orientation, which made the energy
+noisy and BFGS stop; at `conv_thr = 1e-8` it converged. Route C on the same cell (the version
+before the trust region) hovered at a torque of 4e-6 and `dr2` of 1e-7 to 1e-6 after 90
+iterations, with a net moment of 0.22 mu_B per cell appearing, which is the PAW Route C problem
+above and is not read as physics. **The bulk cell, one layer per cell at the real spacing of
+11.515 bohr** (AA rather than bulk NiBr2's ABC), is running (job 20480321) at the user's
+request, about four times cheaper per step than the monolayer's 46 bohr.

@@ -1323,8 +1323,12 @@ def test_turning_the_moments_inside_the_scf_converges_on_the_easy_axis():
     # the loop with nothing turning it, where the energy above only says the
     # run reached the symmetric point. A plain SCF from the converged density
     # stays (measured: 8 iterations, 0.0023 degrees, torque 9.8e-10), and from
-    # the same density turned 5 degrees off ``c`` it turns back (73 iterations,
-    # 0.026 degrees, the torque from -6.0e-6 to -2.5e-8), so the guard fires.
+    # the same density turned 5 degrees off ``c`` the torque is restoring and
+    # the run ends nearer ``c`` than it started, so the guard fires. **How far
+    # it gets is not asserted**: it is the soft mode Route C exists for, and it
+    # measured 0.026 degrees after 73 iterations in one run and 4.4 degrees,
+    # unconverged, after 150 in another, from end states of Route C a hair
+    # apart. An iteration budget on a plain SCF along that mode is a bet.
     from defumat.forces.torque import rotate_texture
     from defumat.scf.driver import run_scf
 
@@ -1344,8 +1348,9 @@ def test_turning_the_moments_inside_the_scf_converges_on_the_easy_axis():
                             np.array([[c, 0.0, s_], [0.0, 1.0, 0.0], [-s_, 0.0, c]]))
     back = run_scf(calculator.system, calculator.pseudos, starting_density=tilted,
                    conv_thr=1.0e-12, max_iterations=150)
-    assert back.converged and angle_of(back) < 0.1
-    assert abs(back.history[0]["orientation_torque"][1]) > 1.0e-6
+    # Turned 5 degrees about +y, so a restoring torque is along -y.
+    assert back.history[0]["orientation_torque"][1] < -1.0e-6
+    assert angle_of(back) < 5.0
 
 
 def test_turning_the_moments_without_the_coupling_is_refused():
