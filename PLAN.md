@@ -22760,3 +22760,19 @@ relaxation at 16.0 in the curvature's one-shots after it had converged, killed b
 wrote its result. The cause is accumulation, not a peak: every orientation is a new
 calculation and compiles afresh, and XLA keeps every executable; `relax_orientation` now
 calls `jax.clear_caches()` after each one-shot. The plane the relaxation found is the rerun's.
+
+**The helix's plane, from the rerun** (job 20478925, 24 GB, 12.6 GiB peak with the compiled
+code dropped after each one-shot, against the 16 GB kill before; 426 s). From the normal
+tilted 0.5 rad off `c`, 8 one-shots to a gradient of 1.5e-9 and the free energy down
+1.05e-6 Ry per four-atom cell, and **the normal returns to `c`**, `(-2.1e-4, 8e-5, 1.0)`:
+the helix prefers its moments in the basal plane, a proper screw along `c`. The curvature
+there is positive in all three directions, so it is a minimum and not a symmetry's
+stationary point: **7.476e-6 and 7.483e-6 Ry/rad^2 for the two tilts** (equal by the
+four-fold axis) and **3.84e-6 for the phase**, the turn about the normal, which a
+four-cell commensurate helix does feel. **It is the opposite of the ferromagnet's easy
+axis.** A single-ion model built from the ferromagnet's `K1`, `K1 (2 + 2 cos^2 beta)`
+summed over the four moments, puts the minimum with `c` *in* the plane and gives a torque
+of 6.7e-5 at the start; the helix's own torque is 3.7e-6 and points the other way. So the
+anisotropy of a 90-degree helix of cobalt is a property of the helix's band structure and
+not the ferromagnet's constant averaged over its moments, which is the kind of thing the
+relaxation exists to find rather than assume.

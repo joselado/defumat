@@ -7480,3 +7480,35 @@ per folded k-point, took 420 s with the reference along `z` and 324 s in the pla
 39 against 35), so the saving hydrogen showed is not there to take, and what the closed
 basis buys on this cell is the answer: a remnant of 1.3e-4 against 0.288, and 2.19 mRy
 lower in the functional the loop minimises (`PLAN.md` P121).
+
+## The orientation torque and the in-loop rotation against `pw.x` (P122, 2026-09-26)
+
+`tools/compare_orientation.py`, the workstation, one core each by the affinity mask set before
+JAX is imported and inherited by `pw.x` (serial 7.5 build), every defumat number the
+**second** call so no compilation is in it, `pw.x`'s its own `PWSCF ... WALL`. One-atom
+tetragonal cobalt, ultrasoft, 18 k-points without symmetry.
+
+| work | `pw.x` | defumat | ratio |
+|---|---|---|---|
+| Route A's one-shot: the collinear density turned 45 degrees off `c`, one diagonalisation with the coupling (`lforcet`) | 2.31 s | 3.33 s | 1.44x |
+| the three-component torque on those states | none | 5.16 s | no counterpart |
+| one SCF with the coupling seeded 45 degrees off `c`, 100 iterations, plain mixing | 8.26 s, not converged, ends 41.37 degrees off `c` | 63.93 s, not converged, ends 37.46 degrees off `c` | 7.7x per iteration |
+| the same SCF with `rotate_moments=True` | no counterpart | 25.10 s, **converged in 41**, 0.0067 degrees off `c` | |
+
+**The wander is not this code's.** `pw.x` from the same seed also runs out of its 100
+iterations with the moment 41 degrees off the easy axis, so the soft orientation mode is a
+property of plain self-consistency with the coupling and not an artefact of this mixer; what
+Route C adds has no counterpart in `pw.x`, which converges nothing here in any time. **The
+torque costs more than the one-shot it differentiates**, 5.16 s against 3.33, which is P60's
+bill (a backward pass through `sum w <psi|H|psi>` on frozen states holds one real-space block
+per k-point in flight); in a relaxation it is paid once per step with the diagonalisation. The
+7.7x per SCF iteration is this one-atom cell's, where fixed overheads dominate, and is not a
+statement about scaling. As a reference, P58's one-shot pair on the three-layer cobalt film
+was 50.0 s against 23.2 s, 2.2x.
+
+**Triton, four cores, the four-cell helix** (source unfolded from the one-atom spiral): the
+spiral SCF 32 s, one one-shot with its torque 94.5 s, the relaxation's eight one-shots and six
+for the curvature 426 s. **Peak resident set**: 15.8 GB for eight one-shots and 16.0 GB (killed)
+before `relax_orientation` dropped the compiled code after each one-shot, **12.6 GiB** after,
+the difference being executables accumulated one per orientation, since each orientation is a
+new calculation. The one-shot's own peak on this cell has not been isolated from that.
