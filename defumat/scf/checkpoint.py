@@ -139,8 +139,12 @@ _REFUSED = ("magnetic_field",)
 #: *density* against the constraint's target, so
 #: ``MagneticField.cell_residual`` recomputes it from the loaded density. The
 #: target itself rides on ``magnetic_field``, which is carried.
+#: ``orientation_torque`` is dropped for the same pair of reasons again: it is
+#: the last iteration's ``integral of B[rho_in] x m_out``, a report of the run,
+#: and a contraction of the output density against the input potential, which a
+#: resumed run recomputes at its first iteration.
 _DROPPED = ("stress", "solver", "history", "site_charges", "site_moments",
-             "site_residuals", "constraint_residual")
+             "site_residuals", "constraint_residual", "orientation_torque")
 
 #: Reconstructed from what the caller supplies on load. ``system`` comes back
 #: directly; ``hubbard_setup`` is ``Calculation.hubbard``, which

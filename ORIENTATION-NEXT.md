@@ -1,6 +1,8 @@
 # Relaxing the orientation of a magnetic texture under spin-orbit coupling
 
-A plan recorded on 2026-09-26 for a later session, not started. We will now see what the
+A plan recorded on 2026-09-26. **Steps 1 to 4 are done as `PLAN.md` P122** (the torque, a
+noncollinear source, the relaxation and Route C), the same day; the helix measurements are
+the Triton job that entry names, and steps 5 and 6 are open. We will now see what the
 coordinate is, why a spin rotation is not an atomic position and what that changes for a
 calculation that already carries the coupling, the two routes to build (one from a state
 without the coupling, one inside a self-consistent run with it) and a third that was

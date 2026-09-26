@@ -16,14 +16,15 @@
 #               coupling and its gradient are each a fraction of that, and the
 #               relaxation is of order ten of them plus six for the curvature.
 # cpus-per-task 4, MKL and OMP pinned to 1.
-# mem           16G: seven times the SCF's measured peak, for a backward pass
-#               on four atoms that has not been measured.
+# mem           24G. The first run (job 20478664) reached 15.8 and 16.0 GB of
+#               16 by accumulating compiled code over its one-shots, which
+#               the workflows now drop after each; 24G is margin on that.
 #SBATCH --job-name=defumat-orientation
 #SBATCH --partition=batch-milan
 #SBATCH --array=0-1
 #SBATCH --time=04:00:00
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=16G
+#SBATCH --mem=24G
 #SBATCH --output=/scratch/work/ladovj1/calculations/defumat-audit/out/orientation-%A_%a.out
 #SBATCH --error=/scratch/work/ladovj1/calculations/defumat-audit/out/orientation-%A_%a.err
 

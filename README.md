@@ -322,7 +322,10 @@ model describes the surface. `calc.get_spiral_scan(wavevectors)`, notebook
 - **Easy orientation of a magnetic texture**, relaxed rather than scanned: every
   spin turned by one rotation, and BFGS in the rotation vector on that torque,
   from a state converged without the coupling. The easy axis of a magnet, and the
-  plane of a spiral in a supercell. `calc.get_relaxed_orientation(spinor)`.
+  plane of a spiral in a supercell. `calc.get_relaxed_orientation(spinor)`. Inside
+  a self-consistent run with the coupling the same torque turns the moments after
+  every mix, `calc.get_scf(rotate_moments=True)`, so the run converges on the easy
+  orientation instead of wandering along it.
 - **Source-free exchange-correlation field, and the torque it exerts**: the
   longitudinal part of $\mathbf B_{xc}$ projected out so that
   $\nabla\cdot\mathbf B_{xc} = 0$, the one thing that lets a local functional
@@ -603,7 +606,7 @@ note, the routine or task in the other code's source, is in
 | **Magnetocrystalline anisotropy**, by the force theorem | `calc.get_anisotropy(spinor)` | ✓ | (✓)⁷ |
 | **Relaxed magnetocrystalline anisotropy** | `calc.get_relaxed_anisotropy()` | (✓)⁸ | ✓ |
 | **Magnetic torque** | `calc.get_torque(spinor)`, `calc.get_orientation_torque(spinor)` | | |
-| **Easy orientation of a magnetic texture**, relaxed | `calc.get_relaxed_orientation(spinor)` | (✓)⁸ | (✓)⁷ |
+| **Easy orientation of a magnetic texture**, relaxed | `calc.get_relaxed_orientation(spinor)`, `calc.get_scf(rotate_moments=True)` | (✓)⁸ | (✓)⁷ |
 | **Source-free exchange-correlation field**, and its torque | `calc.get_exchange_torque()` | | ✓ |
 | **Magnons** and the transverse spin susceptibility | `calc.get_magnon_dispersion(qpoints, frequencies)` | (✓)⁹ | ✓ |
 | **Dielectric constant** and **Born effective charges** | `calc.get_dielectric_tensor()` | ✓ | ✓ |

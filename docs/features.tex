@@ -4625,6 +4625,50 @@ the moment itself. The gradient threshold sits above the torque's noise, and
 the energy minimised is the free energy $\sum w\varepsilon - TS$, for the reason
 above.
 
+\textbf{The same inside a self-consistent run with the coupling.} The
+orientation is an electronic degree of freedom, so an SCF with spin-orbit
+coupling turns the moments itself, but it is a soft mode: the lean of the output
+magnetization off the field it was solved in is the anisotropy over the
+exchange, and a mixer takes a fraction of it per iteration. Seeded 45 degrees off
+$c$, tetragonal cobalt does not converge in 100 iterations, its angle wandering
+between 36 and 54 degrees while $\mathrm{d}r^2$ falls to $10^{-8}$ and rises
+again. Every iteration has done the force theorem's calculation with the input
+density frozen, so the torque on a rigid turn of that density is the closed form
+above, one integral per iteration, recorded as
+\code{SCFResult.orientation\_torque} and in \code{history}; it sits at
+$-3.3\times10^{-5}$~Ry per radian through that whole run, which is $-K_1$ of the
+self-consistent anisotropy read from one run. \code{rotate\_moments=True} turns
+the input density by $\boldsymbol\omega=-H^{-1}\mathbf G$ after every mix, the
+density, \code{becsum}, the mixer's history and the carried states together,
+with $H$ built by BFGS from the torques and every step bounded by
+\code{rotation\_trust}, and the run is converged when the torque is below
+\code{torque\_conv\_thr} as well.
+
+\begin{pycode}
+oblique = Calculator.from_file("oblique.in")     # lspinorb, nosym, angle1 = 45
+scf = oblique.get_scf(rotate_moments=True, conv_thr=1e-12, torque_conv_thr=1e-9)
+print(scf.converged, scf.magnetization_vector)   # -> True, along c
+print(scf.orientation_torque)                    # -> ~1e-9 Ry/rad
+\end{pycode}
+
+\noindent It converges in 44 iterations to 0.002 degrees from $c$, and its total
+energy is that of the SCF started exactly along $c$ to $1.3\times10^{-8}$~Ry.
+Without the coupling every orientation has the same energy and the torque is the
+eigensolver's noise, which a step divided by a vanishing curvature would turn
+into motion, so the option is refused there rather than left to do nothing.
+
+\begin{refuses}
+\textbf{Refuses}, for \code{rotate\_moments}: no coupling (or \code{soc\_scale}
+$=0$); a PAW dataset, whose one-centre field turns the moments too and is not in
+the torque; a spin spiral, whose transverse magnetization is kept in the frame
+that turns with $\mathbf q$; a Hubbard $U$, whose \code{ns} would have to turn
+with the density; a magnetic field or a constrained moment, which holds the
+orientation the step moves; and a run without \code{nosym}.
+\code{get\_relaxed\_orientation} and \code{get\_orientation\_torque} refuse
+everything the force theorem refuses, and a PAW torque, whose one-centre
+coefficients are not yet rebuilt from the turned \code{becsum}.
+\end{refuses}
+
 \begin{refuses}
 \textbf{Refuses.} \textbf{PAW without \code{becsum}}, and \textbf{PAW on the
 two-file route at all}: the one-centre coefficients are built from a

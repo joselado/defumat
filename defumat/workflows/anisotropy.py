@@ -100,6 +100,7 @@ from __future__ import annotations
 import warnings
 from dataclasses import dataclass, field
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -1716,10 +1717,19 @@ def relax_orientation(
         return optimizer, settings
 
     def one_shot(orientation):
-        return run_orientation_torque(
+        result = run_orientation_torque(
             system, pseudos, density, rotation=orientation, nbnd=nbnd,
             conv_thr=conv_thr, k_batch=k_batch, soc_scale=soc_scale,
         )
+        # **Every orientation is a new calculation**, since the system's angles
+        # turn with it, so every one-shot compiles afresh and XLA keeps each
+        # executable for the life of the process. On the four-cell cobalt helix
+        # that accumulation reached 16 GB in eight steps and the curvature's
+        # one-shots were killed for it (Triton job 20478664); a step's own peak
+        # is a fraction of that. Dropping the compiled code costs nothing a new
+        # calculation was not going to pay anyway.
+        jax.clear_caches()
+        return result
 
     optimizer, settings = fresh_optimizer()
     chart = np.zeros(3)

@@ -52,6 +52,7 @@ def main() -> None:
     parser.add_argument("--pseudo-dir", default=str(ROOT / "tests/data/pseudo"))
     arguments = parser.parse_args()
 
+    import jax
     import jax.numpy as jnp
 
     from defumat import Calculator
@@ -117,6 +118,7 @@ def main() -> None:
                 result = run_orientation_torque(system, pseudos, density,
                                                 rotation=turned)
                 energies.append(result.free_energy)
+                jax.clear_caches()
             central.append(-(energies[0] - energies[1]) / (2.0 * STEP))
             print("central", axis, central[-1], flush=True)
         record["central_difference"] = central

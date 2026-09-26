@@ -1355,6 +1355,16 @@ class SCFResult:
     #: cleanly to the wrong state.
     site_charges: tuple | None = None
     site_moments: tuple | None = None
+    #: ``integral of B[rho_in] x m_out`` at the last iteration, in Ry per
+    #: radian: the torque on a rigid rotation of the whole texture, which is
+    #: ``-dE/dw`` of the Harris-Foulkes energy and, near self-consistency, of the
+    #: total (``ORIENTATION-NEXT.md`` Route C). **A run with spin-orbit coupling
+    #: can reach ``conv_thr`` with it far from zero**, because the orientation is
+    #: a soft mode ``dr2`` does not see; it is recorded per iteration in
+    #: :attr:`history` too. Zero by rotation invariance without the coupling, to
+    #: the eigensolver's noise. ``None`` unless the run is noncollinear and
+    #: magnetic, and on PAW or a spiral, where the integral is not the torque.
+    orientation_torque: tuple | None = None
     #: ``-int B . m`` and the constraint penalty at the converged density, in
     #: Ry. **Neither is part of** :attr:`total_energy` -- QE prints ``etcon``
     #: and never adds it, and Elk excludes its external field's energy by the
@@ -5008,6 +5018,43 @@ def _solve_residual(
     return rho_out, becsum_out, ns_out, tau_out, result.psi, result
 
 
+def _refuse_rotating_moments(calculation, field, coupled: bool) -> None:
+    """What ``rotate_moments`` cannot turn, from the assembled calculation.
+
+    Each clause is a quantity the rotation would have to carry and does not, or
+    a calculation in which the orientation is not a coordinate at all.
+    """
+    if not coupled:
+        raise ValueError(
+            "rotate_moments needs a magnetic noncollinear run with spin-orbit "
+            "coupling (lspinorb = .true., soc_scale 1) on a norm-conserving or "
+            "ultrasoft dataset: without the coupling every orientation has the "
+            "same energy and the torque is the eigensolver's noise, which a step "
+            "divided by a vanishing curvature would turn into motion; a PAW "
+            "one-centre field turns the moments too and is not in the torque; "
+            "and a spiral keeps its transverse pair in the frame that turns "
+            "with q"
+        )
+    if calculation.is_hubbard:
+        raise NotImplementedError(
+            "rotate_moments with a Hubbard U: the occupation matrix ns is mixed "
+            "with the density and has a spin structure the step would have to "
+            "turn with it, which is not written"
+        )
+    if field is not None:
+        raise NotImplementedError(
+            "rotate_moments with a magnetic field or a constrained moment: the "
+            "field holds the orientation the step is moving, and the fixed point "
+            "would belong to a different functional"
+        )
+    if not calculation.system.nosym:
+        raise ValueError(
+            "rotate_moments needs nosym = .true.: the magnetic symmetry group, "
+            "and with it the k-set, depends on where the moments point, and the "
+            "run turns them"
+        )
+
+
 def run_scf(
     system: System,
     pseudos: tuple[Pseudopotential, ...],
@@ -5042,6 +5089,10 @@ def run_scf(
     max_seconds: float | None = None,
     residual_split: bool = False,
     mixing_beta_mag: float | None = None,
+    rotate_moments: bool = False,
+    torque_conv_thr: float = 1.0e-8,
+    rotation_trust: float = 0.1,
+    rotation_start: float = 1.0e-5,
 ) -> SCFResult:
     """Run the self-consistent field loop to convergence.
 
@@ -5526,6 +5577,45 @@ def run_scf(
             )
 
     previous_energy, history = None, []
+    # Route C's diagnostic (``ORIENTATION-NEXT.md``, P122): the torque on a rigid
+    # rotation of the input texture, ``integral of B[rho_in] x m_out``. Every
+    # iteration has just done the force theorem's calculation with ``rho_in`` as
+    # the frozen density, so this is the gradient of the Harris-Foulkes energy in
+    # the orientation, one integral and no derivative, and near self-consistency
+    # it is the true orientation gradient. **It is what ``dr2`` cannot see**: the
+    # orientation is a soft mode of a run with the coupling, and a run can reach
+    # ``conv_thr`` with its moments still turning. Without the coupling it is zero
+    # at every iteration by rotation invariance, at the eigensolver's noise, and
+    # is recorded anyway as that control. Not on PAW, whose one-centre field
+    # turns the moments too and is not in the integral, and not on a spiral,
+    # whose transverse pair is in the frame that turns with ``q``.
+    track_orientation = (
+        calculation.noncolin and calculation.nspin_mag == 4
+        and not calculation.spiral and not calculation.is_paw
+    )
+    report_orientation = (
+        track_orientation and bool(calculation.system.lspinorb)
+        and float(calculation.system.soc_scale) != 0.0
+    )
+    orientation_torque = None
+    if track_orientation:
+        from defumat.scf.spin_torque import exchange_torque
+    # ``rotate_moments``: Route C itself, the input density turned after every
+    # mix by ``w = -H^-1 G`` (:mod:`defumat.scf.orientation`), so that a run
+    # with the coupling converges on the orientation of lowest energy instead
+    # of wandering along the soft mode. ``torque_conv_thr`` (Ry per radian) then
+    # joins ``conv_thr``: the run is converged when both hold.
+    stepper = None
+    if rotate_moments:
+        _refuse_rotating_moments(calculation, calculation.magnetic_field,
+                                 report_orientation)
+        from defumat.forces.torque import rotate_texture
+        from defumat.scf.orientation import (
+            OrientationStepper,
+            rotate_spinors,
+            rotation_matrix,
+        )
+        stepper = OrientationStepper(trust=rotation_trust, start=rotation_start)
     # The occupations the *next* iteration's per-band thresholds are built from
     # (:func:`band_thresholds`). ``None`` until the first diagonalisation has
     # happened, which is ``btype`` coming out of ``init_run.f90:149`` all ones.
@@ -5986,6 +6076,15 @@ def run_scf(
             )
         )
 
+        if track_orientation:
+            # ``potential`` is still the input's here, which is the field the
+            # states were solved in; a field or constraint in the run is part
+            # of it and its torque is included.
+            orientation_torque = tuple(float(x) for x in np.asarray(
+                exchange_torque(rho_out, potential.v_scf,
+                                calculation.system.cell).total
+            ))
+
         converged = accuracy < conv_thr
         # The density is self-consistent *at this field*, which is the state the
         # secant update is allowed to measure: see ``MagneticField.feedback``.
@@ -5997,6 +6096,12 @@ def run_scf(
             # it was asked to be: the constraining field is outside the density,
             # so ``dr2`` can fall below ``conv_thr`` while the field is still
             # being driven and the moment is still moving.
+            converged = False
+        if (converged and stepper is not None and orientation_torque is not None
+                and float(np.linalg.norm(orientation_torque)) > torque_conv_thr):
+            # The orientation is a soft mode ``dr2`` does not see, which is the
+            # reason this option exists: converged only when it has stopped
+            # turning as well.
             converged = False
         if converged:
             # QE's ``vnew``: the potential the last step did *not* apply,
@@ -6157,6 +6262,8 @@ def run_scf(
             entry["becsum_magnetic_accuracy"] = becsum_magnetic
         if residual_split:
             entry["residual_split"] = iteration_split
+        if orientation_torque is not None:
+            entry["orientation_torque"] = orientation_torque
         history.append(entry)
         if verbose:
             if moment is not None:
@@ -6205,6 +6312,8 @@ def run_scf(
                     + (f"/{becsum_magnetic:.2e} mag" if becsum_magnetic else "")
                     + " (outside dr2)"
                 )
+            if report_orientation and orientation_torque is not None:
+                extra += f"   |tau| = {float(np.linalg.norm(orientation_torque)):.2e} Ry/rad"
             print(f"  iteration {iteration:3d}   E = {total:16.8f} Ry"
                   f"   accuracy = {accuracy:.2e}   ethr = {ethr:.2e}"
                   f"   |drho| = {residual:.2e}{extra}")
@@ -6269,6 +6378,47 @@ def run_scf(
                 # the next field than the atomic guess, and the field moves by
                 # less each time.
                 field = field.feedback(rho_out, calculation.system.cell)
+        if stepper is not None and orientation_torque is not None:
+            step = stepper.propose(-np.asarray(orientation_torque), accuracy)
+            if step is not None:
+                # Everything carried into the next iteration turns together:
+                # the input density, ``becsum``, the mixer's history (whose Gram
+                # matrix a common rotation leaves alone) and the states the next
+                # diagonalisation starts from. ``tau`` is a scalar and needs no
+                # turn. The static GGA axis stays where it is: for a collinear
+                # texture ``sign(m . u)`` is right for any axis not perpendicular
+                # to the moment (``ORIENTATION-NEXT.md`` Route C).
+                turn = rotation_matrix(step)
+                shapes = [tuple(np.shape(rho))] + [
+                    tuple(np.shape(b)) for b in becsum_state if b is not None]
+
+                def turn_packed(vector, turn=turn, shapes=shapes):
+                    vector = np.array(vector, copy=True)
+                    offset = 0
+                    for shape in shapes:
+                        size = int(np.prod(shape))
+                        block = vector[offset:offset + size].reshape(shape)
+                        vector[offset:offset + size] = np.asarray(
+                            rotate_texture(block, turn)).ravel()
+                        offset += size
+                    return vector
+
+                rho = rotate_texture(rho, turn)
+                becsum_state = tuple(
+                    None if b is None else rotate_texture(b, turn)
+                    for b in becsum_state
+                )
+                mixer.rotate_history(turn_packed)
+                if wavefunctions is not None:
+                    wavefunctions = park_wavefunctions(
+                        jnp.asarray(rotate_spinors(
+                            np.asarray(fetch_wavefunctions(wavefunctions)), step)),
+                        wfc_store,
+                    )
+                if verbose:
+                    angle = float(np.degrees(np.linalg.norm(step)))
+                    print(f"     turned the moments by {angle:.4f} deg about "
+                          f"({step[0]:+.3f}, {step[1]:+.3f}, {step[2]:+.3f})/|w|")
         # **After the mix and after the field steps.** The saved ``rho`` is the
         # next iteration's *input* and the mixer holds the history that belongs
         # to it, so a resume re-enters exactly where this iteration left -- which
@@ -6527,6 +6677,7 @@ def run_scf(
             field.cell_residual(rho_out, calculation.system.cell)),
         magnetic_field=field,
         field_scale=float(field_scale),
+        orientation_torque=orientation_torque,
         fermi_energy=levels.get("fermi_energy"),
         fermi_energy_up=levels.get("fermi_energy_up"),
         fermi_energy_down=levels.get("fermi_energy_down"),

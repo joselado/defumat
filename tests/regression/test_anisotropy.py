@@ -1279,6 +1279,57 @@ def test_the_orientation_relaxes_onto_the_easy_axis():
     assert 0.5 * tilts.mean() == pytest.approx(4.059e-5, rel=0.2)
 
 
+def _oblique_coupled_cobalt():
+    """Tetragonal cobalt with the coupling, self-consistent, seeded 45 degrees off ``c``."""
+    text = (GENERATED / "co-tetragonal-relaxed-mae.in").read_text().replace(
+        "angle1(1) = 0.0, angle2(1) = 0.0,", "angle1(1) = 45.0, angle2(1) = 0.0,")
+    assert "angle1(1) = 45.0" in text
+    return Calculator.from_text(text, pseudo_dir=GENERATED.parent / "pseudo",
+                                announce=False)
+
+
+@pytest.mark.slow
+def test_turning_the_moments_inside_the_scf_converges_on_the_easy_axis():
+    """Route C: the run with the coupling converges on ``c`` instead of wandering.
+
+    ``ORIENTATION-NEXT.md`` step 4. Seeded 45 degrees off ``c``, the plain SCF
+    does not converge in 100 iterations: the angle wanders between 36 and 54
+    degrees and ``dr2`` between 1e-8 and 2e-5 while the per-iteration torque
+    sits at -3.3e-5 Ry per radian, which is ``-K1`` of the relaxed anisotropy
+    (P87's 0.447 meV) read from one run. With the moments turned by the torque
+    after every mix it converges in 44 iterations 0.002 degrees from ``c``, and
+    its total energy is the SCF started exactly along ``c`` to 1.3e-8 Ry, sixty
+    times inside the 8e-7 Ry floor P87 measured between two paths to one state.
+    """
+    turned = _oblique_coupled_cobalt().get_scf(
+        rotate_moments=True, max_iterations=150, conv_thr=1.0e-12,
+        torque_conv_thr=1.0e-9)
+    along = Calculator.from_file(GENERATED / "co-tetragonal-relaxed-mae.in",
+                                 pseudo_dir=GENERATED.parent / "pseudo",
+                                 announce=False).get_scf(conv_thr=1.0e-12)
+    moment = np.asarray(turned.magnetization_vector)
+    angle = np.degrees(np.arccos(moment[2] / np.linalg.norm(moment)))
+
+    assert turned.converged
+    assert angle < 0.05
+    assert np.linalg.norm(turned.orientation_torque) < 1.0e-9
+    assert turned.total_energy == pytest.approx(along.total_energy, abs=1.0e-7)
+    # The torque was recorded every iteration, and early on it was the size of
+    # the anisotropy: the blind spot of dr2 that the option exists for.
+    torques = [np.linalg.norm(e["orientation_torque"]) for e in turned.history]
+    assert max(torques[5:15]) > 1.0e-5
+
+
+def test_turning_the_moments_without_the_coupling_is_refused():
+    """Without the coupling the orientation is not a coordinate, so no step is taken."""
+    from defumat.scf.driver import run_scf
+
+    calculator = _oblique_coupled_cobalt()
+    with pytest.raises(ValueError, match="spin-orbit"):
+        run_scf(calculator.system.with_soc_scale(0.0), calculator.pseudos,
+                rotate_moments=True)
+
+
 def test_the_rotation_plane_must_be_orthogonal():
     scalar, spinor = _tetragonal()
     with pytest.raises(ValueError, match="orthogonal"):

@@ -180,6 +180,17 @@ class Mixer:
         stepped[:size] = head.reshape(-1)
         return stepped
 
+    def rotate_history(self, transform) -> None:
+        """Apply ``transform`` to every stored density and residual, or forget them.
+
+        The in-loop rotation of ``ORIENTATION-NEXT.md`` Route C turns the input
+        density between iterations, and a history left in the old frame is
+        extrapolated back towards it. A mixer that can carry its history across
+        a common linear map overrides this; the default is to reset, which costs
+        iterations and nothing else.
+        """
+        self.reset()
+
     def reset(self) -> None:
         pass
 
@@ -245,6 +256,22 @@ class AndersonMixer(Mixer):
         self._residuals.clear()
         self._fits.clear()
         self._drop_gram()
+
+    def rotate_history(self, transform) -> None:
+        """Turn the stored densities and residuals with the input density.
+
+        ``transform`` is a spin rotation of every magnetization in a packed
+        vector, one map for the whole history. On the flat fit that rotation is
+        an isometry, ``|R m|`` being ``|m|`` point by point, so the cached Gram
+        matrix of the residuals is unchanged and stays valid. A metric's fit
+        vectors are in that metric's own layout, which this does not unpack, so
+        a history carrying them is dropped instead.
+        """
+        if self._fits:
+            self.reset()
+            return
+        self._densities[:] = [transform(v) for v in self._densities]
+        self._residuals[:] = [transform(v) for v in self._residuals]
 
     def _drop_gram(self):
         self._gram = self._norms = self._fit_mask = None

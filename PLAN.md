@@ -22581,7 +22581,7 @@ spin-orbit coupling that direction is free and the closed basis no longer pushes
 66.2, -42.0 and -50.9 degrees against 27.5, 62.3, -40.5 and -48.1, 0.30 mRy lower in
 `E + field`, in 78 iterations against 53, the manifold being exactly flat now.
 
-### P122 -- The torque on a whole texture: every spin turned by one rotation, three generators at once. 🚧 STEPS 1 TO 3 OF 6 IN (`ORIENTATION-NEXT.md`); the helix numbers are on Triton, and the in-loop rotation (Route C) is open.
+### P122 -- The torque on a whole texture: every spin turned by one rotation, three generators at once. 🚧 STEPS 1 TO 4 OF 6 IN (`ORIENTATION-NEXT.md`), Route C included; the helix numbers are on Triton, and the production spiral and the unit-cell route are open.
 
 `defumat/forces/torque.py` (`rotate_texture`, `cross_matrix`, `rotation_near`,
 `band_energy_at_rotation`, `orientation_torque`, and `_band_energy` and
@@ -22694,3 +22694,69 @@ relaxation gained is a difference of two free energies, `K1` a second derivative
 and `K2` a first derivative at 45 degrees, and the three agree. **The chart is recentred
 past 2 rad and a start already below `grad_conv_thr` warns**, because an orientation a
 symmetry fixes has no torque whether it is easy or hard.
+
+**Step 4, Route C: the moments turned inside an SCF with the coupling**
+(`defumat/scf/orientation.py`: `OrientationStepper`, `rotate_spinors`,
+`spinor_rotation`, `rotation_matrix`; `run_scf(rotate_moments=, torque_conv_thr=,
+rotation_trust=, rotation_start=)`, `SCFResult.orientation_torque` and its per-iteration
+`history` entry, `Mixer.rotate_history`; `tests/unit/test_rotating_moments.py`, three,
+gate; two tests in `tests/regression/test_anisotropy.py`).
+
+**The diagnostic first, and it found the reason for the step.** Every iteration of a run
+with the coupling has diagonalised `H[rho_in]`, the force theorem's calculation with the
+input frozen, so `integral of B[rho_in] x m_out` is the gradient of the Harris-Foulkes
+energy in the orientation, one integral per iteration. Tetragonal cobalt with the coupling,
+self-consistent, seeded 45 degrees off `c` (`co-tetragonal-relaxed-mae.in` with
+`angle1 = 45`), plain mixing: **100 iterations and not converged**, the angle wandering
+between 36 and 54 degrees and `dr2` between 1e-8 and 2e-5, with the torque at -3.3e-5 Ry per
+radian throughout. At 46 degrees that is `-K1 sin 2 theta` with `K1` = 3.28e-5 Ry =
+0.446 meV, **P87's self-consistent anisotropy (0.447 meV, from two converged totals) read
+off one unconverged run**. The orientation is a soft mode `dr2` does not see, and the plain
+mixer moves it by `beta` times a lean of 1e-5 rad per iteration.
+
+**The step.** After each mix the input is turned by `w = -H^-1 G`, `G` minus that torque:
+the residual's component along the three global spin rotations divided by their curvature.
+`H` starts from nothing (a first step of 0.05 rad along `-G`), BFGS on the torques after it,
+pairs with `s . y <= 0` skipped; each step at most `rotation_trust = 0.1` rad, none while
+`dr2 > rotation_start = 1e-5`. The density, `becsum`, the Anderson history and the carried
+states turn together: the history is equivariant, `mix(R a, R b) = R mix(a, b)` after
+`rotate_history(R)` to 1e-12 (the flat fit's Gram matrix is invariant under a common spin
+rotation), and `spinor_rotation(w)` turns a spinor's magnetization by `rotation_matrix(w)`
+to 1e-12. The static GGA axis is left alone, which the Hartree and exchange-correlation
+invariance of step 1 (1e-12 at 30 degrees off the axis) justifies for a collinear texture.
+
+| run, oblique tetragonal cobalt with the coupling | iterations | angle to `c` at the end | total energy |
+|---|---|---|---|
+| plain SCF, `conv_thr = 1e-10` | 100, not converged | 36 to 54 degrees, wandering | |
+| `rotate_moments`, `conv_thr = 1e-10`, `torque_conv_thr = 1e-8` | 39 (28 s) | 0.015 degrees | |
+| `rotate_moments`, `conv_thr = 1e-12`, `torque_conv_thr = 1e-9` | 44 (35 s) | 0.0023 degrees | -74.405802459891 Ry |
+| plain SCF started exactly along `c`, `conv_thr = 1e-12` | 21 | 0 | -74.405802472810 Ry |
+
+The two totals differ by **1.3e-8 Ry**, sixty times inside the 8e-7 Ry floor P87 measured
+between two SCF paths to one state on this cell; the residual angle's own cost, `K1 theta^2`,
+is 5e-14. The run along `c` records a torque of 1e-17, zero by the four-fold axis. Refused
+by name: no coupling or `soc_scale = 0` (the torque is then the solver's noise and a step
+divided by a vanishing curvature would move on it), PAW (the one-centre field is not in the
+torque), a spiral, a Hubbard U (`ns` would have to turn), a field or a constraint, and a run
+without `nosym`.
+
+**The helix, on Triton** (job 20478664, `batch-milan`, four cores, the unfolded spiral as
+source, start at ZYZ `(0.3, 0.5, 0.2)`, the plane's normal 0.5 rad off `c`):
+
+| check | value |
+|---|---|
+| torque at the start, per four-atom cell | `(1.3062, -3.4234, 0.7102) x 1e-6` Ry/rad |
+| closed form `integral of m_out x B` against `jax.grad` | 3.1e-11 relative |
+| each component against a central difference of the free energy, step 2e-3 rad | 1.4e-5 relative |
+| the same torque at `soc_scale = 0` | about 1e-10 per component, the noise floor |
+| one one-shot with its gradient | 94.5 s |
+| relaxation | 8 one-shots to a gradient of 1.5e-9, the free energy down by 1.05e-6 Ry per cell |
+
+The helix's torque is about eighteen times below a single-ion estimate from the
+ferromagnet's `K1` (`2 K1 sin 2 beta` over four atoms is 6.7e-5 at `beta = 0.5`), which is a
+statement about the helix's band structure rather than a defect: the checks above all hold.
+**Both tasks ran out of their 16 GB**, the checks at 15.8 after eight one-shots and the
+relaxation at 16.0 in the curvature's one-shots after it had converged, killed before it
+wrote its result. The cause is accumulation, not a peak: every orientation is a new
+calculation and compiles afresh, and XLA keeps every executable; `relax_orientation` now
+calls `jax.clear_caches()` after each one-shot. The plane the relaxation found is the rerun's.
