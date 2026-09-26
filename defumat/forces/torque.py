@@ -42,6 +42,24 @@ term sees only the charge, the exchange-correlation energy only ``|m|``, the
 Ewald sum neither, and ``deband``'s ``int rho v = n v_0 + |m| |b|`` is invariant
 too. So ``dE_total/dtheta = dE_band/dtheta`` exactly, which is the force
 theorem's own statement one derivative down.
+
+**The torque as a vector: every spin turned by one rotation**
+(``ORIENTATION-NEXT.md``, Route A). The angle above turns a collinear moment in
+one plane. :func:`orientation_torque` turns a whole texture by a rotation ``R``,
+``m(r) -> R m(r)`` with the charge kept, and returns ``-dF/dw`` for the three
+generators at once, ``w`` being the rotation vector about the current
+orientation. For a collinear texture it contains the plane torque as one
+component, ``torque . (e1 x e2)``, and its component along the moment is zero
+because a rotation about the moment moves nothing. For a texture that is not
+collinear nothing is read off an axis: :func:`rotate_texture` is ``R m`` on the
+three magnetization channels, linear in ``R``, so the charge, ``|m|`` and every
+angle between moments are kept exactly.
+
+The derivative is only ever taken at ``w = 0``, where the rotation is written as
+``(1 + [w]x) R0`` (:func:`rotation_near`). That agrees with ``exp([w]x) R0`` in
+value and in first derivative there, which is all a gradient at ``w = 0`` reads,
+and it contains no norm of ``w``: Rodrigues' formula puts ``sqrt(sum w^2)`` at
+the origin, whose gradient is ``0/0`` exactly where every call evaluates it.
 """
 
 from __future__ import annotations
@@ -52,7 +70,16 @@ import numpy as np
 
 from defumat.scf.continuation import _axis, _collinear_axis
 
-__all__ = ["band_energy_at_angle", "rotated_density", "torque_at_angle"]
+__all__ = [
+    "band_energy_at_angle",
+    "band_energy_at_rotation",
+    "cross_matrix",
+    "orientation_torque",
+    "rotate_texture",
+    "rotated_density",
+    "rotation_near",
+    "torque_at_angle",
+]
 
 
 def rotated_density(density, direction):
@@ -127,8 +154,13 @@ def band_energy_at_angle(calculation, states, weights, density, plane, angle):
     right (see the module docstring).
     """
     direction = _direction(angle, plane[0], plane[1])
-    rotated = rotated_density(density, direction)
-    potential = calculation.potential(rotated, 1.0, None)
+    return _band_energy(calculation, states, weights,
+                        rotated_density(density, direction))
+
+
+def _band_energy(calculation, states, weights, density):
+    """``sum_n w_n <psi_n | H[density] | psi_n>`` over every k-point at once."""
+    potential = calculation.potential(density, 1.0, None)
     hamiltonian = calculation.hamiltonian(potential.v_scf)[0]
 
     psi = jnp.asarray(states)[0]
@@ -144,7 +176,22 @@ def band_energy_at_angle(calculation, states, weights, density, plane, angle):
 
 def _chunked_energy_and_slope(calculation, states, weights, density, plane,
                               angle, k_batch: int):
-    """``(E, dE/dtheta)`` accumulated over ``k_batch`` k-points at a time.
+    """``(E, dE/dtheta)`` over ``k_batch`` k-points at a time, in one plane."""
+    def build(value):
+        return rotated_density(density, _direction(value, plane[0], plane[1]))
+
+    energy, slope = _chunked_value_and_grad(
+        calculation, states, weights, build, jnp.asarray(float(angle)), k_batch
+    )
+    return energy, float(slope)
+
+
+def _chunked_value_and_grad(calculation, states, weights, build, parameter,
+                            k_batch: int):
+    """``(E, dE/dp)`` accumulated over ``k_batch`` k-points at a time.
+
+    ``build(p)`` is the density the potential is made from, and ``p`` is a
+    scalar angle or a rotation vector; the gradient comes back with its shape.
 
     A Python loop of per-chunk ``value_and_grad`` calls, **not** one
     ``value_and_grad`` around a ``lax.map``, for the reason
@@ -166,9 +213,7 @@ def _chunked_energy_and_slope(calculation, states, weights, density, plane,
     nk = int(psi.shape[0])
 
     def chunk(value, indices, live):
-        direction = _direction(value, plane[0], plane[1])
-        rotated = rotated_density(density, direction)
-        potential = calculation.potential(rotated, 1.0, None)
+        potential = calculation.potential(build(value), 1.0, None)
         hamiltonian = calculation.hamiltonian(potential.v_scf)[0]
         total = 0.0
         for slot in range(k_batch):
@@ -185,9 +230,9 @@ def _chunked_energy_and_slope(calculation, states, weights, density, plane,
         pad = k_batch - len(ks)
         indices = jnp.asarray(np.concatenate([ks, np.full(pad, ks[0], dtype=int)]))
         live = jnp.asarray(np.concatenate([np.ones(len(ks)), np.zeros(pad)]))
-        value, derivative = compiled(jnp.asarray(float(angle)), indices, live)
+        value, derivative = compiled(parameter, indices, live)
         energy = energy + float(value)
-        slope = slope + float(derivative)
+        slope = slope + np.asarray(derivative)
     return energy, slope
 
 
@@ -228,3 +273,101 @@ def torque_at_angle(calculation, states, weights, density, plane, angle,
         calculation, states, weights, density, plane, angle, int(resolved)
     )
     return -float(slope)
+
+
+def rotate_texture(field, rotation):
+    """``R m`` on a four-channel field, its charge channel kept.
+
+    ``field`` is ``(4, ...)``, charge first and the three cartesian
+    magnetization components after it: a density on the grid, or one species'
+    ``becsum``, which carries its components on the same leading axis
+    (``ultracell/kramers.py:time_reversed`` negates exactly those three, which
+    is this with ``-1`` in place of ``R``). Linear in ``rotation``, which may be
+    a tracer; nothing is read off the field, so a texture that is not collinear
+    turns as it is, with every angle between its moments kept.
+    """
+    field = jnp.asarray(field)
+    if field.shape[0] != 4:
+        raise ValueError(
+            f"rotate_texture wants a four-channel field (charge and three "
+            f"magnetization components), got {field.shape[0]} channels"
+        )
+    rotation = jnp.asarray(rotation, dtype=field.real.dtype)
+    moment = jnp.tensordot(rotation, field[1:4], axes=(1, 0))
+    return jnp.concatenate([field[:1], moment])
+
+
+def cross_matrix(vector):
+    """``[w]x``, the antisymmetric matrix with ``[w]x v = w x v``."""
+    w = jnp.asarray(vector)
+    zero = jnp.zeros_like(w[0])
+    return jnp.stack([
+        jnp.stack([zero, -w[2], w[1]]),
+        jnp.stack([w[2], zero, -w[0]]),
+        jnp.stack([-w[1], w[0], zero]),
+    ])
+
+
+def rotation_near(omega, base):
+    """``(1 + [w]x) R0``: the rotation ``w`` about the orientation ``R0``.
+
+    Exact at ``w = 0`` in value and in first derivative, which is where every
+    caller evaluates it (the module docstring says why a norm of ``w`` must not
+    appear). It is not a rotation away from ``w = 0`` and is not used there.
+    """
+    base = jnp.asarray(base)
+    return (jnp.eye(3, dtype=base.dtype) + cross_matrix(omega)) @ base
+
+
+def band_energy_at_rotation(calculation, states, weights, texture, base, omega):
+    """``sum_n w_n <psi_n | H(R) | psi_n>`` at frozen ``states``, ``R = (1 + [w]x) R0``.
+
+    ``texture`` is the four-channel density at the reference orientation, the
+    one ``R = 1`` means, and ``base`` is ``R0``, the orientation the states were
+    diagonalised at. Evaluated at ``omega = 0`` it must reproduce ``sum w eps``
+    of those states, which is the same check :func:`band_energy_at_angle` makes.
+    """
+    texture = jnp.asarray(texture)
+    omega = jnp.asarray(omega, dtype=texture.real.dtype)
+    rotation = rotation_near(omega, jnp.asarray(base, dtype=texture.real.dtype))
+    return _band_energy(calculation, states, weights,
+                        rotate_texture(texture, rotation))
+
+
+def orientation_torque(calculation, states, weights, texture, base,
+                       k_batch: int | None | str = "default"):
+    """``-dF/dw`` at ``w = 0``: the torque on the whole texture, in Ry per radian.
+
+    Three cartesian components, one per generator of a rigid rotation about the
+    orientation ``base``. The sign is :func:`torque_at_angle`'s, so for a
+    collinear texture turning in the plane ``(e1, e2)`` that function's torque
+    is ``orientation_torque(...) . (e1 x e2)``. It is the derivative of the free
+    energy ``sum w eps - TS``, for the reason P60 measured: a Hellmann-Feynman
+    derivative at frozen occupations does not see the occupations' own change,
+    which the entropy cancels.
+
+    ``k_batch`` chunks the backward pass exactly as it does for
+    :func:`torque_at_angle`, and ``None`` takes the whole k axis in one pass.
+    """
+    from defumat.batching import resolve_k_batch
+
+    texture = jnp.asarray(texture)
+    base = jnp.asarray(base, dtype=texture.real.dtype)
+    origin = jnp.zeros(3, dtype=texture.real.dtype)
+    resolved = resolve_k_batch(k_batch)
+    nk = int(jnp.asarray(states).shape[1])
+    if resolved is None or resolved >= nk:
+        def energy(value):
+            return band_energy_at_rotation(
+                calculation, states, weights, texture, base, value
+            )
+
+        return -np.asarray(jax.grad(energy)(origin))
+
+    def build(value):
+        return rotate_texture(texture, rotation_near(value, base))
+
+    _, slope = _chunked_value_and_grad(
+        calculation, states, weights, build, origin, int(resolved)
+    )
+    return -np.asarray(slope)

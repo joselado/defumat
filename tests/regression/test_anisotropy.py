@@ -994,6 +994,133 @@ def test_the_torque_is_the_same_chunked_as_taken_whole():
         assert chunked == pytest.approx(whole, rel=1.0e-9, abs=1.0e-12), chunk
 
 
+def _tetragonal_states_at_45_degrees():
+    """The one-shot states of tetragonal cobalt with the moment 45 degrees off ``c``.
+
+    ``(calculation, states, weights, density, rotation, direction)``, the
+    rotation being the one about ``y`` that takes ``z`` to the moment.
+    """
+    import jax.numpy as jnp
+
+    from defumat.workflows.anisotropy import _rotation_taking, _with_rotation
+    from defumat.workflows.nscf import fixed_density_states
+
+    scalar, spinor = _tetragonal()
+    scf = scalar.get_scf()
+    direction = np.array([np.sin(np.pi / 4), 0.0, np.cos(np.pi / 4)])
+    rotation = _rotation_taking((0.0, 0.0, 1.0), direction)
+    system = _with_rotation(spinor.system, rotation)
+    rotated = nc_magnetization_from_lsda(scf.density, tuple(direction))
+    calculation, system, eigenvalues, states = fixed_density_states(
+        system, spinor.pseudos, rotated, conv_thr=1.0e-10)
+    weights, _ = calculation.occupations(jnp.asarray(eigenvalues))
+    return calculation, states, weights, scf.density, rotation, direction
+
+
+@pytest.mark.slow
+def test_the_orientation_torque_contains_the_plane_torque():
+    """Three components on the same states, and P60's number is one of them.
+
+    ``ORIENTATION-NEXT.md`` step 1. The moment turning in the ``(z, x)`` plane is
+    a turn about ``y``, so ``torque_at_angle`` must be the ``y`` component of the
+    vector, on the same states, to round-off: the two build the same potential
+    through two different parameterisations of the same rotation. The
+    component about the moment itself is zero because such a turn moves
+    nothing, and it is compared against the ``y`` component so that the zero is
+    seen to be one. The third, a tilt out of the ``(z, x)`` plane, is zero by
+    symmetry (the mirror ``y -> -y`` combined with time reversal, which maps a
+    moment in the ``(z, x)`` plane onto itself and which the unshifted grid
+    keeps), so it is bounded by the diagonalisation rather than by round-off:
+    measured at 5.8e-11 Ry per radian, 1.4e-6 of the in-plane torque, at the
+    one-shot's ``conv_thr = 1e-10``.
+    """
+    from defumat.forces.torque import (
+        band_energy_at_rotation,
+        orientation_torque,
+        torque_at_angle,
+    )
+
+    calculation, states, weights, density, rotation, direction = (
+        _tetragonal_states_at_45_degrees()
+    )
+    texture = nc_magnetization_from_lsda(density, (0.0, 0.0, 1.0))
+    torque = orientation_torque(calculation, states, weights, texture, rotation)
+    plane = torque_at_angle(calculation, states, weights, density,
+                            ((0.0, 0.0, 1.0), (1.0, 0.0, 0.0)), np.pi / 4)
+
+    assert torque[1] == pytest.approx(plane, rel=1.0e-10)
+    assert abs(float(torque @ direction)) < 1.0e-12 * abs(torque[1])
+    out_of_plane = float(torque @ np.cross(direction, (0.0, 1.0, 0.0)))
+    assert abs(out_of_plane) < 1.0e-5 * abs(torque[1])
+
+    # A central difference of the functional it differentiates, about ``y``,
+    # with the exact rotation on either side rather than ``rotation_near``.
+    step = 1.0e-3
+
+    def turned(sign):
+        return float(band_energy_at_rotation(
+            calculation, states, weights, texture,
+            _rotation_about_y(sign * step) @ rotation, np.zeros(3)))
+
+    central = (turned(+1) - turned(-1)) / (2 * step)
+    assert -torque[1] == pytest.approx(central, rel=1.0e-5)
+
+
+def _rotation_about_y(angle):
+    c, s = np.cos(angle), np.sin(angle)
+    return np.array([[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]])
+
+
+@pytest.mark.slow
+def test_the_orientation_torque_is_the_plane_torque_end_to_end():
+    """Through the front door, two separate one-shot runs, one number.
+
+    ``get_orientation_torque`` at the rotation taking ``c`` 45 degrees towards
+    ``a`` against ``get_torque`` at its default of 45 degrees in the ``(z, x)``
+    plane: the same system turned by two routes (``_with_rotation`` and
+    ``_with_quantization_axis``), the same density, so the same NSCF, and the
+    ``y`` component must be P60's torque. It also checks the assembly's own
+    identity, ``sum w <psi|H|psi> = sum w eps`` at the orientation the states
+    came from.
+    """
+    from defumat.workflows.anisotropy import _rotation_taking
+
+    scalar, spinor = _tetragonal()
+    direction = np.array([np.sin(np.pi / 4), 0.0, np.cos(np.pi / 4)])
+    rotation = _rotation_taking((0.0, 0.0, 1.0), direction)
+    vector = scalar.get_orientation_torque(spinor, rotation=rotation)
+    plane = scalar.get_torque(spinor)
+
+    assert vector.torque[1] == pytest.approx(plane.torque, rel=1.0e-9)
+    assert vector.residual * RY_TO_EV * 1000 < 1.0e-6
+    np.testing.assert_allclose(vector.direction, direction, atol=1e-12)
+    assert abs(vector.along_moment) < 1.0e-12 * abs(vector.torque[1])
+
+
+@pytest.mark.slow
+def test_turning_the_texture_leaves_the_hartree_and_xc_energies_alone():
+    """The force theorem's premise, for a turn the quantization axis did not follow.
+
+    Every term of the total energy but the band sum is a functional of the
+    density that a global spin rotation leaves alone, which is what makes a
+    difference of band energies a difference of total energies. Checked at two
+    orientations 30 degrees apart built on **one** calculation, whose GGA axis
+    sits at the first: for a collinear texture ``sign(m . u)`` is the correct
+    signed projection for any axis ``u`` not perpendicular to the moment, so the
+    energies must agree to round-off although the axis did not turn. (A turn to
+    90 degrees from the axis is the 36.8 meV trap and is not what this checks.)
+    """
+    from defumat.forces.torque import rotate_texture
+
+    calculation, _, _, density, rotation, _ = _tetragonal_states_at_45_degrees()
+    texture = nc_magnetization_from_lsda(density, (0.0, 0.0, 1.0))
+    first = calculation.potential(rotate_texture(texture, rotation), 1.0, None)
+    second = calculation.potential(
+        rotate_texture(texture, _rotation_about_y(np.pi / 6) @ rotation), 1.0, None)
+    assert float(second.ehart) == pytest.approx(float(first.ehart), abs=1.0e-12)
+    assert float(second.etxc) == pytest.approx(float(first.etxc), abs=1.0e-12)
+
+
 def test_the_rotation_plane_must_be_orthogonal():
     scalar, spinor = _tetragonal()
     with pytest.raises(ValueError, match="orthogonal"):

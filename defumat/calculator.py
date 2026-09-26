@@ -1910,6 +1910,24 @@ class Calculator:
             merged["angle"] = angle
         return run_torque(system, pseudos, result.density, **merged)
 
+    def get_orientation_torque(self, spinor, rotation=None, **options):
+        """The torque on the whole texture for a rigid rotation of every spin.
+
+        Three components where :meth:`get_torque` has one -- see
+        :func:`defumat.workflows.anisotropy.run_orientation_torque`.
+        """
+        from defumat.workflows.anisotropy import run_orientation_torque
+
+        result = self._ground_state("the orientation torque")
+        system, pseudos, leg = _spinor_leg(spinor)
+        merged = self._defaults_for(run_orientation_torque, options,
+                                    exclude=_SPINOR_LEG_OPTIONS)
+        for name, value in leg.items():
+            merged.setdefault(name, value)
+        if rotation is not None:
+            merged["rotation"] = rotation
+        return run_orientation_torque(system, pseudos, result.density, **merged)
+
     def get_first_order_soc(self, spinor, direction=None, **options):
         """The spin-orbit term's expectation value at coupling-free states.
 

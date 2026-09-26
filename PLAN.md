@@ -204,6 +204,10 @@ new phase is started. Each entry names the missing term rather than the missing 
 because that is what decides whether it is a session or a phase.
 
 - **Wyckoff input** (P6, the one part of that phase not done).
+- **Relaxing the orientation of a magnetic texture under spin-orbit coupling** (P122,
+  `ORIENTATION-NEXT.md`): step 1, the three-component torque on a collinear source, is in;
+  a noncollinear source (the four-cell cobalt helix), the BFGS relaxation in the rotation,
+  and Route C's rotation inside the SCF with the coupling are not.
 - **`average_pp`**, and an external pair for the **relaxed** magnetocrystalline
   anisotropy. ~~A relaxed anisotropy, and PAW for it~~ -- **both closed by P87**, which
   differences *total* energies of one self-consistent run per direction and therefore
@@ -22576,3 +22580,55 @@ ferromagnet, keeps its uniform moment along the reference on both bases, because
 spin-orbit coupling that direction is free and the closed basis no longer pushes it: 28.2,
 66.2, -42.0 and -50.9 degrees against 27.5, 62.3, -40.5 and -48.1, 0.30 mRy lower in
 `E + field`, in 78 iterations against 53, the manifold being exactly flat now.
+
+### P122 -- The torque on a whole texture: every spin turned by one rotation, three generators at once. 🚧 STEP 1 OF 6 DONE (`ORIENTATION-NEXT.md`); the noncollinear source, the relaxation and the in-loop rotation are open.
+
+`defumat/forces/torque.py` (`rotate_texture`, `cross_matrix`, `rotation_near`,
+`band_energy_at_rotation`, `orientation_torque`, and `_band_energy` and
+`_chunked_value_and_grad` shared with P60's plane torque), `defumat/workflows/anisotropy.py`
+(`run_orientation_torque`, `OrientationTorque`, `rotation_from_euler`,
+`euler_from_rotation`, and `_with_rotation`/`_turn` factored out of
+`_with_quantization_axis`), `Calculator.get_orientation_torque`,
+`tests/unit/test_orientation_torque.py` (nine, gate), three slow tests in
+`tests/regression/test_anisotropy.py`, `docs/features.tex`, `README.md`.
+
+**What it is.** P60 turns a collinear moment in one plane and returns one number. This turns
+the whole texture by a rotation `R`, `m(r) -> R m(r)` with the charge kept, diagonalises once
+with the coupling at `R0`, and returns `-dF/dw` for the three generators of a rigid rotation
+about `R0`: `jax.grad` of `sum w <psi|H(R)|psi>` at frozen states, with `R(w) = (1 + [w]x) R0`,
+which agrees with `exp([w]x) R0` in value and first derivative at `w = 0` and contains no norm
+of `w` (Rodrigues' `sqrt(sum w^2)` has a `0/0` gradient exactly there). `rotate_texture` is
+`R m` on the three magnetization channels and reads no axis, so it serves the density and
+`becsum` alike. Step 1 is the collinear source; a four-component source that is not collinear
+is refused by name through `nc_magnetization_from_lsda`, and step 2 lifts it.
+
+**Numbers**, tetragonal cobalt (`co-tetragonal-anisotropy-{sr,soc}.in`, the two-file route,
+moment 45 degrees from `c` towards `a`, one-shot `conv_thr = 1e-10`):
+
+| check | value |
+|---|---|
+| `y` component against `torque_at_angle` on the same states | equal to 1e-10 relative; `-4.0594629553945946e-05` Ry/rad |
+| the same through the front door, two separate one-shot runs | equal to 1e-9 relative |
+| component about the moment (a turn that moves nothing) | `-2.8e-22`, against `4.06e-5` |
+| out-of-plane tilt, zero by the mirror `y -> -y` with time reversal | `5.8e-11`, 1.4e-6 of the in-plane torque: the diagonalisation's level |
+| `-torque_y` against a central difference of the functional with exact rotations, step 1e-3 | 1e-5 relative |
+| `sum w <psi|H|psi>` at `w = 0` against `sum w eps` | 2.7e-15 Ry |
+| Hartree and exchange-correlation energies, two orientations 30 degrees apart on one calculation, the GGA axis left at the first | equal to 1e-12 Ry |
+
+P60's k-dial check on Triton read `-4.059378978382e-05` for the same torque; the 2e-5 relative
+difference is the scalar SCF (`conv_thr = 1e-10` there, the input's 1e-9 here), not the
+rotation, which the same-states identity above isolates. The last row is the reason the
+in-loop rotation of Route C can leave the static quantization axis where it is: for a
+collinear texture `sign(m . u) = s(r) sign(n . u)` is the right signed projection for any `u`
+not perpendicular to the moment.
+
+**The refactor is checked by P60's own tests**, which ran unchanged against the shared
+`_band_energy` and `_chunked_value_and_grad`: the gradient against its central difference,
+chunked against whole, and the torque's `K1` against the free-energy difference, all passing,
+as do the fast tests of the quantization axis and the signed moment. `_with_rotation` of the
+smallest rotation reproduces `_with_quantization_axis` angle for angle on the canted iron
+pair, and a turn about the first moment carries the second from `y` to `z`, which no
+direction can ask for.
+
+**Cost.** 41 s for the whole front-door call on the workstation, one core not pinned,
+including the scalar SCF and the first compilation; the three slow tests together 80 s.

@@ -316,7 +316,9 @@ model describes the surface. `calc.get_spiral_scan(wavevectors)`, notebook
 - **Magnetic torque**, $-\mathrm dF/\mathrm d\theta$, the anisotropy from one
   angle rather than a difference of two; for $E(\theta) = K_1\sin^2\theta$ the
   torque at 45 degrees is $-K_1$. `calc.get_torque(spinor)`, notebook
-  [36](notebooks/36_magnetic_anisotropy.ipynb).
+  [36](notebooks/36_magnetic_anisotropy.ipynb). With every spin turned by one
+  rotation it is a vector, the torque for the three generators at once,
+  `calc.get_orientation_torque(spinor, rotation=R)`.
 - **Source-free exchange-correlation field, and the torque it exerts**: the
   longitudinal part of $\mathbf B_{xc}$ projected out so that
   $\nabla\cdot\mathbf B_{xc} = 0$, the one thing that lets a local functional
@@ -596,7 +598,7 @@ note, the routine or task in the other code's source, is in
 | **Orbital magnetization of the cell** | `calc.get_orbital_magnetization()` | ✓ | ⁶ |
 | **Magnetocrystalline anisotropy**, by the force theorem | `calc.get_anisotropy(spinor)` | ✓ | (✓)⁷ |
 | **Relaxed magnetocrystalline anisotropy** | `calc.get_relaxed_anisotropy()` | (✓)⁸ | ✓ |
-| **Magnetic torque** | `calc.get_torque(spinor)` | | |
+| **Magnetic torque** | `calc.get_torque(spinor)`, `calc.get_orientation_torque(spinor)` | | |
 | **Source-free exchange-correlation field**, and its torque | `calc.get_exchange_torque()` | | ✓ |
 | **Magnons** and the transverse spin susceptibility | `calc.get_magnon_dispersion(qpoints, frequencies)` | (✓)⁹ | ✓ |
 | **Dielectric constant** and **Born effective charges** | `calc.get_dielectric_tensor()` | ✓ | ✓ |

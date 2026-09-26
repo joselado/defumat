@@ -124,6 +124,10 @@ __all__ = [
     "frozen_expectation",
     "MagneticTorque",
     "run_torque",
+    "OrientationTorque",
+    "run_orientation_torque",
+    "rotation_from_euler",
+    "euler_from_rotation",
     "RelaxedDirection",
     "RelaxedAnisotropy",
     "run_relaxed_direction",
@@ -958,6 +962,31 @@ def _with_quantization_axis(system: System, direction) -> System:
         # having defaulted to the system's own axis. Returned untouched so
         # that a single-direction run never rebuilds its k-points at all.
         return system
+    _require_nosym_to_turn(system, own)
+    return _turn(system, _rotation_taking(own, wanted), wanted)
+
+
+def _with_rotation(system: System, rotation) -> System:
+    """The same run with its magnetic texture turned rigidly by ``rotation``.
+
+    :func:`_with_quantization_axis` for a rotation given whole rather than as
+    the smallest one taking the reference axis onto a direction: the two agree
+    whenever the rotation is that one, and this one also carries a turn about
+    the reference axis, which a texture that is not collinear feels. Every
+    reason that function's docstring gives applies here unchanged, the
+    quantization axis and the ``nosym`` requirement above all.
+    """
+    rotation = np.asarray(rotation, dtype=float)
+    if np.max(np.abs(rotation - np.eye(3))) <= DIRECTION_TOL:
+        return system
+    own = np.asarray(_reference_axis(system), dtype=float)
+    _require_nosym_to_turn(system, own)
+    wanted = rotation @ own
+    return _turn(system, rotation, wanted / np.sqrt(np.sum(wanted**2)))
+
+
+def _require_nosym_to_turn(system: System, own) -> None:
+    """The refusal :func:`_with_quantization_axis` explains, in one place."""
     if not system.nosym:
         own = tuple(np.round(own, 6))
         raise ValueError(
@@ -970,7 +999,15 @@ def _with_quantization_axis(system: System, direction) -> System:
             "with respect to a direction the wedge is not symmetric in. QE's "
             "own force-theorem example sets nosym for this reason"
         )
-    rotation = _rotation_taking(own, wanted)
+
+
+def _turn(system: System, rotation, wanted) -> System:
+    """Every species' angles and the ``STARTING_MOMENTS`` card, turned by ``rotation``.
+
+    ``wanted`` is where the reference axis lands, ``rotation @ own``: a species
+    along that axis, or against it, is put on ``+/- wanted`` exactly rather than
+    on its rotated image, which differs from it by round-off.
+    """
     # Every species, magnetic or not: a species with no moment has angles that
     # do nothing, and rotating them too keeps the rule one line long. The
     # magnitudes, signs included, stay on ``starting_magnetization``.
@@ -1270,6 +1307,189 @@ def run_torque(
         plane=plane_pair,
         band_energy=float(np.sum(np.asarray(wg) * np.asarray(eigenvalues))),
         band_energy_check=check,
+        fermi_energy=levels.get("fermi_energy"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# The torque on a whole texture: one rotation of every spin, three generators
+# ---------------------------------------------------------------------------
+
+
+def rotation_from_euler(alpha: float, beta: float, gamma: float) -> np.ndarray:
+    """``Rz(alpha) Ry(beta) Rz(gamma)``, the ZYZ convention, angles in radians.
+
+    An active rotation: it turns the texture, and ``beta`` is the angle the
+    reference axis ``z`` is tilted through. Euler angles are how an orientation
+    is given and read, not what anything is differentiated in: at ``beta = 0``
+    the angles ``alpha`` and ``gamma`` are the same rotation, and that is an
+    easy axis along ``z``, where a uniaxial answer usually sits.
+    """
+    def about_z(angle):
+        c, s = np.cos(angle), np.sin(angle)
+        return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
+
+    c, s = np.cos(beta), np.sin(beta)
+    about_y = np.array([[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]])
+    return about_z(alpha) @ about_y @ about_z(gamma)
+
+
+def euler_from_rotation(rotation) -> tuple:
+    """The ZYZ angles of :func:`rotation_from_euler`, in radians.
+
+    ``beta`` in ``[0, pi]``. Where ``beta`` is 0 or ``pi`` only ``alpha +/-
+    gamma`` is defined, and ``gamma = 0`` is returned.
+    """
+    r = np.asarray(rotation, dtype=float)
+    beta = float(np.arccos(np.clip(r[2, 2], -1.0, 1.0)))
+    if np.sin(beta) > 1.0e-12:
+        alpha = float(np.arctan2(r[1, 2], r[0, 2]))
+        gamma = float(np.arctan2(r[2, 1], -r[2, 0]))
+    else:
+        alpha, gamma = float(np.arctan2(r[1, 0], r[0, 0])), 0.0
+        if r[2, 2] < 0.0:
+            alpha = float(np.arctan2(-r[1, 0], -r[0, 0]))
+    return alpha, beta, gamma
+
+
+def _checked_rotation(rotation) -> np.ndarray:
+    """A proper rotation matrix, or a refusal naming what it is instead."""
+    if rotation is None:
+        return np.eye(3)
+    rotation = np.asarray(rotation, dtype=float)
+    if rotation.shape != (3, 3):
+        raise ValueError(f"a rotation is a 3x3 matrix, got shape {rotation.shape}")
+    error = float(np.max(np.abs(rotation @ rotation.T - np.eye(3))))
+    if error > 1.0e-10:
+        raise ValueError(
+            f"the rotation is not orthogonal (|R R^T - 1| = {error:.3e}); use "
+            "rotation_from_euler to build one"
+        )
+    if np.linalg.det(rotation) < 0.0:
+        raise ValueError(
+            "the rotation has determinant -1: an improper rotation is not a "
+            "turn of the texture, and the magnetization is an axial vector, so "
+            "it would not act on it the way the matrix says. Reversing every "
+            "moment is time reversal, which leaves the energy unchanged"
+        )
+    return rotation
+
+
+@dataclass
+class OrientationTorque:
+    """``-dF/dw`` for a rigid rotation of the whole texture, at one orientation."""
+
+    #: ``R0``, the orientation the states were diagonalised at, relative to the
+    #: system's own texture.
+    rotation: np.ndarray
+    #: Where the reference axis (the first magnetic atom's moment) points.
+    direction: tuple
+    #: ``(3,)`` in Ry per radian, cartesian: component ``a`` is minus the
+    #: derivative of the free energy for a turn about ``e_a``.
+    torque: np.ndarray
+    #: ``sum w eps`` of the states, in Ry.
+    band_energy: float
+    #: ``sum w <psi|H|psi>`` rebuilt from the rotated texture at ``w = 0``.
+    band_energy_check: float
+    #: The smearing's ``-TS``, in Ry.
+    entropy: float = 0.0
+    fermi_energy: float | None = None
+
+    @property
+    def torque_mev(self) -> np.ndarray:
+        return np.asarray(self.torque) * RY_TO_EV * 1000.0
+
+    @property
+    def gradient(self) -> np.ndarray:
+        """``dF/dw``, which is what an optimizer steps against."""
+        return -np.asarray(self.torque)
+
+    @property
+    def free_energy(self) -> float:
+        """``sum w eps - TS``, the energy this torque is the derivative of."""
+        return self.band_energy + self.entropy
+
+    @property
+    def along_moment(self) -> float:
+        """The component about :attr:`direction`, zero for a collinear texture."""
+        return float(np.asarray(self.torque) @ np.asarray(self.direction))
+
+    @property
+    def euler_angles(self) -> tuple:
+        """:attr:`rotation` as ZYZ angles, radians."""
+        return euler_from_rotation(self.rotation)
+
+    @property
+    def residual(self) -> float:
+        """``|sum w <psi|H|psi> - sum w eps|``, in Ry: the assembly's own check."""
+        return abs(self.band_energy_check - self.band_energy)
+
+
+def run_orientation_torque(
+    system: System,
+    pseudos: tuple[Pseudopotential, ...],
+    density: jnp.ndarray,
+    rotation=None,
+    nbnd: int | None = None,
+    conv_thr: float = 1.0e-10,
+    k_batch: int | None | str = "default",
+    soc_scale: float | None = None,
+) -> OrientationTorque:
+    """The torque on the texture for a rigid rotation of every spin, three components.
+
+    :func:`run_torque` turns a collinear moment in one plane and returns one
+    number. This turns the whole texture by ``rotation`` (``R0``, the identity
+    by default, meaning the system's own orientation; :func:`rotation_from_euler`
+    builds one from angles), diagonalises once with the coupling at that
+    orientation, and returns ``-dF/dw`` for the three generators about it
+    (:func:`defumat.forces.torque.orientation_torque`). For a collinear magnet
+    turning in the plane ``(e1, e2)`` it contains :func:`run_torque`'s number as
+    ``torque . (e1 x e2)``, and its component along the moment is zero.
+
+    ``density`` is the source's, converged **without** spin-orbit coupling, as
+    :func:`run_force_theorem` takes it, and everything that function refuses is
+    refused here for the same reasons. A four-component source whose moments
+    are not collinear is refused by name for now (``ORIENTATION-NEXT.md``
+    step 2 lifts it).
+    """
+    from defumat.forces.torque import (
+        band_energy_at_rotation,
+        orientation_torque,
+        rotate_texture,
+    )
+
+    if soc_scale is not None:
+        system = system.with_soc_scale(soc_scale)
+    _refuse_system(system, pseudos)
+    rotation = _checked_rotation(rotation)
+
+    own = _reference_axis(system)
+    # The texture at the reference orientation, the one ``R = 1`` means: the
+    # collinear moment laid along the system's own axis with its sign, exactly
+    # as the force theorem lays it (and a four-component source is read off its
+    # own axis, which refuses one that is not collinear).
+    texture = nc_magnetization_from_lsda(density, own)
+    turned = _with_rotation(system, rotation)
+    calculation, turned, eigenvalues, wavefunctions = fixed_density_states(
+        turned, pseudos, rotate_texture(texture, rotation), nbnd=nbnd,
+        conv_thr=conv_thr, k_batch=k_batch,
+    )
+    wg, levels = calculation.occupations(jnp.asarray(eigenvalues))
+
+    check = float(band_energy_at_rotation(
+        calculation, wavefunctions, wg, texture, rotation, np.zeros(3)
+    ))
+    value = orientation_torque(
+        calculation, wavefunctions, wg, texture, rotation, k_batch=k_batch,
+    )
+    direction = rotation @ np.asarray(own, dtype=float)
+    return OrientationTorque(
+        rotation=rotation,
+        direction=tuple(float(x) for x in direction / np.linalg.norm(direction)),
+        torque=np.asarray(value, dtype=float),
+        band_energy=float(np.sum(np.asarray(wg) * np.asarray(eigenvalues))),
+        band_energy_check=check,
+        entropy=float(levels.get("smearing", 0.0)),
         fermi_energy=levels.get("fermi_energy"),
     )
 

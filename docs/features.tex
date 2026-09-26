@@ -423,6 +423,7 @@ says so (\code{tests/unit/test\_facade\_documentation.py}).
 \code{get\_magnetoelectric\_tensor} & $\alpha_{ij} = \mathrm{d}P_i/\mathrm{d}B_j$ \\
 \code{get\_anisotropy} & the magnetocrystalline anisotropy \\
 \code{get\_torque} & the magnetic torque, and $K$ from one angle \\
+\code{get\_orientation\_torque} & the torque on a whole texture, three components \\
 \code{get\_first\_order\_soc} & the spin-orbit expectation at coupling-free states \\
 \code{get\_force\_theorem} & one direction of the anisotropy: its band energy alone \\
 \addlinespace
@@ -4550,6 +4551,44 @@ narrows:
 width and both converge on $K_1=0.531$; at a production \code{degauss} of 0.02
 the \emph{band}-energy difference reads 2.3 times that. Use
 \code{MagneticAnisotropy.free\_energies} to compare like with like.
+
+\textbf{The torque as a vector: every spin turned by one rotation.} The angle
+above turns a collinear moment in one plane. \code{get\_orientation\_torque}
+turns the whole texture by a rotation $R$, $\mathbf m(\mathbf r)\to
+R\,\mathbf m(\mathbf r)$ with the charge kept, diagonalises once with the
+coupling at that orientation, and returns
+\begin{equation*}
+  \boldsymbol\tau = -\frac{\partial F}{\partial\boldsymbol\omega}\bigg|_{\boldsymbol\omega=0},
+  \qquad R(\boldsymbol\omega) = e^{[\boldsymbol\omega]_\times} R_0 ,
+\end{equation*}
+the torque for the three generators of a rigid rotation about $R_0$, in Ry per
+radian, meaning that component $a$ is how fast the free energy falls when every
+spin turns together about $\hat{\mathbf e}_a$. For a collinear magnet turning in
+the plane $(\hat{\mathbf e}_1,\hat{\mathbf e}_2)$ the plane torque above is
+$\boldsymbol\tau\cdot(\hat{\mathbf e}_1\times\hat{\mathbf e}_2)$, and the
+component about the moment is zero, since that turn moves nothing. On the
+tetragonal cobalt pair of the table, 45 degrees from $c$ towards $a$, the $y$
+component is the plane torque to $10^{-10}$ relative on the same states,
+$-4.0595\times10^{-5}$~Ry, and the component that tilts the moment out of the
+$(z,x)$ plane, which the mirror $y\to-y$ with time reversal forces to zero, is
+$5.8\times10^{-11}$~Ry, the diagonalisation's level.
+
+\begin{pycode}
+import numpy as np
+from defumat.workflows.anisotropy import rotation_from_euler
+R = rotation_from_euler(0.0, np.pi / 4, 0.0)     # ZYZ, radians: c tilted 45 deg to a
+vector = scalar.get_orientation_torque(spinor, rotation=R)
+print(vector.torque)                             # -> [~0, -4.06e-05, ~0] Ry/rad
+print(vector.direction, vector.along_moment)     # where the moment points; ~0
+\end{pycode}
+
+\noindent The orientation is given as a matrix and read back as ZYZ Euler angles
+(\code{vector.euler\_angles}), but nothing is differentiated in the angles: at
+$\beta=0$ the angles $\alpha$ and $\gamma$ are the same rotation, and that is an
+easy axis along $z$. What this is for is relaxing the orientation of a texture,
+the easy axis of a magnet or the plane of a spiral, which is planned in
+\code{ORIENTATION-NEXT.md}; a four-component source whose moments are not
+collinear is refused for now, by name.
 
 \begin{refuses}
 \textbf{Refuses.} \textbf{PAW without \code{becsum}}, and \textbf{PAW on the
