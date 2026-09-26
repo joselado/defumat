@@ -114,3 +114,33 @@ def test_the_first_order_spin_turn_is_the_exact_one_to_first_order():
         omega = size * np.array([0.3, -0.5, 0.7])
         gap = np.abs(np.asarray(spin_turned(psi, omega)) - rotate_spinors(psi, omega)).max()
         assert gap < 10 * size ** 2 * np.abs(psi).max()
+
+
+def test_a_measured_flat_direction_is_held_and_the_rest_converges():
+    """The curvature freeze, an option: a direction BFGS finds flatter than ``flat_curvature``.
+
+    ``E = w . K w / 2`` with curvatures 8e-5, 8e-5 and 1e-9 Ry/rad^2, the last a
+    thousand times below the default threshold of 1e-6: stepping along it would
+    need an angle far past the trust bound for a torque at the noise, which is
+    how PAW nickel's in-plane angle kicked its SCF. Once the curvature there has
+    been measured the stepper holds that direction and still converges the two
+    it can resolve; without the freeze (``flat_curvature=None``) it keeps
+    stepping along the flat one at the trust bound.
+    """
+    curvature = np.diag([8.0e-5, 8.0e-5, 1.0e-9])
+    for flat, expect_held in ((1.0e-6, True), (None, False)):
+        stepper = OrientationStepper(trust=0.1, first_step=0.05, start=1.0e-5,
+                                     flat_curvature=flat)
+        w = np.array([0.4, -0.3, 0.3])
+        held_seen = False
+        for _ in range(25):
+            step = stepper.propose(curvature @ w, accuracy=1.0e-6)
+            held_seen = held_seen or len(stepper.flat) > 0
+            if step is None:
+                break
+            w = w + step
+        assert held_seen is expect_held
+        if expect_held:
+            np.testing.assert_allclose(np.abs(stepper.flat[0]), [0.0, 0.0, 1.0],
+                                       atol=1e-6)
+            assert np.linalg.norm(w[:2]) < 1.0e-5

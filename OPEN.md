@@ -6117,6 +6117,9 @@ dropping the mixer's history after a step (worse). The same code converges on co
 (ultrasoft) and on the NiBr2 helix (PAW, at `0e4ca5e`, before the trust region), so the
 suspect is nickel's nearly flat in-plane anisotropy, along which any step is a large
 perturbation for a small gain; freezing the flat generator, as the plan proposed for a
-spiral's phase, is the next thing to try. **The affine turn of the mixer's history is the
+spiral's phase, was the next thing tried (2026-09-27): the texture freeze does not touch
+nickel's in-plane angle, and a freeze by measured curvature held it from iteration 114 without
+bringing `dr2` below 3e-5 over stretches with no step at all, so the density itself does not
+recover from a few small turns on this cell. **The affine turn of the mixer's history is the
 PAW default on the evidence of one cell**: it did not converge nickel either, the reset was
 worse there, and NiBr2 converged with it; there is no run in which it has been shown to help.

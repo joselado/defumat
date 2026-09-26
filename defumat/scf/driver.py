@@ -5144,6 +5144,8 @@ def run_scf(
     torque_conv_thr: float = 1.0e-8,
     rotation_trust: float = 0.1,
     rotation_start: float = 1.0e-5,
+    rotation_freeze_phase: bool = True,
+    rotation_flat_curvature: float | None = None,
 ) -> SCFResult:
     """Run the self-consistent field loop to convergence.
 
@@ -5666,7 +5668,10 @@ def run_scf(
             rotate_spinors,
             rotation_matrix,
         )
-        stepper = OrientationStepper(trust=rotation_trust, start=rotation_start)
+        from defumat.forces.torque import frozen_generators, project_out
+
+        stepper = OrientationStepper(trust=rotation_trust, start=rotation_start,
+                                     flat_curvature=rotation_flat_curvature)
     # The occupations the *next* iteration's per-band thresholds are built from
     # (:func:`band_thresholds`). ``None`` until the first diagonalisation has
     # happened, which is ``btype`` coming out of ``init_run.f90:149`` all ones.
@@ -6139,6 +6144,16 @@ def run_scf(
                     calculation, becsum_state, becsum_out, _meta_c(potential),
                     wavefunctions=fetch_wavefunctions(wavefunctions), weights=wg)
             orientation_torque = tuple(float(x) for x in torque_now)
+            if stepper is not None:
+                # What Route C acts on: the torque without the turns the texture
+                # does not feel or should not move along (its axis if collinear,
+                # its phase if coplanar, read off this iteration's input), nor
+                # the directions the stepper has measured flat.
+                held_now = np.concatenate([
+                    frozen_generators(rho, phase=rotation_freeze_phase),
+                    stepper.flat,
+                ]).reshape(-1, 3)
+                acting_torque = project_out(torque_now, held_now)
 
         converged = accuracy < conv_thr
         # The density is self-consistent *at this field*, which is the state the
@@ -6153,7 +6168,7 @@ def run_scf(
             # being driven and the moment is still moving.
             converged = False
         if (converged and stepper is not None and orientation_torque is not None
-                and float(np.linalg.norm(orientation_torque)) > torque_conv_thr):
+                and float(np.linalg.norm(acting_torque)) > torque_conv_thr):
             # The orientation is a soft mode ``dr2`` does not see, which is the
             # reason this option exists: converged only when it has stopped
             # turning as well.
@@ -6319,6 +6334,8 @@ def run_scf(
             entry["residual_split"] = iteration_split
         if orientation_torque is not None:
             entry["orientation_torque"] = orientation_torque
+            if stepper is not None and len(stepper.flat):
+                entry["orientation_flat"] = stepper.flat.tolist()
         history.append(entry)
         if verbose:
             if moment is not None:
@@ -6434,14 +6451,14 @@ def run_scf(
                 # less each time.
                 field = field.feedback(rho_out, calculation.system.cell)
         if (stepper is not None and orientation_torque is not None
-                and float(np.linalg.norm(orientation_torque)) > torque_conv_thr):
+                and float(np.linalg.norm(acting_torque)) > torque_conv_thr):
             # **No step below the threshold.** There the torque is at its own
             # noise, and a step it drives kicks the density without moving the
             # orientation anywhere that matters: on the four-cell cobalt helix
             # with the coupling the moments sat at 0.05 degrees from their
             # minimum with a torque of 2e-8 against a threshold of 1e-8, and the
             # steps held ``dr2`` near 1e-7 for a hundred iterations.
-            step = stepper.propose(-np.asarray(orientation_torque), accuracy)
+            step = stepper.propose(-acting_torque, accuracy)
             if step is not None:
                 # Everything carried into the next iteration turns together:
                 # the input density, ``becsum``, the mixer's history (whose Gram

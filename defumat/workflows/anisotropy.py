@@ -1690,6 +1690,7 @@ def relax_orientation(
     k_batch: int | None | str = "default",
     soc_scale: float | None = None,
     becsum: tuple = (),
+    freeze_phase: bool = True,
     verbose: bool = False,
 ) -> RelaxedOrientation:
     """Turn the whole texture until the torque on it vanishes: the easy orientation.
@@ -1725,6 +1726,11 @@ def relax_orientation(
         curvature: add a central difference of the torque about the final
             orientation, six more one-shots, so that a minimum is told from a
             saddle (:attr:`RelaxedOrientation.curvature_eigenvalues`).
+        freeze_phase: hold a coplanar texture's phase, the turn about its
+            plane's normal (:func:`~defumat.forces.torque.frozen_generators`),
+            which for a spiral is flat or nearly so; the turn about a collinear
+            texture's axis is dropped always, since it moves nothing. Read off
+            the source texture and turned with the orientation at every step.
 
     The energy minimised is the free energy ``sum w eps - TS`` and not the band
     energy, because the torque is the free energy's derivative and a line
@@ -1736,8 +1742,14 @@ def relax_orientation(
     from defumat.relax.registry import get_ion_dynamics
     from defumat.workflows.spiral import _first_step_scale
 
+    from defumat.forces.torque import frozen_generators, project_out
+
     start = _checked_rotation(rotation)
     free = np.asarray(free, dtype=float).reshape(3)
+    # The generators to hold, in the source texture's frame, where ``R = 1``;
+    # at an orientation ``R`` they are ``R`` times these.
+    held = frozen_generators(_reference_texture(density, _reference_axis(system)),
+                             phase=freeze_phase)
 
     def fresh_optimizer():
         settings = BFGSSettings(
@@ -1775,7 +1787,8 @@ def relax_orientation(
     for index in range(1, nstep + 1):
         orientation = _exp_rotation(chart) @ start
         result = one_shot(orientation)
-        gradient = (_left_jacobian(chart).T @ result.gradient) * free
+        space = project_out(result.gradient, held @ orientation.T)
+        gradient = (_left_jacobian(chart).T @ space) * free
         max_gradient = float(np.max(np.abs(gradient)))
         if index == 1 and max_gradient < grad_conv_thr:
             warnings.warn(

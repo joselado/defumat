@@ -118,6 +118,10 @@ def spin_turned(psi, omega):
     ], axis=-1)
 
 
+#: The shortest step, in radians, whose secant updates the inverse Hessian.
+MIN_SECANT = 1.0e-8
+
+
 class OrientationStepper:
     """The rotation step of Route C, one call per iteration.
 
@@ -127,10 +131,19 @@ class OrientationStepper:
     """
 
     def __init__(self, trust: float = 0.1, first_step: float = 0.05,
-                 start: float = 1.0e-5):
+                 start: float = 1.0e-5, flat_curvature: float | None = None):
         self.trust = float(trust)
         self.first_step = float(first_step)
         self.start = float(start)
+        #: Ry per radian^2. A direction BFGS has measured flatter than this is
+        #: not stepped along, on the argument that the torque's own noise would
+        #: move the minimum there by more than any step resolves. **Off by
+        #: default, because it did not do what it was built for**: on PAW nickel
+        #: at 1e-6 it held a flat direction from iteration 114 and the run still
+        #: sat at ``dr2`` of 3e-5 to 4e-4 (``PLAN.md`` P122). Kept as an option.
+        self.flat_curvature = flat_curvature
+        #: ``(k, 3)``: the directions currently held as flat.
+        self.flat = np.zeros((0, 3))
         self.inverse_hessian = None
         self.previous_gradient = None
         self.previous_step = None
@@ -156,7 +169,12 @@ class OrientationStepper:
             s = self.previous_step
             y = gradient - self.previous_gradient
             sy = float(s @ y)
-            if sy > 1.0e-12 * float(np.linalg.norm(s) * np.linalg.norm(y)) and sy > 0.0:
+            # **No update from a secant at the noise.** Once the resolvable
+            # directions have converged the steps are 1e-12 rad and ``y`` is the
+            # torque's noise, and updating on that pair put eigenvalues of 5e16
+            # and 2.5e-4 into the inverse Hessian on a clean quadratic.
+            if (float(np.linalg.norm(s)) > MIN_SECANT and sy > 0.0
+                    and sy > 1.0e-12 * float(np.linalg.norm(s) * np.linalg.norm(y))):
                 if self.inverse_hessian is None:
                     self.inverse_hessian = (sy / float(y @ y)) * np.eye(3)
                 rho = 1.0 / sy
@@ -164,6 +182,16 @@ class OrientationStepper:
                 left = identity - rho * np.outer(s, y)
                 self.inverse_hessian = (left @ self.inverse_hessian @ left.T
                                         + rho * np.outer(s, s))
+        self.flat = np.zeros((0, 3))
+        if self.inverse_hessian is not None and self.flat_curvature is not None:
+            values, vectors = np.linalg.eigh(
+                0.5 * (self.inverse_hessian + self.inverse_hessian.T))
+            # Curvature is the inverse of the inverse Hessian's eigenvalue; a
+            # negative or tiny eigenvalue is not a measured flat direction.
+            flat = values * self.flat_curvature > 1.0
+            self.flat = vectors[:, flat].T.copy()
+            for direction in self.flat:
+                gradient = gradient - float(gradient @ direction) * direction
         norm = float(np.linalg.norm(gradient))
         if norm == 0.0:
             return None

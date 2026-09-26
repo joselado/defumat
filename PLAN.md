@@ -22903,3 +22903,24 @@ than a measurement of interlayer coupling: it compares an isolated layer with an
 bulk of the same in-plane cell and the same `1 3 1` grid, and how much of it is the coupling
 between layers and how much the bromine's changed surroundings is not separated. Each task took 7 to 8 minutes on one GPU at an 8.1 GB
 host peak, against 13 to 19 minutes for the monolayer.
+
+**Freezing rotations, 2026-09-27: the plan's texture freeze is in, and it was never the cure
+for nickel.** `forces/torque.py:frozen_generators` reads the moment tensor and returns the
+axis of a collinear texture (the turn about it moves nothing) and the normal of a coplanar
+one (its phase, flat for a spiral); `relax_orientation(freeze_phase=True)` projects both out
+of the gradient at every step, turned with the orientation, and Route C
+(`run_scf(rotation_freeze_phase=True)`) reads them off each iteration's input and leaves them
+out of both the step and the convergence test. On a collinear magnet it changes nothing, the
+torque about the moment being zero already; its use is a spiral's phase, which the NiBr2
+relaxations found at -5e-8 Ry/rad^2. **Nickel's stall is along neither**: its moment is in
+the easy plane and the flat direction is its angle within it. So a second freeze was tried,
+by measured curvature (`rotation_flat_curvature`: a direction BFGS finds flatter than the
+threshold is held and left out of convergence). It held such a direction from iteration 114
+and the run still sat at `dr2` of 3e-5 to 4e-4 over stretches with no step at all, the moment
+ending at 75 degrees; it is **kept as an option, off by default**. On this cell the density
+does not recover from a few small turns whatever the stepper does, and that is where item 2
+of `OPEN.md` Part XXI now points. **One genuine defect was found on the way**: the stepper
+updated its inverse Hessian on secants of 1e-12 rad once the resolvable directions had
+converged, which put eigenvalues of 5e16 and 2.5e-4 into it on a clean quadratic; secants
+shorter than 1e-8 rad no longer update it (`MIN_SECANT`), and the test that caught it is
+`test_a_measured_flat_direction_is_held_and_the_rest_converges`.

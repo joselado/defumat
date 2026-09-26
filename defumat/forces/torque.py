@@ -74,7 +74,9 @@ __all__ = [
     "band_energy_at_angle",
     "band_energy_at_rotation",
     "cross_matrix",
+    "frozen_generators",
     "orientation_torque",
+    "project_out",
     "rotate_texture",
     "rotated_density",
     "rotation_near",
@@ -400,3 +402,34 @@ def orientation_torque(calculation, states, weights, texture, base,
         calculation, states, weights, build, origin, int(resolved)
     )
     return -np.asarray(slope)
+
+
+def frozen_generators(density, phase: bool = True, tolerance: float = 1.0e-3) -> np.ndarray:
+    """The rotations a texture's orientation relaxation should not move along, ``(k, 3)``.
+
+    Read from the moment tensor ``M_ab = integral of m_a m_b`` (``ORIENTATION-NEXT.md``,
+    the coordinate): a **collinear** texture (the two smaller eigenvalues below
+    ``tolerance`` of the largest) returns its axis, the turn about which moves
+    nothing; a **coplanar** one (the smallest below it) returns its plane's
+    normal when ``phase`` is set, the turn about which is the texture's phase in
+    its own plane, flat for a spiral and nearly flat for a commensurate one, and
+    a coordinate an optimizer lets noise push; a noncoplanar one returns none.
+    Unit vectors in the frame of ``density``.
+    """
+    moment = np.asarray(jnp.real(jnp.asarray(density)[1:4])).reshape(3, -1)
+    values, vectors = np.linalg.eigh(moment @ moment.T)
+    if values[2] <= 0.0:
+        return np.zeros((0, 3))
+    if values[0] + values[1] <= tolerance * values[2]:
+        return vectors[:, 2:3].T.copy()
+    if phase and values[0] <= tolerance * values[2]:
+        return vectors[:, 0:1].T.copy()
+    return np.zeros((0, 3))
+
+
+def project_out(vector, directions) -> np.ndarray:
+    """``vector`` with its components along each unit row of ``directions`` removed."""
+    vector = np.asarray(vector, dtype=float).copy()
+    for direction in np.asarray(directions, dtype=float).reshape(-1, 3):
+        vector -= float(vector @ direction) * direction
+    return vector
