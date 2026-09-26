@@ -61,6 +61,7 @@ instead, which means the physics is selected in the input file rather than at th
 | Which magnetic state a starting guess lands on | `with_moments(..., magnetization=)` | [43](43_magnetic_textures.ipynb) |
 | A magnon `E(q)` without a supercell | `get_spiral_scan()` | [12](12_spin_spirals.ipynb) |
 | Which way a magnet wants to point | `get_anisotropy()` | [36](36_magnetic_anisotropy.ipynb) |
+| Which way a magnet turns when it is let go: the easy axis by relaxation, and a self-consistent run with the coupling that converges on it | `get_relaxed_orientation()`, `get_scf(rotate_moments=True)` | [47](47_turning_a_magnet.ipynb) |
 | A spin wave, and whether the magnetic order survives it | `get_magnon_dispersion()` | [38](38_magnons.ipynb) |
 | The same `E(q)` from `dE/dq` instead | `get_spiral_scan(gradients=True)` | [12](12_spin_spirals.ipynb) |
 | A magnet's ground-state pitch | `get_spiral_relaxation()` | [14](14_spiral_relaxation.ipynb) |
@@ -176,6 +177,7 @@ want a number.
 | [`44_ultra_long_range.ipynb`](44_ultra_long_range.ipynb) | A potential that varies over eight unit cells of silicon, and the electrons screening it: the long cell solved in the ordinary cell's own states, computed once. What the modulation costs in energy, which is what says whether a modulation is the ground state at all. Then the two kinds of spin wave it carries, one modulating a moment's length and one its direction, and whether the screening cares that a pseudopotential smooths away the charge close to the nucleus |
 | [`45_imaging_a_modulation.ipynb`](45_imaging_a_modulation.ipynb) | What a scanning-tunnelling microscope sees above a spin density wave eight unit cells long: a polarized tip images the wave itself and an unpolarized one images its square, at twice the wavevector, because a collinear crystal cannot respond in the charge at first order in the field. Then the same states read as a *spectrum* rather than an image, where the band edge is seen to move through the wave by a third of an electronvolt and the two spin channels peak four cells apart |
 | [`46_a_spin_wave_that_stays.ipynb`](46_a_spin_wave_that_stays.ipynb) | A long cell built out of a ferromagnet stays ferromagnetic however long it is, the tiled state being an exact solution of its own equations, so a wave has to be handed over: a staggered wave that comes out three millirydberg per cell below the ferromagnet it was started from, a helix that keeps its ninety degrees per cell, and the canting a pitch check on its own would not see |
+| [`47_turning_a_magnet.ipynb`](47_turning_a_magnet.ipynb) | A magnet let go turns on its own: every spin turned together by the torque on the whole texture, as atoms are moved along their forces, so tetragonal cobalt started 51.6 degrees off its long axis lands on it in eight steps, and the energy it gains on the way gives the anisotropy constants; and a self-consistent run with spin-orbit coupling that wanders when left alone and converges on the easy axis when its moments are turned by the same torque |
 
 ## Conventions
 
@@ -285,7 +287,12 @@ order of magnitude it is rather than as current to the second.
 | `16` | 18 | `40` | 34 | `30` | 232 | `20` | 282 |
 | `00` | 22 | `23` | 35 | `39` | 151 |  |  |
 | `07` | 22 | `32` | 35 | `41` | 164 |  |  |
-| `46` | 61 |  |  |  |  |  |  |
+| `46` | 61 | `47` | 260 |  |  |  |  |
+
+`47` reads **260 s** on 2026-09-26, its first measurement, unpinned through
+`tools/export_notebooks.sh` rather than on one core: nine diagonalisations with the
+coupling for the relaxation and three self-consistent runs of one-atom cobalt with it,
+the plain one of them the full hundred iterations.
 
 `21` gained a section on 2026-09-18 saying that the elasto-optic tensor does not depend
 on how the core is pseudised, and it re-executed in **93 s** against the 30 s in the table.
