@@ -74,7 +74,8 @@ opened by P119 and is closed by P120.
 seeded ultracell leans toward its reference cell's moment whichever way that moment points,
 so the converged state keeps a bias the seed warning describes as a cost in iterations.
 The fix, a frozen basis closed under time reversal (`kramers_pairs=True`, `PLAN.md` P121),
-removes the lean on the hydrogen helix in both frames on 2026-09-26; the NiBr2 run is owed.
+removes the lean on the hydrogen helix and on the three-cell NiBr2 helix, in both frames, on
+2026-09-26; what the charge harmonics converge to on NiBr2 is still open.
 
 **Part III** is the sweep of **2026-09-12** -- four read-only agents over the package
 looking for **speed and memory** rather than for wrong answers, 23 entries, ordered by
@@ -5927,7 +5928,7 @@ factor is time-odd, and the exchange term's orbital factor is time-even.
 
 # Part XX -- from the seeded NiBr2 ultracell, reported 2026-09-25
 
-## 1. A seeded ultracell leans toward the reference's moment, and the seed warning's advice turns the lean into a cone **[opened 2026-09-25; the fix is in and measured on hydrogen 2026-09-26, `PLAN.md` P121; the NiBr2 run is owed]**
+## 1. A seeded ultracell leans toward the reference's moment, and the seed warning's advice turns the lean into a cone **[opened 2026-09-25; closed 2026-09-26, `PLAN.md` P121: `kramers_pairs=True` takes the NiBr2 remnant from 0.29 to 1.3e-4 in both frames; the charge harmonics are the open part]**
 
 Measured in the NiBr2 session at `44de8c0` on a clean tree and reported here rather than
 taken here, like the 54-iteration figure `ultracell/seed.py` already quotes from it. The
@@ -6008,7 +6009,23 @@ above the supercell where the old basis is 4.37e-4 at 16 and 1.56e-4 at 32, in 1
 iterations. The seed warning now names both outcomes and the fix. The reversed PAW
 reference is checked on its own, since a wrong one would leave the span unclosed rather than
 give a wrong number: its spectrum equals the reference's to 1.1e-14 Ry on the PAW oxygen
-texture and to 7.0e-14 on spin-orbit PAW nickel under LDA. **What is still owed is
+texture and to 7.0e-14 on spin-orbit PAW nickel under LDA.
+
+**NiBr2, measured 2026-09-26 (`PLAN.md` P121).** The run named above, three cells at
+`nbnd = 40` with the closed basis: the uniform moment is **1.3e-4** of the mean length in
+both frames (1.27e-4 and 1.29e-4, the order of Elk's 9e-5) with the pitch at 120.00 +- 0.00
+degrees, where the old basis reads 41.5 per
+cent along `z` and 30.0 in the plane at 40 bands and still 28.8 and 18.8 at 80. The two frames
+agree to 1e-8 Ry, 2.19 mRy below the old basis at the same size. **The charge harmonics are
+the part left open**: on the closed basis both are at 1e-8 of the mean (1.47e-8 at `q`, 2.2e-8
+at `2q`), an order below the old basis's, so their ratio is not resolved at the run's
+`conv_thr = 1e-8`, which is on `dr2`: the whole charge modulation of the closed three-cell
+helix is at or below this run's convergence, where the old basis at 80 carried 1e-7 at `q`.
+**The run that decides it is one `gpu-debug` job**: the same submission with
+`run_ultracell.py --conv-thr 1e-11`, which `uc_common.sh`'s `paw` case does not pass through
+yet (a `${CONVTHR:+--conv-thr $CONVTHR}` beside `$PAWKRAMERS`). The comparison against
+Elk's 2q/q of 15 rests on it, or on the 15-cell cell. The paragraph below is what was owed
+before this run. **What was still owed was
 the run above on NiBr2**, where spin-orbit coupling is on and the partners remove only the
 preference between `+e_0` and `-e_0`; it needs that project's inputs on Triton. The
 default stays off until it has been measured.

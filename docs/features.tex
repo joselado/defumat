@@ -6187,9 +6187,13 @@ many each folded k-point kept. Those small directions are the ones that matter,
 the differences between the majority and the minority orbitals, and a floor of
 $10^{-2}$ keeps the closure and loses the accuracy ($+1.96\times10^{-4}$). It
 costs a second frozen solve and a basis of up to twice \code{nbnd}, so four times
-the matrix. With spin-orbit coupling the partners still remove the preference
-between $+\hat{\mathbf e}_0$ and $-\hat{\mathbf e}_0$, which is what the NiBr2
-remnant above is; whether that is enough there is not yet measured.
+the matrix. With spin-orbit coupling the partners remove only the preference
+between $+\hat{\mathbf e}_0$ and $-\hat{\mathbf e}_0$, and on NiBr2 that is
+enough: a three-cell PAW helix at \code{nbnd = 40} keeps a uniform moment of
+$1.3\times10^{-4}$ of its length in both frames, the order of Elk's
+$9\times10^{-5}$, where the old basis keeps $0.415$ with the reference along the
+axis and $0.300$ in the plane, and still $0.288$ and $0.188$ at twice the bands; the two frames agree to $10^{-8}$~Ry and lie
+$2.2$~mRy below the old basis at the same size.
 
 \begin{pycode}
 from defumat import Calculator

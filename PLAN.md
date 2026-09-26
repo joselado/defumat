@@ -22499,3 +22499,43 @@ default on for a noncollinear cell is the user's decision once NiBr2 has been me
 **Verified** on the workstation, on this phase's code: the gate 3090 passed, 64 skipped, 0
 failed in 15:11, four more than P120's 3086, which are the refusal test and the three unit
 tests.
+
+**NiBr2, measured 2026-09-26 on Triton** (`gpu-debug`, jobs 20472499 to 20472501, the
+NiBr2 project's `CASE=paw BFCMT=1 PAWCELLS=3 SEED=1`, defumat `eafb407` from the worktree
+`apps/defumat-p121`, read with that project's `read_remnant.py`): the three-cell PAW helix
+with spin-orbit coupling, driven by the helical field and seeded, against the 2026-09-25
+runs at `44de8c0`, whose reference and unit-cell SCF are bit-identical (-576.98037694 Ry
+along `z`, 16 iterations both times).
+
+| basis | reference | states per folded k | uniform moment / mean length | pitch (deg) | E + field (Ry) | iterations | GPU seconds |
+|---|---|---|---|---|---|---|---|
+| old, `nbnd = 40` | `z` | 40 | 41.5 % | 120.00 +- 0.00 | -576.98636256 | 36 | 411 |
+| old, `nbnd = 56` | `z` | 56 | 36.6 % | 120.00 +- 0.00 | -576.98671816 | 38 | 489 |
+| old, `nbnd = 80` | `z` | 80 | 28.8 % | 120.00 +- 0.00 | -576.98729867 | 35 | 300 |
+| old, `nbnd = 40` | in-plane | 40 | 30.0 % | 132.88 +- 38.81 | -576.98609470 | 37 | 477 |
+| old, `nbnd = 80` | in-plane | 80 | 18.8 % | 128.19 +- 24.70 | -576.98715390 | 36 | 505 |
+| Kramers, `nbnd = 40` | `z` | 78 to 80 | **1.27e-4** | 120.00 +- 0.00 | **-576.98949247** | 43 | 420 |
+| Kramers, `nbnd = 40` | in-plane | 78 to 80 | **1.29e-4** | 120.00 +- 0.00 | **-576.98949248** | 39 | 324 |
+
+**The lean is gone with spin-orbit coupling on, in both frames**, which answers the
+question the construction left: removing the preference between `+e_0` and `-e_0` is
+enough here. The remnant is `read_remnant.py`'s `|mean moment| / mean length` read raw,
+1.27e-4 and 1.29e-4 against 0.288 for the old basis at 80, which is the order of Elk's
+9e-5 on its 15-cell supercell; the pitch spreads by 1.3e-3 degrees. The two frames agree to
+1e-8 Ry, and the closed basis at 80 states reaches a stationary value of `E + field`, the
+functional the loop minimises, **2.19 mRy** below the old one at 80 with the reference
+along `z`. There is no supercell for this cell to arbitrate, so that is a lower value at
+equal size and not a distance from an exact answer. The old basis's remnant falls
+only as 41.5, 36.6 and 28.8 per cent from 40 to 80 bands. The union kept 78 to 80 of its 80
+directions per folded k-point, smallest kept overlap 6.2e-8, so the dropping and padding
+path ran in production. **Not cheaper here**: 324 and 420 s against 300 s for the old basis
+at the same size, where hydrogen was cheaper, because the iteration counts are about equal
+on this cell (39 and 43 against 35).
+
+**What it does not settle is the charge.** On the closed basis the charge at `q` and at `2q`
+are 1.47e-8 and 2.2e-8 of the mean, against 1.07e-7 and 9.6e-8 for the old basis at 80 with
+the reference along `z` and 4.2e-8 and 4.8e-7 with it in the plane: both fell by an order,
+so `q / 2q` reads 0.66 and 0.64 where the old runs read 0.09 to 1.62, and at 1e-8 the ratio
+is below what `conv_thr = 1e-8` resolves. Whether a three-cell helix with spin-orbit
+coupling carries charge at `q` at all, and what the `2q` harmonic converges to, needs a
+tighter `conv_thr` or the 15-cell cell against Elk's 2q/q of 15.

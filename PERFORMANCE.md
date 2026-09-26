@@ -7471,3 +7471,12 @@ measured; the comparison that decides which basis to use is the equal-size one a
 
 **No reference pair is taken here**: the Kramers partners are this code's basis and not a
 feature of Elk's ultracell, which expands in one reference's states as the old basis does.
+
+**On NiBr2 the closed basis is not the cheaper run** (Triton `gpu-debug`, one GPU, the
+three-cell PAW helix with spin-orbit coupling, 2026-09-26, one sample each and including
+compilation, so read to about 20 per cent): the closed basis at `nbnd = 40`, 78 to 80 states
+per folded k-point, took 420 s with the reference along `z` and 324 s in the plane, against
+300 s for the old basis at `nbnd = 80`. The iteration counts are about equal there (43 and
+39 against 35), so the saving hydrogen showed is not there to take, and what the closed
+basis buys on this cell is the answer: a remnant of 1.3e-4 against 0.288, and 2.19 mRy
+lower in the functional the loop minimises (`PLAN.md` P121).
