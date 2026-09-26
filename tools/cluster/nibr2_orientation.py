@@ -44,9 +44,25 @@ STARTS = {"routea-tilted": (0.3, 0.5, 0.2),
           "routec-tilted": (0.3, 0.5, 0.2)}
 
 
-def supercell_text(pseudo_dir: str) -> str:
-    """Three cells along ``a1``, one species per Ni so each carries its angle."""
+#: The Br height above and below the Ni plane, bohr: ``0.054571 * 46.255853``.
+BROMINE_HEIGHT = 0.054571 * A3[2]
+
+
+def supercell_text(pseudo_dir: str, spacing: float | None = None) -> str:
+    """Three cells along ``a1``, one species per Ni so each carries its angle.
+
+    ``spacing`` replaces the monolayer's 46 bohr cell by a bulk one of that
+    height, one layer per cell stacked directly above itself (AA), the bromine
+    kept at the same height from the Ni plane and two k-points along the
+    stacking. Bulk NiBr2 stacks ABC with three layers per cell; this is the
+    cheaper stacking at the real spacing, and the interlayer coupling it has is
+    not the crystal's.
+    """
     a1 = [CELLS * x for x in A1]
+    a3 = A3 if spacing is None else (0.0, 0.0, float(spacing))
+    height = BROMINE_HEIGHT / a3[2]
+    bromine = ((0.0, 1.0 / 3.0, height), (0.0, 2.0 / 3.0, 1.0 - height))
+    kz = 1 if spacing is None else 2
     lines = [
         "&CONTROL", "  calculation = 'scf'", "/",
         "&SYSTEM", "  ibrav = 0", f"  nat = {3 * CELLS}", f"  ntyp = {CELLS + 1}",
@@ -65,15 +81,15 @@ def supercell_text(pseudo_dir: str) -> str:
     for i in range(CELLS):
         lines.append(f"  Ni{i + 1} 58.6934 Ni.rel-pbe-n-kjpaw_psl.0.1.UPF")
     lines += ["  Br 79.9040 Br.rel-pbe-n-kjpaw_psl.1.0.0.UPF", "CELL_PARAMETERS bohr"]
-    for vector in (a1, A2, A3):
+    for vector in (a1, A2, a3):
         lines.append("  " + "  ".join(f"{x:.12f}" for x in vector))
     lines.append("ATOMIC_POSITIONS crystal")
     for i in range(CELLS):
         lines.append(f"  Ni{i + 1} {i / CELLS:.9f} 0.000000000 0.000000000")
     for i in range(CELLS):
-        for x, y, z in BROMINE:
+        for x, y, z in bromine:
             lines.append(f"  Br {(x + i) / CELLS:.9f} {y:.9f} {z:.9f}")
-    lines += ["K_POINTS automatic", "  1 3 1 0 0 0", ""]
+    lines += ["K_POINTS automatic", f"  1 3 {kz} 0 0 0", ""]
     return "\n".join(lines)
 
 
@@ -89,6 +105,8 @@ def main() -> None:
     # noisy and BFGS stalled); 1e-8 is ethr = 1.4e-11, far below what a torque of
     # 1e-5 Ry/rad needs.
     parser.add_argument("--one-shot-conv-thr", type=float, default=1.0e-10)
+    parser.add_argument("--layer-spacing", type=float, default=None,
+                        help="bulk layer spacing in bohr; omitted, the monolayer")
     arguments = parser.parse_args()
     arguments.outdir.mkdir(parents=True, exist_ok=True)
 
@@ -100,13 +118,13 @@ def main() -> None:
         rotation_from_euler,
     )
 
-    text = supercell_text(arguments.pseudo_dir)
+    text = supercell_text(arguments.pseudo_dir, arguments.layer_spacing)
     (arguments.outdir / "supercell.in").write_text(text)
     calculator = Calculator.from_text(text, pseudo_dir=arguments.pseudo_dir,
                                       announce=False)
     start = rotation_from_euler(*STARTS[arguments.task])
     seeded_normal = np.array([0.0, 0.0, 1.0])     # the moments are seeded in xy
-    record = {"task": arguments.task,
+    record = {"task": arguments.task, "layer_spacing": arguments.layer_spacing,
               "start_euler": list(map(float, STARTS[arguments.task])),
               "start_normal": (start @ seeded_normal).tolist()}
     clock = time.time()

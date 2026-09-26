@@ -51,7 +51,10 @@ echo "=== node ==="; hostname; date; nvidia-smi -L
 echo "commit: $(git -C "$REPO" rev-parse HEAD)"
 python3 -c "import jax; print('jax', jax.__version__, jax.devices())"
 
-python3 -u tools/cluster/nibr2_orientation.py "$TASK" "$WORK/$TASK" \
-        --pseudo-dir "$PSEUDO" --one-shot-conv-thr "${ONESHOT_CONV_THR:-1e-10}"
+# ``LAYER`` (bohr) runs bulk, one layer per cell, into ``bulk-$TASK``.
+EXTRA=(); OUT="$WORK/$TASK"
+if [ -n "${LAYER:-}" ]; then EXTRA=(--layer-spacing "$LAYER"); OUT="$WORK/bulk-$TASK"; fi
+python3 -u tools/cluster/nibr2_orientation.py "$TASK" "$OUT" \
+        --pseudo-dir "$PSEUDO" --one-shot-conv-thr "${ONESHOT_CONV_THR:-1e-10}" "${EXTRA[@]}"
 echo "exit $?"
 echo "=== done ==="; date
