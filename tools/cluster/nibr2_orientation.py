@@ -53,16 +53,16 @@ def supercell_text(pseudo_dir: str, spacing: float | None = None) -> str:
 
     ``spacing`` replaces the monolayer's 46 bohr cell by a bulk one of that
     height, one layer per cell stacked directly above itself (AA), the bromine
-    kept at the same height from the Ni plane and two k-points along the
-    stacking. Bulk NiBr2 stacks ABC with three layers per cell; this is the
-    cheaper stacking at the real spacing, and the interlayer coupling it has is
-    not the crystal's.
+    kept at the same height from the Ni plane and one k-point along the
+    stacking, as the monolayer has. Bulk NiBr2 stacks ABC with three layers per
+    cell; this is the cheaper stacking at the real spacing, and the interlayer
+    coupling it has is not the crystal's.
     """
     a1 = [CELLS * x for x in A1]
     a3 = A3 if spacing is None else (0.0, 0.0, float(spacing))
     height = BROMINE_HEIGHT / a3[2]
     bromine = ((0.0, 1.0 / 3.0, height), (0.0, 2.0 / 3.0, 1.0 - height))
-    kz = 1 if spacing is None else 2
+    kz = 1
     lines = [
         "&CONTROL", "  calculation = 'scf'", "/",
         "&SYSTEM", "  ibrav = 0", f"  nat = {3 * CELLS}", f"  ntyp = {CELLS + 1}",
