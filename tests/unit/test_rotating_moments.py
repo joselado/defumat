@@ -102,3 +102,15 @@ def test_the_step_converges_on_a_quadratic_and_respects_its_bounds():
         w = w + step
     assert np.linalg.norm(w[:2]) < 1.0e-6
     assert w[2] == pytest.approx(0.2)
+
+
+def test_the_first_order_spin_turn_is_the_exact_one_to_first_order():
+    """``spin_turned`` is what the PAW torque differentiates through the states."""
+    from defumat.scf.orientation import spin_turned
+
+    rng = np.random.default_rng(4)
+    psi = rng.normal(size=(2, 3, 10)) + 1j * rng.normal(size=(2, 3, 10))
+    for size in (1.0e-4, 1.0e-6):
+        omega = size * np.array([0.3, -0.5, 0.7])
+        gap = np.abs(np.asarray(spin_turned(psi, omega)) - rotate_spinors(psi, omega)).max()
+        assert gap < 10 * size ** 2 * np.abs(psi).max()

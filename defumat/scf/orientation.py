@@ -38,8 +38,8 @@ from __future__ import annotations
 
 import numpy as np
 
-__all__ = ["OrientationStepper", "rotate_spinors", "spinor_rotation",
-           "rotation_matrix"]
+__all__ = ["OrientationStepper", "rotate_spinors", "spin_turned",
+           "spinor_rotation", "rotation_matrix"]
 
 
 def rotation_matrix(omega) -> np.ndarray:
@@ -86,6 +86,28 @@ def rotate_spinors(psi, omega):
     u = u.astype(psi.dtype)
     return np.concatenate([u[0, 0] * up + u[0, 1] * down,
                            u[1, 0] * up + u[1, 1] * down], axis=-1)
+
+
+def spin_turned(psi, omega):
+    """``(1 - i sigma . w / 2) psi``, traceable in ``w``: the spin turn to first order.
+
+    Exact in value and first derivative at ``w = 0``, which is where the torque
+    reads it, and with no norm of ``w`` in it (``forces/torque.py`` says why that
+    matters at the origin). :func:`rotate_spinors` is the exact turn of a finite
+    step, on the host.
+    """
+    import jax.numpy as jnp
+
+    psi = jnp.asarray(psi)
+    omega = jnp.asarray(omega)
+    npwx = psi.shape[-1] // 2
+    up, down = psi[..., :npwx], psi[..., npwx:]
+    wx, wy, wz = omega[0], omega[1], omega[2]
+    half = -0.5j
+    return jnp.concatenate([
+        up + half * (wz * up + (wx - 1j * wy) * down),
+        down + half * ((wx + 1j * wy) * up - wz * down),
+    ], axis=-1)
 
 
 class OrientationStepper:

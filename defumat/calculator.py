@@ -1916,7 +1916,7 @@ class Calculator:
         Three components where :meth:`get_torque` has one -- see
         :func:`defumat.workflows.anisotropy.run_orientation_torque`.
         """
-        from defumat.workflows.anisotropy import run_orientation_torque
+        from defumat.workflows.anisotropy import becsum_for_leg, run_orientation_torque
 
         result = self._ground_state("the orientation torque")
         system, pseudos, leg = _spinor_leg(spinor)
@@ -1926,6 +1926,11 @@ class Calculator:
             merged.setdefault(name, value)
         if rotation is not None:
             merged["rotation"] = rotation
+        # ``becsum`` crosses on the one-file route and not on the two-file one,
+        # the rule ``get_anisotropy`` follows (``becsum_for_leg``).
+        merged.setdefault(
+            "becsum", becsum_for_leg(result.becsum, self.pseudos, pseudos)
+        )
         return run_orientation_torque(system, pseudos, result.density, **merged)
 
     def get_relaxed_orientation(self, spinor, rotation=None, **options):
@@ -1935,7 +1940,7 @@ class Calculator:
         the rotation of every spin together -- see
         :func:`defumat.workflows.anisotropy.relax_orientation`.
         """
-        from defumat.workflows.anisotropy import relax_orientation
+        from defumat.workflows.anisotropy import becsum_for_leg, relax_orientation
 
         result = self._ground_state("the orientation relaxation")
         system, pseudos, leg = _spinor_leg(spinor)
@@ -1945,6 +1950,11 @@ class Calculator:
             merged.setdefault(name, value)
         if rotation is not None:
             merged["rotation"] = rotation
+        # ``becsum`` crosses on the one-file route and not on the two-file one,
+        # the rule ``get_anisotropy`` follows (``becsum_for_leg``).
+        merged.setdefault(
+            "becsum", becsum_for_leg(result.becsum, self.pseudos, pseudos)
+        )
         return relax_orientation(system, pseudos, result.density, **merged)
 
     def get_first_order_soc(self, spinor, direction=None, **options):

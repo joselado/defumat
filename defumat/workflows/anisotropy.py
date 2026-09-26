@@ -1395,6 +1395,21 @@ def _reference_texture(density, own) -> jnp.ndarray:
     return nc_magnetization_from_lsda(density, own)
 
 
+def _reference_texture_of(values, density, own) -> jnp.ndarray:
+    """One species' ``becsum`` at the reference orientation.
+
+    The rule of :func:`_reference_texture`, decided by the **density** and not
+    by the species' own occupations: a collinear source's ``becsum`` is laid
+    along ``own`` off the axis the density defines (``axis_from``, as the force
+    theorem does it, since one sublattice of an antiferromagnet has a sign of
+    its own), and a noncollinear source's is returned as it is.
+    """
+    density = jnp.asarray(density)
+    if density.shape[0] == 4 and not _is_collinear(density):
+        return jnp.asarray(values)
+    return nc_magnetization_from_lsda(values, own, axis_from=density)
+
+
 def _is_collinear(density) -> bool:
     """Whether a four-channel magnetization lies along one axis.
 
@@ -1468,6 +1483,7 @@ def run_orientation_torque(
     conv_thr: float = 1.0e-10,
     k_batch: int | None | str = "default",
     soc_scale: float | None = None,
+    becsum: tuple = (),
 ) -> OrientationTorque:
     """The torque on the texture for a rigid rotation of every spin, three components.
 
@@ -1487,6 +1503,13 @@ def run_orientation_torque(
     antiferromagnet -- which is turned as it is (:func:`_reference_texture`),
     with the system's ``angle1``/``angle2`` describing it, since those are what
     ``_with_rotation`` turns with it.
+
+    **PAW takes ``becsum`` beside the density**, from a first leg that ran this
+    same dataset at ``soc_scale = 0`` (the one-file route of
+    :func:`run_force_theorem`), because a PAW Hamiltonian's one-centre
+    coefficients are built from it. It is turned with the density, and the
+    coefficients are rebuilt from the turned ``becsum`` inside the energy the
+    torque is the gradient of, so their share of the torque is in it.
     """
     from defumat.forces.torque import (
         band_energy_at_rotation,
@@ -1496,23 +1519,34 @@ def run_orientation_torque(
 
     if soc_scale is not None:
         system = system.with_soc_scale(soc_scale)
-    _refuse_system(system, pseudos)
+    becsum = _checked_becsum(becsum, pseudos)
+    _refuse_system(system, pseudos, becsum=becsum)
     rotation = _checked_rotation(rotation)
 
     own = _reference_axis(system)
     texture = _reference_texture(density, own)
+    # ``becsum`` at the reference orientation, laid along the axis the *density*
+    # defines when the source is collinear, as the force theorem lays it.
+    reference_becsum = tuple(
+        None if values is None else _reference_texture_of(values, density, own)
+        for values in becsum
+    )
     turned = _with_rotation(system, rotation)
     calculation, turned, eigenvalues, wavefunctions = fixed_density_states(
         turned, pseudos, rotate_texture(texture, rotation), nbnd=nbnd,
         conv_thr=conv_thr, k_batch=k_batch,
+        becsum=tuple(None if values is None else rotate_texture(values, rotation)
+                     for values in reference_becsum),
     )
     wg, levels = calculation.occupations(jnp.asarray(eigenvalues))
 
     check = float(band_energy_at_rotation(
-        calculation, wavefunctions, wg, texture, rotation, np.zeros(3)
+        calculation, wavefunctions, wg, texture, rotation, np.zeros(3),
+        becsum=reference_becsum,
     ))
     value = orientation_torque(
         calculation, wavefunctions, wg, texture, rotation, k_batch=k_batch,
+        becsum=reference_becsum,
     )
     direction = rotation @ np.asarray(own, dtype=float)
     return OrientationTorque(
@@ -1655,6 +1689,7 @@ def relax_orientation(
     ion_dynamics: str | None = None,
     k_batch: int | None | str = "default",
     soc_scale: float | None = None,
+    becsum: tuple = (),
     verbose: bool = False,
 ) -> RelaxedOrientation:
     """Turn the whole texture until the torque on it vanishes: the easy orientation.
@@ -1720,6 +1755,7 @@ def relax_orientation(
         result = run_orientation_torque(
             system, pseudos, density, rotation=orientation, nbnd=nbnd,
             conv_thr=conv_thr, k_batch=k_batch, soc_scale=soc_scale,
+            becsum=becsum,
         )
         # **Every orientation is a new calculation**, since the system's angles
         # turn with it, so every one-shot compiles afresh and XLA keeps each

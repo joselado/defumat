@@ -22788,3 +22788,48 @@ confirmation owed** is Route C on the helix supercell, seeded with the unfolded 
 Route A again once that item is closed; if it holds, the anisotropy of a 90-degree cobalt
 helix is a property of the helix's band structure and not the ferromagnet's constant averaged
 over its moments.
+
+**PAW, both routes** (2026-09-26, asked for on the day). A PAW Hamiltonian carries its
+potential twice, on the grid from the density and on the spheres as `ddd_paw` from `becsum`,
+and turning the texture turns both; the torque refused PAW because it built its Hamiltonian
+from the grid alone. **Route A**: `run_orientation_torque(becsum=)` and
+`relax_orientation(becsum=)` take the one-file route's `becsum` (the dataset at
+`soc_scale = 0`, as `run_force_theorem` does; the front door hands it over by
+`becsum_for_leg`), turn it with the density, and rebuild `ddd_paw` from the turned `becsum`
+inside the differentiated energy (`forces/torque.py:_hamiltonian_of`). **Route C**: the
+per-iteration torque adds the one-centre field's share, `_onecenter_torque`, the derivative of
+`ddd_paw . becsum_out` in a turn of the input. Measured on fully-relativistic PAW nickel
+(`ni-tetragonal-relaxed-mae-paw.in` at 40/320 Ry, an identity holding at any cutoff),
+`tests/regression/test_orientation_paw.py`:
+
+| check | value |
+|---|---|
+| Route A's `jax.grad` torque against grid plus one-centre closed forms, same states | 1.2e-11 relative |
+| the one-centre part against the grid part | `(-1.88, 4.47, -0.01) x 1e-6` against `(1.13, -3.10, 0.21) x 1e-6` Ry/rad: larger and opposite in sign |
+| `sum w <psi|H|psi>` against `sum w eps` | 0.0 |
+| each component against a central difference of the free energy, step 2e-3 | 1.5e-5 relative |
+| the same torque at `soc_scale = 0` | 1.3e-11 against 1.6e-6 |
+
+**The finding: with the coupling, `becsum` is not a vector under a spin rotation.**
+`becsum(U psi)` against `R becsum(psi)` in its three magnetization components is 2.8e-16 at
+`soc_scale = 0` and **4.6e-2** at 1 (the charge part 2.4e-3, the grid density through its
+augmentation 1.1e-5): the fully-relativistic `becsum` keeps only the blocks diagonal in `j`
+(the `fcoef` sandwich with the cross-`j` entries zeroed, `CLAUDE.md`'s spin-orbit row), and a
+spin rotation mixes `j = l + 1/2` with `l - 1/2`. At `soc_scale = 0` the covariance is exact:
+the output `becsum` of a one-shot at a density and `becsum` turned by 30 degrees comes back
+turned, to the 2e-6 of the unturned one. So Route A, whose source is a `soc_scale = 0` leg,
+turns `becsum` exactly, and Route C, whose input `becsum` is the coupled one, must not turn it
+as a vector: it now turns the input by the vector turn plus what that misses on the output
+states, `becsum(U psi_out) - R becsum_out` (and the density likewise), the mixer's history by
+the same affine map, and differentiates the one-centre torque through `becsum(U(w) psi_out)`.
+Before that correction a step left a `becsum` residual of 0.1 that never closed; after it,
+5e-3.
+
+**Route C on PAW nickel still does not converge, and the reason is the step, not the
+turn.** From 45 degrees off `c` the moment goes in-plane (87.5 degrees) and the accuracy sits
+near 1e-4 for 150 iterations, where the plain SCF from the same start stays at 1e-6 to 1e-8
+(while wandering, like cobalt's). The log shows why: in the plane the anisotropy is nearly
+flat, BFGS's inverse Hessian is large there, and it keeps taking the full 5.7-degree trust step,
+each of which kicks the density. **Owed**: a step bounded by the curvature it has measured, or
+the flat direction frozen, as the plan proposed for a spiral's phase. Route A has no such
+issue, and it is what the NiBr2 production runs use.

@@ -1362,8 +1362,9 @@ class SCFResult:
     #: can reach ``conv_thr`` with it far from zero**, because the orientation is
     #: a soft mode ``dr2`` does not see; it is recorded per iteration in
     #: :attr:`history` too. Zero by rotation invariance without the coupling, to
-    #: the eigensolver's noise. ``None`` unless the run is noncollinear and
-    #: magnetic, and on PAW or a spiral, where the integral is not the torque.
+    #: the eigensolver's noise. On PAW the one-centre field's share is added.
+    #: ``None`` unless the run is noncollinear and magnetic, and on a spiral,
+    #: whose transverse magnetization is in the frame that turns with ``q``.
     orientation_torque: tuple | None = None
     #: ``-int B . m`` and the constraint penalty at the converged density, in
     #: Ry. **Neither is part of** :attr:`total_energy` -- QE prints ``etcon``
@@ -5018,6 +5019,56 @@ def _solve_residual(
     return rho_out, becsum_out, ns_out, tau_out, result.psi, result
 
 
+def _onecenter_torque(calculation, becsum_in, becsum_out, meta_c=None,
+                      wavefunctions=None, weights=None) -> np.ndarray:
+    """PAW's share of the orientation torque: the one-centre field on the output.
+
+    The band energy pairs the one-centre coefficients with the output
+    occupations, ``sum ddd_paw[becsum_in] . becsum_out`` (the term ``deband``
+    removes, :func:`_paw_deband`), and a rigid turn of the input texture turns
+    ``becsum_in`` with the density. So the torque's one-centre part is minus the
+    derivative of that pairing with respect to a turn of ``becsum_in`` at zero,
+    taken through the one-centre calculation itself rather than by assuming
+    ``ddd_paw`` turns as a vector: the gradient-corrected functional on the
+    spheres reads a fixed axis that does not turn, and ``jax.grad`` sees what it
+    does. It is the grid integral's partner, ``integral of m_out x B`` being the
+    same derivative for the plane-wave part.
+
+    **How ``becsum_in`` turns, and why it is not always as a vector.** Without
+    the coupling ``becsum``'s three magnetization components are a cartesian
+    vector and a spin rotation turns them as one, exactly (2.8e-16 on PAW
+    nickel). With it they are not: the fully-relativistic ``becsum`` keeps only
+    the blocks diagonal in ``j`` (the ``fcoef`` sandwich, cross-``j`` entries
+    zeroed), and a spin rotation mixes ``j = l + 1/2`` with ``l - 1/2``, so
+    ``becsum(U psi)`` differs from ``R becsum(psi)`` by 4.6e-2 there. Given the
+    output states (``wavefunctions``, ``weights``) the turn is therefore taken
+    through them, ``becsum_in + becsum(U(w) psi_out) - becsum_out``, which is the
+    input turned the way the electrons turn; without them, as a vector, which is
+    right for a source converged without the coupling.
+    """
+    from defumat.forces.torque import rotate_texture, rotation_near
+    from defumat.scf.orientation import spin_turned
+
+    if wavefunctions is not None:
+        psi = jnp.asarray(wavefunctions)
+
+        def turned_becsum(omega):
+            turned = calculation.becsum(spin_turned(psi, omega), weights)
+            return tuple(None if a is None else a + (t - o)
+                         for a, t, o in zip(becsum_in, turned, becsum_out))
+    else:
+        def turned_becsum(omega):
+            rotation = rotation_near(omega, jnp.eye(3))
+            return tuple(None if values is None else rotate_texture(values, rotation)
+                         for values in becsum_in)
+
+    def pairing(omega):
+        _, ddd_paw = calculation.onecenter(turned_becsum(omega), meta_c)
+        return _paw_deband(ddd_paw, calculation.augmentation, becsum_out)
+
+    return -np.asarray(jax.grad(pairing)(jnp.zeros(3)))
+
+
 def _refuse_rotating_moments(calculation, field, coupled: bool) -> None:
     """What ``rotate_moments`` cannot turn, from the assembled calculation.
 
@@ -5027,13 +5078,11 @@ def _refuse_rotating_moments(calculation, field, coupled: bool) -> None:
     if not coupled:
         raise ValueError(
             "rotate_moments needs a magnetic noncollinear run with spin-orbit "
-            "coupling (lspinorb = .true., soc_scale 1) on a norm-conserving or "
-            "ultrasoft dataset: without the coupling every orientation has the "
-            "same energy and the torque is the eigensolver's noise, which a step "
-            "divided by a vanishing curvature would turn into motion; a PAW "
-            "one-centre field turns the moments too and is not in the torque; "
-            "and a spiral keeps its transverse pair in the frame that turns "
-            "with q"
+            "coupling (lspinorb = .true., soc_scale 1): without the coupling "
+            "every orientation has the same energy and the torque is the "
+            "eigensolver's noise, which a step divided by a vanishing curvature "
+            "would turn into motion; and a spiral keeps its transverse pair in "
+            "the frame that turns with q"
         )
     if calculation.is_hubbard:
         raise NotImplementedError(
@@ -5586,12 +5635,12 @@ def run_scf(
     # orientation is a soft mode of a run with the coupling, and a run can reach
     # ``conv_thr`` with its moments still turning. Without the coupling it is zero
     # at every iteration by rotation invariance, at the eigensolver's noise, and
-    # is recorded anyway as that control. Not on PAW, whose one-centre field
-    # turns the moments too and is not in the integral, and not on a spiral,
-    # whose transverse pair is in the frame that turns with ``q``.
+    # is recorded anyway as that control. On PAW the one-centre field turns the
+    # moments too, and its share is added (:func:`_onecenter_torque`). Not on a
+    # spiral, whose transverse pair is in the frame that turns with ``q``.
     track_orientation = (
         calculation.noncolin and calculation.nspin_mag == 4
-        and not calculation.spiral and not calculation.is_paw
+        and not calculation.spiral
     )
     report_orientation = (
         track_orientation and bool(calculation.system.lspinorb)
@@ -6080,10 +6129,14 @@ def run_scf(
             # ``potential`` is still the input's here, which is the field the
             # states were solved in; a field or constraint in the run is part
             # of it and its torque is included.
-            orientation_torque = tuple(float(x) for x in np.asarray(
+            torque_now = np.asarray(
                 exchange_torque(rho_out, potential.v_scf,
-                                calculation.system.cell).total
-            ))
+                                calculation.system.cell).total)
+            if calculation.is_paw:
+                torque_now = torque_now + _onecenter_torque(
+                    calculation, becsum_state, becsum_out, _meta_c(potential),
+                    wavefunctions=fetch_wavefunctions(wavefunctions), weights=wg)
+            orientation_torque = tuple(float(x) for x in torque_now)
 
         converged = accuracy < conv_thr
         # The density is self-consistent *at this field*, which is the state the
@@ -6378,7 +6431,14 @@ def run_scf(
                 # the next field than the atomic guess, and the field moves by
                 # less each time.
                 field = field.feedback(rho_out, calculation.system.cell)
-        if stepper is not None and orientation_torque is not None:
+        if (stepper is not None and orientation_torque is not None
+                and float(np.linalg.norm(orientation_torque)) > torque_conv_thr):
+            # **No step below the threshold.** There the torque is at its own
+            # noise, and a step it drives kicks the density without moving the
+            # orientation anywhere that matters: on the four-cell cobalt helix
+            # with the coupling the moments sat at 0.05 degrees from their
+            # minimum with a torque of 2e-8 against a threshold of 1e-8, and the
+            # steps held ``dr2`` near 1e-7 for a hundred iterations.
             step = stepper.propose(-np.asarray(orientation_torque), accuracy)
             if step is not None:
                 # Everything carried into the next iteration turns together:
@@ -6391,24 +6451,57 @@ def run_scf(
                 turn = rotation_matrix(step)
                 shapes = [tuple(np.shape(rho))] + [
                     tuple(np.shape(b)) for b in becsum_state if b is not None]
+                # **On PAW the turn is affine, and the shift is measured on the
+                # states.** With the coupling, ``becsum`` is not a vector under a
+                # spin rotation (:func:`_onecenter_torque` has the numbers), so
+                # the input is turned as a vector and then corrected by what the
+                # vector turn misses on the output states, ``becsum(U psi_out)
+                # - R becsum_out``, and the density by the same measurement,
+                # which differs from its vector turn only through the
+                # augmentation built from ``becsum``. Near convergence, where the
+                # input is the output, that is the state the electrons would
+                # have if they were turned. Without the correction a step left a
+                # ``becsum`` residual of 0.1 that never closed.
+                shifts = [None] * len(shapes)
+                if calculation.is_paw:
+                    turned_states = jnp.asarray(rotate_spinors(
+                        np.asarray(fetch_wavefunctions(wavefunctions)), step))
+                    turned_becsum = calculation.becsum(turned_states, wg)
+                    turned_density = calculation.density(turned_states, wg,
+                                                         turned_becsum)
+                    shifts = [np.asarray(turned_density)
+                              - np.asarray(rotate_texture(rho_out, turn))] + [
+                        np.asarray(t) - np.asarray(rotate_texture(o, turn))
+                        for t, o in zip(turned_becsum, becsum_out) if o is not None]
 
-                def turn_packed(vector, turn=turn, shapes=shapes):
+                def turn_packed(vector, turn=turn, shapes=shapes, shifts=shifts,
+                                shifted=True):
                     vector = np.array(vector, copy=True)
                     offset = 0
-                    for shape in shapes:
+                    for shape, shift in zip(shapes, shifts):
                         size = int(np.prod(shape))
-                        block = vector[offset:offset + size].reshape(shape)
-                        vector[offset:offset + size] = np.asarray(
-                            rotate_texture(block, turn)).ravel()
+                        block = np.asarray(rotate_texture(
+                            vector[offset:offset + size].reshape(shape), turn))
+                        if shifted and shift is not None:
+                            block = block + shift
+                        vector[offset:offset + size] = block.ravel()
                         offset += size
                     return vector
 
                 rho = rotate_texture(rho, turn)
+                if shifts[0] is not None:
+                    rho = rho + jnp.asarray(shifts[0])
+                species_shifts = iter(shifts[1:])
                 becsum_state = tuple(
-                    None if b is None else rotate_texture(b, turn)
+                    None if b is None else (
+                        rotate_texture(b, turn) + jnp.asarray(next(species_shifts))
+                        if calculation.is_paw else rotate_texture(b, turn))
                     for b in becsum_state
                 )
-                mixer.rotate_history(turn_packed)
+                mixer.rotate_history(
+                    turn_packed,
+                    lambda vector: turn_packed(vector, shifted=False),
+                )
                 if wavefunctions is not None:
                     wavefunctions = park_wavefunctions(
                         jnp.asarray(rotate_spinors(

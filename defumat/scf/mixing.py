@@ -180,8 +180,12 @@ class Mixer:
         stepped[:size] = head.reshape(-1)
         return stepped
 
-    def rotate_history(self, transform) -> None:
+    def rotate_history(self, transform, residual_transform=None) -> None:
         """Apply ``transform`` to every stored density and residual, or forget them.
+
+        ``residual_transform`` is the map for the residuals when it differs from
+        the densities', which it does for an affine map ``x -> R x + c``: a
+        residual is a difference of two densities and sees ``R`` alone.
 
         The in-loop rotation of ``ORIENTATION-NEXT.md`` Route C turns the input
         density between iterations, and a history left in the old frame is
@@ -257,8 +261,12 @@ class AndersonMixer(Mixer):
         self._fits.clear()
         self._drop_gram()
 
-    def rotate_history(self, transform) -> None:
+    def rotate_history(self, transform, residual_transform=None) -> None:
         """Turn the stored densities and residuals with the input density.
+
+        ``residual_transform`` maps the residuals when the densities' map is
+        affine rather than linear (Anderson's step is equivariant under a common
+        shift of every stored density, since its coefficients sum to one).
 
         ``transform`` is a spin rotation of every magnetization in a packed
         vector, one map for the whole history. On the flat fit that rotation is
@@ -270,8 +278,9 @@ class AndersonMixer(Mixer):
         if self._fits:
             self.reset()
             return
+        residual_transform = residual_transform or transform
         self._densities[:] = [transform(v) for v in self._densities]
-        self._residuals[:] = [transform(v) for v in self._residuals]
+        self._residuals[:] = [residual_transform(v) for v in self._residuals]
 
     def _drop_gram(self):
         self._gram = self._norms = self._fit_mask = None

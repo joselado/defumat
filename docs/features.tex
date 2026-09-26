@@ -4659,14 +4659,20 @@ into motion, so the option is refused there rather than left to do nothing.
 
 \begin{refuses}
 \textbf{Refuses}, for \code{rotate\_moments}: no coupling (or \code{soc\_scale}
-$=0$); a PAW dataset, whose one-centre field turns the moments too and is not in
-the torque; a spin spiral, whose transverse magnetization is kept in the frame
-that turns with $\mathbf q$; a Hubbard $U$, whose \code{ns} would have to turn
-with the density; a magnetic field or a constrained moment, which holds the
-orientation the step moves; and a run without \code{nosym}.
-\code{get\_relaxed\_orientation} and \code{get\_orientation\_torque} refuse
-everything the force theorem refuses, and a PAW torque, whose one-centre
-coefficients are not yet rebuilt from the turned \code{becsum}.
+$=0$); a spin spiral, whose transverse magnetization is kept in the frame that
+turns with $\mathbf q$; a Hubbard $U$, whose \code{ns} would have to turn with the
+density; a magnetic field or a constrained moment, which holds the orientation
+the step moves; and a run without \code{nosym}. \code{get\_relaxed\_orientation}
+and \code{get\_orientation\_torque} refuse everything the force theorem refuses.
+\textbf{PAW is taken by both}: the one-centre coefficients are rebuilt from the
+turned \code{becsum} inside the differentiated energy, from the one-file route's
+\code{soc\_scale} $=0$ leg for the force-theorem routes, and on nickel the
+one-centre share of the torque is larger than the whole and of the opposite
+sign. With the coupling, \code{becsum} is not a vector under a spin rotation
+(it keeps only the blocks diagonal in $j$), so \code{rotate\_moments} turns it
+through the states. On PAW nickel \code{rotate\_moments} still stalls near
+$10^{-4}$, its steps running along a nearly flat in-plane direction; prefer
+\code{get\_relaxed\_orientation} there.
 \end{refuses}
 
 \begin{refuses}

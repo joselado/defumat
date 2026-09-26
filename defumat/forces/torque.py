@@ -158,10 +158,25 @@ def band_energy_at_angle(calculation, states, weights, density, plane, angle):
                         rotated_density(density, direction))
 
 
-def _band_energy(calculation, states, weights, density):
-    """``sum_n w_n <psi_n | H[density] | psi_n>`` over every k-point at once."""
+def _hamiltonian_of(calculation, density, becsum=()):
+    """The spinor Hamiltonian built from ``density`` and, on PAW, from ``becsum``.
+
+    A PAW Hamiltonian has two representations of its potential, the grid one
+    from the density and the one-centre coefficients ``ddd_paw`` from
+    ``becsum``, and turning the texture turns both. Rebuilding ``ddd_paw`` here,
+    inside the function a gradient is taken of, is what puts the one-centre
+    field's share of the torque into the same ``jax.grad`` as the grid's; built
+    once outside, it would be a constant the gradient passes through, and the
+    torque would miss it.
+    """
     potential = calculation.potential(density, 1.0, None)
-    hamiltonian = calculation.hamiltonian(potential.v_scf)[0]
+    ddd_paw = calculation.onecenter(tuple(becsum))[1] if becsum else None
+    return calculation.hamiltonian(potential.v_scf, ddd_paw)[0]
+
+
+def _band_energy(calculation, states, weights, density, becsum=()):
+    """``sum_n w_n <psi_n | H[density, becsum] | psi_n>`` over every k-point at once."""
+    hamiltonian = _hamiltonian_of(calculation, density, becsum)
 
     psi = jnp.asarray(states)[0]
     occupation = jnp.asarray(weights)[0]
@@ -178,7 +193,7 @@ def _chunked_energy_and_slope(calculation, states, weights, density, plane,
                               angle, k_batch: int):
     """``(E, dE/dtheta)`` over ``k_batch`` k-points at a time, in one plane."""
     def build(value):
-        return rotated_density(density, _direction(value, plane[0], plane[1]))
+        return rotated_density(density, _direction(value, plane[0], plane[1])), ()
 
     energy, slope = _chunked_value_and_grad(
         calculation, states, weights, build, jnp.asarray(float(angle)), k_batch
@@ -190,8 +205,9 @@ def _chunked_value_and_grad(calculation, states, weights, build, parameter,
                             k_batch: int):
     """``(E, dE/dp)`` accumulated over ``k_batch`` k-points at a time.
 
-    ``build(p)`` is the density the potential is made from, and ``p`` is a
-    scalar angle or a rotation vector; the gradient comes back with its shape.
+    ``build(p)`` is the pair ``(density, becsum)`` the Hamiltonian is made
+    from, ``becsum`` empty except on PAW, and ``p`` is a scalar angle or a
+    rotation vector; the gradient comes back with its shape.
 
     A Python loop of per-chunk ``value_and_grad`` calls, **not** one
     ``value_and_grad`` around a ``lax.map``, for the reason
@@ -213,8 +229,7 @@ def _chunked_value_and_grad(calculation, states, weights, build, parameter,
     nk = int(psi.shape[0])
 
     def chunk(value, indices, live):
-        potential = calculation.potential(build(value), 1.0, None)
-        hamiltonian = calculation.hamiltonian(potential.v_scf)[0]
+        hamiltonian = _hamiltonian_of(calculation, *build(value))
         total = 0.0
         for slot in range(k_batch):
             ik = indices[slot]
@@ -319,23 +334,33 @@ def rotation_near(omega, base):
     return (jnp.eye(3, dtype=base.dtype) + cross_matrix(omega)) @ base
 
 
-def band_energy_at_rotation(calculation, states, weights, texture, base, omega):
+def band_energy_at_rotation(calculation, states, weights, texture, base, omega,
+                            becsum=()):
     """``sum_n w_n <psi_n | H(R) | psi_n>`` at frozen ``states``, ``R = (1 + [w]x) R0``.
 
     ``texture`` is the four-channel density at the reference orientation, the
     one ``R = 1`` means, and ``base`` is ``R0``, the orientation the states were
-    diagonalised at. Evaluated at ``omega = 0`` it must reproduce ``sum w eps``
-    of those states, which is the same check :func:`band_energy_at_angle` makes.
+    diagonalised at. ``becsum`` is, on PAW, each species' one-centre occupations
+    at that same reference orientation, turned with the density. Evaluated at
+    ``omega = 0`` it must reproduce ``sum w eps`` of those states, which is the
+    same check :func:`band_energy_at_angle` makes.
     """
     texture = jnp.asarray(texture)
     omega = jnp.asarray(omega, dtype=texture.real.dtype)
     rotation = rotation_near(omega, jnp.asarray(base, dtype=texture.real.dtype))
     return _band_energy(calculation, states, weights,
-                        rotate_texture(texture, rotation))
+                        rotate_texture(texture, rotation),
+                        _turned_becsum(becsum, rotation))
+
+
+def _turned_becsum(becsum, rotation) -> tuple:
+    """Every species' ``becsum`` turned by ``rotation``; ``()`` stays ``()``."""
+    return tuple(None if values is None else rotate_texture(values, rotation)
+                 for values in becsum)
 
 
 def orientation_torque(calculation, states, weights, texture, base,
-                       k_batch: int | None | str = "default"):
+                       k_batch: int | None | str = "default", becsum=()):
     """``-dF/dw`` at ``w = 0``: the torque on the whole texture, in Ry per radian.
 
     Three cartesian components, one per generator of a rigid rotation about the
@@ -348,6 +373,9 @@ def orientation_torque(calculation, states, weights, texture, base,
 
     ``k_batch`` chunks the backward pass exactly as it does for
     :func:`torque_at_angle`, and ``None`` takes the whole k axis in one pass.
+    ``becsum`` is, on PAW, the one-centre occupations at the reference
+    orientation, turned with the density inside the differentiated energy so
+    that the one-centre coefficients' share of the torque is in it.
     """
     from defumat.batching import resolve_k_batch
 
@@ -359,13 +387,14 @@ def orientation_torque(calculation, states, weights, texture, base,
     if resolved is None or resolved >= nk:
         def energy(value):
             return band_energy_at_rotation(
-                calculation, states, weights, texture, base, value
+                calculation, states, weights, texture, base, value, becsum
             )
 
         return -np.asarray(jax.grad(energy)(origin))
 
     def build(value):
-        return rotate_texture(texture, rotation_near(value, base))
+        rotation = rotation_near(value, base)
+        return rotate_texture(texture, rotation), _turned_becsum(becsum, rotation)
 
     _, slope = _chunked_value_and_grad(
         calculation, states, weights, build, origin, int(resolved)
