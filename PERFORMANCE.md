@@ -7438,3 +7438,36 @@ numbers, and the patches are the local branches `p112-h4-linearize-kernel` and
 **No reference pair is taken here**: none of the five is a feature taken from QE or Elk,
 and each is a change to this code's own arithmetic that must leave the number QE agrees
 with unchanged, which the A/B shows directly.
+
+## What the Kramers-closed ultracell basis costs, at equal size (P121)
+
+The four-cell hydrogen helix of `test_ultracell.py`, reference along the helix axis,
+`kgrid = (1, 2, 2)`, `conv_thr = 1e-10`, `states_conv_thr = 1e-8`, on the workstation, one
+core (`taskset -c 0`, `OMP_NUM_THREADS=1`), nothing else running. Each time is the median
+of the second and third call of `run_ultracell` in one process, the first paying the
+compilation; it covers both frozen solves, the union's Rayleigh-Ritz and the loop, and not
+the unit cell's SCF.
+
+| basis | states per folded k | iterations | seconds | peak (MB) | E above the supercell (Ry/cell) |
+|---|---|---|---|---|---|
+| old, `nbnd = 16` | 16 | 14 | 16.92 | 1697 | +4.37e-4 |
+| Kramers, `nbnd = 8` | 16 | 10 | **13.08** | 1631 | **+1.3e-6** |
+| old, `nbnd = 32` | 32 | 13 | 31.61 | 1639 | +1.56e-4 |
+| Kramers, `nbnd = 16` | 32 | 10 | **18.12** | 1660 | **+4e-7** |
+
+**At equal basis size the closed basis is both cheaper and closer to the supercell**, by
+0.77 and 0.57 in time and by a factor of 340 and 390 in the energy error. The time comes
+from two places: 10 iterations against 13 or 14, and two frozen solves at `nbnd` costing
+less than one at `2 nbnd`. The matrix and its dense solve are the same size on both sides
+of each pair, so the union's own cost is its Rayleigh-Ritz, two applications of the
+reference Hamiltonian and one `(2 nbnd)^3` diagonalisation per folded k-point, done once.
+The peak is set by the frozen coefficients and the compiled kernels and does not move.
+
+**At the same `nbnd`** the closed basis holds twice the states, so it pays four times the
+matrix and eight times its dense solve per iteration: 18.12 s against 16.92 s at
+`nbnd = 16` on this cell, 7 per cent, because here the dense solve is not what the time
+is spent on. A cell whose cost is the dense solve would show the factor, and none has been
+measured; the comparison that decides which basis to use is the equal-size one above.
+
+**No reference pair is taken here**: the Kramers partners are this code's basis and not a
+feature of Elk's ultracell, which expands in one reference's states as the old basis does.

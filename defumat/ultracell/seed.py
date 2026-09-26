@@ -61,11 +61,18 @@ truncated problem closes exactly one rotation sector and its axis is the
 reference's own magnetization: without spin-orbit coupling the unit cell's
 spinors are eigenstates of ``sigma . e_0``, so a rotation about ``e_0`` is a
 phase on each of them and a rotation about anything else is not. A seed outside
-that sector is not wrong -- a global spin rotation costs nothing, so what the
-loop does is traverse a flat manifold to the frame its own basis prefers -- but
-it cost **290 iterations against 14** on four cells of hydrogen, and it arrived
-turning about ``e_0`` rather than about the axis asked for.
-:func:`warn_if_the_seed_leaves_the_closed_sector` measures it and says so.
+that sector either traverses a flat manifold to the frame the basis prefers,
+**290 iterations against 14** on four cells of hydrogen, arriving turned about
+``e_0``, or converges to a texture that leans toward ``e_0``: the same cell with
+the reference in the helix plane converged in 23 iterations to steps of 94, 74
+and 84 degrees where 90 was seeded, with a uniform moment of 0.069 along the
+reference. Inside the sector the basis still charges a cone toward ``e_0``,
+10.64 degrees at ``nbnd = 16``. **All three are the basis preferring
+``+e_0``**, and ``run_ultracell(kramers_pairs=True)`` removes the preference
+(:mod:`defumat.ultracell.kramers`): each of those runs then converges in 10
+iterations to 90 degrees with no cone and no uniform moment.
+:func:`warn_if_the_seed_leaves_the_closed_sector` measures the first two and
+says so.
 
 **The charge is not touched.** A spin density wave's charge modulation is a
 second-order consequence of the spin one and the loop generates it; seeding it
@@ -223,13 +230,16 @@ def warn_if_the_seed_leaves_the_closed_sector(seed, axis: np.ndarray) -> float:
     which is ``|s-hat . e_0|`` being the same at every point -- what this
     measures, the absolute value being the cone's half-angle and the reason a
     staggered ``+-e_0`` seed is silent (see :data:`SEED_CONE_TOL`).
-    A run outside it is not wrong: a global spin rotation costs nothing without
-    spin-orbit coupling, so what it does is traverse that flat manifold to reach
-    the frame its own basis prefers. What it costs was measured on four cells of
-    hydrogen at ``nbnd = 16``: **290 iterations against 14**, arriving at the
-    same state -- the two agree to 0.45 per cent after one global rotation and
-    to 3.5e-9 Ry -- but turning about ``e_0`` rather than about the axis that
-    was asked for.
+    A run outside it pays in one of two ways, both measured on four cells of
+    hydrogen at ``nbnd = 16``. With the reference along ``(1,1,1)/sqrt(3)`` it
+    traversed the flat manifold to the frame its basis prefers, **290
+    iterations against 14**, arriving at the same state (0.45 per cent after one
+    global rotation, 3.5e-9 Ry) turned about ``e_0``. With the reference in the
+    helix plane it converged in 23 iterations to a **wrong** texture: steps of
+    94, 74 and 84 degrees where 90 was seeded and a uniform moment of 0.069
+    along the reference. ``run_ultracell(kramers_pairs=True)`` closes the basis
+    under time reversal and prefers no axis, and this function is then not
+    called: the same two runs converge in 10 iterations to 90 degrees.
 
     With ``lspinorb`` no axis closes the sector at all, since a spin-orbit
     Hamiltonian's eigenstates are eigenstates of no ``sigma . n``. The warning
@@ -241,9 +251,11 @@ def warn_if_the_seed_leaves_the_closed_sector(seed, axis: np.ndarray) -> float:
     which is this function's expensive arrangement, converged in **54**
     iterations (measured in another session, 2026-09-17, and reported here
     rather than taken here). One cell is not a scaling, so what this says is
-    that the traversal is the no-spin-orbit case's bill and the warning is worth
-    reading as advice rather than as a forecast. Returns the spread, for a
-    caller that would rather test than catch.
+    that the traversal is the no-spin-orbit case's bill. **The lean is not**:
+    the same run kept a uniform in-plane moment of 0.144 of the helix at
+    ``nbnd = 96``, where Elk's converged supercell has 9e-5 (``OPEN.md`` Part
+    XX), which is the second of the two outcomes above with spin-orbit coupling
+    on. Returns the spread, for a caller that would rather test than catch.
     """
     values = np.asarray(seed, dtype=float)
     length = np.sqrt(np.sum(values**2, axis=0))
@@ -258,19 +270,24 @@ def warn_if_the_seed_leaves_the_closed_sector(seed, axis: np.ndarray) -> float:
             f"this seed does not turn about the reference's own magnetization: "
             f"the angle between the seed and that direction varies by "
             f"{spread:.3f} in |cos| over the box, where a texture turning about "
-            f"it holds it constant. The run is not wrong -- a global spin rotation costs "
-            f"nothing without spin-orbit coupling -- but the truncated basis "
-            f"closes only the sector whose axis is the reference's direction, "
-            f"so the loop has to traverse a flat manifold to the frame that "
-            f"basis prefers, and it arrives turning about that direction "
-            f"rather than the one asked for. On four cells of hydrogen this was "
-            f"290 iterations against 14 for the same state. Converge the unit "
-            f"cell with its moment along the axis the texture is to turn about, "
-            f"and write the seed about that axis. With spin-orbit coupling no "
-            f"axis closes the sector and that flat manifold is gapped, so this "
-            f"is advice about a cheaper start rather than about a protected "
-            f"pitch, and the traversal may not be charged at all -- a 15-cell "
-            f"PAW helix in exactly this arrangement took 54 iterations",
+            f"it holds it constant. The truncated basis prefers the "
+            f"reference's direction, so the loop either traverses a flat "
+            f"manifold to the frame that basis prefers (290 iterations against "
+            f"14 on four cells of hydrogen, arriving turned) or converges to a "
+            f"texture leaning toward the reference (the same cell with the "
+            f"reference in the helix plane: steps of 94, 74 and 84 degrees "
+            f"where 90 was seeded, and a uniform moment along the reference). "
+            f"Pass kramers_pairs=True, which adds each frozen state's Kramers "
+            f"partner and prefers no direction: both runs then converge in 10 "
+            f"iterations to 90 degrees. Otherwise converge the unit cell with "
+            f"its moment along the axis the texture is to turn about, and write "
+            f"the seed about that axis, which still leaves a cone toward it "
+            f"(10.64 degrees at nbnd = 16). With spin-orbit coupling no "
+            f"axis closes the sector and that flat manifold is gapped, so the "
+            f"traversal may not be charged (a 15-cell NiBr2 PAW helix in this "
+            f"arrangement took 54 iterations), but the lean is: that run kept "
+            f"a uniform in-plane moment of 0.14 of the helix, where Elk's "
+            f"supercell has 9e-5",
             stacklevel=3,
         )
     return spread
@@ -371,7 +388,8 @@ def _refuse_a_seed_over_one(seed, nspin_mag: int) -> None:
         )
 
 
-def seeded_density(density, seed, nspin_mag: int, volume: float, axis=None):
+def seeded_density(density, seed, nspin_mag: int, volume: float, axis=None,
+                   closed: bool = False):
     """The tiled density with its magnetization turned and scaled by ``seed``.
 
     Args:
@@ -392,6 +410,10 @@ def seeded_density(density, seed, nspin_mag: int, volume: float, axis=None):
             Noncollinear only, and it is an argument rather than something
             recomputed here so that the density and the spheres are rotated from
             one axis and not from two.
+        closed: the basis carries the Kramers partners
+            (``run_ultracell(kramers_pairs=True)``), so no axis is preferred
+            and :func:`warn_if_the_seed_leaves_the_closed_sector` has nothing
+            to warn about.
 
     Returns the seeded density, same shape and dtype.
     """
@@ -404,8 +426,9 @@ def seeded_density(density, seed, nspin_mag: int, volume: float, axis=None):
         # collinear case is one multiplication in that representation.
         moment = moment * jnp.asarray(seed)[None]
     else:
-        warn_if_the_seed_leaves_the_closed_sector(seed, _required(axis))
-        moment = _turned(moment, seed, axis)
+        if not closed:
+            warn_if_the_seed_leaves_the_closed_sector(seed, _required(axis))
+        moment = _turned(moment, seed, _required(axis))
     seeded = from_spin_components(charge, moment, nspin_mag)
     return jnp.asarray(seeded, dtype=jnp.asarray(density).dtype)
 

@@ -22391,3 +22391,111 @@ corrected.
 
 **Verified** on the workstation, on this phase's code: the gate 3086 passed, 64 skipped, 0 failed in
 15:12, one more than P118's 3085, which is the structural test.
+
+### P121 -- A frozen ultracell basis closed under time reversal: the lean is gone on hydrogen in both frames, and the energy is 340 times closer to the supercell at equal size. ✅ DONE on the workstation cell; the NiBr2 run that `OPEN.md` Part XX names is owed.
+
+`defumat/ultracell/kramers.py` (new: `time_reversed`, `kramers_closed_basis`,
+`KramersBasis`), `run_ultracell(kramers_pairs=)` and `UltracellResult.kramers_ranks` /
+`.kramers_overlap`, `seeded_density(closed=)` and the seed warning's text,
+`tests/regression/test_ultracell.py` (three tests), `tests/unit/test_ultracell_kramers.py`,
+`docs/features.tex`, notebook 46, `PERFORMANCE.md`. Reached through
+`Calculator.get_ultracell(kramers_pairs=True)`, which forwards caller options by name.
+
+**What the old basis does.** The ultracell expands in the frozen states of one magnetic
+reference, which without spin-orbit coupling are eigenstates of `sigma . e_0`: majority
+orbitals with spin along `+e_0` and minority ones against it. A moment turned off `e_0`
+needs a majority orbital with the other spinor, which the set does not have, so a truncated
+solve leans toward `+e_0`. On the four-cell hydrogen helix at `nbnd = 16`: with the
+reference along the helix axis, a cone of 10.64 degrees (the existing test's table); with
+the reference in the helix plane, a **wrong** texture in 23 iterations, steps of 94.08,
+73.62 and 84.40 degrees where 90 was seeded, moment lengths from 0.283 to 0.383 and a
+uniform moment of 0.069 along the reference, +4.99e-4 Ry per cell above the supercell.
+That is NiBr2's symptom (`OPEN.md` Part XX) on a cell the workstation runs in 20 s.
+
+**The construction.** The Kramers partners of the states at `k` are the time-reversed states
+at `-k`, which are the eigenstates at `k` of the reference with its magnetization reversed,
+since `Theta H[m] Theta^-1 = H[-m]` with spin-orbit coupling or without it. So they come
+from a second fixed-density solve on the same folded k-set at the reversed density and, on
+an augmented dataset, the reversed `becsum` (magnetization components negated, the charge
+kept). Measured on the hydrogen reference: the reversed solve spans the `pi` spin rotation
+of the reference's states to 5.1e-7, the solver's accuracy, at `nbnd = 16` and 64. **The
+union is nearly dependent**: its overlap's smallest eigenvalue is 1.6e-7 at `nbnd = 16` and
+1.1e-9 at 64, and half its eigenvalues are below 1e-2, because a band with little exchange
+splitting has nearly the same orbital in both channels. So the union is handed to the loop
+already diagonalised: at each folded k the reference Hamiltonian and the overlap are built
+on it with `apply`/`apply_s`, overlap directions below `OVERLAP_FLOOR = 1e-8` are dropped
+(canonical orthogonalisation), and the reference Hamiltonian is diagonalised in the rest.
+The result is orthonormal with the reference Hamiltonian diagonal on it, which is all
+`ultracell_matrix` assumes, so the loop, the density, `becsum`, the energy and
+`UltracellStates` are untouched. The matrix is the exact reference Hamiltonian projected
+onto the span, so the partners need not be eigenstates of anything, and the reference's own
+states are in the span, so the lowest Ritz values are its eigenvalues and the tiled null
+holds. A folded k-point that drops directions keeps its slot as zero vectors at 10 Ry above
+the highest Ritz value, never occupied; `kramers_ranks` says how many are real. The
+degenerate-cut check and `multiplet_gap` stay the reference's own `nbnd`-band solve.
+
+**Measured**, the four-cell helix of `test_a_seeded_helix_keeps_the_pitch_it_was_given`
+(`kgrid = (1, 2, 2)`, `conv_thr = 1e-10`, `states_conv_thr = 1e-8`), against the four-atom
+supercell at -0.93374670 Ry per cell:
+
+| basis | reference | states per folded k | steps (deg) | cone (deg) | uniform moment | E above the supercell | iterations |
+|---|---|---|---|---|---|---|---|
+| old, `nbnd = 16` | `z` | 16 | 90.0001 | 10.6434 | 0.0628 | +4.373e-4 | 14 |
+| old, `nbnd = 32` | `z` | 32 | 90.0000 | 3.8095 | 0.0224 | +1.557e-4 | 13 |
+| old, `nbnd = 16` | `x` | 16 | 94.08, 73.62, 84.40 | 0 | 0.0693 | +4.99e-4 | 23 |
+| Kramers, `nbnd = 8` | `z` | 16 | 90.0000 | 0 | 0 | **+1.28e-6** | 10 |
+| Kramers, `nbnd = 8` | `x` | 16 | 90.0001 | 0 | 0 | **+1.28e-6** | 10 |
+| Kramers, `nbnd = 16` | `z` | 32 | 90.0000 | 0 | 0 | +4e-7 | 10 |
+
+The two closed frames agree to 1e-8 Ry, as they must: without spin-orbit coupling the
+closed span is the orbitals times both spinors, invariant under every global spin rotation.
+**The floor only trims accuracy, never the closure**: at `nbnd = 16` a floor of 1e-4 keeps
+24 of 32 directions at +1.13e-5 Ry, and 1e-2 keeps 16 at +1.96e-4, the cone zero in both.
+The small directions are the differences between the majority and the minority orbitals,
+and they carry the accuracy. The equal-size pair is also the cheaper one (`PERFORMANCE.md`):
+13.08 s against 16.92 s at 16 states and 18.12 s against 31.61 s at 32, one core, from
+fewer iterations and two half-size frozen solves; the peak is 1.6 to 1.7 GB in all four.
+
+**Tests.** `test_kramers_pairs_are_refused_on_a_collinear_cell` (gate, 2 s);
+`test_kramers_pairs_keep_the_tiled_null` (slow: the `(1,1,1)/sqrt(3)` cell, one iteration,
+the unit cell's energy to 1e-10, 16 directions kept everywhere);
+`test_kramers_pairs_remove_the_lean_in_both_frames` (slow: both frames at `nbnd = 8` held
+to steps within 1e-3 degrees, no cone, no uniform moment, and 0 to 3e-6 Ry above the
+supercell, with the old in-plane run at `nbnd = 16` as the control that has to fail those
+bounds and does, steps off by 16.4 degrees and a uniform moment of 0.069). The unit test
+reaches the dropping and padding path, which the hydrogen cell never does. The four slow
+ultracell tests this touches run in 3:24.
+
+**The seed warning.** It said a seed outside the closed sector "is not wrong", and the
+in-plane run above is wrong; the warning, `warn_if_the_seed_leaves_the_closed_sector` and
+the module docstring now give both outcomes and name `kramers_pairs=True`, and it is not
+raised when the basis is closed. The NiBr2 sentence now says the traversal may not be
+charged with spin-orbit coupling but the lean is (0.144 of the helix on 15 cells against
+Elk's 9e-5).
+
+**The PAW and spin-orbit half of the construction, checked before NiBr2.** Every number
+above is norm-conserving, and on an augmented dataset three lines run that hydrogen never
+reaches: the sign flip of `becsum`, the partner solve with it, and the one-centre term of the
+reference Hamiltonian. A wrong reversal would not give a wrong number, only a span that is
+not closed, so it is checked on its own: `Theta H[m] Theta^-1 = H[-m]` makes the reversed
+spectrum over an inversion-closed grid the reference's. On the PAW oxygen texture at
+`Gamma` (`o2-paw-texture.in`, `conv_thr = 1e-10`) the lowest 16 of 20 bands agree to
+**1.1e-14 Ry**, and reversing the grid without `becsum` misses by 2.1e-2; on spin-orbit PAW
+nickel under LDA (`ni-tetragonal-relaxed-mae-paw.in` at 40/320 Ry, `input_dft = 'pz'`, an
+unshifted 2x2x2 mesh, 79 SCF iterations to a moment of 1.246) the lowest 22 of 26 bands at
+all 8 k-points agree to **7.0e-14 Ry**, against a control of 9.3e-3. That mesh holds only
+time-reversal-invariant points, so there it compares each k-point with itself. The oxygen
+check is `test_the_reversed_paw_reference_is_the_time_reversed_one` (slow, 88 s).
+
+**Not done, and it is the deciding run.** With spin-orbit coupling the partners remove the
+preference between `+e_0` and `-e_0` and not every preference, since the coupling itself
+fixes a frame, so whether they remove NiBr2's lean is not measured. `OPEN.md` Part XX
+names the run: the three-cell `z` reference at `nbnd = 40` with the closed basis, and the
+`x` reference's uniform in-plane moment against the 0.32 it had, with the old basis at 80
+as the equal-size control. It needs the NiBr2 project's inputs on Triton. The default is
+`kramers_pairs = False`, so every existing ultracell number is unchanged; whether it should
+default on for a noncollinear cell is the user's decision once NiBr2 has been measured.
+
+**Verified** on the workstation, on this phase's code: the gate 3090 passed, 64 skipped, 0
+failed in 15:11, four more than P120's 3086, which are the refusal test and the three unit
+tests.

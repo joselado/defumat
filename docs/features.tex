@@ -6090,9 +6090,12 @@ rotation costs nothing without spin-orbit coupling, so the unprotected run is
 not wrong; it is traversing a flat manifold to reach the frame its own basis
 prefers. That is what the 290 iterations are, and it is why the fix is the axis
 rather than \code{mixing\_beta} --- the same lesson the weak-field case above
-teaches, arriving from the other side. \textbf{The run says so}: a seed whose
+teaches, arriving from the other side. A reference in the helix plane is
+worse: the same seed then converges in 23 iterations to steps of 94, 74 and 84
+degrees with a uniform moment of 0.069 along the reference, which is a wrong
+answer rather than a slow one. \textbf{The run says so}: a seed whose
 directions do not sit on a cone about the reference's magnetization is warned
-about by name, with that pair of iteration counts in the message.
+about by name, and the warning names the fix below.
 
 \textbf{What the truncation costs instead is the canting}, and that is the half a
 pitch check cannot see. The converged moments stand off the helix plane by a
@@ -6153,6 +6156,41 @@ NiBr2 helix seeded about $z$ with its reference along $x$ --- the expensive
 arrangement --- converged in 54 iterations rather than anything like 290. One cell
 is not a scaling, so read the warning as advice and not as a forecast.
 
+\textbf{The fix for the frame, the cone and the lean is a basis closed under
+time reversal.} All three are the basis preferring the reference's own
+direction: its majority orbitals carry spin along $+\hat{\mathbf e}_0$ only, so
+turning a moment away needs a majority orbital with the other spinor, which the
+basis does not have. \code{kramers\_pairs=True} adds each frozen state's Kramers
+partner, the states of the reference with its magnetization reversed, from a
+second fixed-density solve, and diagonalises the reference Hamiltonian in the
+union once, before the loop. Without spin-orbit coupling that span is the
+orbitals times both spinors, which prefers no direction at all. On the same four
+cells of hydrogen, at the same 16 states per folded k-point:
+
+\begin{center}
+\begin{tabular}{llllll}
+basis & reference & steps & cone & uniform moment & $E$ above the supercell \\
+\hline
+\code{nbnd = 16} & along $z$ & $90.0001^\circ$ & $10.64^\circ$ & $0.0628$ & $+4.37\times10^{-4}$ \\
+\code{nbnd = 16} & along $x$ & $94^\circ$, $74^\circ$, $84^\circ$ & $0$ & $0.069$ & $+4.99\times10^{-4}$ \\
+Kramers, \code{nbnd = 8} & along $z$ & $90.0000^\circ$ & $0$ & $0$ & $+1.3\times10^{-6}$ \\
+Kramers, \code{nbnd = 8} & along $x$ & $90.0000^\circ$ & $0$ & $0$ & $+1.3\times10^{-6}$ \\
+\end{tabular}
+\end{center}
+
+in Ry per cell, 10 iterations for both closed runs against 14 and 23, and at
+twice the size the old basis reaches only $3.81^\circ$ and $+1.56\times10^{-4}$.
+The two sets are nearly dependent, since a band with little exchange splitting
+has nearly the same orbital in both spin channels: directions whose overlap
+eigenvalue falls below $10^{-8}$ are dropped, and \code{kramers\_ranks} says how
+many each folded k-point kept. Those small directions are the ones that matter,
+the differences between the majority and the minority orbitals, and a floor of
+$10^{-2}$ keeps the closure and loses the accuracy ($+1.96\times10^{-4}$). It
+costs a second frozen solve and a basis of up to twice \code{nbnd}, so four times
+the matrix. With spin-orbit coupling the partners still remove the preference
+between $+\hat{\mathbf e}_0$ and $-\hat{\mathbf e}_0$, which is what the NiBr2
+remnant above is; whether that is enough there is not yet measured.
+
 \begin{pycode}
 from defumat import Calculator
 import numpy as np
@@ -6173,6 +6211,17 @@ print(ulr.iterations)                              # 14
 print(np.degrees(np.arctan2(m[:, 1], m[:, 0])))    # 35.32 125.32 -144.68 -54.68
 print(np.linalg.norm(m, axis=1))                   # 0.33687 on all four
 print(m.mean(axis=0))                              # [0, 0, 0.036926]: the remnant
+
+# the same helix on a basis closed under time reversal, a third of the size
+closed = cal.get_ultracell(supercell=(4, 1, 1), kgrid=(1, 2, 2), nbnd=8,
+                           seed_magnetization=helix, mixing_beta=0.3,
+                           kramers_pairs=True)
+m = closed.cell_moments()
+print(closed.iterations)                           # 11
+print(np.degrees(np.diff(np.unwrap(np.arctan2(m[:, 1], m[:, 0])))))  # 90 90 90
+print(m.mean(axis=0))                              # [0, 0, 0] to 1e-7: no remnant
+print(closed.total_energy - ulr.total_energy)      # -2.52e-4 Ry per cell
+print(closed.kramers_ranks)                        # 16 at every folded k-point
 \end{pycode}
 
 The four directions are $90.0000$ degrees apart and the offset is not a defect:
@@ -6181,6 +6230,8 @@ and a cell's own moment sits at the average of the phases inside it. The
 \emph{differences} are the pitch.
 
 \begin{refuses}
+\code{kramers\_pairs} on a collinear cell, whose one channel's partner is the
+other channel and is already in the basis.
 A reference whose k-set is not the unshifted, unreduced
 $\code{supercell} \times \code{kgrid}$ Monkhorst-Pack grid. The tiled unit-cell
 density is a fixed point of the loop only when the unit cell integrated the zone

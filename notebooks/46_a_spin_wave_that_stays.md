@@ -21,7 +21,8 @@ it keep it, which is what an ordered state is.
 Both waves below are of the second kind. On a simple cubic hydrogen lattice the
 staggered wave comes out **three millirydberg per unit cell below** the ferromagnet it was
 started from, and a helix keeps its ninety degrees per cell to three decimal
-places.
+places and, built from the unit cell's states and their time-reversed partners,
+lands **within two thousandths of a millirydberg** of a real supercell.
 
 
 ```python
@@ -198,6 +199,50 @@ four-atom supercell started from the same four directions says 0.74, so the gain
 is converging from below in the way everything else about the long cell does.
 The number to quote is the one at the band count you ran.
 
+## A long cell that prefers no direction
+
+The tilt has a plain cause. The long cell is built out of the unit cell's own
+states, and those carry spin along the unit cell's moment only: majority orbitals
+with their spin along it and minority orbitals against it. Turning a moment away
+from that direction needs a majority orbital with its spin reversed, which is not
+among them, so the calculation leans back toward the direction it can represent.
+Time reversal supplies exactly the missing states: the partner of every state of
+the unit cell is the same orbital with its spin flipped, which is a state of the
+unit cell with its moment reversed. Handed both sets, the long cell has nothing
+to prefer.
+
+Eight bands of each make the same number of states as the sixteen-band run above.
+
+
+```python
+closed = spinor.get_ultracell(supercell=(4, 1, 1), kgrid=(1, 2, 2), nbnd=8,
+                              seed_magnetization=texture, mixing_beta=0.3,
+                              kramers_pairs=True)
+
+moments = closed.cell_moments()
+turned = np.unwrap(np.arctan2(moments @ v, moments @ u))
+tilt = np.degrees(np.arcsin((moments @ axis) / np.linalg.norm(moments, axis=1)))
+gain = (spinor.get_scf().total_energy - closed.total_energy) * 1000
+print(f'{closed.iterations} iterations, turning',
+      np.round(np.degrees(np.diff(turned)), 3), 'degrees per cell')
+print(f'tilted out of the plane by {abs(tilt[0]):.3f} degrees, and {gain:.3f} mRy'
+      ' per cell below the ferromagnet')
+```
+
+    11 iterations, turning [90. 90. 90.] degrees per cell
+    tilted out of the plane by 0.000 degrees, and 0.738 mRy per cell below the ferromagnet
+
+
+The tilt is gone, and so is most of the error in the energy: the helix now sits
+0.738 mRy per cell below the ferromagnet, where the real four-atom supercell says
+0.739 and the sixteen-band run of the same size said 0.30. The long cell's
+problem is no larger than before; what changed is which states it is built
+from. It also retires the advice about which axis to turn the texture about.
+Without spin-orbit coupling the two sets together prefer no direction at all,
+so a helix seeded about an axis the unit cell's moment does not point along
+converges the same way, where the one set alone turns the whole texture into its
+own frame first or settles into a helix that leans.
+
 ## What this does not do
 
 The period is yours to choose and the calculation will not look for a better
@@ -209,7 +254,8 @@ try.
 
 The moments' plane is not entirely yours either, at least without spin-orbit
 coupling: a rigid rotation of the whole texture costs nothing then, so the frame
-the calculation settles in is the one the unit cell's states prefer. With
+the calculation settles in is the one the unit cell's states prefer, and with
+their time-reversed partners it stays where it was put. With
 spin-orbit coupling the anisotropy decides it instead, and that is physics
 rather than arithmetic, which also means the pitch is free to relax and a
 comparison against a supercell of the same length is the way to tell a texture

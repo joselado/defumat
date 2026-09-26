@@ -1734,7 +1734,10 @@ def test_a_seeded_helix_keeps_the_pitch_it_was_given(tmp_path, pseudo_dir):
     spin rotation costs nothing without spin-orbit coupling, so the unprotected
     run is not wrong -- it is traversing a flat manifold to reach the frame its
     basis prefers, which is what 290 iterations buys and why the fix is the axis
-    rather than ``mixing_beta``.
+    rather than ``mixing_beta``. That is this reference's outcome and not every
+    reference's: with the reference in the helix plane the same basis converges
+    to a distorted helix instead, and the fix for both, and for the cone below,
+    is the Kramers-closed basis (:func:`test_kramers_pairs_remove_the_lean_in_both_frames`).
 
     **What the truncation costs is the canting**, and that is the half a pitch
     check cannot see. The converged moments stand off the helix plane by a
@@ -1839,6 +1842,170 @@ def test_a_seeded_helix_keeps_the_pitch_it_was_given(tmp_path, pseudo_dir):
     assert all(e > 0.0 for e in energies), energies
     assert amplitudes[-1] < 1e-2 and energies[-1] < 3e-4, (amplitudes, energies)
     assert cones[-1] < 8.0, cones
+
+
+def test_kramers_pairs_are_refused_on_a_collinear_cell(tmp_path, pseudo_dir):
+    """A collinear channel's partner is the other channel, which is already there.
+
+    Refused before the frozen solve, so no ground state is needed to reach it.
+    """
+    calculator = _hydrogen(tmp_path, pseudo_dir, (2, 1, 1))
+    assert calculator.system.nspin == 2
+    with pytest.raises(ValueError, match="kramers_pairs"):
+        run_ultracell(calculator.system, calculator.pseudos, None, (2, 1, 1),
+                      (1, 1, 1), nbnd=4, kramers_pairs=True)
+
+
+@pytest.mark.slow
+def test_kramers_pairs_keep_the_tiled_null(tmp_path, pseudo_dir):
+    """The closed basis is expanded around the same state, so the null holds.
+
+    The reference's own states are in the union, so the lowest Ritz values of
+    the reference Hamiltonian there are its eigenvalues and the occupied
+    subspace is the one the unit cell has: the tiled density has to come back
+    in one iteration, with the unit cell's energy. On the moment along
+    ``(1,1,1)/sqrt(3)``, where every component of the density is live.
+    """
+    shape, kgrid = (2, 1, 1), (2, 2, 2)
+    folded = tuple(n * m for n, m in zip(shape, kgrid))
+    calculator = _noncollinear(tmp_path, pseudo_dir, (1, 1, 1), folded)
+    scf = calculator.get_scf(conv_thr=1e-11, nbnd=16)
+    assert scf.converged
+
+    result = run_ultracell(
+        calculator.system, calculator.pseudos, scf, shape, kgrid,
+        nbnd=8, conv_thr=1e-9, states_conv_thr=1e-8, mixing_beta=0.3,
+        kramers_pairs=True,
+    )
+    assert result.converged and result.iterations == 1
+    assert np.all(result.kramers_ranks == 16), result.kramers_ranks
+    tiled = np.asarray(result.ultracell.tile(jnp.asarray(scf.density)))
+    density = np.asarray(result.density)
+    assert np.abs(density - tiled).max() / np.abs(tiled).max() < 1e-5
+    assert result.total_energy == pytest.approx(scf.total_energy, abs=1e-10)
+
+
+@pytest.mark.slow
+def test_kramers_pairs_remove_the_lean_in_both_frames(tmp_path, pseudo_dir):
+    """The four-cell helix on a basis closed under time reversal (``PLAN.md`` P121).
+
+    The old basis prefers the reference's direction. With the reference along
+    the helix axis it charges a cone, 10.64 degrees at ``nbnd = 16``
+    (:func:`test_a_seeded_helix_keeps_the_pitch_it_was_given`); with the
+    reference in the helix plane it converges in 23 iterations to a distorted
+    helix, steps of 94, 74 and 84 degrees and a uniform moment of 0.069 along
+    the reference, 4.99e-4 Ry per cell above the supercell. That second run is
+    the control here, and it has to fail the assertions the closed basis
+    passes, or they test nothing.
+
+    With the Kramers partners at ``nbnd = 8``, the same 16 states per folded
+    k-point, both frames converge in 10 iterations to the same state: 90
+    degrees, no cone, no uniform moment, and 1.28e-6 Ry per cell above the
+    supercell, where the old basis at 16 and at 32 bands is 4.37e-4 and
+    1.56e-4. Without spin-orbit coupling the closed span is the orbitals times
+    both spinors, which is invariant under every global spin rotation, so the
+    two frames must agree, and they do to 1e-8 Ry.
+    """
+    n, kgrid = 4, (1, 2, 2)
+    shape = (n, 1, 1)
+    folded = tuple(a * b for a, b in zip(shape, kgrid))
+
+    def helix(x):
+        phase = 2 * np.pi * x[..., 0] / n
+        return np.stack([np.cos(phase), np.sin(phase),
+                         np.zeros_like(phase)], axis=-1)
+
+    supercell = _helix_supercell(tmp_path, pseudo_dir, n, kgrid)
+    exact = supercell.get_scf(conv_thr=1e-11, nbnd=16, max_iterations=300)
+    assert exact.converged
+    exact_energy = float(exact.total_energy) / n
+
+    def run(angle1, nbnd, pairs):
+        calculator = _noncollinear(tmp_path, pseudo_dir, (1, 1, 1), folded,
+                                   angle1=angle1, angle2=0.0,
+                                   tag=f"kramers_{angle1:g}")
+        scf = calculator.get_scf(conv_thr=1e-11, nbnd=8, max_iterations=300)
+        assert scf.converged
+        result = run_ultracell(
+            calculator.system, calculator.pseudos, scf, shape, kgrid,
+            nbnd=nbnd, seed_magnetization=helix, conv_thr=1e-10,
+            states_conv_thr=1e-8, mixing_beta=0.3, max_iterations=300,
+            kramers_pairs=pairs,
+        )
+        assert result.converged
+        jax.clear_caches()
+        return result, np.asarray(result.cell_moments())
+
+    def lean(moments):
+        """The worst step error, the worst cone and the uniform moment."""
+        return (float(np.abs(_pitch(moments) - 360.0 / n).max()),
+                float(np.abs(_cone(moments)).max()),
+                float(np.linalg.norm(moments.mean(axis=0))))
+
+    energies = []
+    for angle1 in (0.0, 90.0):
+        result, moments = run(angle1, 8, True)
+        step, cone, net = lean(moments)
+        assert step < 1e-3 and cone < 1e-3 and net < 1e-5, (angle1, step, cone, net)
+        assert result.iterations <= 12, result.iterations
+        above = float(result.total_energy) - exact_energy
+        assert 0.0 < above < 3e-6, above
+        energies.append(float(result.total_energy))
+    assert energies[0] == pytest.approx(energies[1], abs=1e-8)
+
+    # The control: the old basis, twice the bands, the reference in the plane.
+    result, moments = run(90.0, 16, False)
+    step, cone, net = lean(moments)
+    assert step > 1.0 and net > 1e-2, (step, cone, net)
+    assert float(result.total_energy) - exact_energy > 1e-4
+
+
+@pytest.mark.slow
+def test_the_reversed_paw_reference_is_the_time_reversed_one(pseudo_dir):
+    """The partners of a PAW reference come from the reversed ``becsum`` as well.
+
+    ``kramers_pairs`` takes its partners from a second frozen solve at the
+    reversed density and, on an augmented dataset, the reversed ``becsum``,
+    whose one-centre terms are what most of a transition metal's moment is.
+    The matrix is the exact reference Hamiltonian projected onto whatever span
+    that gives, so a wrong reversal would not show as a wrong number: it would
+    leave the span unclosed and the lean in place. What it must satisfy is
+    ``Theta H[m] Theta^-1 = H[-m]``, so the reversed spectrum over an
+    inversion-closed grid is the reference's. On the PAW oxygen texture at
+    ``Gamma`` it is, to 1.1e-14 Ry, where reversing the grid and not
+    ``becsum`` misses by 2.1e-2 -- that control is asserted too. (On
+    spin-orbit PAW nickel under LDA, 40/320 Ry and a 2x2x2 mesh, the same
+    check gives 7.0e-14 against a control of 9.3e-3, which is NiBr2's regime;
+    it is not a test because its SCF takes three minutes.)
+    """
+    from defumat.ultracell.kramers import time_reversed
+    from defumat.workflows.nscf import fixed_density_states
+
+    calculator = Calculator.from_file(
+        Path(__file__).resolve().parents[1] / "data" / "qe" / "o2-paw-texture.in",
+        pseudo_dir=pseudo_dir, announce=False, conv_thr=1e-10)
+    scf = calculator.get_scf()
+    assert scf.converged
+    becsum = tuple(scf.becsum)
+    nbnd = int(np.asarray(scf.eigenvalues).shape[-1])
+    options = dict(nbnd=nbnd, conv_thr=1e-10)
+    calculation, _, reference, _ = fixed_density_states(
+        calculator.system, calculator.pseudos, jnp.asarray(scf.density),
+        becsum=becsum, **options)
+    density, reversed_becsum = time_reversed(scf.density, becsum, 4)
+    _, _, partners, _ = fixed_density_states(
+        calculator.system, calculator.pseudos, density, becsum=reversed_becsum,
+        calculation=calculation, **options)
+    _, _, control, _ = fixed_density_states(
+        calculator.system, calculator.pseudos, density, becsum=becsum,
+        calculation=calculation, **options)
+    keep = nbnd - 4
+
+    def spectrum(values):
+        return np.sort(np.asarray(values).reshape(-1, nbnd)[:, :keep].ravel())
+
+    assert np.abs(spectrum(partners) - spectrum(reference)).max() < 1e-10
+    assert np.abs(spectrum(control) - spectrum(reference)).max() > 1e-3
 
 
 @pytest.mark.slow

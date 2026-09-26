@@ -129,7 +129,7 @@ class UltracellStates:
 
     @property
     def nbnd(self) -> int:
-        """Frozen bands per folded k-point."""
+        """Frozen bands per folded k-point, or with ``kramers_pairs`` the union's count."""
         return int(self.coefficients.shape[3])
 
     @property

@@ -151,6 +151,7 @@ from defumat.ultracell.augmentation import (
 )
 from defumat.ultracell.grid import Ultracell, folded_kpoints
 from defumat.ultracell.hamiltonian import multiplet_cut, ultracell_matrix
+from defumat.ultracell.kramers import kramers_closed_basis, time_reversed
 from defumat.ultracell.mixing import box_kerker
 from defumat.ultracell.states import (
     UltracellStates,
@@ -324,6 +325,14 @@ class UltracellResult:
     #: than at ``|Psi|^2`` needs. Kept unless ``keep_states=False``; both arrays
     #: are alive for the whole loop in any case, so keeping them raises no peak.
     states: object = None
+    #: With ``kramers_pairs``, ``(nk,)`` how many directions of the union each
+    #: folded k-point kept (:mod:`defumat.ultracell.kramers`), and ``None``
+    #: without it. A count below ``2 nbnd`` means the rest are zero vectors at
+    #: a sentinel level that is never occupied.
+    kramers_ranks: np.ndarray | None = None
+    #: With ``kramers_pairs``, the smallest overlap eigenvalue of the union that
+    #: was kept, the conditioning its orthogonalisation ran at.
+    kramers_overlap: float | None = None
 
     @property
     def eigenvalues_ev(self) -> np.ndarray:
@@ -872,6 +881,7 @@ def run_ultracell(
     state_batch: int | None = 1,
     keep_states: bool = True,
     verbose: bool = False,
+    kramers_pairs: bool = False,
 ) -> UltracellResult:
     """Converge a modulation over ``supercell`` unit cells.
 
@@ -949,6 +959,19 @@ def run_ultracell(
             them is the expensive step of the whole method. Keeping them raises
             no peak, because both arrays are alive for the whole loop in any
             case; ``False`` drops them once it is over.
+        kramers_pairs: add each frozen state's Kramers partner to the basis,
+            the states of the reference with its magnetization reversed
+            (:mod:`defumat.ultracell.kramers`). Noncollinear only. The basis
+            the loop otherwise expands in prefers the reference's own
+            direction, so a texture that turns away from it leans back toward
+            it: on four cells of hydrogen at ``nbnd = 16`` a cone of 10.64
+            degrees with the reference along the helix axis, and a distorted
+            helix with a uniform moment along the reference when it lies in
+            the helix plane. With the partners the cone and the uniform moment
+            are zero in both arrangements and the energy is 1.3e-6 Ry per cell
+            above the supercell at ``nbnd = 8``, where the old basis is
+            4.37e-4 at ``nbnd = 16`` and 1.56e-4 at 32. It costs a second
+            frozen solve and a basis of up to ``2 nbnd`` per folded k-point.
 
     **Two thresholds set the floor and neither of them is this one.** The frozen
     states are eigenstates of the density the *unit-cell* SCF stopped at, and
@@ -982,6 +1005,13 @@ def run_ultracell(
 
     basis = build_basis(system)
     require_an_ultracell_regime(system, pseudos, basis)
+    if kramers_pairs and int(system.nspin) != 4:
+        raise ValueError(
+            f"kramers_pairs closes a noncollinear basis under time reversal, "
+            f"and this unit cell has nspin = {system.nspin}: a collinear "
+            f"channel's partner is the other channel, which the basis already "
+            f"holds, so there is nothing to add"
+        )
     # **The frozen states are only a basis if they are eigenstates of a
     # converged density**, and nothing below this line would notice if they
     # were not: ``fixed_density_states`` takes whatever density it is handed.
@@ -1159,6 +1189,42 @@ def run_ultracell(
             stacklevel=2,
         )
 
+    # **The Kramers partners, and the union handed over already diagonalised**
+    # (:mod:`defumat.ultracell.kramers`). After the degenerate-cut check,
+    # which is a statement about the reference's own ``nbnd``-band solve and
+    # is read off it; everything from here on sees the union's count.
+    kramers = None
+    if kramers_pairs:
+        reversed_density, reversed_becsum = time_reversed(
+            reference.density, frozen["becsum"], nspin_mag
+        )
+        partner_options = {
+            key: value for key, value in frozen.items()
+            if key not in ("kpoints", "becsum")
+        }
+        _, _, _, partners = fixed_density_states(
+            folded_system, pseudos, reversed_density, nbnd=kept,
+            becsum=reversed_becsum, calculation=calculation, **partner_options,
+        )
+        ddd_reference = None
+        if calculation.is_paw:
+            _, ddd_reference = calculation.onecenter(tuple(frozen["becsum"]))
+        reference_hamiltonian = calculation.hamiltonian(
+            calculation.potential(jnp.asarray(reference.density)).v_scf,
+            ddd_reference,
+        )[0]
+        kramers = kramers_closed_basis(
+            reference_hamiltonian,
+            coefficients[0].reshape(nk0 * cells, nbnd, npol * npwx),
+            np.asarray(partners)[0], mask,
+        )
+        del partners, reference_hamiltonian
+        nbnd = int(kramers.eigenvalues.shape[-1])
+        eigenvalues = kramers.eigenvalues.reshape(blocks, nk0, cells, nbnd)
+        coefficients = kramers.wavefunctions.reshape(
+            blocks, nk0, cells, nbnd, npol * npwx
+        )
+
     box_index = jnp.asarray(_box_indices(ultracell, calculation, nk0))
     grid = ultracell.grid
 
@@ -1234,7 +1300,8 @@ def run_ultracell(
             # the unit cell's own relaxation did.
             seed_axis = reference_axis(moment, float(cell.volume))
         density = seeded_density(density, seed_field, nspin_mag,
-                                 float(cell.volume), axis=seed_axis)
+                                 float(cell.volume), axis=seed_axis,
+                                 closed=bool(kramers_pairs))
     # ``get_mixer`` drops a ``None`` keyword, so an unset history leaves the
     # mixer its own default and ``mixing_mode = "linear"``, which has no
     # history at all, is not a TypeError.
@@ -1570,6 +1637,9 @@ def run_ultracell(
             float(cell.volume), blocks, band, terms, energies,
             augmentation_residual,
         )
+    if kramers is not None:
+        result.kramers_ranks = np.asarray(kramers.ranks)
+        result.kramers_overlap = float(kramers.smallest_overlap)
     if keep_states:
         # **The last iteration's amplitudes**, which are the ones the *output*
         # density came from. On the converged branch that is also the density

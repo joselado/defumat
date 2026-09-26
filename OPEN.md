@@ -73,6 +73,8 @@ opened by P119 and is closed by P120.
 **Part XX** is from the NiBr2 session, reported **2026-09-25** and not reproduced here: a
 seeded ultracell leans toward its reference cell's moment whichever way that moment points,
 so the converged state keeps a bias the seed warning describes as a cost in iterations.
+The fix, a frozen basis closed under time reversal (`kramers_pairs=True`, `PLAN.md` P121),
+removes the lean on the hydrogen helix in both frames on 2026-09-26; the NiBr2 run is owed.
 
 **Part III** is the sweep of **2026-09-12** -- four read-only agents over the package
 looking for **speed and memory** rather than for wrong answers, 23 entries, ordered by
@@ -5925,7 +5927,7 @@ factor is time-odd, and the exchange term's orbital factor is time-even.
 
 # Part XX -- from the seeded NiBr2 ultracell, reported 2026-09-25
 
-## 1. A seeded ultracell leans toward the reference's moment, and the seed warning's advice turns the lean into a cone **[opened 2026-09-25]**
+## 1. A seeded ultracell leans toward the reference's moment, and the seed warning's advice turns the lean into a cone **[opened 2026-09-25; the fix is in and measured on hydrogen 2026-09-26, `PLAN.md` P121; the NiBr2 run is owed]**
 
 Measured in the NiBr2 session at `44de8c0` on a clean tree and reported here rather than
 taken here, like the 54-iteration figure `ultracell/seed.py` already quotes from it. The
@@ -5993,3 +5995,20 @@ toward Elk's 9e-5 at the same `nbnd`. A basis that removes the lean only at `nbn
 the old one had also nearly lost it is not evidence; the comparison is at equal basis
 *size* too, the old basis at `nbnd = 80` against the closed one at 40. Beside it, the seed
 docstring and the warning should stop describing the cost as iterations alone.
+
+**The closed basis is in, as `run_ultracell(kramers_pairs=True)`, and on hydrogen it works
+(`PLAN.md` P121, 2026-09-26).** The partners come from a second fixed-density solve at the
+reversed magnetization and `becsum`, and the union is diagonalised once before the loop,
+dropping overlap directions below 1e-8, since it is nearly dependent (smallest eigenvalue
+1.6e-7 at `nbnd = 16`). On the four-cell hydrogen helix at 16 states per folded k-point the
+old basis leans in both frames, a cone of 10.64 degrees with the reference along the axis
+and a distorted helix with a uniform moment of 0.069 with it in the plane; the closed basis
+at `nbnd = 8` gives 90 degrees, no cone and no uniform moment in both, 1.28e-6 Ry per cell
+above the supercell where the old basis is 4.37e-4 at 16 and 1.56e-4 at 32, in 10
+iterations. The seed warning now names both outcomes and the fix. The reversed PAW
+reference is checked on its own, since a wrong one would leave the span unclosed rather than
+give a wrong number: its spectrum equals the reference's to 1.1e-14 Ry on the PAW oxygen
+texture and to 7.0e-14 on spin-orbit PAW nickel under LDA. **What is still owed is
+the run above on NiBr2**, where spin-orbit coupling is on and the partners remove only the
+preference between `+e_0` and `-e_0`; it needs that project's inputs on Triton. The
+default stays off until it has been measured.

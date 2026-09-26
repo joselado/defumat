@@ -295,6 +295,10 @@ taken through `tools/export_notebooks.sh`, which does not pin the thread pool, w
 was taken on one core. The table entry stays at 30 s because that is the single-core number
 the caption promises.
 
+`46` re-executed in **84 s** on 2026-09-26 against the 61 s recorded for it below, after
+a section with one more four-cell ultracell run was added. That pair is not a delta either:
+the 84 s went through `tools/export_notebooks.sh`, unpinned, and the section added a run.
+
 `36` re-executed in **114 s** on 2026-09-25 against the 244 s in the table, after its
 first-order cell was corrected and a prose cell added. That pair is not a delta for the same
 reason: the 114 s went through `tools/export_notebooks.sh`, unpinned, and the table entry
