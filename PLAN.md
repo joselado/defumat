@@ -22732,9 +22732,16 @@ invariance of step 1 (1e-12 at 30 degrees off the axis) justifies for a collinea
 | `rotate_moments`, `conv_thr = 1e-12`, `torque_conv_thr = 1e-9` | 44 (35 s) | 0.0023 degrees | -74.405802459891 Ry |
 | plain SCF started exactly along `c`, `conv_thr = 1e-12` | 21 | 0 | -74.405802472810 Ry |
 
-The two totals differ by **1.3e-8 Ry**, sixty times inside the 8e-7 Ry floor P87 measured
-between two SCF paths to one state on this cell; the residual angle's own cost, `K1 theta^2`,
-is 5e-14. The run along `c` records a torque of 1e-17, zero by the four-fold axis. Refused
+The two totals differ by **1.3e-8 Ry**, against the 8e-7 Ry by which P87's relaxed route
+missed an identity that should have held exactly (two directions at `soc_scale = 0`, reached
+from two seeds), so the agreement is well inside what the path dependence of a
+self-consistent run with the coupling leaves on this cell; the residual angle's own cost,
+`K1 theta^2`, is 5e-14. **That agreement only says Route C reaches the symmetric point**, where
+the torque is zero by the four-fold axis, and **the drift pair says it is a stable fixed point
+of the loop left alone**: a plain SCF from the converged density converges in 8 iterations and
+stays at 0.0023 degrees with a torque of 9.8e-10, and from the same density turned 5 degrees
+off `c` it turns back, 5.0, 3.8, 2.9, 2.2 degrees every ten iterations and converged at 0.026
+degrees after 73, the torque falling from -6.0e-6 to -2.5e-8. Both are asserted in the test. The run along `c` records a torque of 1e-17, zero by the four-fold axis. Refused
 by name: no coupling or `soc_scale = 0` (the torque is then the solver's noise and a step
 divided by a vanishing curvature would move on it), PAW (the one-centre field is not in the
 torque), a spiral, a Hubbard U (`ns` would have to turn), a field or a constraint, and a run
@@ -22770,9 +22777,14 @@ there is positive in all three directions, so it is a minimum and not a symmetry
 stationary point: **7.476e-6 and 7.483e-6 Ry/rad^2 for the two tilts** (equal by the
 four-fold axis) and **3.84e-6 for the phase**, the turn about the normal, which a
 four-cell commensurate helix does feel. **It is the opposite of the ferromagnet's easy
-axis.** A single-ion model built from the ferromagnet's `K1`, `K1 (2 + 2 cos^2 beta)`
+axis**, and it is stated as what Route A gives on this source rather than as settled
+physics yet. A single-ion model built from the ferromagnet's `K1`, `K1 (2 + 2 cos^2 beta)`
 summed over the four moments, puts the minimum with `c` *in* the plane and gives a torque
-of 6.7e-5 at the start; the helix's own torque is 3.7e-6 and points the other way. So the
-anisotropy of a 90-degree helix of cobalt is a property of the helix's band structure and
-not the ferromagnet's constant averaged over its moments, which is the kind of thing the
-relaxation exists to find rather than assume.
+of 6.7e-5 at the start; the helix's own torque is 3.7e-6 and points the other way. The
+gradient's immunity to a source that is not quite stationary does not extend to the *sign*
+of an anisotropy this small, and the source is the unfolded spiral that sits 0.49 per cent
+off its own supercell fixed point in the magnetization (`OPEN.md` Part XXI item 1). **The
+confirmation owed** is Route C on the helix supercell, seeded with the unfolded density, or
+Route A again once that item is closed; if it holds, the anisotropy of a 90-degree cobalt
+helix is a property of the helix's band structure and not the ferromagnet's constant averaged
+over its moments.

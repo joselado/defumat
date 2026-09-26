@@ -1319,6 +1319,34 @@ def test_turning_the_moments_inside_the_scf_converges_on_the_easy_axis():
     torques = [np.linalg.norm(e["orientation_torque"]) for e in turned.history]
     assert max(torques[5:15]) > 1.0e-5
 
+    # **The drift pair**, which is what says the state is a stable fixed point of
+    # the loop with nothing turning it, where the energy above only says the
+    # run reached the symmetric point. A plain SCF from the converged density
+    # stays (measured: 8 iterations, 0.0023 degrees, torque 9.8e-10), and from
+    # the same density turned 5 degrees off ``c`` it turns back (73 iterations,
+    # 0.026 degrees, the torque from -6.0e-6 to -2.5e-8), so the guard fires.
+    from defumat.forces.torque import rotate_texture
+    from defumat.scf.driver import run_scf
+
+    calculator = _oblique_coupled_cobalt()
+
+    def angle_of(result):
+        m = np.asarray(result.magnetization_vector)
+        return np.degrees(np.arccos(abs(m[2]) / np.linalg.norm(m)))
+
+    stays = run_scf(calculator.system, calculator.pseudos,
+                    starting_density=turned.density, conv_thr=1.0e-12,
+                    max_iterations=100)
+    assert stays.converged and stays.iterations < 20
+    assert angle_of(stays) < 0.01
+    c, s_ = np.cos(np.radians(5.0)), np.sin(np.radians(5.0))
+    tilted = rotate_texture(turned.density,
+                            np.array([[c, 0.0, s_], [0.0, 1.0, 0.0], [-s_, 0.0, c]]))
+    back = run_scf(calculator.system, calculator.pseudos, starting_density=tilted,
+                   conv_thr=1.0e-12, max_iterations=150)
+    assert back.converged and angle_of(back) < 0.1
+    assert abs(back.history[0]["orientation_torque"][1]) > 1.0e-6
+
 
 def test_turning_the_moments_without_the_coupling_is_refused():
     """Without the coupling the orientation is not a coordinate, so no step is taken."""

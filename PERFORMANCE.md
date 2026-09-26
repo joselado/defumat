@@ -7511,4 +7511,6 @@ spiral SCF 32 s, one one-shot with its torque 94.5 s, the relaxation's eight one
 for the curvature 426 s. **Peak resident set**: 15.8 GB for eight one-shots and 16.0 GB (killed)
 before `relax_orientation` dropped the compiled code after each one-shot, **12.6 GiB** after,
 the difference being executables accumulated one per orientation, since each orientation is a
-new calculation. The one-shot's own peak on this cell has not been isolated from that.
+new calculation. The one-shot's own peak on this cell has not been isolated from that, so the
+24 GB the job script now asks for bounds an accumulation that no longer happens, and can come
+down once one one-shot is measured alone.

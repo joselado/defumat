@@ -11,8 +11,9 @@ Tetragonal cobalt started 51.6 degrees away from its long axis lands on it in
 **eight steps**, and the energy it gains on the way traces
 `K1 sin^2(theta) + K2 sin^4(theta)` with **K1 = 0.54 meV**, the same constant
 notebook 36 gets from the difference between two directions. Quantum ESPRESSO
-computes the energy of one direction at a time (`lforcet`), and neither it nor
-Elk turns a magnet by its torque.
+computes the energy of one direction at a time (`lforcet`), and Elk scans a set of
+directions with a self-consistent run each and reports the lowest; neither turns a
+magnet by its torque, and neither takes a texture that is not collinear.
 
 
 ```python
