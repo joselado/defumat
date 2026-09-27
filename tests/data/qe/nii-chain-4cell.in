@@ -1,0 +1,52 @@
+! The four-cell supercell of nii-chain-spiral.in, for the spiral at q = b3/4.
+!
+! Never converged on its own: it is diagonalised at the spiral's density unfolded
+! onto it (unfold_spiral_density), which is its stationary density exactly, the
+! generalized Bloch theorem being exact at a commensurate q. soc_scale is set by
+! the test, 0 for the first-order identity and 1 for the force theorem. The
+! single k-point is the shifted one the spiral's 1 1 4 grid folds onto.
+!
+! **The starting moments follow the spiral's texture, and that is not cosmetic.**
+! They are never used as a start, but they decide which gradient correction the
+! run evaluates: with every moment parallel the code takes pw.x's signed
+! projection on that axis (compute_ux, lsign = .true.), and on a texture that
+! turns in the laboratory frame the sign flips wherever the moment crosses
+! perpendicular to it, so the resolved spin density jumps there. The spiral
+! takes |m| with no axis. With all four nickel moments along x this cell's PBE
+! potential at the unfolded density was 0.83 Ry away from the spiral's and its
+! first-order energy 33 times the spiral's; started along the texture, as here,
+! the potentials agree to 7e-11 Ry. Under LDA the choice does not arise.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 8, celldm(1) = 13.0, celldm(2) = 0.92307692307692, celldm(3) = 1.35384615384615,
+    nat = 8, ntyp = 5, ecutwfc = 34.0, nbnd = 144,
+    occupations = 'smearing', smearing = 'mv', degauss = 0.03, nosym = .true.,
+    noncolin = .true., lspinorb = .true.,
+    starting_magnetization(1) = 0.5, angle1(1) = 90.0, angle2(1) =   0.0,
+    starting_magnetization(2) = 0.5, angle1(2) = 90.0, angle2(2) = 270.0,
+    starting_magnetization(3) = 0.5, angle1(3) = 90.0, angle2(3) = 180.0,
+    starting_magnetization(4) = 0.5, angle1(4) = 90.0, angle2(4) =  90.0,
+    starting_magnetization(5) = 0.0,
+ /
+ &electrons
+    conv_thr = 1.0d-10, mixing_beta = 0.3
+ /
+ATOMIC_SPECIES
+ Ni1 58.69 Ni.rel-pbe-nc-dojo.UPF
+ Ni2 58.69 Ni.rel-pbe-nc-dojo.UPF
+ Ni3 58.69 Ni.rel-pbe-nc-dojo.UPF
+ Ni4 58.69 Ni.rel-pbe-nc-dojo.UPF
+ I 126.90 I.rel-pbe-nc-dojo.UPF
+ATOMIC_POSITIONS bohr
+ Ni1 4.3 6.0 0.0
+ I  8.7 6.0 2.2
+ Ni2 4.3 6.0 4.4
+ I  8.7 6.0 6.6
+ Ni3 4.3 6.0 8.8
+ I  8.7 6.0 11.0
+ Ni4 4.3 6.0 13.2
+ I  8.7 6.0 15.4
+K_POINTS (automatic)
+ 1 1 2 0 0 0

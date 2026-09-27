@@ -78,6 +78,7 @@ from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass, field
+import warnings
 
 import numpy as np
 
@@ -757,6 +758,20 @@ def unfold_spiral_density(density, spiral_q, multiples, shape) -> np.ndarray:
         coefficients = np.fft.fftn(field) * scale
         target = np.stack([h * multiples[0], k * multiples[1],
                            l * multiples[2]]) + offset.reshape(3, 1, 1, 1)
+        # **The Nyquist index of an even grid is both ends of it**, and
+        # ``fftfreq`` calls it the negative one. That is a label, not a
+        # position, and for the transverse pair it is the wrong one whenever the
+        # shift points the other way: ``m'_+`` lives on a sphere displaced by
+        # ``q`` from the charge's, so on a supercell grid of exactly ``M n``
+        # points its component at ``+n/2`` is physical and lands inside the
+        # grid, while the label ``-n/2`` sends it one index past the other edge.
+        # Take the alias wherever the label falls outside and the alias does
+        # not; a component that fits under neither is still refused below.
+        for axis, size in enumerate(shape):
+            low, high = -(size // 2), (size - 1) // 2
+            alias = target[axis] + multiples[axis] * small[axis]
+            use = (target[axis] < low) & (alias >= low) & (alias <= high)
+            target[axis] = np.where(use, alias, target[axis])
         for axis, size in enumerate(shape):
             # ``fftfreq``'s range on ``size`` points, the Nyquist included.
             if (np.min(target[axis]) < -(size // 2)
@@ -775,4 +790,22 @@ def unfold_spiral_density(density, spiral_q, multiples, shape) -> np.ndarray:
     charge = np.real(place(density[0], none))
     along_z = np.real(place(density[3], none))
     transverse = place(density[1] + 1j * density[2], shift)
+    if tuple(int(n) for n in small * multiples) != shape:
+        # The unfolding itself is exact on any grid that holds the components.
+        # What is not is everything built from it afterwards: the
+        # exchange-correlation potential is evaluated point by point, and on
+        # other points than the unit cell's it is another potential at the
+        # level of the grid's aliasing. On the nickel-iodine chain of P123 at
+        # 30 Ry (unit grid 15 along the chain, supercell 64 rather than 60)
+        # that moved the supercell's first-order spin-orbit energy 1.3 per cent
+        # from the spiral's; with the grid repeated exactly it agrees to 1e-11.
+        warnings.warn(
+            f"the supercell grid {shape} is not the unit cell's "
+            f"{tuple(int(n) for n in small)} repeated {tuple(int(m) for m in multiples)} "
+            "times: the density unfolds exactly, but a potential built from it "
+            "is evaluated on other points than the spiral's and is not its "
+            "potential to better than the grid's aliasing. Choose ecutrho (or "
+            "the cell) so that the supercell's grid is the repeat",
+            stacklevel=2,
+        )
     return np.stack([charge, np.real(transverse), np.imag(transverse), along_z])

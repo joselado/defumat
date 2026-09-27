@@ -7522,3 +7522,43 @@ workstation (a source SCF at `soc_scale = 0` and three one-shots of PAW nickel a
 and on Triton, one GPU each, the NiBr2 relaxations of the three-cell helix in 13 to 19 minutes
 for the monolayer (a 19 GB host peak) and 7 to 8 minutes for the AA bulk (8.1 GB), each
 including its source SCF and six one-shots for the curvature.
+
+## What the first-order spin-orbit energy of a spiral costs, and against what (P123, 2026-09-27)
+
+**There is no reference pair, and that is a property of the quantity.** `pw.x` has no spin
+spiral at all and Elk switches spin-orbit coupling off on one (`init0.f90:108`), so
+neither code computes the first-order energy of a spiral, and the pair timed here is the
+two routes this code has to the same number: the spiral in its unit cell, and the
+four-cell supercell holding the same texture explicitly at the unfolded density. The
+supercell side is also what a `pw.x` user would have to run, since a supercell is the only
+place a spiral with the coupling can live there.
+
+**Machine and date:** this workstation, CPU only, 2026-09-27, one core (the affinity mask
+set before JAX is imported, `OMP_NUM_THREADS=1`), with the antivirus scanner using a third
+of a core on some other one. The nickel-iodine chain of `tests/data/qe/nii-chain-spiral.in`
+and `nii-chain-4cell.in`, 34 Ry, `q = b3/4`: the spiral on `1 1 8` with 34 bands, the
+supercell on `1 1 2` with 144. Each first-order call timed on its second run, the first
+paying the compilation.
+
+| | cell | wall clock | what it is |
+|---|---|---|---|
+| spiral SCF, `soc_scale = 0` | 2 atoms, 8 k-points | **104.9 s** | 23 iterations, what both routes start from |
+| first-order energy, the spiral | 2 atoms, 8 k-points (16 spheres) | **38.0 s** | one diagonalisation at `conv_thr = 1e-10` and the contraction |
+| first-order energy, the supercell | 8 atoms, 2 k-points | **348.3 s** | the same, at the unfolded density |
+
+**9.2 times, and it is doing less work, not doing it faster.** Both sides diagonalise the
+same states at the same threshold; the supercell holds four cells' plane waves on each of
+its two spheres and 144 bands where the spiral holds one cell's on each of its sixteen and
+34, and the dense diagonalisation grows faster than linearly in the basis. The two agree to
+9.4e-12 Ry per cell on this run. The contraction itself is negligible beside either
+diagonalisation.
+
+**What the supercell route cannot do at all is an incommensurate `q`**, or a small one: its
+cost grows with the period, where the spiral's is the unit cell's whatever `q` is. And the
+supercell route here is already the cheap one, since it starts from the spiral's density:
+converging the supercell itself would add an SCF whose texture nothing holds (the four-cell
+cobalt helix limit-cycles for that reason, `co-helix4-spiral.in`).
+
+**Memory**: 2.10 GiB peak for the whole process, which held both, the supercell being the
+larger. The spiral's first-order call adds no array beyond the diagonalisation's: the two
+projections are `(nk, nbnd, nkb)` and the Pauli components of `dD` are `(3, nkb, nkb)`.

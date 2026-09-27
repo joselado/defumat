@@ -250,6 +250,13 @@ because that is what decides whether it is a session or a phase.
 - **The elastic constants and electrostriction of a spinor run** (P46 left that refusal
   standing: they reach the energy functional directly, and their first-order
   wavefunctions come from a Sternheimer solve with no spinor form).
+- **Spin-orbit coupling on a spin spiral beyond its first-order energy** (P123,
+  `SPIRAL-SOC-NEXT.md`). The energy `n . V(q)` is in on a norm-conserving dataset. Not in:
+  the first-order wavefunctions over the ladder `k -+ q` and the density they carry, whose
+  first harmonic is the tilt of the spiral plane (the `q` harmonic of `m_n`; the charge at
+  `2q` is second order and the charge at `q` is zero for a flat spiral at every order); an
+  ultrasoft or PAW dataset, where which blocks of `newd_so`'s sandwich keep a component on
+  its own sphere is not derived; and self-consistency, the spiral in the Sternheimer stack.
 - **The force on an atom of a spin spiral** — the two components live on different
   plane-wave spheres, so the nonlocal term needs the projectors of both. `dE/dq` (P21) is
   what a spiral has instead.
@@ -22924,3 +22931,133 @@ updated its inverse Hessian on secants of 1e-12 rad once the resolvable directio
 converged, which put eigenvalues of 5e16 and 2.5e-4 into it on a clean quadratic; secants
 shorter than 1e-8 rad no longer update it (`MIN_SECANT`), and the test that caught it is
 `test_a_measured_flat_direction_is_held_and_the_rest_converges`.
+
+### P123 -- Spin-orbit coupling on a spin spiral, to first order: the Dzyaloshinskii-Moriya energy as `n . V(q)`. 🚧 STEPS 1 AND 2 OF `SPIRAL-SOC-NEXT.md` IN; the first-order density, augmented datasets and self-consistency are not.
+
+`workflows/spiral_soc.py` (`spiral_spin_orbit_energy`, `spiral_expectation`,
+`SpiralSpinOrbit`), `Calculator.get_spiral_spin_orbit_energy`, the reader's
+`_spiral_q` and a second refusal in `Calculation.__init__`,
+`tests/unit/test_spiral_soc.py`, `tests/regression/test_spiral_soc.py`,
+`tests/data/qe/nii-chain-spiral.in` and `nii-chain-4cell.in`, `docs/features.tex`,
+notebook 48. The derivation the plan asked for first is `SPIRAL-SOC-NEXT.md`, "What the
+derivation found".
+
+**The zeroth order.** A spiral on a fully-relativistic dataset is admitted at
+`soc_scale = 0` and nowhere else, in the reader and again in `Calculation`, since
+`with_soc_scale` is a field replacement that never meets the reader. At zero `dvan_so` is
+its own spin trace, so the Hamiltonian commutes with every spin rotation and the
+generalized Bloch theorem holds exactly (`test_the_zeroth_order_is_spin_rotation_invariant`:
+the off-diagonal spin blocks are exactly 0.0 and the diagonal ones equal). It starts and
+converges with nothing else changed: fcc nickel on `Ni.rel-pbe-nc-dojo` at `q = b3/4`, 45
+Ry, `4 4 4`, 13 iterations, 70 s, moment 0.53. The start is the doubled scalar orbitals
+rather than the spin-angle functions, which put both spin components on one sphere and are
+not states of the spiral's layout at all.
+
+**The operator and the mask.** `dD = dvan_so(1) - dvan_so(0)` (`_first_order_operator`,
+unchanged, held entry by entry against two non-spiral `Calculation`s of the same cell to
+1e-14). It is the same matrix in every cell while the spins turn, so in the spiral's layout
+only its spin-diagonal expectation is an energy: the transverse blocks move the state at `k`
+to `k -+ q` and sum to `sum_R exp(-i q . R) = 0`. **The spiral Hamiltonian's own nonlocal
+contraction must not be reused for it**, since that contraction turns `D` with the spins,
+which is right for the exchange field's part of an ultrasoft `D` and wrong here; the
+transverse contraction it would add is returned beside the energy
+(`SpiralSpinOrbit.dropped`) and on random states is of the same order as what is kept. The
+result is a vector: `E1(n) = n . V(q)` with `V_a = sum w f [<u_up|dD^a|u_up>_(k+q/2) -
+<u_dn|dD^a|u_dn>_(k-q/2)]`, and the unit test rebuilds it for four axes by turning the
+operator's spin indices with the SU(2) matrix and keeping its diagonal blocks, to 1e-11.
+`dD`'s spin trace is 0.0 exactly, so there is no isotropic part to carry.
+
+**The theory checked by itself, on a tight-binding chain.** Three `p` orbitals per site,
+a generic hopping matrix (no inversion), an exchange field turning by `-q R` and `lambda
+L . sigma` on site; the spiral's `n . V` against the trace of the coupling over a four-cell
+supercell's states, turned to each axis: equal to every printed digit (ten) for `z`, `y`
+and `x`, with all three components of `V` nonzero (0.0289, 0.0033, -0.0061). The first
+attempt had the sign reversed on every axis, which was the toy's own Bloch phase
+(`e^{+ik}` where its hopping implies `e^{-ik}`, a spiral at `-q`), not the theory.
+
+**The null, and why it holds k-point by k-point on bulk nickel.** fcc nickel is
+centrosymmetric, so `V = 0`: measured at 45 Ry, `4 4 4`, `q = b3/4`, `|V| = 3.2e-7` meV. It
+is zero at every k-point separately too (largest 7e-8 meV), because inversion, time
+reversal and a half-turn of the spins perpendicular to `n` together map the spiral at `k`
+onto itself and reverse `sigma_n`, when the atom sits on the inversion centre. Such a cell
+checks nothing but the null, which is why the validation cell is polar.
+
+**A defect in `unfold_spiral_density` (P122), found by this cell.** On an even unit grid
+the Nyquist index is both ends of the grid and `fftfreq` labels it negative; the transverse
+pair lives on a sphere displaced by `q`, so its `+n/2` component is physical, and on a
+supercell grid of exactly `M n` points the label sent it one index past the edge and the
+unfolding refused. On the nickel-iodine chain that plane is 3.7e-3 of a largest component
+of 44 (the charge's is 2.5e-14). The alias is now taken where the label falls outside and
+the alias does not (`test_the_nyquist_plane_of_an_even_grid_unfolds_to_the_edge_it_belongs_to`,
+both signs of `q`). The cobalt helix's unit grid is odd along `c`, which is why it never
+showed.
+
+**The reference: the four-cell supercell at the unfolded density, measured on the
+nickel-iodine chain at 40 Ry and `1 1 8`** (`q = b3/4`; the supercell `1 1 2`, 144 bands;
+`conv_thr = 1e-10` on every diagonalisation). The spiral gives `V = (4.0e-6, 2.77525e-2,
+-1.90e-5)` meV per cell, along `y` as the mirror in the plane of the atoms requires, in
+77 s at a converged density (6 min for the SCF). The supercell, whose two spinor components
+share one sphere and whose `dD` is contracted whole with nothing masked, gives **2.77527e-2
+meV along `y` and -1.88e-5 along `z`**: 1.8e-11 Ry per cell apart, which is the spread
+between the spiral at 34 and at 48 bands (2.2e-7 meV). Its Fermi level (0.10077850 Ry) and
+free energy per cell (-50.0825368 Ry) are the spiral's, and the free energies along `y` and
+`z` at `soc_scale = 0` agree to 1e-13, as spin-rotation invariance requires. The
+k-points' own contributions to `V_y` are up to 6.4 meV, of both signs, pairing `k` with
+`-k`: the sum is a 200-to-1 cancellation.
+
+**Two traps on the way to that number, each worth a factor.** Both produce a supercell that
+converges, looks right, and is a different calculation.
+
+- **The gradient correction's sign axis.** Started with all four nickel moments along `x`,
+  the supercell took `pw.x`'s signed projection on `x` for its PBE correction
+  (`compute_ux`, `lsign`), which on a texture turning in the laboratory frame flips where
+  the moment crosses perpendicular to the axis; the spiral takes `|m|`. The two potentials
+  at the same density differed by **0.83 Ry** in the charge channel and more than the
+  whole of the `m_z` channel, the supercell's first-order energy was **0.904 meV**, 33
+  times the spiral's, and its Fermi level 0.038 Ry higher. Under LDA at the same density
+  the potentials agree to 1.4e-11, which is what located it; started along the texture the
+  PBE potentials agree to 6.6e-11. `fixed_density_states` now warns
+  (`_warn_if_the_sign_axis_cuts_the_texture`, tested to fire on a turning texture and to
+  stay quiet on a collinear antiferromagnet on the same axis).
+- **The grid has to repeat.** The unfolding is exact on any grid that holds the components,
+  but the exchange-correlation potential is evaluated point by point, and QE's grid rule
+  (`good_fft_order(2 n + 1)`) gives the supercell four times the unit cell's points only
+  for some cutoffs: at 30 Ry the chain's grid is 15 and the supercell's 64, and the first
+  order moved **1.3 per cent** (-1.7504e-4 against -1.7281e-4 Ry per cell). At 34 and 40 Ry
+  it is 18 and 72. `unfold_spiral_density` warns when the grid is not the repeat.
+
+**The limit, and the second-order odd term the derivation first denied.** On the same
+supercell with the coupling scaled, `H0 + lambda dD` (set on `dvan_so`, which *is* a
+norm-conserving spinor Hamiltonian's nonlocal coefficient; `soc_scale` refuses values
+between 0 and 1 for the ultrasoft overlap, a reason a norm-conserving dataset does not
+have), the odd part of the free energy over `lambda` is 0.07267, 0.11434 and 0.29413 meV at
+0.1, 0.2 and 1. A quadratic through the three reaches **0.0267 at zero** against 0.0278, the
+rest being fourth order and beyond at `lambda = 1`, and its slope is **0.48 meV**. The even
+part is -206.0, -206.1 and -204.7 meV per `lambda^2`, second order as it should be. The
+remainder is linear in `lambda`, and the tight-binding chain shows the same thing on its
+own ((O / lambda - E1) / lambda = -0.0597, -0.0606, -0.0615 at 0.01, 0.02, 0.04): the
+transverse part enters second order as a quadratic form whose antisymmetric piece, `L_-`
+to `k - q` against `L_+` to `k + q`, changes sign with `q`. So the first-order energy is the
+right limit, and on this cell it is 9.4 per cent of the odd part at the physical coupling.
+
+**What the number is not.** The chain's value is not converged and should not be quoted as
+its Dzyaloshinskii-Moriya energy: the nickel dataset wants about 90 Ry, and at 30 Ry the
+same cell gives **-2.351 meV**, the opposite sign, a cancellation over eight k-points being
+as sensitive to the bands as it is. A cutoff and k-mesh sweep of the spiral alone (each
+point one unit-cell SCF and one fixed-density call) is what would give the chain's number,
+and it is a Triton array rather than a workstation job.
+
+**The test cell** (`nii-chain-spiral.in` and `nii-chain-4cell.in`: the same chain at 34 Ry,
+`1 1 8` and `1 1 2`, the spiral at `conv_thr = 1e-9` because 1e-10 takes over a hundred
+iterations there; `tests/regression/test_spiral_soc.py`). `V = (4.2e-7, -1.21790, 1.8e-7)`
+meV per cell. The run at `-q` gives `V_y = +1.21791`, so `V(-q) + V(q)` is 1.54e-5 meV,
+1.3e-5 of `V_y`, two independent SCFs apart. The supercell identity holds to **9.0e-12 Ry
+per cell** along `y`, and along `z` both sides are at 1e-11 Ry. The scaled coupling at
+`lambda` = 0.05, 0.1 and 0.2 gives remainders `O / lambda - V_y` of 5.23e-7, 1.009e-6 and
+1.87e-6 Ry (ratios 1.93 and 1.85, linear with a small curvature), and the quadratic lands on
+**-8.95158e-5 against -8.95137e-5 Ry per cell, 2.3e-5 relative**, with a second-order odd
+slope of +1.09e-5 Ry, a tenth of `V_y` and of the opposite sign. The even part is -198.4 meV
+per `lambda^2` at all three. So the second-order odd part is a tenth of the first order at
+34 Ry and seventeen times it at 40, on the same chain; which one a crystal is, is a question
+its own converged numbers answer. The spiral SCF is 123 s (106 s at `-q`) on the
+workstation's cores, and notebook 48 runs it in 121 s.

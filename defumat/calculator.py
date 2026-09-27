@@ -2025,6 +2025,21 @@ class Calculator:
                               calculation=self.calculation,
                               **self._defaults_for(relax_spiral_q, options))
 
+    def get_spiral_spin_orbit_energy(self, **options):
+        """Spin-orbit coupling to first order on this spiral: ``E1 = n . V(q)``.
+
+        The spiral runs at ``soc_scale = 0`` on its fully-relativistic dataset,
+        and the coupling's first-order energy is its Dzyaloshinskii-Moriya
+        energy, odd in ``q`` and linear in the spiral's axis -- see
+        :func:`defumat.workflows.spiral_soc.spiral_spin_orbit_energy`.
+        """
+        from defumat.workflows.spiral_soc import spiral_spin_orbit_energy
+
+        result = self._ground_state("the spiral's first-order spin-orbit energy")
+        return spiral_spin_orbit_energy(
+            self.system, self.pseudos, result.density,
+            **self._defaults_for(spiral_spin_orbit_energy, options))
+
     # ------------------------------------------------------------------
     # deriving one calculator from another
     # ------------------------------------------------------------------

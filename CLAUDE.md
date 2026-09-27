@@ -116,9 +116,17 @@ in `docs/features.tex`'s amber boxes.
   augmentation charge is the resident table displaced to `Q_ij(G - q)`, and that table is
   a function of `q` exactly as `|k ± q/2 + G|^2` and `vkb` are, so `dE/dq` rebuilds it
   rather than differentiating at a frozen one. Refused for a spiral: spin-orbit coupling
-  permanently, symmetry (until the spin space group is written, so `nosym` and the full
-  grid), and — for `dE/dq` alone — a *tabulated* augmentation table, which reads `|q|` on
-  the host and cannot take a tracer.
+  switched on, permanently, symmetry (until the spin space group is written, so `nosym`
+  and the full grid), and — for `dE/dq` alone — a *tabulated* augmentation table, which
+  reads `|q|` on the host and cannot take a tracer.
+- **Spin-orbit coupling on a spiral, to first order** (P123, `workflows/spiral_soc.py`).
+  The spiral runs on a fully-relativistic dataset at `soc_scale = 0`, the one form of the
+  pair the reader admits, and the operator is `dvan_so(1) - dvan_so(0)`. It is the *same*
+  matrix in every cell while the spins turn, so only its spin-diagonal part in the
+  spiral's frame has an expectation value, and **the spiral Hamiltonian's own nonlocal
+  contraction must not be reused for it**: that contraction turns `D` with the spins,
+  which is right for the exchange field's part of `D` and wrong for the coupling. The
+  energy is `n . V(q)`, linear in the axis and odd in `q`. Norm-conserving only.
 - **Relaxing the spiral wavevector** (P21): `q` is a coordinate like an atomic position, so
   `dE/dq` is `jax.grad` at frozen wavefunctions and a frozen sphere (`forces/spiral.py`,
   `workflows/spiral.relax_spiral_q`), with the same BFGS

@@ -450,9 +450,11 @@ def _refuse_system(
         )
     if system.spiral:
         raise NotImplementedError(
-            "the force theorem for a spin spiral: a spiral refuses spin-orbit "
-            "coupling permanently (it breaks the generalized Bloch theorem), "
-            "so there is no coupling to switch on"
+            "the force theorem for a spin spiral: with the coupling switched "
+            "on the spiral is not a calculation (the coupling breaks the "
+            "generalized Bloch theorem), so there is no one-shot leg to run. "
+            "workflows.spiral_soc.spiral_spin_orbit_energy takes the coupling "
+            "to first order on the soc_scale = 0 spiral instead"
         )
     if not system.noncolin:
         raise ValueError(
@@ -2000,10 +2002,12 @@ def _refuse_relaxed(system: System, pseudos, require_spin_orbit: bool = True) ->
         )
     if system.spiral:
         raise NotImplementedError(
-            "a relaxed magnetic anisotropy for a spin spiral: a spiral refuses "
-            "spin-orbit coupling permanently (it breaks the generalized Bloch "
-            "theorem), so there is no coupling for the energy to depend on a "
-            "direction through"
+            "a relaxed magnetic anisotropy for a spin spiral: with the "
+            "coupling switched on the spiral is not a calculation (it breaks "
+            "the generalized Bloch theorem), so there is no coupled energy to "
+            "relax. workflows.spiral_soc.spiral_spin_orbit_energy takes the "
+            "coupling to first order on the soc_scale = 0 spiral, where its "
+            "dependence on the spiral's axis is exactly linear"
         )
     if not system.noncolin:
         raise ValueError(

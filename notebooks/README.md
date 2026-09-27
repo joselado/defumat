@@ -65,6 +65,7 @@ instead, which means the physics is selected in the input file rather than at th
 | A spin wave, and whether the magnetic order survives it | `get_magnon_dispersion()` | [38](38_magnons.ipynb) |
 | The same `E(q)` from `dE/dq` instead | `get_spiral_scan(gradients=True)` | [12](12_spin_spirals.ipynb) |
 | A magnet's ground-state pitch | `get_spiral_relaxation()` | [14](14_spiral_relaxation.ipynb) |
+| Which way a spiral turns, and which plane it turns in: its Dzyaloshinskii-Moriya energy, spin-orbit coupling to first order on the spiral in its own cell | `get_spiral_spin_orbit_energy()` | [48](48_spiral_chirality.ipynb) |
 | Site-resolved `<L>`, `<S>` and `<J>` | `get_angular_momenta()` | [29](29_effective_mass_and_angular_momenta.ipynb) |
 | The cell's orbital magnetization | `get_orbital_magnetization()` | [39](39_orbital_magnetization.ipynb) |
 | A spin-polarized STM image, one atom's moment at a time | `get_stm(spin=...)` | [40](40_stm_images.ipynb) |
@@ -178,6 +179,7 @@ want a number.
 | [`45_imaging_a_modulation.ipynb`](45_imaging_a_modulation.ipynb) | What a scanning-tunnelling microscope sees above a spin density wave eight unit cells long: a polarized tip images the wave itself and an unpolarized one images its square, at twice the wavevector, because a collinear crystal cannot respond in the charge at first order in the field. Then the same states read as a *spectrum* rather than an image, where the band edge is seen to move through the wave by a third of an electronvolt and the two spin channels peak four cells apart |
 | [`46_a_spin_wave_that_stays.ipynb`](46_a_spin_wave_that_stays.ipynb) | A long cell built out of a ferromagnet stays ferromagnetic however long it is, the tiled state being an exact solution of its own equations, so a wave has to be handed over: a staggered wave that comes out three millirydberg per cell below the ferromagnet it was started from, a helix that keeps its ninety degrees per cell, and the canting a pitch check on its own would not see |
 | [`47_turning_a_magnet.ipynb`](47_turning_a_magnet.ipynb) | A magnet let go turns on its own: every spin turned together by the torque on the whole texture, as atoms are moved along their forces, so tetragonal cobalt started 51.6 degrees off its long axis lands on it in eight steps, and the energy it gains on the way gives the anisotropy constants; and a self-consistent run with spin-orbit coupling that wanders when left alone and converges on the easy axis when its moments are turned by the same torque |
+| [`48_spiral_chirality.ipynb`](48_spiral_chirality.ipynb) | Spin-orbit coupling added to first order on a spin spiral in its own one-atom cell: on a nickel chain with an iodine beside each bond the energy is a vector along the normal to the plane of the atoms, so only the cycloid in that plane feels it, the mirror-image spiral costs exactly the opposite, and a four-cell supercell and the coupling scaled to zero both land on the same number; the number itself is not converged in cutoff or k-mesh and is shown as the method's, not the chain's |
 
 ## Conventions
 
@@ -287,7 +289,12 @@ order of magnitude it is rather than as current to the second.
 | `16` | 18 | `40` | 34 | `30` | 232 | `20` | 282 |
 | `00` | 22 | `23` | 35 | `39` | 151 |  |  |
 | `07` | 22 | `32` | 35 | `41` | 164 |  |  |
-| `46` | 61 | `47` | 260 |  |  |  |  |
+| `46` | 61 | `47` | 260 | `48` | 121 |  |  |
+
+`48` reads **121 s** on 2026-09-27, its first measurement, unpinned through
+`tools/export_notebooks.sh`: one spiral SCF of the nickel-iodine chain and one
+fixed-density call; the `-q` run, the supercell and the scaled coupling are quoted
+from an offline run rather than repeated.
 
 `47` reads **260 s** on 2026-09-26, its first measurement, unpinned through
 `tools/export_notebooks.sh` rather than on one core: nine diagonalisations with the

@@ -227,8 +227,12 @@ def test_the_scan_workflow_reproduces_single_runs(pseudo_dir):
 def test_what_a_spiral_refuses(pseudo_dir, qe_testsuite):
     """The two combinations that are refused, and why each one is.
 
-    Spin-orbit coupling: permanently, because it breaks the generalized Bloch
-    theorem. Symmetry: until the spin space group is written.
+    Spin-orbit coupling switched on: permanently, because it breaks the
+    generalized Bloch theorem. At ``soc_scale = 0`` it is admitted (P123), the
+    coupling-free spiral of a fully-relativistic dataset being the zeroth
+    order of ``spiral_spin_orbit_energy``; ``tests/unit/test_spiral_soc.py``
+    holds both sides of that line. Symmetry: until the spin space group is
+    written.
 
     **Ultrasoft and PAW used to be the third and are not any more**: the
     augmentation charge between the two components is the resident table

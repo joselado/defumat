@@ -285,8 +285,16 @@ model describes the surface. `calc.get_spiral_scan(wavevectors)`, notebook
 - **Spin spirals** at any wavevector $\mathbf q$, by the generalized Bloch
   theorem: the up component at $\mathbf k + \mathbf q/2$ and the down at
   $\mathbf k - \mathbf q/2$, on norm-conserving, ultrasoft and PAW datasets. Needs
-  `nosym`, and spin-orbit coupling is refused. `spiral_q`, notebook
-  [12](notebooks/12_spin_spirals.ipynb).
+  `nosym`, and spin-orbit coupling switched on is refused, since it breaks the
+  theorem. `spiral_q`, notebook [12](notebooks/12_spin_spirals.ipynb).
+- **The Dzyaloshinskii-Moriya energy of a spin spiral**, spin-orbit coupling
+  added to first order on the spiral computed without it, in the unit cell and
+  at any $\mathbf q$: $E_1(\mathbf q, \hat{\mathbf n}) = \hat{\mathbf n}\cdot\mathbf V(\mathbf q)$,
+  odd in $\mathbf q$ and linear in the spiral's axis $\hat{\mathbf n}$, so one
+  vector gives every orientation of the spiral plane, and zero on a
+  centrosymmetric crystal. The spiral runs on a fully-relativistic
+  norm-conserving dataset at `soc_scale = 0`. `calc.get_spiral_spin_orbit_energy()`,
+  notebook [48](notebooks/48_spiral_chirality.ipynb).
 - **Relaxing the spiral wavevector**, $\mathrm dE/\mathrm d\mathbf q$ walked down
   to the ground-state pitch by BFGS. `calc.get_spiral_relaxation()`, notebook
   [14](notebooks/14_spiral_relaxation.ipynb).
@@ -601,6 +609,7 @@ note, the routine or task in the other code's source, is in
 | **Spin spirals** at any wavevector | `spiral_q` | | ✓ |
 | **Relaxing the spiral wavevector** | `calc.get_spiral_relaxation()` | | |
 | **$E(\mathbf q)$ and the Heisenberg exchange constants** | `calc.get_spiral_scan(wavevectors)` | | |
+| **Dzyaloshinskii-Moriya energy of a spin spiral**, spin-orbit coupling to first order | `calc.get_spiral_spin_orbit_energy()` | | |
 | **Orbital, spin and total angular momentum on each atom** | `calc.get_angular_momenta()` | (✓)⁵ | ✓ |
 | **Orbital magnetization of the cell** | `calc.get_orbital_magnetization()` | ✓ | ⁶ |
 | **Magnetocrystalline anisotropy**, by the force theorem | `calc.get_anisotropy(spinor)` | ✓ | (✓)⁷ |

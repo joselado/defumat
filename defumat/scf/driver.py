@@ -2109,6 +2109,22 @@ class Calculation:
                 "is not implemented, so the density symmetrisation and the "
                 "k-point reduction would both be wrong"
             )
+        if self.spiral and self.lspinorb and float(system.soc_scale) != 0.0:
+            # The reader refuses this pair too (``_spiral_q``), and for the
+            # reason the ``nosym`` check above gives a ``System`` can reach here
+            # without it: ``with_soc_scale`` is a plain field replacement. With
+            # the coupling on, translating by ``R`` and turning every spin by
+            # ``q . R`` is not a symmetry, so the two-sphere layout is not the
+            # Hamiltonian's eigenbasis, and its nonlocal term would apply the
+            # coupling's spin off-diagonal blocks as though the lattice turned
+            # with the spins. ``soc_scale = 0`` is the zeroth order, and
+            # ``spiral_spin_orbit_energy`` adds the coupling on top of it.
+            raise NotImplementedError(
+                "a spin spiral with spin-orbit coupling switched on is not a "
+                "calculation: the coupling breaks the generalized Bloch "
+                "theorem. Run the spiral at soc_scale = 0 and take the "
+                "coupling to first order with spiral_spin_orbit_energy"
+            )
         if self.spiral:
             # **A moment on the rotation axis is a stationary point at every
             # q.** The spiral's spin rotation is about ``z``, so a moment along
@@ -4516,9 +4532,11 @@ class Calculation:
         whose two ``6P`` channels carry a negative occupation and are skipped by
         both. **That count is not a detail, it decides whether the random
         vectors get added at all**, which is what the docstring below used to
-        get wrong. A spiral keeps the doubling: it refuses spin-orbit coupling,
-        so its dataset is never relativistic, and its two components live on
-        different spheres.
+        get wrong. A spiral keeps the doubling: its dataset is relativistic
+        only at ``soc_scale = 0``, where nothing in the Hamiltonian couples spin
+        to orbit, and its two components live on different spheres, so a
+        spin-angle function, which puts both spin components on one sphere, is
+        not a state of its layout at all.
 
         ``lspinorb`` is in the condition to state the precondition rather than
         to change the answer: ``spinor_orbital_blocks`` refuses a relativistic

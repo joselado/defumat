@@ -1,0 +1,49 @@
+! A nickel chain with an iodine beside each bond, as a spin spiral along the chain
+! on fully-relativistic datasets with the coupling switched off (soc_scale = 0).
+! The zeroth order of P123: the spin-orbit coupling is added to first order on
+! it by spiral_spin_orbit_energy, and the first-order energy is n . V(q).
+!
+! Nickel 4.4 bohr apart along z, the iodine 4.4 bohr off the chain along x at the
+! bond midpoint (Ni-I 4.92 bohr), 13 x 12 bohr of box. The iodine breaks inversion
+! and leaves one mirror, the plane of the atoms (y -> -y), so V can only point
+! along y: the coupling tells a cycloid turning in the plane of the atoms from its
+! mirror image, and a helix (axis along the chain) or a cycloid across the plane
+! (axis along x) gets nothing at first order. Iodine carries the strong 5p
+! coupling, the Fert-Levy mechanism of NiI2.
+!
+! Deliberately small (34 Ry) so that the spiral, its -q partner and the four-cell
+! supercell of nii-chain-4cell.in run in a test. The cutoff is chosen so that the
+! supercell's FFT grid is this one's repeated exactly (18 and 72 along the chain):
+! at 30 Ry it is 15 and 64, the exchange-correlation potential is then evaluated on
+! other points, and the supercell's first-order energy moved 1.3 per cent. The k-points carry contributions to
+! V a hundred times larger than their sum, so V is far from converged in k here;
+! the tests are identities at this sampling and do not depend on that. Eight
+! k-points rather than four: at four the SCF limit-cycles near 1.7e-8 Ry. The
+! 1 1 8 grid folds onto the supercell's 1 1 2: k + q/2 = (j + 1)/8 b3, which is 0 or
+! half a supercell reciprocal vector. conv_thr = 1e-9 because 1e-10 takes over a
+! hundred iterations here (1.77e-10 at 100, crawling); the identities are taken at
+! one fixed density and do not depend on it, and the one test that compares two
+! SCFs states the floor it measured at this threshold.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 8, celldm(1) = 13.0, celldm(2) = 0.92307692307692, celldm(3) = 0.33846153846154,
+    nat = 2, ntyp = 2, ecutwfc = 34.0, nbnd = 34,
+    occupations = 'smearing', smearing = 'mv', degauss = 0.03, nosym = .true.,
+    noncolin = .true., lspinorb = .true., soc_scale = 0.0,
+    starting_magnetization(1) = 0.5, angle1(1) = 90.0,
+    starting_magnetization(2) = 0.0,
+    spiral_q(1) = 0.0, spiral_q(2) = 0.0, spiral_q(3) = 0.25
+ /
+ &electrons
+    conv_thr = 1.0d-9, mixing_beta = 0.3
+ /
+ATOMIC_SPECIES
+ Ni 58.69 Ni.rel-pbe-nc-dojo.UPF
+ I 126.90 I.rel-pbe-nc-dojo.UPF
+ATOMIC_POSITIONS bohr
+ Ni 4.3 6.0 0.0
+ I  8.7 6.0 2.2
+K_POINTS (automatic)
+ 1 1 8 0 0 0

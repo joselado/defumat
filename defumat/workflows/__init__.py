@@ -28,6 +28,7 @@ from defumat.workflows.polarization import run_polarization
 from defumat.workflows.piezo_ladder import (PiezoelectricLadder,
                                             piezoelectric_kmesh_ladder)
 from defumat.workflows.sfac import run_structure_factors
+from defumat.workflows.spiral_soc import SpiralSpinOrbit, spiral_spin_orbit_energy
 from defumat.workflows.stm import run_stm, run_sts
 from defumat.workflows.topology import (
     DFTSource,
@@ -61,6 +62,8 @@ __all__ = [
     "run_conductivity",
     "run_nesting",
     "run_structure_factors",
+    "SpiralSpinOrbit",
+    "spiral_spin_orbit_energy",
     "run_stm",
     "run_sts",
     "fixed_density_bands",

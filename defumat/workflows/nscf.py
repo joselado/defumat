@@ -195,6 +195,7 @@ def fixed_density_states(
 
     if calculation is None:
         calculation = Calculation(system, pseudos, k_batch=k_batch, david=david)
+    _warn_if_the_sign_axis_cuts_the_texture(calculation, density)
     if kcart is not None:
         calculation = calculation.at_kcart(jnp.asarray(kcart))
     nbnd = nbnd or system.nbnd or default_nbnd(
@@ -278,6 +279,59 @@ def fixed_density_states(
         hamiltonians, nbnd, None, ethr, return_steps=True)
     _say_what_did_not_converge(steps, notcnv, ethr, conv_thr, nbnd)
     return calculation, system, np.asarray(eigenvalues), wavefunctions
+
+
+#: When the signed projection of a gradient-corrected noncollinear run is a jump
+#: rather than a node: a moment larger than ``SIGN_CUT_MOMENT`` of the density's
+#: largest, pointing within ``SIGN_CUT_ANGLE`` (as ``|m . ux| / |m|``) of
+#: perpendicular to the fixed axis.
+SIGN_CUT_MOMENT, SIGN_CUT_ANGLE = 0.1, 0.1
+
+
+def _warn_if_the_sign_axis_cuts_the_texture(calculation, density) -> None:
+    """A fixed gradient axis, and a density whose moment turns through it.
+
+    With every starting moment parallel, a gradient-corrected noncollinear run
+    resolves the density as ``(n +- s |m|)/2`` with ``s`` the sign of ``m`` along
+    that axis (``compute_ux``, :func:`~defumat.scf.potential.fixed_quantization_axis`),
+    which keeps up as up across the node of a collinear magnet. The same rule on
+    a texture that turns -- a commensurate spiral unfolded onto a supercell, a
+    rotated helix -- flips ``s`` wherever the moment passes perpendicular to the
+    axis while ``|m|`` is large, and the resolved spin density jumps there. The
+    run converges and the gradient correction is simply another one: on the
+    nickel-iodine chain of ``PLAN.md`` P123 it put the supercell's potential
+    0.83 Ry from the spiral's at the same density, and its first-order
+    spin-orbit energy a factor of 33 away. Starting the moments along the
+    texture removes the axis, and the run takes ``|m|`` as the spiral does.
+    Warned rather than refused because it is ``pw.x``'s own rule and a start
+    that is parallel and a density that is not can be what was meant.
+    """
+    axis = getattr(calculation, "quantization_axis", None)
+    if axis is None or not calculation.functional.is_gradient:
+        return
+    density = np.asarray(density)
+    if density.ndim != 4 or density.shape[0] != 4:
+        return
+    moment = density[1:]
+    size = np.sqrt(np.sum(moment**2, axis=0))
+    largest = float(np.max(size))
+    if largest <= 0.0:
+        return
+    along = np.abs(np.tensordot(np.asarray(axis, dtype=float), moment, axes=(0, 0)))
+    cut = (size > SIGN_CUT_MOMENT * largest) & (along < SIGN_CUT_ANGLE * size)
+    if np.any(cut):
+        warnings.warn(
+            "this gradient-corrected noncollinear run takes the sign of the "
+            f"magnetization along a fixed axis {tuple(np.round(axis, 6))} "
+            "(every starting moment is parallel, pw.x's lsign), and the density "
+            f"it is handed turns through perpendicular to that axis at "
+            f"{int(np.sum(cut))} grid points where the moment is over "
+            f"{SIGN_CUT_MOMENT:g} of its largest: the resolved spin density jumps "
+            "there, so the gradient correction is not the one this texture has. "
+            "Start the moments along the texture (angle1/angle2 per species, or "
+            "a STARTING_MOMENTS card) and the run takes |m| instead",
+            stacklevel=3,
+        )
 
 
 def _require_a_matching_calculation(calculation, kpoints, k_batch, david) -> None:

@@ -432,6 +432,7 @@ says so (\code{tests/unit/test\_facade\_documentation.py}).
 \midrule
 \code{get\_spiral\_scan} & one SCF per spiral wavevector \\
 \code{get\_spiral\_relaxation} & the spiral wavevector relaxed down $\mathrm{d}E/\mathrm{d}\mathbf q$ \\
+\code{get\_spiral\_spin\_orbit\_energy} & spin-orbit coupling to first order on the spiral, $\hat{\mathbf n}\cdot\mathbf V(\mathbf q)$ \\
 \addlinespace
 \multicolumn{2}{@{}l}{\textit{Modulations over many cells}} \\
 \midrule
@@ -4685,8 +4686,9 @@ shape does not match this leg's projector count is refused rather than
 reshaped. A \textbf{Hubbard $U$}, whose \code{ns} is not in the handoff either; a
 potential-only \textbf{meta-GGA}, whose $\tau$ is not; a converged
 \textbf{magnetic field} or constrained moment, whose energy sits outside the
-reported total; and a \textbf{spin spiral}, which refuses spin-orbit coupling
-permanently and so has no coupling to switch on. A direction other than the
+reported total; and a \textbf{spin spiral}, which cannot carry the coupling
+switched on and so has no one-shot leg; its first-order term is
+\code{spiral\_spin\_orbit\_energy}. A direction other than the
 system's own \code{angle1}/\code{angle2} needs \code{nosym}: a magnetic
 noncollinear run reduces its k-grid with the \emph{magnetic} symmetry group,
 which depends on where the moment points, so two directions would otherwise be
@@ -4756,7 +4758,8 @@ by a Zeeman term neither accounts for --- and because a constraint defeats the
 drift check, the constraint being what holds the moment rather than the
 anisotropy. A potential-only \textbf{meta-GGA}, which has no energy functional
 at all, so its printed total is not the value of anything the run minimised. A
-\textbf{spin spiral}, which refuses spin-orbit coupling permanently. A
+\textbf{spin spiral}, which cannot carry the coupling switched on; its
+first-order term is \code{spiral\_spin\_orbit\_energy} instead. A
 \textbf{collinear} run, which has no direction to point. And \code{nosym} is
 required rather than merely advised: a magnetic noncollinear run reduces its
 k-grid with the \emph{magnetic} symmetry group, which depends on where the
@@ -5438,13 +5441,13 @@ $\mathbf q$ is a spinor whose two components live on \emph{different} plane-wave
 spheres,
 \begin{equation*}
 \psi_{\mathbf k}(\mathbf r) = \begin{pmatrix}
-  e^{i(\mathbf k - \mathbf q/2)\cdot\mathbf r}\,u^{\uparrow}(\mathbf r) \\[3pt]
-  e^{i(\mathbf k + \mathbf q/2)\cdot\mathbf r}\,u^{\downarrow}(\mathbf r)
+  e^{i(\mathbf k + \mathbf q/2)\cdot\mathbf r}\,u^{\uparrow}(\mathbf r) \\[3pt]
+  e^{i(\mathbf k - \mathbf q/2)\cdot\mathbf r}\,u^{\downarrow}(\mathbf r)
 \end{pmatrix}
 \end{equation*}
 so in the rotated frame the density is lattice periodic and the SCF, the
 functional and the mixer are untouched. On a norm-conserving dataset only two
-terms carry $\mathbf q$ --- $|\mathbf k \mp \mathbf q/2 + \mathbf G|^2$ and
+terms carry $\mathbf q$ --- $|\mathbf k \pm \mathbf q/2 + \mathbf G|^2$ and
 $v_{\mathrm{nl}}$ --- and $dE/d\mathbf q$ at frozen coefficients is
 \code{jax.grad} of them.
 
@@ -5573,8 +5576,10 @@ symmetrisation} --- \code{symme.f90}'s \code{symmatrix3}/\code{symtensor3}
 written at any rank.
 
 \begin{refuses}
-\textbf{Refuses.} A spiral with spin-orbit coupling, permanently --- it breaks
-the theorem, and Elk refuses it too; a spiral with symmetry, until the spin
+\textbf{Refuses.} A spiral with spin-orbit coupling switched on, permanently
+--- it breaks the theorem, and Elk refuses it too; at \code{soc\_scale = 0} a
+fully-relativistic dataset is admitted, as the zeroth order of the next
+subsection; a spiral with symmetry, until the spin
 space group is written, so a spiral needs \code{nosym}; $dE/d\mathbf q$ on a
 dataset whose augmentation charge is held as a \emph{radial} table rather than
 on the dense $\mathbf G$ set --- the branch a large cell falls onto when
@@ -5597,6 +5602,122 @@ place $dE/d\mathbf q$ costs more than the SCF it follows: 11.4~GB on the
 one-atom oxygen chain of \code{tests/data/qe/o-chain-spiral-us.in} at
 \code{ecutrho = 200} with four $k$-points, against a few hundred megabytes for
 the SCF.
+\end{refuses}
+
+\subsection{Spin-orbit coupling on a spiral, to first order}
+
+We will now see what spin-orbit coupling does to a spiral when it is small. A
+spiral with the coupling is not a spiral any more, since the coupling ties the
+spin to the lattice and translating by $\mathbf R$ while turning every spin by
+$\mathbf q\cdot\mathbf R$ stops being a symmetry, but the spiral without it is
+exact in the unit cell and the coupling can be added on top as a perturbation.
+Its first order is the Dzyaloshinskii--Moriya energy of the spiral, the energy
+that tells one sense of rotation from the other and that sets whether a polar
+magnet prefers a cycloid, and it is what STM on a chiral surface texture and
+the pitch of a helimagnet measure.
+
+The zeroth order is the spiral on a fully-relativistic dataset with the coupling
+switched off, \code{soc\_scale = 0}, which is the one form of the pair the
+reader admits: \code{soc\_scale} blends the coupling's part of
+\code{dvan\_so} linearly, so the first-order operator is the coupled nonlocal
+coefficients minus the reduced ones,
+$\delta D = D^{\mathrm{so}}(1) - D^{\mathrm{so}}(0) = \sum_a \delta D^a\sigma_a$,
+and at zero the Hamiltonian commutes with every spin rotation. What matters is
+that $\delta D$ is the same matrix in every cell while the spins turn, so in the
+frame of the spiral's axis $\hat{\mathbf n}$ only its $\sigma_n$ part keeps each
+spinor component on its own sphere; the transverse part moves the state at
+$\mathbf k$ to the ones at $\mathbf k \mp \mathbf q$ and has no expectation
+value. The first-order energy is therefore
+\begin{equation*}
+E_1(\mathbf q, \hat{\mathbf n}) = \hat{\mathbf n}\cdot\mathbf V(\mathbf q),\qquad
+V_a = \sum_{\mathbf k} w_{\mathbf k} \sum_n f_{n\mathbf k}\Bigl[
+  \langle u^{\uparrow}_{n\mathbf k}|\delta D^a|u^{\uparrow}_{n\mathbf k}\rangle_{\mathbf k + \mathbf q/2}
+ - \langle u^{\downarrow}_{n\mathbf k}|\delta D^a|u^{\downarrow}_{n\mathbf k}\rangle_{\mathbf k - \mathbf q/2}\Bigr],
+\end{equation*}
+each component projected on the projectors of its own sphere, meaning that the
+energy is linear in the axis and one vector gives it for every orientation of
+the spiral plane. Here $\hat{\mathbf n}$ is the spin direction of the up
+component, about which the moment turns by $-\mathbf q\cdot\mathbf r$. Two
+properties are exact: the spiral at $(\mathbf q, \hat{\mathbf n})$ is the
+texture at $(-\mathbf q, -\hat{\mathbf n})$, so $\mathbf V(-\mathbf q) =
+-\mathbf V(\mathbf q)$ and the whole first-order energy is the chirality; and
+inversion through a site sends $(\mathbf q, \hat{\mathbf n})$ to
+$(-\mathbf q, \hat{\mathbf n})$, so $\mathbf V = 0$ on a centrosymmetric
+crystal. At small $\mathbf q$, $\mathbf V = \mathsf D\,\mathbf q$ with
+$\mathsf D$ the micromagnetic tensor of $E = D_{ij}\,n_i q_j$. By Hellmann and
+Feynman $E_1$ is $\mathrm dF/\mathrm d(\text{\code{soc\_scale}})$ at zero, the
+free energy at frozen occupations.
+
+\begin{pycode}
+calc = Calculator.from_file("nii-chain-spiral.in", "../pseudo")  # spiral_q, lspinorb, soc_scale = 0
+first = calc.get_spiral_spin_orbit_energy()
+print(first.vector_mev)            # V(q), meV per cell, cartesian
+print(first.energy_mev((0, 1, 0))) # E1 with the spiral's axis along y
+print(first.easy_axis)             # the axis the coupling prefers, -V/|V|
+\end{pycode}
+
+\textbf{What it agrees with.} There is no reference code for the quantity, so the
+checks are a supercell and a limit, on a nickel chain with an iodine beside each
+bond (\code{tests/data/qe/nii-chain-spiral.in}; 40~Ry and eight $k$-points for
+the numbers here). The iodine breaks inversion and leaves one mirror, the plane
+of the atoms, so $\mathbf V$ can only lie along $y$, the normal to that plane: at
+$q = \tfrac14$ it is $2.78\times10^{-2}$~meV per cell along $y$, with the other two
+components at $2\times10^{-5}$. The four-cell supercell diagonalised at the
+unfolded spiral density, where both spinor components share one sphere and the
+whole of $\delta D$ is contracted with nothing masked, gives the same first-order
+energy to $1.8\times10^{-11}$~Ry per cell, the spread between two spiral runs at
+34 and 48 bands. With the coupling scaled, $H_0 + \lambda\,\delta D$ on that
+supercell, the odd part of the free energy over $\lambda$ is 0.0727, 0.1143 and
+0.2941~meV at $\lambda = 0.1$, 0.2 and 1, and a quadratic through them reaches
+0.0267 at zero, against 0.0278. The remainder is linear in $\lambda$, not
+quadratic: the transverse part enters second order as a quadratic form whose
+antisymmetric piece changes sign with $\mathbf q$, so the chirality energy has a
+second-order term, and on this chain it is seventeen times the first-order one,
+which is itself a remainder of $k$-point contributions two hundred times larger
+than their sum. So $E_1$ is the right limit and not, on this cell, the energy at
+the physical coupling; the even part, $-206\lambda^2$~meV, is second order
+exactly as it should be. The test cell is the same chain at 34~Ry, where
+$V_y = -1.2179$~meV, the run at $-\mathbf q$ gives $+1.2179$ to $1.3\times10^{-5}$
+of it, the supercell agrees to $9\times10^{-12}$~Ry, the scaled coupling reaches
+$V_y$ to $2.3\times10^{-5}$, and the second-order odd part is a tenth of the
+first-order one rather than seventeen times it. \textbf{None of these values is
+the chain's}: the nickel dataset wants about 90~Ry, the first order is
+$-2.35$, $-1.22$ and $+0.028$~meV at 30, 34 and 40~Ry on eight $k$-points, and a
+remainder of cancelling $k$-point contributions converges only with the cutoff
+and the mesh together.
+
+\textbf{The supercell's grid has to be the spiral's repeated.} The unfolding is
+exact on any grid that holds the density's components, but the
+exchange-correlation potential built from it is evaluated point by point, and
+\code{pw.x}'s grid rule gives the supercell four times the unit cell's points
+only for some cutoffs: at 30~Ry the chain's grid is 15 and the supercell's 64,
+and the first order moved 1.3 per cent. \code{unfold\_spiral\_density} warns.
+
+\textbf{The supercell's starting moments have to follow the texture.} With every
+starting moment parallel, a gradient-corrected noncollinear run takes the sign
+of $\mathbf m$ along that axis to resolve the density (\code{pw.x}'s
+\code{lsign}), and on a texture that turns in the laboratory frame the sign
+flips where the moment crosses perpendicular to it, so the resolved density
+jumps there. That is a different functional from the spiral's, which takes
+$|\mathbf m|$: started all along $x$ the supercell's PBE potential was 0.83~Ry
+from the spiral's at the same density and its first-order energy 33 times
+larger. \code{fixed\_density\_states} warns when it is handed such a density.
+
+\begin{refuses}
+\textbf{Refuses.} The spiral with the coupling switched on, at
+\code{soc\_scale = 1}, in the reader and again inside the calculation, since
+\code{with\_soc\_scale} is a field replacement that never meets the reader. A
+$\mathbf q$ in the reciprocal lattice, where the two spheres coincide and the
+transverse part has an expectation value of its own: that is a uniform magnet,
+and its first-order term is \code{frozen\_expectation}. A scalar-relativistic
+dataset, whose difference from a relativistic file is not a perturbation of
+anything. An \textbf{ultrasoft or PAW} dataset, where \code{soc\_scale} also
+changes \code{qq\_so} and \code{newd\_so}'s sandwich of the augmentation
+integrals, and the exchange field inside that sandwich turns with the spiral
+while \code{fcoef} does not, so which of its blocks keeps a component on its
+own sphere is a derivation not yet written. A spiral converged under a
+magnetic field or a constrained moment is refused by the fixed-density step it
+passes through, which needs the converged field handed over.
 \end{refuses}
 
 % =====================================================================

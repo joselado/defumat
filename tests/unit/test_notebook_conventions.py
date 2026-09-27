@@ -79,6 +79,7 @@ REWRITTEN = {
     "45_imaging_a_modulation",
     "46_a_spin_wave_that_stays",
     "47_turning_a_magnet",
+    "48_spiral_chirality",
 }
 
 #: Notebooks that still say ``jvp`` in a plot label or a code cell. Prose debt

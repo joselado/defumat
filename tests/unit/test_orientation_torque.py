@@ -229,6 +229,55 @@ def test_an_unfolded_spiral_turns_by_minus_q_dot_r_from_cell_to_cell():
     np.testing.assert_allclose(other[1:3, 0, 0, 5], [0.0, -0.7], atol=1e-14)
 
 
+@pytest.mark.parametrize("q3", [0.25, -0.25])
+def test_the_nyquist_plane_of_an_even_grid_unfolds_to_the_edge_it_belongs_to(q3):
+    """The transverse pair's ``+n/2`` component, on a supercell of exactly ``M n``.
+
+    ``m'_+`` lives on a sphere displaced by ``q`` from the charge's, so on an
+    even unit grid its Nyquist component can be physical, and it is the index
+    that ``fftfreq`` labels ``-n/2``. With the label taken literally, one sign
+    of ``q`` sends it one index past the supercell grid's edge and the
+    unfolding refused a perfectly representable density: the nickel-iodine
+    chain of P123, whose transverse Nyquist plane is 1e-4 of its largest
+    component. The field here is that one plane alone, and on the supercell
+    it must be the continuous field evaluated at the supercell's points,
+    ``exp(i 2 pi (l - q3) z / c)`` with ``l = +n/2`` for one sign and ``-n/2``
+    for the other.
+    """
+    from defumat.workflows.spiral import unfold_spiral_density
+
+    n, cells = 6, 4
+    z = np.arange(n) / n
+    plane = np.exp(1j * np.pi * n * z)  # (-1)^j: +n/2 and -n/2 at once
+    rotating = np.zeros((4, 2, 2, n))
+    rotating[0] = 1.0
+    rotating[1] = plane.real
+    rotating[2] = plane.imag
+    lab = unfold_spiral_density(rotating, (0.0, 0.0, q3), (1, 1, cells), (2, 2, cells * n))
+    order = n / 2 if q3 > 0 else -n / 2
+    zz = np.arange(cells * n) / n  # in units of the unit cell's c
+    expected = np.exp(2j * np.pi * (order - q3) * zz)
+    np.testing.assert_allclose(lab[1, 0, 0] + 1j * lab[2, 0, 0], expected, atol=1e-12)
+    np.testing.assert_allclose(lab[0], 1.0, atol=1e-14)
+
+
+def test_a_supercell_grid_that_is_not_the_repeat_is_warned():
+    """Exact as an unfolding, and a different potential once built from it.
+
+    The case that moved P123's supercell identity by 1.3 per cent: a unit grid
+    of 15 along the chain and a supercell grid of 64 rather than 60. The
+    density comes out right and is checked to; the warning is about what the
+    exchange-correlation potential does with other points.
+    """
+    from defumat.workflows.spiral import unfold_spiral_density
+
+    rotating = np.zeros((4, 4, 4, 5))
+    rotating[0] = 1.0
+    with pytest.warns(UserWarning, match="not the unit cell's"):
+        lab = unfold_spiral_density(rotating, (0.0, 0.0, -0.25), (1, 1, 4), (4, 4, 24))
+    np.testing.assert_allclose(lab[0], 1.0, atol=1e-14)
+
+
 def test_an_incommensurate_or_aliased_unfolding_is_refused():
     from defumat.workflows.spiral import unfold_spiral_density
 

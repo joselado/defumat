@@ -1309,7 +1309,7 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
     # ``vc-relax`` is not implemented (P11) and an NSCF run does not come
     # through ``run_scf`` -- so what is read is the input's own value.
     tstress = _logical(pwin.get("control", "tstress", False))
-    spiral_q = _spiral_q(pwin, nspin, lspinorb, nosym)
+    spiral_q = _spiral_q(pwin, nspin, lspinorb, nosym, soc_scale)
     starting_moments = _starting_moments(pwin, structure.nat)
     moments = local_moments(
         structure, nspin, starting_magnetization, angle1, angle2,
@@ -2226,11 +2226,19 @@ def _warn_if_the_spiral_grid_cannot_shift(spiral_q, kpoints) -> None:
     )
 
 
-def _spiral_q(pwin: PwInput, nspin: int, lspinorb: bool, nosym: bool) -> tuple | None:
+def _spiral_q(pwin: PwInput, nspin: int, lspinorb: bool, nosym: bool,
+              soc_scale: float = 1.0) -> tuple | None:
     """``spiral_q``, and the three things a spiral cannot be combined with.
 
     A defumat extension -- ``pw.x`` has no spin spiral at all -- with Elk's
     name for the quantity (``vqlss``) and Elk's units (lattice coordinates).
+
+    ``lspinorb`` is admitted at ``soc_scale = 0`` alone: that is a
+    fully-relativistic dataset with its spin-orbit part switched off, whose
+    Hamiltonian is spin-rotation invariant, so the generalized Bloch theorem
+    holds exactly and the spiral is the zeroth order that
+    :func:`~defumat.workflows.spiral_soc.spiral_spin_orbit_energy` expands
+    around (``PLAN.md`` P123).
     """
     if "spiral_q" not in pwin.namelists.get("system", {}):
         return None
@@ -2243,14 +2251,19 @@ def _spiral_q(pwin: PwInput, nspin: int, lspinorb: bool, nosym: bool) -> tuple |
             "spiral_q needs noncolin = .true.: a spin spiral is a two-component "
             "spinor with a different G-sphere per component"
         )
-    if lspinorb:
+    if lspinorb and soc_scale != 0.0:
         # Permanently: spin-orbit coupling ties spin to the lattice, so the
         # combined translation-plus-spin-rotation the generalized Bloch theorem
         # rests on is not a symmetry. Elk refuses the same combination
-        # (``init0.f90`` sets ``spinorb = .false.`` when ``spinsprl``).
+        # (``init0.f90`` sets ``spinorb = .false.`` when ``spinsprl``). At
+        # ``soc_scale = 0`` the coupling is off and the theorem holds again,
+        # which is the one form of the pair that is a calculation.
         raise ValueError(
             "spiral_q with lspinorb = .true. is not a calculation: spin-orbit "
-            "coupling breaks the generalized Bloch theorem a spiral rests on"
+            "coupling breaks the generalized Bloch theorem a spiral rests on. "
+            "soc_scale = 0 keeps the fully-relativistic dataset with the "
+            "coupling switched off, which is a spiral, and "
+            "spiral_spin_orbit_energy adds the coupling to first order"
         )
     if not nosym:
         # The spin space group is not written; see defumat.system.spiral.

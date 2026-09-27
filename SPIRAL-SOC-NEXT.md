@@ -1,12 +1,15 @@
 # Spin spirals with spin-orbit coupling, as a perturbation on the generalized Bloch theorem
 
-A plan recorded on 2026-09-26 for a later session, not started. We will now see what the
-idea is, why spin-orbit coupling breaks the construction it starts from and what that does
-to a perturbation expansion, what in this code it builds on, how it differs from the
-ultracell (and where the two should agree), and the order in which to build and measure it.
-Nothing below has been derived in detail or run; every physics statement is to be checked
-before code is written, and the ones that are an expectation rather than a result are said
-to be so.
+A plan recorded on 2026-09-26. **Steps 1 and 2 of the build order are done** (2026-09-27,
+`PLAN.md` P123): the spiral runs on a fully-relativistic dataset at `soc_scale = 0`, and
+`workflows/spiral_soc.py:spiral_spin_orbit_energy` gives the coupling's first-order energy.
+The derivation the build order asked for first is the section "What the derivation found",
+below the plan, and it changes step 3: the charge harmonic the plan names as step 3's number
+is second order, not first. We will now see what the idea is, why spin-orbit coupling breaks
+the construction it starts from and what that does to a perturbation expansion, what in this
+code it builds on, how it differs from the ultracell (and where the two should agree), and
+the order in which to build and measure it. The sections up to the build order are the plan
+as it was written, and the statements in them that the derivation corrected are marked.
 
 ## The idea
 
@@ -59,7 +62,9 @@ quantization axis and split it into its `sigma_n` part and its `sigma_+-` parts.
 
 So the perturbed state is a ladder over `k + m q`, with `|m|` growing by one per order in
 the coupling. The density picks up harmonics at multiples of `q`, and which harmonic
-appears at which order is the first thing to derive. The test that decides it exists
+appears at which order is the first thing to derive. (Derived below: for a flat spiral the
+charge has even harmonics only, at every order, so the charge at `2q` is second order and
+the charge at `q` is zero.) The test that decides it exists
 already: NiBr2's charge at `2q` against `q` is 15 in Elk's converged supercell, and the
 three-cell ultracell on the Kramers-closed basis (P121) puts both near 1e-8 at
 `conv_thr = 1e-8`. The expectation, to be checked, is that the perturbation is controlled
@@ -149,6 +154,17 @@ basis is the reference the new route should reproduce.
 
 ## What to decide at the start of that session
 
+Decided on 2026-09-27: perturbation theory first (the user's request); the nickel chain
+with an iodine beside each bond as the validation cell (the user's pick, the only magnetic
+fully-relativistic norm-conserving dataset committed being `Ni.rel-pbe-nc-dojo`); and the
+one-file route at `soc_scale = 0`, which was not a choice once written down, since the
+first-order operator is the difference of one dataset's two Hamiltonians and the
+scalar-relativistic partner file's `D` is not a perturbation of anything. What is next,
+sized: the first-order wavefunctions over `k -+ q` and the tilt of the plane they carry
+(a sum over the ladder, P37's and P54's pattern, then a Sternheimer solve); a cutoff and
+k-mesh sweep of the chain's first order, which is a Triton array of unit-cell runs; and an
+ultrasoft dataset, which needs the `newd_so` blocks derived first.
+
 - Perturbation theory (steps 2 to 4) first, or the spiral ultracell (step 5) first. The
   first gives the Dzyaloshinskii-Moriya energy soonest and is the published route; the
   second is closer to machinery that exists and is not limited to weak coupling.
@@ -159,3 +175,96 @@ basis is the reference the new route should reproduce.
   what step 1 would converge at on a fully-relativistic dataset, or whether step 1 uses the
   scalar-relativistic partner file as the force theorem does (P58's two-file route, which
   cannot carry PAW).
+
+## What the derivation found (2026-09-27)
+
+Let us write the operator the plan calls the coupling as it enters this code. At a frozen
+potential, on a norm-conserving fully-relativistic dataset, `soc_scale` changes `dvan_so`
+alone, linearly, so the first-order operator is `dD = dvan_so(1) - dvan_so(0)`, and its spin
+trace is zero exactly, because `soc_scale` scales the spin-traceless half and nothing else.
+Write it as `dD = sum_a dD^a sigma_a`, `a = x, y, z`, each `dD^a` a Hermitian matrix over the
+projectors, and take the spiral's axis, the spin direction of its up component, along `n`.
+What matters is that `dD` is the same matrix in every cell while the spins turn from one
+cell to the next, so in the spiral's frame its `sigma_n` part keeps each spinor component on
+its own sphere and its `sigma_+-` parts move a component from the state at `k` to the state
+at `k -+ q`, exactly as the plan's section on the break said.
+
+**The first-order energy is linear in the axis.** Only the `sigma_n` part has an expectation
+value, the transverse part summing to `sum_R exp(-i q . R) = 0` over the cells, so
+
+    E1(q, n) = sum_k w sum_n f [ <u_up| n . dD |u_up>_(k+q/2) - <u_dn| n . dD |u_dn>_(k-q/2) ]
+             = n . V(q),
+
+with each component projected on its own sphere's projectors. At zeroth order turning the
+spiral rigidly in spin space costs nothing, so one vector `V(q)` gives the first-order energy
+of every orientation of the spiral plane, and the spiral code's fixed rotation axis (`z`) is
+no restriction. This also settles the plan's worry about "the `sigma_n` projection of
+`dvan_so` for an arbitrary axis": it is a dot product with three Pauli components computed
+once.
+
+**It is odd in `q`, all of it.** The spiral at `(q, n)` is the same texture as the one at
+`(-q, -n)`, so `V(-q) = -V(q)`: there is no first-order part even in `q`, meaning that the
+whole first-order energy is the chirality, the Dzyaloshinskii-Moriya energy, and the
+anisotropy of a spiral starts at second order as that of a ferromagnet does. Inversion
+through a site sends `(q, n)` to `(-q, n)`, so a centrosymmetric crystal has `V = 0`
+identically, which is the null. At small `q`, `V(q) = D q` and `D` is the micromagnetic
+tensor of `E = D_ij n_i q_j`.
+
+**The chirality is not first order alone, and on one of the validation cells the first
+order is the smaller part.** It is tempting to argue that the odd-in-`q` energy is odd in the
+`sigma_n` part of the coupling, the transverse part entering only as its square, so that
+the next odd term is third order. That is wrong, and it was measured wrong before it was
+seen to be. The transverse part enters second order as a quadratic form in its two
+components, and the form has an antisymmetric piece, the `L_-` transition to `k - q`
+against the `L_+` one to `k + q`, which a half-turn of the spins perpendicular to `n`
+reverses and nothing else forbids. So the odd part of the energy is `E1 lambda + E2odd
+lambda^2 + ...`: on the tight-binding chain `(O / lambda - E1) / lambda` is -0.0597, -0.0606
+and -0.0615 at `lambda` = 0.01, 0.02 and 0.04, and on the nickel-iodine chain at 40 Ry and
+`1 1 8` the supercell's odd part over `lambda` is 0.0727, 0.1143 and 0.2941 meV at 0.1, 0.2
+and 1, against a first order of 0.0278. The quadratic through those three points reaches
+0.0267 at zero, and its slope is 0.48 meV, seventeen times the first order. The same chain at
+34 Ry (the test cell) gives a first order of -1.2179 meV, a limit of -1.21792 through
+`lambda` = 0.05, 0.1 and 0.2, and a slope of +0.148 meV, a tenth of it and of the other sign.
+The first order is always the right limit; what the numbers say is that how far it is from
+the chirality energy at the physical coupling depends on how much the k-points cancel, which
+is the whole of the first order at 40 Ry and a small part of it at 34, and that step 2's
+"where first order stops holding" has to be measured cell by cell and converged, not
+assumed. Neither cutoff is converged for nickel, and the first order is -2.35 meV at 30 Ry,
+-1.22 at 34 and +0.028 at 40 on eight k-points.
+
+**On a site that is itself an inversion centre, the null holds k-point by k-point.**
+Inversion, time reversal and a half-turn of the spins about an axis perpendicular to `n`
+together map the spiral at `k` onto itself, and they reverse `sigma_n` while leaving the
+orbital part of `dD` alone, so every `k` contributes zero, not only the sum. Measured on
+bulk fcc nickel at `q = b3/4`: the largest single k-point is 7e-8 meV. Such a cell cannot
+check anything but the null, which is why the validation cell had to be polar.
+
+**Which harmonic appears at which order.** The step the plan asked for first has a clean
+answer for a flat spiral, the one whose rotating-frame `m_n` vanishes. Its coupling-free
+state is invariant under `S`, time reversal followed by a half-turn of the spins about `n`
+(time reversal reverses the moment, and the half-turn rotates the reversed in-plane moment
+back, which is only a phase shift of the spiral). Under `S` the `sigma_n` part of `dD` is
+even and the transverse part is odd. Give the two parts separate strengths, `lambda` and
+`mu`; then `S` maps the problem at `mu` onto the one at `-mu`, every power of `mu` moves a
+harmonic by one multiple of `q`, and every power of `lambda` moves nothing. So:
+
+- the **charge** is even under `S`, hence even in `mu`, hence it has **even harmonics only,
+  at every order**: the charge at `2q` appears at second order in the transverse coupling
+  and the charge at `q` is zero for a flat spiral at every order, while `lambda` alone gives
+  a lattice-periodic change of the charge at first order;
+- the moment along the axis, `m_n`, is odd under `S`, so it has odd harmonics only, and its
+  `q` harmonic appears at **first order**: the coupling tilts the spiral plane, which is the
+  first-order torque on `n` that `E1 = n . V` implies;
+- the in-plane moment is even under `S`: its corrections at `q` come at first order in
+  `lambda`, and the first new harmonics, at `-q` and `3q` (the ellipticity of the spiral),
+  at second order in `mu`.
+
+This contradicts two things written above. Step 3's number, the charge at `2q` against `q`,
+is not a first-order quantity: the first-order density has no charge harmonic at either, and
+the `2q` one needs the second-order wavefunctions or the spiral ultracell. And Elk's 15 to 1
+on NiBr2 cannot be the perturbation's `2q` against its `q`, since the `q` harmonic of a flat
+spiral is forbidden; a nonzero charge at `q` has to come from a cone (a uniform `m_n` breaks
+`S`) or from the supercell converging to something that is not a flat spiral. What step 3
+can measure at first order is the tilt, the `q` harmonic of `m_n`, against the torque that
+`V` implies.
+
