@@ -23066,3 +23066,13 @@ unpinned.
 The slow file is 4 tests in 27:42 at a 2.76 GB peak through `tools/run_regression.sh`
 (most of it the six scaled-coupling legs), and the gate was 3140 passed, 64 skipped, 0
 failed in 15:27 on the commit that added it.
+
+**`soc_scale` between 0 and 1 on norm-conserving datasets, the user's decision of
+2026-09-27.** The refusal's reason was the ultrasoft overlap, which a norm-conserving
+dataset does not have: there the scale reaches `dvan_so` alone, and linearly, so a
+calculation at `s` is `H(0) + s dD` (`test_an_intermediate_soc_scale_on_a_norm_conserving_dataset_is_the_blend`,
+to 1e-14). The reader and `System.with_soc_scale` now take `[0, 1]`, `Calculation` refuses an
+interior value when any dataset is ultrasoft or PAW (a scalar-relativistic ultrasoft species
+included, so the rule has one statement), and `SpinOrbitCoupling` keeps its own refusal for
+an augmented relativistic species. The scaled-coupling test uses the knob rather than
+setting `dvan_so` by hand.

@@ -285,9 +285,21 @@ class SpinOrbitCoupling:
         self.nh = pseudo.nh
         self.has_so = pseudo.has_so
         self.soc_scale = float(soc_scale)
-        if self.soc_scale not in (0.0, 1.0):
+        if not 0.0 <= self.soc_scale <= 1.0:
             raise ValueError(
-                f"soc_scale = {self.soc_scale}: only 0 and 1 are implemented, "
+                f"soc_scale = {self.soc_scale}: it blends the coupling-free end "
+                "(0) with the coupled dataset (1), and outside [0, 1] it is not "
+                "a blend of anything"
+            )
+        # **Between 0 and 1 on a norm-conserving species it is exact**: the
+        # only object the scale reaches there is ``dvan_so``, and the blend
+        # below is linear in it, so ``soc_scale = s`` is ``H(0) + s dD`` with
+        # ``dD`` the first-order operator (P123 uses it to take the weak-coupling
+        # limit). An augmented species is where the reason below applies.
+        if self.soc_scale not in (0.0, 1.0) and pseudo.is_ultrasoft and pseudo.has_so:
+            raise ValueError(
+                f"soc_scale = {self.soc_scale} on an augmented dataset: only 0 "
+                "and 1 are implemented there, "
                 "and the reason is the overlap rather than the potential. "
                 "qq_so's coupling-free end is its spin trace, which is "
                 "spin-independent -- so at soc_scale = 0 the anisotropy "

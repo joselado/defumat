@@ -24,11 +24,10 @@ inversion centre:
    one to ``k + q``) changes sign with ``q``, so there is a second-order odd
    part, and on this cell it is larger than the first-order one. So the check
    extrapolates ``O / lambda`` through three couplings to zero rather than
-   reading it at one. The coupling is scaled by setting the calculation's
-   ``dvan_so`` rather than through ``soc_scale``, which refuses values between
-   0 and 1 for a reason (the ultrasoft overlap) that a norm-conserving dataset
-   does not have; the norm-conserving spinor Hamiltonian's coefficients *are*
-   ``dvan_so``. At the full coupling the same odd part is ten times ``V_y`` on
+   reading it at one. The coupling is scaled through ``soc_scale``, which a
+   norm-conserving dataset admits between 0 and 1 because there it reaches
+   ``dvan_so`` alone and linearly (``tests/unit/test_spiral_soc.py`` holds the
+   blend against ``H(0) + s dD`` entry by entry). At the full coupling the same odd part is ten times ``V_y`` on
    this cell, iodine's coupling being far from small, which is why the check
    is the limit and not the value at 1.
 
@@ -102,12 +101,11 @@ TO_PLUS_Y, TO_MINUS_Y = _about_x(-np.pi / 2), _about_x(np.pi / 2)
 def _supercell_leg(pseudo_dir, rotation, coupling):
     """The supercell at the unfolded, turned density: free energy, and ``E1`` at 0.
 
-    ``coupling`` is ``lambda`` in ``H0 + lambda dD``; see the module docstring
-    for why it is set on ``dvan_so`` rather than through ``soc_scale``.
+    ``coupling`` is ``lambda`` in ``H0 + lambda dD``, which is ``soc_scale``.
     """
     spiral, density, _ = _spiral(0.25, pseudo_dir)
     supercell = Calculator.from_file(SUPERCELL, pseudo_dir, announce=False)
-    system = supercell.system.with_soc_scale(0.0)
+    system = supercell.system.with_soc_scale(coupling)
     calculation = Calculation(system, supercell.pseudos)
     unit = Calculation(spiral.system, spiral.pseudos).basis.dense.grid
     # The identity needs the potential evaluated on the same points, which is
@@ -116,7 +114,6 @@ def _supercell_leg(pseudo_dir, rotation, coupling):
     lab = unfold_spiral_density(density, spiral.system.spiral_q, (1, 1, 4),
                                 calculation.basis.dense.grid)
     delta, _ = _first_order_operator(calculation, None)
-    calculation.dvan_so = calculation.dvan_so + coupling * delta
     calculation, _, eigenvalues, states = fixed_density_states(
         system, supercell.pseudos, rotate_texture(lab, rotation),
         conv_thr=1.0e-10, calculation=calculation,

@@ -388,11 +388,21 @@ def test_soc_scale_zero_gives_exactly_no_anisotropy():
 
 
 @pytest.mark.slow
-def test_an_intermediate_soc_scale_is_refused():
+def test_an_intermediate_soc_scale_is_refused_on_an_augmented_dataset():
+    """Between 0 and 1 the scale needs every dataset norm-conserving (P123).
+
+    This cell's cobalt is ultrasoft, so 0.5 is refused where the calculation
+    meets the datasets; ``System`` cannot know them and admits it. Outside
+    ``[0, 1]`` it is not a blend of anything and is refused by ``System``.
+    """
+    from defumat.scf.driver import Calculation
+
     scalar, _ = _smoke_pair()
     soc = Calculator.from_text(_SMOKE_SOC, pseudo_dir=GENERATED.parent / "pseudo")
-    with pytest.raises(ValueError, match="only 0 and 1"):
-        soc.system.with_soc_scale(0.5)
+    with pytest.raises(ValueError, match="ultrasoft or PAW"):
+        Calculation(soc.system.with_soc_scale(0.5), soc.pseudos)
+    with pytest.raises(ValueError, match="not a blend"):
+        soc.system.with_soc_scale(1.5)
 
 
 def test_the_first_order_operator_is_the_coupled_hamiltonian_minus_the_reduced_one():

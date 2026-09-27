@@ -58,13 +58,17 @@ def test_zero_scale_makes_dvan_spin_diagonal_and_spin_independent():
     assert np.abs(full[:, :, 0, 1]).max() > 1.0
 
 
-def test_the_knob_has_two_ends_and_nothing_in_between():
+def test_the_knob_has_two_ends_and_nothing_in_between_on_an_augmented_dataset():
+    """This cobalt is ultrasoft, so 0.5 is refused; on a norm-conserving dataset
+    it is admitted (P123, ``tests/unit/test_spiral_soc.py``)."""
     pseudo = _pseudo(RELATIVISTIC)
     zero = SpinOrbitCoupling(pseudo, 0.0)
     one = SpinOrbitCoupling(pseudo, 1.0)
     np.testing.assert_allclose(zero.dvan_so, one.dvan_scalar, atol=1e-15)
     with pytest.raises(ValueError, match="only 0 and 1"):
         SpinOrbitCoupling(pseudo, 0.5)
+    with pytest.raises(ValueError, match="not a blend"):
+        SpinOrbitCoupling(pseudo, 1.5)
     # ``soc_scale = 1`` must be bit-for-bit the unscaled operator: it is the
     # branch every ordinary run takes, and a rounding-level change there would
     # move validated numbers.
@@ -136,9 +140,13 @@ def test_the_system_carries_it_without_moving_the_k_points():
     scaled = system.with_soc_scale(0.0)
     assert scaled.soc_scale == 0.0
     assert scaled.kpoints is system.kpoints
-    for bad in (-1.0, 0.5, 2.0):
-        with pytest.raises(ValueError, match="only 0 and 1"):
+    for bad in (-1.0, 2.0):
+        with pytest.raises(ValueError, match="not a blend"):
             system.with_soc_scale(bad)
+    # Between the ends ``System`` cannot know the datasets and admits it; the
+    # calculation refuses it on this ultrasoft cobalt
+    # (``test_an_intermediate_soc_scale_is_refused_on_an_augmented_dataset``).
+    assert system.with_soc_scale(0.5).soc_scale == 0.5
 
 
 # The reduction of the **density** and of ``newd_so`` (`PLAN.md` P115). Before

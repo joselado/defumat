@@ -1901,6 +1901,25 @@ class Calculation:
                 shift=-self.spiral_qcart,
             )
 
+        # ``soc_scale`` strictly between 0 and 1 is exact only where it reaches
+        # ``dvan_so`` alone, which is a calculation whose every dataset is
+        # norm-conserving: an augmented one blends ``qq_so`` too, and a blend of
+        # overlaps is not the overlap of any projectors
+        # (:class:`~defumat.pseudo.spinorbit.SpinOrbitCoupling`). Refused for
+        # the whole calculation rather than per species, a scalar-relativistic
+        # ultrasoft species included, so the rule has one statement.
+        soc_scale = float(system.soc_scale)
+        if 0.0 < soc_scale < 1.0 and any(p.is_ultrasoft for p in self.pseudos):
+            raise ValueError(
+                f"soc_scale = {soc_scale} with an ultrasoft or PAW dataset: "
+                "between 0 and 1 the scale is admitted only when every dataset "
+                "is norm-conserving, where it reaches dvan_so alone and "
+                "linearly. On an augmented dataset it blends qq_so as well, and "
+                "a blend of overlaps is not the overlap of any set of projectors "
+                "(defumat.pseudo.spinorbit.SpinOrbitCoupling says what that "
+                "costs, measured)"
+            )
+
         # PAW adds the one-centre corrections on top of everything ultrasoft
         # does. They depend on ``becsum`` and on nothing else that changes, so
         # like ``newd`` they are rebuilt once per SCF iteration.

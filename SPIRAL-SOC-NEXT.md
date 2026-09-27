@@ -159,7 +159,9 @@ with an iodine beside each bond as the validation cell (the user's pick, the onl
 fully-relativistic norm-conserving dataset committed being `Ni.rel-pbe-nc-dojo`); and the
 one-file route at `soc_scale = 0`, which was not a choice once written down, since the
 first-order operator is the difference of one dataset's two Hamiltonians and the
-scalar-relativistic partner file's `D` is not a perturbation of anything. What is next,
+scalar-relativistic partner file's `D` is not a perturbation of anything. `soc_scale`
+between 0 and 1 is now admitted on norm-conserving datasets (the user's decision), so the
+weak-coupling limit is an input knob. What is next,
 sized: the first-order wavefunctions over `k -+ q` and the tilt of the plane they carry
 (a sum over the ladder, P37's and P54's pattern, then a Sternheimer solve); a cutoff and
 k-mesh sweep of the chain's first order, which is a Triton array of unit-cell runs; and an

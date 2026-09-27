@@ -155,6 +155,30 @@ def test_the_first_order_vector_is_the_diagonal_blocks_on_each_components_sphere
     assert abs(vector[2]) > 1e-6
 
 
+def test_an_intermediate_soc_scale_on_a_norm_conserving_dataset_is_the_blend(pseudo_dir):
+    """``soc_scale = s`` is ``H(0) + s dD`` exactly, entry by entry.
+
+    What admitting it rests on: on a norm-conserving dataset the scale reaches
+    ``dvan_so`` alone, and linearly, so a calculation at ``s`` is the
+    first-order operator's own Hamiltonian at coupling ``s``. The same scale on
+    an ultrasoft dataset is refused where the calculation meets the dataset.
+    """
+    system = dataclasses.replace(_system(), spiral_q=None)
+    pseudos = _pseudos(system, pseudo_dir)
+    free = np.asarray(Calculation(system, pseudos).dvan_so)
+    coupled = np.asarray(Calculation(system.with_soc_scale(1.0), pseudos).dvan_so)
+    blended = np.asarray(Calculation(system.with_soc_scale(0.3), pseudos).dvan_so)
+    np.testing.assert_allclose(blended, free + 0.3 * (coupled - free), rtol=0.0, atol=1e-14)
+    assert np.max(np.abs(blended[0, 1])) > 1e-3
+
+    augmented = _system(INPUT.replace("I.rel-pbe-nc-dojo.UPF", "I.rel-pbe-n-rrkjus_psl.1.0.0.UPF"))
+    augmented = dataclasses.replace(augmented, spiral_q=None).with_soc_scale(0.3)
+    with pytest.raises(ValueError, match="ultrasoft or PAW"):
+        Calculation(augmented, _pseudos(augmented, pseudo_dir))
+    with pytest.raises(ValueError, match="not a blend"):
+        system.with_soc_scale(-0.1)
+
+
 def test_the_transverse_blocks_are_what_the_mask_removes(pseudo_dir):
     """The cross terms are not small in this layout, which is why they are masked.
 

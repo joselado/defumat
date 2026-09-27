@@ -159,11 +159,13 @@ class System(eqx.Module):
     #: ``soc_scale``: switches the spin-orbit part of the nonlocal potential,
     #: the overlap and the augmentation charge off (``0``) or on (``1``) while
     #: keeping the same
-    #: fully-relativistic dataset -- Elk's ``socscf`` (manual 5.118) restricted
-    #: to its two ends. It is what lets the force theorem's coupling-off
+    #: fully-relativistic dataset -- Elk's ``socscf`` (manual 5.118) between its
+    #: two ends. It is what lets the force theorem's coupling-off
     #: control run on **one** file rather than on a matched scalar/relativistic
     #: pair, and what makes ``frozen_expectation`` well posed at all.
-    #: Intermediate values are refused, and
+    #: Values between 0 and 1 are admitted when every dataset is
+    #: norm-conserving, where the scale reaches ``dvan_so`` alone and linearly
+    #: (``H(0) + s dD``, P123), and refused on an augmented one, where
     #: :class:`~defumat.pseudo.spinorbit.SpinOrbitCoupling` says why.
     #: ``pw.x`` has no counterpart.
     soc_scale: float = eqx.field(static=True, default=1.0)
@@ -349,9 +351,12 @@ class System(eqx.Module):
         swamp it.
         """
         soc_scale = float(soc_scale)
-        if soc_scale not in (0.0, 1.0):
+        if not 0.0 <= soc_scale <= 1.0:
             raise ValueError(
-                f"soc_scale = {soc_scale}: only 0 and 1 are implemented "
+                f"soc_scale = {soc_scale}: it blends the coupling-free end (0) "
+                "with the coupled dataset (1), and outside [0, 1] it is not a "
+                "blend of anything. Between them it needs every dataset "
+                "norm-conserving, which the Calculation checks "
                 "(defumat.pseudo.spinorbit.SpinOrbitCoupling says why)"
             )
         return dataclasses.replace(self, soc_scale=soc_scale)
@@ -955,9 +960,11 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
     lspinorb = _logical(pwin.get("system", "lspinorb", False))
     lforcet = _logical(pwin.get("system", "lforcet", False))
     soc_scale = float(pwin.get("system", "soc_scale", 1.0))
-    if soc_scale not in (0.0, 1.0):
+    if not 0.0 <= soc_scale <= 1.0:
         raise ValueError(
-            f"soc_scale = {soc_scale}: only 0 and 1 are implemented "
+            f"soc_scale = {soc_scale}: it blends the coupling-free end (0) with "
+            "the coupled dataset (1), and outside [0, 1] it is not a blend of "
+            "anything. Between them it needs every dataset norm-conserving "
             "(defumat.pseudo.spinorbit.SpinOrbitCoupling says why)"
         )
     nspin = int(pwin.get("system", "nspin", 1))

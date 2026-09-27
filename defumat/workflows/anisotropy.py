@@ -507,7 +507,8 @@ def run_force_theorem(
     and QE's own example sets ``diago_thr_init = 1.d-14`` for the same reason.
 
     ``soc_scale`` is Elk's ``socscf`` (:meth:`~defumat.system.builder.System.
-    with_soc_scale`), restricted to **0 or 1**: it switches the spin-orbit part
+    with_soc_scale`), **0 or 1** on an augmented dataset and anything between
+    on a norm-conserving one: it switches the spin-orbit part
     of ``dvan_so`` and ``qq_so`` off or on while keeping the same dataset and,
     crucially, the same k-points. ``0`` gives an anisotropy of exactly zero,
     which is the same identity ``require_spin_orbit = False`` gives but on

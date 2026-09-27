@@ -4696,11 +4696,14 @@ sampled on two different wedges. A four-component source density that is
 genuinely noncollinear is refused by name, as it already was on the path that
 builds the states: the torque lays the moment down along one axis with its
 sign, and an antiferromagnet keeps its antiparallel regions only because of
-that sign. \code{soc\_scale} takes $0$ or $1$
-and nothing in between: the coupling-free end of the overlap is spin-independent,
-so the anisotropy vanishes identically there whatever else it is, but a blend of
-it with the true overlap partway is not the overlap of any set of projectors and
-$S$ stops being a usable metric.
+that sign. On an \textbf{ultrasoft or PAW} dataset \code{soc\_scale} takes
+$0$ or $1$ and nothing in between: the coupling-free end of the overlap is
+spin-independent, so the anisotropy vanishes identically there whatever else it
+is, but a blend of it with the true overlap partway is not the overlap of any
+set of projectors and $S$ stops being a usable metric. On a calculation whose
+every dataset is norm-conserving there is no overlap to blend, the scale reaches
+\code{dvan\_so} alone and linearly, and any value in $[0, 1]$ is admitted as
+$H_0 + s\,\delta D$ exactly; outside $[0, 1]$ it is refused on every dataset.
 \end{refuses}
 
 \subsection{The relaxed anisotropy: total energies instead of band sums}
@@ -5675,7 +5678,8 @@ unfolded spiral density, where both spinor components share one sphere and the
 whole of $\delta D$ is contracted with nothing masked, gives the same first-order
 energy to $1.8\times10^{-11}$~Ry per cell, the spread between two spiral runs at
 34 and 48 bands. With the coupling scaled, $H_0 + \lambda\,\delta D$ on that
-supercell, the odd part of the free energy over $\lambda$ is 0.0727, 0.1143 and
+supercell (\code{soc\_scale} $=\lambda$, admitted between 0 and 1 because every
+dataset here is norm-conserving), the odd part of the free energy over $\lambda$ is 0.0727, 0.1143 and
 0.2941~meV at $\lambda = 0.1$, 0.2 and 1, and a quadratic through them reaches
 0.0267 at zero, against 0.0278. The remainder is linear in $\lambda$, not
 quadratic: the transverse part enters second order as a quadratic form whose
