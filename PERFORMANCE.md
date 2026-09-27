@@ -7534,8 +7534,9 @@ supercell side is also what a `pw.x` user would have to run, since a supercell i
 place a spiral with the coupling can live there.
 
 **Machine and date:** this workstation, CPU only, 2026-09-27, one core (the affinity mask
-set before JAX is imported, `OMP_NUM_THREADS=1`), with the antivirus scanner using a third
-of a core on some other one. The nickel-iodine chain of `tests/data/qe/nii-chain-spiral.in`
+set before JAX is imported, `OMP_NUM_THREADS=1`), with the antivirus scanner
+(`wdavdaemon`) at 37 per cent of a core when the run started and 7 per cent by the time the
+supercell legs ran, on whichever core it was scheduled. The nickel-iodine chain of `tests/data/qe/nii-chain-spiral.in`
 and `nii-chain-4cell.in`, 34 Ry, `q = b3/4`: the spiral on `1 1 8` with 34 bands, the
 supercell on `1 1 2` with 144. Each first-order call timed on its second run, the first
 paying the compilation.
