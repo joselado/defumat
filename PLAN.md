@@ -23061,3 +23061,6 @@ per `lambda^2` at all three. So the second-order odd part is a tenth of the firs
 34 Ry and seventeen times it at 40, on the same chain; which one a crystal is, is a question
 its own converged numbers answer. The spiral SCF is 123 s (106 s at `-q`) on the
 workstation's cores, and notebook 48 runs it in 121 s.
+The slow file is 4 tests in 27:42 at a 2.76 GB peak through `tools/run_regression.sh`
+(most of it the six scaled-coupling legs), and the gate was 3140 passed, 64 skipped, 0
+failed in 15:27 on the commit that added it.

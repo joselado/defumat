@@ -102,7 +102,7 @@ import numpy as np
 from defumat.pseudo.upf import Pseudopotential
 from defumat.system.builder import System
 
-__all__ = ["SpiralSpinOrbit", "spiral_spin_orbit_energy", "spiral_expectation"]
+__all__ = ["SpiralSpinOrbit", "spiral_spin_orbit_energy"]
 
 RY_TO_MEV = 13605.693122994
 

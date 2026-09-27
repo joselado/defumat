@@ -5656,6 +5656,14 @@ print(first.energy_mev((0, 1, 0))) # E1 with the spiral's axis along y
 print(first.easy_axis)             # the axis the coupling prefers, -V/|V|
 \end{pycode}
 
+The result is a \code{SpiralSpinOrbit}: \code{vector} is $\mathbf V$ in Ry per
+cell, \code{energy(axis)} and \code{energy\_mev(axis)} are $\hat{\mathbf
+n}\cdot\mathbf V$, \code{easy\_axis} is $-\mathbf V/|\mathbf V|$, \code{by\_k}
+resolves $\mathbf V$ by $k$-point (the weights inside), \code{dropped} carries the
+transverse contraction the spiral's layout would have added if the coupling
+turned with the spins, and \code{trace} the operator's spin trace, zero to
+round-off.
+
 \textbf{What it agrees with.} There is no reference code for the quantity, so the
 checks are a supercell and a limit, on a nickel chain with an iodine beside each
 bond (\code{tests/data/qe/nii-chain-spiral.in}; 40~Ry and eight $k$-points for
