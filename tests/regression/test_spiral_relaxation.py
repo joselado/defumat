@@ -544,9 +544,11 @@ def test_chunking_the_k_axis_regroups_the_same_gradient(pseudo_dir):
 #: scales with the dense G set, because the radial Bessel transforms are rebuilt
 #: inside every gradient evaluation and their ``(ngm, kkbeta)`` intermediates are
 #: live at once in reverse mode. The oxygen chain the phase was measured on
-#: (``o-chain-spiral-us.in``, ``ecutrho = 200``, four k-points) peaks at
+#: (``o-chain-spiral-us.in``, ``ecutrho = 200``, four k-points) peaked at
 #: **11.4 GB**, which is this file's whole cgroup cap on its own; here it is
-#: 3.0 GB for ultrasoft and 3.2 GB for PAW. The spiral is seeded rather than
+#: 3.0 GB for ultrasoft and 3.2 GB for PAW. Re-measured on 2026-09-28, after
+#: P112 rematted the radial transforms: the chain's single pass is **2.85 GB**
+#: max RSS on the CPU and the chunked route 1.95 GB, against 1.2 GB for its SCF. The spiral is seeded rather than
 #: physical, which is all an identity between two evaluations of one functional
 #: needs -- ``PLAN.md`` P96 has the physical cell's numbers.
 AUGMENTED_SILICON = """

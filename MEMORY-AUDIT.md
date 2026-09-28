@@ -1,5 +1,19 @@
 # Memory audit of defumat
 
+> **Status, 2026-09-28 (branch `gpu-memory-modes`).** `memory_mode = 'memory'`, the
+> accelerator default, adds `wfc_store = 'stream'`, and three entries below move with it.
+> **The store** (the unnumbered row) is now off the device *for the solve, `becsum` and the
+> density too*: they walk it in k-chunks (`scf/streaming.py`), which is what `host` was
+> measured not to do. **D10** is half addressed: the chunked start builds one k-point's
+> atomic span at a time, so its whole-k term (15.31 GB at the NiBr2 slab's six k-points)
+> falls to one k-point's 2.55 GB -- but the `natomwfc x npol x N_smooth` box block P74's
+> dump names at 42.32 GB is *per k-point* and is untouched, because both presets keep the
+> band block whole; sizing the band dial per calculation is the next item
+> (`GPU-MEMORY-NEXT.md`). **A13** is closed on the streamed path: `becsum` there takes each
+> chunk's projectors from `Calculation.projectors_at`, built from the core, where the
+> whole-set call still materialises `vkb` on a `rebuild` set. None of the three has been
+> measured on the NiBr2 slab itself; the numbers here are the audit's own arithmetic.
+
 > **Status, 2026-09-13.** The top **nine** items are **done**, and B1, C4 and half of A12
 > with them: A1 (both augmentation scan bodies rematted, `bismuthene-soc-small`'s force tape
 > 2.32 GiB -> 0.99 GiB measured by `memory_analysis()`, force and stress unchanged to one

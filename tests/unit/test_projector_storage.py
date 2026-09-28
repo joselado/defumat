@@ -331,3 +331,52 @@ def test_a_single_k_point_run_saves_exactly_nothing():
         assert stored.total_bytes == rebuilt.total_bytes
     else:
         assert rebuilt.total_bytes < stored.total_bytes
+
+
+# --------------------------------------------------------------------------
+# the dial survives a moved calculation (GPU-MEMORY-NEXT.md, 2026-09-28)
+
+def _from(path, which, extra=""):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        if extra:
+            text = open(path).read() + extra
+            return Calculator.from_text(text, "tests/data/pseudo", projectors=which,
+                                        announce=False).calculation
+        return Calculator.from_file(path, pseudo_dir="tests/data/pseudo",
+                                    projectors=which, announce=False).calculation
+
+
+def test_a_new_k_set_keeps_the_dial():
+    """``at_kpoints`` used to rebuild the projectors stored whatever the dial said.
+
+    Every band path and every derived mesh goes through it, so ``rebuild`` --
+    ``memory_mode``'s choice on a card -- stopped at the SCF.
+    """
+    lazy = _calculation("rebuild")
+    moved = lazy.at_kpoints(lazy.system.kpoints)
+    assert moved.projectors.is_lazy
+    assert not _calculation("store").at_kpoints(lazy.system.kpoints).projectors.is_lazy
+
+
+def test_a_new_spiral_wavevector_keeps_the_dial():
+    """Every step of a spiral scan and of ``relax_spiral_q`` comes through here."""
+    calculation = _from("tests/data/qe/h-chain-spiral.in", "rebuild")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        moved = calculation.at_spiral_q([0.0, 0.0, 0.3])
+    assert moved.projectors.is_lazy
+
+
+def test_ultrasoft_hubbard_projectors_are_the_same_rebuilt():
+    """``S|phi>`` reads one k-point's projectors, built rather than sliced.
+
+    ``_overlap`` used to read ``projectors.vkb[ik]``, which on a lazy set builds
+    the whole-k array to slice one row -- once per k-point. It now reads
+    ``at_k(ik)``, the same expression for that row alone, so this is equality.
+    """
+    hubbard = "HUBBARD {atomic}\n U Si-3p 2.0\n"
+    lazy = _from("tests/data/qe/si2-us.in", "rebuild", hubbard)
+    stored = _from("tests/data/qe/si2-us.in", "store", hubbard)
+    assert lazy.is_ultrasoft and lazy.wfcU is not None
+    assert np.array_equal(np.asarray(lazy.wfcU), np.asarray(stored.wfcU))

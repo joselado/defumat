@@ -415,8 +415,12 @@ def _platform_default() -> int | None:
 #: in host memory and streamed through one chunk at a time
 #: (:func:`k_chunks`), so the device peak stops following the number of
 #: k-points. Measured on the eight-atom silicon cell at 20 Ry on a GTX 1060,
-#: 64 k-points: **2133 MB and 7.4 s** per SCF in ``speed``, **167 MB and
-#: 8.95 s** with the first three dials of ``memory`` alone.
+#: 64 k-points, one SCF per fresh process: **2080 MB and 7.7 s** in ``speed``,
+#: **45 MB and 12.3 s** in ``memory`` -- and 4055 MB against 56 MB at 125
+#: k-points, where ``memory`` grows by about 0.2 MB per k-point (the resident
+#: basis bookkeeping) and ``speed`` by 33. Before the store streamed, the first
+#: three dials of ``memory`` alone gave 167 MB and 8.95 s at 64 k-points: the
+#: store itself, fetched whole, was most of what was left.
 #:
 #: The band dial is ``all`` in both: it is a per-k-point working set, it does
 #: not grow with the mesh, and a band loop on a card costs 4.3x (39.5 s against

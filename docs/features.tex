@@ -6907,20 +6907,22 @@ GTX~1060 (6~GB), eight-atom silicon at 20~Ry, \code{nosym}, per SCF:
 \toprule
 $k$-points & \code{memory} peak & \code{speed} peak & \code{memory} time & \code{speed} time \\
 \midrule
-  1 &  35 MB &   37 MB &  0.34 s &  0.35 s \\
- 27 &  80 MB &  918 MB &  5.4 s  &  3.5 s  \\
- 64 &  59 MB & 2174 MB & 12.3 s  &  7.7 s  \\
-125 & 125 MB & 4234 MB & 24.6 s  & 18.6 s  \\
-216 & 135 MB & does not fit & 44.4 s & --- \\
+  1 &  33 MB &   34 MB &  0.34 s &  0.35 s \\
+ 27 &  38 MB &  877 MB &  5.4 s  &  3.5 s  \\
+ 64 &  45 MB & 2080 MB & 12.3 s  &  7.7 s  \\
+125 &  56 MB & 4055 MB & 24.6 s  & 18.6 s  \\
+216 &  91 MB & does not fit & 44.4 s & --- \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-\noindent \code{speed} grows by 33~MB per $k$-point on this cell;
-\code{memory} by about half a megabyte, which is what stays resident per
-$k$-point --- $|k+\mathbf G|^2$, the FFT index and mask, and the projector core,
-$n_{\rm pwx}(3 + 2n_{\rm cs})$ numbers against the wavefunctions'
-$2n_{\rm bnd}n_{\rm pol}n_{\rm pwx}$. The price is time, 1.3--1.6x here, and it
+\noindent Each peak is one SCF in a fresh process with the compiled kernels
+already cached; each time is the second of two runs. \code{speed} grows by
+33~MB per $k$-point on this cell; \code{memory} by about 0.2~MB, which is what
+stays resident per $k$-point --- $|k+\mathbf G|^2$, the FFT index and mask, and
+the projector core, $n_{\rm pwx}(3 + 2n_{\rm cs})$ numbers against the
+wavefunctions' $2n_{\rm bnd}n_{\rm pol}n_{\rm pwx}$. At 216 $k$-points the
+91~MB is the setup's own peak, building that core; the SCF stays below it. The price is time, 1.3--1.6x here, and it
 is the per-$k$-point Davidson solve rather than the transfers (0.23~s of the
 12.3): a larger chunk buys most of it back, \code{k\_batch=4} giving 9.7~s at
 141~MB.
@@ -6963,6 +6965,11 @@ complex), which is the point but is not free. And \textbf{the fall-back from
 \code{'speed'} fires only where the preset is what would run}: with a
 \code{k\_batch} or \code{projectors} of your own, or \code{DEFUMAT\_K\_BATCH},
 the estimate would describe another calculation, so nothing is checked.
+\textbf{A mode given to a \code{Calculator} configures its own setup}, which is
+what its SCF, forces, stress and $dE/d\mathbf q$ run on; a post-SCF method that
+builds a setup of its own --- bands, DOS, PDOS, STM, transport, the spiral scan
+--- resolves its mode from \code{DEFUMAT\_MEMORY\_MODE} and the platform, so set
+the environment variable when those must follow a non-default mode.
 \end{refuses}
 
 \textbf{Two batching dials} control how much is in flight. The band dial

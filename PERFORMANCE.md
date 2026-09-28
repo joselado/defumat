@@ -7563,3 +7563,107 @@ cobalt helix limit-cycles for that reason, `co-helix4-spiral.in`).
 **Memory**: 2.10 GiB peak for the whole process, which held both, the supercell being the
 larger. The spiral's first-order call adds no array beyond the diagonalisation's: the two
 projections are `(nk, nbnd, nkb)` and the Pauli components of `dD` are `(3, nkb, nkb)`.
+
+## Two memory modes, and a wavefunction store that streams (GTX 1060, 2026-09-28)
+
+**The first measurements on a card inside the development loop**: a GeForce GTX 1060
+(6 GB; the allocator's `bytes_limit` is 4.76 GB at JAX's default 75 per cent), jax/jaxlib
+0.11.1 with the `jax-cuda12` plugin, driver 580.173.02. fp64 on this card runs at about
+1/32 of fp32, so **no ratio here is against single-core `pw.x`** (`GPU.md` §2.3) and none
+is against the CPU either: every comparison is one mode against the other on the same card.
+The card reproduces the CPU first -- `si-1k` to 4e-15 Ry, `si2-us-1k` exactly, `si2-paw-1k`
+to 6.8e-13 Ry, all in 7 iterations.
+
+**The finding that motivated the work: at the GPU defaults the peak grew linearly with the
+k-mesh**, 33 MB per k-point on eight-atom silicon at 20 Ry with `nosym`, because the
+accelerator default put every k-point's Davidson subspace and band block on the card at
+once. The existing dials (`k_batch = 1`, `wfc_store = 'host'`, `projectors = 'rebuild'`)
+already cut that to 167 MB at 64 k-points; what was left was the store itself, fetched
+**whole** to the device before each solve. `memory_mode` (`batching.py`) now presets the
+four dials, and `'memory'` -- the accelerator default, by the user's decision -- adds
+`wfc_store = 'stream'` (`scf/streaming.py`): the store is a numpy array in host RAM and the
+start, each Davidson call, `becsum`, the density, `tau` and `ns` walk it in k-chunks.
+
+One SCF per fresh process with the compiled kernels cached (peaks), and the second of two
+runs in one process (times, idle machine):
+
+| k-points | `memory` peak | `speed` peak | `memory` time | `speed` time |
+|---:|---:|---:|---:|---:|
+| 1 | 33.1 MB | 33.9 MB | 0.34 s | 0.35 s |
+| 27 | 37.9 MB | 876.8 MB | 5.35 s | 3.54 s |
+| 64 | 45.0 MB | 2079.7 MB | 12.25 s | 7.66 s |
+| 125 | 56.0 MB | 4054.9 MB | 24.62 s | 18.63 s |
+| 216 | 90.8 MB | falls back to `memory` | 44.39 s | -- |
+
+`memory` grows by about 0.2 MB per k-point: after setup at 216 k-points the device holds
+40.7 MB, of which the projector core's `columns` `(nk, npwx, ncs)` complex128 are 22.5 MB
+and `kg` `(nk, npwx, 3)` 8.4 MB (`jax.live_arrays()`). **The 90.8 MB at 216 k-points is the
+setup's peak, not the SCF's**: a stage-by-stage probe of the high-water saw nothing in the
+SCF raise it past what `Calculation.__init__` had reached. The energies agree between the
+modes to the last printed digit or one ulp.
+
+**Where the 1.3-1.6x goes, measured, and one idea it killed.** At 64 k-points the streamed
+solve was 9.22 s, the density pass 1.16 s and the chunked start 1.33 s of 12.05. Timing the
+solve's pieces: the call that *launches* a chunk took 8.04 s over 512 calls (15.7 ms each),
+waiting for its result 0.26 s, and every host-device transfer together 0.23 s. **The launch
+is synchronous on this card** -- XLA runs Davidson's `while_loop` by reading its predicate
+back each step -- so a look-ahead that launched chunk `i + 1` before collecting chunk `i`
+had nothing to overlap: 9.34 s against 9.22 s. It was removed. What does buy time is a
+larger chunk:
+
+| `k_batch` (64 k-points) | 1 | 2 | 4 | 8 | 16 | all (`speed`) |
+|---|---:|---:|---:|---:|---:|---:|
+| time per SCF | 12.1 s | 10.4 s | 9.65 s | 9.83 s | 8.99 s | 7.66 s |
+| peak | 58 MB | 111 MB | 141 MB | 266 MB | 538 MB | 2080 MB |
+
+(this row's peaks are from the earlier two-runs-per-process script and read about one
+resident setup high; the clean `k_batch = 4` figure is 140.7 MB).
+
+**Band dial, measured on the card before choosing the preset**: `band_batch = 1` costs 4.3x
+(37.9 s against 8.8 s at `k_batch = 1`, 64 k-points) and buys 226 against 253 MB, so both
+presets keep the band block whole on an accelerator.
+
+**`'speed'` falls back when it would not fit**, by `sizing.speed_mode_fits`: the estimate's
+`peak_bytes` against 60 per cent of free device memory. Calibrated on the same cell, where
+the card used 1.57-1.61x the estimate at 8, 27 and 64 k-points (261.3/166.4, 876.8/557.5,
+2133.3/1323.8 MB). At 216 k-points the estimate was 4.16 GiB against 60 per cent of 4.44
+GiB free, and the run went to `memory` with its warning.
+
+**Streaming checked against the whole-set store, regime by regime** (total energies,
+`memory` against `speed`, same card): NC silicon at 1-216 k-points (identical or one ulp),
+`si2-us` 1.0e-14, `si2-paw` 1e-14, `h-chain-spiral` 1.3e-15, `o-chain-spiral-us` 8.8e-14,
+`o-chain-spiral-paw` 0, `si2-tb09` 2.5e-13, `bismuthene-soc-small` 5e-13,
+`pt-soc-paw-nosym` 2e-13, `feo-kind1-J` (DFT+U, LSDA) 4.5e-12, `bn-ldau-noncol` (DFT+U,
+noncollinear, stress off) identical. On bismuthene and platinum the two peaks agree within
+1.5 per cent (3630/3651 MB, 1310/1311 MB): at 7-8 k-points those are set by objects that
+do not grow with the mesh, and the mode does not touch them.
+
+**`dE/dq` in chunks, now on an augmented dataset too** (`forces/spiral.py`,
+`_split_energy_and_gradient`), ultrasoft spiral silicon from
+`tests/regression/test_spiral_relaxation.py`, warm, one process per point:
+
+| k-points | single pass peak | chunked peak | single | chunked |
+|---:|---:|---:|---:|---:|
+| 8 | 342.8 MB | 104.4 MB | 0.09 s | 0.23 s |
+| 27 | 1012.7 MB | 70.4 MB | 0.16 s | 0.49 s |
+| 64 | 2256.7 MB | 73.7 MB | 0.25 s | 1.06 s |
+| 125 | 4350.6 MB | 120.6 MB | 0.52 s | 2.80 s |
+
+The gradients agree to 1e-15 at every point; `tests/regression/test_spiral_relaxation.py`
+pins the regrouping at 1e-12 for `k_batch` 1, 2, 3, 5 and 8 on both datasets. On the
+one-atom oxygen chain (`o-chain-spiral-us.in`, four k-points) the single pass is now 2.85
+GB max RSS on the CPU and the chunked route 1.95 GB, against 1.2 GB for its SCF -- the
+11.4 GB on record predates P112's rematted radial transforms.
+
+**Two instrument notes for the next person on a card.** A compile-cache *miss* costs more
+device memory here, not less (autotuning scratch): `si2-paw` read 126.7 MB cold and 49.7 MB
+warm in both modes -- the opposite sign from the CPU rule in `CLAUDE.md`. And
+`peak_bytes_in_use` cannot be reset, so a peak is one measured run per process; a script
+that keeps the first calculator alive while it builds a second reads two resident setups
+(the first scan here reported 135 MB at 216 k-points where the clean figure is 90.8).
+
+**Not fixed, found on the way**: on this card `bn-ldau-noncol.in` (2 atoms, noncollinear
+DFT+U, ultrasoft, 9 k-points) completes its SCF at about 0.9 GB and then dies in the
+autodiff stress its input asks for (`tstress`), on a single 5.57 GiB request from the
+strain derivative's compiled reverse pass -- in both modes, since the stress reads the
+state whole. `GPU-MEMORY-NEXT.md` carries it with the other candidates.

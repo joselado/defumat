@@ -26,6 +26,19 @@ anisotropy (2.2e-8 meV). Peak device memory 0.472 GB. It ran from a *separate*
 checkout, `apps/defumat-p59`, because `apps/defumat` was 13 commits behind and
 carried uncommitted spiral work in a file this code also touches.
 
+**A card is now in the development loop** (2026-09-28): the workstation's GeForce GTX 1060
+(6 GB, fp64 at about 1/32 of fp32), through the `jax` conda environment (jax/jaxlib 0.11.1,
+`jax-cuda12` plugin, driver 580.173.02). It reproduces the CPU -- `si-1k` to 4e-15 Ry,
+`si2-us-1k` exactly, `si2-paw-1k` to 6.8e-13 Ry -- and it is where **`memory_mode`** was
+built and measured: `'memory'` (one k-point in flight, projectors rebuilt, the wavefunction
+store streamed from host RAM) is the accelerator default and grows by about 0.2 MB per
+k-point on eight-atom silicon where `'speed'` grows by 33 (45 against 2080 MB at 64
+k-points, 1.6x the time), and `'speed'` falls back to `'memory'` when its estimate would
+not fit. `PERFORMANCE.md`'s "Two memory modes" entry has the tables; `GPU-MEMORY-NEXT.md` is
+the list of what is left. §4a's regression set can now be rerun here, on this card, without
+a cluster job -- which also means the test gate must be run with `JAX_PLATFORMS=cpu` from
+that environment, since on the card the defaults differ.
+
 **Phase 0 is done as of 2026-08-25** and the first of those three is settled: the same
 source, unmodified, runs on a Tesla V100 and reproduces the CPU energy to 1.6e-13 Ry. It
 also returned the two numbers this file was written without — **fp64 costs 1.78–1.98x on a

@@ -2448,7 +2448,7 @@ class Calculation:
         """
         if self.projectors.qq is None:
             return psi
-        vkb = self.projectors.vkb[ik]
+        vkb = self.projectors.at_k(ik)  # one k-point's, built when lazy
         becp = jnp.einsum("gk,...g->...k", vkb.conj(), psi)
         qq = self.projectors.qq.astype(vkb.dtype)
         return psi + jnp.einsum("gk,...k->...g", vkb, becp @ qq.T)
@@ -2471,7 +2471,7 @@ class Calculation:
         """
         if self.qq_so is None:
             return psi
-        vkb = self.projectors.vkb[ik]
+        vkb = self.projectors.at_k(ik)  # one k-point's, built when lazy
         npwx = self.basis.npwx
         mask = self.basis.planewaves.mask[ik]
         components = jnp.where(
@@ -3192,8 +3192,12 @@ class Calculation:
             self.pseudos, system.structure, cell, smooth, planewaves, kpoints,
             origin_tangent=self.origin_tangent,
         )
+        # The storage dial follows the calculation across a new k-set; it used
+        # to be dropped here, so every band path and every derived mesh stored
+        # the whole-k ``vkb`` whatever ``projectors`` said.
         moved.projectors = moved.projector_core.at_positions(
-            system.structure.positions, qq=self.projectors.qq
+            system.structure.positions, qq=self.projectors.qq,
+            lazy=self.projector_storage == "rebuild",
         )
         # ``wfcU`` carries a k index, so a new k-list needs new projectors --
         # QE rebuilds them in ``orthoUwfc`` at the start of every run for the
@@ -3449,8 +3453,12 @@ class Calculation:
             self.pseudos, system.structure, cell, smooth, planewaves,
             moved.basis_kpoints, origin_tangent=self.origin_tangent,
         )
+        # Kept across a new wavevector: every step of ``run_spiral_scan`` and
+        # ``relax_spiral_q`` comes through here, and dropping the dial made each
+        # one store the whole-k ``vkb(k +- q/2)`` in ``memory`` mode.
         moved.projectors = moved.projector_core.at_positions(
-            system.structure.positions, qq=self.projectors.qq
+            system.structure.positions, qq=self.projectors.qq,
+            lazy=self.projector_storage == "rebuild",
         )
         return moved
 
