@@ -55,10 +55,15 @@ def test_the_platform_decides_when_nothing_else_does(monkeypatch):
     from defumat import batching
 
     monkeypatch.delenv("DEFUMAT_WFC_STORE", raising=False)
+    monkeypatch.delenv("DEFUMAT_MEMORY_MODE", raising=False)
     monkeypatch.setattr(batching, "_backend", lambda: "cpu")
     assert resolve_wfc_store() == "device"
+    assert resolve_wfc_store(mode="memory") == "device"
+    # On a card the default is the memory mode's, which streams; ``speed``
+    # keeps the whole set on the device. ``host`` is no mode's default.
     monkeypatch.setattr(batching, "_backend", lambda: "gpu")
-    assert resolve_wfc_store() == "host"
+    assert resolve_wfc_store() == "stream"
+    assert resolve_wfc_store(mode="speed") == "device"
 
 
 def test_an_explicit_setting_beats_the_environment_beats_the_platform(monkeypatch):

@@ -350,29 +350,39 @@ def _on(monkeypatch, platform: str):
     monkeypatch.setattr(batching, "_backend", lambda: platform)
 
 
-@pytest.mark.parametrize("platform, expected", [
-    ("cpu", 1),          # QE's loop: one k-point, one band, cache-sized
-    ("gpu", None),       # the whole axis at once
-    ("tpu", None),
-    ("cuda", None),      # a name this was never tested against still lands
-])                       # on the accelerator end rather than on neither
-def test_both_defaults_follow_the_platform(monkeypatch, platform, expected):
+@pytest.mark.parametrize("platform, k_expected, band_expected, speed_k", [
+    ("cpu", 1, 1, 1),          # QE's loop: one k-point, one band, cache-sized
+    ("gpu", 1, None, None),    # ``memory``: one k-point, the whole band block;
+    ("tpu", 1, None, None),    # ``speed``: the whole k axis at once
+    ("cuda", 1, None, None),   # a name this was never tested against still
+])                             # lands on the accelerator end
+def test_both_defaults_follow_the_platform(monkeypatch, platform, k_expected,
+                                           band_expected, speed_k):
+    monkeypatch.delenv("DEFUMAT_MEMORY_MODE", raising=False)
+    monkeypatch.delenv("DEFUMAT_K_BATCH", raising=False)
+    monkeypatch.delenv("DEFUMAT_BAND_BATCH", raising=False)
     _on(monkeypatch, platform)
-    assert batching.DEFAULT_K_BATCH == expected
-    assert batching.DEFAULT_BAND_BATCH == expected
-    assert resolve_k_batch("default") == expected
-    assert _resolve_band_batch("default") == expected
+    assert batching.DEFAULT_K_BATCH == k_expected
+    assert batching.DEFAULT_BAND_BATCH == band_expected
+    assert resolve_k_batch("default") == k_expected
+    assert _resolve_band_batch("default") == band_expected
+    assert resolve_k_batch("default", "speed") == speed_k
 
 
-def test_the_two_axes_move_together(monkeypatch):
+def test_no_preset_pairs_the_whole_k_axis_with_one_band(monkeypatch):
     """``k=all, b=1`` is worse than either end (2075 ms against 177 and 801).
 
-    So the platform answers for both dials at once; a default that flipped one
-    axis and not the other is the mode measured to be the worst available.
+    The two dials used to be asserted *equal* here, which was the rule that
+    kept that pair out. ``memory`` on a card is ``k=1, b=all`` -- the other
+    off-diagonal, measured at 8.95 s against 7.4 s for ``all/all`` and 39.5 s
+    for ``1/1`` on eight-atom silicon at 64 k-points on a GTX 1060 -- so the
+    rule is now the one the measurement actually supports.
     """
     for platform in ("cpu", "gpu"):
         _on(monkeypatch, platform)
-        assert batching.DEFAULT_K_BATCH == batching.DEFAULT_BAND_BATCH
+        for mode in batching.MEMORY_MODES:
+            preset = batching.memory_preset(mode)
+            assert not (preset["k_batch"] is None and preset["band_batch"] == 1)
 
 
 @pytest.mark.parametrize("platform", ["cpu", "gpu"])
@@ -406,9 +416,11 @@ def test_the_environment_is_read_when_it_is_asked_for(monkeypatch):
     assert resolve_k_batch("default") is None
 
 
-@pytest.mark.parametrize("platform, expected", [("cpu", 1), ("gpu", None)])
+@pytest.mark.parametrize("platform, expected", [("cpu", 1), ("gpu", 1)])
 def test_a_malformed_setting_warns_and_falls_back_to_the_platform(
         monkeypatch, platform, expected):
+    """Falls back to the default memory mode's preset: one k-point on both."""
+    monkeypatch.delenv("DEFUMAT_MEMORY_MODE", raising=False)
     _on(monkeypatch, platform)
     monkeypatch.setenv("DEFUMAT_K_BATCH", "lots")
     with pytest.warns(RuntimeWarning, match="not a number"):

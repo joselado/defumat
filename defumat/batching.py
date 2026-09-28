@@ -263,12 +263,42 @@ standing trap about a check whose null result cannot be told from a pass, in the
 one place it would be most expensive: let ``stats["largest_free_block_bytes"]``
 raise ``KeyError``, or assert the key is present once at startup.
 
-**The default is per platform, for the same reason the chunk sizes are**, and it
-falls the other way round from them: on a CPU the host and the device are one
-piece of memory, so parking is a `memcpy` of the whole store per iteration that
-buys nothing, and the default is ``device``. On an accelerator it is ``host``.
-``DEFUMAT_WFC_STORE`` overrides the platform and an explicit ``wfc_store``
-overrides that, which is the precedence the other two dials already have.
+**The default is the memory mode's** (:data:`MEMORY_MODES`): on a CPU the host
+and the device are one piece of memory, so parking is a `memcpy` of the whole
+store per iteration that buys nothing, and the default is ``device`` in either
+mode. On an accelerator it is ``stream`` in ``memory`` -- the default -- and
+``device`` in ``speed``. ``host`` is no longer any mode's default: what it does
+is a subset of what ``stream`` does, and the pair above measured it not to move
+the peak. ``DEFUMAT_WFC_STORE`` overrides the mode and an explicit
+``wfc_store`` overrides that, which is the precedence the other dials have.
+
+Streaming (``stream``)
+----------------------
+
+``host`` parks the set between the density and the next solve and fetches it
+**whole** for the solve, so the device still holds every k-point's
+wavefunctions -- twice, input and output -- at the moment the peak is taken.
+``stream`` is QE's ``get_buffer``/``save_buffer`` pair at the granularity QE
+uses it: the store is a numpy array in host RAM for the whole run, and every
+pass that reads it -- the starting Rayleigh-Ritz, each Davidson call, ``becsum``,
+the density, ``tau`` and DFT+U's ``ns`` -- walks :func:`k_chunks` with a Python
+loop, moving one chunk to the device, running the *same* compiled kernel the
+whole-set path runs on the chunk's slice of every per-k array, and moving the
+result back. The sums over k are accumulated chunk by chunk and finished once
+(lifted to the dense grid, augmented, symmetrised), which is exact because all
+three are linear. What stays resident on the device and still grows with the
+mesh is the basis bookkeeping -- ``|k+G|^2``, the FFT index and mask, and the
+projector *core* -- which is ``npwx (3 + 2 ncs)`` numbers per k-point against the
+store's ``2 nbnd npol npwx``.
+
+**Why a numpy array and not a pinned-host JAX array**, measured on jax 0.11.1
+with a GTX 1060: indexing a ``pinned_host`` array with a k-subset raises
+(``memory_space of all inputs passed to gather must be the same``), and handing
+a whole host-resident array to a jitted function does *not* raise -- XLA's
+host offloader rewrites the kernel to run **on the host**, with only a log
+line (``host_offloader.cc: ... Converting into host compute``). So the store
+must never reach a kernel whole, and the one form that makes that structural is
+a numpy array sliced on the host: 102 MB moves in about 35 ms each way.
 
 **Only the SCF loop parks anything.** :func:`~defumat.workflows.nscf.run_nscf`
 and the band-structure path hold a full-k store of their own and are *not*
@@ -293,7 +323,9 @@ __all__ = ["DEFAULT_K_BATCH", "resolve_k_batch", "map_k", "sum_k",
            "sum_bands", "map_axis",
            "PROJECTOR_STORES", "resolve_projectors",
            "WFC_STORES", "resolve_wfc_store", "park_wavefunctions",
-           "fetch_wavefunctions"]
+           "fetch_wavefunctions",
+           "MEMORY_MODES", "resolve_memory_mode", "memory_preset",
+           "k_chunks"]
 
 
 _UNSET = object()
@@ -339,17 +371,137 @@ def _backend() -> str:
 def _platform_default() -> int | None:
     """QE's loop on a CPU, the whole axis at once on an accelerator.
 
-    This is the one place the two ends of both dials are chosen, and it is a
-    *default* rather than a rule: every entry point takes ``k_batch`` and
-    ``band_batch``, and ``DEFUMAT_K_BATCH``/``DEFUMAT_BAND_BATCH`` override a
-    whole process. See the module docstring for what each end costs where.
+    This is the **band** dial's default, and it is the same in both memory
+    modes (:func:`memory_preset`): one band's box is the cache-sized unit on a
+    CPU, and on a card a band loop serialises every FFT into its own launch --
+    measured at 4.3x the whole block's time at 64 k-points on a GTX 1060, with
+    no peak worth having in exchange. The k dial's default is the memory mode's
+    (:func:`_k_default`), which is where the two modes differ.
+    ``DEFUMAT_K_BATCH``/``DEFUMAT_BAND_BATCH`` override a whole process. See
+    the module docstring for what each end costs where.
     """
     return 1 if _backend() == "cpu" else None
 
 
-def _k_default() -> int | None:
+# ---------------------------------------------------------------------------
+# the two memory modes -- one switch in front of the four dials
+# ---------------------------------------------------------------------------
+
+#: ``"memory"`` and ``"speed"``: two presets for the four dials of this module.
+#:
+#: The dials are the mechanism and stay reachable one by one; the mode is the
+#: question a user actually has -- *does this fit on the card, and if it fits,
+#: how fast* -- answered once. On an accelerator:
+#:
+#: ============  =======  ==========  ============  ===========
+#: mode          k_batch  band_batch  projectors    wfc_store
+#: ============  =======  ==========  ============  ===========
+#: ``speed``     all      all         ``store``     ``device``
+#: ``memory``    1        all         ``rebuild``   ``stream``
+#: ============  =======  ==========  ============  ===========
+#:
+#: ``speed`` is everything on the device at once. ``memory`` is QE's
+#: ``k_loop`` with ``io_level`` pointing at host RAM: one k-point's working set
+#: on the card, its projectors formed on demand, and the wavefunction set held
+#: in host memory and streamed through one chunk at a time
+#: (:func:`k_chunks`), so the device peak stops following the number of
+#: k-points. Measured on the eight-atom silicon cell at 20 Ry on a GTX 1060,
+#: 64 k-points: **2133 MB and 7.4 s** per SCF in ``speed``, **167 MB and
+#: 8.95 s** with the first three dials of ``memory`` alone.
+#:
+#: The band dial is ``all`` in both: it is a per-k-point working set, it does
+#: not grow with the mesh, and a band loop on a card costs 4.3x (39.5 s against
+#: 8.95 on the same cell) for a peak that is not the one in the way.
+#:
+#: On a CPU there is one memory, so streaming it to itself buys nothing and
+#: QE's loop is already both the lean and the fast end. The mode changes one
+#: thing there, the projector storage, and ``speed`` -- the CPU defaults every
+#: validated number on record was taken with -- is the CPU default.
+#:
+#: **The accelerator default is** ``memory`` (2026-09-28, the user's decision),
+#: and ``speed`` on an accelerator is checked before it is used:
+#: :func:`defumat.sizing.speed_mode_fits` estimates the peak, and a run that
+#: would not fit falls back to ``memory`` with a warning rather than dying in
+#: the eigensolver.
+MEMORY_MODES = ("memory", "speed")
+
+
+def _memory_mode_default() -> str:
+    setting = (environ_get("DEFUMAT_MEMORY_MODE", "") or "").strip().lower()
+    if setting in MEMORY_MODES:
+        return setting
+    if setting:
+        warnings.warn(
+            f"ignoring DEFUMAT_MEMORY_MODE={setting!r}: expected one of "
+            f"{MEMORY_MODES}", RuntimeWarning, stacklevel=3,
+        )
+    return "speed" if _backend() == "cpu" else "memory"
+
+
+def resolve_memory_mode(requested: str | None = "default") -> str:
+    """``"memory"`` or ``"speed"``: an argument, then the environment, then the platform.
+
+    ``None`` is "nothing was said", as it is for :func:`resolve_wfc_store`,
+    because neither mode is the absence of a choice.
+    """
+    if requested is None or requested == "default":
+        return _memory_mode_default()
+    value = str(requested).strip().lower()
+    if value not in MEMORY_MODES:
+        raise ValueError(
+            f"memory_mode must be one of {MEMORY_MODES} or 'default', got "
+            f"{requested!r}"
+        )
+    return value
+
+
+def memory_preset(mode: str | None = "default") -> dict:
+    """The four dials a mode sets on this platform -- see :data:`MEMORY_MODES`.
+
+    A preset fills in only what a caller left at ``"default"`` and what the
+    environment leaves unset: an explicit dial, or ``DEFUMAT_K_BATCH`` and its
+    siblings, still beat it, which is the precedence every dial here has.
+    """
+    mode = resolve_memory_mode(mode)
+    if _backend() == "cpu":
+        return {"k_batch": 1, "band_batch": 1,
+                "projectors": "rebuild" if mode == "memory" else "store",
+                "wfc_store": "device"}
+    if mode == "speed":
+        return {"k_batch": None, "band_batch": None,
+                "projectors": "store", "wfc_store": "device"}
+    return {"k_batch": 1, "band_batch": None,
+            "projectors": "rebuild", "wfc_store": "stream"}
+
+
+def k_chunks(nk: int, batch: int | None):
+    """The k-point chunks a streamed pass walks, each padded to one shape.
+
+    Yields ``(rows, live)``: ``rows`` is a numpy ``(chunk,)`` index array and
+    ``live`` how many of its leading entries are real. The last chunk is padded
+    with a repeat of its own first row, so every chunk shares one shape and
+    therefore one compilation. What the padding contributes is decided by the
+    caller: a sum over k gives the padded rows **zero weight**, which is exact
+    because every such sum is linear in the weights; a solve computes them and
+    discards the result, which costs ``chunk - live`` redundant solves once per
+    pass and nothing at ``batch = 1``.
+
+    ``batch = None`` is one chunk of the whole axis.
+    """
+    import numpy as np
+
+    chunk = nk if batch is None else max(1, min(int(batch), nk))
+    for start in range(0, nk, chunk):
+        live = min(chunk, nk - start)
+        rows = np.arange(start, start + live)
+        if live < chunk:
+            rows = np.concatenate([rows, np.full(chunk - live, start)])
+        yield rows, live
+
+
+def _k_default(mode: str | None = "default") -> int | None:
     setting = _from_environment("DEFUMAT_K_BATCH")
-    return _platform_default() if setting is _UNSET else setting
+    return memory_preset(mode)["k_batch"] if setting is _UNSET else setting
 
 
 def _band_default() -> int | None:
@@ -371,16 +523,19 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-def resolve_k_batch(requested: int | None | str = "default") -> int | None:
+def resolve_k_batch(requested: int | None | str = "default",
+                    mode: str | None = "default") -> int | None:
     """Turn what a caller passed into a chunk size.
 
     The sentinel is the string ``"default"`` rather than ``None``, because
     ``None`` is a meaningful value here -- it asks for every k-point at once --
-    and a caller that has one must be able to pass it through.
+    and a caller that has one must be able to pass it through. ``mode`` is the
+    memory mode whose preset answers when neither the caller nor
+    ``DEFUMAT_K_BATCH`` does.
     """
     if isinstance(requested, str):
         if requested == "default":
-            return _k_default()
+            return _k_default(mode)
         return _named(requested)
     if requested is None:
         return None
@@ -588,14 +743,15 @@ def sum_bands(fn, xs, *, batch: int | None | str = "default"):
 #: this bounds what is *held*, so it sits underneath every stage rather than
 #: inside one. It costs ``nat npwx`` complex exponentials per use.
 #:
-#: The default is ``store``, which is what every validated number on record was
-#: measured with. ``DEFUMAT_PROJECTORS`` overrides it and an explicit
-#: ``projectors=`` argument overrides that -- the precedence the other dials
-#: have.
+#: The default is the memory mode's (:func:`memory_preset`): ``store`` on a CPU
+#: and in ``speed``, which is what every validated number on record was
+#: measured with, and ``rebuild`` in ``memory``, the accelerator default.
+#: ``DEFUMAT_PROJECTORS`` overrides the mode and an explicit ``projectors=``
+#: argument overrides that -- the precedence the other dials have.
 PROJECTOR_STORES = ("store", "rebuild")
 
 
-def _projectors_default() -> str:
+def _projectors_default(mode: str | None = "default") -> str:
     setting = (environ_get("DEFUMAT_PROJECTORS", "") or "").strip().lower()
     if setting in PROJECTOR_STORES:
         return setting
@@ -604,14 +760,15 @@ def _projectors_default() -> str:
             f"ignoring DEFUMAT_PROJECTORS={setting!r}: expected one of "
             f"{PROJECTOR_STORES}", RuntimeWarning, stacklevel=2,
         )
-    return "store"
+    return memory_preset(mode)["projectors"]
 
 
-def resolve_projectors(requested: str | None = "default") -> str:
-    """Which projector storage is in force: an argument, then the environment."""
+def resolve_projectors(requested: str | None = "default",
+                       mode: str | None = "default") -> str:
+    """Which projector storage is in force: an argument, the environment, the mode."""
     value = requested
     if value is None or value == "default":
-        return _projectors_default()
+        return _projectors_default(mode)
     value = str(value).strip().lower()
     if value not in PROJECTOR_STORES:
         raise ValueError(
@@ -621,12 +778,18 @@ def resolve_projectors(requested: str | None = "default") -> str:
     return value
 
 
-#: The two places the store can be. ``"device"`` is this package's own history
-#: and is what a CPU wants; ``"host"`` is QE's buffer.
-WFC_STORES = ("device", "host")
+#: The three places the store can be. ``"device"`` is this package's own
+#: history and is what a CPU wants; ``"host"`` is QE's buffer, parked whole
+#: between the density and the next solve and fetched whole for it; and
+#: ``"stream"`` never brings it back whole at all -- it lives in host RAM for
+#: the whole run and crosses to the device one k-chunk at a time, for the
+#: solve, for ``becsum`` and for the density (``k_chunks``). ``host`` is a
+#: resident-set dial and ``stream`` is the peak dial ``host`` was measured
+#: not to be (the NiBr2 pair above).
+WFC_STORES = ("device", "host", "stream")
 
 
-def _wfc_store_default() -> str:
+def _wfc_store_default(mode: str | None = "default") -> str:
     setting = (environ_get("DEFUMAT_WFC_STORE", "") or "").strip().lower()
     if setting in WFC_STORES:
         return setting
@@ -635,19 +798,20 @@ def _wfc_store_default() -> str:
             f"ignoring DEFUMAT_WFC_STORE={setting!r}: expected one of "
             f"{WFC_STORES}", RuntimeWarning, stacklevel=2,
         )
-    return "device" if _backend() == "cpu" else "host"
+    return memory_preset(mode)["wfc_store"]
 
 
-def resolve_wfc_store(requested: str | None = "default") -> str:
-    """Turn what a caller passed into ``"device"`` or ``"host"``.
+def resolve_wfc_store(requested: str | None = "default",
+                      mode: str | None = "default") -> str:
+    """Turn what a caller passed into ``"device"``, ``"host"`` or ``"stream"``.
 
-    ``"default"`` asks the environment and then the platform, exactly as
-    :func:`resolve_k_batch` does. ``None`` is *not* a meaningful value here --
-    unlike the chunk sizes, where it means the whole axis -- so it is treated as
-    "nothing was said" and resolves the same way.
+    ``"default"`` asks the environment and then the memory mode's preset,
+    exactly as :func:`resolve_k_batch` does. ``None`` is *not* a meaningful
+    value here -- unlike the chunk sizes, where it means the whole axis -- so it
+    is treated as "nothing was said" and resolves the same way.
     """
     if requested is None or requested == "default":
-        return _wfc_store_default()
+        return _wfc_store_default(mode)
     value = str(requested).strip().lower()
     if value not in WFC_STORES:
         raise ValueError(
@@ -714,6 +878,19 @@ def park_wavefunctions(psi, where: str = "device"):
     if psi is None or where == "device":
         return psi
     _not_traced(psi, "parking")
+    if where == "stream":
+        # The streamed store is a numpy array for the whole run -- see the
+        # module docstring for why a pinned-host JAX array cannot be it. Anything
+        # that arrives here as a device array (a resume, a caller's own span) is
+        # brought across once and stays.
+        import numpy as np
+
+        # A copy unless it is already a writable host array: the streamed
+        # passes write each chunk's new states back into it in place, and
+        # ``np.asarray`` of a JAX array is a read-only view.
+        if isinstance(psi, np.ndarray) and psi.flags.writeable:
+            return psi
+        return np.array(psi)
     sharding = _host_sharding()
     if sharding is None:
         warnings.warn(

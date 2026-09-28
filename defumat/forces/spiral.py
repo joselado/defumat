@@ -75,8 +75,21 @@ two routes agree to 1e-16 on a spinor silicon,
 mapped one** on purpose: reverse mode through ``lax.map`` stacks every chunk's
 residuals for the backward pass and would hold the same peak. The chunked route
 is the default wherever the calculation carries a chunk size, which is QE's
-end of :mod:`defumat.batching`'s dial on a CPU; ``k_batch = None`` asks for the
-single pass the whole thing used to be.
+end of :mod:`defumat.batching`'s dial on a CPU and ``memory_mode = 'memory'``
+on an accelerator; ``k_batch = None`` -- ``speed`` -- asks for the single pass
+the whole thing used to be.
+
+**An ultrasoft or PAW spiral is chunked too, and exactly**
+(:func:`_split_energy_and_gradient`). Until 2026-09-28 it was forced down the
+single pass with a warning, because its density carries ``q`` and the Hartree
+energy is quadratic in it, so per-chunk gradients miss every cross term. The
+chain rule through the *whole* ``becsum`` removes that: the global terms are
+differentiated once at the full ``becsum`` and their gradient is pulled back
+through each chunk's, so the only tape with more than one chunk on it has no
+k axis at all. The sums the frozen energy needs beyond those -- the density,
+``becsum``, the orthonormality term -- are chunked in both routes, so a state
+held in host memory by ``memory_mode = 'memory'`` never crosses to the device
+whole.
 
 **A magnetic field or a constrained moment is refused rather than corrected.**
 The field's own energy is deliberately outside the reported total
@@ -88,7 +101,6 @@ invisible.
 
 from __future__ import annotations
 
-import warnings
 from dataclasses import dataclass
 from functools import partial
 
@@ -97,7 +109,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.basis.planewaves import PlaneWaveBasis
-from defumat.batching import resolve_k_batch
+from defumat.batching import k_chunks, resolve_k_batch
 from defumat.forces.energy import FrozenState, state_from_result
 from defumat.pseudo.projectors import build_projector_core
 from defumat.scf.potential import total_charge
@@ -204,8 +216,14 @@ def spiral_energy(calculation, q_crystal, state: FrozenState):
     )
 
 
-def q_dependent_energy(calculation, q_crystal, psi, weights, eigenvalues, rows):
+def q_dependent_energy(calculation, q_crystal, psi, weights, eigenvalues, rows,
+                       with_becsum: bool = False):
     """The terms that carry ``q``, over a *subset* of the k-points.
+
+    ``with_becsum`` also returns the chunk's raw ``becsum`` at ``q`` -- built
+    from the same chunk projectors ``vkb(k +- q/2)`` the nonlocal term uses --
+    which is the second output :func:`_split_energy_and_gradient` pulls a
+    cotangent back through on an augmented dataset.
 
     ``rows`` indexes the ``2 nk`` axis both shifted spheres live on -- the up
     component's ``nk`` rows first -- so a chunk of ``m`` k-points is the ``m``
@@ -222,15 +240,15 @@ def q_dependent_energy(calculation, q_crystal, psi, weights, eigenvalues, rows):
     :func:`q_independent_energy` evaluates it once, forward only, so the
     identity against the SCF total energy survives.
 
-    **That split is what makes this route norm-conserving only.** On an
-    augmented dataset the density itself carries ``q``, through the displaced
-    table and through ``becsum``, and the Hartree energy is *quadratic* in the
-    density -- so the sum of per-chunk gradients is no longer the gradient of
-    the sum. :func:`compute_spiral_gradient` sends such a run down the single
-    pass instead. The augmentation half of the constraint is written here
-    nonetheless, and is identically zero on everything that reaches this
-    function, because the two routes differing term by term is how a later
-    lifting of that restriction would go wrong quietly.
+    **On its own that split is norm-conserving only.** On an augmented dataset
+    the density itself carries ``q``, through the displaced table and through
+    ``becsum``, and the Hartree energy is *quadratic* in the density -- so the
+    sum of per-chunk gradients of this function is not the gradient of the sum.
+    :func:`_split_energy_and_gradient` is what makes chunking exact there: it
+    evaluates the global terms once at the **whole** ``becsum`` and pulls their
+    gradient back through each chunk's ``becsum``, which is what
+    ``with_becsum`` exists for. The augmentation half of the constraint is
+    written here and is live on that route.
     """
     cell = calculation.system.cell
     smooth = calculation.basis.smooth
@@ -262,10 +280,16 @@ def q_dependent_energy(calculation, q_crystal, psi, weights, eigenvalues, rows):
         psi, projectors.vkb, calculation.dvan_so, calculation.qq_so, weights,
         eigenvalues, m,
     )
-    return _kinetic_energy(psi, state_kinetic, weights) + nonlocal_ - overlap
+    energy = _kinetic_energy(psi, state_kinetic, weights) + nonlocal_ - overlap
+    if not with_becsum:
+        return energy
+    # ``_noncollinear_becsum``'s own contraction, on this chunk's projectors.
+    # The spin-orbit coefficients it applies carry no ``q``; only ``vkb`` does.
+    return energy, calculation._noncollinear_becsum(psi, weights, projectors.vkb)
 
 
-def q_independent_energy(calculation, state: FrozenState):
+def q_independent_energy(calculation, state: FrozenState,
+                         k_batch: int | None = None):
     """Everything :func:`q_dependent_energy` leaves out, at frozen state.
 
     It is a constant of ``q`` and therefore contributes nothing to ``dE/dq``;
@@ -273,23 +297,86 @@ def q_independent_energy(calculation, state: FrozenState):
     chunked route still reports the *total* energy and
     ``|E_frozen - E_scf|`` remains the check that what was differentiated is
     the energy the SCF converged.
+
+    The sums over k it needs -- ``becsum``, the density, the orthonormality
+    term -- are taken ``k_batch`` k-points at a time (:func:`_frozen_sums`), so
+    a state held in host memory by ``memory_mode = 'memory'`` never crosses to
+    the device whole.
     """
-    psi, weights = state.wavefunctions, state.weights
-    becsum_ = calculation.becsum(psi, weights)
-    rho = calculation.density(psi, weights, becsum_)
+    becsum_, rho_smooth, norm = _frozen_sums(calculation, state, k_batch)
+    becsum_ = calculation.finish_becsum(becsum_) if becsum_ else becsum_
+    rho = calculation.finish_density(rho_smooth, becsum_)
     potential = calculation.potential(rho)
+    epaw, _ = calculation.onecenter(becsum_)
     volume = calculation.system.cell.volume
     local = volume / rho[0].size * jnp.sum(calculation.vltot * total_charge(rho))
-    norm = jnp.sum(weights * state.eigenvalues * (_norms(psi) - 1.0))
     return (
         local
         + potential.ehart
         + potential.etxc
+        + epaw
         + calculation.ewald
         + calculation.dispersion
         - norm
         + state.entropy
     )
+
+
+def q_global_energy(calculation, q_crystal, becsum_, rho_smooth):
+    """The terms that see ``q`` only through the *whole* ``becsum``.
+
+    Local, Hartree, exchange-correlation and PAW's one-centre energy. On an
+    augmented dataset each of them moves with ``q`` in two ways -- through the
+    displaced table ``Q_ij(G - q)`` the augmentation charge is built with,
+    which is a function of ``q`` here directly, and through ``becsum``, which is
+    an argument -- and neither is a sum over k, so this is evaluated once per
+    gradient rather than per chunk. ``rho_smooth`` is ``sum_band``'s part of
+    the density, which does not move with ``q`` at frozen coefficients
+    (the module docstring).
+    """
+    moved = calculation.at_spiral_q(q_crystal, rebuild_basis=False)
+    rho = moved.finish_density(rho_smooth, becsum_)
+    potential = moved.potential(rho)
+    epaw, _ = moved.onecenter(becsum_)
+    volume = calculation.system.cell.volume
+    local = volume / rho[0].size * jnp.sum(moved.vltot * total_charge(rho))
+    return local + potential.ehart + potential.etxc + epaw
+
+
+def _rows_of(array, rows):
+    """One chunk of a state array, on the device -- sliced on the host when it lives there."""
+    if isinstance(array, np.ndarray):
+        return jax.device_put(np.ascontiguousarray(array[:, rows]))
+    return jnp.asarray(array)[:, jnp.asarray(rows)]
+
+
+def _chunk_arguments(state: FrozenState, rows, live):
+    """``psi``, the weights with the padding zeroed, and the eigenvalues of one chunk."""
+    weights = np.array(state.weights[:, rows])
+    weights[:, live:] = 0.0
+    return (_rows_of(state.wavefunctions, rows), jnp.asarray(weights),
+            jnp.asarray(np.asarray(state.eigenvalues)[:, rows]))
+
+
+def _frozen_sums(calculation, state: FrozenState, k_batch):
+    """``(raw becsum, smooth density, orthonormality term)`` over every k-point.
+
+    The three sums over k the frozen energy needs beyond the ``q``-carrying
+    ones, accumulated ``k_batch`` k-points at a time; ``becsum`` is returned
+    unsymmetrised, for the caller to finish once.
+    """
+    nk = calculation.system.kpoints.nk
+    becsum_ = rho = None
+    norm = 0.0
+    for rows, live in k_chunks(nk, k_batch):
+        psi, weights, eigenvalues = _chunk_arguments(state, rows, live)
+        part = calculation.becsum(psi, weights, rows=rows, symmetrize=False)
+        becsum_ = part if becsum_ is None else jax.tree_util.tree_map(
+            jnp.add, becsum_, part)
+        smooth = calculation.smooth_density(psi, weights, rows=rows)
+        rho = smooth if rho is None else rho + smooth
+        norm = norm + jnp.sum(weights * eigenvalues * (_norms(psi) - 1.0))
+    return becsum_, rho, norm
 
 
 def _chunked_energy_and_gradient(calculation, q, state: FrozenState, k_batch: int):
@@ -307,29 +394,96 @@ def _chunked_energy_and_gradient(calculation, q, state: FrozenState, k_batch: in
     the energy or the gradient (both are linear in ``weights``).
     """
     nk = calculation.system.kpoints.nk
-    fn = calculation.__dict__.get("_spiral_gradient_chunk")
+    fn = _chunk_cache(calculation).get("value_and_grad")
     if fn is None:
         fn = jax.jit(jax.value_and_grad(
             lambda q, psi, weights, eigenvalues, rows:
                 q_dependent_energy(calculation, q, psi, weights, eigenvalues, rows)
         ))
-        calculation._spiral_gradient_chunk = fn
+        _chunk_cache(calculation)["value_and_grad"] = fn
 
     energy = 0.0
     gradient = jnp.zeros((3,), dtype=float)
-    for start in range(0, nk, k_batch):
-        ks = np.arange(start, min(start + k_batch, nk))
-        pad = k_batch - len(ks)
-        padded = np.concatenate([ks, np.full(pad, ks[0], dtype=int)])
-        live = np.concatenate([np.ones(len(ks)), np.zeros(pad)])
-        psi = state.wavefunctions[:, padded]
-        weights = state.weights[:, padded] * live[None, :, None]
-        eigenvalues = state.eigenvalues[:, padded]
+    for padded, live in k_chunks(nk, k_batch):
+        psi, weights, eigenvalues = _chunk_arguments(state, padded, live)
         rows = jnp.asarray(np.concatenate([padded, nk + padded]))
         value, slope = fn(q, psi, weights, eigenvalues, rows)
         energy += value
         gradient = gradient + slope
-    return energy + q_independent_energy(calculation, state), gradient
+    return energy + q_independent_energy(calculation, state, k_batch), gradient
+
+
+def _chunk_cache(calculation) -> dict:
+    """The chunked routes' compiled functions, in the one attribute a moved copy drops.
+
+    :meth:`~defumat.scf.driver.Calculation.at_spiral_q` (and ``at_positions``
+    and ``at_strain``) pop ``_spiral_gradient_chunk`` by name, because every
+    function here closes over the calculation it was compiled for; holding all
+    of them under that name keeps the invalidation in one place.
+    """
+    cache = calculation.__dict__.get("_spiral_gradient_chunk")
+    if not isinstance(cache, dict):
+        cache = calculation._spiral_gradient_chunk = {}
+    return cache
+
+
+def _split_energy_and_gradient(calculation, q, state: FrozenState, k_batch: int):
+    """``(E, dE/dq)`` on an augmented spiral, exactly, ``k_batch`` k-points at a time.
+
+    The energy is ``E_sep(q) + E_glob(q, b(q))`` with ``b = sum_k b_k`` the whole
+    ``becsum``: :func:`q_dependent_energy` is ``E_sep``, a sum over k, and
+    :func:`q_global_energy` is ``E_glob``, which is not. So
+
+        dE/dq = sum_k dE_sep,k/dq + dE_glob/dq|_b + sum_k (dE_glob/db) . db_k/dq
+
+    and the three passes below are its three terms: a forward walk for ``b``
+    and the smooth density, one ``value_and_grad`` of ``E_glob`` in both of its
+    arguments **at the whole** ``b``, and a second walk in which each chunk's
+    ``(E_sep,k, b_k)`` is pulled back with cotangent ``(1, dE_glob/db)``. Each
+    walk's tape is one chunk's, and the one global tape has no k axis at all.
+
+    This is the quadratic-functional rule the wedge sums obey one level down:
+    the *value* inside the Hartree energy must be the whole ``b`` while its
+    derivative is a raw sum over chunks. Accumulating per-chunk gradients of
+    ``E_sep + E_glob(b_k)`` instead would drop every cross term between two
+    chunks -- the reason this dataset used to be sent down the single pass.
+    """
+    nk = calculation.system.kpoints.nk
+    cache = _chunk_cache(calculation)
+    if "global" not in cache:
+        cache["global"] = jax.jit(jax.value_and_grad(
+            lambda q, b, rho: q_global_energy(calculation, q, b, rho),
+            argnums=(0, 1),
+        ))
+
+        def pull(q, psi, weights, eigenvalues, rows, cotangent):
+            (energy, _), back = jax.vjp(
+                lambda q: q_dependent_energy(calculation, q, psi, weights,
+                                             eigenvalues, rows, with_becsum=True),
+                q,
+            )
+            (slope,) = back((jnp.ones_like(energy), cotangent))
+            return energy, slope
+
+        cache["pull"] = jax.jit(pull)
+
+    raw, rho_smooth, norm = _frozen_sums(calculation, state, k_batch)
+    whole, unfinish = jax.vjp(calculation.finish_becsum, raw)
+    e_glob, (g_q, g_b) = cache["global"](q, whole, rho_smooth)
+    # ``finish_becsum`` is linear -- a symmetrisation, the identity on a
+    # spiral, which refuses symmetry -- so its transpose carries the cotangent
+    # from the finished ``b`` back to the raw one each chunk contributes to.
+    (cotangent,) = unfinish(g_b)
+
+    energy = e_glob + calculation.ewald + calculation.dispersion - norm + state.entropy
+    gradient = g_q
+    for padded, live in k_chunks(nk, k_batch):
+        psi, weights, eigenvalues = _chunk_arguments(state, padded, live)
+        rows = jnp.asarray(np.concatenate([padded, nk + padded]))
+        value, slope = cache["pull"](q, psi, weights, eigenvalues, rows, cotangent)
+        energy = energy + value
+        gradient = gradient + slope
+    return energy, gradient
 
 
 def compute_spiral_gradient(
@@ -360,36 +514,12 @@ def compute_spiral_gradient(
     q = jnp.asarray(calculation.system.spiral_q, dtype=float)
     batch = (calculation.k_batch if isinstance(k_batch, str) and k_batch == "default"
              else resolve_k_batch(k_batch))
-    if (calculation.is_ultrasoft and batch is not None
-            and batch < calculation.system.kpoints.nk):
-        # **The chunked route cannot express an augmented spiral**, and the
-        # reason is the Hartree energy rather than the augmentation: on this
-        # dataset the density carries ``q``, and a quadratic functional of a
-        # sum is not the sum of the per-chunk quadratic functionals, so
-        # accumulating :func:`q_dependent_energy`'s gradients would be wrong by
-        # every cross term. The dial's default on a CPU is the chunked end, so
-        # this overrides the dial rather than leaving the dispatch to pick.
-        # It is said out loud because the cost is real: the single pass carries
-        # every k-point's ``vkb(k +- q/2)`` and the displaced table's radial
-        # intermediates on one tape.
-        #
-        # ``batch < nk`` rather than ``batch is not None``, because a chunk at
-        # or above the whole axis is not chunking: the dispatch below sends it
-        # to the same single pass, so warning about it would be announcing an
-        # override that did not happen.
-        warnings.warn(
-            "dE/dq on an ultrasoft or PAW spiral is evaluated in a single pass "
-            f"over all {calculation.system.kpoints.nk} k-points rather than in "
-            f"chunks of {batch}: the density carries q on this dataset and the "
-            "Hartree energy is quadratic in it, so a sum of per-chunk "
-            "gradients is not the gradient. The peak working set scales with "
-            "nk rather than with the chunk size",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-        batch = None
     if batch is None or batch >= calculation.system.kpoints.nk:
         energy, gradient = _energy_and_gradient(calculation)(q, state)
+    elif calculation.is_ultrasoft:
+        # The density carries ``q`` on this dataset, and the chain rule through
+        # the whole ``becsum`` is what keeps the chunks exact -- see there.
+        energy, gradient = _split_energy_and_gradient(calculation, q, state, batch)
     else:
         energy, gradient = _chunked_energy_and_gradient(calculation, q, state, batch)
 

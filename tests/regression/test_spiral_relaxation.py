@@ -671,34 +671,37 @@ def test_symmetry_fixes_the_augmented_gradient_at_zero(dataset, pseudo_dir):
     assert np.abs(np.asarray(gradient.gradient)).max() < SYMMETRY_ZERO
 
 
-def test_an_augmented_gradient_is_one_pass_over_the_k_axis(pseudo_dir):
-    """The dial is overridden rather than obeyed, and it says so.
+@pytest.mark.parametrize("dataset", ["us", "paw"])
+def test_an_augmented_gradient_chunks_the_k_axis_exactly(dataset, pseudo_dir):
+    """The chain rule through the whole ``becsum`` regroups the same gradient.
 
     On an augmented dataset the density carries ``q`` and the Hartree energy is
-    quadratic in the density, so a sum of per-chunk gradients is **not** the
-    gradient -- the cross terms between chunks are missing. The chunked route is
-    therefore refused for this dataset by overriding ``k_batch``, and because
-    the dial's default on a CPU is the chunked end, the override is announced:
-    the peak then scales with ``n_k`` rather than with the chunk size.
+    quadratic in it, so a sum of per-chunk gradients of the whole energy would
+    miss every cross term between two chunks -- which is why this dataset was
+    sent down the single pass with a warning until 2026-09-28. The split route
+    differentiates the global terms once at the **whole** ``becsum`` and pulls
+    that gradient back through each chunk's, so it is the single pass's
+    derivative regrouped and must agree to round-off. The chunk sizes include
+    two whose last chunk is short (3 and 5, of 8 k-points), so the zero-weight
+    padding is exercised, and 8, which is the whole axis and goes down the
+    single pass itself.
 
-    Both halves are asserted, because a warning that fires on the wrong
-    condition is as bad as one that does not fire: a chunk size *below* ``n_k``
-    warns and gives the single pass's answer, and ``k_batch >= n_k`` is not
-    chunking at all and must go through silently.
+    A regression that dropped the pull-back would still reproduce the energy --
+    the energy is assembled from the same terms either way -- and would be
+    wrong in the gradient by the whole ``becsum`` channel, which on this cell
+    is most of it; the gradient is what is asserted to 1e-12.
     """
-    calculation, result = _converged_augmented("us", 0.3, pseudo_dir)
-    nk = calculation.system.kpoints.nk
+    calculation, result = _converged_augmented(dataset, 0.3, pseudo_dir)
     whole = compute_spiral_gradient(calculation, result, k_batch=None)
+    assert np.abs(np.asarray(whole.gradient)).max() > 1e-2  # a slope to regroup
 
-    with pytest.warns(RuntimeWarning, match="single pass"):
-        overridden = compute_spiral_gradient(calculation, result, k_batch=1)
-    assert overridden.gradient == pytest.approx(whole.gradient, abs=1e-12)
-
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        unchunked = compute_spiral_gradient(calculation, result, k_batch=nk)
-    assert not [w for w in caught if "single pass" in str(w.message)]
-    assert unchunked.gradient == pytest.approx(whole.gradient, abs=1e-12)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # the old override must not come back
+        for k_batch in (1, 2, 3, 5, 8):
+            chunked = compute_spiral_gradient(calculation, result, k_batch=k_batch)
+            assert chunked.gradient == pytest.approx(whole.gradient, abs=1e-12)
+            assert chunked.total_energy == pytest.approx(whole.total_energy,
+                                                         abs=1e-10)
 
 
 def test_a_tabulated_augmentation_table_is_refused(pseudo_dir, monkeypatch):

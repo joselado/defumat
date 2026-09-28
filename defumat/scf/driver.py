@@ -105,10 +105,13 @@ from defumat.pseudo.spinorbit import (
 )
 from defumat.batching import (
     fetch_wavefunctions, map_k, park_wavefunctions, resolve_band_batch,
-    resolve_k_batch, resolve_projectors, resolve_wfc_store,
+    resolve_k_batch, resolve_memory_mode, resolve_projectors, resolve_wfc_store,
 )
 from defumat.scf.continuation import (
     ContinuedState, continued_state, depolarize_tau,
+)
+from defumat.scf.streaming import (
+    stream_densities, stream_diagonalize, stream_start,
 )
 from defumat.scf.density import (
     becsum,
@@ -786,17 +789,60 @@ def _addusdens_spiral(rho_r, fft_index, grid, augmentation, cross, becsum_):
 
 
 @partial(jax.jit, static_argnames=("nbnd", "k_batch"))
-def _rotate_all(hamiltonian, vectors, nbnd: int, k_batch):
+def _rotate_all(hamiltonian, vectors, nbnd: int, k_batch, indices=None):
     """Rayleigh-Ritz at ``k_batch`` k-points at a time.
 
     ``wfcinit`` does this inside its own ``DO ik`` loop, and the working set is
     the same one the eigensolver has: the atomic orbitals of every k-point, plus
-    ``H`` applied to them.
+    ``H`` applied to them. ``indices`` restricts it to one streamed chunk, with
+    ``vectors`` holding only those k-points' span.
     """
+    if indices is None:
+        indices = jnp.arange(hamiltonian.nk)
     return map_k(
         lambda pair: rayleigh_ritz(hamiltonian, pair[0], pair[1], nbnd),
-        (jnp.arange(hamiltonian.nk), vectors),
+        (indices, vectors),
         batch=resolve_k_batch(k_batch),
+    )
+
+
+@eqx.filter_jit
+def _projector_rows(projectors, rows):
+    """``vkb`` at the basis rows ``rows``, ``(len(rows), npwx, nkb)``.
+
+    Formed from the core one row at a time on a lazy set -- ``init_us_2``
+    inside ``k_loop`` -- and gathered from the stored array otherwise.
+    """
+    if projectors.is_lazy:
+        return jax.vmap(projectors.at_k)(rows)
+    return projectors.stored[rows]
+
+
+def _planewaves_rows(planewaves, rows):
+    """The plane-wave spheres of the basis rows ``rows``, in the same order.
+
+    **Selected, not rebuilt**: which plane waves are in each sphere and in which
+    order is what every coefficient is written against, so a chunk reads the
+    whole set's own rows -- the rule
+    :func:`~defumat.forces.spiral.q_dependent_energy` states for its chunks.
+    """
+    rows = np.asarray(rows)
+    return type(planewaves)(
+        indices=planewaves.indices[rows], mask=planewaves.mask[rows],
+        npw=tuple(planewaves.npw[i] for i in rows) if planewaves.npw else (),
+        ecutwfc=planewaves.ecutwfc, gamma_only=planewaves.gamma_only,
+    )
+
+
+def _kpoints_rows(kpoints, rows):
+    """The k-point list restricted to ``rows``, every per-k leaf sliced."""
+    rows = np.asarray(rows)
+    pick = [lambda k: k.coords, lambda k: k.weights]
+    if kpoints.path_length is not None:
+        pick.append(lambda k: k.path_length)
+    return eqx.tree_at(
+        lambda k: tuple(get(k) for get in pick), kpoints,
+        tuple(get(kpoints)[rows] for get in pick),
     )
 
 
@@ -1645,6 +1691,47 @@ def _adopt_rebuilt_sphere(moved, source, planewaves, smooth, kpoints, cell) -> N
     )
 
 
+def _resolve_memory_mode_for(memory_mode, system, pseudos, k_batch, projectors,
+                             david) -> str:
+    """The memory mode a :class:`Calculation` runs in, ``speed`` checked first.
+
+    ``speed`` is taken as asked on a CPU, where there is no card to overflow,
+    and wherever the caller has set the dials that decide the peak -- a
+    ``k_batch`` or ``projectors`` of their own, or ``DEFUMAT_K_BATCH`` -- since
+    then the preset is not what runs and an estimate of it would describe
+    another calculation. Otherwise :func:`~defumat.sizing.speed_mode_fits`
+    sizes the whole k-set in flight against the device, and a run that would
+    not fit falls back to ``memory``: the same physics, the same numbers to
+    round-off, one k-point's working set on the card.
+    """
+    from defumat import batching
+
+    mode = resolve_memory_mode(memory_mode)
+    if mode != "speed" or batching._backend() == "cpu":
+        return mode
+    dials_set = (
+        k_batch != "default" or projectors not in (None, "default")
+        or batching._from_environment("DEFUMAT_K_BATCH") is not batching._UNSET
+    )
+    if dials_set:
+        return mode
+    from defumat.sizing import speed_mode_fits
+
+    check = speed_mode_fits(system, pseudos, nbnd=system.nbnd,
+                            davidson_basis=david)
+    if check.fits:
+        return mode
+    warnings.warn(
+        f"memory_mode='speed' does not fit this device ({check.describe()}); "
+        "running in memory_mode='memory' instead -- one k-point at a time, "
+        "projectors rebuilt per k-point and the wavefunctions streamed from "
+        "host memory. Same physics and the same numbers to round-off; pass an "
+        "explicit k_batch to override",
+        RuntimeWarning, stacklevel=3,
+    )
+    return "memory"
+
+
 class Calculation:
     """Everything that stays fixed while the density changes.
 
@@ -1663,7 +1750,16 @@ class Calculation:
         david: int | None = None,
         projectors: str | None = "default",
         origin_tangent: bool = True,
+        memory_mode: str | None = "default",
     ):
+        #: ``"memory"`` or ``"speed"`` -- the preset the ``"default"`` dials
+        #: below resolve from (:data:`~defumat.batching.MEMORY_MODES`). Decided
+        #: before anything is allocated, because ``speed`` on an accelerator is
+        #: *checked* first: when its estimated peak would not fit the card the
+        #: calculation falls back to ``memory`` and says so, rather than dying
+        #: in its first Davidson call.
+        self.memory_mode = _resolve_memory_mode_for(
+            memory_mode, system, pseudos, k_batch, projectors, david)
         # **The substitution is conditional now.** Half-sphere storage is
         # consumed where it can be and substituted away where it cannot, so
         # that a run which *can* use it is not silently paying twice.
@@ -1690,7 +1786,7 @@ class Calculation:
         # touches the k axis. One -- QE's ``k_loop`` -- unless asked otherwise;
         # ``None`` is a single ``vmap`` over all of them. See
         # :mod:`defumat.batching`.
-        self.k_batch = resolve_k_batch(k_batch)
+        self.k_batch = resolve_k_batch(k_batch, self.memory_mode)
         #: Carry the ``l = 1`` tangent of ``<k+G|beta>`` at ``k + G = 0``.
         #:
         #: The default is the derivative the operator actually has. ``False``
@@ -1854,7 +1950,7 @@ class Calculation:
         # on demand, which is ``init_us_2`` inside ``c_bands.f90``'s ``k_loop``.
         # It is a **resident**-set dial, so unlike ``k_batch`` it sits under
         # every stage rather than inside one. See :mod:`defumat.batching`.
-        self.projector_storage = resolve_projectors(projectors)
+        self.projector_storage = resolve_projectors(projectors, self.memory_mode)
         self.projectors = self.projector_core.at_positions(
             system.structure.positions,
             lazy=self.projector_storage == "rebuild",
@@ -2407,12 +2503,24 @@ class Calculation:
         """Whether any species carries a Hubbard U."""
         return self.hubbard is not None
 
-    def occupation_matrix(self, wavefunctions, weights) -> jnp.ndarray:
-        """``new_ns``: the symmetrised occupation matrix of the current states."""
+    def occupation_matrix(self, wavefunctions, weights, *, rows=None,
+                          symmetrize: bool = True) -> jnp.ndarray:
+        """``new_ns``: the symmetrised occupation matrix of the current states.
+
+        ``rows`` and ``symmetrize = False`` are :meth:`becsum`'s: one chunk's
+        raw sum, to be added to the others and symmetrised once
+        (:meth:`finish_occupation_matrix`).
+        """
+        wfcU = self.wfcU if rows is None else self.wfcU[np.asarray(rows)]
         ns = occupation_matrix(
-            self.wfcU, wavefunctions, weights,
+            wfcU, wavefunctions, weights,
             self._hubbard_columns, self._hubbard_mask, self.k_batch,
         )
+        if symmetrize:
+            ns = self.finish_occupation_matrix(ns)
+        return ns
+
+    def finish_occupation_matrix(self, ns) -> jnp.ndarray:
         if self.hubbard_symmetry is not None:
             ns = self.hubbard_symmetry.apply(ns)
         return ns
@@ -3422,22 +3530,55 @@ class Calculation:
         )
         return energy, _paw_block_matrices(self.augmentation, blocks, self.nspin_mag)
 
-    def becsum(self, wavefunctions, weights) -> tuple:
-        """``becsum`` for every ultrasoft species, or ``()`` when there are none."""
+    def becsum(self, wavefunctions, weights, *, rows=None,
+               symmetrize: bool = True) -> tuple:
+        """``becsum`` for every ultrasoft species, or ``()`` when there are none.
+
+        ``rows`` names the k-points ``wavefunctions`` and ``weights`` hold when
+        they are one chunk of a streamed pass (:func:`~defumat.batching.k_chunks`):
+        the projectors are then that chunk's, built or sliced, and never the
+        whole-k array -- which on a ``rebuild`` set this method otherwise
+        materialises. ``symmetrize = False`` returns the raw sum over the
+        chunk's k-points, so that the chunks can be added before the one
+        symmetrisation the whole sum gets (it is linear, so the order is
+        exact).
+        """
         if not self.is_ultrasoft:
             return ()
+        vkb = self.projectors.vkb if rows is None else self.projectors_at(rows)
         if self.noncolin:
-            values = self._noncollinear_becsum(wavefunctions, weights)
+            values = self._noncollinear_becsum(wavefunctions, weights, vkb)
         else:
             values = becsum(
-                wavefunctions, self.projectors.vkb, weights, self.species_channels,
-                self.k_batch,
+                wavefunctions, vkb, weights, self.species_channels, self.k_batch,
             )
+        if symmetrize and self._becsum_symmetry is not None:
+            values = self._becsum_symmetry.apply(values)
+        return values
+
+    def finish_becsum(self, values) -> tuple:
+        """The symmetrisation :meth:`becsum` skips under ``symmetrize = False``."""
         if self._becsum_symmetry is not None:
             values = self._becsum_symmetry.apply(values)
         return values
 
-    def _noncollinear_becsum(self, wavefunctions, weights) -> tuple:
+    def basis_rows(self, rows) -> np.ndarray:
+        """The rows of the *basis* list a chunk of states ``rows`` reads.
+
+        The same rows for every regime but one: a spiral's basis list is the
+        doubled ``k + q/2, k - q/2`` one, so the state at ``ik`` reads rows
+        ``ik`` and ``ik + nk`` -- up block first, as the whole list is laid out.
+        """
+        rows = np.asarray(rows)
+        if not self.spiral:
+            return rows
+        return np.concatenate([rows, self.system.kpoints.nk + rows])
+
+    def projectors_at(self, rows) -> jnp.ndarray:
+        """``vkb`` for the basis rows a chunk of states reads -- built, not sliced, when lazy."""
+        return _projector_rows(self.projectors, jnp.asarray(self.basis_rows(rows)))
+
+    def _noncollinear_becsum(self, wavefunctions, weights, vkb=None) -> tuple:
         """``sum_bec`` then ``add_becsum_so``, per species.
 
         The projector occupations are accumulated as a spin-density *matrix* and
@@ -3449,8 +3590,8 @@ class Calculation:
         ``j`` shell its occupation belongs to.
         """
         spinors = spinor_becsum(
-            wavefunctions[0], self.projectors.vkb, weights[0], self.species_channels,
-            self.k_batch, spiral=self.spiral,
+            wavefunctions[0], self.projectors.vkb if vkb is None else vkb,
+            weights[0], self.species_channels, self.k_batch, spiral=self.spiral,
         )
         values = []
         for t, block in enumerate(spinors):
@@ -3963,23 +4104,48 @@ class Calculation:
         from it, and -- once there is an augmentation charge -- where the rest
         of it is added.
         """
-        dense, smooth = self.basis.dense, self.basis.smooth
+        rho = self.smooth_density(wavefunctions, weights)
         if becsum_ is None:
             becsum_ = self.becsum(wavefunctions, weights)
+        return self.finish_density(rho, becsum_)
+
+    def smooth_density(self, wavefunctions, weights, *, rows=None) -> jnp.ndarray:
+        """``sum_band``'s ``|psi|^2`` on the smooth grid, before anything else.
+
+        The part of :meth:`density` that reads the wavefunctions, and the part
+        a streamed pass adds up chunk by chunk: ``rows`` names the k-points the
+        arguments hold, and the per-k FFT indices are sliced to match.
+        """
+        smooth = self.basis.smooth
         if self.noncolin:
-            rho = _spinor_density_of_bands(
-                wavefunctions[0], self.state_fft_index, smooth.grid, weights[0],
-                self.system.cell, self.nspin_mag, self.k_batch,
+            index = self.state_fft_index
+            return _spinor_density_of_bands(
+                wavefunctions[0], index if rows is None else index[rows],
+                smooth.grid, weights[0], self.system.cell, self.nspin_mag,
+                self.k_batch,
             )
-        else:
-            rho = _density_of_bands(
-                wavefunctions, self.fft_index, smooth.grid, weights, self.system.cell,
-                self.k_batch, fft_index_minus=self.fft_index_minus,
-            )
-        return self.symmetrize(self.augmented(to_dense(rho, smooth, dense), becsum_))
+        index, minus = self.fft_index, self.fft_index_minus
+        if rows is not None:
+            index = index[self.basis_rows(rows)]
+            minus = None if minus is None else minus[self.basis_rows(rows)]
+        return _density_of_bands(
+            wavefunctions, index, smooth.grid, weights, self.system.cell,
+            self.k_batch, fft_index_minus=minus,
+        )
+
+    def finish_density(self, rho_smooth, becsum_) -> jnp.ndarray:
+        """Lift to the dense grid, add the augmentation charge, symmetrise.
+
+        All three are linear, which is why a sum of :meth:`smooth_density`
+        over chunks can be finished once and be the whole-set density.
+        """
+        dense, smooth = self.basis.dense, self.basis.smooth
+        return self.symmetrize(
+            self.augmented(to_dense(rho_smooth, smooth, dense), becsum_))
 
     def kinetic_energy_density(self, wavefunctions, weights,
-                               symmetrize: bool = True) -> jnp.ndarray:
+                               symmetrize: bool = True, *, rows=None,
+                               finish: bool = True) -> jnp.ndarray:
         """``tau`` from the occupied states, on the **dense** grid, Ry.
 
         ``sum_band.f90``'s meta-GGA branch, lifted to the dense grid the same
@@ -4008,19 +4174,30 @@ class Calculation:
                 "this calculation's functional is not a meta-GGA, so k + G was "
                 "never built; tau has no consumer here"
             )
-        dense, smooth = self.basis.dense, self.basis.smooth
+        smooth = self.basis.smooth
+        # ``rows``: one chunk of a streamed pass, as in :meth:`smooth_density`;
+        # ``finish = False`` then stops before the lift and the symmetrisation,
+        # which :meth:`finish_kinetic_energy_density` applies to the sum.
+        kplusg = self.kplusg
         if self.noncolin:
+            index = self.state_fft_index
+            if rows is not None:
+                index, kplusg = index[rows], kplusg[self.basis_rows(rows)]
             # ``tau`` is a 2x2 matrix in spin space, carried on the Pauli basis
             # exactly as the density is -- a trace and an axial vector, and the
             # same ``nspin_mag`` decides whether the vector part exists at all.
             tau = _spinor_kinetic_of_bands(
-                wavefunctions[0], self.state_fft_index, smooth.grid, weights[0],
-                self.system.cell, self.kplusg, self.nspin_mag, self.k_batch,
+                wavefunctions[0], index, smooth.grid, weights[0],
+                self.system.cell, kplusg, self.nspin_mag, self.k_batch,
             )
         else:
+            index = self.fft_index
+            if rows is not None:
+                index = index[self.basis_rows(rows)]
+                kplusg = kplusg[self.basis_rows(rows)]
             tau = _kinetic_of_bands(
-                wavefunctions, self.fft_index, smooth.grid, weights,
-                self.system.cell, self.kplusg, self.k_batch,
+                wavefunctions, index, smooth.grid, weights,
+                self.system.cell, kplusg, self.k_batch,
                 # The half sphere needs ``4 (Re h)^2`` where the whole one
                 # needs ``|grad psi|^2``: ``i(k+G) c_G`` is *odd* in ``G``, so
                 # unlike the density this is not a conjugate fill inside the
@@ -4028,7 +4205,13 @@ class Calculation:
                 # (:func:`~defumat.scf.density.band_kinetic_density`).
                 self.gamma_only,
             )
-        tau = to_dense(tau, smooth, dense)
+        if not finish:
+            return tau
+        return self.finish_kinetic_energy_density(tau, symmetrize)
+
+    def finish_kinetic_energy_density(self, tau, symmetrize: bool = True):
+        """The dense-grid lift and the ``sym_rho`` of :meth:`kinetic_energy_density`."""
+        tau = to_dense(tau, self.basis.smooth, self.basis.dense)
         return self.symmetrize(tau) if symmetrize else tau
 
     def hamiltonian(self, v_scf: jnp.ndarray, ddd_paw=None, hubbard=None) -> tuple:
@@ -4445,7 +4628,8 @@ class Calculation:
             return 0.5 * np.stack([1.0 + along_z, 1.0 - along_z], axis=1)
         return np.concatenate([np.ones((len(atoms), 1)), weights], axis=1)
 
-    def starting_wavefunctions(self, hamiltonians, nbnd: int, span=None) -> jnp.ndarray:
+    def starting_wavefunctions(self, hamiltonians, nbnd: int, span=None,
+                               rows=None) -> jnp.ndarray:
         """The first guess at the wavefunctions, from the atomic orbitals.
 
         QE's ``wfcinit``: build the pseudo-atomic orbitals of every atom, then
@@ -4466,7 +4650,20 @@ class Calculation:
         and need not be sorted. That is what makes it safe to hand over the
         converged states of a *different* spin regime
         (:mod:`defumat.scf.continuation`).
+
+        ``rows`` builds the start for one streamed chunk of k-points only --
+        their orbitals, their random top-up, their Rayleigh-Ritz -- and
+        returns ``(nspin, len(rows), nbnd, ndim)``. Every piece is per k-point
+        (the random vectors use one fixed key at every k), so the chunks
+        together are the whole-set start to the last bit.
         """
+        if rows is not None:
+            rows = np.asarray(rows)
+            basis_rows = self.basis_rows(rows)
+            planewaves = _planewaves_rows(self.basis.planewaves, basis_rows)
+            kpoints = _kpoints_rows(self.basis_kpoints, basis_rows)
+        else:
+            planewaves, kpoints = self.basis.planewaves, self.basis_kpoints
         if span is None:
             if self._starts_from_spin_angle_functions():
                 # ``atomic_wfc_so``: the ``|l j m_j>`` themselves, which is what
@@ -4475,28 +4672,29 @@ class Calculation:
                 # start -- see the method's docstring.
                 atomic = spinor_atomic_wavefunctions(
                     self.pseudos, self.system.structure, self.system.cell,
-                    self.basis.smooth, self.basis.planewaves,
-                    self.basis_kpoints, lspinorb=True,
+                    self.basis.smooth, planewaves, kpoints, lspinorb=True,
                 )
             else:
                 atomic = atomic_wavefunctions(
                     self.pseudos, self.system.structure, self.system.cell,
-                    self.basis.smooth, self.basis.planewaves, self.basis_kpoints,
+                    self.basis.smooth, planewaves, kpoints,
                 )
                 if self.noncolin:
                     atomic = self._as_spinors(atomic)
         else:
-            atomic = jnp.asarray(span)
             expected = self.npol * self.basis.npwx
             # ``hamiltonians[0].nk`` and not ``basis_kpoints.nk``: a spiral's
             # basis list is the doubled one (``k +- q/2``) while its *states*
             # number one per physical k-point.
             nk = hamiltonians[0].nk
-            if atomic.shape[-1] != expected or atomic.shape[-3] != nk:
+            if np.shape(span)[-1] != expected or np.shape(span)[-3] != nk:
                 raise ValueError(
-                    f"span has shape {tuple(atomic.shape)}; this calculation "
+                    f"span has shape {tuple(np.shape(span))}; this calculation "
                     f"needs (..., {nk}, nvec, {expected})"
                 )
+            # Sliced where it lives -- a streamed run's span is a host array,
+            # and bringing it across whole is what streaming exists to avoid.
+            atomic = jnp.asarray(span if rows is None else span[..., rows, :, :])
 
         # One span per channel, or one shared by all of them -- which is what
         # the atomic orbitals are, since what splits the channels is the
@@ -4518,6 +4716,8 @@ class Calculation:
                 reference.state_mask if self.noncolin
                 else jnp.tile(self.basis.planewaves.mask, (1, self.npol))
             )
+            if rows is not None:
+                kinetic, mask = kinetic[rows], mask[rows]
             extra = map_k(
                 lambda arrays: starting_vectors(
                     None, missing, ndim, arrays[0], arrays[1], atomic.dtype
@@ -4538,6 +4738,7 @@ class Calculation:
             _rotate_all(
                 hamiltonian, atomic[channel] if per_channel else atomic,
                 nbnd, self.k_batch,
+                None if rows is None else jnp.asarray(rows),
             )[1]
             for channel, hamiltonian in enumerate(hamiltonians)
         ])
@@ -4592,8 +4793,10 @@ class Calculation:
         if self.spiral:
             # The two halves of the doubled list are the two components'
             # orbitals -- at ``k + q/2`` and at ``k - q/2`` -- so each one seeds
-            # its own component and neither seeds the other.
-            nk = self.system.kpoints.nk
+            # its own component and neither seeds the other. Half the rows
+            # rather than ``kpoints.nk``, so that one streamed chunk's doubled
+            # list splits the same way the whole one does.
+            nk = atomic.shape[0] // 2
             upper, lower = atomic[:nk], atomic[nk:]
             up = jnp.concatenate([upper, jnp.zeros_like(upper)], axis=-1)
             down = jnp.concatenate([jnp.zeros_like(lower), lower], axis=-1)
@@ -5160,6 +5363,7 @@ def run_scf(
     k_batch: int | None | str = "default",
     projectors: str | None = "default",
     wfc_store: str | None = "default",
+    memory_mode: str | None = "default",
     starting_density: jnp.ndarray | None = None,
     starting_becsum: tuple | None = None,
     starting_ns: jnp.ndarray | None = None,
@@ -5321,7 +5525,7 @@ def run_scf(
     """
     calculation = calculation or Calculation(
         system, pseudos, diagonalization=diagonalization, k_batch=k_batch,
-        david=david, projectors=projectors,
+        david=david, projectors=projectors, memory_mode=memory_mode,
     )
     nbnd = nbnd or system.nbnd or default_nbnd(
         calculation.nelec,
@@ -5749,7 +5953,12 @@ def run_scf(
     # whole set for nothing; ``host`` is ``c_bands.f90``'s buffer and is the
     # accelerator default. See :mod:`defumat.batching` for what it wins and --
     # more to the point -- what it does not.
-    wfc_store = resolve_wfc_store(wfc_store)
+    #
+    # ``stream`` -- the memory mode's default on an accelerator -- keeps the
+    # store in host memory for the whole run and moves one k-chunk at a time
+    # through every pass that reads it (:mod:`defumat.scf.streaming`).
+    wfc_store = resolve_wfc_store(wfc_store, calculation.memory_mode)
+    streaming = wfc_store == "stream"
     if verbose:
         # **What is in force, said once.** All three of these are resolved from
         # the platform and then from an environment variable, and all three
@@ -5764,7 +5973,8 @@ def run_scf(
         def _dial(value):
             return "all" if value is None else value
 
-        print(f"  k_batch = {_dial(calculation.k_batch)}  "
+        print(f"  memory_mode = {calculation.memory_mode}  "
+              f"k_batch = {_dial(calculation.k_batch)}  "
               f"band_batch = {_dial(resolve_band_batch())}  "
               f"wfc_store = {wfc_store}  "
               f"projectors = {calculation.projector_storage}")
@@ -5938,7 +6148,10 @@ def run_scf(
         # if the density turns out to be better than the eigenvalues, the loose
         # starting ethr was a false economy and the iteration is redone.
         floor = ethr * max(1.0, calculation.nelec)
-        if wavefunctions is None:
+        if wavefunctions is None and streaming:
+            wavefunctions = stream_start(
+                calculation, hamiltonians, nbnd, span=starting_wavefunctions)
+        elif wavefunctions is None:
             wavefunctions = calculation.starting_wavefunctions(
                 hamiltonians, nbnd, span=starting_wavefunctions
             )
@@ -6005,10 +6218,20 @@ def run_scf(
             # Back from the buffer, QE's ``get_buffer``. Unconditional rather
             # than under the dial: a resume, or a caller that handed its own
             # span in, can reach here with a store the dial did not park.
-            wavefunctions = fetch_wavefunctions(wavefunctions)
-            eigenvalues, wavefunctions, steps, unsettled = calculation.diagonalize(
-                hamiltonians, nbnd, wavefunctions, thresholds, return_steps=True
-            )
+            if streaming:
+                # The store stays where it is and the solve walks it, chunk by
+                # chunk, writing each chunk's states back in place. A store that
+                # arrived on the device -- a resume, a caller's span -- is
+                # brought across once here and stays.
+                wavefunctions = park_wavefunctions(wavefunctions, "stream")
+                eigenvalues, steps, unsettled = stream_diagonalize(
+                    calculation, hamiltonians, nbnd, wavefunctions, thresholds)
+                eigenvalues = jnp.asarray(eigenvalues)
+            else:
+                wavefunctions = fetch_wavefunctions(wavefunctions)
+                eigenvalues, wavefunctions, steps, unsettled = calculation.diagonalize(
+                    hamiltonians, nbnd, wavefunctions, thresholds, return_steps=True
+                )
             # ``c_bands.f90:159``: ``avg_iter / nkstot``, and ``nkstot`` counts
             # spin channels, so the mean over both axes is the same quantity.
             # One line per attempt, as ``pw.x`` prints one per ``c_bands``
@@ -6032,10 +6255,22 @@ def run_scf(
                 print(f"     ethr = {ethr:9.2E},  avg # of iterations = "
                       f"{steps_here:4.1f}{stalled}")
             wg, levels = calculation.occupations(eigenvalues)
-            becsum_out = calculation.becsum(wavefunctions, wg)
-            rho_out = calculation.density(wavefunctions, wg, becsum_out)
-            if tau_state is not None:
-                tau_out = calculation.kinetic_energy_density(wavefunctions, wg)
+            if streaming:
+                # One walk of the store for every sum over k the iteration
+                # needs, each finished once; ``ns`` is picked up below where
+                # the whole-set path computes it.
+                becsum_out, rho_out, streamed_tau, streamed_ns = stream_densities(
+                    calculation, wavefunctions, wg,
+                    kinetic=tau_state is not None,
+                    hubbard=calculation.is_hubbard,
+                )
+                if tau_state is not None:
+                    tau_out = streamed_tau
+            else:
+                becsum_out = calculation.becsum(wavefunctions, wg)
+                rho_out = calculation.density(wavefunctions, wg, becsum_out)
+                if tau_state is not None:
+                    tau_out = calculation.kinetic_energy_density(wavefunctions, wg)
             # **The last read of the store in this iteration**, so back to the
             # buffer it goes. Everything between here and the fetch above --
             # the energy terms, ``v_of_rho`` on the dense grid, the mixer's
@@ -6088,7 +6323,8 @@ def run_scf(
                     becsum_state, becsum_out,
                 )
             if calculation.is_hubbard:
-                ns_out = calculation.occupation_matrix(wavefunctions, wg)
+                ns_out = (streamed_ns if streaming
+                          else calculation.occupation_matrix(wavefunctions, wg))
                 if iteration == 1 and starting_density is None and starting_ns is None:
                     # ``IF (first .AND. starting_pot == 'atomic') CALL ns_adj()``:
                     # skipped when the caller supplied ``starting_ns`` as well:

@@ -150,7 +150,8 @@ import numpy as np
 from defumat.basis.fftgrid import fft_grid_dimensions, gcut_from_ecut
 from defumat.system.builder import System
 
-__all__ = ["SizeEstimate", "estimate_size"]
+__all__ = ["SizeEstimate", "estimate_size", "SpeedCheck", "speed_mode_fits",
+           "SPEED_HEADROOM"]
 
 #: Bytes in one complex number at the precision a run will use.
 _COMPLEX_BYTES = {"double": 16, "single": 8}
@@ -817,3 +818,68 @@ def estimate_size(
         arrays=arrays, eigensolver_buffer=eigensolver_buffer,
         setup_transient=setup_transient,
     )
+
+
+#: The fraction of the device's free memory a ``speed``-mode estimate may fill
+#: before :func:`speed_mode_fits` says it does not fit.
+#:
+#: **It is a calibration and it is this module's floor showing.**
+#: :attr:`SizeEstimate.peak_bytes` is a floor by construction, and measured
+#: against ``peak_bytes_in_use`` on a GTX 1060 (jax 0.11.1, eight-atom silicon
+#: at 20 Ry, ``nosym``, the whole k-set in flight) the card used **1.57-1.61x**
+#: the estimate at 8, 27 and 64 k-points -- 261.3 MB against 166.4, 876.8
+#: against 557.5, 2133.3 against 1323.8. ``1 / 1.61 = 0.62``, so a threshold at
+#: 0.6 falls back when the *measured* peak would pass the whole free pool. The
+#: module docstring's H200 and A100 sweeps put the eigensolver-buffer fit
+#: within 3 per cent on most shapes and 20 per cent low on one, so on those
+#: cards 0.6 is conservative -- which is the direction that matters, since the
+#: cost of a wrong ``fits`` is a run that dies in its first Davidson call and
+#: the cost of a wrong ``does not fit`` is a run that is about 20 per cent
+#: slower.
+SPEED_HEADROOM = 0.6
+
+
+@dataclass(frozen=True)
+class SpeedCheck:
+    """Whether a ``speed``-mode run fits the device, and the two numbers behind it."""
+
+    fits: bool
+    #: :attr:`SizeEstimate.peak_bytes` for the whole k-set in flight, bytes.
+    estimate: int
+    #: ``bytes_limit - bytes_in_use`` on the device, bytes; ``None`` where the
+    #: client reports no statistics (the CPU client returns ``None``), in
+    #: which case there is nothing to fit and :attr:`fits` is ``True``.
+    available: int | None
+    headroom: float = SPEED_HEADROOM
+
+    def describe(self) -> str:
+        if self.available is None:
+            return "no device memory statistics on this backend"
+        return (f"estimated peak {self.estimate / 2**30:.2f} GiB against "
+                f"{self.headroom:.0%} of {self.available / 2**30:.2f} GiB free")
+
+
+def speed_mode_fits(system, pseudos, nbnd: int | None = None,
+                    davidson_basis: int | None = None,
+                    headroom: float = SPEED_HEADROOM) -> SpeedCheck:
+    """Would ``memory_mode = 'speed'`` fit on the default device?
+
+    Sizes the run with every k-point and every band in flight and the
+    projectors stored -- :func:`~defumat.batching.memory_preset`'s ``speed`` on
+    an accelerator -- and compares :attr:`SizeEstimate.peak_bytes` with
+    ``headroom`` times what the allocator has left. Nothing is allocated; the
+    only device call is ``memory_stats()``, whose keys are indexed rather than
+    ``.get`` so that an unpopulated one raises instead of reading as a pass.
+    """
+    import jax
+
+    stats = jax.devices()[0].memory_stats()
+    if not stats:
+        return SpeedCheck(fits=True, estimate=0, available=None, headroom=headroom)
+    available = int(stats["bytes_limit"]) - int(stats["bytes_in_use"])
+    estimate = estimate_size(
+        system, pseudos, nbnd=nbnd, k_batch=None, davidson_basis=davidson_basis,
+        band_batch=None, projectors="store",
+    ).peak_bytes
+    return SpeedCheck(fits=estimate <= headroom * available, estimate=int(estimate),
+                      available=available, headroom=headroom)

@@ -151,7 +151,13 @@ SHARED_OPTIONS = frozenset({
 #: ``l = 1`` tangent at ``k + G = 0``, which is what a ``ph.x`` comparison on a
 #: Gamma-containing mesh is held to; see
 #: :func:`~defumat.pseudo.projectors.build_projector_core`.
-SETUP_ONLY_OPTIONS = frozenset({"projectors", "origin_tangent"})
+#:
+#: ``memory_mode`` -- ``'memory'`` or ``'speed'``, :data:`~defumat.batching.MEMORY_MODES`
+#: -- is here for ``projectors``'s reason and one of its own. It is the preset
+#: the ``'default'`` dials of the ``Calculation`` resolve from, so it decides
+#: *which* setup exists; and ``speed`` on an accelerator is checked against the
+#: card when that setup is built, which only happens once.
+SETUP_ONLY_OPTIONS = frozenset({"projectors", "origin_tangent", "memory_mode"})
 
 #: The subset of :data:`SHARED_OPTIONS` that describes the **SCF loop** and
 #: nothing else, and is therefore *not* forwarded past it.
@@ -546,7 +552,7 @@ class Calculator:
         written for; it is the same mistake as sizing ``K_POINTS gamma`` as the
         request rather than as the substitution, one option along.
         """
-        from defumat.batching import resolve_k_batch
+        from defumat.batching import resolve_k_batch, resolve_projectors
         from defumat.sizing import estimate_size
 
         options.setdefault("davidson_basis", self.defaults.get("david"))
@@ -560,11 +566,14 @@ class Calculator:
         # The same argument as ``k_batch`` below: this calculator's own answer,
         # not the library's, because the question is "will *this run* fit" and
         # the dial changes the largest line in the table.
-        options.setdefault("projectors",
-                           self.defaults.get("projectors", "default"))
+        # Both resolved through this calculator's memory mode, which is the
+        # preset the run's own ``"default"`` dials come from.
+        mode = self.defaults.get("memory_mode", "default")
+        options.setdefault("projectors", resolve_projectors(
+            self.defaults.get("projectors", "default"), mode))
         if options.get("k_batch") is None:
             options["k_batch"] = resolve_k_batch(
-                self.defaults.get("k_batch", "default")
+                self.defaults.get("k_batch", "default"), mode
             )
         return estimate_size(self.system, self.pseudos, **options)
 
@@ -636,13 +645,14 @@ class Calculator:
                 david=self.defaults.get("david"),
                 projectors=self.defaults.get("projectors", "default"),
                 origin_tangent=self.defaults.get("origin_tangent", True),
+                memory_mode=self.defaults.get("memory_mode", "default"),
             )
         return self._calculation
 
     #: The options that define a :class:`~defumat.scf.driver.Calculation`
     #: rather than one run over it. Given per call, they have to rebuild it.
     SETUP_OPTIONS = ("diagonalization", "k_batch", "david", "projectors",
-                     "origin_tangent")
+                     "origin_tangent", "memory_mode")
 
     def _adopt(self, options) -> None:
         """Take a per-call setup option as this calculator's own.
@@ -655,7 +665,8 @@ class Calculator:
         changed = {name: options[name] for name in self.SETUP_OPTIONS
                    if name in options and options[name] != self.defaults.get(
                        name, "default"
-                       if name in ("k_batch", "projectors") else None)}
+                       if name in ("k_batch", "projectors", "memory_mode")
+                       else None)}
         if changed:
             self.defaults.update(changed)
             self._calculation = None

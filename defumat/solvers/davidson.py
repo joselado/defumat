@@ -791,8 +791,17 @@ def _every_k(
     *,
     return_steps: bool = False,
     return_finite: bool = False,
+    indices=None,
 ):
     """One compiled solve of the whole k-set, by one of the two routes.
+
+    ``indices`` restricts it to a chunk of k-points, named by their index in
+    the whole set: ``psi0`` is then that chunk's ``(chunk, nbnd, ndim)`` and
+    everything returned has the chunk's length. The Hamiltonian stays whole --
+    it is indexed by ``ik`` already, and slicing it would mean knowing which of
+    its leaves carry a k axis -- and so does ``ethr``, gathered by the same
+    global ``ik``. This is what :func:`~defumat.batching.k_chunks` streams
+    through.
 
     ``return_steps`` and ``return_finite`` are keyword-only and last on purpose:
     ``tools/gpu``'s memory tool lowers this unit by position, so a new
@@ -814,7 +823,9 @@ def _every_k(
     # ``lax.switch`` under ``vmap`` evaluates every branch of the ladder
     # instead of one. So the narrowing is taken on exactly the routes that have
     # no batch axis, which are the ones the large single-k cells run on anyway.
-    narrow = hamiltonian.nk == 1 or batch == 1
+    if indices is None:
+        indices = jnp.arange(hamiltonian.nk)
+    narrow = indices.shape[0] == 1 or batch == 1
 
     def solve(ik, start):
         # The threshold rides the traced ``ethr`` slot as an ``(nk, nbnd)``
@@ -832,7 +843,6 @@ def _every_k(
             return_steps=return_steps, return_finite=return_finite,
         )
 
-    indices = jnp.arange(hamiltonian.nk)
     if psi0 is None:
         return map_k(lambda ik: solve(ik, None), indices, batch=batch)
     return map_k(lambda pair: solve(*pair), (indices, psi0), batch=batch)
@@ -886,8 +896,14 @@ def davidson_eigensolver_all(
     k_batch: int | None | str = "default",
     robust_retry: bool = True,
     return_steps: bool = False,
+    indices=None,
 ):
     """Every k-point, ``k_batch`` of them at a time.
+
+    ``indices`` solves only the k-points it names, with ``psi0`` holding just
+    theirs, and returns arrays of that length -- one chunk of a streamed pass
+    (:func:`~defumat.batching.k_chunks`). ``ethr`` is still indexed by the
+    global k-point, so a per-band threshold is passed whole.
 
     This is where the k-axis working set is largest: each k-point in flight
     holds ``david * nbnd`` subspace vectors of length ``npol * npwx``, three of
@@ -979,10 +995,30 @@ def davidson_eigensolver_all(
     # executable's argument-plus-output requirement down by exactly one buffer
     # and sets ``memory_analysis().alias_size_in_bytes`` to that buffer's size,
     # so the win is real and it is this structure that is in the way.
+    handle = _launch_checked(hamiltonian, nbnd, psi0, ethr, residual_threshold,
+                             david, max_iterations, k_batch, return_steps,
+                             indices, robust_retry)
+    if not robust_retry:
+        return handle
+    return _settle(*handle)
+
+
+def _launch_checked(hamiltonian, nbnd, psi0, ethr, residual_threshold, david,
+                    max_iterations, k_batch, return_steps, indices, robust_retry):
+    """The fast route dispatched -- **not** waited for -- and what settling it needs.
+
+    JAX dispatches asynchronously, so this returns as soon as the solve is
+    queued; nothing here reads a result on the host. With ``robust_retry``
+    the return is the handle :func:`_settle` takes, and without it the solve's
+    own outputs.
+    """
     arguments = (hamiltonian, nbnd, psi0, ethr, residual_threshold, david,
                  max_iterations, k_batch)
+    if indices is not None:
+        indices = jnp.asarray(indices)
     if not robust_retry:
-        return _every_k(*arguments, robust=False, return_steps=return_steps)
+        return _every_k(*arguments, robust=False, return_steps=return_steps,
+                        indices=indices)
     # Both halves, not just the eigenvalues. A Cholesky factor that has gone
     # non-finite does not necessarily poison every root -- the first regression
     # test written for the 64-atom NaN passed on the *unfixed* code precisely
@@ -1018,21 +1054,36 @@ def davidson_eigensolver_all(
     # subspace buffer -- but the *form* is what matters here: one is
     # proportional to the k-set and the other is not.
     fast = _every_k(*arguments, robust=False, return_steps=return_steps,
-                    return_finite=True)
+                    return_finite=True, indices=indices)
+    return fast, arguments, return_steps, indices
+
+
+def _settle(fast, arguments, return_steps, indices):
+    """Wait for a launched solve, and re-solve the k-points that came back non-finite.
+
+    The one host synchronisation of :func:`davidson_eigensolver_all`: the
+    per-k finiteness flags are read here, and only the failed k-points' answers
+    are replaced by the canonical-orthogonalisation route's.
+    """
     fast, per_k = fast[:-1], fast[-1]
     failed = ~np.asarray(per_k)
     if not failed.any():
         return fast
+    # Named by their index in the whole set, which on a streamed chunk is not
+    # their position in it.
+    named = (np.flatnonzero(failed) if indices is None
+             else np.asarray(indices)[failed])
     warnings.warn(
         f"{int(failed.sum())} of {failed.size} k-points came back non-finite "
-        f"from the Cholesky route ({np.flatnonzero(failed).tolist()[:8]}"
+        f"from the Cholesky route ({named.tolist()[:8]}"
         f"{' ...' if failed.sum() > 8 else ''}) and are being re-solved with "
         "canonical orthogonalisation. A non-finite overlap here is usually a "
         "solve that stalled rather than a bad Hamiltonian -- check the step "
         "counts, and loosen ethr (conv_thr) before trusting the result",
-        stacklevel=2,
+        stacklevel=3,
     )
-    robust = _every_k(*arguments, robust=True, return_steps=return_steps)
+    robust = _every_k(*arguments, robust=True, return_steps=return_steps,
+                      indices=indices)
     # Keep what the fast route already converged. The robust pass still runs
     # over the whole k-set -- the shapes are static, so it must -- but its
     # answer is taken only where the fast one has none.
@@ -1044,3 +1095,31 @@ def davidson_eigensolver_all(
 
 
 davidson_eigensolver_all.clear_cache = _every_k.clear_cache
+
+
+def _launch(hamiltonian, nbnd: int, psi0=None, ethr=None,
+            residual_threshold=RESIDUAL_THRESHOLD, david: int = DAVID_NDIM,
+            max_iterations: int = MAX_ITERATIONS,
+            k_batch: int | None | str = "default", return_steps: bool = False,
+            indices=None):
+    """:func:`davidson_eigensolver_all`'s first half: queue the solve, return a handle.
+
+    A streamed pass (:func:`~defumat.scf.streaming.stream_diagonalize`)
+    launches chunk ``i + 1`` before it settles chunk ``i``, so the device is
+    solving while the host copies the previous chunk's states back -- the
+    arguments mean what they mean in :func:`davidson_eigensolver_all`, and
+    ``settle(launch(...))`` is that function with ``robust_retry = True``.
+    """
+    _refuse_a_space_too_small(hamiltonian, nbnd)
+    ethr = jnp.broadcast_to(
+        jnp.asarray(ETHR if ethr is None else ethr,
+                    dtype=hamiltonian.kinetic.dtype),
+        (hamiltonian.nk, nbnd),
+    )
+    return _launch_checked(hamiltonian, nbnd, psi0, ethr, residual_threshold,
+                           david, max_iterations, k_batch, return_steps,
+                           indices, True)
+
+
+davidson_eigensolver_all.launch = _launch
+davidson_eigensolver_all.settle = lambda handle: _settle(*handle)
