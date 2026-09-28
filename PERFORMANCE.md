@@ -7896,3 +7896,34 @@ allocation; the new one runs under the SCF's own 3.6 GB peak. BN's stress is unc
 the eighth digit. **The price is time**: the scanned table is rebuilt for each contraction
 and again in the backward pass, about 2.5 times BN's stored-route stress -- which is why
 speed mode keeps the stored table.
+
+## The projector core built in k-chunks (GTX 1060, 2026-09-28)
+
+`GPU-MEMORY-NEXT.md` item 6, second bullet. Bracketing `Calculation.__init__` on the card
+put the memory-mode peak of eight-atom silicon at 20 Ry, 216 k-points, **inside
+`build_projector_core`**: 12.1 -> 71.1 MB for a core that leaves 19.7 MB resident, and no
+stage of the SCF came back up to it. In memory mode the setup, `at_kpoints` and
+`at_spiral_q(rebuild_basis=True)` now build it about 8 MB of core at a time
+(`CORE_CHUNK_BYTES`), park each piece on the host and put the assembled columns on the
+device once; a build inside a derivative stays whole.
+
+**A trap on the way, and the instrument that found it**: the first version left the
+resident set at 36.2 MB where the one-shot build left 29.4, with `jax.live_arrays()`
+**identical** in both (31.1 MB) -- 6.8 MB held by the allocator that no live array owned,
+surviving a wait and `jax.clear_caches()`. Deleting each piece's device buffers explicitly
+(`Array.delete()`) after its host copy took it back to 29.47 MB. What kept them is not
+known; the explicit delete is the fix, and the `bytes_in_use` against `live_arrays`
+comparison is how to see the next one.
+
+| memory mode, card | before | after |
+|---|---:|---:|
+| setup peak, Si8 20 Ry, 216 k | 71.1 MB | 40.4 MB |
+| SCF peak, same cell | 71.1 MB | **61.8 MB** (the SCF's own now) |
+| `get_bands`, 200 points, after `si8-1k`'s SCF | 44.8 MB | 35.1 MB |
+| `get_bands`, 800 points | 163.6 MB | **78.5 MB** |
+
+The energy is identical to every printed digit; the band path costs 1.5 per cent more time
+(142.6 -> 144.7 s at 800 points). The band path's slope is now 0.072 MB per k-point, which is
+what its own `Calculation` keeps resident per k-point (0.089 MB measured before the columns
+went real, 0.065 after): the 0.11 MB per k-point left unattributed in "A band path that
+keeps no states" was this build's transient.

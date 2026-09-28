@@ -594,7 +594,7 @@ def _aug_max_bytes() -> int:
 #: chunk the whole G set: the tabulated stress was 7.47 GiB of temporaries,
 #: 0.466 GiB at a 4096 chunk. The forward pass does not notice: measured warm,
 #: ``charge`` + ``integrals`` on ``si8-us-1k`` are 0.144 s at the old chunk and
-#: 0.116 s at 1024 on one CPU core, and on the GTX 1060 0.347 s at 8192 against
+#: 0.116 s at 1024 on one CPU core, and on the GTX 1060 0.346 s at 8192 against
 #: 0.312 s at 1024 for spin-orbit bismuthene (``nh = 34``).
 AUG_CHUNK_BYTES = 16 * 1024**2
 

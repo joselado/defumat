@@ -104,7 +104,7 @@ from defumat.pseudo.spinorbit import (
     spin_traced_sandwich,
 )
 from defumat.batching import (
-    fetch_wavefunctions, map_k, park_wavefunctions, resolve_band_batch,
+    fetch_wavefunctions, k_chunks, map_k, park_wavefunctions, resolve_band_batch,
     resolve_k_batch, resolve_memory_mode, resolve_projectors, resolve_wfc_store,
 )
 from defumat.scf.continuation import (
@@ -832,6 +832,61 @@ def _planewaves_rows(planewaves, rows):
         indices=planewaves.indices[rows], mask=planewaves.mask[rows],
         npw=tuple(planewaves.npw[i] for i in rows) if planewaves.npw else (),
         ecutwfc=planewaves.ecutwfc, gamma_only=planewaves.gamma_only,
+    )
+
+
+#: What one chunk of a chunked projector-core build may hold, in bytes of the
+#: core it produces; the build's transient is about three times that.
+CORE_CHUNK_BYTES = 8 * 1024**2
+
+
+def _projector_core(pseudos, structure, cell, smooth, planewaves, kpoints,
+                    origin_tangent, chunked):
+    """:func:`build_projector_core`, in k-chunks when ``chunked``.
+
+    **The one-shot build is the setup's peak in memory mode**: every
+    intermediate -- ``k + G``, its modulus, the harmonics, the radial table,
+    the gathered factors -- is live for the whole k-set at once, and on
+    eight-atom silicon at 20 Ry and 216 k-points that took the device from
+    12.1 to 71.1 MB to leave a 19.7 MB core behind; no stage of the SCF comes
+    back up to it (``GPU-MEMORY-NEXT.md`` item 6). Chunked, each piece is
+    built on the device and parked on the host, and the assembled columns go
+    to the device once, so the device holds the core plus one chunk's
+    transient. Only for a host-side build: a strain, a ``kcart`` or a spiral
+    wavevector differentiated through the core rebuilds it whole, inside the
+    trace. Each k-point's columns are its own arithmetic, so the pieces are
+    the one-shot core to round-off (the radial transforms walk ``|k+G|`` in
+    blocks that start at different rows).
+    """
+    if not chunked:
+        return build_projector_core(pseudos, structure, cell, smooth, planewaves,
+                                    kpoints, origin_tangent=origin_tangent)
+    nk = planewaves.nk
+    ncs = sum(len(projector_channels(p)) for p in pseudos) or 1
+    per_k = planewaves.npwx * (ncs + 3) * 8
+    batch = max(1, CORE_CHUNK_BYTES // max(1, per_k))
+    if batch >= nk:
+        return build_projector_core(pseudos, structure, cell, smooth, planewaves,
+                                    kpoints, origin_tangent=origin_tangent)
+    columns = kg = None
+    piece = None
+    for rows, live in k_chunks(nk, batch):
+        piece = build_projector_core(
+            pseudos, structure, cell, smooth, _planewaves_rows(planewaves, rows),
+            _kpoints_rows(kpoints, rows), origin_tangent=origin_tangent,
+        )
+        block_columns = np.asarray(piece.columns)[:live]
+        block_kg = np.asarray(piece.kg)[:live]
+        piece.columns.delete()
+        piece.kg.delete()
+        if columns is None:
+            columns = np.empty((nk,) + block_columns.shape[1:], block_columns.dtype)
+            kg = np.empty((nk,) + block_kg.shape[1:], block_kg.dtype)
+        columns[rows[:live]] = block_columns
+        kg[rows[:live]] = block_kg
+    return eqx.tree_at(
+        lambda core: (core.columns, core.kg, core.mask),
+        piece, (jnp.asarray(columns), jnp.asarray(kg), planewaves.mask),
     )
 
 
@@ -2003,9 +2058,10 @@ class Calculation:
         # to the positions never reaches the radial integrals. See
         # :class:`defumat.pseudo.projectors.ProjectorCore` and
         # :meth:`at_positions`.
-        self.projector_core = build_projector_core(
+        self.projector_core = _projector_core(
             self.pseudos, system.structure, system.cell, smooth, planewaves,
-            self.basis_kpoints, origin_tangent=self.origin_tangent,
+            self.basis_kpoints, self.origin_tangent,
+            chunked=self.memory_mode == "memory",
         )
         # ``rebuild`` keeps the *core* and forms each k-point's ``(npwx, nkb)``
         # on demand, which is ``init_us_2`` inside ``c_bands.f90``'s ``k_loop``.
@@ -3262,9 +3318,9 @@ class Calculation:
         # The projectors are rebuilt whole: their radial half is tabulated
         # against ``|k+G|``, so unlike a change of position this is not a matter
         # of a new structure factor over a cached core.
-        moved.projector_core = build_projector_core(
+        moved.projector_core = _projector_core(
             self.pseudos, system.structure, cell, smooth, planewaves, kpoints,
-            origin_tangent=self.origin_tangent,
+            self.origin_tangent, chunked=self.memory_mode == "memory",
         )
         # The storage dial follows the calculation across a new k-set; it used
         # to be dropped here, so every band path and every derived mesh stored
@@ -3523,9 +3579,10 @@ class Calculation:
         _adopt_rebuilt_sphere(
             moved, self, planewaves, smooth, moved.basis_kpoints, cell
         )
-        moved.projector_core = build_projector_core(
+        moved.projector_core = _projector_core(
             self.pseudos, system.structure, cell, smooth, planewaves,
-            moved.basis_kpoints, origin_tangent=self.origin_tangent,
+            moved.basis_kpoints, self.origin_tangent,
+            chunked=self.memory_mode == "memory",
         )
         # Kept across a new wavevector: every step of ``run_spiral_scan`` and
         # ``relax_spiral_q`` comes through here, and dropping the dial made each

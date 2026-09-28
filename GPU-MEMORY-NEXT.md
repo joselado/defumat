@@ -76,6 +76,8 @@ below:
   card), for 2.5x BN's stress time. Speed mode keeps the stored table.
 * **Item 18** (the PAW one-centre tensors): factored into radial pair tables and Gaunt
   coefficients; one-atom spin-orbit PAW platinum 1309.6 -> 411.3 MB on the card.
+* **Item 6, second bullet** (the core built in k-chunks, memory mode): the 216-k-point
+  Si8 peak 71.1 -> 61.8 MB (setup 40.4), the 800-point band path 163.6 -> 78.5 MB.
 * **Item 6, first bullet** (real projector columns): bit-identical `vkb`; the 216-k-point
   eight-atom Si peak 93.6 -> 71.1 MB.
 * **Item 8** (a streamed resume): a loaded checkpoint's wavefunctions stay in host memory;
@@ -212,7 +214,8 @@ every Davidson call whole through `HubbardTerm`. Three pieces, in order of cost:
   static per-column phase, applied in `_apply_phases`; same for the atomic orbitals'
   `i^l`. Halves the largest per-k resident array (22.5 -> 11.2 MB on Si8 at 216 k,
   242.8 -> 121.4 MB on nbse2). Round-off only.
-* **Build the core in k-chunks at setup** -- priority 3, small. `build_projector_core`
+* **Build the core in k-chunks at setup** -- priority 3, small. **Done 2026-09-28** in memory
+  mode (setup, `at_kpoints`, a spiral's rebuilt basis): 71.1 -> 40.4 MB at setup. `build_projector_core`
   runs `_angular_part`, the form factors and the radial table over the whole k set with
   every intermediate live (`projectors.py:359-415`); at 216 k on Si8 that setup transient
   (90.8 MB, measured) is the run's peak. Chunk it through `_planewaves_rows` /

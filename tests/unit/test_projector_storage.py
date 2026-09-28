@@ -380,3 +380,85 @@ def test_ultrasoft_hubbard_projectors_are_the_same_rebuilt():
     stored = _from("tests/data/qe/si2-us.in", "store", hubbard)
     assert lazy.is_ultrasoft and lazy.wfcU is not None
     assert np.array_equal(np.asarray(lazy.wfcU), np.asarray(stored.wfcU))
+
+
+_CHUNKED_CELL = """
+&control
+  calculation = 'scf'
+/
+&system
+  ibrav = 2, celldm(1) = 10.20, nat = 2, ntyp = 1, ecutwfc = 12.0, nosym = .true.
+/
+&electrons
+/
+ATOMIC_SPECIES
+ Si 28.086 Si.pz-vbc.UPF
+ATOMIC_POSITIONS alat
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS automatic
+ 3 3 3 0 0 0
+"""
+
+
+def test_a_chunked_core_build_is_the_one_shot_core(pseudo_dir, monkeypatch):
+    """Memory mode builds the projector core a few k-points at a time.
+
+    ``GPU-MEMORY-NEXT.md`` item 6: the one-shot build holds every intermediate
+    for the whole k-set and was the setup's peak. Chunked, each k-point's
+    columns are its own arithmetic, so the core -- at setup and after
+    ``at_kpoints`` -- is the one-shot core to round-off; the budget is forced
+    small here so that the two-atom cell really is walked in pieces, with a
+    short last one.
+    """
+    from defumat.scf import driver as driver_module
+    from defumat.system.kpoints import KPoints
+
+    monkeypatch.setattr(driver_module, "CORE_CHUNK_BYTES", 4 * 180 * 7 * 8)
+    calls = []
+    real_build = driver_module.build_projector_core
+
+    def counting_build(*args, **kwargs):
+        calls.append(args[4].nk)
+        return real_build(*args, **kwargs)
+
+    monkeypatch.setattr(driver_module, "build_projector_core", counting_build)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        whole = Calculator.from_text(_CHUNKED_CELL, pseudo_dir, announce=False,
+                                     memory_mode="speed").calculation
+        chunked = Calculator.from_text(_CHUNKED_CELL, pseudo_dir, announce=False,
+                                       memory_mode="memory").calculation
+    path = KPoints.from_cartesian(
+        np.linspace([0.0, 0.0, 0.0], [0.5, 0.5, 0.5], 11), np.full(11, 1.0 / 11))
+    assert whole.projector_core.columns.shape[0] == 27
+    # One whole build for speed mode, then several pieces for memory mode.
+    assert calls[0] == 27 and len(calls) > 2 and max(calls[1:]) < 27
+    for a, b in ((whole.projector_core, chunked.projector_core),
+                 (whole.at_kpoints(path).projector_core,
+                  chunked.at_kpoints(path).projector_core)):
+        np.testing.assert_allclose(np.asarray(b.columns), np.asarray(a.columns),
+                                   rtol=0, atol=1e-14)
+        np.testing.assert_array_equal(np.asarray(b.kg), np.asarray(a.kg))
+        np.testing.assert_array_equal(np.asarray(b.mask), np.asarray(a.mask))
+
+
+def test_a_chunked_core_on_a_spiral_is_the_one_shot_core(monkeypatch):
+    """The same, through ``at_spiral_q``'s rebuilt basis: two spheres per k-point."""
+    from defumat.scf import driver as driver_module
+
+    monkeypatch.setattr(driver_module, "CORE_CHUNK_BYTES", 1)
+    cores = []
+    for mode in ("speed", "memory"):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            calculation = Calculator.from_file(
+                "tests/data/qe/h-chain-spiral.in", pseudo_dir="tests/data/pseudo",
+                memory_mode=mode,
+            ).calculation
+        cores.append(calculation.at_spiral_q(
+            np.asarray(calculation.system.spiral_q) * 0.9).projector_core)
+    whole, chunked = cores
+    np.testing.assert_allclose(np.asarray(chunked.columns), np.asarray(whole.columns),
+                               rtol=0, atol=1e-14)
+    np.testing.assert_array_equal(np.asarray(chunked.kg), np.asarray(whole.kg))
