@@ -662,7 +662,9 @@ def estimate_size(
         # brackets with 0.00 residual, and ``columns + kg`` there is 0.6-0.7 GB,
         # which would have shown. (A13 made the mirror-image error first, by
         # counting the core as a *new* cost of the rebuilt route.)
-        "projector core columns (nk,npwx,ncs)": nk * npwx * ncs * zc,
+        # Real since ``GPU-MEMORY-NEXT.md`` item 6: the ``(-i)^l`` is kept per
+        # column and applied on use.
+        "projector core columns (nk,npwx,ncs)": nk * npwx * ncs * zr,
         "projector core kg (nk,npwx,3)": nk * npwx * 3 * zr,
         # **What the dial actually chooses**: the whole-k array, or one chunk
         # rebuilt from the core above and freed again. Nothing else moves.

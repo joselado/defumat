@@ -191,6 +191,7 @@ class Projectors(eqx.Module):
         return _apply_phases(
             self.core.columns, self.core.kg, self.positions, self.core.mask,
             jnp.asarray(self.core.atom_of_channel), self.core.column_of_channel,
+            self.core.phase_of_column,
         ).astype(self.core.complex_dtype)
 
     def at_k(self, ik) -> jnp.ndarray:
@@ -215,7 +216,7 @@ class Projectors(eqx.Module):
         return _apply_phases(
             self.core.columns[ik], self.core.kg[ik], self.positions,
             self.core.mask[ik], jnp.asarray(self.core.atom_of_channel),
-            self.core.column_of_channel,
+            self.core.column_of_channel, self.core.phase_of_column,
         ).astype(self.core.complex_dtype)
 
     @property
@@ -240,7 +241,7 @@ class ProjectorCore(eqx.Module):
     differentiable function of the positions without recomputing the radial
     integrals inside the gradient.
 
-    **Memory.** ``columns`` is ``(nk, npwx, sum_d nh_d)`` complex -- one entry
+    **Memory.** ``columns`` is ``(nk, npwx, sum_d nh_d)`` real -- one entry
     per channel of each distinct *dataset* ``d``, where ``vkb`` has one per
     *atom* channel. For a cell with several atoms of the same dataset it is
     therefore smaller than the ``vkb`` it builds, by the multiplicity of that
@@ -254,7 +255,10 @@ class ProjectorCore(eqx.Module):
 
     #: ``(nk, npwx, ncs)``: the phase-free columns, one per channel of each
     #: distinct dataset. Several species may point at the same ones through
-    #: :attr:`column_of_channel`.
+    #: :attr:`column_of_channel`. **Real**: a column is ``Y_lm`` times the
+    #: radial transform, both real, and its ``(-i)^l`` is kept apart in
+    #: :attr:`phase_of_column` -- half the bytes of the largest per-k-point
+    #: array a memory-mode run keeps resident (``GPU-MEMORY-NEXT.md`` item 6).
     columns: jnp.ndarray
     #: ``(nk, npwx, 3)``: ``k + G``, which the phase needs.
     kg: jnp.ndarray
@@ -265,6 +269,13 @@ class ProjectorCore(eqx.Module):
     atom_of_channel: tuple[int, ...] = eqx.field(static=True)
     column_of_channel: jnp.ndarray = eqx.field(converter=jnp.asarray)
     complex_dtype: object = eqx.field(static=True, default=None)
+    #: ``(ncs,)`` complex, ``(-i)^l`` of each column's channel, applied by
+    #: :func:`_apply_phases` before the structure factor. **Multiplying by it
+    #: is exact** -- it is ``1``, ``-i``, ``-1`` or ``i``, so a product with it
+    #: only moves and negates the real one -- which is why the column can be
+    #: stored without it and every ``vkb`` is the one it was when the phase
+    #: was inside the column.
+    phase_of_column: jnp.ndarray | None = None
 
     def at_positions(self, positions: jnp.ndarray, qq=None,
                      lazy: bool = False) -> Projectors:
@@ -286,6 +297,7 @@ class ProjectorCore(eqx.Module):
         vkb = _apply_phases(
             self.columns, self.kg, positions, self.mask,
             jnp.asarray(self.atom_of_channel), self.column_of_channel,
+            self.phase_of_column,
         )
         return Projectors(
             stored=vkb.astype(self.complex_dtype),
@@ -400,11 +412,8 @@ def build_projector_core(
             l_of.append(l)
         column_offset.append(len(beta_of))
 
-    columns = _species_columns(
-        ylm, radial,
-        jnp.asarray(beta_of), jnp.asarray(lm_of),
-        jnp.asarray((-1j) ** np.asarray(l_of)),
-    )
+    columns = _species_columns(ylm, radial, jnp.asarray(beta_of), jnp.asarray(lm_of))
+    phase_of_column = jnp.asarray((-1j) ** np.asarray(l_of))
     # The identity, owning the ``l = 1`` tangent at ``k + G = 0`` that the two
     # origin guards drop between them. See :func:`_with_origin_tangent`.
     # ``origin_tangent=False`` is QE's convention and drops it again, which is
@@ -441,6 +450,7 @@ def build_projector_core(
         atom_of_channel=tuple(atom_of),
         column_of_channel=jnp.asarray(column_of),
         complex_dtype=cell.precision.complex,
+        phase_of_column=phase_of_column,
     )
 
 
@@ -479,13 +489,17 @@ def _radial_table(form_factors, shape):
 
 
 @jax.jit
-def _species_columns(ylm, radial, beta_of, lm_of, l_phase):
-    """The angular times radial part of every species channel, ``(nk, npwx, ncs)``."""
+def _species_columns(ylm, radial, beta_of, lm_of, l_phase=None):
+    """The angular times radial part of every species channel, ``(nk, npwx, ncs)``.
+
+    Real without ``l_phase``, which is how the projector core keeps them; the
+    atomic orbitals pass their ``i^l`` and get the phased columns.
+    """
     columns = (
         jnp.take(ylm, lm_of, axis=-1)
         * jnp.take(radial, beta_of, axis=-1)
     )
-    return columns * l_phase
+    return columns if l_phase is None else columns * l_phase
 
 
 #: For an ``l = 1`` harmonic, the cartesian axis it is proportional to and the
@@ -533,7 +547,7 @@ def _origin_tangent_rule(columns, kg, slopes, axes):
     scales to ``0`` under any strain, so ``dkg`` is zero on exactly those rows.
 
     ``axes`` is the cartesian axis of each column, packed as a static tuple;
-    ``slopes`` carries ``(-i) sign sqrt(3/4pi) f_1'(0)`` and is **zero for every
+    ``slopes`` carries ``sign sqrt(3/4pi) f_1'(0)`` and is **zero for every
     column that is not an ``l = 1`` channel**, so the arithmetic is uniform and
     the branch lives in the data rather than in a mask.
     """
@@ -578,8 +592,10 @@ def _with_origin_tangent(columns, kg, slopes, axes):
 def _origin_slopes(pseudos, channels_by_species, volume):
     """``(axes, slopes)`` for :func:`_with_origin_tangent`, one per column.
 
-    ``slopes`` is ``(-i) sign sqrt(3/4pi) lim_{q->0} f_1(q)/q`` on an ``l = 1``
-    channel and **zero on every other**, so the correction is inert wherever
+    ``slopes`` is ``sign sqrt(3/4pi) lim_{q->0} f_1(q)/q`` on an ``l = 1``
+    channel and **zero on every other** -- real, because the columns it
+    corrects are real and their ``(-i)^l`` is applied afterwards, to the
+    tangent as to the value -- so the correction is inert wherever
     the guarded product's tangent was right to begin with and the rule needs no
     mask over channels.
 
@@ -610,27 +626,35 @@ def _origin_slopes(pseudos, channels_by_species, volume):
             axis, sign = _P_AXIS[lm]
             axes.append(axis)
             picks.append(int(offsets[species]) + nb)
-            coefficients.append(-1j * sign * root)
+            coefficients.append(sign * root)
     if not axes:
-        return (), jnp.zeros((0,), dtype=complex)
+        return (), jnp.zeros((0,))
     table = jnp.concatenate([_origin_integrals(p) for p in pseudos])
     slopes = (jnp.take(table, jnp.asarray(picks))
-              * jnp.asarray(np.asarray(coefficients, dtype=complex)))
+              * jnp.asarray(np.asarray(coefficients, dtype=float)))
     return tuple(axes), slopes * (FPI / jnp.sqrt(volume))
 
 
 @jax.jit
-def _apply_phases(columns, kg, tau, mask, atom_of, column_of):
+def _apply_phases(columns, kg, tau, mask, atom_of, column_of, column_phase=None):
     """``<k+G|beta>``: each channel's column times its atom's structure factor.
 
     The only place the atomic positions enter the nonlocal pseudopotential, and
     therefore the only place ``grad`` with respect to them has to reach.
+
+    ``column_phase`` is the ``(-i)^l`` a real column was stored without, and it
+    multiplies the gathered column **before** the structure factor, so the
+    product is the one a phased column gave: the phase is exact, the order of
+    the one rounding multiply is unchanged.
     """
     # ``...`` rather than ``k``: the same expression serves the whole k-axis
     # and one k-point's slice of it, which is what lets a lazy ``Projectors``
     # rebuild through this without a second implementation of the phase.
     phases = jnp.exp(-1j * jnp.einsum("...gc,ac->...ga", kg, tau))
-    vkb = jnp.take(columns, column_of, axis=-1) * jnp.take(phases, atom_of, axis=-1)
+    gathered = jnp.take(columns, column_of, axis=-1)
+    if column_phase is not None:
+        gathered = gathered * jnp.take(column_phase, column_of)
+    vkb = gathered * jnp.take(phases, atom_of, axis=-1)
     return jnp.where(mask[..., None], vkb, 0.0)
 
 
