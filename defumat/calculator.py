@@ -869,7 +869,7 @@ class Calculator:
         kw.setdefault("fermi_energy", result.fermi_energy)
         kw.setdefault("homo", result.homo)
         return run_bands(self.system, self.pseudos, result.density,
-                         kpoints=kpoints, **kw)
+                         kpoints=kpoints, calculation=self.calculation, **kw)
 
     def get_nscf(self, kpoints=None, **options):
         """Diagonalise on a k-grid at the converged density, and occupy it."""
@@ -877,7 +877,7 @@ class Calculator:
 
         result = self._ground_state("an NSCF run")
         return run_nscf(self.system, self.pseudos, result.density,
-                        kpoints=kpoints,
+                        kpoints=kpoints, calculation=self.calculation,
                         **self._call_options(run_nscf, result, options))
 
     def get_dos(self, grid=None, **options):
@@ -890,7 +890,7 @@ class Calculator:
 
         result = self._ground_state("a density of states")
         dos, states = run_dos(self.system, self.pseudos, result.density,
-                              grid=grid,
+                              grid=grid, calculation=self.calculation,
                               **self._call_options(run_dos, result, options))
         self.dos_states = states
         return dos

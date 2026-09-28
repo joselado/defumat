@@ -22,7 +22,7 @@ from defumat.pseudo.upf import Pseudopotential
 from defumat.system.builder import System
 from defumat.system.kpoints import KPoints
 from defumat.units import RY_TO_EV
-from defumat.workflows.nscf import fixed_density_bands
+from defumat.workflows.nscf import fixed_density_bands, threaded_calculation
 
 __all__ = ["BandStructure", "run_bands"]
 
@@ -146,6 +146,7 @@ def run_bands(
     becsum: tuple = (),
     field=None,
     field_scale: float | None = None,
+    calculation=None,
 ) -> BandStructure:
     """Diagonalise at a k-path with the density fixed.
 
@@ -176,6 +177,11 @@ def run_bands(
             when the input carries one: ``reducebf`` and the fixed-spin-moment
             scheme both change the field as the loop runs, so rebuilding it from
             the input applies a field the ground state does not have.
+        calculation: the SCF's own :class:`~defumat.scf.driver.Calculation`,
+            moved to the path with ``at_kpoints`` rather than a second one
+            built beside it -- it shares the augmentation and PAW tables and
+            keeps the SCF's memory mode (:func:`~defumat.workflows.nscf.
+            threaded_calculation`). ``Calculator.get_bands`` passes its own.
 
     The potential is built once from the given density and never updated -- that
     is the whole content of "non self-consistent", and it is why this is a thin
@@ -184,9 +190,11 @@ def run_bands(
     the eigenvalues: any Fermi level or HOMO must come from the SCF that
     produced the density, which is what the two arguments are for.
     """
+    calculation, system, kpoints, k_batch = threaded_calculation(
+        calculation, system, kpoints, k_batch)
     calculation, system, eigenvalues = fixed_density_bands(
         system, pseudos, density, kpoints, nbnd, conv_thr, k_batch, ns, tau,
-        becsum, field, field_scale,
+        becsum, field, field_scale, calculation=calculation,
     )
     nspin = calculation.nspin
     return BandStructure(

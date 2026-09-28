@@ -409,6 +409,7 @@ def run_dos(
     becsum: tuple = (),
     field=None,
     field_scale: float | None = None,
+    calculation=None,
 ):
     """SCF density in, ``(DensityOfStates, NSCFResult)`` out.
 
@@ -433,9 +434,11 @@ def run_dos(
     if kpoints is None and grid is not None:
         kpoints = denser_grid(system, grid, shift)
 
+    # ``calculation``: the SCF's own, moved to the denser grid inside
+    # ``run_nscf`` rather than a second one built beside it.
     nscf = run_nscf(system, pseudos, density, kpoints, nbnd, conv_thr, k_batch,
                     ns=ns, tau=tau, becsum=becsum, field=field,
-                    field_scale=field_scale)
+                    field_scale=field_scale, calculation=calculation)
 
     scheme, degauss = default_scheme(system, scheme, degauss, delta_e)
 

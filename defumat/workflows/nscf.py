@@ -435,6 +435,28 @@ def _say_what_did_not_converge(steps, notcnv, ethr, conv_thr, nbnd) -> None:
     )
 
 
+def threaded_calculation(calculation, system, kpoints, k_batch):
+    """``(calculation, system, kpoints, k_batch)`` for a workflow handed a calculation.
+
+    A workflow that is given the caller's own :class:`~defumat.scf.driver.
+    Calculation` moves it to the k-set it needs with ``at_kpoints`` -- which
+    shares every k-independent array, the augmentation table and the PAW
+    tables among them, and follows the caller's memory mode -- instead of
+    building a second one beside it (``GPU-MEMORY-NEXT.md`` item 20). What
+    comes back is ready for :func:`fixed_density_states`: ``kpoints = None``,
+    the moved calculation's own system and chunk size. A spin spiral cannot be
+    moved to another k-set that way, and a calculation of ``None`` is left to
+    be built as before; both come back unthreaded.
+    """
+    if calculation is None:
+        return None, system, kpoints, k_batch
+    if kpoints is not None:
+        if calculation.spiral:
+            return None, system, kpoints, k_batch
+        calculation = calculation.at_kpoints(kpoints_for_spin(kpoints, system.nspin))
+    return calculation, calculation.system, None, calculation.k_batch
+
+
 def fixed_density_bands(*args, **kwargs):
     """:func:`fixed_density_states` without the wavefunctions.
 
@@ -460,6 +482,7 @@ def run_nscf(
     becsum: tuple = (),
     field=None,
     field_scale: float | None = None,
+    calculation: Calculation | None = None,
 ) -> NSCFResult:
     """A full NSCF run: diagonalise, then occupy by the system's own scheme.
 
@@ -467,10 +490,15 @@ def run_nscf(
     input asking for ``occupations='tetrahedra'`` gets a tetrahedron Fermi level
     here exactly as it would from an SCF run, which is what makes the DOS of a
     metal consistent with the calculation that produced its density.
+
+    ``calculation`` is the SCF's own, moved to ``kpoints`` rather than a second
+    one built beside it (:func:`threaded_calculation`).
     """
+    calculation, system, kpoints, k_batch = threaded_calculation(
+        calculation, system, kpoints, k_batch)
     calculation, system, eigenvalues = fixed_density_bands(
         system, pseudos, density, kpoints, nbnd, conv_thr, k_batch, ns, tau,
-        becsum, field, field_scale,
+        becsum, field, field_scale, calculation=calculation,
     )
     wg, levels = calculation.occupations(jnp.asarray(eigenvalues))
     nspin = calculation.nspin
