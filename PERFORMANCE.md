@@ -7634,7 +7634,9 @@ GiB free, and the run went to `memory` with its warning.
 `si2-us` 1.0e-14, `si2-paw` 1e-14, `h-chain-spiral` 1.3e-15, `o-chain-spiral-us` 8.8e-14,
 `o-chain-spiral-paw` 0, `si2-tb09` 2.5e-13, `bismuthene-soc-small` 5e-13,
 `pt-soc-paw-nosym` 2e-13, `feo-kind1-J` (DFT+U, LSDA) 4.5e-12, `bn-ldau-noncol` (DFT+U,
-noncollinear, stress off) identical. On bismuthene and platinum the two peaks agree within
+noncollinear, stress off) identical, and gamma-only storage (eight-atom Si with
+`K_POINTS gamma` and `nosym`, so the half sphere and its `-(k+G)` index are consumed)
+identical on the card and on the CPU. On bismuthene and platinum the two peaks agree within
 1.5 per cent (3630/3651 MB, 1310/1311 MB): at 7-8 k-points those are set by objects that
 do not grow with the mesh, and the mode does not touch them.
 
