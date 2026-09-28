@@ -57,6 +57,25 @@ below:
   k-points, so the linear growth in nk is gone as well. BN's SCF and stress now run on the
   GTX 1060 at 2052.9 MB peak, the stress within 2.1e-7 Ry/bohr^3 of `pw.x`. Cost: 7.6 per
   cent on `si2-us-1k`'s warm stress. `PERFORMANCE.md`, "The stress tape".
+* **Item 9** (the band dial in memory mode): a `Calculation` resolves its band batch once
+  and its Hamiltonians and density kernels carry it; in memory mode on a card the value is
+  the largest batch whose estimate fits (`sizing.choose_band_batch`), the whole block
+  whenever that fits. On `h40-chain-lsda.in` the peak runs 4127 / 2402 / 1551 / 1327 / 1230
+  MB at all / 28 / 14 / 8 / 1 bands for 23.0 / 22.9 / 22.7 / 22.8 / 25.6 s; in a pool cut
+  to 2225 MB the default chose 14 bands and ran at 1551 MB where `all` died.
+  `PERFORMANCE.md`, "The band dial, budgeted from the card". **Not measured here**: the
+  NiBr2 slab this was sized on, which needs a larger card.
+* **Item 24, two of its lines**: the estimate now takes `wfc_store` (a streamed store is one
+  chunk on the device) and carries the start as a stage (`start_buffer`, D10), and a
+  non-dividing band batch pays its tail. The core build, the `qgm` accumulator, `wfcU`, the
+  symmetry maps and the index arrays are still absent.
+* **Item 18** (the PAW one-centre tensors): factored into radial pair tables and Gaunt
+  coefficients; one-atom spin-orbit PAW platinum 1309.6 -> 411.3 MB on the card.
+* **Item 1** (the fixed-density solve): an eigenvalue-only solve streams where the store
+  does and keeps no states. On eight-atom Si the band path's peak is 102.8 -> 44.8 MB at 200
+  points and 383.4 -> 163.6 MB at 800, for 2-3 per cent in time. **Still 0.20 MB per
+  k-point**, not states: 0.089 of it is the band path's own `Calculation`'s resident
+  per-k tables (measured, items 6 and 20), the rest unattributed.
 
 ## Suggested order
 
@@ -68,11 +87,11 @@ default mode:
    done.
 3. ~~**Remat the radial transforms on the derivative path** (item 13)~~ -- done; it was the
    cause of the BN stress death (A/B above).
-4. **A budget for the band dial in memory mode** (item 9) -- what stands between the NiBr2
-   slab and the default mode.
-5. **Stream the NSCF / band-structure solve** (item 1) -- the largest k-mesh term left
-   after the SCF.
-6. **Factor the PAW one-centre tensors** (item 18) -- 885 MB of Pt's 1.3 GB peak.
+4. ~~**A budget for the band dial in memory mode** (item 9)~~ -- done, measured on
+   `h40-chain-lsda.in`; the NiBr2 slab itself is not measured.
+5. ~~**Stream the NSCF / band-structure solve** (item 1)~~ -- done for the eigenvalue-only
+   callers; the band path's own `Calculation` is what grows now (items 6, 20).
+6. ~~**Factor the PAW one-centre tensors** (item 18)~~ -- done, 1309.6 -> 411.3 MB.
 
 Then the rest by priority.
 
@@ -84,6 +103,10 @@ Memory mode bounds the SCF. These are the places outside it -- and the resident
 bookkeeping inside it -- that still scale with `nk`.
 
 ### 1. Stream the fixed-density (NSCF, bands, DOS) solve -- priority 1, medium
+
+**Done 2026-09-28 for the callers that want energies only** (`fixed_density_bands`). A
+caller that keeps the states (PDOS, STM, the sum-over-states workflows) still gets them
+stacked on the device; that is item 4's shape of problem.
 
 `workflows/nscf.py` `fixed_density_states` calls `calculation.diagonalize(...)` and gets
 the stacked `(nspin, nk, nbnd, npol*npwx)` set on the device (`nscf.py:278-281`), in
@@ -219,6 +242,10 @@ chunk.
 ## B. Per k-point and per band: the next lever on a large cell
 
 ### 9. Memory mode never budgets the band dial -- priority 1, medium
+
+**Done 2026-09-28** (see "Done since"). The response stack's `map_bands` sites
+(Sternheimer, the q-phonon) are left at the platform default: they hold the whole k axis
+anyway (item 2).
 
 Both presets keep `band_batch = all` on a card (`batching.py:482`), a decision measured on
 Si8, where a band loop costs 4.3x and buys nothing. On a large cell it is the largest per-k
@@ -365,6 +392,11 @@ size of the win.
 
 ### 18. The PAW one-centre tensors are rank-1 products kept whole -- priority 1, medium
 
+**Done 2026-09-28**: Pt's peak 1309.6 -> 411.3 MB, energy moved by 1e-13 Ry
+(`PERFORMANCE.md`, "The PAW one-centre tensors, factored"). The meta-GGA kinetic tensors are
+still products (they are built by quadrature, not as one coefficient times one radial
+function) and are what is left of this item.
+
 `density_ae`, `density_ps` and, since P117, `density_rel` are `einsum('lij,ijr->ijlr')`
 outer products put on the device (`paw/onecenter.py:884-925`). For
 `Pt.rel-pbe-n-kjpaw_psl.0.1` (`nh = 34`, `nlm = 25`, `mesh = 1277`) each is 295.2 MB:
@@ -434,6 +466,8 @@ accepts `cuda_async`, `vmm` and `address` allocators, which are the untried half
 fragmentation question. A capacity lever rather than a reduction.
 
 ### 24. `sizing.py` misses the stages that set the peak -- priority 3, an enabler
+
+**Partly done 2026-09-28**: `wfc_store` and the start (D10) are in; the rest below is not.
 
 `peak_bytes` is `resident + max(eigensolver buffer, augmentation Bessel transient)`
 (`sizing.py:320-335`): the start (D10), the core build, the `qgm` accumulator, `wfcU`, the

@@ -6897,6 +6897,8 @@ the card, its projectors formed when they are used, and the wavefunctions kept
 in host RAM for the whole run and \emph{streamed} through the card one
 $k$-point at a time --- for the starting guess, for each Davidson call, and for
 the density, which is summed over $k$-points as they pass and finished once.
+A band structure, an NSCF run and a density of states, which want energies only,
+solve each $k$-point from scratch and keep none of its states on the card.
 The physics is the same and so are the numbers, to round-off.
 
 \textbf{What it changes is how the peak grows with the $k$-mesh.} Measured on a

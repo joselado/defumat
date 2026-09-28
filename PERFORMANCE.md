@@ -7728,3 +7728,97 @@ G-chunk scan, the same executable's temporary is **7.47 GiB**, and its report is
 whole-`ngm` complex pair tables (`c128[196,43903]` and their transposes, 131 MB each). What
 in that route keeps the whole table on a strain's tape has not been located; it is the
 thing to check before routing stored datasets through it.
+
+## The band dial, budgeted from the card in memory mode (GTX 1060, 2026-09-28)
+
+`GPU-MEMORY-NEXT.md` item 9. Once the k axis streams, one k-point's band loop through the
+grid is the largest per-k-point term left on a large cell, and memory mode kept it at `all`
+on a card. A `Calculation` now resolves its band batch once (`resolve_band_batch_for`:
+explicit argument, `DEFUMAT_BAND_BATCH`, then in memory mode on an accelerator the largest
+batch whose estimate fits the card, `sizing.choose_band_batch`, then the platform) and the
+Hamiltonians and density kernels carry it. The estimate behind the choice now counts one
+streamed chunk of the store rather than the whole set, the start (`max(natomwfc, nbnd)`
+vectors, `MEMORY-AUDIT.md` D10) as a stage, and a non-dividing batch's tail.
+
+`benchmarks/h40-chain-lsda.in` (40 H atoms, LSDA, one k-point, 56 bands, a 40x40x640 smooth
+box), memory mode, one process per point, compile cache warm, three SCF iterations, time of
+the second of two runs in the process:
+
+| band batch | peak | estimate | peak / estimate | 3 iterations |
+|---|---:|---:|---:|---:|
+| all | 4127.3 MB | 2679.8 MB | 1.54 | 23.0 s |
+| 28 | 2401.9 MB | 1762.3 MB | 1.36 | 22.9 s |
+| 14 | 1550.8 MB | 1303.5 MB | 1.19 | 22.7 s |
+| 8 | 1326.8 MB | 1106.9 MB | 1.20 | 22.8 s |
+| 1 | 1229.9 MB | 877.5 MB | 1.40 | 25.6 s |
+
+The energy after three iterations is the same at every point to 1.4e-14 Ry. **On this box
+the band loop costs almost nothing in time** -- one band's transform already fills the card
+-- where the eight-atom silicon cell pays 4.3x at one band; the peak falls by 2.7x at 14.
+The all-bands peak is 87 per cent of the 4764.7 MB pool. The `all`, 8 and 1 points were
+taken twice, once beside a CPU job and once on a quiet machine; the table has the quiet
+ones (the 8-band point read 23.5 s beside the job, the others the same both times).
+
+**The chooser, end to end**: the same input with the pool cut to 2225.1 MB
+(`XLA_CLIENT_MEM_FRACTION=0.35`). With nothing set, the calculation warned and chose **14
+bands** (estimate 1.21 GiB against 60 per cent of 2.07 GiB free) and ran at **1550.8 MB**.
+Forced to `band_batch = all` in the same pool it died, `RESOURCE_EXHAUSTED` on a 1.76 GiB
+allocation. On the full card the whole block fits by the estimate (2.68 GB against 60 per
+cent of 4.76), so nothing that ran before changes.
+
+**What the choice costs**: it sizes the run host-side (`estimate_size`, a G-vector
+enumeration) inside every memory-mode `Calculation` built on a card, a band path's
+included. Timed on the CPU, third call: 9 ms on `si8-1k.in` against a 0.67 s build, 22 ms
+on `pt-soc-paw-nosym.in` against 2.41 s, 0.29 s on `h40-chain-lsda.in` against 4.57 s (6
+per cent, the largest box here).
+
+## A band path that keeps no states (GTX 1060, 2026-09-28)
+
+`GPU-MEMORY-NEXT.md` item 1. `fixed_density_bands` -- `run_bands`, `run_nscf` and so the
+DOS, the effective mass's eigenvalue route -- wants energies only, and in memory mode it
+still stacked the `(nspin, nk, nbnd, ndim)` states on the card. Where the store streams it
+now solves each chunk from scratch and drops its states (`scf/streaming.stream_eigenvalues`,
+QE's `c_bands_nscf`). `benchmarks/si8-1k.in` (eight-atom Si, 12 Ry, `nbnd = 16`, `npwx =
+738`), memory mode, the SCF's own peak 20.3 MB, then `get_bands` on a straight path of `n`
+points, one process per point, cache warm, time of the second call:
+
+| path | peak before | peak after | time before | time after |
+|---:|---:|---:|---:|---:|
+| 200 points | 102.8 MB | 44.8 MB | 34.4 s | 35.5 s |
+| 800 points | 383.4 MB | 163.6 MB | 139.7 s | 142.6 s |
+
+The slope falls from **0.47 to 0.20 MB per k-point**. The lowest eigenvalue agrees before
+and after to the printed digit (-0.41663246398257975 Ry at both lengths); the set is held
+to 1e-9 against the whole-set solve by `tests/unit/test_streaming.py`. One band set is
+0.19 MB per k-point here. **It is not flat**, and what is left is not states, since none
+are kept. Part of it is measured: `jax.live_arrays()` on the band path's own
+`Calculation` (the one `run_bands` builds, item 20) holds **0.089 MB per k-point** --
+the projector core columns `(nk, 748, 4)` complex, `k+G` `(nk, 748, 3)`, the kinetic
+energies and four index arrays (item 6). The other 0.11 MB per k-point is not attributed;
+the core's setup build, which runs over the whole k-set with its intermediates live (item
+6, second bullet), is the candidate to check. The chunk walk costs 2-3 per cent in time.
+
+## The PAW one-centre tensors, factored (GTX 1060, 2026-09-28)
+
+`GPU-MEMORY-NEXT.md` item 18. `PawSpecies` kept `density_ae`, `density_ps` and, for a
+fully-relativistic dataset, `density_rel` as `(nh, nh, nlm, mesh)` products of the Gaunt
+coefficients and the radial pair functions -- 295.2 MB each for `Pt.rel-pbe-n-kjpaw_psl`
+(`nh = 34`, `nlm = 25`, `mesh = 1277`), resident in both memory modes. It now keeps the
+two factors and contracts `becsum` with the coefficients inside each radial pair first,
+then with the radial table (`PAW_rho_lm`'s order); `ddd` is the same contraction run
+backwards. The meta-GGA kinetic tensors are still products.
+
+`tests/data/qe/pt-soc-paw-nosym.in` (one Pt atom, spin-orbit PAW, 8 k-points), default
+memory mode, one process per run, each code run twice so that the second is warm:
+
+| | peak | energy | SCF, second call |
+|---|---:|---:|---:|
+| before | **1309.6 MB** (both runs) | -753.0385301005763 Ry | 1.7 s |
+| after | **411.3 MB** (both runs) | -753.0385301005764 Ry | 1.8 s |
+
+`pw.x` gives -753.03853013 Ry (`reference.out.pt-soc-paw-nosym`); the 3e-8 Ry is the same
+before and after. **Round-off, measured** on the five committed PAW datasets (Si, O, Pt, Ni,
+I; the relativistic three also with `nspin = 4`, which exercises the small component) at
+a random `becsum`: the one-centre energy within 1.8e-15 Ry (exactly equal in 11 of 12
+cases), `ddd` within 1e-13 relative, and its `becsum` tangent -- what the response stack
+differentiates -- within 1.4e-12 relative.

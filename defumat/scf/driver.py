@@ -5480,6 +5480,12 @@ def run_scf(
     ``k_loop``. Same expression either way, so no number moves. It is ignored
     when ``calculation`` is given, for the same reason ``k_batch`` is.
 
+    ``memory_mode`` (``'memory'`` or ``'speed'``) is the preset every
+    ``'default'`` dial resolves from (:data:`~defumat.batching.MEMORY_MODES`),
+    and ``band_batch`` is how many bands go through the grid at once, resolved
+    by :func:`resolve_band_batch_for` -- chosen from the card in memory mode on
+    an accelerator. Both are ignored when ``calculation`` is given.
+
     ``diago_full_acc`` is ``pw.x``'s switch of the same name, and it is
     ``False`` here as it is there. With it off, a band whose fractional
     occupation has fallen below 0.01 is diagonalised to ``max(5 ethr, 1e-5)``
