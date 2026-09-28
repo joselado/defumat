@@ -77,54 +77,46 @@ def stream_diagonalize(calculation, hamiltonians, nbnd: int, store: np.ndarray,
     ``return_steps``, as numpy arrays. ``ethr`` is a scalar or the
     ``(nspin, nk, nbnd)`` per-band array, as there.
 
-    **One chunk ahead.** Chunk ``i + 1`` is launched before chunk ``i`` is
-    settled, so the device is solving the next chunk while the host waits on
-    this one's finiteness flags and copies its states back; the peak holds two
-    chunks' working sets rather than one. Measured on the eight-atom silicon
-    cell at 64 k-points on a GTX 1060, the solves took 9.22 s per SCF settled
-    one at a time, against 8.0 s for the same per-k solves inside one compiled
-    ``lax.map`` -- the gap is the device idling across each hand-over, and it
-    is what the look-ahead is for. A solver with no ``launch``/``settle`` pair
-    is called synchronously, one chunk at a time.
+    **Chunks are settled one at a time, and launching the next one early was
+    measured not to help.** On a GTX 1060 (jax 0.11.1) the call that launches a
+    chunk's solve *returns only when the solve is done*: XLA runs Davidson's
+    ``while_loop`` by reading its predicate back to the host each step, so the
+    execution happens on the calling thread. Timed on eight-atom silicon at 64
+    k-points, the launch was 8.04 s of a 9.2 s streamed solve (512 calls,
+    15.7 ms each) and waiting on its result afterwards 0.26 s; the transfers
+    both ways were 0.23 s. A look-ahead that launched chunk ``i + 1`` before
+    collecting chunk ``i`` measured 9.34 s against 9.22 s -- nothing to overlap
+    -- while holding a second chunk on the device, so it is not here. What does
+    buy time is a larger chunk (``k_batch``), which amortises the loop over a
+    batch: 12.1 s at one k-point, 9.65 s at four, 7.66 s for the whole axis
+    (``speed``), at 58, 141 and 2174 MB.
     """
     rank = 0 if ethr is None else jnp.ndim(ethr)
     if rank not in (0, 3):
         raise ValueError(
             f"ethr must be a scalar or a (nspin, nk, nbnd) array, got rank {rank}")
     extra = {} if calculation.david is None else {"david": calculation.david}
-    solver = calculation.eigensolver
-    launch, settle = getattr(solver, "launch", None), getattr(solver, "settle", None)
     nspin, nk = len(hamiltonians), hamiltonians[0].nk
-    out = {}
-
-    def collect(spin, rows, live, handle):
-        energies, states, taken, stuck = (
-            settle(handle) if launch is not None else handle)
-        energies = np.asarray(energies)
-        if not out:
-            out["eigenvalues"] = np.empty((nspin, nk, nbnd), energies.dtype)
-            out["steps"] = np.empty((nspin, nk), np.asarray(taken).dtype)
-            out["unsettled"] = np.empty((nspin, nk), np.asarray(stuck).dtype)
-        live_rows = rows[:live]
-        store[spin, live_rows] = np.asarray(states)[:live]
-        out["eigenvalues"][spin, live_rows] = energies[:live]
-        out["steps"][spin, live_rows] = np.asarray(taken)[:live]
-        out["unsettled"][spin, live_rows] = np.asarray(stuck)[:live]
-
-    pending = None
+    eigenvalues = steps = unsettled = None
     for spin, hamiltonian in enumerate(hamiltonians):
         threshold = ethr[spin] if rank == 3 else ethr
         for rows, live in k_chunks(nk, calculation.k_batch):
-            arguments = (hamiltonian, nbnd, _to_device(store[spin, rows]), threshold)
-            options = dict(k_batch=calculation.k_batch, return_steps=True,
-                           indices=jnp.asarray(rows), **extra)
-            handle = (launch(*arguments, **options) if launch is not None
-                      else solver(*arguments, **options))
-            if pending is not None:
-                collect(*pending)
-            pending = (spin, rows, live, handle)
-    collect(*pending)
-    return out["eigenvalues"], out["steps"], out["unsettled"]
+            energies, states, taken, stuck = calculation.eigensolver(
+                hamiltonian, nbnd, _to_device(store[spin, rows]), threshold,
+                k_batch=calculation.k_batch, return_steps=True,
+                indices=jnp.asarray(rows), **extra,
+            )
+            energies = np.asarray(energies)
+            if eigenvalues is None:
+                eigenvalues = np.empty((nspin, nk, nbnd), energies.dtype)
+                steps = np.empty((nspin, nk), np.asarray(taken).dtype)
+                unsettled = np.empty((nspin, nk), np.asarray(stuck).dtype)
+            live_rows = rows[:live]
+            store[spin, live_rows] = np.asarray(states)[:live]
+            eigenvalues[spin, live_rows] = energies[:live]
+            steps[spin, live_rows] = np.asarray(taken)[:live]
+            unsettled[spin, live_rows] = np.asarray(stuck)[:live]
+    return eigenvalues, steps, unsettled
 
 
 def _add(total, part):

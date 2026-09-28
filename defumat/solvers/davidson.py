@@ -995,23 +995,6 @@ def davidson_eigensolver_all(
     # executable's argument-plus-output requirement down by exactly one buffer
     # and sets ``memory_analysis().alias_size_in_bytes`` to that buffer's size,
     # so the win is real and it is this structure that is in the way.
-    handle = _launch_checked(hamiltonian, nbnd, psi0, ethr, residual_threshold,
-                             david, max_iterations, k_batch, return_steps,
-                             indices, robust_retry)
-    if not robust_retry:
-        return handle
-    return _settle(*handle)
-
-
-def _launch_checked(hamiltonian, nbnd, psi0, ethr, residual_threshold, david,
-                    max_iterations, k_batch, return_steps, indices, robust_retry):
-    """The fast route dispatched -- **not** waited for -- and what settling it needs.
-
-    JAX dispatches asynchronously, so this returns as soon as the solve is
-    queued; nothing here reads a result on the host. With ``robust_retry``
-    the return is the handle :func:`_settle` takes, and without it the solve's
-    own outputs.
-    """
     arguments = (hamiltonian, nbnd, psi0, ethr, residual_threshold, david,
                  max_iterations, k_batch)
     if indices is not None:
@@ -1055,16 +1038,6 @@ def _launch_checked(hamiltonian, nbnd, psi0, ethr, residual_threshold, david,
     # proportional to the k-set and the other is not.
     fast = _every_k(*arguments, robust=False, return_steps=return_steps,
                     return_finite=True, indices=indices)
-    return fast, arguments, return_steps, indices
-
-
-def _settle(fast, arguments, return_steps, indices):
-    """Wait for a launched solve, and re-solve the k-points that came back non-finite.
-
-    The one host synchronisation of :func:`davidson_eigensolver_all`: the
-    per-k finiteness flags are read here, and only the failed k-points' answers
-    are replaced by the canonical-orthogonalisation route's.
-    """
     fast, per_k = fast[:-1], fast[-1]
     failed = ~np.asarray(per_k)
     if not failed.any():
@@ -1080,7 +1053,7 @@ def _settle(fast, arguments, return_steps, indices):
         "canonical orthogonalisation. A non-finite overlap here is usually a "
         "solve that stalled rather than a bad Hamiltonian -- check the step "
         "counts, and loosen ethr (conv_thr) before trusting the result",
-        stacklevel=3,
+        stacklevel=2,
     )
     robust = _every_k(*arguments, robust=True, return_steps=return_steps,
                       indices=indices)
@@ -1095,31 +1068,3 @@ def _settle(fast, arguments, return_steps, indices):
 
 
 davidson_eigensolver_all.clear_cache = _every_k.clear_cache
-
-
-def _launch(hamiltonian, nbnd: int, psi0=None, ethr=None,
-            residual_threshold=RESIDUAL_THRESHOLD, david: int = DAVID_NDIM,
-            max_iterations: int = MAX_ITERATIONS,
-            k_batch: int | None | str = "default", return_steps: bool = False,
-            indices=None):
-    """:func:`davidson_eigensolver_all`'s first half: queue the solve, return a handle.
-
-    A streamed pass (:func:`~defumat.scf.streaming.stream_diagonalize`)
-    launches chunk ``i + 1`` before it settles chunk ``i``, so the device is
-    solving while the host copies the previous chunk's states back -- the
-    arguments mean what they mean in :func:`davidson_eigensolver_all`, and
-    ``settle(launch(...))`` is that function with ``robust_retry = True``.
-    """
-    _refuse_a_space_too_small(hamiltonian, nbnd)
-    ethr = jnp.broadcast_to(
-        jnp.asarray(ETHR if ethr is None else ethr,
-                    dtype=hamiltonian.kinetic.dtype),
-        (hamiltonian.nk, nbnd),
-    )
-    return _launch_checked(hamiltonian, nbnd, psi0, ethr, residual_threshold,
-                           david, max_iterations, k_batch, return_steps,
-                           indices, True)
-
-
-davidson_eigensolver_all.launch = _launch
-davidson_eigensolver_all.settle = lambda handle: _settle(*handle)
