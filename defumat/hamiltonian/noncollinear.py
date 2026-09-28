@@ -132,6 +132,9 @@ class SpinorHamiltonian(eqx.Module):
     #: (``c_bands.f90:286``) and is what a Hamiltonian built without its basis
     #: gets.
     npw: tuple[int, ...] | None = eqx.field(static=True, default=None)
+    #: The band dial, as :attr:`Hamiltonian.band_batch
+    #: <defumat.hamiltonian.operator.Hamiltonian.band_batch>` carries it.
+    band_batch: int | None | str = eqx.field(static=True, default="default")
 
     @property
     def gamma_only(self) -> bool:
@@ -323,7 +326,8 @@ class SpinorHamiltonian(eqx.Module):
             pair = states.reshape(states.shape[:-1] + (2, self.npwx))
             return self._join(self._local_block(pair, ik))
 
-        return map_bands(block, flat).reshape(components.shape)
+        return map_bands(block, flat, batch=self.band_batch).reshape(
+            components.shape)
 
     def _local_block(self, components: jnp.ndarray, ik: int) -> jnp.ndarray:
         """One block of bands through the grid; see :meth:`_local`."""

@@ -143,7 +143,7 @@ References for the conventions rather than the code: ``PW/src/setup.f90`` for
 from __future__ import annotations
 
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -308,6 +308,29 @@ class SizeEstimate:
     #: **bounds** the peak against the eigensolver's buffer rather than adding
     #: to it; on a vacuum-padded slab it is the larger of the two.
     setup_transient: int = 0
+    #: Where the wavefunction set lives between the points that read it --
+    #: :func:`~defumat.batching.resolve_wfc_store`'s answer. ``stream`` holds it
+    #: in host RAM and puts one chunk on the device per call, so the
+    #: ``wavefunctions`` line is that chunk rather than the whole set.
+    wfc_store: str = "device"
+    #: **The start** -- ``wfcinit``: ``max(natomwfc, nbnd)`` vectors, ``H`` and
+    #: ``S`` applied to them, and their band loop through the grid, at
+    #: :attr:`band_batch`. It runs once, before the first Davidson call, and is
+    #: a moment rather than a standing cost, so it enters :attr:`peak_bytes`
+    #: beside the eigensolver's buffer (`MEMORY-AUDIT.md` D10, where it set the
+    #: peak of the one cell measured).
+    start_buffer: int = 0
+    #: How many vectors the start rotates: ``max(natomwfc, nbnd)``, with
+    #: ``natomwfc`` counted the way ``wfcinit`` counts it for this regime.
+    start_vectors: int = 0
+    #: The band-independent parts of the two band-looped stages, and what one
+    #: band in flight adds to either (``_FFT_COEFFICIENT npol N_smooth zc``,
+    #: times the k-points in flight). Kept so that :meth:`at_band_batch` can
+    #: re-evaluate the estimate at another band batch without rebuilding the
+    #: basis, which is what :func:`choose_band_batch` walks.
+    eigensolver_fixed: float = 0.0
+    start_fixed: float = 0.0
+    band_box_bytes: float = 0.0
 
     #: The ``arrays`` entries the eigensolver's buffer stands in for.
     _SUPERSEDED = ("Davidson subspace psi+hpsi", "Davidson Ritz block")
@@ -329,10 +352,28 @@ class SizeEstimate:
             size for name, size in self.arrays.items()
             if name not in self._SUPERSEDED
         )
-        # Setup's transient and the eigensolver's buffer never coexist -- the
-        # first is freed before the second is asked for -- so the peak takes
-        # the larger of the two, not their sum.
-        return int(resident + max(self.eigensolver_buffer, self.setup_transient))
+        # Setup's transient, the start and the eigensolver's buffer never
+        # coexist -- each is freed before the next is asked for -- so the peak
+        # takes the largest of them, not their sum.
+        return int(resident + max(self.eigensolver_buffer, self.setup_transient,
+                                  self.start_buffer))
+
+    def at_band_batch(self, band_batch: int | None) -> "SizeEstimate":
+        """The same estimate with ``band_batch`` bands in flight instead.
+
+        Only the two band-looped stages move -- the eigensolver's grid line and
+        the start's -- and both are ``fixed + boxes x band_box_bytes``, so this
+        is arithmetic on stored numbers and builds nothing.
+        """
+        return replace(
+            self,
+            band_batch=None if band_batch is None else int(band_batch),
+            eigensolver_buffer=int(self.eigensolver_fixed + _boxes_in_flight(
+                band_batch, self.nbnd) * self.band_box_bytes),
+            start_buffer=int(self.start_fixed + _boxes_in_flight(
+                band_batch, self.start_vectors) * self.band_box_bytes)
+            if self.start_vectors else 0,
+        )
 
     @property
     def dense_points(self) -> int:
@@ -402,6 +443,10 @@ class SizeEstimate:
             "        the (ngm, kkbeta) Bessel intermediate of the augmentation",
             "        charge, freed before the SCF starts. It bounds the peak",
             "        against the line below rather than adding to it.",
+            f"  {'start (wfcinit)':<34s}{gb(self.start_buffer)}",
+            f"        {self.start_vectors} vectors -- max(natomwfc, nbnd) -- with",
+            "        H and S applied and their grid loop at the band batch. Runs",
+            "        once, before the first Davidson call.",
             f"  {'eigensolver XLA temp buffer':<34s}{gb(self.eigensolver_buffer)}",
             "        one contiguous allocation, and it stands in for the two",
             "        Davidson lines above rather than adding to them. Estimated",
@@ -425,6 +470,7 @@ def estimate_size(
     davidson_basis: int | None = None,
     band_batch: int | None | str = "default",
     projectors: str | None = "default",
+    wfc_store: str | None = "default",
 ) -> SizeEstimate:
     """Size a run from its input alone, allocating nothing on the device.
 
@@ -459,6 +505,11 @@ def estimate_size(
             eigensolver's buffer. ``"default"`` resolves it the way a run
             would, from ``DEFUMAT_BAND_BATCH`` and the platform; ``None`` means
             every band at once, which is what an accelerator defaults to.
+        wfc_store: where the wavefunction set lives, as
+            :func:`~defumat.batching.resolve_wfc_store` resolves it. ``stream``
+            (memory mode on an accelerator) keeps it in host RAM, so the device
+            holds one chunk of it; sizing the whole set there would count a
+            store that is not on the card.
 
     Returns:
         a :class:`SizeEstimate`. Its counts are exact; its bytes are a floor.
@@ -572,6 +623,9 @@ def estimate_size(
     from defumat.batching import resolve_projectors
 
     projectors = resolve_projectors(projectors)
+    from defumat.batching import resolve_wfc_store
+
+    wfc_store = resolve_wfc_store(wfc_store)
     name = getattr(cell.precision, "name", "double")
     zc, zr = _COMPLEX_BYTES.get(name, 16), _REAL_BYTES.get(name, 8)
     nk = len(npw)
@@ -589,7 +643,13 @@ def estimate_size(
     nvecx = davidson_basis * nbnd
 
     arrays = {
-        "wavefunctions (nspin,nk,nbnd,ndim)": wf_spin * nk * nbnd * ndim * zc,
+        # **Streamed, the set is not on the device**: one chunk of it is, put
+        # there per Davidson call from the host store (``scf/streaming.py``),
+        # one channel at a time.
+        **({"wavefunctions (nspin,nk,nbnd,ndim)": wf_spin * nk * nbnd * ndim * zc}
+           if wfc_store != "stream" else
+           {"wavefunctions, one streamed chunk (k,nbnd,ndim)":
+                k_live * nbnd * ndim * zc}),
         # **The core is resident under BOTH routes**, and putting it inside the
         # conditional below was this model's second wrong turn about the same
         # object. ``Calculation.__init__`` assigns ``projector_core``
@@ -798,12 +858,45 @@ def estimate_size(
     # 664 MB **below** the floor it discarded and a smaller peak at the end of
     # the dial that actually holds ``nk`` subspaces. That is this module's own
     # stated error inverted -- a green light for the larger calculation.
-    bands_in_flight = nbnd if band_batch is None else min(band_batch, nbnd)
-    eigensolver_buffer = int(k_live * (
+    #
+    # **A band batch that does not divide the band count costs its tail too**:
+    # ``map_bands`` compiles the full blocks and the remainder separately, and
+    # the executable holds both (the ``band_batch = 16`` point above, 24 bands
+    # as a 16-block and an 8-tail) -- so the boxes in flight are ``b + n % b``,
+    # :func:`_boxes_in_flight`.
+    band_box_bytes = k_live * _FFT_COEFFICIENT * npol * int(np.prod(smooth_grid)) * zc
+    eigensolver_fixed = k_live * (
         _SUBSPACE_COEFFICIENT * nvecx * ndim * zc
         + _RITZ_COEFFICIENT * nbnd * ndim * zc
-        + _FFT_COEFFICIENT * bands_in_flight * npol * int(np.prod(smooth_grid)) * zc
-    ))
+    )
+    eigensolver_buffer = int(
+        eigensolver_fixed + _boxes_in_flight(band_batch, nbnd) * band_box_bytes
+    )
+
+    # **The start** (`MEMORY-AUDIT.md` D10). ``starting_wavefunctions`` builds
+    # the atomic span -- ``natomwfc`` vectors, topped up with random ones to
+    # ``nbnd`` -- and ``rayleigh_ritz`` applies ``H`` and ``S`` to it, so three
+    # blocks of ``max(natomwfc, nbnd)`` vectors, the span itself whole-k unless
+    # the store streams (``stream_start`` builds it chunk by chunk). Three is
+    # D10's count and is within 5 per cent of the one measured rise it names
+    # (45.93 GB of blocks, plus the grid line at the band batch that run set,
+    # against 51.05). The grid line is ``h_psi``'s, so it takes the
+    # eigensolver's coefficient; that transfer is an assumption, not a fit.
+    from defumat.pseudo.atomic import (
+        count_atomic_wavefunctions, count_spinor_wavefunctions,
+    )
+
+    if (npol == 2 and system.lspinorb and not system.spiral
+            and any(p.has_so for p in pseudos)):
+        natomwfc = count_spinor_wavefunctions(pseudos, structure, lspinorb=True)
+    else:
+        natomwfc = npol * count_atomic_wavefunctions(pseudos, structure)
+    start_vectors = max(int(natomwfc), int(nbnd))
+    span_k = k_live if wfc_store == "stream" else nk
+    start_fixed = (span_k + 2 * k_live) * start_vectors * ndim * zc
+    start_buffer = int(
+        start_fixed + _boxes_in_flight(band_batch, start_vectors) * band_box_bytes
+    )
 
     return SizeEstimate(
         nat=len(structure.types), nsp=len(pseudos), nelec=nelec, nbnd=int(nbnd),
@@ -816,8 +909,24 @@ def estimate_size(
         davidson_basis=int(davidson_basis), k_batch=k_live,
         band_batch=None if band_batch is None else int(band_batch),
         arrays=arrays, eigensolver_buffer=eigensolver_buffer,
-        setup_transient=setup_transient,
+        setup_transient=setup_transient, wfc_store=wfc_store,
+        start_buffer=start_buffer, start_vectors=start_vectors,
+        eigensolver_fixed=float(eigensolver_fixed),
+        start_fixed=float(start_fixed), band_box_bytes=float(band_box_bytes),
     )
+
+
+def _boxes_in_flight(band_batch: int | None, n: int) -> int:
+    """How many band boxes a loop over ``n`` bands in blocks of ``band_batch`` holds.
+
+    ``None`` (or a batch of ``n`` or more) is every band at once. Otherwise the
+    full blocks and the remainder are compiled separately and the executable
+    holds both, so a batch that does not divide ``n`` pays its tail as well.
+    """
+    if band_batch is None or band_batch >= n:
+        return int(n)
+    band_batch = max(1, int(band_batch))
+    return band_batch + n % band_batch
 
 
 #: The fraction of the device's free memory a ``speed``-mode estimate may fill
@@ -879,7 +988,95 @@ def speed_mode_fits(system, pseudos, nbnd: int | None = None,
     available = int(stats["bytes_limit"]) - int(stats["bytes_in_use"])
     estimate = estimate_size(
         system, pseudos, nbnd=nbnd, k_batch=None, davidson_basis=davidson_basis,
-        band_batch=None, projectors="store",
+        band_batch=None, projectors="store", wfc_store="device",
     ).peak_bytes
     return SpeedCheck(fits=estimate <= headroom * available, estimate=int(estimate),
                       available=available, headroom=headroom)
+
+
+@dataclass(frozen=True)
+class BandBatchChoice:
+    """The band batch memory mode runs at on this device, and why."""
+
+    #: ``None`` for the whole block, which is what memory mode runs whenever
+    #: it fits -- a band loop on a card is slower (4.3x at one band on the
+    #: eight-atom silicon cell), so the dial moves only when it has to.
+    band_batch: int | None
+    #: Whether the estimate at :attr:`band_batch` fits. ``False`` only when not
+    #: even one band at a time does, in which case :attr:`band_batch` is 1 and
+    #: the run is expected to die in its first large allocation.
+    fits: bool
+    #: :attr:`SizeEstimate.peak_bytes` at :attr:`band_batch`, bytes.
+    estimate: int
+    #: ``bytes_limit - bytes_in_use``, bytes; ``None`` without device
+    #: statistics (the CPU client), where nothing is chosen.
+    available: int | None
+    headroom: float = SPEED_HEADROOM
+
+    def describe(self) -> str:
+        if self.available is None:
+            return "no device memory statistics on this backend"
+        return (f"estimated peak {self.estimate / 2**30:.2f} GiB against "
+                f"{self.headroom:.0%} of {self.available / 2**30:.2f} GiB free")
+
+
+def choose_band_batch(system, pseudos, nbnd: int | None = None,
+                      davidson_basis: int | None = None,
+                      k_batch: int | None = 1, projectors: str = "rebuild",
+                      wfc_store: str = "stream",
+                      headroom: float = SPEED_HEADROOM,
+                      available: int | None = None) -> BandBatchChoice:
+    """The largest band batch whose estimated peak fits the device.
+
+    Memory mode bounds what grows with the k-mesh; on a large cell what is left
+    is one k-point's working set, and the largest term of that is the band
+    loop through the grid -- ``2 b npol N_smooth`` complex numbers at ``b``
+    bands in flight, 66.9 GB at every band against 2.65 GB at 16 on the 45-atom
+    NiBr2 slab (``GPU-MEMORY-NEXT.md`` item 9). This sizes the run once at the
+    memory preset's other dials and re-evaluates it at each ``b``
+    (:meth:`SizeEstimate.at_band_batch`, arithmetic only).
+
+    **The whole block wins whenever it fits**, so a cell that ran before runs
+    exactly as before. Otherwise the choice minimises the number of blocks --
+    the time -- and, among batches with the same number, the boxes in flight,
+    which prefers a batch that divides the band count (a remainder costs its
+    own block, :func:`_boxes_in_flight`). The threshold is
+    :data:`SPEED_HEADROOM` of what the allocator has left, the calibration
+    :func:`speed_mode_fits` uses, and for the same reason.
+
+    ``available`` replaces the device query, for a test or a planned run on a
+    card that is not this one.
+    """
+    if available is None:
+        import jax
+
+        stats = jax.devices()[0].memory_stats()
+        if not stats:
+            return BandBatchChoice(band_batch=None, fits=True, estimate=0,
+                                   available=None, headroom=headroom)
+        available = int(stats["bytes_limit"]) - int(stats["bytes_in_use"])
+    base = estimate_size(
+        system, pseudos, nbnd=nbnd, k_batch=k_batch,
+        davidson_basis=davidson_basis, band_batch=None, projectors=projectors,
+        wfc_store=wfc_store,
+    )
+    budget = headroom * available
+    if base.peak_bytes <= budget:
+        return BandBatchChoice(band_batch=None, fits=True,
+                               estimate=int(base.peak_bytes),
+                               available=int(available), headroom=headroom)
+    best = None
+    for b in range(base.nbnd, 0, -1):
+        estimate = base.at_band_batch(b)
+        if estimate.peak_bytes > budget:
+            continue
+        key = (-(-base.nbnd // b), _boxes_in_flight(b, base.nbnd))
+        if best is None or key < best[0]:
+            best = (key, b, estimate)
+    if best is None:
+        return BandBatchChoice(band_batch=1, fits=False,
+                               estimate=int(base.at_band_batch(1).peak_bytes),
+                               available=int(available), headroom=headroom)
+    return BandBatchChoice(band_batch=best[1], fits=True,
+                           estimate=int(best[2].peak_bytes),
+                           available=int(available), headroom=headroom)

@@ -378,9 +378,9 @@ def _symmetrize_noncollinear(rho_r, fft_index, grid, maps, rotations):
     return jax.vmap(lambda rho_g: jnp.real(g_to_r(rho_g, fft_index, grid)))(stacked)
 
 
-@partial(jax.jit, static_argnames=("grid", "k_batch"))
+@partial(jax.jit, static_argnames=("grid", "k_batch", "band_batch"))
 def _density_of_bands(psi, fft_index, grid, weights, cell, k_batch,
-                      fft_index_minus=None):
+                      fft_index_minus=None, band_batch="default"):
     """``sum_band`` on the smooth grid, in one kernel.
 
     The symmetrisation used to be fused in here. It cannot be any more: it acts
@@ -388,23 +388,24 @@ def _density_of_bands(psi, fft_index, grid, weights, cell, k_batch,
     first.
     """
     return sum_band(psi, fft_index, grid, weights, cell, k_batch,
-                    fft_index_minus=fft_index_minus)
+                    fft_index_minus=fft_index_minus, band_batch=band_batch)
 
 
-@partial(jax.jit, static_argnames=("grid", "k_batch", "gamma_only"))
+@partial(jax.jit, static_argnames=("grid", "k_batch", "gamma_only", "band_batch"))
 def _kinetic_of_bands(psi, fft_index, grid, weights, cell, kplusg, k_batch,
-                      gamma_only=False):
+                      gamma_only=False, band_batch="default"):
     """``sum_band``'s meta-GGA branch on the smooth grid, in one kernel."""
     return kinetic_energy_density(psi, fft_index, grid, weights, cell, kplusg,
-                                  k_batch, gamma_only)
+                                  k_batch, gamma_only, band_batch)
 
 
-@partial(jax.jit, static_argnames=("grid", "nspin_mag", "k_batch"))
+@partial(jax.jit, static_argnames=("grid", "nspin_mag", "k_batch", "band_batch"))
 def _spinor_kinetic_of_bands(psi, fft_index, grid, weights, cell, kplusg,
-                             nspin_mag, k_batch):
+                             nspin_mag, k_batch, band_batch="default"):
     """The same for spinors: ``tau`` on the Pauli basis."""
     return spinor_kinetic_energy_density(
-        psi, fft_index, grid, weights, cell, kplusg, nspin_mag, k_batch
+        psi, fft_index, grid, weights, cell, kplusg, nspin_mag, k_batch,
+        band_batch,
     )
 
 
@@ -846,10 +847,12 @@ def _kpoints_rows(kpoints, rows):
     )
 
 
-@partial(jax.jit, static_argnames=("grid", "nspin_mag", "k_batch"))
-def _spinor_density_of_bands(psi, fft_index, grid, weights, cell, nspin_mag, k_batch):
+@partial(jax.jit, static_argnames=("grid", "nspin_mag", "k_batch", "band_batch"))
+def _spinor_density_of_bands(psi, fft_index, grid, weights, cell, nspin_mag, k_batch,
+                             band_batch="default"):
     """``sum_band`` for spinors, in one kernel."""
-    return spinor_sum_band(psi, fft_index, grid, weights, cell, nspin_mag, k_batch)
+    return spinor_sum_band(psi, fft_index, grid, weights, cell, nspin_mag, k_batch,
+                           band_batch)
 
 
 @partial(jax.jit, static_argnums=(3,))
@@ -1732,6 +1735,53 @@ def _resolve_memory_mode_for(memory_mode, system, pseudos, k_batch, projectors,
     return "memory"
 
 
+def resolve_band_batch_for(band_batch, mode, system, pseudos, k_batch="default",
+                           projectors="default", david=None):
+    """The band batch a :class:`Calculation` runs at: one resolution for every caller.
+
+    In order: an explicit ``band_batch``; then ``DEFUMAT_BAND_BATCH``; then, in
+    ``memory`` mode on an accelerator, the largest batch whose estimated peak
+    fits the card (:func:`~defumat.sizing.choose_band_batch`); then the
+    platform's default -- one band on a CPU, the whole block on a card. The
+    cluster runs that set ``DEFUMAT_BAND_BATCH`` by hand keep what they set.
+
+    **The choice is the whole block wherever that fits**, so nothing that ran
+    before changes. Where it does not, the run warns, because the answer is the
+    same to the last bit (``map_bands``) and the price is time.
+    :meth:`~defumat.calculator.Calculator.estimate` resolves through here too,
+    so a size report describes the run that will happen.
+    """
+    from defumat import batching
+
+    if band_batch != "default":
+        return batching.resolve_band_batch(band_batch)
+    setting = batching._from_environment("DEFUMAT_BAND_BATCH")
+    if setting is not batching._UNSET:
+        return setting
+    if mode != "memory" or batching._backend() == "cpu":
+        return batching._platform_default()
+    from defumat.sizing import choose_band_batch
+
+    choice = choose_band_batch(
+        system, pseudos, nbnd=system.nbnd, davidson_basis=david,
+        k_batch=resolve_k_batch(k_batch, mode),
+        projectors=resolve_projectors(projectors, mode),
+        wfc_store=resolve_wfc_store("default", mode),
+    )
+    if choice.band_batch is not None:
+        what = ("does not fit even one band at a time"
+                if not choice.fits else
+                f"transforming {choice.band_batch} bands at a time instead")
+        warnings.warn(
+            f"memory_mode='memory': the whole band block does not fit this "
+            f"device; {what} ({choice.describe()}). Same numbers to the last "
+            "bit, more time; pass band_batch or set DEFUMAT_BAND_BATCH to "
+            "override",
+            RuntimeWarning, stacklevel=3,
+        )
+    return choice.band_batch
+
+
 class Calculation:
     """Everything that stays fixed while the density changes.
 
@@ -1751,6 +1801,7 @@ class Calculation:
         projectors: str | None = "default",
         origin_tangent: bool = True,
         memory_mode: str | None = "default",
+        band_batch: int | None | str = "default",
     ):
         #: ``"memory"`` or ``"speed"`` -- the preset the ``"default"`` dials
         #: below resolve from (:data:`~defumat.batching.MEMORY_MODES`). Decided
@@ -1787,6 +1838,16 @@ class Calculation:
         # ``None`` is a single ``vmap`` over all of them. See
         # :mod:`defumat.batching`.
         self.k_batch = resolve_k_batch(k_batch, self.memory_mode)
+        #: How many bands go through the grid at once in ``h_psi`` and in the
+        #: density -- :func:`~defumat.batching.map_bands`'s dial, resolved once
+        #: here and carried by every :class:`Hamiltonian` this calculation
+        #: builds (:func:`resolve_band_batch_for`). In memory mode on a card it
+        #: is chosen from the card, because on a large cell it is the largest
+        #: per-k-point term left once the k axis streams.
+        self.band_batch = resolve_band_batch_for(
+            band_batch, self.memory_mode, system, pseudos, k_batch,
+            projectors, david,
+        )
         #: Carry the ``l = 1`` tangent of ``<k+G|beta>`` at ``k + G = 0``.
         #:
         #: The default is the derivative the operator actually has. ``False``
@@ -4130,7 +4191,7 @@ class Calculation:
             return _spinor_density_of_bands(
                 wavefunctions[0], index if rows is None else index[rows],
                 smooth.grid, weights[0], self.system.cell, self.nspin_mag,
-                self.k_batch,
+                self.k_batch, self.band_batch,
             )
         index, minus = self.fft_index, self.fft_index_minus
         if rows is not None:
@@ -4138,7 +4199,7 @@ class Calculation:
             minus = None if minus is None else minus[self.basis_rows(rows)]
         return _density_of_bands(
             wavefunctions, index, smooth.grid, weights, self.system.cell,
-            self.k_batch, fft_index_minus=minus,
+            self.k_batch, fft_index_minus=minus, band_batch=self.band_batch,
         )
 
     def finish_density(self, rho_smooth, becsum_) -> jnp.ndarray:
@@ -4197,6 +4258,7 @@ class Calculation:
             tau = _spinor_kinetic_of_bands(
                 wavefunctions[0], index, smooth.grid, weights[0],
                 self.system.cell, kplusg, self.nspin_mag, self.k_batch,
+                self.band_batch,
             )
         else:
             index = self.fft_index
@@ -4211,7 +4273,7 @@ class Calculation:
                 # unlike the density this is not a conjugate fill inside the
                 # transform but a different combination after it
                 # (:func:`~defumat.scf.density.band_kinetic_density`).
-                self.gamma_only,
+                self.gamma_only, self.band_batch,
             )
         if not finish:
             return tau
@@ -4271,6 +4333,7 @@ class Calculation:
                 resolves_differences=self.resolves_differences,
                 deeq=None if deeq is None else deeq[spin],
                 hubbard=None if hubbard is None else hubbard[spin],
+                band_batch=self.band_batch,
             ))
         return tuple(hamiltonians)
 
@@ -4302,6 +4365,7 @@ class Calculation:
             resolves_differences=self.resolves_differences,
             qq=self.qq_so,
             hubbard=None if hubbard is None else hubbard[0],
+            band_batch=self.band_batch,
         )
 
     def starting_density(self) -> jnp.ndarray:
@@ -5372,6 +5436,7 @@ def run_scf(
     projectors: str | None = "default",
     wfc_store: str | None = "default",
     memory_mode: str | None = "default",
+    band_batch: int | None | str = "default",
     starting_density: jnp.ndarray | None = None,
     starting_becsum: tuple | None = None,
     starting_ns: jnp.ndarray | None = None,
@@ -5534,6 +5599,7 @@ def run_scf(
     calculation = calculation or Calculation(
         system, pseudos, diagonalization=diagonalization, k_batch=k_batch,
         david=david, projectors=projectors, memory_mode=memory_mode,
+        band_batch=band_batch,
     )
     nbnd = nbnd or system.nbnd or default_nbnd(
         calculation.nelec,

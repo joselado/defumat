@@ -6886,7 +6886,7 @@ takes two values, and each sets the four dials:
 mode on a GPU & \code{k\_batch} & \code{band\_batch} & \code{projectors} & \code{wfc\_store} \\
 \midrule
 \code{'speed'}  & all & all & \code{store}   & \code{device} \\
-\code{'memory'} & 1   & all & \code{rebuild} & \code{stream} \\
+\code{'memory'} & 1   & all, if it fits & \code{rebuild} & \code{stream} \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -6975,7 +6975,24 @@ the environment variable when those must follow a non-default mode.
 \textbf{Two batching dials} control how much is in flight. The band dial
 follows the platform: on a CPU, \qe's loop --- one band at a time, which is what
 a \emph{cache} wants --- and on a GPU the whole block, which is what a card
-wants. The $k$ dial follows the memory mode above: one $k$-point on a CPU in
+wants. \textbf{In \code{'memory'} mode on a GPU the whole block is checked
+first}: once the $k$ axis streams, one $k$-point's band loop through the grid
+is the largest thing left on a large cell, so the setup estimates the peak at
+every band batch and, if the whole block would not fit, runs the fewest blocks
+that do and says so in a warning. The answer is identical bit for bit, since
+chunking the band axis is a map rather than a sum; what it costs is time. The
+chosen value is \code{calc.calculation.band\_batch}, and an explicit
+\code{band\_batch} or \code{DEFUMAT\_BAND\_BATCH} is taken as given:
+
+\begin{lstlisting}[language=Python]
+calc = Calculator.from_file("scf.in", band_batch=16)
+print(calc.calculation.band_batch, calc.estimate().band_batch)
+\end{lstlisting}
+
+\noindent The estimate counts what \code{'memory'} actually puts on the card ---
+one streamed chunk of the wavefunctions rather than the whole set --- and the
+starting guess, $\max(n_{\rm atomwfc}, n_{\rm bnd})$ vectors with $H$ and $S$
+applied, which on a large cell is where the peak is. The $k$ dial follows the memory mode above: one $k$-point on a CPU in
 either mode and in \code{'memory'} on a GPU, all of them in \code{'speed'}.
 Either end is reachable everywhere:
 

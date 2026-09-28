@@ -157,7 +157,12 @@ SHARED_OPTIONS = frozenset({
 #: the ``'default'`` dials of the ``Calculation`` resolve from, so it decides
 #: *which* setup exists; and ``speed`` on an accelerator is checked against the
 #: card when that setup is built, which only happens once.
-SETUP_ONLY_OPTIONS = frozenset({"projectors", "origin_tangent", "memory_mode"})
+#:
+#: ``band_batch`` is here because the ``Calculation`` resolves it once --
+#: from the card, in memory mode -- and every Hamiltonian it builds carries the
+#: answer, so it too decides which setup exists.
+SETUP_ONLY_OPTIONS = frozenset({"projectors", "origin_tangent", "memory_mode",
+                                "band_batch"})
 
 #: The subset of :data:`SHARED_OPTIONS` that describes the **SCF loop** and
 #: nothing else, and is therefore *not* forwarded past it.
@@ -552,23 +557,31 @@ class Calculator:
         written for; it is the same mistake as sizing ``K_POINTS gamma`` as the
         request rather than as the substitution, one option along.
         """
-        from defumat.batching import resolve_k_batch, resolve_projectors
+        from defumat.batching import (
+            resolve_k_batch, resolve_projectors, resolve_wfc_store,
+        )
+        from defumat.scf.driver import resolve_band_batch_for
         from defumat.sizing import estimate_size
 
         options.setdefault("davidson_basis", self.defaults.get("david"))
         options.setdefault("nbnd", self.defaults.get("nbnd"))
-        # The band dial has no input-file variable, so a caller's value or the
-        # environment's is the whole of it -- but it still has to be resolved
-        # here rather than inside, for the same reason ``k_batch`` is: the
-        # answer describes *this run*.
-        if options.get("band_batch") is None:
-            options["band_batch"] = "default"
-        # The same argument as ``k_batch`` below: this calculator's own answer,
-        # not the library's, because the question is "will *this run* fit" and
-        # the dial changes the largest line in the table.
-        # Both resolved through this calculator's memory mode, which is the
-        # preset the run's own ``"default"`` dials come from.
+        # The dials below are resolved through this calculator's memory mode,
+        # which is the preset the run's own ``"default"`` dials come from: the
+        # answer describes *this run*, not the library's defaults.
         mode = self.defaults.get("memory_mode", "default")
+        # The band dial has no input-file variable. It is resolved by the
+        # **same function** ``Calculation.__init__`` uses -- which in memory
+        # mode on a card chooses it from the card -- so the report and the run
+        # cannot disagree about the largest per-k-point line in the table.
+        if options.get("band_batch") is None:
+            options["band_batch"] = resolve_band_batch_for(
+                self.defaults.get("band_batch", "default"), mode, self.system,
+                self.pseudos, self.defaults.get("k_batch", "default"),
+                self.defaults.get("projectors", "default"),
+                options.get("davidson_basis"),
+            )
+        options.setdefault("wfc_store", resolve_wfc_store(
+            self.defaults.get("wfc_store", "default"), mode))
         options.setdefault("projectors", resolve_projectors(
             self.defaults.get("projectors", "default"), mode))
         if options.get("k_batch") is None:
@@ -646,13 +659,14 @@ class Calculator:
                 projectors=self.defaults.get("projectors", "default"),
                 origin_tangent=self.defaults.get("origin_tangent", True),
                 memory_mode=self.defaults.get("memory_mode", "default"),
+                band_batch=self.defaults.get("band_batch", "default"),
             )
         return self._calculation
 
     #: The options that define a :class:`~defumat.scf.driver.Calculation`
     #: rather than one run over it. Given per call, they have to rebuild it.
     SETUP_OPTIONS = ("diagonalization", "k_batch", "david", "projectors",
-                     "origin_tangent", "memory_mode")
+                     "origin_tangent", "memory_mode", "band_batch")
 
     def _adopt(self, options) -> None:
         """Take a per-call setup option as this calculator's own.
@@ -665,7 +679,8 @@ class Calculator:
         changed = {name: options[name] for name in self.SETUP_OPTIONS
                    if name in options and options[name] != self.defaults.get(
                        name, "default"
-                       if name in ("k_batch", "projectors", "memory_mode")
+                       if name in ("k_batch", "projectors", "memory_mode",
+                                   "band_batch")
                        else None)}
         if changed:
             self.defaults.update(changed)

@@ -34,7 +34,8 @@ __all__ = ["sum_band", "band_density", "becsum", "spinor_sum_band",
 
 
 def band_density(psi: jnp.ndarray, fft_index: jnp.ndarray, grid, weights: jnp.ndarray,
-                 cell: Cell, fft_index_minus: jnp.ndarray | None = None):
+                 cell: Cell, fft_index_minus: jnp.ndarray | None = None,
+                 band_batch: int | None | str = "default"):
     """Contribution of one k-point's bands to the density.
 
     Args:
@@ -73,12 +74,13 @@ def band_density(psi: jnp.ndarray, fft_index: jnp.ndarray, grid, weights: jnp.nd
 
     # One band at a time, as ``sum_band.f90`` accumulates them: a band's
     # real-space box is the working set (:mod:`defumat.batching`).
-    return sum_bands(one_band, (psi, weights)) / cell.volume
+    return sum_bands(one_band, (psi, weights), batch=band_batch) / cell.volume
 
 
 def sum_band(psi, fft_index, grid, weights, cell: Cell,
              k_batch: int | None | str = "default",
-             fft_index_minus=None) -> jnp.ndarray:
+             fft_index_minus=None,
+             band_batch: int | None | str = "default") -> jnp.ndarray:
     """The density from every k-point, ``(nspin, n1, n2, n3)`` and real.
 
     Args:
@@ -101,7 +103,7 @@ def sum_band(psi, fft_index, grid, weights, cell: Cell,
             def one_k(arrays):
                 state, index, minus, occupation = arrays
                 return band_density(state, index, grid, occupation, cell,
-                                    fft_index_minus=minus)
+                                    fft_index_minus=minus, band_batch=band_batch)
 
             return sum_k(one_k, (states, fft_index, fft_index_minus, occupations),
                          batch=batch)
@@ -111,7 +113,8 @@ def sum_band(psi, fft_index, grid, weights, cell: Cell,
     def channel(states, occupations):
         def one_k(arrays):
             state, index, occupation = arrays
-            return band_density(state, index, grid, occupation, cell)
+            return band_density(state, index, grid, occupation, cell,
+                                band_batch=band_batch)
 
         return sum_k(one_k, (states, fft_index, occupations), batch=batch)
 
@@ -119,7 +122,8 @@ def sum_band(psi, fft_index, grid, weights, cell: Cell,
 
 
 def band_kinetic_density(psi, fft_index, grid, weights, cell: Cell, kplusg,
-                         gamma_only: bool = False):
+                         gamma_only: bool = False,
+                         band_batch: int | None | str = "default"):
     """One k-point's contribution to ``tau``, in **Rydberg**.
 
     Args:
@@ -182,12 +186,13 @@ def band_kinetic_density(psi, fft_index, grid, weights, cell: Cell, kplusg,
             return weight * jnp.sum(4.0 * real * real, axis=0)
         return weight * jnp.sum(jnp.real(jnp.conj(field) * field), axis=0)
 
-    return sum_bands(one_band, (psi, weights)) / cell.volume
+    return sum_bands(one_band, (psi, weights), batch=band_batch) / cell.volume
 
 
 def kinetic_energy_density(psi, fft_index, grid, weights, cell: Cell, kplusg,
                            k_batch: int | None | str = "default",
-                           gamma_only: bool = False) -> jnp.ndarray:
+                           gamma_only: bool = False,
+                           band_batch: int | None | str = "default") -> jnp.ndarray:
     """``tau`` from every k-point, ``(nspin, n1, n2, n3)`` and real, Ry.
 
     Args:
@@ -208,7 +213,7 @@ def kinetic_energy_density(psi, fft_index, grid, weights, cell: Cell, kplusg,
         def one_k(arrays):
             state, index, vectors, occupation = arrays
             return band_kinetic_density(state, index, grid, occupation, cell,
-                                        vectors, gamma_only)
+                                        vectors, gamma_only, band_batch)
 
         return sum_k(one_k, (states, fft_index, kplusg, occupations), batch=batch)
 
@@ -216,7 +221,8 @@ def kinetic_energy_density(psi, fft_index, grid, weights, cell: Cell, kplusg,
 
 
 def spinor_band_kinetic_density(psi, fft_index, grid, weights, cell: Cell,
-                                kplusg, nspin_mag: int):
+                                kplusg, nspin_mag: int,
+                                band_batch: int | None | str = "default"):
     """One k-point's contribution to a **noncollinear** ``tau``, Ry.
 
     Args:
@@ -275,12 +281,13 @@ def spinor_band_kinetic_density(psi, fft_index, grid, weights, cell: Cell,
             up_density - down_density,
         ])
 
-    return sum_bands(one_band, (psi, weights)) / cell.volume
+    return sum_bands(one_band, (psi, weights), batch=band_batch) / cell.volume
 
 
 def spinor_kinetic_energy_density(psi, fft_index, grid, weights, cell: Cell,
                                   kplusg, nspin_mag: int,
-                                  k_batch: int | None | str = "default"):
+                                  k_batch: int | None | str = "default",
+                                  band_batch: int | None | str = "default"):
     """Noncollinear ``tau`` from every k-point, ``(nspin_mag, n1, n2, n3)``, Ry.
 
     Args:
@@ -291,7 +298,7 @@ def spinor_kinetic_energy_density(psi, fft_index, grid, weights, cell: Cell,
     def one_k(arrays):
         state, index, vectors, occupation = arrays
         return spinor_band_kinetic_density(
-            state, index, grid, occupation, cell, vectors, nspin_mag
+            state, index, grid, occupation, cell, vectors, nspin_mag, band_batch
         )
 
     return sum_k(one_k, (psi, fft_index, kplusg, weights),
@@ -364,7 +371,8 @@ def _becsum_species(projections, weights, channels):
     )
 
 
-def spinor_band_density(psi, fft_index, grid, weights, cell: Cell, nspin_mag: int):
+def spinor_band_density(psi, fft_index, grid, weights, cell: Cell, nspin_mag: int,
+                        band_batch: int | None | str = "default"):
     """One k-point's contribution to a noncollinear density.
 
     Args:
@@ -436,11 +444,12 @@ def spinor_band_density(psi, fft_index, grid, weights, cell: Cell, nspin_mag: in
             up_density - down_density,
         ])
 
-    return sum_bands(one_band, (psi, weights)) / cell.volume
+    return sum_bands(one_band, (psi, weights), batch=band_batch) / cell.volume
 
 
 def spinor_sum_band(psi, fft_index, grid, weights, cell: Cell, nspin_mag: int,
-                    k_batch: int | None | str = "default"):
+                    k_batch: int | None | str = "default",
+                    band_batch: int | None | str = "default"):
     """A noncollinear density from every k-point, ``(nspin_mag, n1, n2, n3)``.
 
     Args:
@@ -449,7 +458,8 @@ def spinor_sum_band(psi, fft_index, grid, weights, cell: Cell, nspin_mag: int,
     """
     def one_k(arrays):
         state, index, occupation = arrays
-        return spinor_band_density(state, index, grid, occupation, cell, nspin_mag)
+        return spinor_band_density(state, index, grid, occupation, cell, nspin_mag,
+                                   band_batch)
 
     return sum_k(one_k, (psi, fft_index, weights), batch=resolve_k_batch(k_batch))
 

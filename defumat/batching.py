@@ -381,8 +381,11 @@ def _platform_default() -> int | None:
     """QE's loop on a CPU, the whole axis at once on an accelerator.
 
     This is the **band** dial's default, and it is the same in both memory
-    modes (:func:`memory_preset`): one band's box is the cache-sized unit on a
-    CPU, and on a card a band loop serialises every FFT into its own launch --
+    modes (:func:`memory_preset`) except where a ``memory``-mode calculation on
+    a card finds the whole block does not fit and chooses a batch itself
+    (:func:`~defumat.scf.driver.resolve_band_batch_for`). One band's box is the
+    cache-sized unit on a CPU, and on a card a band loop serialises every FFT
+    into its own launch --
     measured at 4.3x the whole block's time at 64 k-points on a GTX 1060, with
     no peak worth having in exchange. The k dial's default is the memory mode's
     (:func:`_k_default`), which is where the two modes differ.
@@ -422,9 +425,18 @@ def _platform_default() -> int | None:
 #: three dials of ``memory`` alone gave 167 MB and 8.95 s at 64 k-points: the
 #: store itself, fetched whole, was most of what was left.
 #:
-#: The band dial is ``all`` in both: it is a per-k-point working set, it does
-#: not grow with the mesh, and a band loop on a card costs 4.3x (39.5 s against
-#: 8.95 on the same cell) for a peak that is not the one in the way.
+#: The band dial is ``all`` in both **wherever that fits**: it is a
+#: per-k-point working set, it does not grow with the mesh, and a band loop on a
+#: card costs 4.3x (39.5 s against 8.95 on the same cell) for a peak that is not
+#: the one in the way. On a large cell it becomes the one in the way -- it is
+#: the largest per-k-point term left once the k axis streams, 66.9 GB at every
+#: band against 2.65 GB at 16 on the 45-atom NiBr2 slab -- so in ``memory``
+#: mode the :class:`~defumat.scf.driver.Calculation` budgets it from the card
+#: (:func:`~defumat.scf.driver.resolve_band_batch_for`,
+#: :func:`~defumat.sizing.choose_band_batch`): the whole block when it fits,
+#: otherwise the fewest blocks that do, with a warning. The Hamiltonians and
+#: the density kernels carry the value it chose; ``map_bands``' own
+#: ``"default"`` below still means the platform's.
 #:
 #: On a CPU there is one memory, so streaming it to itself buys nothing and
 #: QE's loop is already both the lean and the fast end. The mode changes one

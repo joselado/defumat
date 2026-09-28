@@ -90,6 +90,14 @@ class Hamiltonian(eqx.Module):
     #: (``c_bands.f90:286``) and is what a Hamiltonian built without its basis
     #: gets.
     npw: tuple[int, ...] | None = eqx.field(static=True, default=None)
+    #: How many bands :meth:`_local` puts through the grid at once --
+    #: :func:`~defumat.batching.map_bands`'s dial, carried here so that the
+    #: value the :class:`~defumat.scf.driver.Calculation` resolved (from the
+    #: card, in memory mode) is the one every ``h_psi`` uses. **Static**,
+    #: because it sets the shape of the block the transform is compiled for;
+    #: ``"default"`` defers to the environment and the platform, which is what
+    #: a Hamiltonian built outside a calculation gets.
+    band_batch: int | None | str = eqx.field(static=True, default="default")
 
     @property
     def gamma_only(self) -> bool:
@@ -284,7 +292,7 @@ class Hamiltonian(eqx.Module):
                 box = jnp.fft.fftn(field * self.potential, axes=(-3, -2, -1)) / n
                 return gather_from_box(box, self.fft_index[ik])
 
-            return map_bands(block_gamma, psi)
+            return map_bands(block_gamma, psi, batch=self.band_batch)
 
         if self.sticks is None:
             n = self.grid[0] * self.grid[1] * self.grid[2]
@@ -294,7 +302,7 @@ class Hamiltonian(eqx.Module):
                 box = jnp.fft.fftn(field * self.potential, axes=(-3, -2, -1)) / n
                 return gather_from_box(box, self.fft_index[ik])
 
-            return map_bands(block, psi)
+            return map_bands(block, psi, batch=self.band_batch)
 
         columns, index = self.sticks.columns[ik], self.sticks.index[ik]
 
@@ -302,7 +310,7 @@ class Hamiltonian(eqx.Module):
             field = sticks_to_r(states, self.sticks, columns, index)
             return r_to_sticks(field * self.potential_wave, self.sticks, columns, index)
 
-        return map_bands(block, psi)
+        return map_bands(block, psi, batch=self.band_batch)
 
     def _nonlocal(self, psi: jnp.ndarray, ik: int) -> jnp.ndarray:
         """``sum_ij |beta_i> D_ij <beta_j|psi>``."""

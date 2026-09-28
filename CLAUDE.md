@@ -973,8 +973,10 @@ whether a new test belongs in the gate, the cgroup cap and the RSS watchdog.
   follows `memory_mode`** — QE's loop, one k-point at a time as `c_bands.f90` and
   `sum_band.f90` do it, on a CPU and in `'memory'` (the accelerator default since
   2026-09-28, the user's decision), and the whole axis at once in `'speed'`. The band dial
-  follows the platform alone — one band on a CPU, the whole block on an accelerator — in
-  both modes. `k=all, b=1` is in neither preset, being measured worse than either end, and
+  follows the platform — one band on a CPU, the whole block on an accelerator — in both
+  modes, **except** that a `'memory'`-mode `Calculation` on an accelerator whose whole
+  block would not fit chooses the largest batch that does, from the card
+  (`resolve_band_batch_for`), and carries it on its Hamiltonians and density kernels. `k=all, b=1` is in neither preset, being measured worse than either end, and
   `k=1, b=all` is `'memory'`'s, measured at 1.2x `all/all` on a card.
   `k_batch`
   reaches every entry point (`run_scf`, `run_bands`, `run_nscf`, `run_dos`, `Calculation`,
