@@ -45,7 +45,7 @@ __all__ = [
 #: products.
 CHUNK = 4096
 
-# The four kernels below are module-level and jitted rather than closures defined
+# The kernels below are module-level and jitted rather than closures defined
 # per call. Each radial transform is ~30 elementwise operations on a (nq, mesh)
 # intermediate; dispatched eagerly, XLA compiles and launches every one of them
 # separately, which is where most of a cold run's setup time went. As one
@@ -54,13 +54,45 @@ CHUNK = 4096
 # would be a new callable each time and so a new compilation each time.
 
 
-def _chunked(function, q: jnp.ndarray) -> jnp.ndarray:
-    """Apply a vectorised transform to ``q`` in bounded-size pieces."""
-    q = jnp.atleast_1d(jnp.asarray(q))
-    if q.shape[0] <= CHUNK:
-        return function(q)
-    pieces = [function(q[start : start + CHUNK]) for start in range(0, q.shape[0], CHUNK)]
-    return jnp.concatenate(pieces, axis=-1)
+def _scan_rows(block, q: jnp.ndarray) -> jnp.ndarray:
+    """``block(q)`` in pieces of :data:`CHUNK` values, walked by a rematted scan.
+
+    Called *inside* a jitted kernel, so ``block`` may close over that kernel's
+    arguments. ``block`` maps ``(n,)`` values of ``q`` to ``(..., n)``.
+
+    **Why a scan and a remat rather than a loop.** These transforms were a
+    Python loop of jitted calls, which bounds the forward pass and nothing
+    else: under ``jax.grad`` every chunk's ``(chunk, mesh)`` residuals stay on
+    the tape, and ``Calculation.at_strain`` rebuilds ``V_loc``, the core charge
+    and the projectors against the strained ``|G|`` inside the stress's
+    gradient. With the body under ``jax.checkpoint`` the tape holds the ``q``
+    chunks and the backward pass recomputes one chunk at a time -- the pattern
+    ``augmentation._qrad_kernel`` took first (``OPEN.md`` S4, ``PLAN.md``
+    P112). Measured on ``bn-ldau-noncol.in``'s stress gradient on the GTX 1060:
+    see ``PERFORMANCE.md``, "The stress tape".
+
+    **The chunks are exactly** :data:`CHUNK` **wide**, as the loop's were, and
+    only the last is padded, with ``q = 0`` -- a value every transform here
+    already meets at ``G = 0`` and is finite at, in value and derivative. So
+    every row but the last chunk's is computed at the shape it always was --
+    which is not bit-identity: inside the scan XLA fuses the body differently,
+    and on N, B and Si datasets at 100 to 43903 values of ``q`` 53 of 68
+    arrays came out identical and the rest within 2.2e-16 relative, a gradient
+    through all of them within 4.9e-15.
+    """
+    nq = q.shape[0]
+    if nq <= CHUNK:
+        return block(q)
+    nchunks = -(-nq // CHUNK)
+    padded = jnp.pad(q, (0, nchunks * CHUNK - nq)).reshape(nchunks, CHUNK)
+
+    @jax.checkpoint
+    def body(carry, rows):
+        return carry, block(rows)
+
+    _, blocks = jax.lax.scan(body, None, padded)  # (nchunks, ..., CHUNK)
+    values = jnp.moveaxis(blocks, 0, -2)
+    return values.reshape(values.shape[:-2] + (-1,))[..., :nq]
 
 
 def _truncated(pseudo: Pseudopotential):
@@ -98,11 +130,17 @@ def local_potential_of_g(pseudo: Pseudopotential, q, omega: float) -> jnp.ndarra
     # a convincingly self-consistent calculation with the wrong absolute energy.
     at_zero = r * (r * vloc + z * E2)
 
-    return _chunked(lambda qq: _vloc_kernel(qq, r, weights, short, at_zero, z, omega), q)
+    return _vloc_kernel(jnp.atleast_1d(jnp.asarray(q)), r, weights, short, at_zero, z, omega)
 
 
 @jax.jit
-def _vloc_kernel(qq, r, weights, short, at_zero, z, omega):
+def _vloc_kernel(q, r, weights, short, at_zero, z, omega):
+    return _scan_rows(
+        lambda qq: _vloc_block(qq, r, weights, short, at_zero, z, omega), q
+    )
+
+
+def _vloc_block(qq, r, weights, short, at_zero, z, omega):
     qq = qq[:, None]
     small = qq[:, 0] < 1e-8
     safe = jnp.where(qq < 1e-8, 1.0, qq)
@@ -126,11 +164,15 @@ def atomic_charge_of_g(pseudo: Pseudopotential, q, omega: float) -> jnp.ndarray:
     r, weights, msh = _truncated(pseudo)
     rho = jnp.asarray(pseudo.rho_atom[:msh])
 
-    return _chunked(lambda qq: _rhoat_kernel(qq, r, weights, rho, omega), q)
+    return _rhoat_kernel(jnp.atleast_1d(jnp.asarray(q)), r, weights, rho, omega)
 
 
 @jax.jit
-def _rhoat_kernel(qq, r, weights, rho, omega):
+def _rhoat_kernel(q, r, weights, rho, omega):
+    return _scan_rows(lambda qq: _rhoat_block(qq, r, weights, rho, omega), q)
+
+
+def _rhoat_block(qq, r, weights, rho, omega):
     qq = qq[:, None]
     small = qq[:, 0] < 1e-8
     safe = jnp.where(qq < 1e-8, 1.0, qq)
@@ -153,11 +195,15 @@ def core_charge_of_g(pseudo: Pseudopotential, q, omega: float) -> jnp.ndarray:
     r, weights, msh = _truncated(pseudo)
     rho = jnp.asarray(pseudo.rho_core[:msh])
 
-    return _chunked(lambda qq: _rhocore_kernel(qq, r, weights, rho, omega), q)
+    return _rhocore_kernel(jnp.atleast_1d(jnp.asarray(q)), r, weights, rho, omega)
 
 
 @jax.jit
-def _rhocore_kernel(qq, r, weights, rho, omega):
+def _rhocore_kernel(q, r, weights, rho, omega):
+    return _scan_rows(lambda qq: _rhocore_block(qq, r, weights, rho, omega), q)
+
+
+def _rhocore_block(qq, r, weights, rho, omega):
     argument = qq[:, None] * r[None, :]
     integrand = FPI * r[None, :] ** 2 * rho[None, :] * spherical_bessel(0, argument)
     return integrand @ weights / omega
@@ -195,11 +241,7 @@ def projector_form_factors(pseudo: Pseudopotential, q, omega: float) -> jnp.ndar
         beta = jnp.asarray(projector.beta[:cutoff])
         l = projector.l
 
-        rows.append(_chunked(
-            lambda qq, r=r, weights=weights, beta=beta, l=l:
-                _beta_kernel(qq, r, weights, beta, prefactor, l),
-            q,
-        ))
+        rows.append(_beta_kernel(q, r, weights, beta, prefactor, l))
 
     if not rows:
         return jnp.zeros((0,) + q.shape)
@@ -314,11 +356,8 @@ def atomic_form_factors(pseudo: Pseudopotential, q, omega) -> jnp.ndarray:
     r, weights, _ = _truncated(pseudo)
 
     rows = [
-        _chunked(
-            lambda qq, chi=jnp.asarray(orbital.chi[: r.shape[0]]), l=orbital.l:
-                _beta_kernel(qq, r, weights, chi, prefactor, l),
-            q,
-        )
+        _beta_kernel(q, r, weights, jnp.asarray(orbital.chi[: r.shape[0]]),
+                     prefactor, orbital.l)
         for orbital in pseudo.orbitals
         if orbital.occupation >= 0.0
     ]
@@ -328,7 +367,13 @@ def atomic_form_factors(pseudo: Pseudopotential, q, omega) -> jnp.ndarray:
 
 
 @partial(jax.jit, static_argnames=("l",))
-def _beta_kernel(qq, r, weights, beta, prefactor, l):
+def _beta_kernel(q, r, weights, beta, prefactor, l):
+    return _scan_rows(
+        lambda qq: _beta_block(qq, r, weights, beta, prefactor, l), q
+    )
+
+
+def _beta_block(qq, r, weights, beta, prefactor, l):
     argument = qq[:, None] * r[None, :]
     integrand = beta[None, :] * spherical_bessel(l, argument) * r[None, :]
     return integrand @ weights * prefactor

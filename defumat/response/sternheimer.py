@@ -877,7 +877,11 @@ def local_perturbation(calculation, dv, v_scf=None, ddd_paw=None, dddd_paw=None)
     coefficients = _perturbed_coefficients(
         calculation, dv, v_scf, ddd_paw, dddd_paw
     )
-    vkb = calculation.projectors.vkb
+    # Read one k-point's projectors where they are used, never the whole-k
+    # ``vkb``: on a norm-conserving dataset they are not used at all, and on a
+    # lazy set the property would build the ``(nk, npwx, nkb)`` array for every
+    # perturbation of every iteration to read one row of it.
+    projector_set = calculation.projectors
     # **A spinor perturbation is one operator on a space twice as large, not two
     # operators.** ``dv`` carries ``nspin_mag`` components -- one for a
     # nonmagnetic spin-orbit run and four for a magnetic one -- and they are a
@@ -924,7 +928,7 @@ def local_perturbation(calculation, dv, v_scf=None, ddd_paw=None, dddd_paw=None)
                 # which is :meth:`~defumat.hamiltonian.noncollinear.
                 # SpinorHamiltonian._nonlocal` with ``int3`` in place of
                 # ``deeq_nc``.
-                projectors = vkb[ik]
+                projectors = projector_set.at_k(ik)
                 pair = jnp.where(mask[ik], states, 0.0).reshape(
                     states.shape[:-1] + (2, npwx)
                 )
@@ -960,7 +964,7 @@ def local_perturbation(calculation, dv, v_scf=None, ddd_paw=None, dddd_paw=None)
 
         out = map_bands(local_block, states)
         if coefficients is not None:
-            projectors = vkb[ik]
+            projectors = projector_set.at_k(ik)
             projections = jnp.einsum("gk,...g->...k", projectors.conj(), states)
             if minus_index is not None:
                 # ``calbec_gamma`` again -- a sum over plane waves, so it takes

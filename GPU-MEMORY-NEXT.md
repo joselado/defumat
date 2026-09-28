@@ -43,15 +43,31 @@ below:
   array to slice one row, once per k-point (`O(nk^2)` work, a whole-k transient). It reads
   `at_k(ik)` now; the projectors are bit-identical (`test_projector_storage.py`).
 
+## Done since
+
+* **Item 21** (the relaxation loops' retention): `run_vc_relax`, `run_spiral_scan` and
+  `relax_spiral_q` drop the previous step's result and `Calculation` (`MEMORY-AUDIT.md`
+  A2, extended). No number moves.
+* **Item 7, first half**: `local_perturbation` reads `projectors.at_k(ik)` inside its
+  guard; a norm-conserving perturbation no longer builds a whole-k `vkb` it never reads.
+  The dozen other response sites are still open.
+* **Items 13 and 14(b)**: the four radial transforms walk their chunks in a rematted scan
+  (`formfactors._scan_rows`). BN's compiled stress temporary on the card **5.574 -> 1.609
+  GiB**, and on the CPU 5.74 / 8.52 / 17.81 -> 1.88 / 1.42 / 1.93 GiB at 1 / 9 / 36
+  k-points, so the linear growth in nk is gone as well. BN's SCF and stress now run on the
+  GTX 1060 at 2052.9 MB peak, the stress within 2.1e-7 Ry/bohr^3 of `pw.x`. Cost: 7.6 per
+  cent on `si2-us-1k`'s warm stress. `PERFORMANCE.md`, "The stress tape".
+
 ## Suggested order
 
 Cheap and certain first, then the two that decide whether the large cells run in the
 default mode:
 
-1. **Retention in the relaxation loops** (item 21) -- three lines, no numbers move.
-2. **One misplaced line in the Sternheimer local perturbation** (item 7, first half).
-3. **Remat the radial transforms on the derivative path** (item 13) -- the likely cause of
-   the BN stress death, S4's pattern applied to `formfactors._chunked`.
+1. ~~**Retention in the relaxation loops** (item 21)~~ -- done.
+2. ~~**One misplaced line in the Sternheimer local perturbation** (item 7, first half)~~ --
+   done.
+3. ~~**Remat the radial transforms on the derivative path** (item 13)~~ -- done; it was the
+   cause of the BN stress death (A/B above).
 4. **A budget for the band dial in memory mode** (item 9) -- what stands between the NiBr2
    slab and the default mode.
 5. **Stream the NSCF / band-structure solve** (item 1) -- the largest k-mesh term left
@@ -173,6 +189,8 @@ every Davidson call whole through `HubbardTerm`. Three pieces, in order of cost:
 
 ### 7. `projectors='rebuild'` does not reach the traced movers or the response -- priority 2
 
+**First half done 2026-09-28** (the misplaced line); the rest is open.
+
 `at_strain` (`driver.py:3050`), `at_kcart` (`:3299`) and `at_spiral_q(rebuild_basis=False)`
 (`:3412`) still build a stored set; they run under the stress `grad`, the velocity `jvp`
 and `dE/dq`, so check with `memory_analysis()` whether a lazy set on the tape saves
@@ -264,6 +282,8 @@ donating variant of `_every_k` used only when the caller passes a way to rebuild
 
 ### 13. The radial transforms are taped whole under the strain gradient -- priority 1, small
 
+**Done 2026-09-28** (see "Done since"); the text below is the survey's, kept for the record.
+
 `formfactors._chunked` (`formfactors.py:57-63`) is a Python loop of jitted kernels with no
 remat, so every chunk's `(chunk, msh)` residuals stay on the reverse tape. `at_strain`
 rebuilds `V_loc` and the core charge against the strained `|G|` inside the gradient
@@ -285,6 +305,9 @@ with the state as `ShapeDtypeStruct`s at BN's shapes and read
 
 ### 14. The projector and atomic-orbital transforms are taped per |k+G| -- priority 1, small
 
+**(b) done 2026-09-28** with item 13, and it removed the growth in nk (measured). (a)
+and (c) remain, and (a) is now a saving in time rather than in memory.
+
 Under a strain, `build_projector_core` calls `projector_form_factors` on the flattened
 `nk x npwx` `|k+G|` (`projectors.py:382-388`), one `_chunked` call per projector, each
 with a `(chunk, kkbeta)` intermediate (`formfactors.py:331-334`). So **the stress tape
@@ -297,6 +320,14 @@ the interpolation error, so it stays opt-in. **Measure**: `memory_analysis()` of
 stress on Si8 at 8/27/64/216 k before and after; report MB per k-point.
 
 ### 15. The stored augmentation table is assembled on the strain tape -- priority 2, small
+
+**Measured 2026-09-28, and the prescription below does not yet hold.** After items 13/14
+this is the largest thing left on BN's stress tape: its 1.42 GiB (CPU) is headed by
+`c128[196,43903]` and a dozen `f64[196,1,1,1,43903]`, `nh^2 x ngm` pair blocks. But with
+`DEFUMAT_AUG_MAX_BYTES=0`, which sends the table through the tabulated scan named below,
+the same executable is **7.47 GiB**, fifteen whole-`ngm` complex pair tables. Locate what
+in the tabulated route keeps the whole table on a strain's tape before routing stored
+datasets through it.
 
 `at_strain` calls `build_augmentation` from scratch (`driver.py:3054-3057`); below
 `AUG_MAX_BYTES` the stored route runs `_assemble_qgm` over strain-dependent `ylm` and
@@ -370,6 +401,8 @@ setups also do not see the calculator's `memory_mode` or `projectors`
 `self.calculation.at_kpoints(k)` elsewhere -- `at_kpoints` now keeps the projector dial.
 
 ### 21. The relaxation loops keep the previous step alive -- priority 2, small
+
+**Done 2026-09-28.**
 
 `vc_relax`'s `previous = current` (`:345`) stays bound through the next iteration's SCF,
 force and stress; `run_spiral_scan` (`spiral.py:304-316`) and `relax_spiral_q` (`:591`)

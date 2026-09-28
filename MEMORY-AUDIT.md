@@ -291,6 +291,13 @@ bracketed the SCF.
 
 ---
 
+**Extended 2026-09-28** (`GPU-MEMORY-NEXT.md` item 21): the same two drops -- `result =
+None` at the top of the loop body, and the previous `Calculation` released once its last
+reader has run -- are now in `run_vc_relax`'s loop (`del previous` after `_advance`, which
+matters more there because under a stress `at_cell` goes through `at_strain` and carries its
+own augmentation table and core), in `run_spiral_scan` and in `relax_spiral_q`. No number
+moves; nothing was measured, because nothing reads the dropped objects.
+
 ### A3. `vc_relax` ends holding four Calculations and two SCF states while it starts a fresh SCF
 
 **Site.** `defumat/workflows/vc_relax.py`: `base` at `:245`, `current = base` at `:265`, `previous

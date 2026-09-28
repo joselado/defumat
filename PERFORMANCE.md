@@ -1476,7 +1476,8 @@ is `(ngm, kkbeta)` — 36257 by ~1100, so 300 MB — with a handful of temporari
 `spherical_bessel` on top and one of them per `L`. Evaluated forward they are transient;
 **taped for a backward pass they are all live at once.** The same is true, more mildly, of
 `_vloc_kernel` and `_beta_kernel`, which are chunked at 4096 `q` values but whose chunks
-are all taped.
+are all taped. (Since 2026-09-28 they are not: all four walk their chunks in a rematted
+scan -- "The stress tape" at the end of this file.)
 
 In the terms of `CLAUDE.md`'s memory rule, the peak of a stress evaluation is
 
@@ -1484,7 +1485,10 @@ In the terms of `CLAUDE.md`'s memory rule, the peak of a stress evaluation is
 
 which is independent of `nbnd` and of `nk` — a stress does not touch the wavefunctions
 beyond one contraction — and grows with the *density* cutoff rather than the wavefunction
-one. `jax.checkpoint` on `_qrad_kernel` was tried and **measured to be worth nothing** on
+one. (**The `nk` half was wrong** while the projector transforms were taped: they run on
+the flattened `nk x npwx` values of `|k+G|`, and on `bn-ldau-noncol.in` the compiled
+temporary was 5.74 / 8.52 / 17.81 GiB at 1 / 9 / 36 k-points, 0.35 GiB per k-point. With
+the transforms rematted it is 1.88 / 1.42 / 1.93 GiB -- "The stress tape" below.) `jax.checkpoint` on `_qrad_kernel` was tried and **measured to be worth nothing** on
 this case (11.0 GB against 10.7), so the intermediates are spread across the radial kernels
 rather than concentrated in one; rematerialising all of them, or evaluating the radial
 transforms on `|G|` *shells* under a custom JVP, is the fix and it is in the backlog rather
@@ -7664,8 +7668,63 @@ warm in both modes -- the opposite sign from the CPU rule in `CLAUDE.md`. And
 that keeps the first calculator alive while it builds a second reads two resident setups
 (the first scan here reported 135 MB at 216 k-points where the clean figure is 90.8).
 
-**Not fixed, found on the way**: on this card `bn-ldau-noncol.in` (2 atoms, noncollinear
-DFT+U, ultrasoft, 9 k-points) completes its SCF at about 0.9 GB and then dies in the
-autodiff stress its input asks for (`tstress`), on a single 5.57 GiB request from the
-strain derivative's compiled reverse pass -- in both modes, since the stress reads the
-state whole. `GPU-MEMORY-NEXT.md` carries it with the other candidates.
+**Found on the way, and fixed the same day** (next section): on this card
+`bn-ldau-noncol.in` (2 atoms, noncollinear DFT+U, ultrasoft, 9 k-points) completed its SCF
+at about 0.9 GB and then died in the autodiff stress its input asks for (`tstress`), on a
+single 5.57 GiB request from the strain derivative's compiled reverse pass -- in both
+modes, since the stress reads the state whole.
+
+## The stress tape: the radial transforms rematted (GTX 1060, 2026-09-28)
+
+`GPU-MEMORY-NEXT.md` items 13 and 14. `pseudo/formfactors.py`'s four radial transforms
+(`V_loc`, the atomic and core charges, the projectors and atomic orbitals) walked their
+4096-value chunks in a Python loop of jitted calls. That bounds the forward pass and
+nothing else: under `jax.grad` every chunk's `(chunk, mesh)` residuals stay on the tape,
+and `Calculation.at_strain` rebuilds `V_loc`, the core charge and the projectors against
+the strained `|G|` and `|k+G|` inside the stress's gradient. They now walk them in a
+`lax.scan` whose body is under `jax.checkpoint` (`_scan_rows`), which is `OPEN.md` S4's
+pattern for `_qrad_kernel` applied to the other four. Chunks stay exactly 4096 wide; the
+last is padded with `q = 0`.
+
+Compiled temporary of `compute_stress`'s gradient, `memory_analysis()`, read by
+`tools/gpu/stress_memory.py` (a `ShapeDtypeStruct` state, no SCF), old code at `2ad4707`
+against the change:
+
+| case | backend | k-points | before | after |
+|---|---|---:|---:|---:|
+| `bn-ldau-noncol.in` | GPU | 9 | **5.574 GiB** | **1.609 GiB** |
+| `bn-ldau-noncol.in` | CPU | 1 | 5.739 GiB | 1.880 GiB |
+| `bn-ldau-noncol.in` | CPU | 9 | 8.516 GiB | 1.419 GiB |
+| `bn-ldau-noncol.in` | CPU | 36 | 17.814 GiB | 1.929 GiB |
+| `si2-us-1k.in` (S4's row) | CPU | 1 | 880.8 MB | 371.7 MB |
+
+The GPU figure before is the 5.57 GiB request the card refused, to the digit. The CPU
+column is the nk scan: before, 0.35 GiB per k-point (the projector transforms on the
+flattened `|k+G|`); after, flat to within what the scheduler moves (the after-row is not
+monotonic in nk, and is not attributed further).
+
+**What it buys on the card**: BN's SCF and stress now run in the default memory mode,
+**2052.9 MB peak** warm (2058.1 cold -- a cache miss costs more device memory on this
+card), the SCF in 29.5 s warm and the stress 2.55 s on its third call. The stress agrees
+with `pw.x` (`reference.out.bn-ldau-noncol`) to 2.1e-7 Ry/bohr^3 on the largest component
+(`xy`: -0.00171634 against -0.00171613), 0.03 kbar.
+
+**What it costs**: the backward pass recomputes each chunk. `si2-us-1k.in`, one core
+(`taskset -c 3`, `OMP_NUM_THREADS=1`, `DEFUMAT_THREADS=1`), cache off, warm calls 2-4 of
+`compute_stress` in one process: **2.667 s before and 2.869 s after** (medians of three;
+2.667/2.693/2.652 against 2.829/2.880/2.869), 7.6 per cent. The stress moves by 1.2e-17.
+
+**Round-off, measured**: the transforms themselves on N, B and Si datasets at 100 to 43903
+values of `q`, before against after: 53 of 68 arrays bit-identical, the rest within
+2.2e-16 relative (the core and atomic charges), and a gradient through all of them within
+4.9e-15.
+
+**What the remaining 1.4 GiB is** (CPU, 9 k-points, XLA's memory-usage report): the
+largest buffers are `c128[196,43903]` and a dozen `f64[196,1,1,1,43903]` -- `nh^2 = 196`
+projector pairs of a 14-channel dataset times `ngm` -- which is the stored augmentation
+table being assembled on the tape (item 15). **The route item 15 proposes to reuse is not
+yet a fix**: with `DEFUMAT_AUG_MAX_BYTES=0`, which sends the table through the tabulated
+G-chunk scan, the same executable's temporary is **7.47 GiB**, and its report is fifteen
+whole-`ngm` complex pair tables (`c128[196,43903]` and their transposes, 131 MB each). What
+in that route keeps the whole table on a strain's tape has not been located; it is the
+thing to check before routing stored datasets through it.

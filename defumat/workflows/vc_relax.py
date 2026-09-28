@@ -289,6 +289,10 @@ def run_vc_relax(
     converged = False
 
     for index in range(1, nstep + 1):
+        # The last step's result holds its wavefunctions and must not be live
+        # under this step's SCF, force and stress: ``run_relax``'s line, for the
+        # reason given there (`MEMORY-AUDIT.md` A2).
+        result = None
         result = run_scf(
             current.system, pseudos, nbnd=nbnd, conv_thr=threshold,
             calculation=current, mixing_mode=mixing_mode, mixing_beta=mixing_beta,
@@ -348,6 +352,11 @@ def run_vc_relax(
             pseudos, treinit_gvectors, density_extrapolation,
             diagonalization, k_batch,
         )
+        # ``_advance`` was the last reader of the old geometry's Calculation.
+        # Under a stress ``at_cell`` goes through ``at_strain``, so it carries
+        # its own augmentation table and core; left bound it would sit beside
+        # ``current`` through the whole of the next step.
+        del previous
 
     relaxed = current.system
     relaxation_scf = result

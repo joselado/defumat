@@ -441,9 +441,10 @@ def _qrad_kernel(q, r, weights, functions, prefactor, l):
     :data:`~defumat.pseudo.formfactors.CHUNK` values of ``q`` it is therefore
     built a chunk of rows at a time, the bound ``pseudo/formfactors.py`` puts
     on its four transforms and for the same reason: ``(chunk, kkbeta)`` is 27
-    MB on that cell. Those walk their chunks in a Python loop, every chunk of
-    which is taped under a gradient; this one walks them in a ``lax.scan``
-    with a rematted body, which bounds the tape as well. The table on
+    MB on that cell. This one walks them in a ``lax.scan`` with a rematted
+    body, which bounds the tape as well, and those four have walked theirs the
+    same way since the stress of ``bn-ldau-noncol.in`` was found taping every
+    chunk of a Python loop (``formfactors._scan_rows``). The table on
     the knots (:func:`_qrad_table`) has 2533 at ``ecutrho = 160`` and crosses
     the bound only above about 419 Ry; a single-``q`` caller never does. Every
     row is independent and its sum over the mesh keeps its length, so the chunk

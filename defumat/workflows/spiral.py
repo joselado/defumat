@@ -300,6 +300,10 @@ def run_spiral_scan(
         _require_a_differentiable_spiral(base.at_spiral_q(wavevectors[0]))
     energies, moments, converged, results, slopes = [], [], [], [], []
     for q in wavevectors:
+        # The last point's result and Calculation must not be live under this
+        # point's setup and SCF (`MEMORY-AUDIT.md` A2); ``results`` keeps the
+        # result when it was asked for, and nothing else reads either.
+        calculation = result = None
         calculation = base.at_spiral_q(q)
         result = run_scf(
             calculation.system, pseudos, calculation=calculation, **scf_options
@@ -588,6 +592,9 @@ def relax_spiral_q(
     q_crystal = np.asarray(system.spiral_q, dtype=float)
 
     for index in range(1, nstep + 1):
+        # The last step's result must not be live under this step's SCF
+        # (`MEMORY-AUDIT.md` A2); ``density`` is the only thing carried over.
+        result = None
         result = run_scf(
             calculation.system,
             pseudos,
