@@ -250,3 +250,37 @@ def test_a_lazy_chunk_projector_is_the_stored_one():
     np.testing.assert_allclose(np.asarray(lazy.projectors_at(rows)),
                                np.asarray(stored.projectors.vkb)[rows], atol=1e-13)
     assert jnp.shape(stored.projectors_at(rows)) == (3,) + stored.projectors.vkb.shape[1:]
+
+
+@pytest.mark.slow  # 27 s on the CPU: an SCF and three path solves
+def test_an_eigenvalue_only_solve_streams_and_keeps_no_states(k_batch=3):
+    """``fixed_density_bands`` walks the chunks and drops each one's states.
+
+    A band path or an NSCF grid asks for energies, and the streamed solve is
+    ``c_bands_nscf``: every chunk from scratch, its states discarded as it
+    returns. Round-off against the whole-set solve, a short last chunk at
+    ``k_batch = 3``, and no wavefunctions handed back.
+    """
+    from defumat.system.kpoints import KPoints
+    from defumat.workflows.nscf import fixed_density_bands, fixed_density_states
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        calculator = Calculator.from_text(SILICON_8K, PSEUDO, k_batch=k_batch,
+                                          announce=False)
+        result = calculator.get_scf()
+    system = calculator.system
+    path = KPoints.from_cartesian(
+        np.linspace([0.0, 0.0, 0.0], [0.5, 0.5, 0.5], 7), np.full(7, 1.0 / 7))
+    common = dict(nbnd=8, conv_thr=1e-10, k_batch=k_batch)
+    _, _, streamed = fixed_density_bands(system, calculator.pseudos,
+                                         result.density, path,
+                                         wfc_store="stream", **common)
+    _, _, whole, states = fixed_density_states(system, calculator.pseudos,
+                                               result.density, path, **common)
+    np.testing.assert_allclose(streamed, np.asarray(whole), atol=1e-9)
+    assert states is not None
+    _, _, _, dropped = fixed_density_states(
+        system, calculator.pseudos, result.density, path, wfc_store="stream",
+        keep_states=False, **common)
+    assert dropped is None

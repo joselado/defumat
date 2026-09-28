@@ -24,7 +24,7 @@ import warnings
 
 import numpy as np
 
-from defumat.batching import resolve_k_batch
+from defumat.batching import resolve_k_batch, resolve_wfc_store
 from defumat.pseudo.upf import Pseudopotential
 from defumat.scf.driver import Calculation, default_nbnd
 from defumat.solvers.davidson import DAVID_NDIM, ETHR_MIN
@@ -96,6 +96,8 @@ def fixed_density_states(
     david: int | None = None,
     kcart: np.ndarray | None = None,
     calculation: Calculation | None = None,
+    keep_states: bool = True,
+    wfc_store: str | None = "default",
 ):
     """Diagonalise once at every k-point of ``system`` with ``density`` fixed.
 
@@ -171,6 +173,13 @@ def fixed_density_states(
     calculation's arrays are on), a ``david`` other than the calculation's
     own, and a ``k_batch`` that resolves to a different chunk size from the
     calculation's.
+
+    ``keep_states = False`` says the caller wants the eigenvalues only, and the
+    fourth element comes back ``None`` when that lets the solve stream: where
+    ``wfc_store`` resolves to ``stream`` through the calculation's memory mode
+    (a card in memory mode), each chunk of k-points is solved from scratch and
+    its states dropped, so the set is never stacked on the device.
+    :func:`fixed_density_bands` passes it.
     """
     if calculation is not None:
         _require_a_matching_calculation(calculation, kpoints, k_batch, david)
@@ -275,8 +284,22 @@ def fixed_density_states(
     # There is no SCF here to tighten the threshold over, so ``setup.f90`` picks
     # one up front from the accuracy of the density the bands are computed in.
     ethr = max(ETHR_MIN, 0.1 * min(1.0e-2, conv_thr / max(1.0, calculation.nelec)))
-    eigenvalues, wavefunctions, steps, notcnv = calculation.diagonalize(
-        hamiltonians, nbnd, None, ethr, return_steps=True)
+    # **A caller that wants only the energies, where the store streams, never
+    # stacks the states** (``GPU-MEMORY-NEXT.md`` item 1): each chunk's solve is
+    # discarded as it returns, which is ``c_bands_nscf``, so the device peak
+    # stops following the length of the path or the mesh. ``wfc_store`` is
+    # resolved through the calculation's memory mode, as the SCF resolves it;
+    # on a CPU that is ``device`` and nothing here changes.
+    if not keep_states and resolve_wfc_store(
+            wfc_store, calculation.memory_mode) == "stream":
+        from defumat.scf.streaming import stream_eigenvalues
+
+        eigenvalues, steps, notcnv = stream_eigenvalues(
+            calculation, hamiltonians, nbnd, ethr)
+        wavefunctions = None
+    else:
+        eigenvalues, wavefunctions, steps, notcnv = calculation.diagonalize(
+            hamiltonians, nbnd, None, ethr, return_steps=True)
     _say_what_did_not_converge(steps, notcnv, ethr, conv_thr, nbnd)
     return calculation, system, np.asarray(eigenvalues), wavefunctions
 
@@ -419,6 +442,7 @@ def fixed_density_bands(*args, **kwargs):
     array a run holds -- so the caller that does not need them says so by
     calling this, and the buffer is free as soon as this returns.
     """
+    kwargs.setdefault("keep_states", False)
     calculation, system, eigenvalues, _ = fixed_density_states(*args, **kwargs)
     return calculation, system, eigenvalues
 

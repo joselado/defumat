@@ -46,7 +46,8 @@ import numpy as np
 
 from defumat.batching import k_chunks
 
-__all__ = ["stream_start", "stream_diagonalize", "stream_densities"]
+__all__ = ["stream_start", "stream_diagonalize", "stream_densities",
+           "stream_eigenvalues"]
 
 
 def _to_device(array):
@@ -113,6 +114,41 @@ def stream_diagonalize(calculation, hamiltonians, nbnd: int, store: np.ndarray,
                 unsettled = np.empty((nspin, nk), np.asarray(stuck).dtype)
             live_rows = rows[:live]
             store[spin, live_rows] = np.asarray(states)[:live]
+            eigenvalues[spin, live_rows] = energies[:live]
+            steps[spin, live_rows] = np.asarray(taken)[:live]
+            unsettled[spin, live_rows] = np.asarray(stuck)[:live]
+    return eigenvalues, steps, unsettled
+
+
+def stream_eigenvalues(calculation, hamiltonians, nbnd: int, ethr):
+    """A solve from scratch at every k-point, keeping the eigenvalues only.
+
+    QE's ``c_bands_nscf``: a band structure, an NSCF grid or a density of
+    states wants the energies, and each k-point's states are discarded as soon
+    as its solve returns -- so the device holds one chunk's solve and never
+    the ``(nspin, nk, nbnd, ndim)`` set the whole-set call stacks. Every chunk
+    starts from Davidson's own random vectors (``psi0 = None``), which are
+    drawn per k-point, so the chunks together are the whole-set solve.
+
+    Returns ``(eigenvalues, steps, unsettled)`` as numpy arrays shaped as
+    :meth:`~defumat.scf.driver.Calculation.diagonalize` returns them with
+    ``return_steps``.
+    """
+    extra = {} if calculation.david is None else {"david": calculation.david}
+    nspin, nk = len(hamiltonians), hamiltonians[0].nk
+    eigenvalues = steps = unsettled = None
+    for spin, hamiltonian in enumerate(hamiltonians):
+        for rows, live in k_chunks(nk, calculation.k_batch):
+            energies, _, taken, stuck = calculation.eigensolver(
+                hamiltonian, nbnd, None, ethr, k_batch=calculation.k_batch,
+                return_steps=True, indices=jnp.asarray(rows), **extra,
+            )
+            energies = np.asarray(energies)
+            if eigenvalues is None:
+                eigenvalues = np.empty((nspin, nk, nbnd), energies.dtype)
+                steps = np.empty((nspin, nk), np.asarray(taken).dtype)
+                unsettled = np.empty((nspin, nk), np.asarray(stuck).dtype)
+            live_rows = rows[:live]
             eigenvalues[spin, live_rows] = energies[:live]
             steps[spin, live_rows] = np.asarray(taken)[:live]
             unsettled[spin, live_rows] = np.asarray(stuck)[:live]
