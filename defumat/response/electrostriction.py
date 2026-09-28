@@ -138,7 +138,7 @@ being measured.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import jax
 import jax.numpy as jnp
@@ -283,6 +283,39 @@ class Electrostriction:
         big_m, big_q = _to_voigt(self.M), _to_voigt(self.Q)
         return (float(big_m[0, 0] + 2 * big_m[0, 1]),
                 float(big_q[0, 0] + 2 * big_q[0, 1]))
+
+
+def field_blocks(field):
+    """``(field, solver, v_scf, b, u, stored)`` from a field response, each block once.
+
+    The third-derivative drivers need the field response's bare perturbations
+    ``b``, its solutions ``u`` and its pre-tail solutions ``stored`` as stacked
+    ``(3, nspin, nk, nocc, ndim)`` blocks, and nothing else of its internals but
+    the solver and ``V_scf``. Stacking copies, so the lists are released as each
+    stack is made and the returned ``field`` carries no internals -- it used to
+    carry all three lists for the whole assembly beside their stacks, and hand
+    them back in the result. **``stored`` is ``b`` itself on a norm-conserving
+    dataset**, where ``dielectric_tensor`` appends one object to both lists
+    (the augmentation dipole is what makes them differ), so it is not stacked a
+    second time. Only lifetimes change; every block holds the values it held.
+    """
+    internals = field.internals
+    solver, v_scf = internals["solver"], internals["v_scf"]
+    bare, dpsi, commutators = (
+        internals["bare"], internals["dpsi"], internals["commutators"]
+    )
+    field = replace(field, internals=None)
+    del internals
+    aliased = len(commutators) == len(bare) and all(
+        c is x for c, x in zip(commutators, bare)
+    )
+    b = jnp.stack(bare)
+    del bare
+    stored = b if aliased else jnp.stack(commutators)
+    del commutators
+    u = jnp.stack(dpsi)
+    del dpsi
+    return field, solver, v_scf, b, u, stored
 
 
 def refined_states(calculation, result, ethr: float = REFINE_ETHR):
@@ -905,8 +938,7 @@ def electrostriction(
         born_charges=False, keep_internals=True, verbose=verbose,
         **response_options,
     )
-    internals = field.internals
-    solver = internals["solver"]
+    field, solver, _, b, u, stored = field_blocks(field)
     # **Projected onto the conduction manifold before anything else.** Both are
     # orthogonal to the occupied states *by definition* -- the Sternheimer
     # right-hand side is projected and the operator preserves the split -- but
@@ -920,8 +952,6 @@ def electrostriction(
     # the state form to both, which for an ultrasoft dataset is not idempotent
     # against the other and undoes it -- measured on the identity below,
     # 2.2e-3 against 3.4e-10.
-    b = jnp.stack(internals["bare"])
-    u = jnp.stack(internals["dpsi"])
 
     if strain is None:
         strain = strain_response(
@@ -934,7 +964,7 @@ def electrostriction(
 
     depsilon = susceptibility_strain_derivative(
         calculation, solver, density, b, u, strain, verbose=verbose,
-        stored=jnp.stack(internals["commutators"]),
+        stored=stored,
     )
     # ``symmatrix3`` one rank further up: two field labels and two strain
     # labels. A no-op on a ``nosym`` run, which is what every case this phase

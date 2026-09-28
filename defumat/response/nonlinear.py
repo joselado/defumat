@@ -122,6 +122,7 @@ from defumat.response.electrostriction import (
     _position_response,
     _project_conduction,
     _second_order_energy_at,
+    field_blocks,
     refined_states,
 )
 from defumat.response.phonon import (
@@ -458,16 +459,13 @@ def raman_tensors(
         born_charges=born_charges, keep_internals=True, verbose=verbose,
         **response_options,
     )
-    internals = field.internals
-    solver = internals["solver"]
+    field, solver, v_scf, b, u, stored = field_blocks(field)
     # **Handed over unprojected.** ``F`` projects both itself, and with the
     # *right* projector for each: a state takes ``1 - sum |psi><psi| S`` and a
     # right-hand side takes ``1 - sum S|psi><psi|``. Pre-projecting here applied
     # the state form to both, which for an ultrasoft dataset is not idempotent
     # against the other and undoes it -- measured on the identity below,
     # 2.2e-3 against 3.4e-10.
-    b = jnp.stack(internals["bare"])
-    u = jnp.stack(internals["dpsi"])
     if not (field.converged or allow_unconverged):
         raise ValueError(
             "the electric-field response did not converge, and a third "
@@ -477,7 +475,7 @@ def raman_tensors(
         )
 
     positions = jnp.asarray(calculation.system.structure.positions)
-    bare = _bare_displacements(calculation, solver, internals["v_scf"], positions)
+    bare = _bare_displacements(calculation, solver, v_scf, positions)
     ort = orthogonality_states(calculation, solver, positions)
     (rho_moved, bec_moved), (rho_ort, bec_ort) = non_variational_response(
         calculation, positions, psi, solver.weights, density, result.becsum, ort,
@@ -494,6 +492,10 @@ def raman_tensors(
         calculation, solver, bare, density, positions=positions,
         becsumort=becsumort, drhous=drhous, verbose=verbose, **response_options,
     )
+    # The displacements' bare perturbations drive that solve and nothing after
+    # it: ``3 nat`` wavefunction-sized blocks, 7.4 GB on the P25 yardstick,
+    # that were carried through the whole assembly below.
+    del bare
     if not (phonon_converged or allow_unconverged):
         raise ValueError(
             "the displacement response did not converge; see the electric "
@@ -502,8 +504,7 @@ def raman_tensors(
 
     tensors = susceptibility_displacement_derivative(
         calculation, solver, density, b, u, positions, dpsi, drho,
-        verbose=verbose, ort=ort,
-        stored=jnp.stack(internals["commutators"]),
+        verbose=verbose, ort=ort, stored=stored,
     )
     # ``symtensor3``, and it is a no-op on the closed-grid runs this phase was
     # validated on -- :meth:`~defumat.scf.driver.Calculation.symmetrize_atom_cartesian_tensor`
