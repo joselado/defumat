@@ -71,6 +71,12 @@ below:
   symmetry maps and the index arrays are still absent.
 * **Item 18** (the PAW one-centre tensors): factored into radial pair tables and Gaunt
   coefficients; one-atom spin-orbit PAW platinum 1309.6 -> 411.3 MB on the card.
+* **Item 6, first bullet** (real projector columns): bit-identical `vkb`; the 216-k-point
+  eight-atom Si peak 93.6 -> 71.1 MB.
+* **Item 8** (a streamed resume): a loaded checkpoint's wavefunctions stay in host memory;
+  the same resume's peak 220.8 -> 71.1 MB, the setup's own.
+* **Item 12, third bullet**: the third-derivative drivers stack each field block once and
+  drop the dead displacement block; lifetimes only, not measured on this card.
 * **Item 1** (the fixed-density solve): an eigenvalue-only solve streams where the store
   does and keeps no states. On eight-atom Si the band path's peak is 102.8 -> 44.8 MB at 200
   points and 383.4 -> 163.6 MB at 800, for 2-3 per cent in time. **Still 0.20 MB per
@@ -193,7 +199,9 @@ k-point (22.5 MB of columns and 8.4 MB of `kg` at 216 k). On nbse2 (`ncs = 36`) 
 DFT+U, `wfcU` alone is 18.5 MB against a 44.3 MB store on `ni10-ldau`, and it enters
 every Davidson call whole through `HubbardTerm`. Three pieces, in order of cost:
 
-* **Store the projector columns as real** -- priority 2, small. `_species_columns` is
+* **Store the projector columns as real** -- priority 2, small. **Done 2026-09-28** for the
+  projectors (bit-identical, 93.6 -> 71.1 MB on eight-atom Si at 216 k-points); the atomic
+  orbitals' `i^l` is not done. `_species_columns` is
   `ylm (real) x radial (real) x (-i)^l` (`projectors.py:403-407`, `:482-488`), so each
   column is a real array times a fixed phase, stored complex128. Store float64 plus a
   static per-column phase, applied in `_apply_phases`; same for the atomic orbitals'
@@ -227,6 +235,9 @@ on every perturbation of every iteration and never read. On Si8 at 216 k that is
 `at_k(ik)` in `becsum_of`, `_raw_becsum`, `mixed_becsum` and the velocity operator.
 
 ### 8. A streamed resume still lands the source set on the device once -- priority 2, small
+
+**Done 2026-09-28** (220.8 -> 71.1 MB on the resume measured). `mmap_mode` was not needed:
+the host copy is what a streamed run holds anyway.
 
 The resident half is fixed (above). The transient half is not: `load_state` does
 `jnp.asarray` on every array including the wavefunctions (`checkpoint.py:89-90`,
@@ -296,7 +307,7 @@ donating variant of `_every_k` used only when the caller passes a way to rebuild
 * **The TDDFT frequency axis has no dial** (`MEMORY-AUDIT.md` A10, open, and
   `PERFORMANCE.md`'s backlog): the `chi_0` assembly holds `(nw, 2 npairs, nm)` per chunk
   and the Dyson loop iterates every frequency with `nw` copies of `f_xc`. Chunk `w`. Medium.
-* **Duplicate stacks and dead blocks in the third-derivative drivers**: `b = jnp.stack(
+* **Done 2026-09-28, not measured on this card.** **Duplicate stacks and dead blocks in the third-derivative drivers**: `b = jnp.stack(
   internals['bare'])` and `u = ...['dpsi']` copy while the lists are still held
   (`response/nonlinear.py:469-470`), the commutator stack copies even where it aliases
   `bare` (`:506`), and `RamanTensors(field=field)` returns the internals regardless of

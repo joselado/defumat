@@ -7822,3 +7822,34 @@ I; the relativistic three also with `nspin = 4`, which exercises the small compo
 a random `becsum`: the one-centre energy within 1.8e-15 Ry (exactly equal in 11 of 12
 cases), `ddd` within 1e-13 relative, and its `becsum` tangent -- what the response stack
 differentiates -- within 1.4e-12 relative.
+
+## Real projector columns, and a resume that stays on the host (GTX 1060, 2026-09-28)
+
+Two of `GPU-MEMORY-NEXT.md`'s smaller items, measured on the cell the memory-mode scan uses:
+`si8-1k.in` at `ecutwfc = 20` with `nosym` on a 6x6x6 mesh (216 k-points), default memory
+mode, one process per run, each run twice.
+
+**Item 6, first bullet: the projector core's columns are real.** A column is `Y_lm` times
+the radial transform, both real, times `(-i)^l`; the core now keeps the real product and
+applies the phase per column in `_apply_phases`, before the structure factor. Multiplying
+by `1, -i, -1, i` is exact, so `vkb` and its `k`-tangent with Gamma on the mesh (where the
+`l = 1` origin correction fires) are **bit-identical** on `si2-us-1k`, `pt-soc-paw-nosym`
+and `si8-1k`. The SCF's peak, which at 216 k-points is the setup's: **93.6 -> 71.1 MB**,
+the energy identical to every printed digit.
+
+**Item 8: a loaded checkpoint keeps its wavefunctions in host memory.** `load_state` put
+every array on the device, so a streamed resume landed the whole saved set on the card at
+iteration 1 beside a transient copy. Instrumented, the same resume from the same saved
+state: before, `bytes_in_use` went from 40.7 to **131.1 MB** across `load_state` and the peak
+to **220.8 MB**; after, 29.4 to 29.8 MB, and the run's peak stays at the setup's **71.1 MB**
+through every stage. The first attempt at this converted the array to numpy *after*
+`jnp.asarray` had already made the device copy, and measured exactly the old peak -- the
+instrumented run is what found it. A 2 -> 4 promotion now concatenates in numpy when its
+source is a host array.
+
+**Item 12, third bullet** (the third-derivative drivers' duplicate stacks and dead block) is
+lifetimes only -- each field block stacked once, the norm-conserving case's aliased
+commutators not stacked a second time, the displacements' bare block dropped after its
+solve, and no internals handed back in `RamanTensors.field` -- and is not measured here:
+the case it was sized on (`PERFORMANCE.md` P25, 1.38 GB of duplicates and 7.4 GB of dead
+block) does not run on this card.
