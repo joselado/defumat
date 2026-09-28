@@ -252,6 +252,15 @@ is that ``bytes_in_use`` and ``peak_bytes_in_use`` are populated under
 ``XLA_PYTHON_CLIENT_ALLOCATOR=platform`` as well as under BFC, so the ``.get``
 trap does not bite on that arm. The rest of the key set is still unenumerated:
 that run printed two keys, it did not list them.
+**Enumerated on 2026-09-28**, ``sorted(jax.devices()[0].memory_stats())`` on a
+GTX 1060 (jax/jaxlib 0.11.1, driver 580.173.02, BFC allocator): ``bytes_in_use``,
+``bytes_limit``, ``bytes_reserved``, ``largest_alloc_size``,
+``largest_free_block_bytes``, ``num_allocs``, ``peak_bytes_in_use``,
+``peak_bytes_reserved``, ``peak_pool_bytes``, ``pool_bytes`` -- ten keys, all
+populated. Against the guessed list above: ``bytes_reservable_limit`` is **not**
+in the CUDA client's dict, and ``bytes_reserved``, ``peak_bytes_reserved`` and
+``peak_pool_bytes`` are, which neither grep asked about. There is no call that
+resets ``peak_bytes_in_use``, so a peak is one measured run per process.
 ``largest_alloc_size`` is arguably the better single number for this question
 than ``largest_free_block_bytes``, since what a 23.18 GiB request is up against
 is the largest request the arena can still satisfy.

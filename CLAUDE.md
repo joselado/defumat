@@ -834,8 +834,11 @@ None of these is incidental to the algorithm:
   `sum_band.f90` accumulates the density inside the same loop, so QE's working set is one
   k-point's whatever `nks` is, and the parallelism over k comes from MPI pools. Batching
   the whole k axis with `vmap` is this code's deliberate deviation — it is what a GPU wants
-  — so it is a **dial** (`defumat/batching.py`), defaulting to QE's end of it on a CPU and
-  to the batch on an accelerator. Rule R6 (k leading) is what keeps both available.
+  — so it is a **dial** (`defumat/batching.py`), set by `memory_mode`: QE's end of it on a
+  CPU and in `'memory'`, the accelerator default, which also streams the wavefunction store
+  through the card from host RAM (`wfc_store = 'stream'`); the batch in `'speed'`, which is
+  checked against the card and falls back to `'memory'` when it would not fit. Rule R6
+  (k leading) is what keeps both available.
 - **The sphere, not the box.** Wavefunctions live on the G-vectors inside the cutoff and
   are expanded into the FFT box only for the transform, and only over the sticks the
   sphere occupies (`basis/sticks.py`).
@@ -966,10 +969,12 @@ whether a new test belongs in the gate, the cgroup cap and the RSS watchdog.
   eigensolver, use `lax.while_loop`/`fori_loop` with a fixed subspace size so the solver
   stays on device.
 - **How many k-points are in flight is `defumat/batching.py`'s dial, and its default
-  follows the platform** — QE's loop on a CPU, one k-point at a time as `c_bands.f90` and
-  `sum_band.f90` do it, and the whole axis at once on an accelerator, where the cache
-  argument behind that loop does not exist and inheriting it gives up 4.5x. The band dial
-  moves with it, never separately: `k=all, b=1` is measured to be worse than either end.
+  follows `memory_mode`** — QE's loop, one k-point at a time as `c_bands.f90` and
+  `sum_band.f90` do it, on a CPU and in `'memory'` (the accelerator default since
+  2026-09-28, the user's decision), and the whole axis at once in `'speed'`. The band dial
+  follows the platform alone — one band on a CPU, the whole block on an accelerator — in
+  both modes. `k=all, b=1` is in neither preset, being measured worse than either end, and
+  `k=1, b=all` is `'memory'`'s, measured at 1.2x `all/all` on a card.
   `k_batch`
   reaches every entry point (`run_scf`, `run_bands`, `run_nscf`, `run_dos`, `Calculation`,
   `DEFUMAT_K_BATCH`), `None` asks for one `vmap` over the whole axis, and the chunked form

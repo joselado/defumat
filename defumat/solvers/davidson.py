@@ -997,11 +997,13 @@ def davidson_eigensolver_all(
     # so the win is real and it is this structure that is in the way.
     arguments = (hamiltonian, nbnd, psi0, ethr, residual_threshold, david,
                  max_iterations, k_batch)
-    if indices is not None:
-        indices = jnp.asarray(indices)
+    # Passed only when there is a chunk, so a whole-set solve calls ``_every_k``
+    # exactly as it always has -- ``tools/gpu``'s memory tool and the tests'
+    # stand-ins for it are written against that signature.
+    chunk = {} if indices is None else {"indices": jnp.asarray(indices)}
     if not robust_retry:
         return _every_k(*arguments, robust=False, return_steps=return_steps,
-                        indices=indices)
+                        **chunk)
     # Both halves, not just the eigenvalues. A Cholesky factor that has gone
     # non-finite does not necessarily poison every root -- the first regression
     # test written for the 64-atom NaN passed on the *unfixed* code precisely
@@ -1037,7 +1039,7 @@ def davidson_eigensolver_all(
     # subspace buffer -- but the *form* is what matters here: one is
     # proportional to the k-set and the other is not.
     fast = _every_k(*arguments, robust=False, return_steps=return_steps,
-                    return_finite=True, indices=indices)
+                    return_finite=True, **chunk)
     fast, per_k = fast[:-1], fast[-1]
     failed = ~np.asarray(per_k)
     if not failed.any():
@@ -1056,7 +1058,7 @@ def davidson_eigensolver_all(
         stacklevel=2,
     )
     robust = _every_k(*arguments, robust=True, return_steps=return_steps,
-                      indices=indices)
+                      **chunk)
     # Keep what the fast route already converged. The robust pass still runs
     # over the whole k-set -- the shapes are static, so it must -- but its
     # answer is taken only where the fast one has none.

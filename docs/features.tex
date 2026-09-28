@@ -5595,17 +5595,20 @@ the one being differentiated. \code{heisenberg\_exchange} refuses a shell
 vector that is not a nonzero integer lattice vector in crystal coordinates, and
 two representatives of the same star, whose two $J$ would be one parameter and
 leave the fit singular.
-
-\textbf{Warns rather than refuses}: $dE/d\mathbf q$ on an augmented dataset is
-evaluated in \emph{one} pass over the whole $k$ axis whatever \code{k\_batch}
-asks for, because the density carries $\mathbf q$ there and the Hartree energy
-is quadratic in it, so a sum of per-chunk gradients is not the gradient. The
-peak then scales with $n_k$ rather than with the chunk size, and it is the one
-place $dE/d\mathbf q$ costs more than the SCF it follows: 11.4~GB on the
-one-atom oxygen chain of \code{tests/data/qe/o-chain-spiral-us.in} at
-\code{ecutrho = 200} with four $k$-points, against a few hundred megabytes for
-the SCF.
 \end{refuses}
+
+\textbf{What bounds its memory.} $dE/d\mathbf q$ is walked \code{k\_batch}
+$k$-points at a time wherever the calculation carries a chunk size --- a CPU, or
+\code{memory\_mode='memory'} on a card --- and in one pass in \code{'speed'}.
+On an augmented dataset the chunks are exact by the chain rule: the density
+carries $\mathbf q$ there and the Hartree energy is quadratic in it, so the
+terms that see $\mathbf q$ through the whole \code{becsum} are differentiated
+once at the whole \code{becsum} and their gradient is pulled back through each
+chunk's. Measured on ultrasoft spiral silicon on a GTX~1060, the single pass
+peaks at 343, 1013, 2257 and 4351~MB at 8, 27, 64 and 125 $k$-points, and the
+chunked route at 104, 70, 74 and 121~MB, the two gradients agreeing to 1e-15.
+(Until 2026-09-28 an augmented dataset was forced down the single pass with a
+warning.)
 
 \subsection{Spin-orbit coupling on a spiral, to first order}
 
@@ -6872,10 +6875,102 @@ there is a core, and no splice of the two would be a solution of anything.
 % =====================================================================
 \section{Performance: dials, memory and GPUs}
 
-\textbf{Two batching dials} control how much is in flight, and both defaults
-follow the platform: on a CPU, QE's loop --- one $k$-point and one band at a
-time, which is what a \emph{cache} wants --- and on a GPU the whole of both
-axes, which is what a card wants. Either end is reachable everywhere:
+\textbf{One switch in front of the dials: \code{memory\_mode}.} The four dials
+below are the mechanism; the question a run on a card actually has is \emph{does
+it fit, and if it fits, how fast}, and \code{memory\_mode} answers it once. It
+takes two values, and each sets the four dials:
+
+\begin{center}
+\begin{tabular}{lcccc}
+\toprule
+mode on a GPU & \code{k\_batch} & \code{band\_batch} & \code{projectors} & \code{wfc\_store} \\
+\midrule
+\code{'speed'}  & all & all & \code{store}   & \code{device} \\
+\code{'memory'} & 1   & all & \code{rebuild} & \code{stream} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\code{'speed'} puts every $k$-point on the card at once. \code{'memory'} is
+\qe's own loop with its buffer in host memory: one $k$-point's working set on
+the card, its projectors formed when they are used, and the wavefunctions kept
+in host RAM for the whole run and \emph{streamed} through the card one
+$k$-point at a time --- for the starting guess, for each Davidson call, and for
+the density, which is summed over $k$-points as they pass and finished once.
+The physics is the same and so are the numbers, to round-off.
+
+\textbf{What it changes is how the peak grows with the $k$-mesh.} Measured on a
+GTX~1060 (6~GB), eight-atom silicon at 20~Ry, \code{nosym}, per SCF:
+
+\begin{center}
+\begin{tabular}{rrrrr}
+\toprule
+$k$-points & \code{memory} peak & \code{speed} peak & \code{memory} time & \code{speed} time \\
+\midrule
+  1 &  35 MB &   37 MB &  0.34 s &  0.35 s \\
+ 27 &  80 MB &  918 MB &  5.4 s  &  3.5 s  \\
+ 64 &  59 MB & 2174 MB & 12.3 s  &  7.7 s  \\
+125 & 125 MB & 4234 MB & 24.6 s  & 18.6 s  \\
+216 & 135 MB & does not fit & 44.4 s & --- \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent \code{speed} grows by 33~MB per $k$-point on this cell;
+\code{memory} by about half a megabyte, which is what stays resident per
+$k$-point --- $|k+\mathbf G|^2$, the FFT index and mask, and the projector core,
+$n_{\rm pwx}(3 + 2n_{\rm cs})$ numbers against the wavefunctions'
+$2n_{\rm bnd}n_{\rm pol}n_{\rm pwx}$. The price is time, 1.3--1.6x here, and it
+is the per-$k$-point Davidson solve rather than the transfers (0.23~s of the
+12.3): a larger chunk buys most of it back, \code{k\_batch=4} giving 9.7~s at
+141~MB.
+
+\textbf{The defaults.} On a GPU the default is \code{'memory'}. \code{'speed'}
+is \emph{checked} before it runs: the peak is estimated from the input
+(\code{Calculator.estimate}) and compared with 60\% of what the card has free,
+and a run that would not fit falls back to \code{'memory'} with a warning
+instead of dying in its first Davidson call. The 60\% is the estimate's floor
+showing --- on this card the measured peaks were 1.57--1.61x the estimate. On a
+CPU the default is \code{'speed'}, which there is \qe's loop already and is what
+every validated number in this document was measured with; \code{'memory'} on a
+CPU changes one thing, the projector storage, since host and device are one
+memory. An explicit dial beats the mode, and \code{DEFUMAT\_MEMORY\_MODE} sets
+it for a whole process:
+
+\begin{lstlisting}[language=Python]
+from defumat import Calculator
+
+calc = Calculator.from_file("scf.in", memory_mode="speed")
+result = calc.get_scf()
+print(calc.calculation.memory_mode, calc.calculation.k_batch)
+\end{lstlisting}
+
+\begin{shcode}
+DEFUMAT_MEMORY_MODE=speed python3 run.py
+\end{shcode}
+
+\begin{refuses}
+Nothing is refused; what the mode does not reach is worth knowing. \textbf{It
+bounds what grows with the $k$-mesh and nothing else}: a peak set by the
+augmentation tables, the dense grid or one $k$-point's band block is the same
+in both modes --- on seven-$k$ spin-orbit bismuthene and eight-$k$ PAW platinum
+the two peaks agree within 1.5\%. \textbf{A streamed result's wavefunctions are
+a host array}, and what reads them whole --- the stress an input asks for with
+\code{tstress}, a force, a response --- moves them to the card whole; $dE/d\mathbf
+q$ is the one derivative that walks them a chunk at a time. \textbf{The host
+must hold the set} ($n_{\rm spin} n_k n_{\rm bnd} n_{\rm pwx} n_{\rm pol}$
+complex), which is the point but is not free. And \textbf{the fall-back from
+\code{'speed'} fires only where the preset is what would run}: with a
+\code{k\_batch} or \code{projectors} of your own, or \code{DEFUMAT\_K\_BATCH},
+the estimate would describe another calculation, so nothing is checked.
+\end{refuses}
+
+\textbf{Two batching dials} control how much is in flight. The band dial
+follows the platform: on a CPU, \qe's loop --- one band at a time, which is what
+a \emph{cache} wants --- and on a GPU the whole block, which is what a card
+wants. The $k$ dial follows the memory mode above: one $k$-point on a CPU in
+either mode and in \code{'memory'} on a GPU, all of them in \code{'speed'}.
+Either end is reachable everywhere:
 
 \begin{shcode}
 DEFUMAT_K_BATCH=all DEFUMAT_BAND_BATCH=all python3 run.py
@@ -6893,16 +6988,18 @@ single application of $H$. \code{DEFUMAT\_BAND\_BATCH=16} makes that 1.3 GB. The
 answer is unchanged bit for bit, not merely to round-off, because chunking the
 band axis reorders nothing: it is a map, not a sum.
 
-\textbf{Why the default is per platform.} A GPU has no cache to fit in and
+\textbf{Why the band default is per platform.} A GPU has no cache to fit in and
 inverts the conclusion: on a ten-atom metal, \code{k=1,b=1} costs \textbf{4.5x}
 what \code{k=all,b=all} does on the same card, sixteen-atom silicon runs at
 \textbf{0.20x} --- an outright loss against four CPU cores --- and at
-thirty-two atoms \code{b=1} did not finish at all. So a run on a device gets
-both batched unless it says otherwise, and the plausible half-measure
-\code{k=all,b=1} is never the default: it is the \emph{worst} setting
-available, because it buys the batched mode's memory with the looped mode's
-kernel launches. An explicit argument beats the environment variables, which
-beat the platform.
+thirty-two atoms \code{b=1} did not finish at all. So a run on a device batches
+its bands unless it says otherwise. The plausible half-measure
+\code{k=all,b=1} is in neither mode: it is the \emph{worst} setting available,
+because it buys the batched mode's memory with the looped mode's kernel
+launches. The other off-diagonal, \code{k=1,b=all}, is \code{'memory'}'s, and
+it is measured rather than assumed: 8.95~s against 7.4~s for \code{all/all} and
+39.5~s for \code{1/1} on the 64-$k$ silicon above. An explicit argument beats
+the environment variables, which beat the mode.
 
 \textbf{A third dial says where the wavefunctions are \emph{kept}}
 (\code{wfc\_store}, \code{DEFUMAT\_WFC\_STORE}), which is a different question
@@ -6926,6 +7023,17 @@ here, which at slab scale would be 18.6~s per iteration for nothing. On an
 accelerator the same transfer is PCIe, around a second. So \code{device} on a
 CPU, \code{host} on anything else, and the answer is bit-for-bit identical
 either way --- a transfer is not arithmetic.
+
+\emph{The third place, \code{wfc\_store='stream'}}, is \code{'memory'}'s and is
+the one that moves the peak: the store never comes back whole. It stays in
+host RAM, and the solve, \code{becsum}, the density, $\tau$ and DFT+U's
+occupations each walk it a chunk of $k$-points at a time with the same compiled
+kernels the whole-set path runs, so the card holds one chunk's states where
+\code{'host'} holds the whole set twice. It was checked against the whole-set
+store on norm-conserving, ultrasoft and PAW silicon, the three spiral chains,
+\code{tb09}, spin-orbit bismuthene, PAW spin-orbit platinum, and DFT+U on FeO
+and on noncollinear BN: total energies agree to 5e-12~Ry or better, most of them
+to the last printed digit. \code{'host'} is no mode's default any more.
 
 \textbf{A fourth dial says whether the \emph{projectors} are kept}
 (\code{projectors}, \code{DEFUMAT\_PROJECTORS}), and it is the one that has been
@@ -6955,12 +7063,13 @@ cs}$, atoms per species, that decides how much smaller the core is than the
 array, which is why the core stays cheap on a large cell. Measured cost:
 $n_{\rm at} n_{\rm pwx}$ complex exponentials each time a $k$-point's projectors
 are used, which on that slab is \textbf{+1.5\% per SCF iteration} (46.1~s against
-45.4~s) and 10~s more to compile. The default is \code{store}.
+45.4~s) and 10~s more to compile. The default is \code{store} on a CPU and
+in \code{'speed'}, and \code{rebuild} in \code{'memory'}.
 
 \begin{refuses}
-Nothing is refused, but two things are worth knowing before switching. The
-default is \code{store} and every validated number in this document was measured
-with it. And a size estimate follows the dial only from \code{433abd7} onward:
+Nothing is refused, but two things are worth knowing before switching. Every
+validated number in this document was measured with \code{store}. And a size
+estimate follows the dial only from \code{433abd7} onward:
 an older \code{defumat size} reports the stored array for a rebuilt run and so
 overstates the floor by the largest single line in its own table.
 \end{refuses}
