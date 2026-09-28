@@ -394,6 +394,18 @@ def radial_augmentation_transforms(
     ``|l_n - l_m| <= L <= l_n + l_m`` with ``L + l_n + l_m`` even, exactly the
     condition ``init_tab_qrad`` applies. The rest stay zero.
     """
+    r, weights, pairs, functions = _radial_pairs(pseudo, nl)
+    return _radial_rows(jnp.atleast_1d(jnp.asarray(q)), r, weights, pairs,
+                        functions, FPI / omega, pseudo.nbeta)
+
+
+def _radial_pairs(pseudo: Pseudopotential, nl: int):
+    """``(r, weights, pairs, functions)``: which ``(n, m)`` each ``L`` stores, and their ``r^2 Q^L``.
+
+    One list per ``L``; ``functions[L]`` is ``(npairs, kkbeta)`` or ``None``.
+    Shared by :func:`radial_augmentation_transforms` and :class:`ExactRadial`
+    so the stored table and the scanned one cannot select different pairs.
+    """
     augmentation = pseudo.augmentation
     if augmentation is None or augmentation.qfuncl is None:
         raise _no_augmentation_section(pseudo)
@@ -401,13 +413,10 @@ def radial_augmentation_transforms(
     kkbeta = pseudo.kkbeta
     r = jnp.asarray(pseudo.r[:kkbeta])
     weights = simpson_weights(jnp.asarray(pseudo.rab[:kkbeta]))
-    q = jnp.atleast_1d(jnp.asarray(q))
-
     nbeta = pseudo.nbeta
     ls = [projector.l for projector in pseudo.projectors]
-    prefactor = FPI / omega
 
-    rows = []
+    all_pairs, all_functions = [], []
     for l in range(nl):
         pairs, functions = [], []
         for nb in range(nbeta):
@@ -420,14 +429,51 @@ def radial_augmentation_transforms(
                 if allowed:
                     pairs.append((nb, mb))
                     functions.append(augmentation.qfuncl[nb, mb, l, :kkbeta])
+        all_pairs.append(tuple(pairs))
+        all_functions.append(jnp.asarray(np.stack(functions)) if pairs else None)
+    return r, weights, tuple(all_pairs), tuple(all_functions)
+
+
+def _radial_rows(q, r, weights, pairs, functions, prefactor, nbeta):
+    """``(nbeta, nbeta, nl, nq)`` from :func:`_radial_pairs`' selection."""
+    rows = []
+    for l, (pair, function) in enumerate(zip(pairs, functions)):
         table = jnp.zeros((nbeta, nbeta) + q.shape)
-        if pairs:
-            values = _qrad_kernel(q, r, weights, jnp.asarray(np.stack(functions)), prefactor, l)
-            index = np.asarray(pairs)
+        if pair:
+            values = _qrad_kernel(q, r, weights, function, prefactor, l)
+            index = np.asarray(pair)
             table = table.at[index[:, 0], index[:, 1]].set(values)
         rows.append(table)
-
     return jnp.stack(rows, axis=2)
+
+
+class ExactRadial(eqx.Module):
+    """``Q^L_nm(q)`` by the radial integral itself, at whatever ``q`` it is asked.
+
+    What :class:`TabulatedAugmentation` holds in place of a knot table when the
+    table must be the **stored** route's to round-off rather than to
+    interpolation error -- under a strain (:meth:`~defumat.scf.driver.
+    Calculation.at_strain`), where the stored route assembled the whole
+    ``(nh, nh, ngm)`` array on the gradient's tape: 4.15 GiB of temporaries on
+    ``bismuthene-soc-small``'s stress (``GPU-MEMORY-NEXT.md`` item 15). The
+    radial part is :func:`radial_augmentation_transforms`' own arithmetic on a
+    chunk of ``|G|`` -- same pairs, same ``_qrad_kernel`` -- so a chunk of the
+    scanned table is that chunk of the stored one.
+
+    ``omega`` is the cell volume, traced under a strain; ``4 pi / omega`` is the
+    transform's prefactor.
+    """
+
+    r: jnp.ndarray
+    weights: jnp.ndarray
+    functions: tuple
+    omega: jnp.ndarray
+    pairs: tuple = eqx.field(static=True)
+    nbeta: int = eqx.field(static=True)
+
+    def __call__(self, qmod: jnp.ndarray) -> jnp.ndarray:
+        return _radial_rows(qmod, self.r, self.weights, self.pairs,
+                            self.functions, FPI / self.omega, self.nbeta)
 
 
 @partial(jax.jit, static_argnames=("l",))
@@ -540,14 +586,27 @@ def _aug_max_bytes() -> int:
     return int(float(text))
 
 
+#: The forward block :func:`_aug_chunk` aims for, bytes of ``(nh, nh, chunk)``
+#: complex. **16 MB, and the reason is the backward pass**: one chunk's
+#: rematted body holds about fifteen blocks of that size while it is
+#: transposed, so a 256 MB target -- what this was -- put ~2 GB of blocks on
+#: every gradient's tape, and on ``bn-ldau-noncol.in`` (``nh = 14``) made the
+#: chunk the whole G set: the tabulated stress was 7.47 GiB of temporaries,
+#: 0.466 GiB at a 4096 chunk. The forward pass does not notice: measured warm,
+#: ``charge`` + ``integrals`` on ``si8-us-1k`` are 0.144 s at the old chunk and
+#: 0.116 s at 1024 on one CPU core, and on the GTX 1060 0.347 s at 8192 against
+#: 0.312 s at 1024 for spin-orbit bismuthene (``nh = 34``).
+AUG_CHUNK_BYTES = 16 * 1024**2
+
+
 def _aug_chunk(nh_max: int, ngm: int) -> int:
     """How many G vectors ``Q_ij(G)`` is rebuilt for at a time.
 
     The intermediate this decides is ``(nh, nh, chunk)`` complex, so the
-    default is chosen to put *that* near 256 MB rather than fixed at a count:
-    one chunk is eleven times more memory for a fully-relativistic nickel
-    dataset (``nh = 34``) than for silicon's (``nh = 8``).
-    ``DEFUMAT_AUG_CHUNK`` overrides it.
+    default is chosen to put *that* near :data:`AUG_CHUNK_BYTES` rather than
+    fixed at a count: one chunk is eleven times more memory for a
+    fully-relativistic nickel dataset (``nh = 34``) than for silicon's
+    (``nh = 8``). ``DEFUMAT_AUG_CHUNK`` overrides it.
 
     Like every other batching dial here it is a loop bound over an exact sum,
     and must not be visible in a result beyond round-off.
@@ -555,7 +614,7 @@ def _aug_chunk(nh_max: int, ngm: int) -> int:
     value = os.environ.get("DEFUMAT_AUG_CHUNK")
     if value is not None:
         return max(1, min(int(value), ngm))
-    target = 256 * 1024**2 // max(1, nh_max * nh_max * 16)
+    target = AUG_CHUNK_BYTES // max(1, nh_max * nh_max * 16)
     return int(min(1 << max(10, int(np.floor(np.log2(max(target, 1024))))), ngm))
 
 
@@ -648,7 +707,9 @@ class TabulatedAugmentation(AugmentationCharge):
     # ``shift`` has one and a dataclass forbids a required field after it.
     # :func:`_build_tabulated_augmentation` passes all of them by keyword, so
     # the defaults are never the values that are used.
-    tables: tuple = ()  # per species, (nbeta, nbeta, nl, nqx) -- QE's tab_qrad
+    #: Per species, ``(nbeta, nbeta, nl, nqx)`` -- QE's ``tab_qrad`` -- or an
+    #: :class:`ExactRadial`, which evaluates the transform itself (``scanned``).
+    tables: tuple = ()
     coefficients: tuple = ()  # per species, (nlm, nh, nh) -- ap, restricted
     beta_of: tuple = ()  # per species, (nh,) -- which radial projector a channel is
     gcart: jnp.ndarray = None  # (npad, 3) cartesian G, padded; carries the cell
@@ -677,7 +738,9 @@ class TabulatedAugmentation(AugmentationCharge):
 
         def build(gcart_chunk):
             ylm = real_spherical_harmonics(gcart_chunk, self.lmax2)
-            radial = _interpolate_qrad(table, modulus(gcart_chunk))
+            qmod = modulus(gcart_chunk)
+            radial = (table(qmod) if isinstance(table, ExactRadial)
+                      else _interpolate_qrad(table, qmod))
             return _assemble_qgm(coefficients, ylm, radial, beta_of, nl)
 
         return build
@@ -893,7 +956,7 @@ def _nl_of(pseudo: Pseudopotential, nl: int) -> int:
 
 def _build_tabulated_augmentation(
     pseudos, structure, cell, gvectors, ap, lmax, nl, nh_max, cell_factor,
-    shift=None,
+    shift=None, exact: bool = False,
 ):
     """:class:`TabulatedAugmentation` -- the branch for a cell too large to store.
 
@@ -939,8 +1002,16 @@ def _build_tabulated_augmentation(
         key = _dataset_key(pseudo, nl_t)
         if key not in built:
             lm_of = np.array([lm for _, _, lm in channels])
+            if exact:
+                r, weights, pairs, functions = _radial_pairs(pseudo, nl_t)
+                radial = ExactRadial(
+                    r=r, weights=weights, functions=functions,
+                    omega=jnp.asarray(volume), pairs=pairs, nbeta=pseudo.nbeta,
+                )
+            else:
+                radial = _qrad_table(pseudo, qmax, volume, nl_t, cell.precision.real)
             built[key] = (
-                _qrad_table(pseudo, qmax, volume, nl_t, cell.precision.real),
+                radial,
                 jnp.asarray(ap[:, lm_of[:, None], lm_of[None, :]]),
                 jnp.asarray(np.array([nb for nb, _, _ in channels])),
             )
@@ -954,10 +1025,11 @@ def _build_tabulated_augmentation(
         # rather than from the radial transform directly, so that the file's
         # own ``PP_Q`` check reaches the interpolation as well: at ``q = 0``
         # the four weights are (1, 0, 0, 0), so this reads the first knot.
+        origin = modulus(gcart[:1])
         at_origin = _assemble_qgm(
             coefficient,
             real_spherical_harmonics(gcart[:1], 2 * lmax),
-            _interpolate_qrad(table, modulus(gcart[:1])),
+            table(origin) if exact else _interpolate_qrad(table, origin),
             betas, nl_t,
         )
         qq.append(
@@ -1001,6 +1073,7 @@ def build_augmentation(
     max_bytes: int | None = None,
     cell_factor: float = AUG_CELL_FACTOR,
     shift=None,
+    scanned: bool = False,
 ) -> AugmentationCharge | None:
     """Assemble ``Q_ij(G)`` for every ultrasoft species. ``None`` if there are none.
 
@@ -1023,6 +1096,13 @@ def build_augmentation(
     GB on a 45-atom NiBr2 slab, at the cost of rebuilding it twice an
     iteration. The two agree to interpolation error, which
     ``tests/regression/test_uspp.py`` measures rather than assumes.
+
+    ``scanned = True`` keeps a cell below ``max_bytes`` on the stored route's
+    numbers but not its storage: the scanned class with :class:`ExactRadial`
+    in place of the table, so ``Q_ij(G)`` is rebuilt exactly, a chunk at a
+    time, and never held whole. It is what a strain derivative wants -- the
+    stored route puts the whole array and its assembly on the tape -- and
+    what :meth:`~defumat.scf.driver.Calculation.at_strain` asks for.
     """
     if not any(pseudos[t].is_ultrasoft for t in structure.types):
         return None
@@ -1063,6 +1143,11 @@ def build_augmentation(
         return _build_tabulated_augmentation(
             pseudos, structure, cell, gvectors, ap, lmax, nl, nh_max, cell_factor,
             shift=shift,
+        )
+    if scanned:
+        return _build_tabulated_augmentation(
+            pseudos, structure, cell, gvectors, ap, lmax, nl, nh_max, cell_factor,
+            shift=shift, exact=True,
         )
 
     gcart = gvectors.cartesian(cell)

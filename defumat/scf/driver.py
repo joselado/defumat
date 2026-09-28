@@ -3113,8 +3113,21 @@ class Calculation:
         )
 
         if self.augmentation is not None:
+            # **Scanned in memory mode, stored in speed mode**, on the stored
+            # route's numbers either way (to round-off). Stored, the whole
+            # ``(nh, nh, ngm)`` array and its per-``L`` blocks are on the
+            # strain gradient's tape: 4.15 GiB of temporaries on spin-orbit
+            # bismuthene, which did not fit the GTX 1060, against 0.46 scanned;
+            # 1.61 against 0.42 on ``bn-ldau-noncol``. Scanned, the table is
+            # rebuilt a chunk at a time for every contraction and again in the
+            # backward pass, which made BN's warm stress 6.2-7.3 s against 2.55
+            # (``GPU-MEMORY-NEXT.md`` item 15). That is the two modes' trade, so
+            # the mode decides; the CPU default is ``speed``, and every
+            # validated stress on record stays on the route it was taken with.
+            # A cell already on the tabulated route stays on it.
             strained.augmentation = build_augmentation(
-                self.pseudos, structure, cell, dense
+                self.pseudos, structure, cell, dense,
+                scanned=self.memory_mode == "memory",
             )
 
         # The local potential and the core charge: new radial transforms against

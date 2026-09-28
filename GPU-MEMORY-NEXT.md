@@ -69,6 +69,11 @@ below:
   chunk on the device) and carries the start as a stage (`start_buffer`, D10), and a
   non-dividing band batch pays its tail. The core build, the `qgm` accumulator, `wfcU`, the
   symmetry maps and the index arrays are still absent.
+* **Item 15** (the augmentation table on the strain tape): the tabulated chunk sized for
+  the backward pass (16 MB target: BN's tabulated stress 7.47 -> 0.47 GiB), and in memory
+  mode `at_strain` rebuilds a stored table scanned with the exact radial integral (BN's
+  stress tape 1.61 -> 0.42 GiB, bismuthene's 4.15 -> 0.46 GiB and its stress now fits the
+  card), for 2.5x BN's stress time. Speed mode keeps the stored table.
 * **Item 18** (the PAW one-centre tensors): factored into radial pair tables and Gaunt
   coefficients; one-atom spin-orbit PAW platinum 1309.6 -> 411.3 MB on the card.
 * **Item 6, first bullet** (real projector columns): bit-identical `vkb`; the 216-k-point
@@ -358,6 +363,10 @@ the interpolation error, so it stays opt-in. **Measure**: `memory_analysis()` of
 stress on Si8 at 8/27/64/216 k before and after; report MB per k-point.
 
 ### 15. The stored augmentation table is assembled on the strain tape -- priority 2, small
+
+**Done 2026-09-28** (see "Done since"; `PERFORMANCE.md`, "The augmentation table on the
+stress tape"). Not done: the spin spiral's displaced table `Q_ij(G - q)`, which `dE/dq`
+rebuilds under its gradient through the stored route in the same way.
 
 **Measured 2026-09-28, and the prescription below does not yet hold.** After items 13/14
 this is the largest thing left on BN's stress tape: its 1.42 GiB (CPU) is headed by

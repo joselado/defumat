@@ -7856,3 +7856,43 @@ commutators not stacked a second time, the displacements' bare block dropped aft
 solve, and no internals handed back in `RamanTensors.field` -- and is not measured here:
 the case it was sized on (`PERFORMANCE.md` P25, 1.38 GB of duplicates and 7.4 GB of dead
 block) does not run on this card.
+
+## The augmentation table on the stress tape: a backward-sized chunk, and a scanned strain (GTX 1060, 2026-09-28)
+
+`GPU-MEMORY-NEXT.md` item 15, in two steps.
+
+**The tabulated route's chunk.** `_aug_chunk` sized a G block at 256 MB of `(nh, nh,
+chunk)` complex, and one chunk's rematted body holds about fifteen such blocks while it is
+transposed; at `nh = 14` the chunk was the whole G set. Now `AUG_CHUNK_BYTES = 16 MB`.
+Forward cost, warm, `charge` + `integrals`: on `si8-us-1k`, one CPU core, 0.144 s at the
+old chunk (the whole G set) against 0.126 s at 4096 and 0.116 s at 1024; on the card,
+bismuthene-soc-small (`nh = 34`) 0.346 s at the old 8192 against 0.306 s at 4096 and 0.312
+s at 1024. Compiled temporaries of the gradients with the table tabulated
+(`DEFUMAT_AUG_MAX_BYTES=0`):
+
+| case | old chunk | new chunk |
+|---|---:|---:|
+| `bn-ldau-noncol` stress (CPU) | 7.47 GiB | 0.466 GiB |
+| `bismuthene-soc-small` stress (GPU) | 1.013 GiB | 0.288 GiB |
+| `bismuthene-soc-small` force (GPU) | 0.51 GiB | 0.13 GiB |
+
+**A strain rebuilds the stored table scanned, in memory mode.** Below `AUG_MAX_BYTES` the
+table is stored, and `at_strain` assembled the whole `(nh, nh, ngm)` array and its per-`L`
+blocks on the strain gradient's tape. In memory mode it now builds the scanned class with
+`ExactRadial` -- the radial integral itself on each chunk of `|G|`, the stored route's own
+`_qrad_kernel` and pair selection -- so the table is the stored one to round-off: charge
+within 9e-16 relative, `D_ij` integrals within 6.2e-15, `q_ij` within 4.4e-16, on BN,
+bismuthene and `si8-us-1k`. `tests/regression/test_stress.py` passes in memory mode
+against `pw.x` (18 of 18, the ultrasoft, PAW, PBE and DFT+U cases included). Speed mode,
+and so the CPU default, keeps the stored route.
+
+| case, memory mode, card | stress tape before | after | SCF + stress peak | warm stress |
+|---|---:|---:|---:|---:|
+| `bn-ldau-noncol` | 1.609 GiB | 0.422 GiB | 2053 -> 875 MB | 2.55 -> 6.2-7.3 s |
+| `bismuthene-soc-small` | 4.149 GiB | 0.463 GiB | did not fit -> 3625 MB | -- -> 5.2-6.5 s |
+
+The old code dies on bismuthene's stress with `RESOURCE_EXHAUSTED` on a 4.15 GiB
+allocation; the new one runs under the SCF's own 3.6 GB peak. BN's stress is unchanged to
+the eighth digit. **The price is time**: the scanned table is rebuilt for each contraction
+and again in the backward pass, about 2.5 times BN's stored-route stress -- which is why
+speed mode keeps the stored table.
