@@ -363,9 +363,16 @@ stress on Si8 at 8/27/64/216 k before and after; report MB per k-point.
 this is the largest thing left on BN's stress tape: its 1.42 GiB (CPU) is headed by
 `c128[196,43903]` and a dozen `f64[196,1,1,1,43903]`, `nh^2 x ngm` pair blocks. But with
 `DEFUMAT_AUG_MAX_BYTES=0`, which sends the table through the tabulated scan named below,
-the same executable is **7.47 GiB**, fifteen whole-`ngm` complex pair tables. Locate what
-in the tabulated route keeps the whole table on a strain's tape before routing stored
-datasets through it.
+the same executable is **7.47 GiB**, fifteen whole-`ngm` complex pair tables. **Located the
+same day**: the HLO places them in the backward pass of the tabulated route's own rematted
+scan (`transpose(jvp(_addusdens))/while/body/checkpoint`), and each is one *chunk* --
+`_aug_chunk` sizes the chunk for about 256 MB of forward block, which at `nh = 14` is more
+than the whole G set, so BN runs one chunk of all 43903, and one chunk's backward holds
+about fifteen blocks of it. With the chunk set small (`DEFUMAT_AUG_CHUNK`), same route,
+same compile: **0.466 GiB at 4096, 0.450 GiB at 1024**, against 1.42 for the stored table.
+So the prescription below holds **with a chunk sized for the backward pass** (a sixteenth
+of the forward budget, or a separate budget under a derivative); the exact builder in place
+of the interpolation is still what keeps the stored route's numbers.
 
 `at_strain` calls `build_augmentation` from scratch (`driver.py:3054-3057`); below
 `AUG_MAX_BYTES` the stored route runs `_assemble_qgm` over strain-dependent `ylm` and

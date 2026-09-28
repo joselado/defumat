@@ -7727,7 +7727,10 @@ yet a fix**: with `DEFUMAT_AUG_MAX_BYTES=0`, which sends the table through the t
 G-chunk scan, the same executable's temporary is **7.47 GiB**, and its report is fifteen
 whole-`ngm` complex pair tables (`c128[196,43903]` and their transposes, 131 MB each). What
 in that route keeps the whole table on a strain's tape has not been located; it is the
-thing to check before routing stored datasets through it.
+thing to check before routing stored datasets through it. (Located later the same day: the
+route's G chunk is sized for a 256 MB forward block, which on BN is the whole G set, and
+one chunk's backward pass holds about fifteen such blocks. At `DEFUMAT_AUG_CHUNK=4096` the
+same executable is **0.466 GiB**, at 1024 0.450 -- `GPU-MEMORY-NEXT.md` item 15.)
 
 ## The band dial, budgeted from the card in memory mode (GTX 1060, 2026-09-28)
 
