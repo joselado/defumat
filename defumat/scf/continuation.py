@@ -900,7 +900,12 @@ def promote_wavefunctions(result, calculation):
     psi = getattr(result, "wavefunctions", None)
     if psi is None:
         return None
-    psi = jnp.asarray(psi)
+    # **Where the source set lives, it stays**: a streamed result or a loaded
+    # checkpoint holds it in host RAM, and the target's start slices the span a
+    # chunk at a time when it streams, so the promotion is done in numpy there
+    # rather than landing the set -- doubled, for 2 -> 4 -- on the device.
+    xp = np if isinstance(psi, np.ndarray) else jnp
+    psi = xp.asarray(psi)
     npwx = calculation.basis.npwx
     # The number of *states*, which for a spiral is not the number of entries in
     # the basis list -- that one is doubled, ``k + q/2`` beside ``k - q/2``.
@@ -940,11 +945,11 @@ def promote_wavefunctions(result, calculation):
     # 1 -> 4 and 2 -> 4: the two channels become the two components.
     up = psi[0]
     down = psi[-1]
-    zero_up, zero_down = jnp.zeros_like(up), jnp.zeros_like(down)
-    return jnp.concatenate(
+    zero_up, zero_down = xp.zeros_like(up), xp.zeros_like(down)
+    return xp.concatenate(
         [
-            jnp.concatenate([up, zero_up], axis=-1),
-            jnp.concatenate([zero_down, down], axis=-1),
+            xp.concatenate([up, zero_up], axis=-1),
+            xp.concatenate([zero_down, down], axis=-1),
         ],
         axis=1,
     )

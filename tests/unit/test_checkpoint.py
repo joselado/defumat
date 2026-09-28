@@ -90,6 +90,10 @@ def test_the_round_trip_is_exact(text, pseudo_dir, tmp_path):
     assert back.total_energy == result.total_energy
     assert back.converged == result.converged
     assert back.nspin == result.nspin and back.nspin_mag == result.nspin_mag
+    # Loaded into host memory, as a streamed result's are: a resume that
+    # streams slices them per chunk, and nothing lands the whole set on the
+    # device on the way in (``GPU-MEMORY-NEXT.md`` item 8).
+    assert isinstance(back.wavefunctions, np.ndarray)
     for name in ("density", "wavefunctions", "potential", "eigenvalues",
                  "occupations"):
         np.testing.assert_array_equal(

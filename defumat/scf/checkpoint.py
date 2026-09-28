@@ -290,14 +290,22 @@ def load_state(path, system=None, calculation=None, strict: bool = True):
         fields = {name: meta[name] for name in _SCALARS if name in meta}
         if fields.get("magnetization_vector") is not None:
             fields["magnetization_vector"] = tuple(fields["magnetization_vector"])
+        host = ("eigenvalues", "occupations", "wavefunctions")
         arrays = {
-            name: jnp.asarray(handle[name]) for name in _ARRAYS if name in handle
+            name: (np.asarray(handle[name]) if name in host
+                   else jnp.asarray(handle[name]))
+            for name in _ARRAYS if name in handle
         }
         # ``eigenvalues`` and ``occupations`` are numpy on the result, not JAX:
-        # they are indexed and sliced host-side throughout.
-        for name in ("eigenvalues", "occupations"):
-            if name in arrays:
-                arrays[name] = np.asarray(handle[name])
+        # they are indexed and sliced host-side throughout. **So are the
+        # wavefunctions**, which are the largest array a run holds: a streamed
+        # result's are a host array already, and a resume that streams slices
+        # them a chunk at a time (``stream_start``), so putting the whole set on
+        # the device here was a transient of the whole store at iteration 1 --
+        # 12.10 GB on the NiBr2 slab (``GPU-MEMORY-NEXT.md`` item 8). Whatever
+        # reads them whole brings them across itself. (Chosen when each array
+        # is read, not converted afterwards: a device copy made first and
+        # replaced is the same transient, and was, on the first try.)
         becsum = tuple(
             jnp.asarray(handle[f"becsum_{index}"])
             for index in range(int(meta.get("nbecsum", 0)))
