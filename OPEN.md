@@ -77,6 +77,16 @@ The fix, a frozen basis closed under time reversal (`kramers_pairs=True`, `PLAN.
 removes the lean on the hydrogen helix and on the three-cell NiBr2 helix, in both frames, on
 2026-09-26; what the charge harmonics converge to on NiBr2 is still open.
 
+**Part XXI** is from the orientation torque's helix, **2026-09-26** (P122): an ultrasoft
+spiral that disagrees with its unfolded supercell at 7e-5 Ry, whose norm-conserving
+discriminator was run by P123 and closes (so the ultrasoft nonlocal side is what is left),
+and Route C not converging on PAW nickel.
+
+**Part XXII** is two memory reports from the NiBr2 orientation session, **2026-09-27**, not
+reproduced here: `run_scf` computing the PAW one-centre orientation torque on every
+noncollinear iteration when nothing reads it, and `orientation_torque`'s reverse-mode tape
+not fitting an H200 at 432 spinor bands even at one k-point.
+
 **Part III** is the sweep of **2026-09-12** -- four read-only agents over the package
 looking for **speed and memory** rather than for wrong answers, 23 entries, ordered by
 ease times impact. **Nothing in it was measured and nothing in it is a defect**: each
@@ -6105,6 +6115,24 @@ frozen source and only needs it to be a texture, not an exact stationary point: 
 internal torques of a texture that is not quite stationary cancel in the net rotation,
 since exchange conserves the total spin. The helix numbers of P122 are read that way.
 
+**The norm-conserving discriminator has been run, as a by-product of P123 (2026-09-27).**
+The nickel-iodine chain (`nii-chain-spiral.in` against `nii-chain-4cell.in`,
+`Ni.rel-pbe-nc-dojo` and `I.rel-pbe-nc-dojo` at `soc_scale = 0`, PBE, `q = b3/4`, a chain
+with eight k-points along it) closes the same identity: the supercell diagonalised at the
+unfolded density has the spiral's Fermi level (0.10077850 Ry, both) and free energy per cell
+(-50.0825368 Ry, both), and a quantity as sensitive as the first-order spin-orbit energy
+agrees to 9e-12 Ry per cell at 34 Ry and 1.8e-11 at 40. So PBE as such is not the cause, and
+the hypothesis this entry ends on, the nonlocal side of an ultrasoft dataset, is what is left
+standing. **Two traps found on the way, either of which reads like this entry's symptom**,
+to be ruled out on the cobalt cell before anything else: a supercell whose starting moments
+are all parallel takes a fixed gradient-correction sign axis, which on a turning texture is
+another functional (0.83 Ry in the potential; `co-helix4-nosoc.in` starts along the texture,
+so this one is ruled out by reading the input), and a supercell grid that is not the unit
+cell's repeated evaluates the exchange-correlation potential on other points (1.3 per cent
+of the first-order energy at 30 Ry; for the cobalt cell, 25 along `c` in the cell and 100 in
+the supercell on the dense grid and 18 and 72 on the smooth one, checked, so it is the repeat
+and this one is ruled out too). Both now warn.
+
 ## 2. Route C does not reach `conv_thr` on PAW nickel **[opened 2026-09-26]**
 
 `run_scf(rotate_moments=True)` on fully-relativistic PAW nickel (`ni-tetragonal-relaxed-mae-paw.in`
@@ -6123,3 +6151,65 @@ bringing `dr2` below 3e-5 over stretches with no step at all, so the density its
 recover from a few small turns on this cell. **The affine turn of the mixer's history is the
 PAW default on the evidence of one cell**: it did not converge nickel either, the reset was
 worse there, and NiBr2 converged with it; there is no run in which it has been shown to help.
+
+# Part XXII -- from the NiBr2 orientation session, reported 2026-09-27 to the P123 session
+
+Two reports from the NiBr2 session running the fifteen-cell helix on Triton, sent while P123
+was being written and **not reproduced here**. Both are memory on an H200, both are in code
+from P122, and the line numbers are theirs, at `7b7bf6f`; P123 added lines to
+`scf/driver.py` above them, so look the functions up by name. The case in both: 15 cells
+of the three-cell `paw_n3_k3` primitive cell, 45 atoms, a `STARTING_MOMENTS` helix,
+fully-relativistic PAW, LDA, `ecutwfc = 45`, `ecutrho = 360`, `nbnd = 432`, `nosym`,
+`DEFUMAT_K_BATCH=1`, band batch 16, projectors rebuilt per k-point, on the worktree
+`apps/defumat-orient`.
+
+## 1. `run_scf` computes the PAW one-centre orientation torque on every noncollinear iteration, used or not **[opened 2026-09-27]**
+
+`track_orientation` is set for any noncollinear magnetic run that is not a spiral
+(`driver.py:5643-5650` at `7b7bf6f`), and whenever it is, the loop calls
+`_onecenter_torque(..., wavefunctions=fetch_wavefunctions(wavefunctions), weights=wg)`
+(`:6130-6141`), a `jax.grad` through `calculation.becsum(spin_turned(psi, omega))` over every
+output wavefunction. On a `soc_scale = 0` source with `rotate_moments` off the result feeds
+nothing: the `torque_conv_thr` gate needs Route C's stepper (`:6155`, `:6436`), the printed
+line needs `report_orientation`, which needs `lspinorb` and a nonzero `soc_scale` (`:6370`),
+and what remains is a history entry. At `K_POINTS 1 9 1` that alone stops the source before
+its first iteration: `RESOURCE_EXHAUSTED: Out of memory while trying to allocate 19.50GiB
+[jit_add]` in `run_scf` at `:6138`, inside `_onecenter_torque` (`:5071`), Triton jobs
+20496215 (`wfc_store` on the device) and 20496423 (on the host), the same failure both
+times. The same source fits at `1 6 1`. Their workaround is to replace `_onecenter_torque`
+by a function returning `zeros(3)` for the source run, which leaves the density the run
+converges to unchanged. **What to do**: compute the torque only when something reads it
+(Route C's step, its convergence gate, or the report), and record `None` in the history
+otherwise; the test is that a `soc_scale = 0` PAW source's history carries no torque and its
+peak drops by the tape. **Found** by the NiBr2 session; not measured here.
+
+## 2. `orientation_torque` does not fit an H200 on the fifteen-cell helix, even at one k-point **[opened 2026-09-27]**
+
+After the `soc_scale = 0` source converged and `relax_orientation`'s first one-shot
+completed, the job died in `run_orientation_torque` -> `forces/torque.py:orientation_torque`
+-> `_chunked_value_and_grad` (`:249`) with `RESOURCE_EXHAUSTED: Failed to load in-memory
+CUBIN ... CUDA_ERROR_OUT_OF_MEMORY [jit_chunk]` (Triton job 20492578, log
+`calculations/NiBr2_orientation/out/nibr2-orient15-20492578.err`, `K_POINTS 1 3 1`). At
+`1 1 1` the unchunked path (`:393`) asked for **33.37 GiB more** (job 20498222), so the limit
+is not the k-mesh: it is the reverse-mode tape through `H psi` for 432 spinor bands. The
+lever they name, and leave to this project, is `jax.checkpoint` on the band-batched
+`hamiltonian.apply`, so the backward pass recomputes each batch rather than storing it; the
+number to take first is the compiled `memory_analysis()` of the gradient at `1 1 1` with
+and without it, which `MEMORY-AUDIT.md`'s augmentation-table remat is the precedent for.
+**Their workaround, and it is a validated one**: an energy-only scan at fixed rigid
+rotations (`_reference_texture`, `_with_rotation`, `rotate_texture` on the density and
+`becsum`, `fixed_density_states`, `F = sum w eps - TS`), which on the three-cell helix
+reproduces `relax_orientation`'s curvature (`K` = 3.377e-5 against 3.379e-5 at `5 3 1`, the
+minimum 1.04 degrees off against 1.05; 3.30e-5 against 3.29e-5 at `5 6 1`), and whose
+rotations at `soc_scale = 0` on the fifteen-cell source repeat `F` to 1e-10.
+
+Two smaller things from the same runs, recorded as reported:
+
+- at `XLA_PYTHON_CLIENT_MEM_FRACTION=0.95` with `DEFUMAT_K_BATCH` set, three-cell
+  relaxations with 30 and 45 k-points failed to load the `jit_chunk` CUBIN, and ran at 0.85;
+- `run_scf` called directly uses the Anderson default `mixing_beta = 0.7` rather than the
+  input's `&electrons` (which only `Calculator.from_file` adopts), and the fifteen-cell
+  source diverged under it (site moments to 3.4 mu_B, the accuracy at 1e2 Ry by iteration
+  11); it converged in 46 iterations with `mixing_mode = 'kerker'`, `mixing_beta = 0.2`,
+  `mixing_beta_mag = 0.1`.
+

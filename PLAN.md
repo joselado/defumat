@@ -256,7 +256,10 @@ because that is what decides whether it is a session or a phase.
   first harmonic is the tilt of the spiral plane (the `q` harmonic of `m_n`; the charge at
   `2q` is second order and the charge at `q` is zero for a flat spiral at every order); an
   ultrasoft or PAW dataset, where which blocks of `newd_so`'s sandwich keep a component on
-  its own sphere is not derived; and self-consistency, the spiral in the Sternheimer stack.
+  its own sphere is not derived; self-consistency, the spiral in the Sternheimer stack; the
+  second-order energy's dependence on the spiral's axis, which is what picks its plane at the
+  physical coupling where the first order leaves two axes at zero; and a converged value for
+  the validation chain, whose first order changes sign between 34 and 40 Ry.
 - **The force on an atom of a spin spiral** — the two components live on different
   plane-wave spheres, so the nonlocal term needs the projectors of both. `dE/dq` (P21) is
   what a spiral has instead.

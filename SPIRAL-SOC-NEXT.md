@@ -164,8 +164,12 @@ between 0 and 1 is now admitted on norm-conserving datasets (the user's decision
 weak-coupling limit is an input knob. What is next,
 sized: the first-order wavefunctions over `k -+ q` and the tilt of the plane they carry
 (a sum over the ladder, P37's and P54's pattern, then a Sternheimer solve); a cutoff and
-k-mesh sweep of the chain's first order, which is a Triton array of unit-cell runs; and an
-ultrasoft dataset, which needs the `newd_so` blocks derived first.
+k-mesh sweep of the chain's first order, which is a Triton array of unit-cell runs; the
+second-order energy's dependence on the axis, which is what decides the plane the spiral
+turns in at the physical coupling (the first order fixes the normal to the plane of the
+atoms by symmetry and gives the other two axes nothing, and on this chain the even part is
+-198 to -206 meV per cell, measured along one axis only); and an ultrasoft dataset, which
+needs the `newd_so` blocks derived first.
 
 - Perturbation theory (steps 2 to 4) first, or the spiral ultracell (step 5) first. The
   first gives the Dzyaloshinskii-Moriya energy soonest and is the published route; the
