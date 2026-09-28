@@ -73,14 +73,35 @@ __all__ = ["PawSpecies", "PawCorrections", "build_paw", "onecenter_species"]
 class PawSpecies(eqx.Module):
     """Everything one PAW species contributes, precomputed on its radial mesh.
 
-    ``density_ae`` and ``density_ps`` are the tensors that turn ``becsum`` into
-    on-site multipole densities: ``rho_lm = einsum('ij,ijlr->lr', becsum, t)``,
-    holding ``r^2 rho_lm(r)`` as QE's ``rho_lm`` does. They are ``(nh, nh, nlm,
-    mesh)`` and symmetric in their first two indices.
+    ``becsum`` becomes the on-site multipole densities ``r^2 rho_lm(r)`` -- QE's
+    ``rho_lm`` -- through a Gaunt coefficient and a radial pair function,
+
+        rho_lm(r) = sum_ij becsum_ij C_lm,ij P_{b(i) b(j)}(r),
+
+    where ``b(i)`` is the radial projector channel ``i`` belongs to. **The two
+    factors are kept apart and contracted in** ``PAW_rho_lm`` **'s order** --
+    ``becsum`` with ``C`` over ``(i, j)`` inside each pair of radial channels,
+    then with ``P`` over the pair -- so the ``(nh, nh, nlm, mesh)`` product is
+    never formed (:func:`_multipoles`, :func:`_pulled_back`). That product was
+    kept here, three times over for a fully-relativistic dataset: 295.2 MB each
+    for ``Pt.rel-pbe-n-kjpaw_psl`` (``nh = 34``, ``nlm = 25``, ``mesh =
+    1277``), most of the one-atom spin-orbit PAW platinum peak
+    (``GPU-MEMORY-NEXT.md`` item 18).
     """
 
-    density_ae: jnp.ndarray
-    density_ps: jnp.ndarray
+    #: ``(nlm, nh, nh)`` ``C_lm,ij``: the expansion of ``Y_i Y_j`` on the
+    #: multipoles, QE's ``ap(lm, nhtolm(ih), nhtolm(jh))``.
+    coefficients: jnp.ndarray
+    #: ``(nh, nbeta)``: one in column ``b(i)`` of row ``i``, which sums a
+    #: channel pair into its radial pair.
+    channel_of: jnp.ndarray
+    #: ``(nbeta, nbeta, mesh)`` ``pfunc`` -- the all-electron pair densities,
+    #: the Dirac small component's charge included.
+    radial_ae: jnp.ndarray
+    #: ``(nbeta, nbeta, nlm, mesh)`` ``ptfunc`` plus the augmentation charge
+    #: ``Q^L`` at ``L = floor(sqrt(lm))``: the pseudo sphere carries what was
+    #: added to the grid density, and its multipole is fixed by the ``lm``.
+    radial_ps: jnp.ndarray
     core_ae: jnp.ndarray  # (mesh,) the true core charge
     core_ps: jnp.ndarray  # (mesh,) the NLCC core charge
     r: jnp.ndarray
@@ -103,14 +124,45 @@ class PawSpecies(eqx.Module):
     #: have PAW at all.
     kinetic_ae: jnp.ndarray | None = None
     kinetic_ps: jnp.ndarray | None = None
-    #: ``pfunc_rel``'s tensor, laid out like :attr:`density_ae` and ``None``
+    #: ``(nbeta, nbeta, mesh)`` ``pfunc_rel``, times ``soc_scale``, and ``None``
     #: unless the dataset is fully relativistic. The *small* component of the
     #: Dirac partial waves carries magnetization of its own, and it enters the
     #: all-electron sphere alone -- there is no pseudo counterpart, because
     #: there is no small component to pseudize. Scaled by ``soc_scale`` and
     #: ``None`` at ``soc_scale = 0``: its magnetization is tied to the radial
     #: direction on the sphere, which is spin-orbit coupling (``PLAN.md`` P117).
-    density_rel: jnp.ndarray | None = None
+    radial_rel: jnp.ndarray | None = None
+
+
+def _multipoles(paw: PawSpecies, becsum: jnp.ndarray, radial: jnp.ndarray):
+    """``(nspin, nlm, mesh)``: ``r^2 rho_lm`` from ``becsum`` and one radial table.
+
+    ``PAW_rho_lm``'s order: ``becsum`` meets the Gaunt coefficients first,
+    summed into each pair of radial channels, and the result meets the radial
+    table once per pair -- ``nbeta^2`` radial functions where the product form
+    read ``nh^2``.
+    """
+    pairs = jnp.einsum("sij,lij,ib,jc->sbcl", becsum, paw.coefficients,
+                       paw.channel_of, paw.channel_of)
+    if radial.ndim == 3:
+        return jnp.einsum("sbcl,bcr->slr", pairs, radial)
+    return jnp.einsum("sbcl,bclr->slr", pairs, radial)
+
+
+def _pulled_back(paw: PawSpecies, field: jnp.ndarray, radial: jnp.ndarray):
+    """``(nspin, nh, nh)``: the transpose of :func:`_multipoles` applied to ``field``.
+
+    ``d(sum_lr rho_lm field_lm)/d becsum`` -- ``ddd`` when ``field`` is the
+    weighted potential, and the same contraction :func:`_multipoles` does run
+    backwards: the radial integral per pair first, then out through the
+    coefficients to the channels.
+    """
+    if radial.ndim == 3:
+        pairs = jnp.einsum("bcr,slr->sbcl", radial, field)
+    else:
+        pairs = jnp.einsum("bclr,slr->sbcl", radial, field)
+    return jnp.einsum("lij,ib,jc,sbcl->sij", paw.coefficients,
+                      paw.channel_of, paw.channel_of, pairs)
 
 
 #: How many atoms of one PAW species have their one-centre spheres in flight at
@@ -267,21 +319,19 @@ def onecenter_species(paw: PawSpecies, becsum: jnp.ndarray, meta_c=None, axis=No
     # ``with_small_so`` in ``PAW_potential``: the small component's
     # magnetization, which exists only for a fully-relativistic dataset and only
     # where the density has magnetization channels to correct.
-    small = paw.density_rel if nspin == 4 else None
+    small = paw.radial_rel if nspin == 4 else None
 
-    for tensor, kinetic, core, sign, rel in (
-        (paw.density_ae, paw.kinetic_ae, paw.core_ae, 1.0, small),
+    for radial, kinetic, core, sign, rel in (
+        (paw.radial_ae, paw.kinetic_ae, paw.core_ae, 1.0, small),
         # No pseudo counterpart, and this is not an omission: the small
         # component is a property of the Dirac solution, so there is nothing on
         # the pseudo sphere for it to cancel against. ``PAW_potential`` sets
         # ``with_small_so = .FALSE.`` on its ``PS`` pass for the same reason.
-        (paw.density_ps, paw.kinetic_ps, paw.core_ps, -1.0, None),
+        (paw.radial_ps, paw.kinetic_ps, paw.core_ps, -1.0, None),
     ):
         # (nspin, nlm, mesh), holding r^2 rho_lm per channel
-        rho_lm = jnp.einsum("sij,ijlr->slr", becsum, tensor)
-        msmall_lm = (
-            None if rel is None else jnp.einsum("sij,ijlr->slr", becsum, rel)
-        )
+        rho_lm = _multipoles(paw, becsum, radial)
+        msmall_lm = None if rel is None else _multipoles(paw, becsum, rel)
 
         v_hartree, e_hartree = _hartree(_charge_channel(rho_lm), paw)
         v_xc, e_xc, g_lm = _exchange_correlation(
@@ -308,8 +358,8 @@ def onecenter_species(paw: PawSpecies, becsum: jnp.ndarray, meta_c=None, axis=No
         # because rho_lm is linear in becsum it is the same tensor contracted
         # against the potential instead of against becsum. QE gets it by
         # rebuilding rho_lm once per (ih, jh) pair with a unit becsum.
-        ddd = ddd + sign * jnp.einsum(
-            "ijlr,slr->sij", tensor, potential * paw.weights_core[None, None, :]
+        ddd = ddd + sign * _pulled_back(
+            paw, potential * paw.weights_core[None, None, :], radial
         )
         if g_lm is not None:
             # The second half of the same derivative: the energy is a function
@@ -317,8 +367,8 @@ def onecenter_species(paw: PawSpecies, becsum: jnp.ndarray, meta_c=None, axis=No
             # and both are linear in it, so the chain rule is one more
             # contraction rather than a second machinery. Its charge component
             # is identically zero, which is QE's ``is > 1``.
-            ddd = ddd + sign * jnp.einsum(
-                "ijlr,slr->sij", rel, g_lm * paw.weights_core[None, None, :]
+            ddd = ddd + sign * _pulled_back(
+                paw, g_lm * paw.weights_core[None, None, :], rel
             )
 
     return energy, ddd
@@ -882,7 +932,8 @@ def _build_species(
     lm_of = np.array([lm for _, _, lm in channels])
     coefficients = ap[:nlm, lm_of[:, None], lm_of[None, :]]  # (nlm, nh, nh)
 
-    density_ae = np.einsum("lij,ijr->ijlr", coefficients, pfunc[beta_of][:, beta_of])
+    nbeta = pfunc.shape[0]
+    channel_of = np.eye(nbeta)[beta_of]  # (nh, nbeta)
     # The small component's *magnetization* is scaled with the coupling, and
     # its *charge*, added into ``pfunc`` above, is not. The magnetization is
     # the spin reflected about the radial direction, ``-2 (m . r) r`` on the
@@ -895,34 +946,38 @@ def _build_species(
     # the tensor and ``ddd`` reads the same tensor, so scaling it scales the
     # term and its chain rule together, and the run stays variational. QE has
     # no ``soc_scale``; at 1 this is ``with_small_so`` unchanged.
-    density_rel = (
+    radial_rel = (
         None if paw.ae_wfc_rel is None or soc_scale == 0.0
-        else jnp.asarray(soc_scale * np.einsum(
-            "lij,ijr->ijlr", coefficients, pfunc_rel[beta_of][:, beta_of]
-        ))
+        else jnp.asarray(soc_scale * pfunc_rel)
     )
-    pseudo_density = ptfunc[beta_of][:, beta_of].copy()
-    density_ps = np.einsum("lij,ijr->ijlr", coefficients, pseudo_density)
-
-    # ... plus the augmentation charge, which the pseudo on-site density carries
-    # because it is what was added to the grid density in the first place. Its
-    # L is fixed by the lm, not free: rho_lm picks up Q^L for L = floor(sqrt(lm)).
+    # The pseudo pair densities plus the augmentation charge, which the pseudo
+    # on-site density carries because it is what was added to the grid density
+    # in the first place. Its L is fixed by the lm, not free: rho_lm picks up
+    # Q^L for L = floor(sqrt(lm)), so this table carries the lm axis the other
+    # two do not.
     qfuncl = augmentation.qfuncl
+    if qfuncl.shape[-1] != mesh:
+        raise ValueError(
+            f"{pseudo.element}: PP_QIJL is tabulated on {qfuncl.shape[-1]} points "
+            f"and the PAW sphere on {mesh}; the pseudo on-site density needs both "
+            "on one radial mesh"
+        )
+    radial_ps = np.repeat(ptfunc[:, :, None, :], nlm, axis=2)
     for lm in range(nlm):
         l = int(np.sqrt(lm))
         if l >= qfuncl.shape[2]:
             continue
-        density_ps[:, :, lm, :] += (
-            coefficients[lm][:, :, None] * qfuncl[beta_of][:, beta_of, l]
-        )
+        radial_ps[:, :, lm, :] += qfuncl[:, :, l, :]
 
     core_ps = pseudo.rho_core
     core_ae = paw.ae_rho_core
     zero = np.zeros(mesh)
 
     return PawSpecies(
-        density_ae=jnp.asarray(density_ae),
-        density_ps=jnp.asarray(density_ps),
+        coefficients=jnp.asarray(coefficients),
+        channel_of=jnp.asarray(channel_of),
+        radial_ae=jnp.asarray(pfunc),
+        radial_ps=jnp.asarray(radial_ps),
         core_ae=jnp.asarray(zero if core_ae is None else core_ae[:mesh]),
         core_ps=jnp.asarray(zero if core_ps is None else core_ps[:mesh]),
         r=jnp.asarray(pseudo.r),
@@ -945,7 +1000,7 @@ def _build_species(
         kinetic_ps=None if not functional.is_meta else _kinetic_tensor(
             ps[beta_of], coefficients, angular_grid, lm_of, pseudo.r, iraug, nlm
         ),
-        density_rel=density_rel,
+        radial_rel=radial_rel,
     )
 
 

@@ -403,10 +403,10 @@ def test_the_paw_sphere_does_not_know_where_the_spin_points_at_zero():
         return x - z
 
     zero = _build_species(pseudo, functional, 0.0)
-    assert zero.nh == nh and zero.density_rel is None
+    assert zero.nh == nh and zero.radial_rel is None
     assert abs(turned(zero)) < 1e-11
     del zero
 
     one = _build_species(pseudo, functional, 1.0)
-    assert one.density_rel is not None
+    assert one.radial_rel is not None
     assert abs(turned(one)) > 1e-6  # 7.5e-6 Ry, 0.10 meV

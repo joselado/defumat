@@ -777,34 +777,35 @@ def estimate_size(
                 nqx * pseudo.kkbeta * zr for pseudo, _, _ in datasets
             )
 
-    # **The PAW one-centre tensors**, the ``becsum -> r^2 rho_lm`` maps of
+    # **The PAW one-centre tables**, the ``becsum -> r^2 rho_lm`` maps of
     # :class:`~defumat.paw.onecenter.PawSpecies`. ``Calculation.__init__``
     # keeps them as ``self.paw`` and ``_paw_onecenter`` takes them as an
     # argument at every SCF iteration, so they are **resident** for the life of
     # the run and belong in the floor, not in the setup transient. What one
-    # dataset holds is read off ``_build_species``: ``density_ae`` and
-    # ``density_ps`` always, ``density_rel`` when the dataset is fully
-    # relativistic (the Dirac small component's ``pfunc_rel``), and
-    # ``kinetic_ae``/``kinetic_ps`` under a meta-GGA, each ``(nh, nh, nlm,
-    # mesh)``, so
+    # dataset holds is read off ``_build_species``. The density maps are
+    # factored -- the Gaunt coefficients ``(nlm, nh, nh)``, the channel map
+    # ``(nh, nbeta)`` and three radial pair tables, ``pfunc`` and ``pfunc_rel``
+    # ``(nbeta, nbeta, mesh)`` and the pseudo one with its augmentation charge
+    # ``(nbeta, nbeta, nlm, mesh)`` -- so
     #
-    #     n_t nh^2 nlm mesh zr,    n_t = 2 + [ae_wfc_rel] + 2 [meta-GGA],
+    #     [nlm nh^2 + nh nbeta + nbeta^2 mesh (1 + nlm + [ae_wfc_rel])] zr
     #
-    # with ``nlm = (l_max_rho + 1)^2`` from the header and ``mesh`` the whole
-    # radial mesh rather than ``kkbeta``, because the energies are integrated to
-    # the end of it. ``OPEN.md``'s ``2 nh^2 nlm mesh x 8`` is the scalar-
-    # relativistic, non-meta case of this. Counted per distinct dataset with
-    # ``build_paw``'s own key, for the reason ``ncs`` is (P110).
+    # and a meta-GGA adds ``kinetic_ae``/``kinetic_ps``, which are still
+    # ``(nh, nh, nlm, mesh)`` each: ``2 nh^2 nlm mesh zr``. ``nlm = (l_max_rho
+    # + 1)^2`` from the header and ``mesh`` the whole radial mesh rather than
+    # ``kkbeta``, because the energies are integrated to the end of it. Until
+    # ``GPU-MEMORY-NEXT.md`` item 18 the density maps were products of the two
+    # factors, ``nh^2 nlm mesh`` each and 295.2 MB apiece on platinum. Counted
+    # per distinct dataset with ``build_paw``'s own key, for the reason ``ncs``
+    # is (P110).
     #
-    # Left out: each dataset's seven ``(mesh,)`` radial vectors, which are
-    # ``7 / (n_t nh^2 nlm)`` of the tensors -- 0.6 per cent on the smallest
-    # committed PAW dataset (``nh = 8``, ``nlm = 9``) and falling as ``nh^2``
-    # grows -- its angular quadrature's tables, tens of kB, and the sphere
-    # workspace inside ``_paw_onecenter``, an XLA temporary this module cannot
-    # see for the same reason it cannot see the eigensolver's. The bytes
-    # are ``zr``, as on every real line here, but ``_build_species`` builds
-    # through NumPy and does not read the precision policy, so under ``single``
-    # the tensors it allocates are still float64 and this line is half of them.
+    # Left out: each dataset's seven ``(mesh,)`` radial vectors, its angular
+    # quadrature's tables, and the sphere workspace inside ``_paw_onecenter``,
+    # an XLA temporary this module cannot see for the same reason it cannot
+    # see the eigensolver's. The bytes are ``zr``, as on every real line here,
+    # but ``_build_species`` builds through NumPy and does not read the
+    # precision policy, so under ``single`` the tables it allocates are still
+    # float64 and this line is half of them.
     from defumat.paw.onecenter import _lmax_rho, _paw_dataset_key
 
     onecentre_bytes, paw_datasets = 0, set()
@@ -816,16 +817,20 @@ def estimate_size(
             continue
         paw_datasets.add(key)
         nh = len(projector_channels(pseudo))
-        # ``density_rel`` is not built at ``soc_scale = 0`` (P117).
+        nbeta = len(pseudo.projectors)
+        # ``pfunc_rel``'s table is not built at ``soc_scale = 0`` (P117).
         relativistic = (
             pseudo.paw is not None and pseudo.paw.ae_wfc_rel is not None
             and system.soc_scale != 0.0
         )
-        tensors = 2 + int(relativistic) + 2 * int(functional.is_meta)
         nlm = (_lmax_rho(pseudo) + 1) ** 2
-        onecentre_bytes += tensors * nh * nh * nlm * pseudo.mesh * zr
+        onecentre_bytes += (
+            nlm * nh * nh + nh * nbeta
+            + nbeta * nbeta * pseudo.mesh * (1 + nlm + int(relativistic))
+            + 2 * int(functional.is_meta) * nh * nh * nlm * pseudo.mesh
+        ) * zr
     if onecentre_bytes:
-        arrays["PAW one-centre (nh,nh,nlm,mesh)"] = onecentre_bytes
+        arrays["PAW one-centre tables"] = onecentre_bytes
 
     # The eigensolver's own XLA temp buffer -- see the module docstring. The
     # FFT term is on the **smooth** grid, which is the box ``h_psi`` transforms

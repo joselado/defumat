@@ -103,6 +103,10 @@ __all__ = ["FrozenState", "frozen_energy", "energy_at", "reject_spinors", "rejec
 #: the persistent cache, on any machine that has run this before
 #: (``OPEN.md`` Part I item 2).
 #:
+#: (The two ``PawSpecies`` tensors no longer exist in that form: since
+#: ``GPU-MEMORY-NEXT.md`` item 18 they are factored into radial pair tables and
+#: Gaunt coefficients of a few MB, so the hoisting now matters for ``qgm``.)
+#:
 #: Both are ``equinox`` modules and therefore pytrees, so they cross the
 #: boundary as ordinary arguments. ``None`` is kept as ``None`` so that a
 #: norm-conserving run has a stable pytree structure and does not retrace.

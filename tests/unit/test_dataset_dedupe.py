@@ -181,7 +181,8 @@ def test_two_labels_naming_one_file_share_one_paw_species(silicon, pseudo_dir):
     # The shared object is the one a one-label cell builds, array for array.
     single = build_paw((first,), system.structure, functional).species[0]
     shared = split.species[0]
-    for name in ("density_ae", "density_ps", "core_ae", "core_ps", "r",
+    for name in ("coefficients", "channel_of", "radial_ae", "radial_ps",
+                 "core_ae", "core_ps", "r",
                  "weights_full", "weights_core"):
         assert (np.asarray(getattr(shared, name)).tobytes()
                 == np.asarray(getattr(single, name)).tobytes()), name

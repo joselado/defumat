@@ -54,10 +54,12 @@ NC = "Si.pz-vbc.UPF"
 PAW = "Si.pz-n-kjpaw_psl.0.1.UPF"
 
 COLUMNS = "projector core columns (nk,npwx,ncs)"
-ONECENTRE = "PAW one-centre (nh,nh,nlm,mesh)"
+ONECENTRE = "PAW one-centre tables"
 
-#: Every ``(nh, nh, nlm, mesh)`` tensor a :class:`PawSpecies` can hold.
-TENSORS = ("density_ae", "density_ps", "density_rel", "kinetic_ae", "kinetic_ps")
+#: Every table a :class:`PawSpecies` can hold that grows with ``nh``, ``nlm``
+#: or ``mesh``.
+TENSORS = ("coefficients", "channel_of", "radial_ae", "radial_ps", "radial_rel",
+           "kinetic_ae", "kinetic_ps")
 
 
 def _once(text, old, new):
@@ -124,12 +126,12 @@ def _nudged_partial_wave(pseudo):
 def _with_small_component(pseudo):
     """``pseudo`` given a Dirac small component, a copy of its large one.
 
-    Not physics, a shape: ``_build_species`` builds ``density_rel`` from
-    ``ae_wfc_rel`` exactly as it builds ``density_ae`` from ``ae_wfc``, so any
+    Not physics, a shape: ``_build_species`` builds ``radial_rel`` from
+    ``ae_wfc_rel`` exactly as it builds ``radial_ae`` from ``ae_wfc``, so any
     array of that shape reaches the fully relativistic branch. The committed
     datasets that carry ``PP_AEWFC_REL`` (Pt, I, Ni) all have ten projectors
-    and ``l_max_rho = 4``, so ``nh = 34`` and ``nlm = 25``, which is about
-    0.9 GB of tensors for Pt and no unit test.
+    and ``l_max_rho = 4``, so ``nh = 34`` and ``nlm = 25`` -- too slow a
+    build for a unit test.
     """
     small = np.array(pseudo.paw.ae_wfc, copy=True)
     return dataclasses.replace(
@@ -185,11 +187,10 @@ def test_the_onecentre_line_is_what_build_paw_allocates(
     """The line against the tensors ``Calculation.__init__`` keeps as ``self.paw``.
 
     ``build_paw`` is the call the constructor makes, on the same
-    pseudopotentials and the functional the run resolves. The line is
-    ``n_t`` tensors of one shape, ``n_t = 2 + [ae_wfc_rel] + 2 [meta-GGA]``,
-    and each parameter reaches one term of it: a meta-GGA adds the two
+    pseudopotentials and the functional the run resolves. Each parameter
+    reaches one term of the line: a meta-GGA adds the two
     kinetic-energy-density tensors, a fully relativistic dataset the small
-    component's ``density_rel``. Each is checked to reach its branch rather
+    component's radial table. Each is checked to reach its branch rather
     than assumed to.
     """
     calculator = _calculator(_input(PAW, two_labels=True, system=system), pseudo_dir)
@@ -212,14 +213,17 @@ def test_the_onecentre_line_is_what_build_paw_allocates(
     assert len(held) == 1
     (species,) = held.values()
     assert (species.kinetic_ae is not None) is meta
-    assert (species.density_rel is not None) is relativistic
+    assert (species.radial_rel is not None) is relativistic
     built = sum(
         getattr(species, name).nbytes for name in TENSORS
         if getattr(species, name) is not None
     )
     assert estimate.arrays[ONECENTRE] == built
-    tensors = 2 + int(relativistic) + 2 * int(meta)
-    assert estimate.arrays[ONECENTRE] == tensors * species.density_ae.nbytes
+    # And the density maps are factored: nothing of ``(nh, nh, nlm, mesh)``
+    # is held but the two meta-GGA tensors.
+    product = species.nh**2 * species.nlm * species.r.shape[0] * 8
+    kinetic = 2 * product if meta else 0
+    assert built - kinetic < product
 
 
 def test_each_line_is_keyed_on_what_its_own_setup_reads(pseudo_dir):
