@@ -6148,20 +6148,23 @@ def run_scf(
         # if the density turns out to be better than the eigenvalues, the loose
         # starting ethr was a false economy and the iteration is redone.
         floor = ethr * max(1.0, calculation.nelec)
-        if wavefunctions is None and streaming:
-            wavefunctions = stream_start(
-                calculation, hamiltonians, nbnd, span=starting_wavefunctions)
-        elif wavefunctions is None:
-            wavefunctions = calculation.starting_wavefunctions(
-                hamiltonians, nbnd, span=starting_wavefunctions
-            )
+        if wavefunctions is None:
+            if streaming:
+                wavefunctions = stream_start(
+                    calculation, hamiltonians, nbnd, span=starting_wavefunctions)
+            else:
+                wavefunctions = calculation.starting_wavefunctions(
+                    hamiltonians, nbnd, span=starting_wavefunctions
+                )
             # ``wavefunctions`` is ``None`` exactly once -- it is set just above
             # the loop and rebound by every diagonalisation -- so the span is
             # provably never read again. A promotion between spin regimes
             # allocates it fresh (``promote_wavefunctions`` concatenates
             # ``([up, 0], [0, down])``), at the size of this run's *own*
             # wavefunctions, and without this it would sit under every Davidson
-            # call for the rest of the run.
+            # call for the rest of the run. **Both branches**: the streamed one
+            # released nothing until 2026-09-28, so a streamed resume kept the
+            # whole source set alive beside the store it had just streamed.
             state = starting_wavefunctions = None
 
         davidson_steps, davidson_unconverged = 0.0, 0

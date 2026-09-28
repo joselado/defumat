@@ -435,6 +435,62 @@ def test_a_resume_does_not_pin_the_checkpoint_for_the_whole_run(
     )
 
 
+def test_a_streamed_resume_does_not_pin_the_loaded_wavefunctions(
+        pseudo_dir, tmp_path, monkeypatch):
+    """The same pin, on the streamed store, and on the array rather than the result.
+
+    ``wfc_store = 'stream'`` builds its start with ``stream_start`` and until
+    2026-09-28 the release of the span sat in the other branch only, so the
+    loaded wavefunctions -- device arrays from ``load_state`` -- stayed reachable
+    through ``state`` and ``starting_wavefunctions`` for the whole run, beside
+    the host store that had just been streamed from them. The test above holds
+    a weakref to the ``SCFResult``, which is released elsewhere, so it could not
+    see this; this one holds one to the wavefunction array itself, and counts
+    the streamed solves, since the stream path never calls ``diagonalize``.
+    """
+    from defumat.scf import driver as driver_module
+
+    calculator, result = _converged(SILICON, pseudo_dir)
+    save_state(result, tmp_path / SCF_CHECKPOINT)
+
+    seen = {}
+    real_load = checkpoint_module.load_state
+
+    def watching_load(*args, **kwargs):
+        loaded = real_load(*args, **kwargs)
+        seen["ref"] = weakref.ref(loaded.wavefunctions)
+        return loaded
+
+    monkeypatch.setattr(checkpoint_module, "load_state", watching_load)
+
+    solves = []
+    real_solve = driver_module.stream_diagonalize
+
+    def counting_solve(*args, **kwargs):
+        solves.append(1)
+        if len(solves) == 2:
+            gc.collect()
+            seen["alive_at_second_solve"] = seen["ref"]() is not None
+        return real_solve(*args, **kwargs)
+
+    monkeypatch.setattr(driver_module, "stream_diagonalize", counting_solve)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        run_scf(
+            calculator.system, calculator.pseudos,
+            calculation=calculator.calculation, wfc_store="stream",
+            checkpoint_dir=tmp_path, conv_thr=1.0e-12, max_iterations=3,
+        )
+
+    assert seen.get("ref") is not None, "the run did not take the resume path"
+    assert len(solves) >= 2, "the resumed run converged in one solve"
+    assert seen["alive_at_second_solve"] is False, (
+        "the loaded wavefunctions are still reachable during a streamed SCF, "
+        "so the resume carries the whole source set for the whole run"
+    )
+
+
 def test_the_checkpoints_field_scale_belongs_to_the_density_beside_it(
     pseudo_dir, tmp_path
 ):
