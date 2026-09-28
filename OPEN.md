@@ -6203,6 +6203,33 @@ reproduces `relax_orientation`'s curvature (`K` = 3.377e-5 against 3.379e-5 at `
 minimum 1.04 degrees off against 1.05; 3.30e-5 against 3.29e-5 at `5 6 1`), and whose
 rotations at `soc_scale = 0` on the fifteen-cell source repeat `F` to 1e-10.
 
+**Three memory-light routes, proposed by the same session on 2026-09-27**, in the order
+it ranks them:
+
+1. **The closed form, with no tape at all.** In the force theorem the one-shot's
+   Hamiltonian depends on the rotation only through the turned input field and the turned
+   input `becsum`, so `-dF/dw = sum w <psi|dH/dw|psi>` is the torque of the input
+   exchange field on the one-shot's output: `integral of m_out x B_xc[R rho_in]`
+   (`scf/spin_torque.py:exchange_torque`) plus the one-centre pairing
+   (`_onecenter_torque` with `wavefunctions=None`, which turns `becsum_in` rather than
+   differentiating `becsum(spin_turned(psi))`). The cost is one density and one
+   one-centre derivative, an SCF iteration's. **This one is already measured as an
+   identity**: P122 holds the grid and one-centre closed forms against Route A's
+   `jax.grad` torque on the same states at 1.2e-11 relative on fully-relativistic PAW
+   nickel, 1.7e-12 on ultrasoft cobalt and 3.1e-11 on the helix (`PLAN.md` P122's
+   tables). What is not measured is the fifteen-cell cell's peak with it, and whether
+   the turned-`becsum_in` branch is exact there needs `soc_scale = 0` on the source,
+   which Route A has (P122's 2.8e-16).
+2. **Forward mode**: three `jax.jvp`, one per generator, each holding one pass's memory
+   rather than the whole reverse tape.
+3. **Rematerialisation**: `jax.checkpoint` around the band-batched `H psi` inside
+   `band_energy_at_rotation`, one batch's residuals at a time.
+
+The check they propose for (1) is the three-cell NiBr2 cell (`paw_n3_k3`, `5 3 1`), where
+the relaxation already runs, against the current autodiff torque. The same
+wavefunction-free branch would also remove item 1's always-on diagnostic whenever the
+source is at `soc_scale = 0`. **Which to take is the user's decision.**
+
 Two smaller things from the same runs, recorded as reported:
 
 - at `XLA_PYTHON_CLIENT_MEM_FRACTION=0.95` with `DEFUMAT_K_BATCH` set, three-cell
