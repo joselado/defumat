@@ -277,6 +277,18 @@ class ProjectorCore(eqx.Module):
     #: was inside the column.
     phase_of_column: jnp.ndarray | None = None
 
+    def rows(self, rows) -> "ProjectorCore":
+        """The same core restricted to the k-points ``rows``: the per-k leaves sliced.
+
+        ``columns``, ``kg`` and ``mask`` carry the k index; everything else is a
+        property of the datasets and is shared. Selected rather than rebuilt,
+        so the columns are the whole set's own, bit for bit.
+        """
+        return eqx.tree_at(
+            lambda core: (core.columns, core.kg, core.mask), self,
+            (self.columns[rows], self.kg[rows], self.mask[rows]),
+        )
+
     def at_positions(self, positions: jnp.ndarray, qq=None,
                      lazy: bool = False) -> Projectors:
         """The projectors for atoms at ``positions`` (cartesian, bohr).

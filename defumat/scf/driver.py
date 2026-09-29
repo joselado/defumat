@@ -3342,6 +3342,64 @@ class Calculation:
             moved.wfcU = moved._build_hubbard_projectors()
         return moved
 
+    def at_rows(self, rows) -> "Calculation":
+        """The same calculation restricted to the k-points ``rows``, nothing rebuilt.
+
+        Every array with a k index is **sliced** -- the plane-wave spheres, the
+        FFT and stick indices, ``|k+G|^2``, the projector core, ``wfcU`` -- and
+        every k-independent one is shared. ``npwx`` and the stick count stay the
+        whole set's, so one chunk of a ``(nspin, nk, nbnd, ndim)`` store is this
+        calculation's store as it stands, and a Hamiltonian built here applies
+        at those k-points exactly what the whole set's applies there. The
+        k-points keep their weights: a sum over this calculation is the chunk's
+        share of the whole sum, not a renormalised one.
+
+        This is the primitive the streamed consumers that need a *Calculation*
+        rather than a slice of arrays wait on (``GPU-MEMORY-NEXT.md`` items 2
+        and 6): a velocity operator's ``jvp`` over ``at_kcart``, or a
+        Sternheimer solve, on one chunk of k-points at a time, without
+        rebuilding every k-point's projector core per chunk.
+
+        Refused for a spiral, whose basis list is the doubled ``k +- q/2`` one.
+        """
+        if self.spiral:
+            raise NotImplementedError(
+                "at_rows on a spin spiral is not implemented: its basis list is "
+                "the doubled k + q/2, k - q/2 one, so a row of the states is two "
+                "rows of every per-k table (see basis_rows)"
+            )
+        rows = np.asarray(rows)
+        moved = copy.copy(self)
+        # Every compiled function and cached object that closes over the k-set
+        # is dropped, as ``at_kpoints`` drops them.
+        for name in ("_spiral_gradient", "_spiral_gradient_chunk", "_tetrahedra",
+                     "_energy_gradient", "_chunked_gradient", "_kcart"):
+            moved.__dict__.pop(name, None)
+        moved.system = eqx.tree_at(lambda sys: sys.kpoints, self.system,
+                                   _kpoints_rows(self.system.kpoints, rows))
+        moved.basis_kpoints = _kpoints_rows(self.basis_kpoints, rows)
+        moved._kcrystal = np.asarray(self._kcrystal)[rows]
+        planewaves = _planewaves_rows(self.basis.planewaves, rows)
+        moved.basis = Basis(dense=self.basis.dense, smooth=self.basis.smooth,
+                            planewaves=planewaves)
+        moved.kinetic = self.kinetic[rows]
+        moved.fft_index = self.fft_index[rows]
+        if self.fft_index_minus is not None:
+            moved.fft_index_minus = self.fft_index_minus[rows]
+        if self.kplusg is not None:
+            moved.kplusg = self.kplusg[rows]
+        moved.sticks = eqx.tree_at(
+            lambda sticks: (sticks.columns, sticks.index), self.sticks,
+            (self.sticks.columns[rows], self.sticks.index[rows]))
+        moved.projector_core = self.projector_core.rows(rows)
+        moved.projectors = moved.projector_core.at_positions(
+            self.system.structure.positions, qq=self.projectors.qq,
+            lazy=self.projector_storage == "rebuild",
+        )
+        if self.hubbard is not None:
+            moved.wfcU = self.wfcU[rows]
+        return moved
+
     def at_kcart(self, kcart) -> "Calculation":
         """The same calculation with the k-points moved, at a **frozen sphere**.
 
