@@ -2629,7 +2629,8 @@ class Calculation:
         raw sum, to be added to the others and symmetrised once
         (:meth:`finish_occupation_matrix`).
         """
-        wfcU = self.wfcU if rows is None else self.wfcU[np.asarray(rows)]
+        wfcU = self.wfcU if rows is None else self.wfcU[
+            rows if isinstance(rows, jax.Array) else np.asarray(rows)]
         ns = occupation_matrix(
             wfcU, wavefunctions, weights,
             self._hubbard_columns, self._hubbard_mask, self.k_batch,
@@ -3716,10 +3717,13 @@ class Calculation:
         doubled ``k + q/2, k - q/2`` one, so the state at ``ik`` reads rows
         ``ik`` and ``ik + nk`` -- up block first, as the whole list is laid out.
         """
-        rows = np.asarray(rows)
+        # A traced ``rows`` stays traced: the chunked force and stress pass the
+        # chunk as an argument so that every chunk shares one compilation.
+        xp = jnp if isinstance(rows, jax.Array) else np
+        rows = xp.asarray(rows)
         if not self.spiral:
             return rows
-        return np.concatenate([rows, self.system.kpoints.nk + rows])
+        return xp.concatenate([rows, self.system.kpoints.nk + rows])
 
     def projectors_at(self, rows) -> jnp.ndarray:
         """``vkb`` for the basis rows a chunk of states reads -- built, not sliced, when lazy."""

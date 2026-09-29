@@ -494,13 +494,33 @@ def davidson_eigensolver(
         narrow,
     )
 
+    def ritz(coefficients, psi, hpsi, live, with_h: bool = True):
+        """``(evc, hevc)``: the Ritz vectors and ``H`` of them, from their coefficients.
+
+        The two rotations that carry the estimate back into the plane-wave
+        basis -- no extra ``H``. **They are rebuilt where they are consumed
+        rather than carried across the loop** (``GPU-MEMORY-NEXT.md`` item 10):
+        ``cegterg`` carries the ``(nvecx, nbnd)`` coefficients ``vc`` and so does
+        this, so the two ``(nbnd, npwx)`` blocks are not live through the
+        correction block's ``h_psi``, which is the step's FFT peak. The rows of
+        ``psi`` and ``hpsi`` the coefficients read are the ones the solve that
+        produced them read -- the expansion writes past ``live`` -- and the
+        product is taken at the same ladder width, so the shapes, and the
+        values, are the ones the solve would have formed.
+        """
+        def at(m):
+            c = coefficients[:m].T
+            return (c @ psi[:m], c @ hpsi[:m] if with_h else None)
+
+        return _at_width(live, widths, at, narrow)
+
     def solve(psi, hpsi, becq, active, hc_raw, sc_raw, previous, live):
         """Diagonalise in the current subspace and measure what is left.
 
         Everything that scales with the subspace is inside :func:`at`, which is
-        run at the live width rather than at ``nvecx`` -- the solve, and the two
-        rotations that carry the estimate back into the plane-wave basis. See
-        :func:`_at_width`.
+        run at the live width rather than at ``nvecx``. What comes back is the
+        Ritz *coefficients*, padded to ``nvecx`` rows, rather than the vectors;
+        :func:`ritz` forms those. See :func:`_at_width`.
         """
         def at(m):
             pair = active[:m, None] & active[None, :m]
@@ -520,24 +540,22 @@ def davidson_eigensolver(
             vectors = vectors.astype(psi.dtype)
             coefficients = vectors[:, :nbnd]
 
-            # ... the estimate in the plane-wave basis, and H applied to it,
-            # both rotations of vectors already computed -- no extra H.
             # ``sbec`` is ``q <beta|evc>``, the only thing S needs beyond
             # ``evc`` itself: the Ritz vector's projections are the same
             # rotation of the stored ones, so ``S|psi>`` is never formed.
             # ``(nbnd, nkb)``, and zero-width without an augmentation charge.
             return (values[:nbnd].real,
-                    coefficients.T @ psi[:m],
-                    coefficients.T @ hpsi[:m],
+                    jnp.zeros((nvecx, nbnd), psi.dtype).at[:m].set(coefficients),
                     coefficients.T @ becq[:m])
 
-        energies, evc, hevc, sbec = _at_width(live, widths, at, narrow)
+        energies, coefficients, sbec = _at_width(live, widths, at, narrow)
 
         settled = jnp.abs(energies - previous) < ethr
         if residual_threshold is not None:
             # The only consumer of the residual inside this function, and it is
             # off by default (:data:`RESIDUAL_THRESHOLD`). :func:`expansion`
             # builds its own from the same inputs.
+            evc, hevc = ritz(coefficients, psi, hpsi, live)
             sevc = (evc + hamiltonian.s_correction(sbec, ik)
                     if hamiltonian.has_overlap else evc)
             residual = hevc - energies[:, None].astype(dtype) * sevc
@@ -546,7 +564,7 @@ def davidson_eigensolver(
                 jnp.sqrt(jnp.sum(jnp.abs(residual) ** 2, axis=1)) < residual_threshold,
             )
 
-        return (energies, evc, hevc, sbec, settled,
+        return (energies, coefficients, sbec, settled,
                 jnp.sum(jnp.logical_not(settled)), jnp.all(settled))
 
     def expansion(evc, hevc, sbec, energies, settled):
@@ -562,9 +580,12 @@ def davidson_eigensolver(
         and computing it here means it is *not* a loop carry -- which is one
         ``(nbnd, npwx)`` block, 5.8 GiB on a 157-atom slab, live across the
         whole of the next step for the sake of an elementwise chain that costs
-        nothing to rebuild. ``cegterg`` carries ``evc`` and ``hevc`` and no
-        such block either. The arithmetic is unchanged, so the vectors are
-        bit-for-bit what the carried version produced.
+        nothing to rebuild. ``cegterg`` carries no such block either. The
+        arithmetic is unchanged, so the vectors are bit-for-bit what the
+        carried version produced. (``evc`` and ``hevc`` themselves are not
+        carried either any more -- :func:`ritz` forms them from the Ritz
+        coefficients at the top of the step, as ``cegterg`` forms them from
+        ``vc``.)
 
         ``sbec`` is ``<beta|evc>`` already multiplied by ``q``, carried as the
         ``(nbnd, nkb)`` array it is rather than recomputed: recomputing it from
@@ -600,7 +621,7 @@ def davidson_eigensolver(
             correction[order] / jnp.where(norm > 0.0, norm, 1.0),
         )
 
-    energies0, evc0, hevc0, sbec0, settled0, notcnv0, converged0 = solve(
+    energies0, coefficients0, sbec0, settled0, notcnv0, converged0 = solve(
         psi, hpsi, becq, first, hc0, sc0,
         jnp.full((nbnd,), jnp.inf, dtype=diagonal.dtype), nbnd,
     )
@@ -608,7 +629,7 @@ def davidson_eigensolver(
     state = (
         psi, hpsi, becp, becq, first, hc0, sc0,  # the subspace and its projections
         nbnd,                              # where the next block is written
-        evc0, hevc0, energies0,            # current estimate, and H applied to it
+        coefficients0, energies0,          # current estimate, as Ritz coefficients
         sbec0, settled0, notcnv0,          # what the expansion is built from
         0, converged0,                     # iteration, converged
     )
@@ -621,15 +642,20 @@ def davidson_eigensolver(
         # It costs one reduction over ``nbnd`` per step and it is what makes
         # the retry in :func:`davidson_eigensolver_all` cheap enough to be the
         # guard rather than a ``cond`` inside the batch.
-        alive = jnp.all(jnp.isfinite(state[10]))
+        alive = jnp.all(jnp.isfinite(state[9]))
         return jnp.logical_and(
-            jnp.logical_and(jnp.logical_not(state[15]), state[14] < max_iterations),
+            jnp.logical_and(jnp.logical_not(state[14]), state[13] < max_iterations),
             alive,
         )
 
     def step(state):
         (psi, hpsi, becp, becq, active, hc_raw, sc_raw, nbase,
-         evc, hevc, energies, sbec, settled, notcnv, iteration, _) = state
+         coefficients, energies, sbec, settled, notcnv, iteration, _) = state
+
+        # The current estimate, formed from its coefficients for the two things
+        # that read it -- the collapse and the expansion -- both before the
+        # step's ``h_psi``, so neither block is live across it (:func:`ritz`).
+        evc, hevc = ritz(coefficients, psi, hpsi, nbase)
 
         # ... collapse onto the current estimates when the subspace is full,
         # which is the only place the basis ever shrinks (cegterg's "refresh").
@@ -727,21 +753,22 @@ def davidson_eigensolver(
         )
         nbase = nbase + notcnv
 
-        energies, evc, hevc, sbec, settled, notcnv, converged = solve(
+        energies, coefficients, sbec, settled, notcnv, converged = solve(
             psi, hpsi, becq, active, hc_raw, sc_raw, energies, nbase
         )
         return (psi, hpsi, becp, becq, active, hc_raw, sc_raw, nbase,
-                evc, hevc, energies, sbec, settled, notcnv, iteration + 1,
+                coefficients, energies, sbec, settled, notcnv, iteration + 1,
                 converged)
 
     final = jax.lax.while_loop(unconverged, step, state)
-    evc, energies = final[8], final[10]
+    energies = final[9]
+    evc, _ = ritz(final[8], final[0], final[1], final[7], with_h=False)
     wavefunctions = jnp.where(mask, evc, 0.0)
     out = (energies, wavefunctions)
     if return_steps:
         # Both are loop carries already: nothing is measured that was not
         # measured before, and nothing is read on the host inside the loop.
-        out += (final[14], final[13])
+        out += (final[13], final[12])
     if return_finite:
         # **The finiteness guard, reduced here rather than over the stacked
         # k-set.** It is the same two reductions

@@ -26,7 +26,10 @@ import jax
 import jax.numpy as jnp
 
 from defumat.forces.energy import FrozenState, hoisted, with_hoisted
-from defumat.stress.energy import strained_energy, strained_energy_terms
+from defumat.forces.chunked import chunked_gradient, wants_chunks
+from defumat.stress.energy import (
+    require_a_differentiable_cell, strained_energy, strained_energy_terms,
+)
 
 __all__ = ["autodiff_stress", "autodiff_stress_terms"]
 
@@ -47,9 +50,15 @@ def autodiff_stress(calculation, state: FrozenState) -> jnp.ndarray:
     ``calculation`` fixes everything the cell does not; the derivative is taken
     at *its* cell, i.e. at ``epsilon = 0``.
     """
-    gradient = _energy_gradient(calculation)(
-        _zero(), state, hoisted(calculation)
-    )
+    if wants_chunks(calculation, state):
+        # Memory mode, or a state in host memory: the k axis is walked rather
+        # than taped whole (``GPU-MEMORY-NEXT.md`` item 3).
+        require_a_differentiable_cell(calculation)
+        gradient = chunked_gradient(calculation, state, "strain", _zero())[1]
+    else:
+        gradient = _energy_gradient(calculation)(
+            _zero(), state, hoisted(calculation)
+        )
     return -gradient / calculation.system.cell.volume
 
 

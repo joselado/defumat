@@ -141,6 +141,23 @@ below:
   (`make_jaxpr(...).consts`); forces and stress bit-identical to the old tuple on ultrasoft,
   PAW, noncollinear, DFT+U and LSDA cells. Whether a card keeps a second copy of a constant
   is still unmeasured.
+* **Item 3** (2026-09-29): the force and the stress walk the k axis where the state is a
+  host store or memory mode's chunk is smaller than the k-set (`forces/chunked.py`): a forward
+  walk for the raw `becsum`, smooth density and `ns`, one `value_and_grad` of the global terms
+  at the whole sums, and a second walk pulling each chunk back with cotangent
+  `(1, g_b, g_rho, g_ns)` -- `forces/spiral.py`'s split, generalised to the positions and the
+  strain. Round-off against the single pass (<= 3e-14 on force and stress) on ultrasoft, PAW,
+  DFT+U, noncollinear, LSDA, spin-orbit, norm-conserving and gamma-only cells with a short last
+  chunk; `test_forces.py` and `test_stress.py` pass in memory mode against `pw.x` (51 passed,
+  7 skipped). Speed mode keeps the single pass. **Not measured on the card**: the tape it
+  removes is item 3's `nk (npwx nkb + npwx nat + nbnd npwx npol) x 16 B`.
+* **Item 10** (2026-09-29): Davidson carries the `(nvecx, nbnd)` Ritz coefficients and forms
+  `evc`/`hevc` at the top of each step (`ritz`), at the width the solve used. **Bit-identical**
+  eigenvalues, states and step counts on `si2-us`, `pt-soc-paw-nosym`, `si8-1k` and a
+  gamma-only cell, both routes, cold and seeded. Compiled temporary, `si16-1k-ecut30`,
+  `david = 4`: on the GTX 1060 **117.0 -> 111.2 MB** at 64 bands one band in flight (one
+  band block), 129.43 MB unchanged at 32 bands all in flight (the FFT boxes set it there); on
+  the CPU 46.0 -> 44.5 and 126.2 -> 123.4 MB.
 * **Item 1** (the fixed-density solve): an eigenvalue-only solve streams where the store
   does and keeps no states. On eight-atom Si the band path's peak is 102.8 -> 44.8 MB at 200
   points and 383.4 -> 163.6 MB at 800, for 2-3 per cent in time. **Still 0.20 MB per

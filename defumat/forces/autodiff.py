@@ -19,6 +19,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
+from defumat.forces.chunked import chunked_gradient, wants_chunks
 from defumat.forces.energy import FrozenState, frozen_energy, hoisted, with_hoisted
 
 __all__ = ["autodiff_forces"]
@@ -31,6 +32,10 @@ def autodiff_forces(calculation, state: FrozenState) -> jnp.ndarray:
     taken at *its* positions.
     """
     positions = calculation.system.structure.positions
+    if wants_chunks(calculation, state):
+        # Memory mode, or a state in host memory: the k axis is walked rather
+        # than taped whole (``GPU-MEMORY-NEXT.md`` item 3).
+        return -chunked_gradient(calculation, state, "positions", positions)[1]
     gradient = _energy_gradient(calculation)(positions, state, hoisted(calculation))
     return -gradient
 
