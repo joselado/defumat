@@ -22,7 +22,10 @@ from defumat.pseudo.upf import Pseudopotential
 from defumat.system.builder import System
 from defumat.system.kpoints import KPoints
 from defumat.units import RY_TO_EV
-from defumat.workflows.nscf import fixed_density_bands, threaded_calculation
+from defumat.system.kpoints import for_spin as kpoints_for_spin
+from defumat.workflows.nscf import (
+    fixed_density_bands, kset_blocks, threaded_calculation,
+)
 
 __all__ = ["BandStructure", "run_bands"]
 
@@ -190,6 +193,34 @@ def run_bands(
     the eigenvalues: any Fermi level or HOMO must come from the SCF that
     produced the density, which is what the two arguments are for.
     """
+    plan = kset_blocks(calculation, kpoints)
+    if plan is not None:
+        # A long path in memory mode, a block of points at a time: each block is
+        # its own ``at_kpoints``, padded to the whole path's widths, so only one
+        # block's per-k tables are on the device (``kset_blocks``).
+        from defumat.scf.driver import _kpoints_rows
+
+        blocks, widths = plan
+        path = kpoints_for_spin(kpoints, system.nspin)
+        parts = []
+        for rows, live in blocks:
+            moved = calculation.at_kpoints(_kpoints_rows(path, rows), widths=widths)
+            moved, _, block = fixed_density_bands(
+                moved.system, pseudos, density, None, nbnd, conv_thr,
+                moved.k_batch, ns, tau, becsum, field, field_scale,
+                calculation=moved,
+            )
+            parts.append(np.asarray(block)[:, :live])
+            del moved
+        eigenvalues = np.concatenate(parts, axis=1)
+        nspin = calculation.nspin
+        return BandStructure(
+            kpoints=path,
+            eigenvalues=eigenvalues if nspin == 2 else eigenvalues[0],
+            fermi_energy=fermi_energy,
+            homo=homo,
+            nspin=nspin,
+        )
     calculation, system, kpoints, k_batch = threaded_calculation(
         calculation, system, kpoints, k_batch)
     calculation, system, eigenvalues = fixed_density_bands(

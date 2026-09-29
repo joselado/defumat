@@ -51,7 +51,8 @@ class Sticks(eqx.Module):
         return self.columns.shape[0]
 
 
-def build_sticks(fft_index, mask, grid: tuple[int, int, int]) -> Sticks:
+def build_sticks(fft_index, mask, grid: tuple[int, int, int],
+                 nsticks: int | None = None) -> Sticks:
     """Work out the stick layout from the box indices of each plane wave.
 
     Host-side integer bookkeeping over a fixed G list, done once -- the
@@ -61,6 +62,10 @@ def build_sticks(fft_index, mask, grid: tuple[int, int, int]) -> Sticks:
         fft_index: ``(nk, npwx)`` flat indices into the ``(n1, n2, n3)`` box.
         mask: ``(nk, npwx)``, false on padding.
         grid: the box dimensions.
+        nsticks: pad to at least this many sticks -- a block of a longer k-list
+            takes the whole list's count, for the reason
+            :func:`~defumat.basis.planewaves.build_plane_wave_basis` takes its
+            ``npwx``. ``None`` is this list's own.
     """
     n1, n2, n3 = (int(n) for n in grid)
     fft_index = np.asarray(fft_index)
@@ -70,7 +75,7 @@ def build_sticks(fft_index, mask, grid: tuple[int, int, int]) -> Sticks:
     for indices, keep in zip(fft_index, mask):
         column = indices // n3  # the flat xy index, since z is fastest
         per_k.append(np.unique(column[keep]))
-    nsticks = max(len(s) for s in per_k)
+    nsticks = max(max(len(s) for s in per_k), nsticks or 0)
 
     columns = np.zeros((len(per_k), nsticks), dtype=np.int64)
     index = np.zeros(fft_index.shape, dtype=np.int64)

@@ -136,22 +136,8 @@ def _kplusg(gcart, kcart, indices, mask):
     return jnp.where(mask[..., None], vectors, 0.0)
 
 
-def build_plane_wave_basis(
-    gvectors: GVectors, kpoints: KPoints, cell: Cell, ecutwfc: float,
-    gamma_only: bool = False,
-) -> PlaneWaveBasis:
-    """Select and pad the plane waves for every k-point.
-
-    Args:
-        gvectors: the dense G-vector set to select from.
-        kpoints: the k-points, in units of ``2*pi/alat``.
-        cell: the unit cell.
-        ecutwfc: wavefunction cutoff in Ry.
-        gamma_only: keep one plane wave of each ``(G, -G)`` pair. At ``k = 0``
-            the state can be chosen real, so the other half is
-            ``c(-G) = conj(c(G))`` and storing it is storing the same numbers
-            twice. Halves ``npwx`` and with it every array a band lives in.
-    """
+def _selected_plane_waves(gvectors, kpoints, cell, ecutwfc, gamma_only):
+    """Each k-point's plane-wave indices into ``gvectors``, ``gk_sort``'s order."""
     gcutw = gcut_from_ecut(ecutwfc, cell.alat)
     g = np.asarray(gvectors.reduced(cell))  # (ngm, 3) in 2*pi/alat
     k = np.asarray(kpoints.coords)  # (nk, 3) in 2*pi/alat
@@ -167,11 +153,55 @@ def build_plane_wave_basis(
         # Order by |k+G|^2, as gk_sort does; ties broken by G index so the
         # result does not depend on the sorting algorithm.
         selected.append(indices[np.lexsort((indices, np.round(kg2[indices], 12)))])
+    return selected
+
+
+def sphere_widths(gvectors: GVectors, kpoints: KPoints, cell: Cell,
+                  ecutwfc: float, gamma_only: bool = False) -> tuple[int, int]:
+    """``(npwx, nsticks)`` over a k-list, without building the basis.
+
+    What a caller walking a long k-list in blocks needs first, so that every
+    block can be padded to the whole list's widths and share one compilation
+    (:func:`build_plane_wave_basis`'s ``npwx``,
+    :func:`~defumat.basis.sticks.build_sticks`' ``nsticks``). A stick is an
+    ``(x, y)`` column of the box, and the box index runs ``z`` fastest.
+    """
+    box = np.asarray(gvectors.fft_index)
+    n3 = int(gvectors.grid[2])
+    npwx = nsticks = 0
+    for chosen in _selected_plane_waves(gvectors, kpoints, cell, ecutwfc, gamma_only):
+        npwx = max(npwx, len(chosen))
+        nsticks = max(nsticks, len(np.unique(box[chosen] // n3)))
+    return npwx, nsticks
+
+
+def build_plane_wave_basis(
+    gvectors: GVectors, kpoints: KPoints, cell: Cell, ecutwfc: float,
+    gamma_only: bool = False, npwx: int | None = None,
+) -> PlaneWaveBasis:
+    """Select and pad the plane waves for every k-point.
+
+    Args:
+        gvectors: the dense G-vector set to select from.
+        kpoints: the k-points, in units of ``2*pi/alat``.
+        cell: the unit cell.
+        ecutwfc: wavefunction cutoff in Ry.
+        gamma_only: keep one plane wave of each ``(G, -G)`` pair. At ``k = 0``
+            the state can be chosen real, so the other half is
+            ``c(-G) = conj(c(G))`` and storing it is storing the same numbers
+            twice. Halves ``npwx`` and with it every array a band lives in.
+        npwx: pad to at least this width. A block of a longer k-list is padded
+            to the whole list's width, so that every block has one shape and
+            one compilation -- a per-block width recompiles per block, which is
+            the Berry-string trap (``CLAUDE.md``). ``None`` pads to this list's
+            own widest sphere.
+    """
+    selected = _selected_plane_waves(gvectors, kpoints, cell, ecutwfc, gamma_only)
 
     npw = tuple(len(s) for s in selected)
     if min(npw) == 0:
         raise ValueError("a k-point retained no plane waves; ecutwfc is far too small")
-    npwx = max(npw)
+    npwx = max(max(npw), npwx or 0)
 
     indices = np.zeros((len(selected), npwx), dtype=np.int32)
     mask = np.zeros((len(selected), npwx), dtype=bool)

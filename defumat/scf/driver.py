@@ -3245,8 +3245,12 @@ class Calculation:
         strained._reporting_regions = None
         return strained
 
-    def at_kpoints(self, kpoints) -> "Calculation":
+    def at_kpoints(self, kpoints, widths: tuple[int, int] | None = None) -> "Calculation":
         """The same calculation on a different k-point list.
+
+        ``widths`` is ``(npwx, nsticks)`` to pad to, for a block of a longer
+        list walked a block at a time (:func:`~defumat.basis.planewaves.
+        sphere_widths`): every block then has one shape and one compilation.
 
         The counterpart of :meth:`at_positions` on the other axis, and it exists
         for the same reason: **almost nothing depends on which k-points are
@@ -3319,13 +3323,16 @@ class Calculation:
         moved._kcrystal = np.asarray(kpoints.crystal(self.system.cell))
 
         smooth, cell = self.basis.smooth, self.system.cell
-        planewaves = build_plane_wave_basis(smooth, kpoints, cell, system.ecutwfc)
+        npwx, nsticks = widths if widths is not None else (None, None)
+        planewaves = build_plane_wave_basis(smooth, kpoints, cell, system.ecutwfc,
+                                            npwx=npwx)
         moved.basis = Basis(
             dense=self.basis.dense, smooth=smooth, planewaves=planewaves
         )
         moved.kinetic = planewaves.kinetic(smooth, kpoints, cell)
         moved.fft_index = planewaves.fft_index(smooth)
-        moved.sticks = build_sticks(moved.fft_index, planewaves.mask, smooth.grid)
+        moved.sticks = build_sticks(moved.fft_index, planewaves.mask, smooth.grid,
+                                    nsticks=nsticks)
         _adopt_rebuilt_sphere(moved, self, planewaves, smooth, kpoints, cell)
 
         # The projectors are rebuilt whole: their radial half is tabulated

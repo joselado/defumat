@@ -446,6 +446,66 @@ def _say_what_did_not_converge(steps, notcnv, ethr, conv_thr, nbnd) -> None:
     )
 
 
+#: How much of a derived k-set's per-k tables memory mode builds at once,
+#: bytes: a band path longer than this is walked a block at a time
+#: (:func:`kset_blocks`).
+KSET_BLOCK_BYTES = 64 * 2**20
+
+
+def _per_k_table_bytes(calculation) -> float:
+    """What ``calculation`` keeps on the device per k-point, bytes.
+
+    The arrays with a k index that ``at_kpoints`` rebuilds for a new k-set: the
+    sphere and its box and stick indices, ``|k+G|^2``, the projector core, and
+    where they exist the gamma trick's ``-(k+G)`` index, a meta-GGA's ``k+G``
+    and DFT+U's ``wfcU``.
+    """
+    arrays = [
+        calculation.basis.planewaves.indices, calculation.basis.planewaves.mask,
+        calculation.kinetic, calculation.fft_index,
+        calculation.sticks.columns, calculation.sticks.index,
+        calculation.projector_core.columns, calculation.projector_core.kg,
+        calculation.fft_index_minus, calculation.kplusg,
+        getattr(calculation, "wfcU", None) if calculation.is_hubbard else None,
+    ]
+    total = sum(int(np.prod(a.shape)) * a.dtype.itemsize
+                for a in arrays if a is not None)
+    return total / max(1, calculation.system.kpoints.nk)
+
+
+def kset_blocks(calculation, kpoints):
+    """``(blocks, widths)`` to walk a derived k-set a block at a time, or ``None``.
+
+    **A long derived k-set is built a block at a time in memory mode**
+    (``GPU-MEMORY-NEXT.md`` item 6). A band path moved onto with ``at_kpoints``
+    holds every point's per-k tables on the device while its solve walks the
+    points in chunks: 1.65 MB per point on the NbSe2 monolayer, 1.4 GB on an
+    800-point path. Where the store streams and the tables would pass
+    :data:`KSET_BLOCK_BYTES`, the set is cut into blocks of
+    :func:`~defumat.batching.k_chunks` (the last padded with repeats), each is
+    its own ``at_kpoints``, and ``widths`` -- ``(npwx, nsticks)`` over the whole
+    set -- pads every block to one shape, so they share one compilation.
+    ``None`` walks the set whole: on a CPU, in speed mode, for a spiral (which
+    ``at_kpoints`` refuses) and for a set that fits.
+    """
+    from defumat.basis.planewaves import sphere_widths
+    from defumat.batching import k_chunks
+
+    if calculation is None or kpoints is None or calculation.spiral:
+        return None
+    if resolve_wfc_store("default", calculation.memory_mode) != "stream":
+        return None
+    batch = max(1, calculation.k_batch or 1)
+    per_k = max(1.0, _per_k_table_bytes(calculation))
+    block = batch * max(1, int(KSET_BLOCK_BYTES // (per_k * batch)))
+    if block >= kpoints.nk:
+        return None
+    system = calculation.system
+    widths = sphere_widths(calculation.basis.smooth, kpoints, system.cell,
+                           system.ecutwfc)
+    return list(k_chunks(kpoints.nk, block)), widths
+
+
 def threaded_calculation(calculation, system, kpoints, k_batch):
     """``(calculation, system, kpoints, k_batch)`` for a workflow handed a calculation.
 
