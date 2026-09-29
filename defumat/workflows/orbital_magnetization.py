@@ -70,6 +70,7 @@ def run_orbital_magnetization(
     field_scale: float | None = None,
     gap_tol: float = 1.0e-4,
     stream: bool | None = None,
+    calculation=None,
 ) -> OrbitalMagnetization:
     """``M_orb`` by the modern theory, in Bohr magnetons per cell.
 
@@ -129,7 +130,8 @@ def run_orbital_magnetization(
         )
 
     source = _source(system, pseudos, density, nocc, nbnd, conv_thr, k_batch,
-                     becsum=becsum, ns=ns, field=field, field_scale=field_scale)
+                     becsum=becsum, ns=ns, field=field, field_scale=field_scale,
+                     calculation=calculation)
     source.gap_tol = gap_tol
     mesh = volume_mesh(_divisions(system, divisions), shift)
     if source.streams if stream is None else stream:

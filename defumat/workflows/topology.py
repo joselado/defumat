@@ -124,6 +124,11 @@ class DFTSource:
     #: the eigenvalues are already computed, since the eigensolver is asked for
     #: empty bands anyway.
     gap_tol: float = 1.0e-4
+    #: The caller's own :class:`~defumat.scf.driver.Calculation` of this
+    #: system, used as :meth:`_base` rather than a second one built beside it
+    #: -- it shares the augmentation and PAW tables and keeps the caller's
+    #: memory mode (``GPU-MEMORY-NEXT.md`` item 20). ``None`` builds one.
+    calculation: object = None
 
     def __post_init__(self):
         if self.system.nspin == 2:
@@ -147,7 +152,8 @@ class DFTSource:
         if getattr(self, "_calculation", None) is None:
             object.__setattr__(
                 self, "_calculation",
-                Calculation(self.system, self.pseudos, k_batch=self.k_batch),
+                self.calculation if self.calculation is not None
+                else Calculation(self.system, self.pseudos, k_batch=self.k_batch),
             )
         return self._calculation
 
@@ -334,7 +340,8 @@ class DFTSource:
 
 
 def _source(system, pseudos, density, nocc, nbnd, conv_thr, k_batch,
-            becsum=(), ns=None, field=None, field_scale=None) -> DFTSource:
+            becsum=(), ns=None, field=None, field_scale=None,
+            calculation=None) -> DFTSource:
     if nocc is None:
         nocc = _occupied_bands(system, pseudos)
     return DFTSource(
@@ -349,6 +356,7 @@ def _source(system, pseudos, density, nocc, nbnd, conv_thr, k_batch,
         nbnd=nbnd,
         conv_thr=conv_thr,
         k_batch=k_batch,
+        calculation=calculation,
     )
 
 
@@ -402,6 +410,7 @@ def run_berry_curvature(
     field=None,
     field_scale: float | None = None,
     stream: bool | None = None,
+    calculation=None,
     **kwargs,
 ) -> BerryCurvature:
     """Berry curvature and the Chern number on one plane of the zone.
@@ -425,7 +434,8 @@ def run_berry_curvature(
     """
     source = _source(system, pseudos, density, nocc, nbnd, conv_thr, k_batch,
                      becsum=becsum, ns=ns,
-                     field=field, field_scale=field_scale)
+                     field=field, field_scale=field_scale,
+                     calculation=calculation)
     return _chern_number(
         source, shape=shape, axis=axis, offset=offset, method=method,
         k_batch=k_batch, stream=stream, **kwargs,
@@ -450,6 +460,7 @@ def run_z2(
     ns: jnp.ndarray | None = None,
     field=None,
     field_scale: float | None = None,
+    calculation=None,
 ):
     """The 2D Z2 invariant of one plane of the zone.
 
@@ -465,7 +476,8 @@ def run_z2(
     _require_spinors(system, "the Z2 invariant")
     source = _source(system, pseudos, density, nocc, nbnd, conv_thr, k_batch,
                      becsum=becsum, ns=ns,
-                     field=field, field_scale=field_scale)
+                     field=field, field_scale=field_scale,
+                     calculation=calculation)
     kwargs = dict(axis=axis, offset=offset)
     if (method or "wilson").lower() == "parity":
         kwargs.update(dimension=2, centre=_centre(system))
@@ -490,6 +502,7 @@ def run_z2_3d(
     ns: jnp.ndarray | None = None,
     field=None,
     field_scale: float | None = None,
+    calculation=None,
 ):
     """The four three-dimensional indices ``(nu0; nu1 nu2 nu3)``.
 
@@ -500,7 +513,8 @@ def run_z2_3d(
     _require_spinors(system, "the Z2 invariants")
     source = _source(system, pseudos, density, nocc, nbnd, conv_thr, k_batch,
                      becsum=becsum, ns=ns,
-                     field=field, field_scale=field_scale)
+                     field=field, field_scale=field_scale,
+                     calculation=calculation)
     kwargs = {}
     if (method or "wilson").lower() == "parity":
         kwargs["centre"] = _centre(system)

@@ -184,8 +184,13 @@ below:
   is its own solve); iodine `M_LC`/`M_IC` to 3.5e-9/1.2e-9. Bismuthene 12x12: solve output
   446 -> 37 MB, occupied states 372 -> 93 MB (shapes). 0.96 s against 0.74 s on one CPU
   core (NC AlAs 6x6). Not measured on the card.
-* **Item 20, third part** (2026-09-29): `run_spiral_scan` and `spiral_spin_orbit_energy`
-  take `calculation=` and the `Calculator` passes its own. Left: `DFTSource._base`.
+* **Item 20, third part** (2026-09-29): `run_spiral_scan`, `spiral_spin_orbit_energy` and,
+  through `DFTSource.calculation`, `run_berry_curvature`, `run_z2`, `run_z2_3d` and
+  `run_orbital_magnetization` take `calculation=`, and the `Calculator` passes its own. With
+  the same options the results are identical to a fresh setup's (AlAs Berry flux, the
+  hydrogen-chain spiral scan: differences of 0.0). Nothing in the list builds a second
+  `Calculation` beside the calculator's any more, except the force theorem, which rotates
+  the system.
 * **Item 25** (2026-09-29): recorded in `GPU.md` Phase 4 -- k-sharding divides time, not
   per-device memory; distributing the plane waves by sticks is the memory lever.
 * **Item 1** (the fixed-density solve): an eigenvalue-only solve streams where the store
@@ -220,7 +225,7 @@ none but 10 and 23 measured on the card. What is left, in order:
 2. **A `Calculation` restricted to a row subset of k** -- the one primitive items 2 and 6
    both wait on (see item 2).
 3. **Stream the linear-response stack** (item 2) on top of it, the dielectric tensor first.
-4. The small tail: `DFTSource._base` (item 20), the in-loop orientation diagnostics (item 4),
+4. The small tail: the in-loop orientation diagnostics (item 4),
    the traced movers (item 7), the meta-GGA kinetic tensors (item 18), forward-mode stress
    (item 16, now less needed), item 14's per-`l` transform (time only), the float32 tier
    (item 26).
@@ -602,7 +607,7 @@ check is round-off, not equality.
 
 ### 20. Post-SCF workflows build a second `Calculation` -- priority 2, medium
 
-**Done 2026-09-29** except `DFTSource._base` (see "Done since").
+**Done 2026-09-29** (see "Done since").
 
 `get_bands`/`get_nscf`/`get_dos` pass no calculation, so `nscf.py:196-197` builds another
 beside the facade's own, which stays alive; `pdos`, `stm`, `sts`, `transport`, `sfac` (with

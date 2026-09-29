@@ -1745,6 +1745,7 @@ class Calculator:
 
         result = self._ground_state("the Berry curvature")
         return run_berry_curvature(self.system, self.pseudos, result.density,
+                                   calculation=self.calculation,
                                    **self._call_options(run_berry_curvature,
                                                         result, options))
 
@@ -1764,6 +1765,7 @@ class Calculator:
         result = self._ground_state("the orbital magnetization")
         return run_orbital_magnetization(
             self.system, self.pseudos, result.density,
+            calculation=self.calculation,
             **self._call_options(run_orbital_magnetization, result, options),
         )
 
@@ -2024,6 +2026,7 @@ class Calculator:
 
         result = self._ground_state("the Z2 invariant")
         return run_z2(self.system, self.pseudos, result.density,
+                      calculation=self.calculation,
                       **self._call_options(run_z2, result, options))
 
     def get_z2_3d(self, **options):
@@ -2032,6 +2035,7 @@ class Calculator:
 
         result = self._ground_state("the 3D Z2 invariants")
         return run_z2_3d(self.system, self.pseudos, result.density,
+                         calculation=self.calculation,
                          **self._call_options(run_z2_3d, result, options))
 
     # ------------------------------------------------------------------
