@@ -354,6 +354,7 @@ def test_a_host_store_is_read_a_chunk_at_a_time():
     np.testing.assert_allclose(streamed, whole, atol=1e-12)
 
 
+@pytest.mark.slow  # 7.7 s in the gate: an SCF and two path solves
 def test_a_streamed_solve_that_keeps_its_states_keeps_them_on_the_host(k_batch=3):
     """``fixed_density_states`` in a streamed store: the whole-set solve, in host memory."""
     from defumat.system.kpoints import KPoints
