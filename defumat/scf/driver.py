@@ -3690,7 +3690,9 @@ class Calculation:
             # card) is walked a chunk at a time rather than put on the device
             # whole (``GPU-MEMORY-NEXT.md`` item 4); the sum is the same.
             return stream_becsum(self, wavefunctions, weights)
-        vkb = self.projectors.vkb if rows is None else self.projectors_at(rows)
+        # The whole k-set passes the projectors themselves, which a lazy set
+        # rebuilds per k inside the sum rather than stacking (item 7).
+        vkb = self.projectors if rows is None else self.projectors_at(rows)
         if self.noncolin:
             values = self._noncollinear_becsum(wavefunctions, weights, vkb)
         else:
@@ -3735,7 +3737,7 @@ class Calculation:
         ``j`` shell its occupation belongs to.
         """
         spinors = spinor_becsum(
-            wavefunctions[0], self.projectors.vkb if vkb is None else vkb,
+            wavefunctions[0], self.projectors if vkb is None else vkb,
             weights[0], self.species_channels, self.k_batch, spiral=self.spiral,
         )
         values = []

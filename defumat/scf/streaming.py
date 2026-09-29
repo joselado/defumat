@@ -122,10 +122,17 @@ def stream_diagonalize(calculation, hamiltonians, nbnd: int, store: np.ndarray,
     for spin, hamiltonian in enumerate(hamiltonians):
         threshold = ethr[spin] if rank == 3 else ethr
         for rows, live in k_chunks(nk, calculation.k_batch):
+            # The chunk's starting block is donated to the solve, which writes
+            # its states into the same buffer; the host store still holds the
+            # block, which is what a robust retry is handed instead
+            # (``GPU-MEMORY-NEXT.md`` item 11).
             energies, states, taken, stuck = calculation.eigensolver(
                 hamiltonian, nbnd, _to_device(store[spin, rows]), threshold,
                 k_batch=calculation.k_batch, return_steps=True,
-                indices=jnp.asarray(rows), **extra,
+                indices=jnp.asarray(rows),
+                psi0_again=lambda spin=spin, rows=rows: _to_device(
+                    store[spin, rows]),
+                **extra,
             )
             energies = np.asarray(energies)
             if eigenvalues is None:

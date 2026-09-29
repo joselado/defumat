@@ -756,10 +756,18 @@ def build_plane_wave_states(
     becp = None
     vkb = None
     if calculation.augmentation is not None:
-        projectors = calculation.projectors.vkb
-        becp = jax.vmap(lambda c, v: _project(c, v, npol))(coefficients, projectors)
-        if keep_projectors:
-            vkb = projectors
+        projectors = calculation.projectors
+        if projectors.is_lazy and not keep_projectors:
+            # One k-point's projectors built at a time rather than the whole-k
+            # ``vkb`` stacked (``GPU-MEMORY-NEXT.md`` item 7).
+            becp = jax.lax.map(
+                lambda ik: _project(coefficients[ik], projectors.at_k(ik), npol),
+                jnp.arange(coefficients.shape[0]))
+        else:
+            becp = jax.vmap(lambda c, v: _project(c, v, npol))(
+                coefficients, projectors.vkb)
+            if keep_projectors:
+                vkb = projectors.vkb
 
     return PlaneWaveStates(
         coefficients=coefficients,

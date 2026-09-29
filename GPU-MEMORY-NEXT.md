@@ -111,6 +111,22 @@ below:
   `run_momentum_transport` and `run_structure_factors` take `calculation=` (the SCF's own,
   on its k-set or moved with `at_kpoints`), and the `Calculator` passes its own. Left: the
   spiral scan and `DFTSource._base`. Not measured on the card.
+* **Item 7, second half** (2026-09-29): `becsum` and `spinor_becsum` take the `Projectors`
+  and walk a lazy set per k (`density.walk_projectors`, `at_k` inside the sum, a spiral's
+  rows `ik` and `ik + nk`), so the SCF's whole-set `becsum` on a CPU in memory mode, the
+  Sternheimer solver's raw `becsum`, the ultrasoft position operator (`efield.
+  ultrasoft_position`), the transverse susceptibility's `state_projections` and the topology
+  states' `becp` no longer stack the whole-k `vkb`. `test_projector_storage.py` makes the
+  whole-k property fail for a lazy set during the call. AlAs ultrasoft `epsilon` identical
+  and `Z*` within 1e-14 between the two modes; the ultrasoft magnon and the ultrasoft
+  topology checks pass with `DEFUMAT_PROJECTORS=rebuild`. Still whole-k: the traced movers
+  (`at_strain`, `at_kcart`, `at_spiral_q`) and what reads them -- the velocity operator's
+  projector derivative, the strain and phonon responses, `born.py`'s ultrasoft tail. Not
+  measured on the card.
+* **Item 11** (2026-09-29): the streamed Davidson call donates its starting block
+  (`_every_k_donating`), and the robust retry is handed a fresh copy from the host store
+  (`psi0_again`). `test_solvers.py` forces the retry and checks both halves. Not measured on
+  the card.
 * **Item 1** (the fixed-density solve): an eigenvalue-only solve streams where the store
   does and keeps no states. On eight-atom Si the band path's peak is 102.8 -> 44.8 MB at 200
   points and 383.4 -> 163.6 MB at 800, for 2-3 per cent in time. **Still 0.20 MB per

@@ -305,6 +305,29 @@ def spinor_kinetic_energy_density(psi, fft_index, grid, weights, cell: Cell,
                  batch=resolve_k_batch(k_batch))
 
 
+def walk_projectors(vkb, nk: int, spiral: bool = False):
+    """``(operand, fetch)``: the projectors walked along k inside :func:`sum_k`.
+
+    ``vkb`` is the ``(nk, npwx, nkb)`` array or a
+    :class:`~defumat.pseudo.projectors.Projectors`. A **lazy** set is walked by
+    index and rebuilt one k-point at a time (``at_k``, ``init_us_2`` inside the
+    k loop), so the whole-k array is never formed (``GPU-MEMORY-NEXT.md`` item
+    7); a stored set is walked as its array. ``fetch(operand[ik])`` is the
+    ``(npwx, nkb)`` block, or for a spiral the ``(2, npwx, nkb)`` pair of rows
+    ``(ik, ik + nk)`` -- the up component's sphere and the down one's.
+    """
+    if getattr(vkb, "is_lazy", False):
+        if spiral:
+            return jnp.arange(nk), lambda ik: jnp.stack(
+                [vkb.at_k(ik), vkb.at_k(ik + nk)])
+        return jnp.arange(nk), vkb.at_k
+    if hasattr(vkb, "at_k"):
+        vkb = vkb.vkb
+    if spiral:
+        vkb = jnp.stack([vkb[:nk], vkb[nk:]], axis=1)  # (nk, 2, npwx, nkb)
+    return vkb, lambda block: block
+
+
 def becsum(psi, vkb, weights, species_channels,
            k_batch: int | None | str = "default") -> tuple:
     """The projector occupation matrices ``becsum``, per species.
@@ -319,7 +342,9 @@ def becsum(psi, vkb, weights, species_channels,
 
     Args:
         psi: ``(nspin, nk, nbnd, npwx)`` wavefunctions.
-        vkb: ``(nk, npwx, nkb)`` projectors -- the same in both channels.
+        vkb: ``(nk, npwx, nkb)`` projectors -- the same in both channels -- or
+            the :class:`~defumat.pseudo.projectors.Projectors` themselves, which
+            a lazy set then rebuilds per k (:func:`walk_projectors`).
         weights: ``(nspin, nk, nbnd)`` occupation weights.
         species_channels: for each species, the ``(nat_t, nh_t)`` array of
             channel columns belonging to each of its atoms, or ``None`` when the
@@ -337,18 +362,19 @@ def becsum(psi, vkb, weights, species_channels,
     quantities, and they are all built from this one.
     """
     batch = resolve_k_batch(k_batch)
+    operand, fetch = walk_projectors(vkb, psi.shape[1])
 
     def channel(states, occupations):
         def one_k(arrays):
-            projectors, state, occupation = arrays
-            projections = jnp.einsum("gc,bg->bc", projectors.conj(), state)
+            row, state, occupation = arrays
+            projections = jnp.einsum("gc,bg->bc", fetch(row).conj(), state)
             return tuple(
                 None if channels is None
                 else _becsum_species(projections, occupation, channels)
                 for channels in species_channels
             )
 
-        return sum_k(one_k, (vkb, states, occupations), batch=batch)
+        return sum_k(one_k, (operand, states, occupations), batch=batch)
 
     # One channel at a time rather than a spin axis through the accumulation:
     # QE has no spin axis here either -- ``sum_bec`` writes into
@@ -482,7 +508,9 @@ def spinor_becsum(psi, vkb, weights, species_channels,
 
     Args:
         psi: ``(nk, nbnd, 2 npwx)``.
-        vkb: ``(nk, npwx, nkb)``, or ``(2 nk, npwx, nkb)`` for a spiral.
+        vkb: ``(nk, npwx, nkb)``, or ``(2 nk, npwx, nkb)`` for a spiral, or
+            the :class:`~defumat.pseudo.projectors.Projectors` themselves
+            (:func:`walk_projectors`).
         weights: ``(nk, nbnd)``.
         spiral: the two components live on different spheres, so each is
             projected on **its own** ``vkb`` -- ``vkb(k + q/2)`` for the up
@@ -501,13 +529,12 @@ def spinor_becsum(psi, vkb, weights, species_channels,
 
     Returns one complex ``(nat_t, nh_t, 2, nh_t, 2)`` array per species.
     """
-    npwx = vkb.shape[-2]
-    if spiral:
-        nk = psi.shape[0]
-        vkb = jnp.stack([vkb[:nk], vkb[nk:]], axis=1)  # (nk, 2, npwx, nkb)
+    npwx = psi.shape[-1] // 2
+    operand, fetch = walk_projectors(vkb, psi.shape[0], spiral)
 
     def one_k(arrays):
-        projectors, state, occupation = arrays
+        row, state, occupation = arrays
+        projectors = fetch(row)
         components = state.reshape(state.shape[:-1] + (2, npwx))
         if spiral:
             projections = jnp.einsum("agc,bag->bac", projectors.conj(), components)
@@ -519,7 +546,7 @@ def spinor_becsum(psi, vkb, weights, species_channels,
             for channels in species_channels
         )
 
-    return sum_k(one_k, (vkb, psi, weights), batch=resolve_k_batch(k_batch))
+    return sum_k(one_k, (operand, psi, weights), batch=resolve_k_batch(k_batch))
 
 
 @jax.jit

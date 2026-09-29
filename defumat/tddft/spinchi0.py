@@ -409,8 +409,15 @@ def state_projections(calculation, coefficients):
     from defumat.topology.states import _project
 
     npol = int(calculation.npol)
+    projectors = calculation.projectors
+    if projectors.is_lazy:
+        # One k-point's projectors built at a time rather than the whole-k
+        # ``vkb`` stacked (``GPU-MEMORY-NEXT.md`` item 7).
+        return jax.lax.map(
+            lambda ik: _project(coefficients[ik], projectors.at_k(ik), npol),
+            jnp.arange(coefficients.shape[0]))
     return jax.vmap(lambda c, v: _project(c, v, npol))(
-        coefficients, calculation.projectors.vkb
+        coefficients, projectors.vkb
     )
 
 

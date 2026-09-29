@@ -702,13 +702,17 @@ def ultrasoft_position(calculation, hamiltonians, states, position, dipole,
     this is a function and not the body of the one below.
     """
     batch = calculation.k_batch
-    vkb = calculation.projectors.vkb
-    dipole = dipole.astype(vkb.dtype)
+    # One k-point's projectors at a time, built rather than sliced on a lazy
+    # set: the whole-k ``vkb`` is never formed here (``GPU-MEMORY-NEXT.md``
+    # item 7).
+    projectors = calculation.projectors
+    dipole = dipole.astype(projectors.dtype)
     blocks = []
     for spin, hamiltonian in enumerate(hamiltonians):
         occupied = states[spin]
 
         def one_k(ik, hamiltonian=hamiltonian, occupied=occupied, spin=spin):
+            vkb = projectors.at_k(ik)
             overlapped = hamiltonian.apply_s(position[spin][ik], ik)
             if calculation.noncolin:
                 # ``adddvepsi_us``'s ``lspinorb`` branch, which is the same two
@@ -717,11 +721,11 @@ def ultrasoft_position(calculation, hamiltonians, states, position, dipole,
                 # mixes them is ``qq_so`` and ``dpqq_so``. A spiral is the one
                 # case where the projectors differ between components and the
                 # velocity operator refuses it before this is reached.
-                npwx = vkb.shape[1]
+                npwx = vkb.shape[0]
                 pair = occupied[ik].reshape(
                     occupied[ik].shape[:-1] + (2, npwx)
                 )
-                becp1 = jnp.einsum("gk,nag->nak", vkb[ik].conj(), pair)
+                becp1 = jnp.einsum("gk,nag->nak", vkb.conj(), pair)
                 becp2 = jnp.einsum(
                     "gk,nag->nak", projector_velocity[ik].conj(), pair
                 )
@@ -729,14 +733,14 @@ def ultrasoft_position(calculation, hamiltonians, states, position, dipole,
                 coefficients = 1j * jnp.einsum(
                     "abij,nbj->nai", qq, becp2
                 ) + jnp.einsum("abij,nbj->nai", dipole, becp1)
-                added = jnp.einsum("gk,nak->nag", vkb[ik], coefficients)
+                added = jnp.einsum("gk,nak->nag", vkb, coefficients)
                 return overlapped + added.reshape(occupied[ik].shape)
             qq = hamiltonian.projectors.qq.astype(vkb.dtype)
-            becp1 = jnp.einsum("gk,ng->nk", vkb[ik].conj(), occupied[ik])
+            becp1 = jnp.einsum("gk,ng->nk", vkb.conj(), occupied[ik])
             becp2 = jnp.einsum("gk,ng->nk",
                                projector_velocity[ik].conj(), occupied[ik])
             coefficients = 1j * (becp2 @ qq.T) + becp1 @ dipole.T
-            return overlapped + jnp.einsum("gk,nk->ng", vkb[ik], coefficients)
+            return overlapped + jnp.einsum("gk,nk->ng", vkb, coefficients)
 
         blocks.append(map_k(one_k, jnp.arange(occupied.shape[0]), batch=batch))
     return jnp.stack(blocks)

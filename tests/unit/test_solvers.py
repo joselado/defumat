@@ -306,6 +306,48 @@ def test_a_cholesky_that_returns_nan_is_rescued_outside_the_k_batch(silicon,
         davidson.davidson_eigensolver_all.clear_cache()
 
 
+def test_a_donated_start_is_consumed_and_rebuilt_for_the_retry(silicon,
+                                                                monkeypatch):
+    """``psi0_again`` donates ``psi0`` and hands the retry a fresh copy.
+
+    ``GPU-MEMORY-NEXT.md`` item 11: the streamed solve donates each chunk's
+    starting block, so the fast pass writes its states into that buffer. The
+    robust retry cannot start from a deleted array, so it calls ``psi0_again``
+    -- which this test forces by the same ``NaN`` route as the test above, and
+    then checks both halves: the block was donated (deleted), and the retry
+    ran from the rebuilt one to the exact answer.
+    """
+    from defumat.solvers import davidson, subspace
+
+    _, _, hamiltonian = silicon
+    exact, _ = exact_eigenpairs_all(hamiltonian, NBND)
+    _, start = davidson_eigensolver_all(hamiltonian, NBND, None, ethr=1e-6)
+    host = np.array(start)
+
+    real_route = subspace._cholesky_route
+    monkeypatch.setattr(subspace, "_cholesky_route",
+                        lambda h, s: tuple(x * np.nan for x in real_route(h, s)))
+    davidson.davidson_eigensolver_all.clear_cache()
+    rebuilt = []
+
+    def again():
+        rebuilt.append(True)
+        return jnp.asarray(host)
+
+    try:
+        psi0 = jnp.asarray(host)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            values, _ = davidson_eigensolver_all(
+                hamiltonian, NBND, psi0, ethr=1e-13, max_iterations=60,
+                psi0_again=again)
+        assert psi0.is_deleted(), "the start was not donated"
+        assert rebuilt, "the retry did not ask for the start again"
+        assert np.asarray(values) == pytest.approx(np.asarray(exact), abs=1e-8)
+    finally:
+        davidson.davidson_eigensolver_all.clear_cache()
+
+
 # --------------------------------------------------------------------------
 # the retry keeps what the fast route already converged
 # --------------------------------------------------------------------------

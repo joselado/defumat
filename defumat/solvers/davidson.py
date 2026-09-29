@@ -848,6 +848,25 @@ def _every_k(
     return map_k(lambda pair: solve(*pair), (indices, psi0), batch=batch)
 
 
+#: :func:`_every_k` with the starting block **donated**, so the solve may write
+#: its states into the buffer ``psi0`` arrived in (``GPU-MEMORY-NEXT.md`` item
+#: 11). Used only when the caller can rebuild ``psi0`` for the robust retry --
+#: the streamed store, whose host copy is still there -- because a donated
+#: input is deleted by the fast pass. The same trace, so the same bits.
+_every_k_donating = jax.jit(
+    _every_k.__wrapped__,
+    static_argnames=("nbnd", "david", "max_iterations", "k_batch", "robust",
+                     "return_steps", "return_finite"),
+    donate_argnames=("psi0",),
+)
+
+
+def _clear_every_k() -> None:
+    """Drop both compiled forms of :func:`_every_k`."""
+    _every_k.clear_cache()
+    _every_k_donating.clear_cache()
+
+
 def _refuse_a_space_too_small(hamiltonian, nbnd: int) -> None:
     """``nbnd`` bands asked of a space that does not hold them, refused by name.
 
@@ -897,6 +916,7 @@ def davidson_eigensolver_all(
     robust_retry: bool = True,
     return_steps: bool = False,
     indices=None,
+    psi0_again=None,
 ):
     """Every k-point, ``k_batch`` of them at a time.
 
@@ -967,6 +987,15 @@ def davidson_eigensolver_all(
     ``return_steps`` adds the per-k step count and unsettled-band count to the
     return, ``(nk,)`` each. It is off by default so that every existing caller
     still unpacks two values.
+
+    ``psi0_again`` is a callable that returns ``psi0`` afresh, and passing it
+    **donates** ``psi0`` to the fast pass: the states are written into its
+    buffer, so a chunk holds one band block where it held two, and the
+    alternating allocate-and-free of a whole block per call goes away
+    (``MEMORY-AUDIT.md`` A16 measured the saving at exactly one buffer). The
+    rare robust retry calls it for the starting block the fast pass consumed.
+    The streamed solve passes it, since its host store still holds the block;
+    the caller must not read ``psi0`` after the call.
     """
     _refuse_a_space_too_small(hamiltonian, nbnd)
     ethr = jnp.broadcast_to(
@@ -1038,8 +1067,12 @@ def davidson_eigensolver_all(
     # backends, the same caveat ``tools/gpu/davidson_memory`` states for the
     # subspace buffer -- but the *form* is what matters here: one is
     # proportional to the k-set and the other is not.
-    fast = _every_k(*arguments, robust=False, return_steps=return_steps,
-                    return_finite=True, **chunk)
+    # A donated ``psi0`` is consumed here, and ``psi0_again`` is what the
+    # retry below starts from instead (see the note above ``arguments``).
+    donate = psi0_again is not None and psi0 is not None
+    fast = (_every_k_donating if donate else _every_k)(
+        *arguments, robust=False, return_steps=return_steps,
+        return_finite=True, **chunk)
     fast, per_k = fast[:-1], fast[-1]
     failed = ~np.asarray(per_k)
     if not failed.any():
@@ -1057,6 +1090,8 @@ def davidson_eigensolver_all(
         "counts, and loosen ethr (conv_thr) before trusting the result",
         stacklevel=2,
     )
+    if donate:
+        arguments = (hamiltonian, nbnd, psi0_again(), *arguments[3:])
     robust = _every_k(*arguments, robust=True, return_steps=return_steps,
                       **chunk)
     # Keep what the fast route already converged. The robust pass still runs
@@ -1069,4 +1104,4 @@ def davidson_eigensolver_all(
     )
 
 
-davidson_eigensolver_all.clear_cache = _every_k.clear_cache
+davidson_eigensolver_all.clear_cache = _clear_every_k

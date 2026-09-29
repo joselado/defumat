@@ -736,7 +736,7 @@ class SternheimerSolver:
             # the symmetrisation, for this method's own reason.
             return calculation._noncollinear_becsum(states, weights)
         return becsum_of(
-            states, calculation.projectors.vkb, weights,
+            states, calculation.projectors, weights,
             calculation.species_channels, calculation.k_batch,
         )
 

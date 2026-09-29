@@ -462,3 +462,51 @@ def test_a_chunked_core_on_a_spiral_is_the_one_shot_core(monkeypatch):
     np.testing.assert_allclose(np.asarray(chunked.columns), np.asarray(whole.columns),
                                rtol=0, atol=1e-14)
     np.testing.assert_array_equal(np.asarray(chunked.kg), np.asarray(whole.kg))
+
+
+@pytest.mark.parametrize("path", [
+    "tests/data/qe/si2-us.in",
+    pytest.param("tests/data/qe/o-chain-spiral-us.in", id="spinor-spiral",
+                 marks=pytest.mark.slow),  # 11 s
+])
+def test_becsum_rebuilds_a_lazy_set_per_k(path, monkeypatch):
+    """``becsum`` over the whole k-set walks a lazy set one k-point at a time.
+
+    ``GPU-MEMORY-NEXT.md`` item 7: the SCF's ``becsum`` and the response's
+    raw one read the whole-k ``vkb``, which a lazy set built in full on every
+    call. The values are the stored route's; and the whole-k property is made
+    to fail for a lazy set during the call, so the test fails if the branch
+    that avoids it did not run. The spiral pairs each state with rows ``ik``
+    and ``ik + nk``.
+    """
+    from defumat.pseudo.projectors import Projectors
+
+    calculations = {}
+    for which in ("store", "rebuild"):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            calculator = Calculator.from_file(
+                path, pseudo_dir="tests/data/pseudo", announce=False)
+            calculations[which] = calculator.calculation.__class__(
+                calculator.system, calculator.pseudos, projectors=which)
+    stored, lazy = calculations["store"], calculations["rebuild"]
+    assert lazy.projectors.is_lazy
+    potential = stored.potential(stored.starting_density())
+    states = stored.starting_wavefunctions(stored.hamiltonian(potential.v_scf), 4)
+    kweights = np.asarray(stored.system.kpoints.weights)
+    weights = np.broadcast_to(kweights[None, :, None],
+                              states.shape[:3]).astype(float)
+    expected = stored.becsum(states, weights)
+
+    whole = Projectors.vkb
+
+    def refuse_a_lazy_whole(self):
+        assert self.stored is not None, "a lazy set was stacked whole"
+        return whole.fget(self)
+
+    monkeypatch.setattr(Projectors, "vkb", property(refuse_a_lazy_whole))
+    got = lazy.becsum(states, weights)
+    assert len(got) == len(expected) and any(e is not None for e in expected)
+    for a, b in zip(got, expected):
+        if b is not None:
+            np.testing.assert_allclose(np.asarray(a), np.asarray(b), atol=1e-13)
