@@ -59,6 +59,12 @@ from defumat.projwfc.channels import AtomicChannel, projection_channels
 from defumat.scf.streaming import is_host_store
 from defumat.system.symmetry import atom_mapping, spin_rotations
 
+#: How much of the atomic projector set memory mode builds at once, bytes: a
+#: block of k-points whose ``npol npwx natomwfc`` columns come to about this,
+#: rounded to the calculation's own k chunk. The build's transients are a few
+#: times it.
+PROJECTOR_BLOCK_BYTES = 16 * 2**20
+
 __all__ = [
     "ProjectionSymmetry",
     "build_projection_symmetry",
@@ -299,30 +305,32 @@ def atomic_projections(
             "atomic wavefunctions')"
         )
 
-    projectors = build_atomic_projectors(
-        calculation.pseudos,
-        system.structure,
-        system.cell,
-        calculation.basis.smooth,
-        calculation.basis.planewaves,
-        calculation.basis_kpoints,
-        # ``s_psi`` written against the projectors alone, exactly as the Hubbard
-        # projectors reach it -- there is no Hamiltonian in a projection. The
-        # spinor branch is a **different operator** and not the same one on a
-        # longer vector: ``_spinor_overlap`` carries ``qq_so``, whose off-
-        # diagonal spin blocks are exactly what tells the two ``j`` channels
-        # apart, so contracting each component against the scalar ``qq`` would
-        # give the j-averaged overlap. ``Calculation._build_hubbard_projectors``
-        # picks between them the same way, on ``self.noncolin``.
-        calculation._spinor_overlap if noncolin else calculation._overlap,
-        kind=kind,
-        noncolin=noncolin,
-        # ``atomic_wfc_nc_proj``'s ``starting_spin_angle = .TRUE.``: the
-        # projection is onto the spin-angle functions themselves, where the SCF
-        # and DFT+U start from the j-averaged up/down set. Without spin-orbit
-        # coupling the two coincide -- there is no j to average.
-        spinor_basis="jmj" if lspinorb else "updown",
-    )  # (nk, npol npwx, natomwfc)
+    def build(calc):
+        return build_atomic_projectors(
+            calc.pseudos,
+            system.structure,
+            system.cell,
+            calc.basis.smooth,
+            calc.basis.planewaves,
+            calc.basis_kpoints,
+            # ``s_psi`` written against the projectors alone, exactly as the
+            # Hubbard projectors reach it -- there is no Hamiltonian in a
+            # projection. The spinor branch is a **different operator** and not
+            # the same one on a longer vector: ``_spinor_overlap`` carries
+            # ``qq_so``, whose off-diagonal spin blocks are exactly what tells
+            # the two ``j`` channels apart, so contracting each component
+            # against the scalar ``qq`` would give the j-averaged overlap.
+            # ``Calculation._build_hubbard_projectors`` picks between them the
+            # same way, on ``self.noncolin``.
+            calc._spinor_overlap if noncolin else calc._overlap,
+            kind=kind,
+            noncolin=noncolin,
+            # ``atomic_wfc_nc_proj``'s ``starting_spin_angle = .TRUE.``: the
+            # projection is onto the spin-angle functions themselves, where the
+            # SCF and DFT+U start from the j-averaged up/down set. Without
+            # spin-orbit coupling the two coincide -- there is no j to average.
+            spinor_basis="jmj" if lspinorb else "updown",
+        )  # (nk, npol npwx, natomwfc)
 
     symmetry = (
         build_projection_symmetry(
@@ -337,26 +345,42 @@ def atomic_projections(
             return jnp.abs(proj0) ** 2
         return symmetry.apply(proj0)
 
-    # One spin channel at a time, and the k axis walked by the calculation's own
-    # batching dial inside each -- the same shape ``sum_band`` has (rule R6).
-    if is_host_store(wavefunctions):
-        # A streamed store stays in host memory and crosses a chunk at a time
-        # (``GPU-MEMORY-NEXT.md`` item 4); the padded rows are dropped.
-        nk = wavefunctions.shape[1]
-        out = None
+    # **In memory mode the projectors are built a block of k-points at a time**,
+    # on the block's own row-subset calculation, and the block's states are
+    # projected before the next is built. Whole, they are ``nk npol npwx
+    # natomwfc`` complex with the orthonormalisation's copies beside them: on
+    # eight-atom Si at 20 Ry and 216 k-points that took the card from the SCF's
+    # 59.0 MB to 645.6 MB, for an 86 MB store. Each k-point's set is its own
+    # arithmetic -- ``orthoUwfc`` orthonormalises per k -- so the blocks are the
+    # whole build to round-off. Speed mode keeps the one-shot build.
+    wavefunctions = (wavefunctions if is_host_store(wavefunctions)
+                     else jnp.asarray(wavefunctions))
+    nspin, nk = wavefunctions.shape[:2]
+    if calculation.memory_mode == "memory" and not calculation.spiral:
+        per_k = int(np.prod(wavefunctions.shape[3:])) * max(1, len(channels)) * 16
+        batch = max(1, calculation.k_batch or 1)
+        block = batch * max(1, PROJECTOR_BLOCK_BYTES // max(1, per_k * batch))
+        blocks = k_chunks(nk, block)
+    else:
+        blocks = [(np.arange(nk), nk)]
+
+    def upload(states, rows, whole):
+        if is_host_store(wavefunctions):
+            return jax.device_put(np.ascontiguousarray(states[rows]))
+        return states if whole else states[jnp.asarray(rows)]
+
+    out = None
+    for rows, live in blocks:
+        whole = live == nk and len(rows) == nk
+        projectors = build(calculation if whole else calculation.at_rows(rows))
         for spin, states in enumerate(wavefunctions):
-            for rows, live in k_chunks(nk, calculation.k_batch):
-                chunk = np.asarray(map_k(
-                    one_kpoint,
-                    (projectors[jnp.asarray(rows)],
-                     jax.device_put(np.ascontiguousarray(states[rows]))),
-                    batch=calculation.k_batch))
-                if out is None:
-                    out = np.empty((len(wavefunctions), nk) + chunk.shape[1:],
-                                   chunk.dtype)
-                out[spin, rows[:live]] = chunk[:live]
-        return out
-    return np.stack([
-        np.asarray(map_k(one_kpoint, (projectors, states), batch=calculation.k_batch))
-        for states in jnp.asarray(wavefunctions)
-    ])
+            # The k axis walked by the calculation's own batching dial inside
+            # the block -- the same shape ``sum_band`` has (rule R6).
+            chunk = np.asarray(map_k(
+                one_kpoint, (projectors, upload(states, rows, whole)),
+                batch=calculation.k_batch))
+            if out is None:
+                out = np.empty((nspin, nk) + chunk.shape[1:], chunk.dtype)
+            out[spin, rows[:live]] = chunk[:live]
+        del projectors
+    return out

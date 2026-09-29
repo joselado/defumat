@@ -55,6 +55,34 @@ def test_smearing_scheme_refuses_a_zero_width():
         compute_dos(eigenvalues, weights, np.linspace(0.0, 1.0, 5), "gaussian", degauss=0.0)
 
 
+@pytest.mark.parametrize("name", ["gaussian", "mp", "cold", "fermi-dirac"])
+def test_smearing_blocks_over_energies_are_the_whole_grid(name, monkeypatch):
+    """The energies are independent, so walking them in blocks moves nothing.
+
+    Seven energies a block on 101, so the last block is short, for the total
+    and for a projected density with three channels.
+    """
+    import jax.numpy as jnp
+
+    from defumat.workflows import dos as dos_module
+
+    eigenvalues, weights = _free_electron(4)
+    eigenvalues = jnp.asarray(eigenvalues)
+    weights = jnp.asarray(weights)
+    energies = jnp.linspace(-0.2, 1.2, 101)
+    projections = jnp.asarray(
+        np.random.default_rng(1).random(eigenvalues.shape + (3,)))
+    scheme = get_dos_scheme(name)
+    whole = [scheme(eigenvalues, weights, energies, degauss=0.02,
+                    projections=p) for p in (None, projections)]
+    per_energy = eigenvalues.size * eigenvalues.dtype.itemsize
+    monkeypatch.setattr(dos_module, "SMEARING_CHUNK_BYTES", 7 * per_energy)
+    for p, (dos, integrated) in zip((None, projections), whole):
+        blocks = scheme(eigenvalues, weights, energies, degauss=0.02, projections=p)
+        np.testing.assert_allclose(blocks[0], dos, rtol=1e-14, atol=1e-14)
+        np.testing.assert_allclose(blocks[1], integrated, rtol=1e-14, atol=1e-14)
+
+
 def test_tetrahedron_scheme_refuses_without_tetrahedra():
     eigenvalues, weights = _free_electron(4)
     with pytest.raises(ValueError, match="needs the tetrahedra"):

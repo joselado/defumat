@@ -35,6 +35,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -178,6 +179,12 @@ class DensityOfStates:
 # --------------------------------------------------------------------------
 
 
+#: How much of the ``(nE, nk, nbnd)`` smearing intermediate is formed at once,
+#: bytes. The energies are independent, so the grid is walked in blocks of
+#: about this size.
+SMEARING_CHUNK_BYTES = 16 * 2**20
+
+
 def _smearing_scheme(ngauss: int):
     """``dos_g``: a normalised delta per level, summed with the k-point weights.
 
@@ -185,12 +192,32 @@ def _smearing_scheme(ngauss: int):
     ``D(E)`` is its derivative, which is ``w0gauss`` over ``degauss`` -- exactly
     ``dos_g``'s expression, but reached by differentiating rather than by
     transcribing a second formula. The intermediate is ``(nE, nk, nbnd)``, five
-    orders of magnitude smaller than the tetrahedron one, so it is not chunked.
+    orders of magnitude smaller than the tetrahedron one, **and it is still
+    chunked over energies**: it is formed several times over (the argument,
+    both smearing functions and their temporaries), so on eight-atom silicon's
+    216 k-points and 1214 energies a projected DOS put 197 MB on the card for a
+    33.6 MB array, and it grows as ``nE nk nbnd``. The blocks hold
+    :data:`SMEARING_CHUNK_BYTES` of it at a time.
     """
 
     def scheme(eigenvalues, weights, energies, *, degauss=None, projections=None, **_):
         if not degauss:
             raise ValueError("a smearing density of states needs a positive degauss")
+        per_energy = max(1, eigenvalues.size * eigenvalues.dtype.itemsize)
+        step = max(1, SMEARING_CHUNK_BYTES // per_energy)
+        if energies.shape[0] > step:
+            parts = [block(eigenvalues, weights, energies[start:start + step],
+                           degauss, projections)
+                     for start in range(0, energies.shape[0], step)]
+            return (jnp.concatenate([dos for dos, _ in parts]),
+                    jnp.concatenate([n for _, n in parts]))
+        return block(eigenvalues, weights, energies, degauss, projections)
+
+    # Compiled, so the argument and the smearing function's own temporaries
+    # fuse into the one ``(nE, nk, nbnd)`` operand the contraction reads,
+    # instead of each being a buffer of its own.
+    @jax.jit
+    def block(eigenvalues, weights, energies, degauss, projections):
         x = (energies[:, None, None] - eigenvalues[None, :, :]) / degauss
         if projections is None:
             dos = jnp.einsum("k,ekb->e", weights, w0gauss(x, ngauss)) / degauss
