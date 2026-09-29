@@ -7928,7 +7928,7 @@ what its own `Calculation` keeps resident per k-point (0.089 MB measured before 
 went real, 0.065 after): the 0.11 MB per k-point left unattributed in "A band path that
 keeps no states" was this build's transient.
 
-## Fourteen memory items, validated on the CPU; four numbers and one refusal (2026-09-29)
+## Fourteen memory items, validated on the CPU; five numbers and one refusal (2026-09-29)
 
 `GPU-MEMORY-NEXT.md` items 3, 4, 5, 7, 10, 11, 12, 15, 17, 19, 20, 23, 24 and 25 landed in one
 day. Each is held to round-off (or bit-identity) against the route it replaces on the CPU,
@@ -7968,8 +7968,21 @@ small on every augmented spiral here and the scanned route's per-chunk radial in
 not; it was reverted, the same outcome `MEMORY-AUDIT.md` A4 and A11 record for two other
 prescribed fixes.
 
-**What the chunked force and stress cost on the CPU is not yet timed.** They are exact
-(<= 3e-14 against the single pass on eight regimes, and `test_forces.py`/`test_stress.py`
-pass in memory mode against `pw.x`), and the tape they remove is item 3's
-`nk (npwx nkb + npwx nat + nbnd npwx npol) x 16 B`; the card measurement is item 1 of the
-list's remaining order.
+**The chunked force and stress on the card** (item 3). Exact (<= 7e-14 against the single
+pass on eight regimes; `test_forces.py`/`test_stress.py` pass in memory mode against
+`pw.x`). `benchmarks/si8-1k.in` at `ecutwfc = 20` with `nosym`, one atom displaced, memory
+mode (the store streams, one k-point per chunk), `tools`-free script, one process per
+point, the second of two chunked runs taken (the first is a compile-cache miss and reads up
+to 33 MB higher -- this card's sign of that effect):
+
+| k-points | SCF peak | force, single | force, chunked | stress, single | stress, chunked |
+|---:|---:|---:|---:|---:|---:|
+| 27 | 35.0 MB | 73.9 MB, 0.26 s | **35.0 MB**, 1.5 s | 94.1 MB, 1.0 s | **57.5 MB**, 2.2 s |
+| 64 | 39.9 MB | 167.8 MB, 0.32 s | **39.9 MB**, 2.9 s | 220.8 MB, 1.3 s | **62.6 MB**, 4.2 s |
+
+The force now adds nothing to the SCF's own peak and the stress about 22 MB whatever the
+mesh; both cost the dispatch of two walks over the chunks. **The first version was not
+this**: it moved the whole calculation and sliced a chunk out of it, so `at_strain` rebuilt
+every k-point's projector core inside each chunk's backward pass -- 129.1 MB and 19.8 s for
+the stress at 64 k-points. Running each pass on the chunk's own row-subset calculation
+(`Calculation.at_rows`) is what made it flat.
