@@ -905,6 +905,7 @@ class Calculator:
 
         result = self._ground_state("a projected density of states")
         pdos, states = run_pdos(self.system, self.pseudos, result, grid=grid,
+                                calculation=self.calculation,
                                 **self._defaults_for(run_pdos, options))
         self.pdos_states = states
         return pdos
@@ -1306,6 +1307,7 @@ class Calculator:
         result = self._ground_state("structure factors")
         return run_structure_factors(
             self.system, self.pseudos, result, hmax=hmax,
+            calculation=self.calculation,
             **self._call_options(run_structure_factors, result, options,
                                  exclude=SCF_ONLY_OPTIONS)
         )
@@ -1331,7 +1333,7 @@ class Calculator:
         if height is not None:
             options = {**options, "height": height}
         return run_stm(
-            self.system, self.pseudos, result,
+            self.system, self.pseudos, result, calculation=self.calculation,
             **self._call_options(run_stm, result, options,
                                  exclude=SCF_ONLY_OPTIONS)
         )
@@ -1364,7 +1366,7 @@ class Calculator:
         if energies is not None:
             options = {**options, "energies": energies}
         return run_sts(
-            self.system, self.pseudos, result,
+            self.system, self.pseudos, result, calculation=self.calculation,
             **self._call_options(run_sts, result, options,
                                  exclude=SCF_ONLY_OPTIONS)
         )
@@ -1401,7 +1403,7 @@ class Calculator:
         if height is not None:
             options = {**options, "height": height}
         return run_vertical_transport(
-            self.system, self.pseudos, result,
+            self.system, self.pseudos, result, calculation=self.calculation,
             **self._call_options(run_vertical_transport, result, options,
                                  exclude=SCF_ONLY_OPTIONS)
         )
@@ -1435,7 +1437,7 @@ class Calculator:
         if height is not None:
             options = {**options, "height": height}
         return run_momentum_transport(
-            self.system, self.pseudos, result,
+            self.system, self.pseudos, result, calculation=self.calculation,
             **self._call_options(run_momentum_transport, result, options,
                                  exclude=SCF_ONLY_OPTIONS)
         )

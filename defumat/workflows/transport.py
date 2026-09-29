@@ -69,7 +69,7 @@ from defumat.transport.substrate import (
 )
 from defumat.system.kpoints import KPoints, is_reduced
 from defumat.system.kpoints import for_spin as kpoints_for_spin
-from defumat.workflows.nscf import fixed_density_states
+from defumat.workflows.nscf import fixed_density_states, threaded_calculation
 from defumat.workflows.stm import _plane, _refuse_what_has_no_fermi_level
 
 __all__ = ["run_vertical_transport", "run_momentum_transport",
@@ -111,6 +111,7 @@ def run_vertical_transport(
     nbnd: int | None = None,
     conv_thr: float = 1.0e-6,
     k_batch: int | None | str = "default",
+    calculation=None,
 ) -> VerticalTransport:
     """``T(r; E)``: the vertical transmission from a tip at ``r`` to a substrate.
 
@@ -179,6 +180,10 @@ def run_vertical_transport(
             and is the largest thing this workflow allocates. See
             :func:`_assemble` for why an accelerator's default does not bound
             the second one.
+        calculation: the SCF's own :class:`~defumat.scf.driver.Calculation`,
+            used on its own k-set or moved to ``kpoints`` with ``at_kpoints``
+            rather than a second one built beside it
+            (:func:`~defumat.workflows.nscf.threaded_calculation`).
 
     Returns a :class:`~defumat.transport.green.VerticalTransport`.
     """
@@ -224,8 +229,17 @@ def run_vertical_transport(
     if kpoints is None and grid is not None:
         kpoints = whole_grid(system, grid, shift)
 
-    if kpoints is None:
-        calculation = Calculation(system, pseudos, k_batch=k_batch)
+    # The caller's own calculation, when handed one, is used on its own k-set or
+    # moved to ``kpoints`` rather than a second one built beside it
+    # (``GPU-MEMORY-NEXT.md`` item 20); ``resolve`` remembers which branch the
+    # k-set asked for, since a moved calculation carries it and ``kpoints``
+    # comes back ``None``.
+    resolve = kpoints is not None
+    calculation, system, kpoints, k_batch = threaded_calculation(
+        calculation, system, kpoints, k_batch)
+    if not resolve:
+        if calculation is None:
+            calculation = Calculation(system, pseudos, k_batch=k_batch)
         eigenvalues = np.asarray(result.eigenvalues_by_spin)
         wavefunctions = result.wavefunctions
         levels = {"fermi_energy": result.fermi_energy,
@@ -238,6 +252,7 @@ def run_vertical_transport(
             becsum=tuple(getattr(result, "becsum", ()) or ()),
             field=getattr(result, "magnetic_field", None),
             field_scale=getattr(result, "field_scale", None),
+            calculation=calculation,
         )
         eigenvalues = np.asarray(eigenvalues)
         _, levels = calculation.occupations(eigenvalues)
@@ -334,6 +349,7 @@ def run_momentum_transport(
     conv_thr: float = 1.0e-6,
     k_batch: int | None | str = "default",
     report=None,
+    calculation=None,
 ) -> MomentumTransport:
     """``W(k; E)``: which k-points the tunnelling current comes out of.
 
@@ -379,6 +395,10 @@ def run_momentum_transport(
             the reason :func:`whole_grid` gives.
         k_batch: the band solve's batching dial. The assembly here allocates
             only ``(nk, nbnd, nbnd)``, so it needs no bound of its own.
+        calculation: the SCF's own :class:`~defumat.scf.driver.Calculation`,
+            used on its own k-set or moved to ``kpoints`` with ``at_kpoints``
+            rather than a second one built beside it
+            (:func:`~defumat.workflows.nscf.threaded_calculation`).
         report: a ``callable(str)`` -- ``print``, or a logger -- told what this
             is about to do and what it has finished. ``None`` is silent, which
             is what every test wants and is therefore the default.
@@ -429,8 +449,17 @@ def run_momentum_transport(
         kpoints = whole_grid(system, grid, shift)
 
     say = report if callable(report) else (lambda _line: None)
-    if kpoints is None:
-        calculation = Calculation(system, pseudos, k_batch=k_batch)
+    # The caller's own calculation, when handed one, is used on its own k-set or
+    # moved to ``kpoints`` rather than a second one built beside it
+    # (``GPU-MEMORY-NEXT.md`` item 20); ``resolve`` remembers which branch the
+    # k-set asked for, since a moved calculation carries it and ``kpoints``
+    # comes back ``None``.
+    resolve = kpoints is not None
+    calculation, system, kpoints, k_batch = threaded_calculation(
+        calculation, system, kpoints, k_batch)
+    if not resolve:
+        if calculation is None:
+            calculation = Calculation(system, pseudos, k_batch=k_batch)
         eigenvalues = np.asarray(result.eigenvalues_by_spin)
         wavefunctions = result.wavefunctions
         levels = {"fermi_energy": result.fermi_energy,
@@ -439,8 +468,10 @@ def run_momentum_transport(
             "no band solve")
     else:
         # The shape of the work, before an hour of silence rather than after it.
+        # A moved calculation carries the k-set, and ``kpoints`` is then None.
+        solving = system.kpoints if kpoints is None else kpoints
         wanted = nbnd or system.nbnd
-        say(f"solving {kpoints.nk} k-points"
+        say(f"solving {solving.nk} k-points"
             + (f" x {wanted} bands" if wanted else "")
             + " at fixed density -- the whole grid, because W(k) is a function "
               "of k. This is the long part and it cannot report from inside: "
@@ -453,12 +484,13 @@ def run_momentum_transport(
             becsum=tuple(getattr(result, "becsum", ()) or ()),
             field=getattr(result, "magnetic_field", None),
             field_scale=getattr(result, "field_scale", None),
+            calculation=calculation,
         )
         eigenvalues = np.asarray(eigenvalues)
         _, levels = calculation.occupations(eigenvalues)
         elapsed = time.time() - began
         say(f"  solved in {elapsed:.0f} s "
-            f"({elapsed / max(1, kpoints.nk):.2f} s per k-point)")
+            f"({elapsed / max(1, solving.nk):.2f} s per k-point)")
 
     if wavefunctions is None:
         raise ValueError(

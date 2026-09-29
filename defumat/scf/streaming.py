@@ -47,12 +47,32 @@ import numpy as np
 from defumat.batching import k_chunks
 
 __all__ = ["stream_start", "stream_diagonalize", "stream_densities",
-           "stream_eigenvalues"]
+           "stream_eigenvalues", "stream_states", "stream_becsum",
+           "is_host_store"]
 
 
 def _to_device(array):
     """One chunk across: a numpy slice made contiguous, then ``device_put``."""
     return jax.device_put(np.ascontiguousarray(array))
+
+
+def is_host_store(wavefunctions) -> bool:
+    """Whether ``wavefunctions`` is a streamed store: a ``(nspin, nk, nbnd, ndim)`` numpy array.
+
+    What a streamed SCF hands back as ``SCFResult.wavefunctions``, and what a
+    streamed fixed-density solve that keeps its states returns. A consumer that
+    reads the states whole should walk it with :func:`~defumat.batching.k_chunks`
+    rather than ``jnp.asarray`` it, which puts the whole set back on the device
+    (``GPU-MEMORY-NEXT.md`` item 4).
+    """
+    return isinstance(wavefunctions, np.ndarray) and wavefunctions.ndim == 4
+
+
+def _chunk_weights(weights: np.ndarray, rows, live: int):
+    """One chunk's weights, with a padded chunk's repeated rows weighted zero."""
+    w = weights[:, rows].copy()
+    w[:, live:] = 0.0
+    return jnp.asarray(w)
 
 
 def stream_start(calculation, hamiltonians, nbnd: int, span=None) -> np.ndarray:
@@ -134,12 +154,33 @@ def stream_eigenvalues(calculation, hamiltonians, nbnd: int, ethr):
     :meth:`~defumat.scf.driver.Calculation.diagonalize` returns them with
     ``return_steps``.
     """
+    eigenvalues, _, steps, unsettled = _stream_from_scratch(
+        calculation, hamiltonians, nbnd, ethr, keep=False)
+    return eigenvalues, steps, unsettled
+
+
+def stream_states(calculation, hamiltonians, nbnd: int, ethr):
+    """:func:`stream_eigenvalues` for a caller that keeps the states, in host memory.
+
+    ``c_bands_nscf`` with ``save_buffer`` after each k-point: the solve is the
+    same chunk walk, and each chunk's states are written into a numpy store
+    rather than dropped, so a projected density of states or an STM image on a
+    long mesh holds one chunk on the device and the set in host RAM -- the
+    store a streamed SCF keeps (:func:`is_host_store`).
+
+    Returns ``(eigenvalues, store, steps, unsettled)``, the order
+    :meth:`~defumat.scf.driver.Calculation.diagonalize` uses.
+    """
+    return _stream_from_scratch(calculation, hamiltonians, nbnd, ethr, keep=True)
+
+
+def _stream_from_scratch(calculation, hamiltonians, nbnd, ethr, *, keep):
     extra = {} if calculation.david is None else {"david": calculation.david}
     nspin, nk = len(hamiltonians), hamiltonians[0].nk
-    eigenvalues = steps = unsettled = None
+    eigenvalues = store = steps = unsettled = None
     for spin, hamiltonian in enumerate(hamiltonians):
         for rows, live in k_chunks(nk, calculation.k_batch):
-            energies, _, taken, stuck = calculation.eigensolver(
+            energies, states, taken, stuck = calculation.eigensolver(
                 hamiltonian, nbnd, None, ethr, k_batch=calculation.k_batch,
                 return_steps=True, indices=jnp.asarray(rows), **extra,
             )
@@ -149,35 +190,58 @@ def stream_eigenvalues(calculation, hamiltonians, nbnd: int, ethr):
                 steps = np.empty((nspin, nk), np.asarray(taken).dtype)
                 unsettled = np.empty((nspin, nk), np.asarray(stuck).dtype)
             live_rows = rows[:live]
+            if keep:
+                states = np.asarray(states)
+                if store is None:
+                    store = np.empty((nspin, nk) + states.shape[1:], states.dtype)
+                store[spin, live_rows] = states[:live]
+            del states
             eigenvalues[spin, live_rows] = energies[:live]
             steps[spin, live_rows] = np.asarray(taken)[:live]
             unsettled[spin, live_rows] = np.asarray(stuck)[:live]
-    return eigenvalues, steps, unsettled
+    return eigenvalues, store, steps, unsettled
 
 
 def _add(total, part):
     return part if total is None else jax.tree_util.tree_map(jnp.add, total, part)
 
 
+def stream_becsum(calculation, store: np.ndarray, weights) -> tuple:
+    """``becsum`` from the streamed store, symmetrised once: ``()`` on a norm-conserving run."""
+    if not calculation.is_ultrasoft:
+        return ()
+    weights = np.asarray(weights)
+    total = None
+    for rows, live in k_chunks(store.shape[1], calculation.k_batch):
+        total = _add(total, calculation.becsum(
+            _to_device(store[:, rows]), _chunk_weights(weights, rows, live),
+            rows=rows, symmetrize=False))
+    return calculation.finish_becsum(total)
+
+
 def stream_densities(calculation, store: np.ndarray, weights, *,
-                     kinetic: bool = False, hubbard: bool = False):
+                     kinetic: bool = False, hubbard: bool = False,
+                     becsum_=None):
     """``(becsum, rho, tau, ns)`` from the streamed store, each finished once.
 
     ``tau`` and ``ns`` are ``None`` unless asked for. ``becsum`` is ``()`` on a
     norm-conserving run, as :meth:`~defumat.scf.driver.Calculation.becsum`
-    returns it. The values are those of the whole-set calls to round-off: the
-    chunks change only the order the k contributions are added in.
+    returns it; a caller that already has it passes it as ``becsum_``, and it
+    is then used for the augmentation charge and handed back rather than
+    accumulated again. The values are those of the whole-set calls to
+    round-off: the chunks change only the order the k contributions are added
+    in.
     """
     weights = np.asarray(weights)
     nk = store.shape[1]
-    becsum_ = rho = tau = ns = None
+    accumulate = becsum_ is None
+    rho = tau = ns = None
     for rows, live in k_chunks(nk, calculation.k_batch):
-        w = weights[:, rows].copy()
-        w[:, live:] = 0.0
-        w = jnp.asarray(w)
+        w = _chunk_weights(weights, rows, live)
         psi = _to_device(store[:, rows])
-        becsum_ = _add(becsum_, calculation.becsum(psi, w, rows=rows,
-                                                   symmetrize=False))
+        if accumulate:
+            becsum_ = _add(becsum_, calculation.becsum(psi, w, rows=rows,
+                                                       symmetrize=False))
         rho = _add(rho, calculation.smooth_density(psi, w, rows=rows))
         if kinetic:
             tau = _add(tau, calculation.kinetic_energy_density(
@@ -186,7 +250,8 @@ def stream_densities(calculation, store: np.ndarray, weights, *,
             ns = _add(ns, calculation.occupation_matrix(
                 psi, w, rows=rows, symmetrize=False))
         del psi
-    becsum_ = calculation.finish_becsum(becsum_) if becsum_ else becsum_
+    if accumulate and becsum_:
+        becsum_ = calculation.finish_becsum(becsum_)
     rho = calculation.finish_density(rho, becsum_)
     if kinetic:
         tau = calculation.finish_kinetic_energy_density(tau)

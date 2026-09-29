@@ -64,7 +64,9 @@ from defumat.workflows.dos import (
     get_dos_scheme,
     is_tetrahedron_scheme,
 )
-from defumat.workflows.nscf import NSCFResult, denser_grid, fixed_density_states
+from defumat.workflows.nscf import (
+    NSCFResult, denser_grid, fixed_density_states, threaded_calculation,
+)
 
 __all__ = [
     "ProjectedDOS",
@@ -680,6 +682,7 @@ def run_pdos(
     conv_thr: float = 1.0e-6,
     chunk: int | None = None,
     k_batch: int | None | str = "default",
+    calculation=None,
 ) -> tuple[ProjectedDOS, NSCFResult]:
     """A converged SCF in, ``(ProjectedDOS, NSCFResult)`` out.
 
@@ -690,12 +693,25 @@ def run_pdos(
     Without ``grid`` or ``kpoints`` the SCF's own states are projected on the
     SCF's own k-points, which is what ``projwfc.x`` does when it is pointed at a
     ``pw.x`` ``outdir``. With either, the bands are re-solved there first.
+
+    ``calculation`` is the SCF's own, used on its own k-set or moved to
+    ``kpoints`` rather than a second one built beside it
+    (:func:`~defumat.workflows.nscf.threaded_calculation`).
     """
     if kpoints is None and grid is not None:
         kpoints = denser_grid(system, grid, shift)
 
-    if kpoints is None:
-        calculation = Calculation(system, pseudos, k_batch=k_batch)
+    # The caller's own calculation, when handed one, is used on its own k-set or
+    # moved to ``kpoints`` rather than a second one built beside it
+    # (``GPU-MEMORY-NEXT.md`` item 20); ``resolve`` remembers which branch the
+    # k-set asked for, since a moved calculation carries it and ``kpoints``
+    # comes back ``None``.
+    resolve = kpoints is not None
+    calculation, system, kpoints, k_batch = threaded_calculation(
+        calculation, system, kpoints, k_batch)
+    if not resolve:
+        if calculation is None:
+            calculation = Calculation(system, pseudos, k_batch=k_batch)
         eigenvalues = jnp.asarray(result.eigenvalues_by_spin)
         wavefunctions = result.wavefunctions
         occupations = np.asarray(
@@ -724,6 +740,7 @@ def run_pdos(
             becsum=tuple(getattr(result, "becsum", ()) or ()),
             field=getattr(result, "magnetic_field", None),
             field_scale=getattr(result, "field_scale", None),
+            calculation=calculation,
         )
         eigenvalues = jnp.asarray(eigenvalues)
         wg, levels = calculation.occupations(eigenvalues)

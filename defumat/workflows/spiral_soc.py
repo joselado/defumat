@@ -99,6 +99,7 @@ from dataclasses import dataclass
 import jax.numpy as jnp
 import numpy as np
 
+from defumat.batching import k_chunks
 from defumat.pseudo.upf import Pseudopotential
 from defumat.system.builder import System
 
@@ -227,41 +228,53 @@ def spiral_expectation(calculation, wavefunctions, weights, delta_d) -> tuple:
     :func:`spiral_spin_orbit_energy` so that the contraction can be held
     against the operator's blocks without a diagonalisation in between.
     """
-    # A spiral's projectors have ``2 nk`` rows, the up component's ``k + q/2``
-    # first and the down component's ``k - q/2`` after them.
-    vkb = jnp.asarray(calculation.projectors.vkb)
-    nk = vkb.shape[0] // 2
-    npwx = vkb.shape[1]
-    psi = jnp.asarray(wavefunctions)
-    components = psi.reshape(psi.shape[:-1] + (2, npwx))
-    # ``<beta_i(k + q/2)|u_up>`` and ``<beta_i(k - q/2)|u_dn>``: each component
-    # on the projectors of its own sphere, which is what
-    # ``SpinorHamiltonian._project`` does for a spiral.
-    up = jnp.einsum("kgi,skng->skni", vkb[:nk].conj(), components[..., 0, :])
-    down = jnp.einsum("kgi,skng->skni", vkb[nk:].conj(), components[..., 1, :])
-
     delta = np.asarray(delta_d)
     # ``dD^a = (1/2) sum_st (sigma_a)_ts dD^{st}``, Hermitian in ``(i, j)``.
     parts = jnp.asarray(0.5 * np.einsum("ats,stij->aij", _PAULI, delta))
     trace = 0.5 * (delta[0, 0] + delta[1, 1])
-    weights = jnp.asarray(weights)
+    all_weights = np.asarray(weights)
+    nk = all_weights.shape[1]
 
     def expectation(left, operator, right):
         return jnp.einsum("skni,aij,sknj->askn", left.conj(), operator, right)
 
-    diagonal = jnp.real(expectation(up, parts, up) - expectation(down, parts, down))
-    by_k = jnp.einsum("askn,skn->ka", diagonal, weights)
-
     # What the spiral layout would make of ``dD``'s transverse blocks: the
     # ``(up, dn)`` and ``(dn, up)`` contractions across the two spheres.
     # Carried beside the energy, never added to it.
-    def across(left, block, right):
-        return jnp.sum(weights * jnp.einsum(
+    def across(left, block, right, w):
+        return jnp.sum(w * jnp.einsum(
             "skni,ij,sknj->skn", left.conj(), jnp.asarray(block), right))
 
-    dropped = np.asarray([across(up, delta[0, 1], down),
-                          across(down, delta[1, 0], up)])
-    return (np.asarray(jnp.sum(by_k, axis=0)), np.asarray(by_k), dropped,
+    # Every quantity is a sum over k, so the k axis is walked a chunk at a
+    # time: one chunk's states and projectors on the device, never a streamed
+    # store or the whole-k ``vkb`` stacked (``GPU-MEMORY-NEXT.md`` items 4, 7).
+    by_k = np.empty((nk, 3))
+    dropped = np.zeros(2, dtype=complex)
+    for rows, live in k_chunks(nk, calculation.k_batch):
+        w = all_weights[:, rows].copy()
+        w[:, live:] = 0.0
+        w = jnp.asarray(w)
+        # A spiral's chunk of projectors has ``2 len(rows)`` rows, the up
+        # component's ``k + q/2`` first and the down component's ``k - q/2``
+        # after them (:meth:`~defumat.scf.driver.Calculation.basis_rows`).
+        vkb = jnp.asarray(calculation.projectors_at(rows))
+        npwx = vkb.shape[1]
+        psi = jnp.asarray(wavefunctions[:, rows])
+        components = psi.reshape(psi.shape[:-1] + (2, npwx))
+        # ``<beta_i(k + q/2)|u_up>`` and ``<beta_i(k - q/2)|u_dn>``: each
+        # component on the projectors of its own sphere, which is what
+        # ``SpinorHamiltonian._project`` does for a spiral.
+        up = jnp.einsum("kgi,skng->skni", vkb[:len(rows)].conj(),
+                        components[..., 0, :])
+        down = jnp.einsum("kgi,skng->skni", vkb[len(rows):].conj(),
+                          components[..., 1, :])
+        diagonal = jnp.real(expectation(up, parts, up)
+                            - expectation(down, parts, down))
+        by_k[rows[:live]] = np.asarray(
+            jnp.einsum("askn,skn->ka", diagonal, w))[:live]
+        dropped += np.asarray([across(up, delta[0, 1], down, w),
+                               across(down, delta[1, 0], up, w)])
+    return (by_k.sum(axis=0), by_k, dropped,
             float(np.max(np.abs(trace))))
 
 

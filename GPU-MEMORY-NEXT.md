@@ -92,6 +92,25 @@ below:
   the same resume's peak 220.8 -> 71.1 MB, the setup's own.
 * **Item 12, third bullet**: the third-derivative drivers stack each field block once and
   drop the dead displacement block; lifetimes only, not measured on this card.
+* **Item 4** (post-SCF consumers of a streamed store, 2026-09-29): `Calculation.density` and
+  `Calculation.becsum` walk a numpy store a chunk at a time (`streaming.stream_densities`,
+  `stream_becsum`), which covers the STM image, the windowed structure factor and a
+  relaxation's density extrapolation without touching them; `atomic_projections`, the site
+  moments' density matrix, the force theorem's projected decomposition, its first-order
+  spin-orbit energy and the spiral's `spiral_expectation` walk the chunks themselves (the
+  last two also read `projectors_at(rows)`, not the whole-k `vkb`); the three sum-over-states
+  workflows slice their bands before the upload. `test_streaming.py` holds the host and
+  device routes to 1e-12 on ultrasoft silicon with a short last chunk. **Not done**: the
+  in-loop orientation diagnostics, the magnetic torque's derivatives (they are item 3's
+  shape), the response stack (item 2) and the ultracell. **Not measured on the card.**
+* **Item 1, second half**: a fixed-density solve that keeps its states streams them into a
+  numpy store where the store streams (`streaming.stream_states`), so a PDOS or STM on a
+  denser grid holds one chunk on the device; the force theorem without `projected` now asks
+  for energies only. Same test file, round-off and the same span. Not measured on the card.
+* **Item 20, second part**: `run_pdos`, `run_stm`, `run_sts`, `run_vertical_transport`,
+  `run_momentum_transport` and `run_structure_factors` take `calculation=` (the SCF's own,
+  on its k-set or moved with `at_kpoints`), and the `Calculator` passes its own. Left: the
+  spiral scan and `DFTSource._base`. Not measured on the card.
 * **Item 1** (the fixed-density solve): an eigenvalue-only solve streams where the store
   does and keeps no states. On eight-atom Si the band path's peak is 102.8 -> 44.8 MB at 200
   points and 383.4 -> 163.6 MB at 800, for 2-3 per cent in time. **Still 0.20 MB per
@@ -255,14 +274,14 @@ on every perturbation of every iteration and never read. On Si8 at 216 k that is
 **Done 2026-09-28** (220.8 -> 71.1 MB on the resume measured). `mmap_mode` was not needed:
 the host copy is what a streamed run holds anyway.
 
-The resident half is fixed (above). The transient half is not: `load_state` does
+Both halves are fixed. What the survey found, for the record: `load_state` did
 `jnp.asarray` on every array including the wavefunctions (`checkpoint.py:89-90`,
-`:293-295`) and `promote_wavefunctions` does `jnp.asarray(psi)`, concatenating with zeros
+`:293-295`) and `promote_wavefunctions` did `jnp.asarray(psi)`, concatenating with zeros
 for a 2 -> 4 promotion (`continuation.py:903`, `:960-968`). So a streamed resume or
-continuation puts the whole set (12.10 GB on NiBr2, doubled by a promotion) on the device
-at iteration 1. **Fix**: keep them numpy when the run streams (`np.load(mmap_mode='r')`
-even), and `np.concatenate` for the promotion; `stream_start` already slices the span per
-chunk.
+continuation put the whole set (12.10 GB on NiBr2, doubled by a promotion) on the device
+at iteration 1. Now `load_state` keeps the wavefunctions, eigenvalues and occupations as
+numpy and the promotion concatenates in numpy when its source is a host array
+(`continuation.py:907`).
 
 ---
 

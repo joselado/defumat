@@ -114,7 +114,7 @@ def run_shg(
                - np.asarray(eigenvalues)[..., nbnd - 1])
     )
     eigenvalues = eigenvalues[..., :nbnd]
-    wavefunctions = jnp.asarray(wavefunctions)[..., :nbnd, :]
+    wavefunctions = jnp.asarray(wavefunctions[..., :nbnd, :])
     potential = calculation.potential(jnp.asarray(density))
     # PAW's one-centre coefficients are built from ``becsum`` and multiply
     # ``vkb(k)``, so they belong to ``dH/dk`` as much as to ``H``.

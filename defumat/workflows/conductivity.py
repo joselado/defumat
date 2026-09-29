@@ -140,7 +140,7 @@ def run_conductivity(
                np.asarray(eigenvalues)[..., nbnd - 1])
     )
     eigenvalues = eigenvalues[..., :nbnd]
-    wavefunctions = jnp.asarray(wavefunctions)[..., :nbnd, :]
+    wavefunctions = jnp.asarray(wavefunctions[..., :nbnd, :])
     # ``field``/``field_scale`` reach the states above and must reach the
     # potential too: accepting an argument and dropping it half way is how the
     # input's field gets rebuilt at full strength over a ground state that

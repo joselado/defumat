@@ -55,6 +55,7 @@ def run_structure_factors(
     core: bool = False,
     method: str = "fft",
     k_batch="default",
+    calculation=None,
 ) -> StructureFactors:
     """``F(H)`` for the charge and the magnetization of a converged run.
 
@@ -83,11 +84,15 @@ def run_structure_factors(
             core rather than the true one, so it moves the low-``|H|``
             reflections towards an all-electron value and cannot reach it.
         method: ``"fft"`` or the definition, ``"direct"``.
+        k_batch, calculation: the batching dial, and the SCF's own
+            :class:`~defumat.scf.driver.Calculation` -- used for ``window``'s
+            density rather than a second one built beside it.
 
     Returns a :class:`~defumat.diffraction.structure_factor.StructureFactors`.
     """
     density = np.asarray(result.density if window is None else
-                         _windowed_density(system, pseudos, result, window, k_batch))
+                         _windowed_density(system, pseudos, result, window, k_batch,
+                                           calculation))
     if density.ndim != 4:
         raise ValueError(
             f"the density must be (nspin_mag, n1, n2, n3), got {density.shape}")
@@ -169,7 +174,8 @@ def _require_a_representable_cutoff(system, hmax: float) -> None:
         )
 
 
-def _windowed_density(system, pseudos, result, window, k_batch):
+def _windowed_density(system, pseudos, result, window, k_batch,
+                      calculation=None):
     """The density of the states inside ``window`` -- Elk's ``wsfac``."""
     from defumat.scf.driver import Calculation
 
@@ -193,5 +199,8 @@ def _windowed_density(system, pseudos, result, window, k_batch):
             f"no state has an eigenvalue in [{lo}, {hi}] Ry: the window is "
             "empty and the density would be zero"
         )
-    calculation = Calculation(system, pseudos, k_batch=k_batch)
+    # The SCF's own calculation when it is handed one, rather than a second
+    # with its own augmentation table (``GPU-MEMORY-NEXT.md`` item 20).
+    if calculation is None:
+        calculation = Calculation(system, pseudos, k_batch=k_batch)
     return calculation.density(result.wavefunctions, weights * inside)

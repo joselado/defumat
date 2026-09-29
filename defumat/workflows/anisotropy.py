@@ -104,6 +104,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from defumat.batching import k_chunks
 from defumat.pseudo.projectors import projector_channels
 from defumat.pseudo.upf import Pseudopotential
 from defumat.scf.continuation import (
@@ -574,9 +575,12 @@ def run_force_theorem(
         for values in becsum
     )
 
+    # The states are read only by the projected decomposition; without it the
+    # solve keeps the energies alone and, where the store streams, never stacks
+    # the states (``GPU-MEMORY-NEXT.md`` item 1).
     calculation, system, eigenvalues, wavefunctions = fixed_density_states(
         system, pseudos, rotated, nbnd=nbnd, conv_thr=conv_thr, k_batch=k_batch,
-        becsum=rotated_becsum,
+        becsum=rotated_becsum, keep_states=bool(projected),
     )
 
     wg, levels = calculation.occupations(jnp.asarray(eigenvalues))
@@ -777,7 +781,9 @@ def _project_band_energy(calculation, system, eigenvalues, wg, wavefunctions, ef
     )
     spinors = calculation._as_spinors(atomic)  # (nk, 2 n, 2 npwx)
 
-    psi = jnp.asarray(wavefunctions)[0]  # (nk, nbnd, 2 npwx)
+    # One k-point's states on the device at a time: a streamed store is a host
+    # array and is not moved across whole (``GPU-MEMORY-NEXT.md`` item 4).
+    psi = wavefunctions[0]  # (nk, nbnd, 2 npwx)
     eigenvalues = np.asarray(eigenvalues)[0]
     wg = np.asarray(wg)[0]
     weight = wg * (eigenvalues - float(ef_0))  # (nk, nbnd)
@@ -789,7 +795,8 @@ def _project_band_energy(calculation, system, eigenvalues, wg, wavefunctions, ef
         overlap = jnp.conj(phi) @ sphi.T
         transform = lowdin_transform(overlap)
         projectors = _apply_transform(transform, jnp.transpose(sphi, (1, 0)))
-        proj0 = jnp.einsum("gi,bg->ib", jnp.conj(projectors), psi[ik])
+        proj0 = jnp.einsum("gi,bg->ib", jnp.conj(projectors),
+                           jnp.asarray(psi[ik]))
         # ``lsym`` is refused with ``lforcet`` (``projwfc.f90:152``) and the run
         # is ``nosym`` anyway, so there is no ``sym_proj_k`` average here.
         total += np.asarray(jnp.abs(proj0) ** 2 @ jnp.asarray(weight[ik]))
@@ -1137,11 +1144,21 @@ def frozen_expectation(
         calculation.vltot, calculation.nspin_mag
     )
     delta_d, delta_qq = _first_order_operator(calculation, total)
-    nonlocal_, overlap = _spinor_projector_energies(
-        jnp.asarray(wavefunctions), calculation.projectors.vkb,
-        delta_d, delta_qq, jnp.asarray(wg), jnp.asarray(eigenvalues),
-    )
-    return float(nonlocal_ - overlap)
+    # A sum over k, walked a chunk at a time: one chunk's projectors and states
+    # on the device, never the whole-k ``vkb`` or a streamed store stacked
+    # (``GPU-MEMORY-NEXT.md`` items 4 and 7). Padded rows carry zero weight.
+    wg, eigenvalues = np.asarray(wg), np.asarray(eigenvalues)
+    energy = 0.0
+    for rows, live in k_chunks(wg.shape[1], calculation.k_batch):
+        weights = wg[:, rows].copy()
+        weights[:, live:] = 0.0
+        nonlocal_, overlap = _spinor_projector_energies(
+            jnp.asarray(wavefunctions[:, rows]),
+            calculation.projectors_at(rows), delta_d, delta_qq,
+            jnp.asarray(weights), jnp.asarray(eigenvalues[:, rows]),
+        )
+        energy += float(nonlocal_ - overlap)
+    return energy
 
 
 def _first_order_operator(calculation, total) -> tuple:

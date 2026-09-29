@@ -298,28 +298,41 @@ def _site_density_matrix(calculation, result, projectors, channels):
     """
     import jax.numpy as jnp
 
-    psi = jnp.asarray(result.wavefunctions)          # (nspin, nk, nbnd, ndim)
+    from defumat.scf.streaming import is_host_store
+
+    psi = result.wavefunctions                        # (nspin, nk, nbnd, ndim)
     weights = np.asarray(result.occupations)          # wg, k-weights folded in
     if weights.ndim == 2:
         weights = weights[None]
     nspin = calculation.nspin
     natomwfc = projectors.shape[2]
 
+    def project(channel, columns):
+        """``(nk, nbnd, natomwfc)``: ``<phi|psi>`` for one channel's columns."""
+        if not is_host_store(psi):
+            return np.asarray(jnp.einsum(
+                "kgi,kbg->kbi", projectors.conj(),
+                jnp.asarray(psi)[channel, :, :, columns]))
+        # A streamed store crosses one k-point at a time rather than whole
+        # (``GPU-MEMORY-NEXT.md`` item 4).
+        return np.stack([
+            np.asarray(jnp.einsum(
+                "gi,bg->bi", projectors[ik].conj(),
+                jnp.asarray(np.ascontiguousarray(psi[channel, ik, :, columns]))))
+            for ik in range(psi.shape[1])
+        ])
+
     coefficients = []  # one (nk, nbnd, natomwfc) per spin component
     if nspin == 4:
         npwx = calculation.basis.planewaves.npwx
         for component in range(2):
-            block = psi[0, :, :, component * npwx:(component + 1) * npwx]
             coefficients.append(
-                np.asarray(jnp.einsum("kgi,kbg->kbi", projectors.conj(), block))
-            )
+                project(0, slice(component * npwx, (component + 1) * npwx)))
         band_weights = [np.asarray(weights[0]), np.asarray(weights[0])]
     else:
         for spin in range(2):
             channel = min(spin, nspin - 1)
-            coefficients.append(np.asarray(
-                jnp.einsum("kgi,kbg->kbi", projectors.conj(), psi[channel])
-            ))
+            coefficients.append(project(channel, slice(None)))
         if nspin == 1:
             # ``wg`` already carries ``degspin = 2``; half of it belongs to each
             # component, and the two are the same state.

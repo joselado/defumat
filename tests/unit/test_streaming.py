@@ -16,6 +16,7 @@ since the CPU client reports no memory statistics.
 
 from __future__ import annotations
 
+import types
 import warnings
 
 import jax.numpy as jnp
@@ -284,3 +285,99 @@ def test_an_eigenvalue_only_solve_streams_and_keeps_no_states(k_batch=3):
         system, calculator.pseudos, result.density, path, wfc_store="stream",
         keep_states=False, **common)
     assert dropped is None
+
+
+# ---------------------------------------------------------------------------
+# consumers of a streamed store
+
+#: The eight-k-point cell on an ultrasoft dataset, so ``becsum`` and the
+#: augmentation charge are read through each chunk's own projectors.
+SILICON_8K_US = SILICON_8K.replace(
+    "ecutwfc = 12.0,", "ecutwfc = 12.0, ecutrho = 96.0,").replace(
+    "conv_thr = 1.0d-12", "conv_thr = 1.0d-8").replace(
+    "Si.pz-vbc.UPF", "Si.pz-n-rrkjus_psl.0.1.UPF")
+
+
+def test_a_host_store_is_read_a_chunk_at_a_time():
+    """A numpy store gives the whole-set density, ``becsum`` and projections.
+
+    What a streamed SCF hands back is a host array, and the consumers after
+    it -- an STM image, a windowed structure factor, a relaxation's density
+    extrapolation, a projected DOS, the site moments -- walk it a chunk at a
+    time instead of moving it to the device whole (``GPU-MEMORY-NEXT.md``
+    item 4). The same states in both forms, a short last chunk at
+    ``k_batch = 3``: round-off.
+    """
+    from defumat.hubbard.projectors import build_atomic_projectors
+    from defumat.projwfc.angular_momentum import _site_density_matrix
+    from defumat.projwfc.channels import projection_channels
+    from defumat.projwfc.projections import atomic_projections
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        calculation = Calculator.from_text(SILICON_8K_US, PSEUDO, k_batch=3,
+                                           announce=False).calculation
+    # The starting states rather than converged ones: the two routes are
+    # compared at the same states, and no SCF is needed for that.
+    potential = calculation.potential(calculation.starting_density())
+    device = calculation.starting_wavefunctions(
+        calculation.hamiltonian(potential.v_scf), 4)
+    host = np.array(device)
+    kweights = np.asarray(calculation.system.kpoints.weights)
+    weights = jnp.asarray(np.broadcast_to(kweights[None, :, None], (1, 8, 4)))
+    result = types.SimpleNamespace(wavefunctions=device, occupations=weights[0])
+
+    for whole, chunked in zip(calculation.becsum(device, weights),
+                              calculation.becsum(host, weights)):
+        np.testing.assert_allclose(np.asarray(chunked), np.asarray(whole),
+                                   atol=1e-13)
+    np.testing.assert_allclose(np.asarray(calculation.density(host, weights)),
+                               np.asarray(calculation.density(device, weights)),
+                               atol=1e-12)
+    np.testing.assert_allclose(atomic_projections(calculation, host),
+                               atomic_projections(calculation, device),
+                               atol=1e-12)
+    # The site moments' density matrix rather than the moments: silicon's
+    # ``<L>`` and ``<S>`` are zero by symmetry, which both routes would pass.
+    system = calculation.system
+    projectors = np.asarray(build_atomic_projectors(
+        calculation.pseudos, system.structure, system.cell,
+        calculation.basis.smooth, calculation.basis.planewaves,
+        calculation.basis_kpoints, calculation._overlap))
+    channels = projection_channels(calculation.pseudos, system.structure)
+    whole = _site_density_matrix(calculation, result, projectors, channels)
+    streamed = _site_density_matrix(
+        calculation, types.SimpleNamespace(wavefunctions=host,
+                                           occupations=result.occupations),
+        projectors, channels)
+    assert np.max(np.abs(whole)) > 0.1
+    np.testing.assert_allclose(streamed, whole, atol=1e-12)
+
+
+def test_a_streamed_solve_that_keeps_its_states_keeps_them_on_the_host(k_batch=3):
+    """``fixed_density_states`` in a streamed store: the whole-set solve, in host memory."""
+    from defumat.system.kpoints import KPoints
+    from defumat.workflows.nscf import fixed_density_states
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        calculator = Calculator.from_text(SILICON_8K, PSEUDO, k_batch=k_batch,
+                                          announce=False)
+        result = calculator.get_scf()
+    system = calculator.system
+    path = KPoints.from_cartesian(
+        np.linspace([0.0, 0.0, 0.0], [0.5, 0.5, 0.5], 7), np.full(7, 1.0 / 7))
+    common = dict(nbnd=8, conv_thr=1e-10, k_batch=k_batch)
+    calculation, _, streamed, host = fixed_density_states(
+        system, calculator.pseudos, result.density, path, wfc_store="stream",
+        **common)
+    _, _, whole, device = fixed_density_states(
+        system, calculator.pseudos, result.density, path, **common)
+    np.testing.assert_allclose(streamed, np.asarray(whole), atol=1e-9)
+    assert isinstance(host, np.ndarray) and host.shape == device.shape
+    # The same states up to a phase and, inside a multiplet, a rotation (rule
+    # D4): each k-point's two sets span the same space.
+    for ik in range(path.nk):
+        overlap = host[0, ik] @ np.asarray(device[0, ik]).conj().T
+        occupied = np.linalg.svd(overlap[:4, :4], compute_uv=False)
+        np.testing.assert_allclose(occupied, 1.0, atol=1e-6)

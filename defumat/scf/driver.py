@@ -111,7 +111,8 @@ from defumat.scf.continuation import (
     ContinuedState, continued_state, depolarize_tau,
 )
 from defumat.scf.streaming import (
-    stream_densities, stream_diagonalize, stream_start,
+    is_host_store, stream_becsum, stream_densities, stream_diagonalize,
+    stream_start,
 )
 from defumat.scf.density import (
     becsum,
@@ -3684,6 +3685,11 @@ class Calculation:
         """
         if not self.is_ultrasoft:
             return ()
+        if rows is None and symmetrize and is_host_store(wavefunctions):
+            # A streamed store (``SCFResult.wavefunctions`` in memory mode on a
+            # card) is walked a chunk at a time rather than put on the device
+            # whole (``GPU-MEMORY-NEXT.md`` item 4); the sum is the same.
+            return stream_becsum(self, wavefunctions, weights)
         vkb = self.projectors.vkb if rows is None else self.projectors_at(rows)
         if self.noncolin:
             values = self._noncollinear_becsum(wavefunctions, weights, vkb)
@@ -4242,7 +4248,16 @@ class Calculation:
         dense grid is where the density is mixed, where the potential is built
         from it, and -- once there is an augmentation charge -- where the rest
         of it is added.
+
+        A streamed store -- a numpy ``(nspin, nk, nbnd, ndim)`` array, which is
+        what ``SCFResult.wavefunctions`` is in memory mode on a card -- is
+        walked a chunk at a time (:func:`~defumat.scf.streaming.stream_densities`)
+        rather than moved to the device whole, and the density is the same to
+        round-off (``GPU-MEMORY-NEXT.md`` item 4).
         """
+        if is_host_store(wavefunctions):
+            return stream_densities(self, wavefunctions, weights,
+                                    becsum_=becsum_)[1]
         rho = self.smooth_density(wavefunctions, weights)
         if becsum_ is None:
             becsum_ = self.becsum(wavefunctions, weights)

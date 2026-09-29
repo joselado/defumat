@@ -290,13 +290,21 @@ def fixed_density_states(
     # stops following the length of the path or the mesh. ``wfc_store`` is
     # resolved through the calculation's memory mode, as the SCF resolves it;
     # on a CPU that is ``device`` and nothing here changes.
-    if not keep_states and resolve_wfc_store(
-            wfc_store, calculation.memory_mode) == "stream":
-        from defumat.scf.streaming import stream_eigenvalues
+    #
+    # **A caller that keeps the states gets them in host memory** on the same
+    # route: each chunk's states go into a numpy store as its solve returns, the
+    # store a streamed SCF keeps, and the consumers walk it a chunk at a time
+    # (``Calculation.density``, the projections) rather than stacking it.
+    if resolve_wfc_store(wfc_store, calculation.memory_mode) == "stream":
+        from defumat.scf.streaming import stream_eigenvalues, stream_states
 
-        eigenvalues, steps, notcnv = stream_eigenvalues(
-            calculation, hamiltonians, nbnd, ethr)
-        wavefunctions = None
+        if keep_states:
+            eigenvalues, wavefunctions, steps, notcnv = stream_states(
+                calculation, hamiltonians, nbnd, ethr)
+        else:
+            eigenvalues, steps, notcnv = stream_eigenvalues(
+                calculation, hamiltonians, nbnd, ethr)
+            wavefunctions = None
     else:
         eigenvalues, wavefunctions, steps, notcnv = calculation.diagonalize(
             hamiltonians, nbnd, None, ethr, return_steps=True)

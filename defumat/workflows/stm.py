@@ -55,7 +55,9 @@ from defumat.stm.spectrum import (
     spectrum_weights,
 )
 from defumat.stm.plane import PlotPlane, plot_plane
-from defumat.workflows.nscf import denser_grid, fixed_density_states
+from defumat.workflows.nscf import (
+    denser_grid, fixed_density_states, threaded_calculation,
+)
 from defumat.system.kpoints import is_reduced
 
 __all__ = ["run_stm", "run_sts", "sample_spectrum",
@@ -91,6 +93,7 @@ def run_stm(
     nbnd: int | None = None,
     conv_thr: float = 1.0e-6,
     k_batch: int | None | str = "default",
+    calculation=None,
 ) -> STMImage:
     """A Tersoff-Hamann STM image of a converged run.
 
@@ -145,6 +148,10 @@ def run_stm(
         grid, shift, kpoints, nbnd, conv_thr: re-solve the bands at fixed
             density on a denser k-set first.
         k_batch: the k-axis batching dial.
+        calculation: the SCF's own :class:`~defumat.scf.driver.Calculation`,
+            used on its own k-set or moved to ``kpoints`` with ``at_kpoints``
+            rather than a second one built beside it
+            (:func:`~defumat.workflows.nscf.threaded_calculation`).
 
     Returns an :class:`~defumat.stm.image.STMImage`.
     """
@@ -169,8 +176,17 @@ def run_stm(
     if kpoints is None and grid is not None:
         kpoints = denser_grid(system, grid, shift)
 
-    if kpoints is None:
-        calculation = Calculation(system, pseudos, k_batch=k_batch)
+    # The caller's own calculation, when handed one, is used on its own k-set or
+    # moved to ``kpoints`` rather than a second one built beside it
+    # (``GPU-MEMORY-NEXT.md`` item 20); ``resolve`` remembers which branch the
+    # k-set asked for, since a moved calculation carries it and ``kpoints``
+    # comes back ``None``.
+    resolve = kpoints is not None
+    calculation, system, kpoints, k_batch = threaded_calculation(
+        calculation, system, kpoints, k_batch)
+    if not resolve:
+        if calculation is None:
+            calculation = Calculation(system, pseudos, k_batch=k_batch)
         eigenvalues = np.asarray(result.eigenvalues_by_spin)
         wavefunctions = result.wavefunctions
         levels = {"fermi_energy": result.fermi_energy,
@@ -183,6 +199,7 @@ def run_stm(
             becsum=tuple(getattr(result, "becsum", ()) or ()),
             field=getattr(result, "magnetic_field", None),
             field_scale=getattr(result, "field_scale", None),
+            calculation=calculation,
         )
         eigenvalues = np.asarray(eigenvalues)
         _, levels = calculation.occupations(eigenvalues)
@@ -282,6 +299,7 @@ def run_sts(
     nbnd: int | None = None,
     conv_thr: float = 1.0e-6,
     k_batch: int | None | str = "default",
+    calculation=None,
 ) -> STMSpectrum:
     """``dI/dV(r, V)``: a tunnelling spectrum at a point, a line or a plane.
 
@@ -316,6 +334,10 @@ def run_sts(
             than :func:`~defumat.workflows.nscf.denser_grid`, for the reason the
             wedge is refused below.
         k_batch: the k-axis batching dial, for the band solve.
+        calculation: the SCF's own :class:`~defumat.scf.driver.Calculation`,
+            used on its own k-set or moved to ``kpoints`` with ``at_kpoints``
+            rather than a second one built beside it
+            (:func:`~defumat.workflows.nscf.threaded_calculation`).
 
     Returns an :class:`~defumat.stm.spectrum.STMSpectrum`.
     """
@@ -336,8 +358,17 @@ def run_sts(
 
     if kpoints is None and grid is not None:
         kpoints = whole_grid(system, grid, shift)
-    if kpoints is None:
-        calculation = Calculation(system, pseudos, k_batch=k_batch)
+    # The caller's own calculation, when handed one, is used on its own k-set or
+    # moved to ``kpoints`` rather than a second one built beside it
+    # (``GPU-MEMORY-NEXT.md`` item 20); ``resolve`` remembers which branch the
+    # k-set asked for, since a moved calculation carries it and ``kpoints``
+    # comes back ``None``.
+    resolve = kpoints is not None
+    calculation, system, kpoints, k_batch = threaded_calculation(
+        calculation, system, kpoints, k_batch)
+    if not resolve:
+        if calculation is None:
+            calculation = Calculation(system, pseudos, k_batch=k_batch)
         eigenvalues = np.asarray(result.eigenvalues_by_spin)
         wavefunctions = result.wavefunctions
         levels = {"fermi_energy": result.fermi_energy,
@@ -350,6 +381,7 @@ def run_sts(
             becsum=tuple(getattr(result, "becsum", ()) or ()),
             field=getattr(result, "magnetic_field", None),
             field_scale=getattr(result, "field_scale", None),
+            calculation=calculation,
         )
         eigenvalues = np.asarray(eigenvalues)
         _, levels = calculation.occupations(eigenvalues)

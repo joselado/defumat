@@ -51,10 +51,11 @@ import numpy as np
 
 from defumat.basis.gvectors import refuse_gamma_storage
 
-from defumat.batching import map_k
+from defumat.batching import k_chunks, map_k
 from defumat.hubbard.projectors import build_atomic_projectors
 from defumat.paw.symmetry import harmonic_rotations
 from defumat.projwfc.channels import AtomicChannel, projection_channels
+from defumat.scf.streaming import is_host_store
 from defumat.system.symmetry import atom_mapping, spin_rotations
 
 __all__ = [
@@ -337,6 +338,23 @@ def atomic_projections(
 
     # One spin channel at a time, and the k axis walked by the calculation's own
     # batching dial inside each -- the same shape ``sum_band`` has (rule R6).
+    if is_host_store(wavefunctions):
+        # A streamed store stays in host memory and crosses a chunk at a time
+        # (``GPU-MEMORY-NEXT.md`` item 4); the padded rows are dropped.
+        nk = wavefunctions.shape[1]
+        out = None
+        for spin, states in enumerate(wavefunctions):
+            for rows, live in k_chunks(nk, calculation.k_batch):
+                chunk = np.asarray(map_k(
+                    one_kpoint,
+                    (projectors[jnp.asarray(rows)],
+                     jnp.asarray(np.ascontiguousarray(states[rows]))),
+                    batch=calculation.k_batch))
+                if out is None:
+                    out = np.empty((len(wavefunctions), nk) + chunk.shape[1:],
+                                   chunk.dtype)
+                out[spin, rows[:live]] = chunk[:live]
+        return out
     return np.stack([
         np.asarray(map_k(one_kpoint, (projectors, states), batch=calculation.k_batch))
         for states in jnp.asarray(wavefunctions)
