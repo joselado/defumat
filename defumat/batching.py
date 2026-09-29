@@ -329,8 +329,9 @@ from ._envcompat import environ_get
 
 __all__ = ["DEFAULT_K_BATCH", "resolve_k_batch", "map_k", "sum_k",
            "DEFAULT_BAND_BATCH", "resolve_band_batch", "resolve_pair_batch",
+           "resolve_w_batch",
            "map_bands",
-           "sum_bands", "map_axis",
+           "sum_bands", "map_axis", "map_windows",
            "PROJECTOR_STORES", "resolve_projectors",
            "WFC_STORES", "resolve_wfc_store", "park_wavefunctions",
            "fetch_wavefunctions",
@@ -612,6 +613,46 @@ def map_axis(fn, xs, *, batch: int | None):
     return lax.map(fn, xs, batch_size=batch)
 
 
+def map_windows(fn, xs, *, batch: int | None):
+    """:func:`map_axis`, with every chunk written into one output array.
+
+    ``lax.map(..., batch_size=n)`` over an axis ``n`` does not divide computes
+    the short tail separately and **concatenates** it onto the scanned part,
+    which is a second output-sized buffer: measured on ``chi_0``'s frequency
+    axis (200 frequencies, ``nm = 115``) a chunk of 32 held **68.0 MB** of
+    temporaries where the whole axis held 40.4, while a chunk of 8, which
+    divides it, held 6.7. Here the chunks start at ``0, n, 2n, ...`` and the
+    last one at ``len - n``, overlapping its predecessor, and each is written
+    into the output in place (``dynamic_update_slice`` on a scan carry); the
+    overlap is recomputed from the same inputs at the same shape, so it
+    writes the same values again. Use it where the output is large and the
+    axis length is arbitrary -- a frequency grid -- rather than for the k
+    axis, whose chunks :func:`k_chunks` pads instead.
+    """
+    n = _leading(xs)
+    if n == 1 or batch is None or batch >= n:
+        return map_axis(fn, xs, batch=batch)
+    if batch == 1 or n % batch == 0:
+        return map_axis(fn, xs, batch=batch)  # a scan stacks in place
+    batched = jax.vmap(fn)
+    first = jax.tree_util.tree_map(lambda a: a[:batch], xs)
+    template = jax.eval_shape(batched, first)
+    out = jax.tree_util.tree_map(
+        lambda s: jnp.zeros((n,) + s.shape[1:], s.dtype), template)
+    starts = jnp.minimum(jnp.arange(-(-n // batch)) * batch, n - batch)
+
+    def write(out, start):
+        chunk = jax.tree_util.tree_map(
+            lambda a: lax.dynamic_slice_in_dim(a, start, batch), xs)
+        done = batched(chunk)
+        return jax.tree_util.tree_map(
+            lambda o, d: lax.dynamic_update_slice_in_dim(o, d, start, 0),
+            out, done), None
+
+    out, _ = lax.scan(write, out, starts)
+    return out
+
+
 def map_k(fn, xs, *, batch: int | None):
     """``fn`` at every k-point, results stacked on a leading k axis.
 
@@ -760,6 +801,48 @@ def resolve_pair_batch(requested: int | None | str = "default", *,
         return platform
     fit = max(1, int(PAIR_BUDGET_BYTES // max(1, 2 * box_bytes)))
     return None if fit >= npairs else fit
+
+
+#: What a sum-over-states spectrum's **frequency** axis may hold in flight on an
+#: accelerator when nothing chose a chunk (``GPU-MEMORY-NEXT.md`` item 12,
+#: ``MEMORY-AUDIT.md`` A10). The frequencies are independent -- ``chi_0`` is a
+#: sum of per-frequency weights on the same pair vectors, and the Dyson
+#: equation is one matrix solve per frequency -- so a chunk bounds the
+#: per-frequency temporaries and never moves a number beyond round-off. Not
+#: yet tuned on a card.
+W_BUDGET_BYTES = 256 * 2**20
+
+
+def resolve_w_batch(requested: int | None | str = "default", *,
+                    block_bytes: int, nw: int) -> int | None:
+    """The frequency axis's chunk: an argument, then ``DEFUMAT_W_BATCH``, then a budget.
+
+    ``block_bytes`` is what one frequency's temporaries cost at the call site
+    -- ``2 npairs nm`` complex for ``chi_0``'s pair-weighted block, a few
+    ``nm^2`` for a Dyson solve. On a CPU the default is the whole axis, which
+    is what every validated spectrum was computed with; on an accelerator it
+    is the largest chunk whose blocks fit :data:`W_BUDGET_BYTES`, ``None``
+    when that is every frequency. ``all``/``0`` in the environment, and
+    ``None`` as an argument, ask for the whole axis anywhere.
+    """
+    if isinstance(requested, str):
+        if requested != "default":
+            value = _named(requested)
+            return None if value is None or value >= nw else value
+        setting = _from_environment("DEFUMAT_W_BATCH")
+        if setting is not _UNSET:
+            return None if setting is None or setting >= nw else setting
+        if _backend() == "cpu":
+            return None
+        fit = max(1, int(W_BUDGET_BYTES // max(1, block_bytes)))
+        return None if fit >= nw else fit
+    if requested is None:
+        return None
+    value = int(requested)
+    if value < 1:
+        raise ValueError(
+            f"w_batch must be a positive integer or None, got {requested!r}")
+    return None if value >= nw else value
 
 
 def sum_bands(fn, xs, *, batch: int | None | str = "default"):

@@ -80,12 +80,18 @@ it was divided by have moved.
 * the **stored matrix**, ``nw nm^2`` complex, which is what the caller keeps.
   With ``nm = 115`` (silicon at ``ecut_response = 8``) and 150 frequencies that
   is 25 MB, and it is quadratic in the response cutoff.
-* the **assembly**, ``nw (2 npairs) nm`` complex in flight per k-chunk, which is
-  the ``einsum`` below and is the larger of the two: 100 MB at the same sizes.
-  It is a stated trade rather than an accident -- the alternative is one matrix
-  product per frequency, which halves the flop rate on CPU -- and the frequency
-  axis is the dial that would fix it if it ever mattered. ``PERFORMANCE.md``
-  carries the measurement.
+* the **assembly**, the ``einsum`` below, which is the larger of the two. Over
+  the whole frequency axis XLA contracts it through whichever intermediate is
+  smaller -- ``(nw, 2 npairs, nm)`` when ``nw < nm``, ``(2 npairs, nm, nm)``
+  otherwise -- and at 60 bands, ``nm = 115`` and 200 frequencies that is a
+  90 MB block of a **131 MB** temporary per k-point (compiled, CPU). It is a
+  stated trade rather than an accident -- the alternative is one matrix product
+  per frequency, which halves the flop rate on CPU -- and the frequency axis is
+  the dial that bounds it: ``w_batch`` frequencies at a time hold ``w_batch``
+  blocks of ``(2 npairs, nm)``, **32.4 MB at 32 and 8.7 MB at 8** on the same
+  shapes (``GPU-MEMORY-NEXT.md`` item 12). The whole axis is the CPU default;
+  an accelerator's is budgeted (:func:`~defumat.batching.resolve_w_batch`).
+  ``PERFORMANCE.md`` carries the time.
 
 The transforms are ``nk npairs`` of them, one per occupied-empty pair, and the
 **pair densities are a working set of their own**: one is a whole complex field
@@ -116,7 +122,10 @@ import numpy as np
 
 from defumat.basis.fft import g_to_r, r_to_g
 from defumat.basis.gvectors import refuse_gamma_storage
-from defumat.batching import map_axis, resolve_k_batch, resolve_pair_batch, sum_k
+from defumat.batching import (
+    map_axis, map_windows, resolve_k_batch, resolve_pair_batch,
+    resolve_w_batch, sum_k,
+)
 from defumat.response.velocity import VelocityOperator
 from defumat.units import E2, FPI
 from defumat.system.kpoints import is_reduced
@@ -390,6 +399,7 @@ def independent_response(
     scissor: float = 0.0,
     k_batch: int | None | str = "default",
     pair_batch: int | None | str = "default",
+    w_batch: int | None | str = "default",
 ) -> ChiZero:
     """``v^1/2 chi_0 v^1/2`` over a response sphere and a frequency grid.
 
@@ -427,6 +437,14 @@ def independent_response(
             and the default is a chunk budgeted to about 256 MB of boxes
             (:func:`~defumat.batching.resolve_pair_batch`). Every chunk goes
             through the same transform, so the answer does not depend on it.
+        w_batch: how many **frequencies** each k-point's assembly forms at
+            once. The whole axis (the CPU default) is one contraction whose
+            intermediate is ``2 npairs nm min(nw, nm)`` complex; a chunk of
+            ``n`` forms ``n`` pair-weighted blocks, ``2 npairs nm`` each, and
+            contracts them -- one matrix product per frequency, as the module
+            docstring's trade describes. On an accelerator the default is
+            budgeted (:func:`~defumat.batching.resolve_w_batch`). The
+            frequencies are independent, so it moves nothing beyond round-off.
 
     Returns:
         A :class:`ChiZero`. Nothing is symmetrised: on the full grid there is
@@ -468,9 +486,14 @@ def independent_response(
     volume = calculation.system.cell.volume
     mask = jnp.asarray(calculation.basis.planewaves.mask)
     batch = resolve_k_batch(k_batch)
+    itemsize = np.dtype(precision.complex).itemsize
     pairs = resolve_pair_batch(
         pair_batch, npairs=int(rows.size),
-        box_bytes=int(np.prod(grid)) * np.dtype(precision.complex).itemsize)
+        box_bytes=int(np.prod(grid)) * itemsize)
+    # One frequency's pair-weighted block, ``(2 npairs, nm)`` complex.
+    chunk = resolve_w_batch(
+        w_batch, nw=int(zomega.shape[0]),
+        block_bytes=2 * int(rows.size) * sphere.nm * itemsize)
 
     def one_k(arrays):
         psi, fft_index, band_mask, eig, occupation, element = arrays
@@ -481,7 +504,7 @@ def independent_response(
         )
         # ``(nw, nm, nm)``: one matrix product per frequency, the pair axis
         # contracted away. This is the whole frequency cost of the phase.
-        return jnp.einsum("wp,pa,pb->wab", scalars, vectors, jnp.conj(vectors))
+        return _assemble(scalars, vectors, chunk)
 
     x = sum_k(
         one_k,
@@ -497,6 +520,30 @@ def independent_response(
         nocc=nocc,
         nbnd=nbnd,
     )
+
+
+def _assemble(scalars, vectors, batch):
+    """``(nw, nm, nm)``: ``sum_p s_wp v_pa conj(v_pb)``, ``batch`` frequencies at a time.
+
+    ``batch = None`` is one ``einsum`` over the whole axis, and XLA contracts
+    it through ``v_pa conj(v_pb)`` first -- a ``(2 npairs, nm, nm)`` block,
+    measured at 90 MB of a 131 MB temporary on silicon at ``ecut_response =
+    8`` with 60 bands and 200 frequencies -- whenever ``nw`` exceeds ``nm``,
+    and through ``s_wp v_pa``, ``(nw, 2 npairs, nm)``, otherwise. A chunk forms
+    ``s_wp v_pa`` for its own frequencies only and contracts that with
+    ``conj(v)``, so what is in flight is ``batch`` blocks of ``(2 npairs,
+    nm)`` whatever ``nw`` and ``nm`` are (``GPU-MEMORY-NEXT.md`` item 12). The
+    frequencies are independent, so the chunk moves nothing beyond the order
+    of a sum.
+    """
+    conjugate = jnp.conj(vectors)
+    if batch is None or batch >= scalars.shape[0]:
+        return jnp.einsum("wp,pa,pb->wab", scalars, vectors, conjugate)
+
+    def one_frequency(weights):
+        return (weights[:, None] * vectors).T @ conjugate
+
+    return map_windows(one_frequency, scalars, batch=batch)
 
 
 def _pairs(nocc: int, nbnd: int):

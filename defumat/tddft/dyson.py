@@ -28,15 +28,29 @@ its exit test is data-dependent. **Failure to converge is an error**, not a
 warning -- ``tddftlr.f90`` stops at ``maxit = 500`` and so does this.
 
 **The kernel is static and the spectrum is not.** ``F`` is built once, from the
-``omega = 0`` slice, and used at every frequency -- so the iteration costs one
-matrix solve per frequency per pass, and the physics costs one ``chi_0``.
+``omega = 0`` slice, and used at every frequency -- and the bootstrap reads
+``eps^-1`` at that slice alone, and so does the convergence test. So for a
+static kernel (every one registered here, :attr:`~defumat.tddft.kernels.
+XCKernel.static`) the fixed point is iterated on **the one frequency it
+depends on**, and the whole axis is screened once with the kernel it
+converged to: the same ``F``, the same history and the same ``eps^-1`` to
+round-off, for one matrix solve per pass instead of ``nw``, and without ``nw``
+copies of ``F``. The final screening walks the frequencies ``w_batch`` at a
+time (:func:`~defumat.batching.resolve_w_batch`), so only one chunk's
+temporaries are in flight (``GPU-MEMORY-NEXT.md`` item 12, ``MEMORY-AUDIT.md``
+A10); the physics still costs one ``chi_0``.
 """
 
 from __future__ import annotations
 
-import equinox as eqx
-import jax.numpy as jnp
+from functools import partial
 
+import equinox as eqx
+import jax
+import jax.numpy as jnp
+import numpy as np
+
+from defumat.batching import resolve_w_batch
 from defumat.tddft.kernels import get_kernel
 from defumat.units import FPI
 
@@ -54,7 +68,9 @@ class DysonSolution(eqx.Module):
 
     #: ``(nw, nm, nm)`` -- the inverse dielectric matrix.
     epsilon_inverse: jnp.ndarray
-    #: ``(nw, nm, nm)`` -- the symmetrised kernel ``v^-1/2 f_xc v^-1/2``.
+    #: ``(nw, nm, nm)`` -- the symmetrised kernel ``v^-1/2 f_xc v^-1/2``; for
+    #: a static kernel (every one registered here) ``(1, nm, nm)``, the one
+    #: matrix that is used at every frequency, which broadcasts against them.
     fxc: jnp.ndarray
     #: ``(nw, 3, 3)`` -- the macroscopic tensor, local fields included.
     epsilon: jnp.ndarray
@@ -90,6 +106,7 @@ def solve_dyson(
     tolerance: float = TOLERANCE,
     max_iterations: int = MAX_ITERATIONS,
     verbose: bool = False,
+    w_batch: int | None | str = "default",
 ) -> DysonSolution:
     """Solve ``eps^-1 = 1 + X (1 - X - F X)^-1`` with the named kernel.
 
@@ -101,14 +118,55 @@ def solve_dyson(
         static_index: which frequency is ``omega = 0``. The bootstrap kernel is
             built from that slice alone, and ``init3.f90`` puts the point there
             deliberately -- carrying ``i eta``, not zero.
+        w_batch: how many frequencies are screened at once
+            (:func:`~defumat.batching.resolve_w_batch`): the whole axis on a
+            CPU, a budgeted chunk on an accelerator. Each frequency is its own
+            matrix solve, so it moves nothing beyond round-off.
     """
     rule = get_kernel(kernel)
     context = dict(context or {})
     context["static_index"] = static_index
 
     x = chi.x
-    identity = jnp.eye(x.shape[-1], dtype=x.dtype)
-    eps0 = identity[None] - x
+    nw, nm = int(x.shape[0]), int(x.shape[-1])
+    identity = jnp.eye(nm, dtype=x.dtype)
+    batch = resolve_w_batch(
+        w_batch, nw=nw,
+        # One frequency's temporaries: ``X``, ``F X``, the matrix inverted and
+        # its inverse.
+        block_bytes=4 * nm * nm * np.dtype(x.dtype).itemsize)
+
+    def screen(response, f):
+        """``1 + X (1 - X - F X)^-1`` at every frequency of ``response``.
+
+        ``f`` is ``(1, nm, nm)`` for a static kernel, broadcast against every
+        frequency, or one matrix per frequency. A chunked walk is a host loop
+        writing each chunk into one donated output, so what is in flight is
+        the output, ``X`` and one chunk's temporaries -- a compiled loop over
+        the same chunks kept a second copy of its output carry (measured:
+        60.0 MB against 40.4 for the whole axis, at 200 frequencies of
+        ``nm = 115`` in chunks of 32).
+        """
+        n = response.shape[0]
+        if batch is None or batch >= n:
+            return _screen(response, f, identity)
+        out = jnp.zeros_like(response)
+        for start in range(0, n, batch):
+            stop = min(start + batch, n)
+            part = _screen(response[start:stop],
+                           f if f.shape[0] == 1 else f[start:stop], identity)
+            out = _write(out, part, start)
+        return out
+
+    # A static kernel depends on the static slice alone, and so does the
+    # convergence test: iterate there, then screen the whole axis once.
+    if rule.static:
+        looped = eqx.tree_at(lambda c: c.x, chi,
+                             x[static_index:static_index + 1])
+        loop_context = {**context, "static_index": 0}
+        index = 0
+    else:
+        looped, loop_context, index = chi, context, static_index
 
     epsi = None
     fxc = None
@@ -119,17 +177,18 @@ def solve_dyson(
     passes = max_iterations if rule.self_consistent else (rule.iterations or 1)
     iteration = 0
     for iteration in range(1, passes + 1):
-        fxc = rule.build(chi, epsi, context)
+        fxc = rule.build(looped, epsi, loop_context)
+        if rule.static:
+            fxc = fxc[:1]  # one matrix, used at every frequency
         # ``genvfxc`` returns ``F X``, not ``F``: it right-multiplies by
         # ``vchi0`` before returning, and every consumer expects that.
-        fxc_x = fxc @ x
-        epsi = x @ jnp.linalg.inv(eps0 - fxc_x) + identity[None]
+        epsi = screen(looped.x, fxc)
 
         if not rule.self_consistent:
             continue
         # ``tddftlr.f90``'s test, transcribed including its shape: a difference
         # of *moduli* of one complex entry, the head of ``F X`` at omega = 0.
-        current = complex(fxc_x[static_index, 0, 0])
+        current = complex((fxc[index] @ looped.x[index])[0, 0])
         change = float("inf") if previous is None else abs(
             abs(previous) - abs(current)
         )
@@ -150,13 +209,16 @@ def solve_dyson(
             "any functional, so it is refused rather than returned"
         )
 
-    head = jnp.real(fxc[static_index, 0, 0])
-    head_x = jnp.real((fxc @ x)[static_index, 0, 0])
+    if rule.static:
+        epsi = screen(x, fxc)
+    at_static = fxc[index]
+    head = jnp.real(at_static[0, 0])
+    head_x = jnp.real((at_static @ x[static_index])[0, 0])
     return DysonSolution(
         epsilon_inverse=epsi,
         fxc=fxc,
         epsilon=macroscopic_tensor(epsi),
-        epsilon_no_local_fields=eps0[:, :3, :3],
+        epsilon_no_local_fields=identity[None, :3, :3] - x[:, :3, :3],
         iterations=iteration,
         converged=bool(converged),
         kernel=rule.name,
@@ -164,6 +226,18 @@ def solve_dyson(
         alpha_elk=float(-FPI * head_x),
         history=tuple(history),
     )
+
+
+@jax.jit
+def _screen(response, f, identity):
+    """``X (1 - X - F X)^-1 + 1`` for a block of frequencies; ``F`` broadcasts."""
+    return response @ jnp.linalg.inv(identity - response - f @ response) + identity
+
+
+@partial(jax.jit, donate_argnums=0)
+def _write(out, part, start):
+    """``out[start:start + len(part)] = part``, in the donated buffer."""
+    return jax.lax.dynamic_update_slice_in_dim(out, part, start, 0)
 
 
 def macroscopic_tensor(epsilon_inverse: jnp.ndarray) -> jnp.ndarray:

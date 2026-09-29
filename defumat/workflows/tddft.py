@@ -155,6 +155,7 @@ def run_absorption(
     conv_thr: float = 1.0e-10,
     k_batch: int | None | str = "default",
     pair_batch: int | None | str = "default",
+    w_batch: int | None | str = "default",
     static_residual: bool = True,
     tolerance: float = TOLERANCE,
     max_iterations: int = MAX_ITERATIONS,
@@ -204,6 +205,11 @@ def run_absorption(
             what decides the largest array a spectrum allocates; the default is
             the band dial. See
             :func:`~defumat.tddft.chi0.independent_response`.
+        w_batch: how many frequencies are in flight at once, in the ``chi_0``
+            assembly and in the Dyson screening. The whole axis on a CPU and a
+            budgeted chunk on an accelerator
+            (:func:`~defumat.batching.resolve_w_batch`); the frequencies are
+            independent, so it moves nothing beyond round-off.
     """
     from defumat.scf.driver import Calculation
 
@@ -243,6 +249,7 @@ def run_absorption(
         calculation, wavefunctions, eigenvalues, potential.v_scf,
         grid + 1j * imaginary, ecut_response=ecut_response, broadening=0.0,
         scissor=scissor, k_batch=k_batch, pair_batch=pair_batch,
+        w_batch=w_batch,
     )
 
     context = {}
@@ -254,7 +261,7 @@ def run_absorption(
 
     solution = solve_dyson(
         chi, kernel, context, static_index=1, tolerance=tolerance,
-        max_iterations=max_iterations, verbose=verbose,
+        max_iterations=max_iterations, verbose=verbose, w_batch=w_batch,
     )
 
     residual, rpa_static = None, None
@@ -262,7 +269,7 @@ def run_absorption(
         rpa_static, residual = _static_residual(
             calculation, wavefunctions, eigenvalues, density, chi,
             scissor=scissor, ecut_response=ecut_response, k_batch=k_batch,
-            pair_batch=pair_batch,
+            pair_batch=pair_batch, w_batch=w_batch,
             v_scf=potential.v_scf,
         )
 
@@ -300,7 +307,8 @@ def _default_nbnd(calculation) -> int:
 
 
 def _static_residual(calculation, wavefunctions, eigenvalues, density, chi, *,
-                     scissor, ecut_response, k_batch, v_scf, pair_batch="default"):
+                     scissor, ecut_response, k_batch, v_scf, pair_batch="default",
+                     w_batch="default"):
     """``eps_M(0)`` here in RPA, against the Sternheimer solve's RPA value.
 
     **Everything about this comparison has to match except the truncation**,
@@ -339,6 +347,6 @@ def _static_residual(calculation, wavefunctions, eigenvalues, density, chi, *,
         )
     # Index 0 is the unbroadened static point; the Sternheimer solve has no
     # broadening either, so the two are comparable without a limit being taken.
-    rpa = solve_dyson(chi, "rpa", {}, static_index=index)
+    rpa = solve_dyson(chi, "rpa", {}, static_index=index, w_batch=w_batch)
     here = float(np.real(np.diag(np.asarray(rpa.epsilon)[index])).mean())
     return here, here - sternheimer

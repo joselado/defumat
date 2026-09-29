@@ -243,3 +243,135 @@ def test_the_pair_densities_are_bounded_by_the_pair_dial():
     assert big - small > 0.5 * npairs * box
     assert small < 4 * nbnd * box
     assert np.abs(np.asarray(whole) - np.asarray(chunked)).max() < 1.0e-14
+
+
+# --- the frequency axis --------------------------------------------------------
+
+def test_the_frequency_dial_bounds_the_assembly_and_does_not_move_it():
+    """``chi_0``'s per-k assembly, whole axis against chunks of frequencies.
+
+    ``GPU-MEMORY-NEXT.md`` item 12. The whole-axis ``einsum`` is contracted
+    through ``v_pa conj(v_pb)`` whenever ``nw`` exceeds ``nm`` -- a ``(2 npairs,
+    nm, nm)`` block -- and a chunk forms only its own frequencies'
+    pair-weighted ``(2 npairs, nm)`` blocks. Two assertions, the two halves of
+    a dial: the compiler's temporary falls, and the matrix does not move
+    beyond the order of a sum. Seven frequencies in chunks of three, so the
+    last chunk is short.
+    """
+    import jax
+
+    from defumat.tddft.chi0 import _assemble
+
+    rng = np.random.default_rng(0)
+    nw, npairs2, nm = 7, 48, 20
+    scalars = jnp.asarray(rng.normal(size=(nw, npairs2))
+                          + 1j * rng.normal(size=(nw, npairs2)))
+    vectors = jnp.asarray(rng.normal(size=(npairs2, nm))
+                          + 1j * rng.normal(size=(npairs2, nm)))
+    whole = np.asarray(_assemble(scalars, vectors, None))
+    for batch in (3, 1):
+        chunked = np.asarray(_assemble(scalars, vectors, batch))
+        assert np.abs(chunked - whole).max() < 1e-12 * np.abs(whole).max()
+
+    def temporary(batch, nw=64, npairs2=96, nm=40):
+        s = jax.ShapeDtypeStruct((nw, npairs2), jnp.complex128)
+        v = jax.ShapeDtypeStruct((npairs2, nm), jnp.complex128)
+        compiled = jax.jit(lambda s, v: _assemble(s, v, batch)).lower(s, v).compile()
+        return compiled.memory_analysis().temp_size_in_bytes
+
+    block = 96 * 40 * 40 * 16   # the (2 npairs, nm, nm) contraction, 2.4 MB
+    assert temporary(None) > block
+    assert temporary(None) - temporary(4) > 0.5 * block
+
+
+def _synthetic_chi(nw: int = 7, nm: int = 8):
+    """A ``ChiZero`` whose static slice is negative definite, as ``X`` is."""
+    from defumat.tddft.chi0 import ChiZero, ResponseSphere
+
+    rng = np.random.default_rng(1)
+    sphere = ResponseSphere(
+        fft_index=jnp.arange(nm - 3), sqrt_coulomb=jnp.ones(nm - 3),
+        reflection=jnp.arange(nm - 3), miller=jnp.zeros((nm - 3, 3), int),
+        ecut=1.0,
+    )
+    a = rng.normal(size=(nm, nm)) + 1j * rng.normal(size=(nm, nm))
+    static = -(a @ a.conj().T) / nm * 0.8
+    omega = np.linspace(0.0, 0.5, nw)
+    x = np.stack([static / (1.0 - (w + 0.05j) ** 2) for w in omega])
+    return ChiZero(x=jnp.asarray(x), frequencies=jnp.asarray(omega),
+                   sphere=sphere, npairs=1, nocc=1, nbnd=2)
+
+
+def _whole_axis_dyson(chi, kernel, context, static_index):
+    """The Dyson solve as it was: every frequency on every pass.
+
+    Kept here as the reference the one-frequency fixed point is held against:
+    ``tddftlr.f90``'s loop over the whole axis, ``F`` built at every frequency.
+    """
+    rule = get_kernel(kernel)
+    context = {**context, "static_index": static_index}
+    x = chi.x
+    identity = jnp.eye(x.shape[-1], dtype=x.dtype)
+    eps0 = identity[None] - x
+    epsi, previous, iterations = None, None, 0
+    passes = 500 if rule.self_consistent else (rule.iterations or 1)
+    for iterations in range(1, passes + 1):
+        fxc = rule.build(chi, epsi, context)
+        fxc_x = fxc @ x
+        epsi = x @ jnp.linalg.inv(eps0 - fxc_x) + identity[None]
+        if not rule.self_consistent:
+            continue
+        current = complex(fxc_x[static_index, 0, 0])
+        if previous is not None and abs(abs(previous) - abs(current)) <= 1e-8:
+            break
+        previous = current
+    return epsi, fxc[static_index], iterations
+
+
+@pytest.mark.parametrize("kernel, context", [
+    ("rpa", {}), ("lrc", {"alpha": 0.2}), ("bootstrap-1", {}), ("bootstrap", {}),
+])
+def test_the_dyson_solve_iterates_one_frequency_and_screens_the_rest_in_chunks(
+        kernel, context):
+    """The fixed point on the static slice alone, then the axis in chunks.
+
+    A static kernel is built from ``eps^-1`` at ``omega = 0`` and nothing else,
+    and so is the convergence test, so iterating that one frequency reaches
+    the same ``F`` in the same number of passes; the rest of the axis is then
+    screened once, ``w_batch`` frequencies at a time. Held against the
+    whole-axis loop it replaced, with seven frequencies in chunks of three and
+    of one.
+    """
+    from defumat.tddft.dyson import solve_dyson
+
+    chi = _synthetic_chi()
+    epsi, fxc, iterations = _whole_axis_dyson(chi, kernel, context, 1)
+    for batch in (None, 3, 1):
+        solution = solve_dyson(chi, kernel, context, static_index=1,
+                               w_batch=batch)
+        assert solution.iterations == iterations
+        assert solution.fxc.shape == (1,) + fxc.shape
+        np.testing.assert_allclose(np.asarray(solution.fxc[0]), np.asarray(fxc),
+                                   atol=1e-12)
+        np.testing.assert_allclose(np.asarray(solution.epsilon_inverse),
+                                   np.asarray(epsi), atol=1e-12)
+
+
+def test_the_frequency_dial_chunks_on_a_card_and_not_on_a_cpu(monkeypatch):
+    """The accelerator default is a budget, and it fires; the CPU's is the axis."""
+    from defumat import batching
+
+    monkeypatch.delenv("DEFUMAT_W_BATCH", raising=False)
+    block = 2**20
+    monkeypatch.setattr(batching, "_backend", lambda: "cpu")
+    assert batching.resolve_w_batch(block_bytes=block, nw=1000) is None
+    monkeypatch.setattr(batching, "_backend", lambda: "gpu")
+    chunk = batching.resolve_w_batch(block_bytes=block, nw=1000)
+    assert chunk == batching.W_BUDGET_BYTES // block < 1000
+    assert batching.resolve_w_batch(block_bytes=block, nw=10) is None
+    assert batching.resolve_w_batch(8, block_bytes=block, nw=1000) == 8
+    assert batching.resolve_w_batch(None, block_bytes=block, nw=1000) is None
+    monkeypatch.setenv("DEFUMAT_W_BATCH", "5")
+    assert batching.resolve_w_batch(block_bytes=block, nw=1000) == 5
+    monkeypatch.setenv("DEFUMAT_W_BATCH", "all")
+    assert batching.resolve_w_batch(block_bytes=block, nw=1000) is None

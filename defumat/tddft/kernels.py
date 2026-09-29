@@ -83,7 +83,7 @@ class XCKernel:
     """
 
     def __init__(self, name, build, *, self_consistent=False, iterations=None,
-                 description=""):
+                 static=False, description=""):
         self.name = name
         self.build = build
         #: Whether the kernel has to be rebuilt from its own answer until it
@@ -91,6 +91,13 @@ class XCKernel:
         self.self_consistent = self_consistent
         #: A fixed number of passes for a kernel that is neither -- 211 is one.
         self.iterations = iterations
+        #: Whether ``F`` is the same matrix at every frequency and is built
+        #: from the ``static_index`` slice alone -- true of every kernel
+        #: registered here. :func:`~defumat.tddft.dyson.solve_dyson` then
+        #: iterates on that one frequency and screens the rest once, a chunk at
+        #: a time. ``False`` is the safe default for a new kernel: it is built
+        #: over the whole axis, as before.
+        self.static = static
         self.description = description
 
     def __repr__(self) -> str:  # pragma: no cover -- diagnostics
@@ -122,7 +129,7 @@ def _rpa(chi, epsi, context):
 
 
 register_kernel(XCKernel(
-    "rpa", _rpa,
+    "rpa", _rpa, static=True,
     description="f_xc = 0: the random phase approximation",
 ))
 
@@ -151,7 +158,7 @@ def _lrc(chi, epsi, context):
 
 
 register_kernel(XCKernel(
-    "lrc", _lrc,
+    "lrc", _lrc, static=True,
     description="f_xc = -alpha/q^2, the empirical long-range correction",
 ))
 
@@ -175,7 +182,7 @@ def _alda(chi, epsi, context):
 
 
 register_kernel(XCKernel(
-    "alda", _alda,
+    "alda", _alda, static=True,
     description="the adiabatic local density approximation",
 ))
 
@@ -255,7 +262,7 @@ def _bootstrap(chi, epsi, context):
 
 
 register_kernel(XCKernel(
-    "bootstrap", _bootstrap, self_consistent=True,
+    "bootstrap", _bootstrap, self_consistent=True, static=True,
     description="the bootstrap kernel, iterated to self-consistency (Elk 210)",
 ))
 #: **Two passes, not one.** ``tddftlr.f90``'s 211 branch increments its counter
@@ -265,6 +272,6 @@ register_kernel(XCKernel(
 #: Byun and Ullrich's "0-bootstrap" is a third thing again -- one pass from the
 #: *true* RPA ``eps^-1`` -- and is not this.
 register_kernel(XCKernel(
-    "bootstrap-1", _bootstrap, iterations=2,
+    "bootstrap-1", _bootstrap, iterations=2, static=True,
     description="the bootstrap kernel, a single update (Elk 211)",
 ))
