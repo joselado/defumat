@@ -167,6 +167,13 @@ below:
   radial transforms store only the allowed `L`). Energies move by at most 1.1e-13 Ry. The
   storage gate still sizes the complex table, so no cell changes route. Not measured on the
   card.
+* **Item 24, three more lines** (2026-09-29): the estimate counts the per-k basis tables
+  (`|k+G|^2`, the FFT index, the mask, the gamma trick's `-(k+G)` index), the symmetry maps
+  (`nsym ngm` permutations and phases) and DFT+U's `wfcU`, each held exactly against the
+  arrays a built `Calculation` allocates (`test_sizing.py`). On two-atom PAW silicon the
+  symmetry maps (6.9 MB, 48 operations) are now the largest line after the PAW tensors,
+  above the real `Q_ij(G)` (3.1 MB). Still absent: the core build's transient and the `qgm`
+  accumulator.
 * **Item 1** (the fixed-density solve): an eigenvalue-only solve streams where the store
   does and keeps no states. On eight-atom Si the band path's peak is 102.8 -> 44.8 MB at 200
   points and 383.4 -> 163.6 MB at 800, for 2-3 per cent in time. **Still 0.20 MB per

@@ -13,6 +13,7 @@ on silicon and be wrong on every ultrasoft run.
 
 import warnings
 
+import numpy as np
 import pytest
 
 from defumat.calculator import Calculator
@@ -120,9 +121,19 @@ def test_the_augmentation_charge_is_sized_and_is_the_largest_term(pseudo_dir):
     # are ``nh^2 nlm mesh`` per dataset, set by the pseudopotential and not by
     # the cell, so on this two-atom cell they outweigh ``Q_ij(G)`` where on a
     # slab ``Q_ij(G)`` grows with ``ngm`` past them.
+    #
+    # The symmetry maps are left out too, and counted exactly instead: they are
+    # ``nsym ngm`` and silicon's 48 operations make them the larger on this
+    # cell (a slab keeps a handful of operations, where ``Q_ij(G)`` has ``nh^2``
+    # rows). Since the table went real (``GPU-MEMORY-NEXT.md`` item 19) it is
+    # half what it was, which is what put the maps above it here.
+    permutations, phases = built._symmetry_maps
+    assert (estimate.arrays["symmetry maps (nsym,ngm)"]
+            == permutations.nbytes + phases.nbytes)
     largest = max(
         size for name, size in estimate.arrays.items()
-        if name != "PAW one-centre (nh,nh,nlm,mesh)"
+        if name not in ("PAW one-centre (nh,nh,nlm,mesh)",
+                        "symmetry maps (nsym,ngm)")
     )
     assert counted == largest
     assert estimate.setup_transient > counted
@@ -385,3 +396,24 @@ def test_the_peak_grows_with_the_k_batch(pseudo_dir):
     assert whole.eigensolver_buffer == pytest.approx(
         whole.nk * one.eigensolver_buffer, abs=whole.nk
     )
+
+
+def test_the_per_k_tables_and_the_hubbard_projectors_are_counted_exactly(pseudo_dir):
+    """``GPU-MEMORY-NEXT.md`` item 24: two resident lines the estimate lacked.
+
+    Held against the arrays a real ``Calculation`` allocated, not against the
+    formula a second time: ``|k+G|^2``, the FFT index and the mask, and DFT+U's
+    ``wfcU``.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        calculator = Calculator.from_file(
+            "tests/data/qe/ni-ldau-nospin.in", pseudo_dir=pseudo_dir,
+            announce=False)
+        built = calculator.calculation
+    estimate = estimate_size(calculator.system, calculator.pseudos)
+    tables = (built.kinetic.nbytes + built.fft_index.nbytes
+              + np.asarray(built.basis.planewaves.mask).nbytes)
+    assert estimate.arrays["per-k basis tables (nk,npwx)"] == tables
+    assert (estimate.arrays["Hubbard projectors wfcU (nk,ndim,nwfcU)"]
+            == built.wfcU.nbytes)

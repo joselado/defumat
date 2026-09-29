@@ -684,6 +684,28 @@ def estimate_size(
     }
     if nkb:
         arrays["Davidson becp+becq (nvecx,nkb)"] = 2 * k_live * nvecx * nkb * zc
+    # **The per-k basis bookkeeping every Hamiltonian reads** (``GPU-MEMORY-NEXT.md``
+    # item 24): ``|k+G|^2`` (real), the FFT index (int32) and the sphere's mask,
+    # and the gamma trick's ``-(k+G)`` index where the half sphere is consumed.
+    # Resident for the run in both memory modes, and one of the things that
+    # still grows with the mesh in memory mode.
+    arrays["per-k basis tables (nk,npwx)"] = (
+        nk * npwx * (zr + 4 + 1 + (4 if gamma_only else 0)))
+    # The density's symmetrisation: a permutation of the dense G set (int64)
+    # and its translation phases, per operation of the run's group.
+    if not system.nosym:
+        nsym = system.symmetry_group().nsym
+        if nsym > 1:
+            arrays["symmetry maps (nsym,ngm)"] = nsym * ngm * (8 + zc)
+    # DFT+U's projectors ``S|phi>``, the same layout as ``vkb`` with the
+    # Hubbard manifold's columns: resident, and read by every ``h_psi``.
+    from defumat.hubbard.manifold import build_hubbard_setup
+
+    hubbard = build_hubbard_setup(system.hubbard, structure, pseudos,
+                                  noncolin=bool(system.noncolin))
+    if hubbard is not None:
+        arrays["Hubbard projectors wfcU (nk,ndim,nwfcU)"] = (
+            nk * ndim * hubbard.nwfcU * zc)
     if doublegrid:
         arrays["fields on smooth grid"] = (
             2 * nspin_mag * int(np.prod(smooth_grid)) * zr
