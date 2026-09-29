@@ -151,6 +151,21 @@ class DFTSource:
             )
         return self._calculation
 
+    @property
+    def streams(self) -> bool:
+        """Whether this source's calculation keeps its states streamed.
+
+        True where ``wfc_store`` resolves to ``stream`` through the
+        calculation's memory mode -- memory mode on a card -- and the default
+        for :func:`~defumat.topology.invariants.chern_number` and the orbital
+        magnetization to walk their meshes a column or a plane at a time
+        (``GPU-MEMORY-NEXT.md`` item 5). False on a CPU, where the store is on
+        the one memory there is and a column's own compiled solve is the cost.
+        """
+        from defumat.batching import resolve_wfc_store
+
+        return resolve_wfc_store("default", self._base().memory_mode) == "stream"
+
     def _ddd_paw(self):
         """PAW's one-centre coefficients, built once and kept.
 
@@ -386,6 +401,7 @@ def run_berry_curvature(
     ns: jnp.ndarray | None = None,
     field=None,
     field_scale: float | None = None,
+    stream: bool | None = None,
     **kwargs,
 ) -> BerryCurvature:
     """Berry curvature and the Chern number on one plane of the zone.
@@ -393,6 +409,10 @@ def run_berry_curvature(
     Args:
         shape: the plaquette mesh, ``(n1, n2)`` points along the two crystal
             directions that span the plane.
+        stream: diagonalise the plane a column at a time rather than whole,
+            holding at most three columns of states. ``None`` streams where the
+            calculation does (memory mode on a card); see
+            :func:`~defumat.topology.invariants.chern_number`.
         axis: the crystal direction held fixed at ``offset``.
         nocc: how many bands are occupied. Defaults to the electron count
             divided by one or two according to whether a band is a spinor.
@@ -408,7 +428,7 @@ def run_berry_curvature(
                      field=field, field_scale=field_scale)
     return _chern_number(
         source, shape=shape, axis=axis, offset=offset, method=method,
-        k_batch=k_batch, **kwargs,
+        k_batch=k_batch, stream=stream, **kwargs,
     )
 
 

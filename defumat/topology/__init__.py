@@ -51,6 +51,7 @@ from defumat.topology.orbital_magnetization import (
     OrbitalMagnetization,
     orbital_magnetization,
     orbital_magnetization_sums,
+    streamed_orbital_magnetization_sums,
 )
 from defumat.topology.polarization import Polarization, StringPhases
 from defumat.topology.parity import ParityInvariant, fu_kane_z2, inversion_centre
@@ -82,6 +83,7 @@ __all__ = [
     "volume_mesh",
     "orbital_magnetization",
     "orbital_magnetization_sums",
+    "streamed_orbital_magnetization_sums",
     "StateSet",
     "WannierFlow",
     "Z2Invariant3D",

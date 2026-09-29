@@ -107,7 +107,8 @@ class StateSet(eqx.Module):
         """
         raise NotImplementedError
 
-    def overlaps(self, pairs, k_batch: int | None | str = "default") -> jnp.ndarray:
+    def overlaps(self, pairs, k_batch: int | None | str = "default",
+                 other: "StateSet | None" = None) -> jnp.ndarray:
         """``(npair, nbnd, nbnd)``: :meth:`overlap` for a list of neighbour pairs.
 
         ``pairs`` is a sequence of ``(i, j, shift)``. This is the entry point
@@ -115,10 +116,25 @@ class StateSet(eqx.Module):
         because it is the k-axis walk: subclasses that can chunk it do
         (:class:`PlaneWaveStates` through :func:`defumat.batching.map_k`), and
         the base implementation is the ``batch = 1`` behaviour written out.
-        """
-        return jnp.stack([self.overlap(i, j, shift) for i, j, shift in pairs])
 
-    def transport_plan(self, pairs):
+        ``other`` is the state set the **second** index of each pair refers to,
+        when it is not this one: ``<u(k_i) of self | S | u(k_j + shift) of
+        other>``. It is what lets a mesh be diagonalised a column at a time --
+        the links between two neighbouring columns join two state sets that
+        were never one (:func:`~defumat.topology.invariants.chern_number`'s
+        streamed route). Both sets must come from the same cell and dataset.
+        """
+        if other is None:
+            return jnp.stack([self.overlap(i, j, shift) for i, j, shift in pairs])
+        return jnp.stack(
+            [self.overlap_with(other, i, j, shift) for i, j, shift in pairs]
+        )
+
+    def overlap_with(self, other, i: int, j: int, shift=None) -> jnp.ndarray:
+        """:meth:`overlap` with the ket taken from ``other``'s k-point ``j``."""
+        raise NotImplementedError
+
+    def transport_plan(self, pairs, other: "StateSet | None" = None):
         """``(index, phase)``: how a neighbour's coefficients are read at ``k_i``.
 
         ``pairs`` is a sequence of ``(i, j, shift)`` as :meth:`overlaps` takes
@@ -137,6 +153,10 @@ class StateSet(eqx.Module):
         :mod:`defumat.topology.orbital_magnetization` are a linear combination
         of the neighbours', and the Hamiltonian is then applied to them at
         ``k_i``, which cannot be done to an overlap matrix.
+
+        ``other`` is the set ``j`` indexes, as in :meth:`overlaps`; the index
+        then points into ``other``'s coefficients and the result is still in
+        ``k_i``'s own representation.
         """
         raise NotImplementedError
 
@@ -201,7 +221,14 @@ class ArrayStates(StateSet):
             self.coefficients[i], self.coefficients[j], shift, self.orbital_positions
         )
 
-    def transport_plan(self, pairs):
+    def overlap_with(self, other, i: int, j: int, shift=None) -> jnp.ndarray:
+        return _array_overlap(
+            self.coefficients[i], other.coefficients[j], shift, self.orbital_positions
+        )
+
+    def transport_plan(self, pairs, other=None):
+        # A fixed basis is the same at every k, so the plan does not depend on
+        # which set the neighbour's coefficients sit in.
         return _array_transport_plan(
             pairs, self.coefficients.shape[-1], self.orbital_positions
         )
@@ -280,7 +307,12 @@ class ModelStates(StateSet):
             self.coefficients[i], self.coefficients[j], shift, self.orbital_positions
         )
 
-    def transport_plan(self, pairs):
+    def overlap_with(self, other, i: int, j: int, shift=None) -> jnp.ndarray:
+        return _array_overlap(
+            self.coefficients[i], other.coefficients[j], shift, self.orbital_positions
+        )
+
+    def transport_plan(self, pairs, other=None):
         return _array_transport_plan(
             pairs, self.coefficients.shape[-1], self.orbital_positions
         )
@@ -417,43 +449,52 @@ class PlaneWaveStates(StateSet):
     def npwx(self) -> int:
         return self.keys.shape[1]
 
-    def _alignment(self, i: int, j: int, shift):
+    def _alignment(self, i: int, j: int, shift, other=None):
         """Where each of ``i``'s plane waves sits in ``j``'s list, after ``shift``.
 
         Returns ``(gather, found)``: an index array of length ``npwx`` into
         ``j``'s plane waves, and a boolean saying whether the Miller index was
         there at all. A plane wave inside ``i``'s sphere and outside ``j``'s
         contributes nothing, which is correct -- the coefficient it would
-        multiply is zero -- and is what ``found`` masks.
+        multiply is zero -- and is what ``found`` masks. ``j`` is a k-point of
+        ``other`` when one is given, whose list may be padded to a different
+        ``npwx``; the gather then indexes that list.
         """
+        other = self if other is None else other
         shift = np.zeros(3, dtype=int) if shift is None else np.asarray(shift, dtype=int)
         target = _pack(self.miller[i] + shift)
-        order = self.order[j]
-        sorted_keys = self.keys[j][order]
+        order = other.order[j]
+        sorted_keys = other.keys[j][order]
         position = np.searchsorted(sorted_keys, target)
         position = np.clip(position, 0, len(sorted_keys) - 1)
         gather = order[position]
-        found = (sorted_keys[position] == target) & self.valid[i] & self.valid[j][gather]
+        found = (sorted_keys[position] == target) & self.valid[i] & other.valid[j][gather]
         return jnp.asarray(gather), jnp.asarray(found)
 
-    def _difference(self, i: int, j: int, shift) -> np.ndarray:
+    def _difference(self, i: int, j: int, shift, other=None) -> np.ndarray:
         """``k_j + shift - k_i`` in cartesian 1/bohr, the *unwrapped* difference."""
+        other = self if other is None else other
         shift = np.zeros(3) if shift is None else np.asarray(shift, dtype=float)
-        return self.kcart[j] + shift @ self.bg - self.kcart[i]
+        return other.kcart[j] + shift @ self.bg - self.kcart[i]
 
     def overlap(self, i: int, j: int, shift=None) -> jnp.ndarray:
-        gather, found = self._alignment(i, j, shift)
+        return self.overlap_with(self, i, j, shift)
+
+    def overlap_with(self, other, i: int, j: int, shift=None) -> jnp.ndarray:
+        gather, found = self._alignment(i, j, shift, other)
         matrix = _aligned_overlap(
-            self.coefficients[i], self.coefficients[j], gather, found, self.npol
+            self.coefficients[i], other.coefficients[j], gather, found, self.npol
         )
         if self.becp is None:
             return matrix
-        factors = _cached_augmentation(self.calculation, self._difference(i, j, shift))
+        factors = _cached_augmentation(
+            self.calculation, self._difference(i, j, shift, other))
         if factors is None:
             return matrix
-        return matrix + _augmentation_term(self.becp[i], self.becp[j], factors)
+        return matrix + _augmentation_term(self.becp[i], other.becp[j], factors)
 
-    def overlaps(self, pairs, k_batch: int | None | str = "default") -> jnp.ndarray:
+    def overlaps(self, pairs, k_batch: int | None | str = "default",
+                 other: "PlaneWaveStates | None" = None) -> jnp.ndarray:
         """The batched overlap, walked over the pair axis by ``map_k``.
 
         Every pair in one call must share the same geometric ``k' - k``, which
@@ -475,34 +516,40 @@ class PlaneWaveStates(StateSet):
         from defumat.batching import map_k, resolve_k_batch
 
         pairs = list(pairs)
-        differences = np.stack([self._difference(i, j, s) for i, j, s in pairs])
+        partner = self if other is None else other
+        differences = np.stack(
+            [self._difference(i, j, s, partner) for i, j, s in pairs])
         if not np.allclose(differences, differences[0], atol=1e-10):
             raise ValueError(
                 "every pair in one overlaps() call must have the same k' - k; "
                 "group the pairs by mesh direction"
             )
-        alignments = [self._alignment(i, j, s) for i, j, s in pairs]
+        alignments = [self._alignment(i, j, s, partner) for i, j, s in pairs]
         gather = jnp.stack([g for g, _ in alignments])
         found = jnp.stack([f for _, f in alignments])
         index_i = jnp.asarray([i for i, _, _ in pairs])
         index_j = jnp.asarray([j for _, j, _ in pairs])
 
         coefficients = self.coefficients
+        # With no ``other`` the kets are the very same array, so a one-set call
+        # closes over one array exactly as it always has.
+        kets = coefficients if other is None else other.coefficients
         npol = self.npol
         factors = None
         if self.becp is not None:
             factors = _cached_augmentation(self.calculation, differences[0])
         becp = self.becp
+        ket_becp = becp if other is None else other.becp
 
         def body(entry):
             ci = jnp.take(coefficients, entry["i"], axis=0)
-            cj = jnp.take(coefficients, entry["j"], axis=0)
+            cj = jnp.take(kets, entry["j"], axis=0)
             matrix = _aligned_overlap(ci, cj, entry["gather"], entry["found"], npol)
             if factors is None:
                 return matrix
             return matrix + _augmentation_term(
                 jnp.take(becp, entry["i"], axis=0),
-                jnp.take(becp, entry["j"], axis=0),
+                jnp.take(ket_becp, entry["j"], axis=0),
                 factors,
             )
 
@@ -512,7 +559,7 @@ class PlaneWaveStates(StateSet):
             batch=resolve_k_batch(k_batch),
         )
 
-    def transport_plan(self, pairs):
+    def transport_plan(self, pairs, other=None):
         """The Miller-index gather of :meth:`_alignment`, on the full state vector.
 
         ``_alignment`` answers for one spinor component's ``npwx`` plane waves;
@@ -521,12 +568,14 @@ class PlaneWaveStates(StateSet):
         real phase. What a missing Miller index means is what it means in
         :meth:`overlap`: the neighbour has no plane wave there, its coefficient
         is zero, and the mask is what puts a zero rather than whatever
-        ``searchsorted`` clipped onto.
+        ``searchsorted`` clipped onto. With ``other`` the offset is *its*
+        ``npwx``, since the index points into its coefficients, and the result
+        is as long as this set's state vector.
         """
-        npwx = self.npwx
+        npwx = self.npwx if other is None else other.npwx
         index, phase = [], []
         for i, j, shift in pairs:
-            gather, found = self._alignment(i, j, shift)
+            gather, found = self._alignment(i, j, shift, other)
             gather = np.asarray(gather)
             found = np.asarray(found)
             index.append(np.concatenate(

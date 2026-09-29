@@ -25,11 +25,16 @@ spin-orbit coupling has a real Hamiltonian in each channel and its orbital
 moment is quenched, which is the same 1.7e-16 :mod:`defumat.projwfc` measures
 for ``<L>``. Both are checked here rather than left to produce a confident zero.
 
-**Memory.** The whole mesh's occupied states are resident:
+**Memory.** By default the whole mesh's occupied states are resident:
 ``nk nbnd npol npwx * 16`` bytes, plus six ``(nk, npol npwx)`` integer gather
-plans. A derivative needs both neighbours of every point, so unlike a Wilson
-loop there is no streaming order that holds less than a plane; on the committed
-iodine reference (27 k-points, 7 bands, 8829 plane waves) it is 53 MB.
+plans; on the committed iodine reference (27 k-points, 7 bands, 8829 plane
+waves) it is 53 MB. ``stream=True`` -- the default where the calculation keeps
+its states streamed, memory mode on a card -- diagonalises the mesh a plane at a
+time instead
+(:func:`~defumat.topology.orbital_magnetization.streamed_orbital_magnetization_sums`):
+a derivative needs both neighbours of every point, so the plane being assembled
+and the planes on either side are held, plus the first and last planes the
+cyclic walk returns to -- at most five planes against the whole mesh.
 """
 
 from __future__ import annotations
@@ -41,6 +46,7 @@ from defumat.topology.mesh import volume_mesh
 from defumat.topology.orbital_magnetization import (
     OrbitalMagnetization,
     orbital_magnetization,
+    streamed_orbital_magnetization_sums,
 )
 from defumat.workflows.topology import _source
 
@@ -63,6 +69,7 @@ def run_orbital_magnetization(
     field=None,
     field_scale: float | None = None,
     gap_tol: float = 1.0e-4,
+    stream: bool | None = None,
 ) -> OrbitalMagnetization:
     """``M_orb`` by the modern theory, in Bohr magnetons per cell.
 
@@ -79,6 +86,8 @@ def run_orbital_magnetization(
             prints at zero and so does this by default; the term it multiplies
             is reported as ``dm_dmu`` whatever is passed.
         gap_tol: the smallest gap above the manifold that is still trusted.
+        stream: diagonalise the mesh a plane at a time rather than whole (the
+            module docstring). ``None`` streams where the calculation does.
 
     Returns:
         :class:`~defumat.topology.orbital_magnetization.OrbitalMagnetization`
@@ -123,6 +132,11 @@ def run_orbital_magnetization(
                      becsum=becsum, ns=ns, field=field, field_scale=field_scale)
     source.gap_tol = gap_tol
     mesh = volume_mesh(_divisions(system, divisions), shift)
+    if source.streams if stream is None else stream:
+        sums = streamed_orbital_magnetization_sums(source, mesh, k_batch=k_batch)
+        return orbital_magnetization(
+            None, mesh, system.cell, mu=mu, k_batch=k_batch, sums=sums,
+        )
     states = source.states(mesh.flat(), keep_hamiltonian=True)
     return orbital_magnetization(
         states, mesh, system.cell, mu=mu, k_batch=k_batch,

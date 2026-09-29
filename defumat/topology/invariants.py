@@ -30,25 +30,37 @@ pumping step and drops the previous step's states: the peak is
 ``nloop * nocc * npol * npwx * 16`` bytes and does not grow with the pumping
 resolution at all.
 
-Two honest qualifications. The plaquette mesh a Chern number needs is *not*
-streamed -- :func:`chern_number` asks for the whole plane at once, because the
-link variables along both directions are needed together and the mesh a Chern
-number needs is small; splitting it is a change to make when a case demands it,
-not before. And streaming is a dial rather than a law: a plane-wave source
-rebuilds a gigabyte of setup on every call, which on a mesh of the sizes that
-run here costs more than the states do, so ``stream=False`` takes the whole
-pumping mesh in one go and is the right choice there. Both are stated where the
-number is, in :func:`wilson_z2`.
+The plaquette mesh a Chern number needs is streamed too, a **column** at a
+time (:func:`chern_number` with ``stream=True``): a plaquette joins two
+neighbouring columns, so the links along a column are taken inside it, the
+links across to the next column between the two, and only the link *phases*
+-- ``(n1, n2)`` complex numbers -- are kept. The first column is held to the
+end, because the last column's neighbour is the first one plus a reciprocal
+lattice vector. At most three columns of states are ever resident (the first,
+the current and the next), against the whole plane. It is the default where
+the source keeps its states streamed -- memory mode on a card
+(``DFTSource.streams``) -- and not on a CPU, because each column is its own
+diagonalisation with its own plane-wave padding and therefore its own compiled
+solve. Streaming is a dial rather than a law, and ``stream=False`` on
+:func:`wilson_z2` is the same trade for the pumping mesh.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+import jax.numpy as jnp
 import numpy as np
 
-from defumat.topology.berry import BerryCurvature, berry_curvature
-from defumat.topology.mesh import PLANE_AXES, plane_mesh, pumping_mesh, trim_points
+from defumat.topology.berry import BerryCurvature, berry_curvature, plaquette_flux
+from defumat.topology.links import link_phase
+from defumat.topology.mesh import (
+    PLANE_AXES,
+    PlaneMesh,
+    plane_mesh,
+    pumping_mesh,
+    trim_points,
+)
 from defumat.topology.parity import (
     ParityInvariant,
     fu_kane_z2,
@@ -91,9 +103,11 @@ class ModelSource:
     inversion: np.ndarray | None = None
 
     def states(self, points, keep_projectors: bool = False,
-               keep_velocity: bool = False) -> ModelStates:
-        # ``keep_velocity`` is accepted and ignored: a model state set already
-        # carries ``H(k)`` itself, which is what its Kubo route differentiates.
+               keep_velocity: bool = False,
+               keep_hamiltonian: bool = False) -> ModelStates:
+        # ``keep_velocity`` and ``keep_hamiltonian`` are accepted and ignored: a
+        # model state set already carries ``H(k)`` itself, which is what its
+        # Kubo route differentiates and what an orbital magnetization applies.
         return ModelStates.solve(
             self.hamiltonian,
             points,
@@ -110,6 +124,7 @@ def chern_number(
     offset: float = 0.0,
     method: str | None = None,
     k_batch="default",
+    stream: bool | None = None,
     **kwargs,
 ) -> BerryCurvature:
     """Berry curvature and the Chern number over one plane of the zone.
@@ -117,20 +132,130 @@ def chern_number(
     ``axis`` is the crystal direction held fixed at ``offset``; the plane is
     spanned by the other two. For a two-dimensional crystal the only meaningful
     choice is the stacking axis at ``offset = 0``, which is the default.
+
+    ``stream`` walks the plane a column at a time instead of diagonalising it
+    whole (the module docstring; ``GPU-MEMORY-NEXT.md`` item 5). ``None`` asks
+    the source -- ``source.streams``, true for a plane-wave source in memory
+    mode on a card and absent (so false) for a model. The two routes take the
+    same overlaps on states solved at the same k-points, so a Chern number is
+    the same integer on both and the flux agrees to what the eigensolver's
+    threshold leaves in each state.
     """
     mesh = plane_mesh(shape, axis=axis, offset=offset)
     # The ``kubo`` route is a sum over *empty* states through a velocity
     # operator, so it needs more of the source than the occupied manifold every
     # other quantity here is a property of. Asked for by name rather than
     # always, because it doubles what a mesh of states costs to hold.
-    from defumat.topology.registry import DEFAULT_CURVATURE_METHOD
+    from defumat.topology.registry import (
+        DEFAULT_CURVATURE_METHOD,
+        get_curvature_method,
+    )
 
-    wants_velocity = (method or DEFAULT_CURVATURE_METHOD).lower() == "kubo"
+    name = (method or DEFAULT_CURVATURE_METHOD).lower()
+    get_curvature_method(name)  # an unknown method is refused before any solve
+    wants_velocity = name == "kubo"
     # Passed only when it is wanted, so that a source written to the protocol's
     # two-argument signature still satisfies it.
     extra = {"keep_velocity": True} if wants_velocity else {}
+    if stream is None:
+        stream = bool(getattr(source, "streams", False))
+    if stream and wants_velocity and isinstance(source, ModelSource):
+        # A model's Kubo route takes its degeneracy scale from the band width
+        # over the mesh it is handed, which a column would change; and a model
+        # has nothing to save by streaming. So it stays whole.
+        stream = False
+    if stream:
+        if wants_velocity:
+            return _streamed_kubo(source, mesh, extra, k_batch=k_batch, **kwargs)
+        return _streamed_fhs(source, mesh, k_batch=k_batch)
     states = source.states(mesh.flat(), **extra)
     return berry_curvature(states, mesh, method=method, k_batch=k_batch, **kwargs)
+
+
+def _column(mesh: PlaneMesh, i: int) -> PlaneMesh:
+    """Column ``i`` of a plane mesh as a mesh of its own, open across."""
+    return PlaneMesh(points=mesh.points[i:i + 1], span1=mesh.span1,
+                     span2=mesh.span2, closed=(False, mesh.closed[1]))
+
+
+def _streamed_fhs(source, mesh: PlaneMesh, k_batch="default") -> BerryCurvature:
+    """The FHS curvature with the plane diagonalised one column at a time.
+
+    Column ``i`` is ``mesh.points[i]``. The links along it, ``U_2(i, :)``, are
+    taken inside that column's state set, the wrap at ``j = n2 - 1`` being the
+    shift by ``span2`` exactly as :func:`~defumat.topology.berry.link_variables`
+    takes it; the links across, ``U_1(i, :)``, between column ``i`` and column
+    ``i + 1`` (``overlaps(..., other=...)``), the last one reaching back to
+    column 0 through ``span1``. Everything after the phases is
+    :func:`~defumat.topology.berry.plaquette_flux`, the whole-mesh route's own.
+    """
+    if not all(mesh.closed):
+        raise ValueError(
+            "the Chern number is an integral over a closed surface; this mesh "
+            "is open in at least one direction"
+        )
+    n1, n2 = mesh.shape
+    zero = np.zeros(3, dtype=int)
+    along = [(j, (j + 1) % n2, mesh.span2 if j + 1 == n2 else zero)
+             for j in range(n2)]
+    first = source.states(mesh.points[0])
+    current = first
+    u1, u2 = [], []
+    for i in range(n1):
+        following = first if i + 1 == n1 else source.states(mesh.points[i + 1])
+        u2.append(link_phase(current.overlaps(along, k_batch=k_batch)))
+        across = mesh.span1 if i + 1 == n1 else zero
+        u1.append(link_phase(current.overlaps(
+            [(j, j, across) for j in range(n2)], k_batch=k_batch,
+            other=following)))
+        # Dropping the reference here is what bounds the working set: the
+        # column just finished is never read again, except the first.
+        current = following
+    flux = plaquette_flux(jnp.stack(u1), jnp.stack(u2))
+    return BerryCurvature(
+        mesh=mesh, curvature=flux * n1 * n2, flux=flux, method="fhs"
+    )
+
+
+def _streamed_kubo(source, mesh: PlaneMesh, extra, k_batch="default",
+                   **kwargs) -> BerryCurvature:
+    """The Kubo curvature one column at a time: it is pointwise, so it splits.
+
+    What does not split is the two diagnostics, and they are recombined as the
+    whole-mesh route defines them: the truncation is the largest shift over
+    the plane divided by the largest ``|Omega|`` over the plane, not a mean of
+    per-column ratios, and the singular points are counted over every column.
+    """
+    n1, _ = mesh.shape
+    parts = []
+    for i in range(n1):
+        states = source.states(mesh.points[i], **extra)
+        parts.append(berry_curvature(states, _column(mesh, i), method="kubo",
+                                     k_batch=k_batch, **kwargs))
+        del states
+    curvature = np.concatenate([np.asarray(p.curvature) for p in parts])
+    by_band = (None if parts[0].curvature_by_band is None else
+               np.concatenate([np.asarray(p.curvature_by_band) for p in parts]))
+    shifts = [p.truncation_abs for p in parts]
+    shift = None if any(s is None for s in shifts) else float(max(shifts))
+    scale = float(np.max(np.abs(curvature)))
+    truncation = None
+    if shift is not None:
+        truncation = shift / scale if scale > 0.0 else float("nan")
+    singular = [p.singular_points for p in parts]
+    return BerryCurvature(
+        mesh=mesh,
+        curvature=curvature,
+        flux=None,
+        method="kubo",
+        curvature_by_band=by_band,
+        nbnd=parts[0].nbnd,
+        nocc=parts[0].nocc,
+        truncation=truncation,
+        truncation_abs=shift,
+        singular_points=(None if any(s is None for s in singular)
+                         else int(sum(singular))),
+    )
 
 
 def wilson_z2(

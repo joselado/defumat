@@ -103,6 +103,7 @@ __all__ = [
     "OrbitalMagnetization",
     "orbital_magnetization",
     "orbital_magnetization_sums",
+    "streamed_orbital_magnetization_sums",
 ]
 
 #: ``(l, i, j)``: the derivative directions each Cartesian assembly pairs, in
@@ -167,13 +168,44 @@ def orbital_magnetization_sums(states, mesh, *, k_batch="default") -> dict:
 
     **Memory.** The gather plans are ``(nk, dim)`` integers per neighbour, six
     of them -- megabytes beside the states themselves, which are the whole mesh
-    at once here rather than one row at a time. A derivative needs both
-    neighbours of every point, so there is no streaming order that keeps fewer
-    than a plane of them resident, and a plane is what the caller would have to
-    hold anyway.
+    at once here. :func:`streamed_orbital_magnetization_sums` is the same
+    assembly with the mesh diagonalised a plane at a time, holding the plane
+    being assembled, its two neighbours and the two planes the wrap returns to.
     """
+    flat = _checked_divisions(mesh)
+    nk = mesh.nk
+    if states.nk != nk:
+        raise ValueError(
+            f"the state set has {states.nk} k-points and the mesh {nk}; an "
+            "orbital magnetization is assembled at every point of its own mesh"
+        )
+
+    vectors = jnp.asarray(states.coefficients)
+    live = [d for d in range(3) if d not in flat]
+
+    neighbours = {}
+    for direction in live:
+        for sign in (1, -1):
+            pairs = [mesh.neighbour(i, direction, sign) for i in range(nk)]
+            index, phase = states.transport_plan(
+                [(i, j, shift) for i, (j, shift) in enumerate(pairs)]
+            )
+            neighbours[direction, sign] = (
+                vectors,
+                jnp.asarray([j for j, _ in pairs]),
+                jnp.asarray(np.asarray(index, dtype=np.int32)),
+                phase,
+            )
+
+    per_k = _zone_terms(vectors, states.hamiltonian_matvec(), neighbours,
+                        live, flat, k_batch)
+    return _zone_sums({key: np.asarray(value) for key, value in per_k.items()},
+                      flat)
+
+
+def _checked_divisions(mesh) -> tuple[int, ...]:
+    """The directions with one division, after refusing any with two."""
     divisions = tuple(int(n) for n in mesh.divisions)
-    flat = tuple(d for d, n in enumerate(divisions) if n == 1)
     aliased = [d for d, n in enumerate(divisions) if n == 2]
     if aliased:
         raise ValueError(
@@ -182,30 +214,31 @@ def orbital_magnetization_sums(states, mesh, *, k_batch="default") -> dict:
             "is an alias of the derivative rather than the derivative. Use one "
             "division (the derivative is then taken as zero) or at least three"
         )
+    return tuple(d for d, n in enumerate(divisions) if n == 1)
 
-    nk = mesh.nk
-    if states.nk != nk:
-        raise ValueError(
-            f"the state set has {states.nk} k-points and the mesh {nk}; an "
-            "orbital magnetization is assembled at every point of its own mesh"
-        )
 
-    matvec = states.hamiltonian_matvec()
-    vectors = jnp.asarray(states.coefficients)
-    live = [d for d in range(3) if d not in flat]
+def _zone_sums(per_k: dict, flat) -> dict:
+    """The per-k terms, in the mesh's flat order, summed over the zone."""
+    return {
+        "lc": per_k["lc"].sum(axis=0),
+        "ic": per_k["ic"].sum(axis=0),
+        "curvature": per_k["curvature"].sum(axis=0),
+        "determinant": float(np.exp(per_k["logdet"].min())),
+        "flat_directions": flat,
+    }
 
-    plans, targets = {}, {}
-    for direction in live:
-        for sign in (1, -1):
-            pairs = [mesh.neighbour(i, direction, sign) for i in range(nk)]
-            index, phase = states.transport_plan(
-                [(i, j, shift) for i, (j, shift) in enumerate(pairs)]
-            )
-            plans[direction, sign] = (
-                jnp.asarray(np.asarray(index, dtype=np.int32)), phase,
-            )
-            targets[direction, sign] = jnp.asarray([j for j, _ in pairs])
 
+def _zone_terms(vectors, matvec, neighbours, live, flat, k_batch="default"):
+    """The three per-k terms and the smallest ``log |det M|``, at every k of ``vectors``.
+
+    ``vectors`` is ``(n, nbnd, dim)``, the states being assembled, and
+    ``matvec(v, ik)`` applies ``H`` at their ``ik``-th k-point.
+    ``neighbours[direction, sign]`` is ``(kets, targets, index, phase)``: the
+    neighbour of point ``ik`` is ``kets[targets[ik]]`` read in ``ik``'s own
+    representation through ``index[ik]`` and ``phase[ik]`` -- ``kets`` is
+    ``vectors`` itself for the whole mesh, and the next plane's states when the
+    mesh is walked a plane at a time.
+    """
     dim = vectors.shape[-1]
     nbnd = vectors.shape[-2]
 
@@ -218,8 +251,8 @@ def orbital_magnetization_sums(states, mesh, *, k_batch="default") -> dict:
         for direction in live:
             duals = []
             for sign in (1, -1):
-                index, phase = plans[direction, sign]
-                neighbour = vectors[targets[direction, sign][ik]]
+                kets, targets, index, phase = neighbours[direction, sign]
+                neighbour = kets[targets[ik]]
                 transported = neighbour[:, index[ik]] * phase[ik]
                 overlap = jnp.einsum("ma,na->mn", u.conj(), transported)
                 _, magnitude = jnp.linalg.slogdet(overlap)
@@ -256,19 +289,103 @@ def orbital_magnetization_sums(states, mesh, *, k_batch="default") -> dict:
     # nothing and keeps the smallest determinant a *minimum* -- an accumulator
     # can only sum, and a mesh is bad because of its worst overlap rather than
     # because of its average one.
-    per_k = map_k(body, jnp.arange(nk), batch=resolve_k_batch(k_batch))
-    return {
-        "lc": np.asarray(per_k["lc"]).sum(axis=0),
-        "ic": np.asarray(per_k["ic"]).sum(axis=0),
-        "curvature": np.asarray(per_k["curvature"]).sum(axis=0),
-        "determinant": float(np.exp(np.asarray(per_k["logdet"]).min())),
-        "flat_directions": flat,
-    }
+    return map_k(body, jnp.arange(vectors.shape[0]),
+                 batch=resolve_k_batch(k_batch))
+
+
+def streamed_orbital_magnetization_sums(source, mesh, *,
+                                        k_batch="default") -> dict:
+    """:func:`orbital_magnetization_sums`, with the mesh diagonalised a plane at a time.
+
+    ``source`` is a state source (:mod:`defumat.topology.invariants`) whose
+    states answer ``keep_hamiltonian=True``. The mesh is cut into planes normal
+    to the direction with the most divisions; each plane is diagonalised once,
+    kept while a plane that needs it is still to be assembled and dropped
+    after, and the per-k terms are the whole-mesh route's own function
+    (:func:`_zone_terms`) with the neighbours along the cut read from the
+    neighbouring plane's states (``transport_plan(..., other=...)``). The
+    per-k terms are put back in the mesh's flat order before they are summed,
+    so the sums are taken in the same order as on the whole mesh.
+
+    **What is resident.** A point's neighbours along the cut are in the planes
+    on either side, and the walk is cyclic, so the first plane and the last
+    are both needed again at the other end: at most five planes of states --
+    the one being assembled, its two neighbours, and the two the wrap returns
+    to -- against the whole mesh. A mesh of five planes or fewer gains nothing
+    and holds what the whole-mesh route holds.
+    """
+    flat = _checked_divisions(mesh)
+    divisions = tuple(int(n) for n in mesh.divisions)
+    live = [d for d in range(3) if d not in flat]
+    cut = int(np.argmax(divisions))
+    nplanes = divisions[cut]
+    nk = mesh.nk
+
+    grid = np.arange(nk).reshape(divisions)
+    members = [np.take(grid, p, axis=cut).reshape(-1) for p in range(nplanes)]
+    plane_of = np.empty(nk, dtype=int)
+    local = np.empty(nk, dtype=int)
+    for p, flat_indices in enumerate(members):
+        plane_of[flat_indices] = p
+        local[flat_indices] = np.arange(len(flat_indices))
+
+    # Which planes each step reads, and so when each can be let go.
+    wanted = []
+    for p in range(nplanes):
+        needed = {p}
+        for direction in live:
+            for sign in (1, -1):
+                target, _ = mesh.neighbour(int(members[p][0]), direction, sign)
+                needed.add(int(plane_of[target]))
+        wanted.append(needed)
+    last = {q: max(p for p in range(nplanes) if q in wanted[p])
+            for q in range(nplanes)}
+
+    points = mesh.flat()
+    resident = {}
+    per_k = None
+    for p in range(nplanes):
+        for q in sorted(wanted[p]):
+            if q not in resident:
+                resident[q] = source.states(points[members[q]],
+                                            keep_hamiltonian=True)
+        centre = resident[p]
+        vectors = jnp.asarray(centre.coefficients)
+        neighbours = {}
+        for direction in live:
+            for sign in (1, -1):
+                steps = [mesh.neighbour(int(i), direction, sign)
+                         for i in members[p]]
+                q = int(plane_of[steps[0][0]])
+                other = None if q == p else resident[q]
+                index, phase = centre.transport_plan(
+                    [(e, int(local[j]), shift)
+                     for e, (j, shift) in enumerate(steps)],
+                    other=other,
+                )
+                neighbours[direction, sign] = (
+                    vectors if other is None else jnp.asarray(other.coefficients),
+                    jnp.asarray([int(local[j]) for j, _ in steps]),
+                    jnp.asarray(np.asarray(index, dtype=np.int32)),
+                    phase,
+                )
+        terms = _zone_terms(vectors, centre.hamiltonian_matvec(), neighbours,
+                            live, flat, k_batch)
+        if per_k is None:
+            per_k = {key: np.empty((nk,) + np.shape(value)[1:],
+                                   dtype=np.asarray(value).dtype)
+                     for key, value in terms.items()}
+        for key, value in terms.items():
+            per_k[key][members[p]] = np.asarray(value)
+        del vectors, neighbours, terms, centre
+        for q in [q for q in resident if last[q] <= p]:
+            del resident[q]
+    return _zone_sums(per_k, flat)
 
 
 def orbital_magnetization(
     states, mesh, cell, *, mu: float = 0.0, degeneracy: int = 1,
-    k_batch="default",
+    k_batch="default", sums: dict | None = None,
 ) -> OrbitalMagnetization:
     """The zone sums turned into Bohr magnetons per cell.
 
@@ -279,8 +396,13 @@ def orbital_magnetization(
     the difference therefore only ever multiplies zero, and it is applied here
     because a factor that is right for the wrong reason is how the ``degspin``
     trap of :mod:`defumat.response.conductivity` got in twice.
+
+    ``sums`` takes zone sums already assembled -- by
+    :func:`streamed_orbital_magnetization_sums`, which never holds the whole
+    mesh -- in which case ``states`` is not read.
     """
-    sums = orbital_magnetization_sums(states, mesh, k_batch=k_batch)
+    if sums is None:
+        sums = orbital_magnetization_sums(states, mesh, k_batch=k_batch)
     bg = np.asarray(cell.bg, dtype=float)  # rows b_1, b_2, b_3 in 1/bohr
     volume = float(cell.volume)
     divisions = np.asarray(mesh.divisions, dtype=float)

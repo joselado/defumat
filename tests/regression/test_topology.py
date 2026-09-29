@@ -133,6 +133,37 @@ def test_silicon_has_no_berry_curvature(case):
     assert result.max_flux < 1e-5
 
 
+@pytest.mark.slow
+@pytest.mark.parametrize("case", ["alas-berry.in", "alas-piezo-tiny.in"])
+def test_a_plane_walked_a_column_at_a_time_is_the_whole_plane(case):
+    """``GPU-MEMORY-NEXT.md`` item 5, on real states: the streamed Chern route.
+
+    Zincblende has no inversion centre, so -- unlike silicon above -- its
+    Berry flux is **nonzero** pointwise (odd in ``k``, which is why the Chern
+    number is still zero), and the comparison is about something. Each column
+    is its own diagonalisation on its own padded sphere from its own random
+    start, so the two routes agree to what the eigensolver's threshold leaves
+    in the states rather than to round-off: at ``conv_thr = 1e-10`` the
+    largest flux difference measured 9.6e-9 on the norm-conserving cell (a
+    6x6 plane) and 2.6e-8 on the ultrasoft one (4x4), against fluxes of 2.2e-2
+    and 5.1e-2; on the norm-conserving 4x4 it falls from 1.5e-7 at
+    ``conv_thr = 1e-8`` to 8.6e-9 at 1e-12, which is convergence and not a
+    floor. The ultrasoft case takes its links through ``q_ij(b)`` between two
+    state sets that were never one.
+    """
+    system, pseudos, density = converged(case)
+    runs = {
+        stream: run_berry_curvature(system, pseudos, density, shape=(4, 4),
+                                    nocc=4, conv_thr=1e-10, stream=stream)
+        for stream in (False, True)
+    }
+    whole, streamed = runs[False], runs[True]
+    assert whole.max_flux > 1e-2  # a flux, not a null
+    assert streamed.chern_number == pytest.approx(whole.chern_number, abs=1e-9)
+    assert abs(whole.chern_number) < 1e-9
+    np.testing.assert_allclose(streamed.flux, whole.flux, atol=1e-7)
+
+
 def test_silicon_is_a_trivial_insulator_by_the_parity_criterion():
     """``nu0 = 0`` from the eight TRIM of diamond silicon.
 
