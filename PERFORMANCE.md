@@ -7986,3 +7986,17 @@ this**: it moved the whole calculation and sliced a chunk out of it, so `at_stra
 every k-point's projector core inside each chunk's backward pass -- 129.1 MB and 19.8 s for
 the stress at 64 k-points. Running each pass on the chunk's own row-subset calculation
 (`Calculation.at_rows`) is what made it flat.
+
+**Before and after on the card, whole chains** (this morning's `master` against the branch
+head, one process per run, each run twice and the second taken, memory mode, GTX 1060):
+
+| chain | before | after | result |
+|---|---:|---:|---|
+| `bismuthene-soc-small`: SCF + stress | 3457.4 MB | **2393.5 MB** | E to 3e-13 Ry, stress to 2e-14; times equal (16 s + 7.5 s) |
+| same, + Berry curvature 8x8 | died at the 0.75 pool (2.09 GiB request); **4578.1 MB** at 0.9 | **2393.5 MB** | Chern 0 both; 140 s against 118-135 s |
+| `si8-1k`: SCF + PDOS on an 8x8x8 grid | 56.9 MB | **45.7 MB** | integrated sum to 4e-12 relative |
+
+The first row is mostly the real `Q_ij(G)` (item 19: the resident table halves and its
+complex assembly transient goes); the second is the column-streamed plane (item 5), whose
+states never exceed the SCF's own peak; the third the state-keeping streamed solve and the
+chunked projections (items 1 and 4), where the whole-k atomic projectors are what is left.

@@ -106,7 +106,8 @@ below:
 * **Item 1, second half**: a fixed-density solve that keeps its states streams them into a
   numpy store where the store streams (`streaming.stream_states`), so a PDOS or STM on a
   denser grid holds one chunk on the device; the force theorem without `projected` now asks
-  for energies only. Same test file, round-off and the same span. Not measured on the card.
+  for energies only. Same test file, round-off and the same span. **On the card**, `si8-1k`
+  SCF + PDOS on an 8x8x8 grid: 56.9 -> 45.7 MB (the whole-k atomic projectors remain).
 * **Item 20, second part**: `run_pdos`, `run_stm`, `run_sts`, `run_vertical_transport`,
   `run_momentum_transport` and `run_structure_factors` take `calculation=` (the SCF's own,
   on its k-set or moved with `at_kpoints`), and the `Calculator` passes its own. Left: the
@@ -171,8 +172,9 @@ below:
   120.9 -> 60.5 MB (nbytes, CPU). Against the complex construction: table 8.6e-17, charge
   7.7e-16, integrals 4.5e-15 relative, `qq` exact; the wrong-parity part is exactly zero (the
   radial transforms store only the allowed `L`). Energies move by at most 1.1e-13 Ry. The
-  storage gate still sizes the complex table, so no cell changes route. Not measured on the
-  card.
+  storage gate still sizes the complex table, so no cell changes route. **On the card**
+  (against this morning's code, memory mode): bismuthene's SCF + stress peak **3457.4 ->
+  2393.5 MB**, same energy, stress and time.
 * **Item 24, three more lines** (2026-09-29): the estimate counts the per-k basis tables
   (`|k+G|^2`, the FFT index, the mask, the gamma trick's `-(k+G)` index), the symmetry maps
   (`nsym ngm` permutations and phases) and DFT+U's `wfcU`, each held exactly against the
@@ -189,7 +191,8 @@ below:
   to 1e-12; AlAs flux to 9.6e-9 (NC) and 2.6e-8 (US), shrinking with `conv_thr` (each column
   is its own solve); iodine `M_LC`/`M_IC` to 3.5e-9/1.2e-9. Bismuthene 12x12: solve output
   446 -> 37 MB, occupied states 372 -> 93 MB (shapes). 0.96 s against 0.74 s on one CPU
-  core (NC AlAs 6x6). Not measured on the card.
+  core (NC AlAs 6x6). **On the card**, bismuthene SCF + Berry curvature 8x8: the old code
+  died at the 0.75 pool and peaked at 4578.1 MB at 0.9; now 2393.5 MB, the SCF's own.
 * **Item 20, third part** (2026-09-29): `run_spiral_scan`, `spiral_spin_orbit_energy` and,
   through `DFTSource.calculation`, `run_berry_curvature`, `run_z2`, `run_z2_3d` and
   `run_orbital_magnetization` take `calculation=`, and the `Calculator` passes its own. With
