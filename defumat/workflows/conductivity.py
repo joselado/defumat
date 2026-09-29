@@ -25,7 +25,7 @@ from defumat.response.conductivity import (
     optical_conductivity,
     require_a_conductivity_regime,
 )
-from defumat.workflows.nscf import fixed_density_states
+from defumat.workflows.nscf import fixed_density_states, threaded_calculation
 
 __all__ = ["run_conductivity"]
 
@@ -54,6 +54,7 @@ def run_conductivity(
     conv_thr: float = 1.0e-10,
     degeneracy_tol: float | None = None,
     k_batch="default",
+    calculation=None,
 ) -> OpticalConductivity:
     """``sigma_ab(omega)`` for a converged run.
 
@@ -77,6 +78,9 @@ def run_conductivity(
             rises past it -- on nonmagnetic fcc nickel, 5.5e-12 Ry at ``ethr``
             of both 5.6e-13 and 5.6e-11, and 1.2e-10 at 5.6e-9. See
             :data:`~defumat.response.conductivity.DEGENERACY_TOL`.
+        calculation: the SCF's own, used on its own k-set or moved to
+            ``kpoints`` rather than a second one built beside it
+            (:func:`~defumat.workflows.nscf.threaded_calculation`).
 
     The remaining arguments are
     :func:`~defumat.response.conductivity.optical_conductivity`'s.
@@ -87,6 +91,11 @@ def run_conductivity(
     # ``run_absorption`` checks its own: they are statements about the
     # calculation, and a caller asking for something this cannot do should not
     # first pay for three times the bands at every k-point.
+    # The caller's own calculation, when handed one, is used on its own k-set or
+    # moved to ``kpoints`` rather than a second one built beside it, so it
+    # follows the caller's memory mode (``GPU-MEMORY-NEXT.md`` item 20).
+    calculation, system, kpoints, k_batch = threaded_calculation(
+        calculation, system, kpoints, k_batch)
     if kpoints is not None:
         import equinox as eqx
 
@@ -114,7 +123,8 @@ def run_conductivity(
     # the value the kept build always had; the ``_default_nbnd`` build went
     # without it, and read only ``nelec`` and ``noncolin``, which no chunk size
     # touches.
-    calculation = Calculation(system, pseudos, k_batch=k_batch)
+    if calculation is None:
+        calculation = Calculation(system, pseudos, k_batch=k_batch)
     require_a_conductivity_regime(calculation)
 
     # **One band more than the sum uses**, and it is not an accident of
@@ -132,6 +142,9 @@ def run_conductivity(
         conv_thr=conv_thr, k_batch=k_batch, ns=ns, becsum=becsum, tau=tau,
         field=field, field_scale=field_scale, calculation=calculation,
     )
+    # The solve re-checks the dials at its own band count (``Calculation.
+    # for_bands``); what follows runs at whatever it resolved to.
+    k_batch = calculation.k_batch
     eigenvalues = jnp.asarray(eigenvalues)
     if eigenvalues.ndim == 2:
         eigenvalues = eigenvalues[None]

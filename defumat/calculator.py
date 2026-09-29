@@ -1266,6 +1266,7 @@ class Calculator:
         result = self._ground_state("an absorption spectrum")
         return run_absorption(
             self.system, self.pseudos, result.density, frequencies,
+            calculation=self.calculation,
             **self._call_options(run_absorption, result, options,
                                  exclude=SCF_ONLY_OPTIONS)
         )
@@ -1283,6 +1284,7 @@ class Calculator:
         result = self._ground_state("the optical conductivity")
         return run_conductivity(
             self.system, self.pseudos, result.density,
+            calculation=self.calculation,
             **self._call_options(run_conductivity, result, options,
                                  exclude=SCF_ONLY_OPTIONS)
         )
@@ -1659,6 +1661,7 @@ class Calculator:
         result = self._ground_state("a spin susceptibility")
         return run_spin_susceptibility(
             self.system, self.pseudos, result.density, q, frequencies,
+            calculation=self.calculation,
             **self._call_options(run_spin_susceptibility, result, options,
                                  exclude=SCF_ONLY_OPTIONS)
         )
@@ -1677,6 +1680,7 @@ class Calculator:
         result = self._ground_state("a magnon dispersion")
         return run_magnon_dispersion(
             self.system, self.pseudos, result.density, qpoints, frequencies,
+            calculation=self.calculation,
             **self._call_options(run_magnon_dispersion, result, options,
                                  exclude=SCF_ONLY_OPTIONS)
         )
@@ -1704,6 +1708,7 @@ class Calculator:
             options = {**options, "nbnd": nbnd}
         return run_shift_current(
             self.system, self.pseudos, result.density,
+            calculation=self.calculation,
             **self._call_options(run_shift_current, result, options,
                                  exclude=SCF_ONLY_OPTIONS)
         )
@@ -1730,6 +1735,7 @@ class Calculator:
             options = {**options, "nbnd": nbnd}
         return run_shg(
             self.system, self.pseudos, result.density,
+            calculation=self.calculation,
             **self._call_options(run_shg, result, options,
                                  exclude=SCF_ONLY_OPTIONS)
         )

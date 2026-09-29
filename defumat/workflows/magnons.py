@@ -44,7 +44,7 @@ from defumat.tddft.spinkernel import (
     transverse_kernel_matrix,
 )
 from defumat.units import RY_TO_EV
-from defumat.workflows.nscf import fixed_density_states
+from defumat.workflows.nscf import fixed_density_states, threaded_calculation
 
 __all__ = [
     "SpinSusceptibility",
@@ -233,6 +233,7 @@ def run_spin_susceptibility(
     crossing_points: int = 17,
     conv_thr: float = 1.0e-8,
     k_batch: int | None | str = "default",
+    calculation=None,
     goldstone: bool | None = None,
     states=None,
 ) -> SpinSusceptibility:
@@ -291,6 +292,9 @@ def run_spin_susceptibility(
             earlier :func:`~defumat.workflows.nscf.fixed_density_states`, to be
             reused. A dispersion is many wavevectors on **one** set of states,
             which is the whole reason ``q`` is restricted to the grid.
+        calculation: the SCF's own, used on its own k-set or moved to
+            ``kpoints`` rather than a second one built beside it
+            (:func:`~defumat.workflows.nscf.threaded_calculation`).
     """
     from defumat.scf.driver import Calculation
 
@@ -298,6 +302,11 @@ def run_spin_susceptibility(
     q = np.asarray(q, dtype=float).reshape(3)
 
     if states is None:
+        # The caller's own calculation, when handed one, is used on its own k-set or
+        # moved to ``kpoints`` rather than a second one built beside it, so it
+        # follows the caller's memory mode (``GPU-MEMORY-NEXT.md`` item 20).
+        calculation, system, kpoints, k_batch = threaded_calculation(
+            calculation, system, kpoints, k_batch)
         if kpoints is not None:
             system = eqx.tree_at(
                 lambda s: s.kpoints, system, _for_spin(kpoints, system)
@@ -310,7 +319,8 @@ def run_spin_susceptibility(
         # one system (``OPEN.md`` Part III, H3); ``k_batch`` is what the kept
         # build carried, and the discarded ``_default_nbnd`` one read only
         # electron counts, which no chunk size touches.
-        calculation = Calculation(system, pseudos, k_batch=k_batch)
+        if calculation is None:
+            calculation = Calculation(system, pseudos, k_batch=k_batch)
         require_a_transverse_regime(calculation)
         states = fixed_density_states(
             system, pseudos, density,
@@ -318,6 +328,9 @@ def run_spin_susceptibility(
             conv_thr=conv_thr, k_batch=k_batch, calculation=calculation,
         )
     calculation, system, eigenvalues, wavefunctions = states
+    # The solve re-checks the dials at its own band count (``Calculation.
+    # for_bands``); what follows runs at whatever it resolved to.
+    k_batch = calculation.k_batch
 
     if goldstone is None:
         goldstone = bool(np.all(np.abs(q) < 1.0e-10))
@@ -437,6 +450,7 @@ def run_magnon_dispersion(
     nbnd: int | None = None,
     conv_thr: float = 1.0e-8,
     k_batch: int | None | str = "default",
+    calculation=None,
     goldstone_correction: bool = False,
     **kwargs,
 ) -> MagnonDispersion:
@@ -461,21 +475,34 @@ def run_magnon_dispersion(
     not, the residual error is q-dependent and the correction is cosmetic. The
     factor is reported on every point (:attr:`SpinSusceptibility.kernel_scale`)
     so a reader can see how large it was.
+
+    ``calculation`` is the SCF's own, used on its own k-set or moved to
+    ``kpoints`` rather than a second one built beside it
+    (:func:`~defumat.workflows.nscf.threaded_calculation`).
     """
     from defumat.scf.driver import Calculation
 
+    # The caller's own calculation, when handed one, is used on its own k-set or
+    # moved to ``kpoints`` rather than a second one built beside it, so it
+    # follows the caller's memory mode (``GPU-MEMORY-NEXT.md`` item 20).
+    calculation, system, kpoints, k_batch = threaded_calculation(
+        calculation, system, kpoints, k_batch)
     if kpoints is not None:
         system = eqx.tree_at(
             lambda s: s.kpoints, system, _for_spin(kpoints, system)
         )
     # One build, read by the refusals and then diagonalised in, as in
     # :func:`run_spin_susceptibility` (``OPEN.md`` Part III, H3).
-    calculation = Calculation(system, pseudos, k_batch=k_batch)
+    if calculation is None:
+        calculation = Calculation(system, pseudos, k_batch=k_batch)
     require_a_transverse_regime(calculation)
     states = fixed_density_states(
         system, pseudos, density, nbnd=nbnd or _default_nbnd(calculation),
         conv_thr=conv_thr, k_batch=k_batch, calculation=calculation,
     )
+    # The solve re-checks the dials at its own band count (``Calculation.
+    # for_bands``); what follows runs at whatever it resolved to.
+    k_batch = states[0].k_batch
 
     qpoints = np.atleast_2d(np.asarray(qpoints, dtype=float))
     scale = kwargs.pop("kernel_scale", 1.0)

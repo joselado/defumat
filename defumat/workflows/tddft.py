@@ -40,7 +40,7 @@ from defumat.tddft.chi0 import (
 from defumat.tddft.dyson import MAX_ITERATIONS, TOLERANCE, solve_dyson
 from defumat.tddft.kernels import DEFAULT_KERNEL, alda_matrix, get_kernel
 from defumat.units import RY_TO_EV
-from defumat.workflows.nscf import fixed_density_states
+from defumat.workflows.nscf import fixed_density_states, threaded_calculation
 
 __all__ = ["OpticalSpectrum", "run_absorption"]
 
@@ -154,6 +154,7 @@ def run_absorption(
     ns=None,
     conv_thr: float = 1.0e-10,
     k_batch: int | None | str = "default",
+    calculation=None,
     pair_batch: int | None | str = "default",
     w_batch: int | None | str = "default",
     static_residual: bool = True,
@@ -210,6 +211,9 @@ def run_absorption(
             budgeted chunk on an accelerator
             (:func:`~defumat.batching.resolve_w_batch`); the frequencies are
             independent, so it moves nothing beyond round-off.
+        calculation: the SCF's own, used on its own k-set or moved to
+            ``kpoints`` rather than a second one built beside it
+            (:func:`~defumat.workflows.nscf.threaded_calculation`).
     """
     from defumat.scf.driver import Calculation
 
@@ -220,6 +224,11 @@ def run_absorption(
     # ``independent_response`` where they would also be checked: they are
     # statements about the calculation, and a caller asking for something this
     # cannot do should not first pay for sixty bands at every k-point.
+    # The caller's own calculation, when handed one, is used on its own k-set or
+    # moved to ``kpoints`` rather than a second one built beside it, so it
+    # follows the caller's memory mode (``GPU-MEMORY-NEXT.md`` item 20).
+    calculation, system, kpoints, k_batch = threaded_calculation(
+        calculation, system, kpoints, k_batch)
     if kpoints is not None:
         import equinox as eqx
 
@@ -229,7 +238,8 @@ def run_absorption(
     # two of them discarded (``OPEN.md`` Part III, H3). ``k_batch`` is what the
     # kept build always carried; the discarded ``_default_nbnd`` build read
     # only the electron count, which no chunk size touches.
-    calculation = Calculation(system, pseudos, k_batch=k_batch)
+    if calculation is None:
+        calculation = Calculation(system, pseudos, k_batch=k_batch)
     require_a_sum_over_states_regime(calculation)
 
     calculation, system, eigenvalues, wavefunctions = fixed_density_states(
@@ -237,6 +247,9 @@ def run_absorption(
         conv_thr=conv_thr, k_batch=k_batch, ns=ns, becsum=becsum,
         calculation=calculation,
     )
+    # The solve re-checks the dials at its own band count (``Calculation.
+    # for_bands``); what follows runs at whatever it resolved to.
+    k_batch = calculation.k_batch
     nocc = int(round(calculation.nelec / 2))
     nbnd = int(eigenvalues.shape[-1])
     potential = calculation.potential(jnp.asarray(density))

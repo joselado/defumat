@@ -168,3 +168,77 @@ def test_an_explicit_value_and_the_environment_beat_the_chooser(pseudo_dir, monk
 def test_the_size_report_resolves_the_band_batch_the_way_the_run_does(pseudo_dir):
     calculator = _calculator(pseudo_dir)
     assert calculator.estimate().band_batch == calculator.calculation.band_batch
+
+
+# -- a solve at more bands than the SCF ------------------------------------------
+
+
+def _a_card_where_more_than(n, monkeypatch):
+    """Pretend to be on a card where more than ``n`` bands do not fit whole.
+
+    Memory mode's chooser answers two bands at a time past ``n``, and speed
+    mode's check says no past ``n`` -- the guard is tested by feeding it the
+    case that must trip it (``CLAUDE.md``), not by finding a cell too large.
+    """
+    from defumat import sizing
+
+    def chooser(system, pseudos, nbnd=None, **kwargs):
+        wide = nbnd is not None and nbnd > n
+        return BandBatchChoice(band_batch=2 if wide else None, fits=True,
+                               estimate=1, available=10)
+
+    def speed(system, pseudos, nbnd=None, **kwargs):
+        wide = nbnd is not None and nbnd > n
+        return sizing.SpeedCheck(fits=not wide, estimate=10 * 2**30,
+                                 available=4 * 2**30)
+
+    monkeypatch.setattr(batching, "_backend", lambda: "gpu")
+    monkeypatch.setattr("defumat.sizing.choose_band_batch", chooser)
+    monkeypatch.setattr("defumat.sizing.speed_mode_fits", speed)
+    monkeypatch.delenv("DEFUMAT_BAND_BATCH", raising=False)
+    monkeypatch.delenv("DEFUMAT_K_BATCH", raising=False)
+
+
+def test_a_solve_at_more_bands_re_chooses_the_band_batch(pseudo_dir, monkeypatch):
+    """The dials were sized for the SCF's eight bands; sixty are re-sized.
+
+    Measured before this existed: ``h40-chain-lsda.in`` in a 2.1 GB pool ran
+    its SCF at eight bands at a time and died asking for 1.86 GiB when the same
+    calculation was asked for 168 bands, still at eight.
+    """
+    calculator = _calculator(pseudo_dir)
+    system, pseudos = calculator.system, calculator.pseudos
+    # On the CPU nothing is re-sized, whatever the count.
+    cpu = Calculation(system, pseudos)
+    assert cpu.for_bands(60) is cpu
+
+    _a_card_where_more_than(8, monkeypatch)
+    calculation = Calculation(system, pseudos, memory_mode="memory")
+    assert calculation.band_batch is None
+    assert calculation.for_bands(8) is calculation
+    with pytest.warns(RuntimeWarning, match="2 bands at a time"):
+        wide = calculation.for_bands(60)
+    assert wide is not calculation
+    assert (wide.memory_mode, wide.k_batch, wide.band_batch) == ("memory", 1, 2)
+    # Nothing rebuilt: the copy shares every array.
+    assert wide.projector_core is calculation.projector_core
+    assert wide.basis is calculation.basis
+    # And an explicit value is what runs, at any band count.
+    fixed = Calculation(system, pseudos, memory_mode="memory", band_batch=4)
+    assert fixed.for_bands(60) is fixed
+
+
+def test_speed_mode_falls_back_for_a_solve_that_would_not_fit(pseudo_dir, monkeypatch):
+    """The SCF fits in speed mode; a sixty-band solve on it does not."""
+    calculator = _calculator(pseudo_dir)
+    system, pseudos = calculator.system, calculator.pseudos
+    _a_card_where_more_than(8, monkeypatch)
+    calculation = Calculation(system, pseudos, memory_mode="speed")
+    assert (calculation.memory_mode, calculation.k_batch) == ("speed", None)
+    with pytest.warns(RuntimeWarning, match="for a solve at 60 bands"):
+        with pytest.warns(RuntimeWarning, match="2 bands at a time"):
+            wide = calculation.for_bands(60)
+    assert (wide.memory_mode, wide.k_batch, wide.band_batch) == ("memory", 1, 2)
+    # A chunk the caller chose is not overridden.
+    chosen = Calculation(system, pseudos, memory_mode="speed", k_batch=4)
+    assert chosen.for_bands(60).k_batch == 4

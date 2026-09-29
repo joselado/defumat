@@ -885,9 +885,12 @@ def _projector_core(pseudos, structure, cell, smooth, planewaves, kpoints,
             kg = np.empty((nk,) + block_kg.shape[1:], block_kg.dtype)
         columns[rows[:live]] = block_columns
         kg[rows[:live]] = block_kg
+    # ``device_put``, not ``jnp.asarray``: on a card the latter holds the host
+    # array twice on the device while it crosses (measured: 512 MB of peak for
+    # a 256 MB array, against 256 MB through ``device_put``).
     return eqx.tree_at(
         lambda core: (core.columns, core.kg, core.mask),
-        piece, (jnp.asarray(columns), jnp.asarray(kg), planewaves.mask),
+        piece, (jax.device_put(columns), jax.device_put(kg), planewaves.mask),
     )
 
 
@@ -1751,7 +1754,7 @@ def _adopt_rebuilt_sphere(moved, source, planewaves, smooth, kpoints, cell) -> N
 
 
 def _resolve_memory_mode_for(memory_mode, system, pseudos, k_batch, projectors,
-                             david) -> str:
+                             david, purpose: str = "", nbnd=None) -> str:
     """The memory mode a :class:`Calculation` runs in, ``speed`` checked first.
 
     ``speed`` is taken as asked on a CPU, where there is no card to overflow,
@@ -1761,7 +1764,9 @@ def _resolve_memory_mode_for(memory_mode, system, pseudos, k_batch, projectors,
     another calculation. Otherwise :func:`~defumat.sizing.speed_mode_fits`
     sizes the whole k-set in flight against the device, and a run that would
     not fit falls back to ``memory``: the same physics, the same numbers to
-    round-off, one k-point's working set on the card.
+    round-off, one k-point's working set on the card. ``nbnd`` sizes a solve
+    at another band count than the system's, and ``purpose`` names it in the
+    warning (:meth:`Calculation.for_bands`).
     """
     from defumat import batching
 
@@ -1776,12 +1781,13 @@ def _resolve_memory_mode_for(memory_mode, system, pseudos, k_batch, projectors,
         return mode
     from defumat.sizing import speed_mode_fits
 
-    check = speed_mode_fits(system, pseudos, nbnd=system.nbnd,
+    check = speed_mode_fits(system, pseudos, nbnd=nbnd or system.nbnd,
                             davidson_basis=david)
     if check.fits:
         return mode
     warnings.warn(
-        f"memory_mode='speed' does not fit this device ({check.describe()}); "
+        f"memory_mode='speed' does not fit this device"
+        f"{' for ' + purpose if purpose else ''} ({check.describe()}); "
         "running in memory_mode='memory' instead -- one k-point at a time, "
         "projectors rebuilt per k-point and the wavefunctions streamed from "
         "host memory. Same physics and the same numbers to round-off; pass an "
@@ -1792,7 +1798,7 @@ def _resolve_memory_mode_for(memory_mode, system, pseudos, k_batch, projectors,
 
 
 def resolve_band_batch_for(band_batch, mode, system, pseudos, k_batch="default",
-                           projectors="default", david=None):
+                           projectors="default", david=None, nbnd=None):
     """The band batch a :class:`Calculation` runs at: one resolution for every caller.
 
     In order: an explicit ``band_batch``; then ``DEFUMAT_BAND_BATCH``; then, in
@@ -1819,7 +1825,7 @@ def resolve_band_batch_for(band_batch, mode, system, pseudos, k_batch="default",
     from defumat.sizing import choose_band_batch
 
     choice = choose_band_batch(
-        system, pseudos, nbnd=system.nbnd, davidson_basis=david,
+        system, pseudos, nbnd=nbnd or system.nbnd, davidson_basis=david,
         k_batch=resolve_k_batch(k_batch, mode),
         projectors=resolve_projectors(projectors, mode),
         wfc_store=resolve_wfc_store("default", mode),
@@ -1904,6 +1910,9 @@ class Calculation:
             band_batch, self.memory_mode, system, pseudos, k_batch,
             projectors, david,
         )
+        # What was asked for, before resolution: :meth:`for_bands` re-resolves
+        # the same requests at another band count.
+        self._dial_requests = (memory_mode, k_batch, projectors, band_batch)
         #: Carry the ``l = 1`` tangent of ``<k+G|beta>`` at ``k + G = 0``.
         #:
         #: The default is the derivative the operator actually has. ``False``
@@ -3340,6 +3349,61 @@ class Calculation:
         # projectors, which is silently wrong rather than an error.
         if self.hubbard is not None:
             moved.wfcU = moved._build_hubbard_projectors()
+        return moved
+
+    def band_count(self, nbnd: int | None = None) -> int:
+        """``nbnd`` if given, else the system's, else QE's default for this run."""
+        system = self.system
+        return nbnd or system.nbnd or default_nbnd(
+            self.nelec,
+            system.occupations,
+            *((self.nelup, self.neldw) if system.nspin == 2 else (None, None)),
+            noncolin=system.noncolin,
+        )
+
+    def for_bands(self, nbnd: int) -> "Calculation":
+        """This calculation with its memory dials re-checked for ``nbnd`` bands.
+
+        The memory mode and the band batch are decided once, at construction,
+        for the SCF's band count. A fixed-density solve asks for its own, and
+        it can be many times larger -- an optical spectrum's sixty bands on
+        silicon, whose SCF has four -- so a dial that fitted the SCF can overflow
+        the solve: on a card, speed mode's whole-k, whole-band block, or memory
+        mode's band batch. Both are re-resolved here from the same requests at
+        ``nbnd``: speed mode falls back to memory mode when the solve would not
+        fit, and memory mode's batch is re-chosen from the card
+        (``GPU-MEMORY-NEXT.md``, "The dials are sized for the SCF's bands").
+
+        Returns ``self`` when nothing changes -- on a CPU, for a band count no
+        larger than the SCF's, and wherever the caller set the dials -- and
+        otherwise a copy sharing every array, with only the dials moved. The
+        numbers do not depend on any of them beyond round-off.
+        """
+        from defumat import batching
+
+        if batching._backend() == "cpu" or nbnd <= self.band_count():
+            return self
+        requests = getattr(self, "_dial_requests", None)
+        if requests is None:
+            return self
+        memory_mode, k_batch, projectors, band_batch = requests
+        mode = self.memory_mode
+        if mode == "speed":
+            mode = _resolve_memory_mode_for(
+                memory_mode, self.system, self.pseudos, k_batch, projectors,
+                self.david, purpose=f"a solve at {nbnd} bands", nbnd=int(nbnd))
+        dials = (mode, resolve_k_batch(k_batch, mode),
+                 resolve_band_batch_for(band_batch, mode, self.system,
+                                        self.pseudos, k_batch, projectors,
+                                        self.david, nbnd=int(nbnd)))
+        if dials == (self.memory_mode, self.k_batch, self.band_batch):
+            return self
+        moved = copy.copy(self)
+        # A compiled function closes over the chunking it was built with.
+        for name in ("_spiral_gradient", "_spiral_gradient_chunk",
+                     "_energy_gradient", "_chunked_gradient"):
+            moved.__dict__.pop(name, None)
+        moved.memory_mode, moved.k_batch, moved.band_batch = dials
         return moved
 
     def at_rows(self, rows) -> "Calculation":

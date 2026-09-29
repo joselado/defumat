@@ -35,7 +35,7 @@ from defumat.response.shg import (
     require_an_shg_regime,
     second_harmonic,
 )
-from defumat.workflows.nscf import fixed_density_states
+from defumat.workflows.nscf import fixed_density_states, threaded_calculation
 
 __all__ = ["run_shg"]
 
@@ -56,6 +56,7 @@ def run_shg(
     degeneracy_tol: float | None = None,
     conv_thr: float = 1.0e-10,
     k_batch="default",
+    calculation=None,
 ) -> SecondHarmonic:
     """``chi^(2)(-2w; w, w)`` in pm/V for a converged run.
 
@@ -66,12 +67,20 @@ def run_shg(
         kpoints: a denser k-set to evaluate on. It must be the **whole**
             unshifted grid; a wedge is refused by name.
         nbnd: how many bands to diagonalise. Both sums use them.
+        calculation: the SCF's own, used on its own k-set or moved to
+            ``kpoints`` rather than a second one built beside it
+            (:func:`~defumat.workflows.nscf.threaded_calculation`).
 
     The remaining arguments are
     :func:`~defumat.response.shg.second_harmonic`'s.
     """
     from defumat.scf.driver import Calculation
 
+    # The caller's own calculation, when handed one, is used on its own k-set or
+    # moved to ``kpoints`` rather than a second one built beside it, so it
+    # follows the caller's memory mode (``GPU-MEMORY-NEXT.md`` item 20).
+    calculation, system, kpoints, k_batch = threaded_calculation(
+        calculation, system, kpoints, k_batch)
     if kpoints is not None:
         import equinox as eqx
 
@@ -88,7 +97,8 @@ def run_shg(
     # for the empty states. The calculation the check reads is then the one
     # the run diagonalises in, where it used to be built a second time
     # (``OPEN.md`` Part III, H3), with the ``k_batch`` both builds carried.
-    calculation = Calculation(system, pseudos, k_batch=k_batch)
+    if calculation is None:
+        calculation = Calculation(system, pseudos, k_batch=k_batch)
     require_an_shg_regime(calculation)
 
     if nbnd is None:
@@ -106,6 +116,9 @@ def run_shg(
         conv_thr=conv_thr, k_batch=k_batch, becsum=becsum,
         calculation=calculation,
     )
+    # The solve re-checks the dials at its own band count (``Calculation.
+    # for_bands``); what follows runs at whatever it resolved to.
+    k_batch = calculation.k_batch
     eigenvalues = jnp.asarray(eigenvalues)
     if eigenvalues.ndim == 2:
         eigenvalues = eigenvalues[None]

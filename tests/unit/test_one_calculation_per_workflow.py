@@ -233,3 +233,71 @@ def test_a_default_chunk_defers_to_the_threaded_calculation():
     with pytest.raises(ValueError, match="chunk size is fixed"):
         _require_a_matching_calculation(
             _a_built_calculation(k_batch=None), None, 2, None)
+
+
+# -- the calculator's own calculation reaches the solve -------------------------
+
+
+def _converged_stand_in():
+    """What the ``get_*`` methods read off a ground state before the solve.
+
+    The density is never touched -- the solve stops at ``potential`` -- and the
+    mixed-state arguments (``ns``, ``becsum``, ``tau``) are absent, as they are
+    for this cell.
+    """
+    result = types.SimpleNamespace(density=None, fermi_energy=0.0, homo=0.0)
+    result.require_converged = lambda quantity: result
+    return result
+
+
+@pytest.mark.parametrize(
+    "call, extra",
+    [
+        (lambda c: c.get_optical_conductivity(), ""),
+        (lambda c: c.get_absorption(np.array([0.1])), ""),
+        (lambda c: c.get_shg(nbnd=8), ""),
+        (lambda c: c.get_shift_current(nbnd=8), ""),
+        (lambda c: c.get_spin_susceptibility(np.zeros(3), np.array([0.01])),
+         _MAGNETIC),
+        (lambda c: c.get_magnon_dispersion(np.zeros((1, 3)), np.array([0.01])),
+         _MAGNETIC),
+    ],
+    ids=["conductivity", "absorption", "shg", "shift-current",
+         "spin-susceptibility", "magnon-dispersion"],
+)
+def test_the_calculator_hands_the_spectra_its_own_calculation(
+    call, extra, pseudo_dir, monkeypatch
+):
+    """No second ``Calculation`` beside the calculator's, and the solve uses its.
+
+    ``GPU-MEMORY-NEXT.md`` item 20. A second build shares nothing with the
+    first, and it is built without the calculator's ``memory_mode``, so a
+    speed-mode calculator's spectrum used to run in the platform's default
+    mode without saying so.
+    """
+    from defumat import Calculator
+
+    calculator = Calculator.from_text(_SILICON.format(extra=extra), pseudo_dir,
+                                      announce=False)
+    own = calculator.calculation
+    calculator._scf = _converged_stand_in()
+
+    built, reached = [], []
+    original = Calculation.__init__
+
+    @functools.wraps(original)
+    def counting(self, *args, **kwargs):
+        built.append(self)
+        original(self, *args, **kwargs)
+
+    def stop(self, *args, **kwargs):
+        reached.append(self)
+        raise _ReachedTheSolve
+
+    monkeypatch.setattr(Calculation, "__init__", counting)
+    monkeypatch.setattr(Calculation, "potential", stop)
+
+    with pytest.raises(_ReachedTheSolve):
+        call(calculator)
+    assert not built, f"{len(built)} Calculation objects built beside the calculator's"
+    assert len(reached) == 1 and reached[0] is own

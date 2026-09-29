@@ -8000,3 +8000,70 @@ The first row is mostly the real `Q_ij(G)` (item 19: the resident table halves a
 complex assembly transient goes); the second is the column-streamed plane (item 5), whose
 states never exceed the SCF's own peak; the third the state-keeping streamed solve and the
 chunked projections (items 1 and 4), where the whole-k atomic projectors are what is left.
+
+## The 2.6 GB silicon spectrum was speed mode; the dials are now re-sized for a solve's bands (GTX 1060, 2026-09-29)
+
+`GPU-MEMORY-NEXT.md` item 12 recorded the TDDFT silicon cell (`si-epsilon-unshifted-nosym`,
+64 k-points, 60 bands, `ecut_response = 8`) at **2613.9 MB at every pair batch** and "the
+peak is set elsewhere". Reproduced with the script that took it (`Calculation(memory_mode=
+"speed")`, `run_scf`, `fixed_density_states(nbnd = 60)`, `independent_response`), and
+located by reading `peak_bytes_in_use` after each stage in one process:
+
+| stage | speed mode | memory mode |
+|---|---:|---:|
+| SCF (4 bands) | 144.3 MB | 6.9 MB |
+| + fixed-density solve, 60 bands | 1867.0 MB | 29.3 MB |
+| + `chi_0` | 2613.5 MB | 110.2 MB |
+
+**It is speed mode doing what it is for**: all 64 k-points and all 60 bands through the
+grid at once in the solve, and every k-point's states in real space at once in `chi_0`. No
+defect; the same chain is 24x smaller in memory mode. `get_absorption` on the whole chain
+(bootstrap, 120 frequencies, scissor, static residual) peaks at **226.5 MB** in memory mode
+and 230.8 MB in speed mode -- lower than the script, because `run_absorption` built its own
+`Calculation` without the calculator's `memory_mode` and so ran the solve in memory mode
+whatever the calculator was set to. **The frequency dial moved nothing here**: the same
+chain before `w_batch` existed reads 229.8 MB (memory mode) and 234.1 MB (speed), so
+3.3 MB, because the frequency block is not the peak on this cell. A guess that it was (a
+42 MB block times 64 k-points) was wrong.
+
+Three changes follow.
+
+* **The six sum-over-states spectra take `calculation=`** (`run_absorption`,
+  `run_conductivity`, `run_shg`, `run_shift_current`, `run_spin_susceptibility`,
+  `run_magnon_dispersion`, through `workflows/nscf.threaded_calculation`), and the
+  `Calculator` passes its own: no second setup, and the calculator's memory mode is
+  followed. `test_one_calculation_per_workflow.py` fails on all six without it.
+* **A fixed-density solve re-sizes the dials for its own band count**
+  (`Calculation.for_bands`, called by `fixed_density_states`). The memory mode and the band
+  batch were decided once, at construction, for the SCF's bands, and a solve at 15x as
+  many ran at them. The estimate is not the problem: asked for 60 bands in speed mode it
+  says 1239.5 MB against the measured 1867.0, the 1.5x this card is known to need and
+  `SPEED_HEADROOM` covers; it was simply never asked. Now speed mode falls back to memory
+  mode for a solve that would not fit (with a warning naming the band count) and memory
+  mode re-chooses its batch. On `benchmarks/h40-chain-lsda.in` in a pool cut to 2122 MB
+  (`XLA_CLIENT_MEM_FRACTION=0.35`; the SCF chooses 8 of 56 bands at a time and peaks at
+  1213.1 MB), a solve at 84 bands:
+
+  | | band batch | peak | band-energy sum |
+  |---|---:|---:|---:|
+  | before | 8 (the SCF's) | 1456.1 MB | -26.958662639606686 Ry |
+  | after | 1 (re-chosen) | **1371.5 MB** | -26.958662639606622 Ry |
+
+  Neither dies at 84. At 168 bands both do (`RESOURCE_EXHAUSTED` on 1.86 GiB after 46 s of
+  the solve): the estimate at one band is 2471 MB against a 2122 MB pool, so nothing can
+  rescue it, and the difference is that the run now says so before it starts.
+* **`jax.device_put`, not `jnp.asarray`, for a large host array.** On this card
+  `jnp.asarray` of a 256 MB numpy array peaks at 512 MB on the device and `device_put` at
+  256 MB (float64 and complex128 alike; `jnp.array` is the same as `asarray`). The streamed
+  store already crossed with `device_put`; the assembled projector core and the projections'
+  chunks did not. Eight-atom Si at 20 Ry, `nosym`, 216 k-points, memory mode: setup peak
+  **38.5 -> 35.4 MB** (the SCF's own 61.8 MB is higher, so the run's peak does not move on
+  this cell; the transient is twice the core, which grows with the mesh).
+
+**And the question item 17 left open, answered**: a device array a `jit` closes over is
+*not* copied a second time on the card -- 256 MB in use whether a 256 MB array is closed
+over or passed as an argument. What closing over does is keep it alive: deleting the
+array frees it when it was an argument and leaves the 256 MB in use when it was a
+constant, for as long as the compiled function lives (`tools`-free script, one process
+per case, run twice). So hoisting the per-k tables bought nothing in peak on the card;
+what it changes is how long a table the program has dropped stays on the device.

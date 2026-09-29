@@ -6987,9 +6987,13 @@ complex), which is the point but is not free. And \textbf{the fall-back from
 the estimate would describe another calculation, so nothing is checked.
 \textbf{A mode given to a \code{Calculator} configures its own setup}, and the
 calculator's post-SCF methods --- bands, NSCF, DOS, PDOS, STM, transport,
-structure factors, the spiral scan, the topological invariants --- run on that
-same setup, moved to their own $k$-points where they need others, so they follow
-its mode. The magnetic-anisotropy force theorem and torque build a setup of
+structure factors, the spiral scan, the topological invariants, the optical and
+magnetic spectra --- run on that same setup, moved to their own $k$-points where
+they need others, so they follow its mode. \textbf{A solve at more bands than the
+SCF is re-checked for its own count}: the mode and the band batch were sized for
+the SCF's bands, so a spectrum's sixty bands on a cell whose SCF has four can
+fall back from \code{'speed'} to \code{'memory'}, or run fewer bands at a time,
+for that solve alone, with a warning. The magnetic-anisotropy force theorem and torque build a setup of
 their own, because they rotate the moments; they resolve the mode from
 \code{DEFUMAT\_MEMORY\_MODE} and the platform.
 \end{refuses}

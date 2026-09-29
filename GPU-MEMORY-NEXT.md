@@ -140,8 +140,10 @@ below:
   indices, a meta-GGA's `k + G`, `vltot` and the core charge. Ultrasoft silicon at 64
   k-points: the force gradient's constants **2.85 -> 0.29 MB**, the stress's 0.68 -> 0.58 MB
   (`make_jaxpr(...).consts`); forces and stress bit-identical to the old tuple on ultrasoft,
-  PAW, noncollinear, DFT+U and LSDA cells. Whether a card keeps a second copy of a constant
-  is still unmeasured.
+  PAW, noncollinear, DFT+U and LSDA cells. **On the card** (2026-09-29, a 256 MB array): a
+  closed-over device array is *not* copied a second time -- the same 256 MB in use as an
+  argument -- but it stays alive for as long as the compiled function does, where an
+  argument is freed when dropped. So the hoisting changes retention, not peak.
 * **Item 3** (2026-09-29): the force and the stress walk the k axis where the state is a
   host store or memory mode's chunk is smaller than the k-set (`forces/chunked.py`): a forward
   walk for the raw `becsum`, smooth density and `ns`, one `value_and_grad` of the global terms
@@ -197,9 +199,16 @@ below:
   through `DFTSource.calculation`, `run_berry_curvature`, `run_z2`, `run_z2_3d` and
   `run_orbital_magnetization` take `calculation=`, and the `Calculator` passes its own. With
   the same options the results are identical to a fresh setup's (AlAs Berry flux, the
-  hydrogen-chain spiral scan: differences of 0.0). Nothing in the list builds a second
-  `Calculation` beside the calculator's any more, except the force theorem, which rotates
-  the system.
+  hydrogen-chain spiral scan: differences of 0.0). *That sentence then said nothing else
+  built a second `Calculation` except the force theorem, which was wrong*: the six
+  sum-over-states spectra did (next bullet).
+* **Item 20, fourth part** (2026-09-29): `run_absorption`, `run_conductivity`, `run_shg`,
+  `run_shift_current`, `run_spin_susceptibility` and `run_magnon_dispersion` take
+  `calculation=` and the `Calculator` passes its own
+  (`test_one_calculation_per_workflow.py`, which fails on all six without it). They are
+  norm-conserving only, so the second setup cost little memory; what it dropped was the
+  calculator's `memory_mode`, so a speed-mode calculator's spectrum ran in the platform's
+  default mode without saying so. Now only the force theorem builds its own.
 * **Item 25** (2026-09-29): recorded in `GPU.md` Phase 4 -- k-sharding divides time, not
   per-device memory; distributing the plane waves by sticks is the memory lever.
 * **Item 12, second bullet** (2026-09-29): the TDDFT frequency axis has a dial, `w_batch`
@@ -212,7 +221,9 @@ below:
   point on the one frequency it depends on and screens the axis once in chunks into a donated
   output, keeping one `(1, nm, nm)` `fxc`. Bit-identical to the old loop on synthetic data; on
   silicon `eps_M` agrees to 8e-19 and `chi_0` to 7e-15; the bootstrap at `nw = 200` goes from
-  56.6 to 0.94 s warm (machine loaded). Not measured on the card.
+  56.6 to 0.94 s warm (machine loaded). **On the card**, `get_absorption` on the silicon
+  cell (120 frequencies, bootstrap, scissor, static residual): 229.8 -> 226.5 MB in memory
+  mode, 234.1 -> 230.8 MB in speed mode -- the frequency block is not the peak on this cell.
 * **The row-subset `Calculation`** (2026-09-29), the prerequisite items 2 and 6 name:
   `Calculation.at_rows(rows)` slices every array with a k index (spheres selected, FFT and
   stick indices, `|k+G|^2`, `ProjectorCore.rows`, `wfcU`) and shares the rest; `npwx` and the
@@ -222,9 +233,25 @@ below:
   stress use it; the response stack does not yet.
 * **Item 1** (the fixed-density solve): an eigenvalue-only solve streams where the store
   does and keeps no states. On eight-atom Si the band path's peak is 102.8 -> 44.8 MB at 200
-  points and 383.4 -> 163.6 MB at 800, for 2-3 per cent in time. **Still 0.20 MB per
-  k-point**, not states: 0.089 of it is the band path's own `Calculation`'s resident
-  per-k tables (measured, items 6 and 20), the rest unattributed.
+  points and 383.4 -> 163.6 MB at 800, for 2-3 per cent in time. The 0.20 MB per k-point
+  left then is since **0.072 MB**: the rest was the core build's transient, gone with item
+  6's chunked build (`PERFORMANCE.md`, "the 0.11 MB per k-point left unattributed ... was
+  this build's transient"). What remains is the band path's own resident per-k tables,
+  which is item 6's third bullet.
+
+* **The dials are sized for the SCF's bands** (2026-09-29, found locating item 12's 2.6 GB):
+  the memory mode and the band batch were resolved once, for the SCF's band count, and a
+  fixed-density solve at many more bands ran at them. `Calculation.for_bands(nbnd)`,
+  called by `fixed_density_states`, re-resolves both from the same requests: speed mode
+  falls back for a solve that would not fit, memory mode re-chooses its batch. `h40-chain-
+  lsda.in` in a 2122 MB pool, 84 bands: batch 8 -> 1, peak 1456.1 -> 1371.5 MB, band
+  energies to 6e-14 Ry; at 168 bands nothing fits and the run now says so before starting.
+  `test_band_budget.py`.
+* **`jax.device_put`, not `jnp.asarray`, for a large host array** (2026-09-29): on the card
+  `jnp.asarray` of a host array peaks at twice its size on the device, `device_put` at
+  once. The assembled projector core and the projections' chunks now cross with
+  `device_put` (the streamed store already did): eight-atom Si, 216 k-points, setup peak
+  38.5 -> 35.4 MB. Other `jnp.asarray` uploads of large host arrays have not been audited.
 
 ## Suggested order
 
@@ -488,7 +515,11 @@ donating variant of `_every_k` used only when the caller passes a way to rebuild
   1060 on the TDDFT silicon cell (`si-epsilon-unshifted-nosym`, 60 bands, `ecut_response =
   8`, 224 pairs): the peak is 2613.9 MB at every pair batch -- all, 1, 8, 32 and the budget --
   and `chi_0` identical, because 224 pair boxes on this grid are about 29 MB and the peak is
-  set elsewhere. The budget is unmeasured on a cell where the pair axis is the peak.
+  set elsewhere -- **located 2026-09-29**: that script ran in speed mode, and 1867 MB of it
+  is the 60-band solve with all 64 k-points in flight, the rest `chi_0`'s real-space states
+  for all 64 at once. In memory mode the same chain is 110.2 MB (`PERFORMANCE.md`, "The
+  2.6 GB silicon spectrum was speed mode"). The budget is unmeasured on a cell where the
+  pair axis is the peak.
   **`chi_0`'s pair axis
   defaults to the band dial**, which is `all` on any card in both
   modes (`tddft/chi0.py:468`), so every pair's box is in flight -- the module's own 26 GB
@@ -497,6 +528,8 @@ donating variant of `_every_k` used only when the caller passes a way to rebuild
 * **The TDDFT frequency axis has no dial** (`MEMORY-AUDIT.md` A10, open, and
   `PERFORMANCE.md`'s backlog): the `chi_0` assembly holds `(nw, 2 npairs, nm)` per chunk
   and the Dyson loop iterates every frequency with `nw` copies of `f_xc`. Chunk `w`. Medium.
+  **Done 2026-09-29** (`w_batch`, see "Done since"); on the card the silicon spectrum's
+  whole chain reads 229.8 -> 226.5 MB, because the frequency block is not the peak there.
 * **Done 2026-09-28, not measured on this card.** **Duplicate stacks and dead blocks in the third-derivative drivers**: `b = jnp.stack(
   internals['bare'])` and `u = ...['dpsi']` copy while the lists are still held
   (`response/nonlinear.py:469-470`), the commutator stack copies even where it aliases
@@ -605,8 +638,9 @@ symmetry maps become executable constants. Hoisting the first two took one-atom 
 stress constants from 1062 MB to 10.1 MB (`PERFORMANCE.md`, "A gigabyte of constants");
 the rest is 253 MB of core on nbse2. **Fix**: split the `Calculation`'s array leaves with
 `eqx.partition` and pass them as an argument, so no large array can become a constant.
-Whether XLA:GPU keeps a second resident copy of a constant is unmeasured and decides the
-size of the win.
+Whether XLA:GPU keeps a second resident copy of a constant was unmeasured and decided the
+size of the win: **it does not** (measured 2026-09-29, see "Done since"), so the win is in
+how long a dropped table stays on the card, not in the peak.
 
 ---
 

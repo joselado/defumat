@@ -26,7 +26,7 @@ import numpy as np
 
 from defumat.batching import resolve_k_batch, resolve_wfc_store
 from defumat.pseudo.upf import Pseudopotential
-from defumat.scf.driver import Calculation, default_nbnd
+from defumat.scf.driver import Calculation
 from defumat.solvers.davidson import DAVID_NDIM, ETHR_MIN
 from defumat.system.builder import System
 from defumat.system.cell import Cell
@@ -207,12 +207,11 @@ def fixed_density_states(
     _warn_if_the_sign_axis_cuts_the_texture(calculation, density)
     if kcart is not None:
         calculation = calculation.at_kcart(jnp.asarray(kcart))
-    nbnd = nbnd or system.nbnd or default_nbnd(
-        calculation.nelec,
-        system.occupations,
-        *((calculation.nelup, calculation.neldw) if system.nspin == 2 else (None, None)),
-        noncolin=system.noncolin,
-    )
+    nbnd = calculation.band_count(nbnd)
+    # The dials were sized for the SCF's band count; a solve at more bands is
+    # re-checked against the card, and whatever it resolves to is the
+    # calculation handed back, so the consumer of the states runs at it too.
+    calculation = calculation.for_bands(nbnd)
 
     if calculation.is_paw and not becsum:
         # A PAW Hamiltonian's nonlocal coefficients are D^(0) + int V Q + ddd_paw,

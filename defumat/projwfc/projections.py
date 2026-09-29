@@ -46,6 +46,7 @@ wavefunctions they are made from.
 from __future__ import annotations
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -348,7 +349,7 @@ def atomic_projections(
                 chunk = np.asarray(map_k(
                     one_kpoint,
                     (projectors[jnp.asarray(rows)],
-                     jnp.asarray(np.ascontiguousarray(states[rows]))),
+                     jax.device_put(np.ascontiguousarray(states[rows]))),
                     batch=calculation.k_batch))
                 if out is None:
                     out = np.empty((len(wavefunctions), nk) + chunk.shape[1:],
