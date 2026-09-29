@@ -264,10 +264,12 @@ def test_the_tabulated_augmentation_charge_agrees_with_the_stored_one(pseudo_dir
 
     # And the point of the exercise. The ratio is ngm/nqx and so grows with
     # the cell: 9.7x on this two-atom one, 38x on benchmarks/si8-us-1k.in, and
-    # 9100x on the 45-atom NiBr2 slab this was written for.
+    # 9100x on the 45-atom NiBr2 slab this was written for -- each against the
+    # complex table. The stored table is real since GPU-MEMORY-NEXT.md item 19,
+    # which halves every one of them: 4.8x here.
     held_stored = sum(q.nbytes for q in stored.qgm)
     held_table = sum(t.nbytes for t in tabulated.tables if t is not None)
-    assert held_table * 5 < held_stored
+    assert held_table * 4 < held_stored
 
 
 @pytest.mark.parametrize("chunk", [1024, 5000], ids=["divides-npad", "does-not"])

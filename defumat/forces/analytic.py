@@ -450,18 +450,20 @@ def _addusforce(calculation, becsum_, total, gcart, phases, volume):
             index = jnp.asarray(atoms)
             # becsum is (nspin, nat_t, nh, nh) whatever nspin is -- the spin
             # axis is never squeezed on the way in, only on the way out.
+            # ``sum_ij becsum_ij Q_ij(G)`` -- the same contraction addusdens
+            # does, per atom, from the real table and its pair phase.
+            charge = augmentation.species_channels(
+                t, becsum_[t][spin].astype(phases.dtype))
             contribution = _augmentation_force(
-                qgm, becsum_[t][spin], v_g, phases[index], gcart, volume,
+                charge, v_g, phases[index], gcart, volume,
             )
             forces = forces.at[index].add(contribution)
     return forces
 
 
 @jax.jit
-def _augmentation_force(qgm, becsum, v_g, phases, gcart, volume):
-    """One species' contribution: ``(nat_t, 3)``."""
-    # sum_ij becsum_ij Q_ij(G) -- the same contraction addusdens does, per atom
-    charge = jnp.einsum("aij,ijg->ag", becsum.astype(qgm.dtype), qgm)
+def _augmentation_force(charge, v_g, phases, gcart, volume):
+    """One species' contribution: ``(nat_t, 3)``, from its ``(nat_t, ngm)`` charge."""
     field = jnp.conj(charge) * (v_g * jnp.conj(phases))
     weight = jnp.imag(field)
     weight = weight.at[:, 0].set(0.0)

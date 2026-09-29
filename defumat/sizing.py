@@ -736,8 +736,12 @@ def estimate_size(
             datasets.append((pseudo, nl_species, len(projector_channels(pseudo))))
 
         nh_max = max(nh for _, _, nh in datasets)
-        qgm_bytes = sum(nh * nh * ngm * zc for _, _, nh in datasets)
-        if qgm_bytes <= _aug_max_bytes():
+        # The route is decided on the complex table's size, as
+        # ``build_augmentation`` decides it; what a stored route then holds is
+        # the real ``R_ij(G)`` (``AugmentationCharge``), half of that.
+        gate_bytes = sum(nh * nh * ngm * zc for _, _, nh in datasets)
+        qgm_bytes = sum(nh * nh * ngm * zr for _, _, nh in datasets)
+        if gate_bytes <= _aug_max_bytes():
             arrays["augmentation Q_ij(G) (nh,nh,ngm)"] = qgm_bytes
             arrays["augmentation phases (nat,ngm)"] = len(structure.types) * ngm * zc
             # ``_species_charge``'s intermediate, one species at a time, so the

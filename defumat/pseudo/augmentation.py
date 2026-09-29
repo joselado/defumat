@@ -98,9 +98,23 @@ class AugmentationCharge(eqx.Module):
     - ``qq`` is ``Omega * Q_ij(b)``, **complex**, which is the same number
       :func:`defumat.topology.augmentation.augmentation_at_q` builds at a
       single wavevector. It is not an overlap and must not be given to ``S``.
+
+    **The stored table is real, and the phase is a property of the pair.**
+    ``Q_ij(G) = sum_LM (-i)^L ap(LM,i,j) Y_LM(G) Q^L_ij(|G|)``, every factor but
+    ``(-i)^L`` is real, and the real Gaunt coefficient ``ap`` vanishes unless
+    ``l_i + l_j + L`` is even. So ``(-i)^L = (-i)^(l_i + l_j) (-1)^((L - l_i -
+    l_j)/2)`` on every term that survives, and ``Q_ij(G) = p_ij R_ij(G)`` with
+    ``R`` real and ``p_ij = (-i)^(l_i + l_j)`` one of ``1, -i, -1, i``. ``qgm``
+    holds ``R`` -- half the bytes of the complex table (1.12 GB for a
+    fully-relativistic bismuth dataset) -- and ``pair_phase`` holds ``p``; the
+    consumers put the phase on the small side of each contraction, so no
+    complex ``(nh, nh, ngm)`` array is ever formed (``GPU-MEMORY-NEXT.md`` item
+    19). The same holds for a displaced table: ``G + b`` is still a real
+    vector. What is dropped is the wrong-parity part of ``ap``, which the
+    matrix inverse that builds it leaves at round-off rather than at zero.
     """
 
-    qgm: tuple  # per species, (nh, nh, ngm) complex
+    qgm: tuple  # per species, (nh, nh, ngm) real -- R_ij(G); Q_ij = pair_phase * R
     qq: tuple  # per species, (nh, nh) real -- Omega * Q_ij(G=0)
     phases: jnp.ndarray  # (nat, ngm) complex
     volume: jnp.ndarray  # bohr^3
@@ -111,6 +125,11 @@ class AugmentationCharge(eqx.Module):
     #: the ordinary ``Q_ij(G)``. Traced, not static: a spiral's ``dE/dq``
     #: differentiates the energy with respect to it.
     shift: jnp.ndarray | None = None
+    #: Per species, ``(nh, nh)`` complex: ``(-i)^(l_i + l_j)``, the phase the
+    #: real ``qgm`` is multiplied by to give ``Q_ij(G)``. Empty for a species
+    #: with no augmentation charge, and on :class:`TabulatedAugmentation`,
+    #: which rebuilds the complex table a chunk at a time.
+    pair_phase: tuple = ()
 
     @property
     def ntyp(self) -> int:
@@ -159,7 +178,8 @@ class AugmentationCharge(eqx.Module):
         for t, (q, atoms) in enumerate(zip(self.qgm, self.species_atoms)):
             if q.shape[0] == 0 or not atoms:
                 continue
-            contribution = _species_charge(q, becsum[t], self.phases[jnp.asarray(atoms)])
+            contribution = _species_charge(q, self.pair_phase[t], becsum[t],
+                                           self.phases[jnp.asarray(atoms)])
             total = contribution if total is None else total + contribution
         if total is None:
             return jnp.zeros(self.phases.shape[-1], dtype=self.phases.dtype)
@@ -174,16 +194,26 @@ class AugmentationCharge(eqx.Module):
         ``newq_acc`` transforms.
         """
         result = []
-        for q, atoms in zip(self.qgm, self.species_atoms):
+        for t, (q, atoms) in enumerate(zip(self.qgm, self.species_atoms)):
             if q.shape[0] == 0 or not atoms:
                 result.append(jnp.zeros((len(atoms), q.shape[0], q.shape[0])))
                 continue
             result.append(
                 _species_integrals(
-                    q, potential_g, self.phases[jnp.asarray(atoms)], self.volume
+                    q, self.pair_phase[t], potential_g,
+                    self.phases[jnp.asarray(atoms)], self.volume,
                 )
             )
         return tuple(result)
+
+    def species_channels(self, t: int, becsum: jnp.ndarray) -> jnp.ndarray:
+        """``(nat_t, ngm)``: ``sum_ij becsum_ij^a Q_ij(G)`` for species ``t``.
+
+        The per-atom augmentation charge before its structure factor, which is
+        what ``addusforce`` contracts. Built from the real table and the pair
+        phase without a complex copy of the table (see the class docstring).
+        """
+        return species_channels(self.qgm[t], self.pair_phase[t], becsum)
 
     def at_positions(self, positions: jnp.ndarray, gcart: jnp.ndarray):
         """The same augmentation charge with the atoms somewhere else.
@@ -216,7 +246,7 @@ class AugmentationCharge(eqx.Module):
         either the table is displaced or the potential is complex.
         """
         result = []
-        for q, atoms in zip(self.qgm, self.species_atoms):
+        for t, (q, atoms) in enumerate(zip(self.qgm, self.species_atoms)):
             if q.shape[0] == 0 or not atoms:
                 result.append(
                     jnp.zeros((len(atoms), q.shape[0], q.shape[0]),
@@ -225,7 +255,8 @@ class AugmentationCharge(eqx.Module):
                 continue
             result.append(
                 _species_cross_integrals(
-                    q, potential_g, self.phases[jnp.asarray(atoms)], self.volume
+                    q, self.pair_phase[t], potential_g,
+                    self.phases[jnp.asarray(atoms)], self.volume,
                 )
             )
         return tuple(result)
@@ -266,28 +297,64 @@ class AugmentationCharge(eqx.Module):
 
 
 @jax.jit
-def _species_charge(qgm, becsum, phases):
+def species_channels(table, pair_phase, becsum):
+    """``sum_ij becsum_ij^a Q_ij(G)``, ``(nat, ngm)``, from the real table.
+
+    ``Q_ij = p_ij R_ij`` with ``R`` real (:class:`AugmentationCharge`), so the
+    phase goes onto ``becsum`` -- ``(nat, nh, nh)``, small -- and the complex
+    contraction against the real table is two real ones. Contracting a complex
+    ``becsum`` with ``R`` directly would promote ``R`` to a complex copy of the
+    whole table, which is the array this layout exists not to hold.
+    """
+    weighted = becsum.astype(pair_phase.dtype) * pair_phase
+    return jax.lax.complex(
+        jnp.einsum("aij,ijg->ag", jnp.real(weighted), table),
+        jnp.einsum("aij,ijg->ag", jnp.imag(weighted), table),
+    )
+
+
+@jax.jit
+def _species_charge(table, pair_phase, becsum, phases):
     """``sum_a sum_ij becsum_ij^a Q_ij(G) e^{-i G tau_a}`` for one species.
 
     The association is :meth:`AugmentationCharge.charge`'s subject: the
     intermediate here is ``(nat, ngm)`` and not ``(nh, nh, ngm)``.
     """
-    channels = jnp.einsum("aij,ijg->ag", becsum.astype(phases.dtype), qgm)
+    channels = species_channels(table, pair_phase, becsum.astype(phases.dtype))
     return jnp.einsum("ag,ag->g", channels, phases)
 
 
-@jax.jit
-def _species_integrals(qgm, potential_g, phases, volume):
-    """``Omega * Re sum_G conj(Q_ij(G)) V(G) e^{+i G tau_a}``."""
-    shifted = potential_g[None, :] * jnp.conj(phases)  # (nat, ngm)
-    return volume * jnp.real(jnp.einsum("ijg,ag->aij", jnp.conj(qgm), shifted))
+def _conjugate_table_sum(table, pair_phase, shifted):
+    """``sum_G conj(Q_ij(G)) s_a(G)`` in pieces: ``(Re p, Im p, A, B)``.
+
+    ``conj(Q_ij) = conj(p_ij) R_ij``, so the sum is ``conj(p_ij) (A + i B)``
+    with ``A = sum_G R_ij Re s_a`` and ``B = sum_G R_ij Im s_a`` -- two real
+    contractions against the real table, never a complex copy of it.
+    """
+    a = jnp.einsum("ijg,ag->aij", table, jnp.real(shifted))
+    b = jnp.einsum("ijg,ag->aij", table, jnp.imag(shifted))
+    return jnp.real(pair_phase), jnp.imag(pair_phase), a, b
 
 
 @jax.jit
-def _species_cross_integrals(qgm, potential_g, phases, volume):
-    """:func:`_species_integrals` with the real part left off."""
+def _species_integrals(table, pair_phase, potential_g, phases, volume):
+    """``Omega * Re sum_G conj(Q_ij(G)) V(G) e^{+i G tau_a}``.
+
+    ``Re(conj(p) (A + i B)) = Re(p) A + Im(p) B``; see
+    :func:`_conjugate_table_sum`.
+    """
     shifted = potential_g[None, :] * jnp.conj(phases)  # (nat, ngm)
-    return volume * jnp.einsum("ijg,ag->aij", jnp.conj(qgm), shifted)
+    pr, pi, a, b = _conjugate_table_sum(table, pair_phase, shifted)
+    return volume * (pr * a + pi * b)
+
+
+@jax.jit
+def _species_cross_integrals(table, pair_phase, potential_g, phases, volume):
+    """:func:`_species_integrals` with the imaginary part kept."""
+    shifted = potential_g[None, :] * jnp.conj(phases)  # (nat, ngm)
+    pr, pi, a, b = _conjugate_table_sum(table, pair_phase, shifted)
+    # conj(p) (A + i B) = (pr A + pi B) + i (pr B - pi A)
+    return volume * jax.lax.complex(pr * a + pi * b, pr * b - pi * a)
 
 
 def _no_augmentation_section(pseudo) -> ValueError:
@@ -558,6 +625,11 @@ AUG_DQ = 0.01
 #: second array of the same shape beside it, so a cell sized to sit just under
 #: this default actually ran at twice it. See
 #: :meth:`AugmentationCharge.charge`.
+#:
+#: **It is compared with the complex table's size**, ``nh^2 ngm`` complex,
+#: although what a stored route keeps is the real half of it
+#: (``GPU-MEMORY-NEXT.md`` item 19): the route each cell takes is the one it
+#: took before the table went real, and a stored table sits at half this.
 AUG_MAX_BYTES = 2 * 1024**3
 
 #: QE's ``cell_factor``: how far past ``sqrt(ecutrho)`` the table reaches, so
@@ -1136,6 +1208,13 @@ def build_augmentation(
         seen.add(key)
         # The dtype's own width, never a literal: under ``precision = 'single'``
         # a hardcoded 16 fires the gate at twice the true size.
+        #
+        # **Still the complex width, although the stored table is now real**
+        # (``R_ij(G)``, see :class:`AugmentationCharge`) and half this. Sizing
+        # the real array would move every cell between one and two budgets
+        # from the tabulated route to a stored one -- more resident memory,
+        # not less, on exactly the cells the gate exists for. So the gate
+        # decides the route as it always did, and each stored table halves.
         stored_bytes += (len(channels) ** 2 * gvectors.ngm
                          * cell.precision.complex.itemsize)
         nh_max = max(nh_max, len(channels))
@@ -1157,13 +1236,14 @@ def build_augmentation(
     ylm = real_spherical_harmonics(gcart, 2 * lmax)  # (ngm, (2lmax+1)^2)
     volume = cell.volume
 
-    qgm, qq = [], []
-    built: dict = {}  # dataset fingerprint -> (Q_ij(G), qq); see _dataset_key
+    qgm, qq, pair_phase = [], [], []
+    built: dict = {}  # dataset fingerprint -> (R_ij(G), qq, p_ij); see _dataset_key
     for pseudo in pseudos:
         channels = projector_channels(pseudo)
         if not pseudo.is_ultrasoft or not channels:
-            qgm.append(jnp.zeros((0, 0, gvectors.ngm), dtype=cell.precision.complex))
+            qgm.append(jnp.zeros((0, 0, gvectors.ngm), dtype=cell.precision.real))
             qq.append(jnp.zeros((0, 0)))
+            pair_phase.append(jnp.zeros((0, 0), dtype=cell.precision.complex))
             continue
 
         nl_species = min(nl, pseudo.augmentation.nqlc) if pseudo.augmentation else nl
@@ -1176,6 +1256,7 @@ def build_augmentation(
             shared = built[key]
             qgm.append(shared[0])
             qq.append(shared[1])
+            pair_phase.append(shared[2])
             continue
 
         radial = radial_augmentation_transforms(pseudo, gmod, volume, nl_species)
@@ -1186,16 +1267,25 @@ def build_augmentation(
         # lpl/lpx lists restrict the sum.
         coefficients = jnp.asarray(ap[:, lm_of[:, None], lm_of[None, :]])
 
-        values = _assemble_qgm(
-            coefficients, ylm, radial, jnp.asarray(beta_of), nl_species
-        )
+        # ``R_ij(G)`` real, and ``Q_ij(G) = (-i)^(l_i + l_j) R_ij(G)``: see
+        # :class:`AugmentationCharge` for why the split is exact.
+        l_of = np.array([l for _, l, _ in channels])
+        signs, phase = _pair_parity(l_of, nl_species)
+        values = _assemble_real_qgm(
+            coefficients, ylm, radial, jnp.asarray(beta_of),
+            jnp.asarray(signs, dtype=cell.precision.real), nl_species,
+        ).astype(cell.precision.real)
+        phase = jnp.asarray(phase, dtype=cell.precision.complex)
         # ``qq`` is ``Omega Q_ij(G = 0)`` for the resident table and
         # ``Omega Q_ij(b)`` -- complex -- for a displaced one.
-        at_origin = values[:, :, 0] if shift is not None else jnp.real(values[:, :, 0])
-        entry = (values.astype(cell.precision.complex), volume * at_origin)
+        at_origin = phase * values[:, :, 0]
+        if shift is None:
+            at_origin = jnp.real(at_origin)
+        entry = (values, volume * at_origin, phase)
         built[key] = entry
         qgm.append(entry[0])
         qq.append(entry[1])
+        pair_phase.append(entry[2])
 
     phases = _atom_phases(gcart, structure.positions)
 
@@ -1215,7 +1305,43 @@ def build_augmentation(
         channel_offsets=offsets,
         nkb=int(sum(sizes)),
         shift=None if shift is None else jnp.asarray(shift),
+        pair_phase=tuple(pair_phase),
     )
+
+
+def _pair_parity(l_of: np.ndarray, nl: int):
+    """``(signs, phase)``: how ``(-i)^L`` splits over one species' channel pairs.
+
+    ``phase[i, j] = (-i)^(l_i + l_j)``, and ``signs[L, i, j]`` is the real
+    remainder ``(-i)^(L - l_i - l_j) = (-1)^((L - l_i - l_j)/2)`` where
+    ``L - l_i - l_j`` is even and **zero** where it is odd -- the terms whose
+    real Gaunt coefficient is zero by parity and which :func:`harmonic_products`
+    leaves at round-off, since it builds ``ap`` through a matrix inverse.
+    """
+    total = l_of[:, None] + l_of[None, :]  # (nh, nh)
+    difference = np.arange(nl)[:, None, None] - total[None]  # (nl, nh, nh)
+    even = difference % 2 == 0
+    signs = np.where(even, (-1.0) ** (difference // 2), 0.0)
+    phase = np.array([1.0, -1.0j, -1.0, 1.0j])[total % 4]  # exact, no pow
+    return signs, phase
+
+
+@partial(jax.jit, static_argnames=("nl",))
+def _assemble_real_qgm(coefficients, ylm, radial, beta_of, signs, nl):
+    """``R_ij(G)``, real, with ``Q_ij(G) = (-i)^(l_i + l_j) R_ij(G)``.
+
+    :func:`_assemble_qgm` with ``(-i)^L`` replaced by the real ``signs[L]`` of
+    :func:`_pair_parity`, so every term and the accumulator are real: the
+    build's transient is half the complex one's, and so is the table.
+    """
+    total = None
+    for l in range(nl):
+        block = slice(l * l, (l + 1) ** 2)
+        angular = jnp.einsum("mij,gm->ijg", coefficients[block], ylm[:, block])
+        term = (signs[l][:, :, None] * angular
+                * radial[beta_of[:, None], beta_of[None, :], l])
+        total = term if total is None else total + term
+    return total
 
 
 @partial(jax.jit, static_argnames=("nl",))
