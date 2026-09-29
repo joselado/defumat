@@ -78,7 +78,7 @@ import numpy as np
 
 from defumat.basis.fft import g_to_r, r_to_g
 from defumat.basis.gvectors import refuse_gamma_storage
-from defumat.batching import resolve_k_batch, sum_bands, sum_k
+from defumat.batching import map_k, resolve_k_batch, sum_bands, sum_k
 from defumat.scf.occupations import smearing_order, w0gauss
 from defumat.system.kpoints import is_reduced
 
@@ -413,9 +413,9 @@ def state_projections(calculation, coefficients):
     if projectors.is_lazy:
         # One k-point's projectors built at a time rather than the whole-k
         # ``vkb`` stacked (``GPU-MEMORY-NEXT.md`` item 7).
-        return jax.lax.map(
+        return map_k(
             lambda ik: _project(coefficients[ik], projectors.at_k(ik), npol),
-            jnp.arange(coefficients.shape[0]))
+            jnp.arange(coefficients.shape[0]), batch=calculation.k_batch)
     return jax.vmap(lambda c, v: _project(c, v, npol))(
         coefficients, projectors.vkb
     )

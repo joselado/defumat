@@ -807,11 +807,13 @@ def build_plane_wave_states(
     if calculation.augmentation is not None:
         projectors = calculation.projectors
         if projectors.is_lazy and not keep_projectors:
+            from defumat.batching import map_k
+
             # One k-point's projectors built at a time rather than the whole-k
             # ``vkb`` stacked (``GPU-MEMORY-NEXT.md`` item 7).
-            becp = jax.lax.map(
+            becp = map_k(
                 lambda ik: _project(coefficients[ik], projectors.at_k(ik), npol),
-                jnp.arange(coefficients.shape[0]))
+                jnp.arange(coefficients.shape[0]), batch=calculation.k_batch)
         else:
             becp = jax.vmap(lambda c, v: _project(c, v, npol))(
                 coefficients, projectors.vkb)
