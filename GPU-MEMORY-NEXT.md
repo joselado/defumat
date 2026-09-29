@@ -304,8 +304,11 @@ the whole sums; a second walk pulling each chunk's `(e_c, b_c, ns_c)` back with 
 
 ### 4. Post-SCF consumers move a streamed store to the device whole -- priority 2, medium
 
-**Done 2026-09-29** for the consumers named below (see "Done since"); the in-loop
-diagnostics in the second paragraph are still open.
+**Done 2026-09-29** for the consumers named below (see "Done since"), and the PAW
+orientation torque of the second paragraph (`_streamed_onecenter_torque`: the pairing's
+gradient in the turned `becsum` once, contracted with each chunk's forward derivative;
+1.6e-16 against the whole-set `grad` on a torque of 0.04). The orientation stepper's turn of
+the store is still whole.
 
 `Calculation.density` has no stream branch (`driver.py:4098`) and `stm.py:205`,
 `sfac.py:197` call it with `result.wavefunctions`; `projwfc/projections.py:341-343`,

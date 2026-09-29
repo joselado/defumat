@@ -381,3 +381,43 @@ def test_a_streamed_solve_that_keeps_its_states_keeps_them_on_the_host(k_batch=3
         overlap = host[0, ik] @ np.asarray(device[0, ik]).conj().T
         occupied = np.linalg.svd(overlap[:4, :4], compute_uv=False)
         np.testing.assert_allclose(occupied, 1.0, atol=1e-6)
+
+
+@pytest.mark.slow  # 15 s on the CPU: a PAW spinor setup and two torques
+def test_the_paw_orientation_torque_walks_a_host_store():
+    """The one-centre torque through the output states, streamed.
+
+    ``_onecenter_torque`` differentiates the turned ``becsum`` in the three
+    generators; a streamed store takes each chunk's forward derivative instead
+    of moving the set to the device. The input ``becsum`` is the output turned
+    by a finite rotation so the torque is not zero by alignment -- a zero here
+    would pass whatever the regrouping did.
+    """
+    from defumat.forces.torque import rotate_texture
+    from defumat.scf.driver import _onecenter_torque
+    from defumat.workflows.anisotropy import rotation_from_euler
+
+    text = open("tests/data/qe/o2-paw-texture.in").read()
+    text = text.replace("celldm(1) = 14.0", "celldm(1) = 9.0").replace(
+        "ecutwfc = 30, ecutrho = 240", "ecutwfc = 25, ecutrho = 200").replace(
+        "K_POINTS {gamma}", "K_POINTS {automatic}\n 3 1 1 0 0 0")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        calculation = Calculator.from_text(text, PSEUDO, announce=False,
+                                           k_batch=2).calculation
+    potential = calculation.potential(calculation.starting_density())
+    psi = calculation.starting_wavefunctions(
+        calculation.hamiltonian(potential.v_scf), 8)
+    kweights = np.asarray(calculation.system.kpoints.weights)
+    weights = jnp.asarray(np.broadcast_to(kweights[None, :, None],
+                                          psi.shape[:3]).astype(float))
+    becsum_out = calculation.becsum(psi, weights)
+    rotation = jnp.asarray(rotation_from_euler(0.4, 0.9, -0.3))
+    becsum_in = tuple(None if b is None else rotate_texture(b, rotation)
+                      for b in becsum_out)
+    whole = _onecenter_torque(calculation, becsum_in, becsum_out,
+                              wavefunctions=psi, weights=weights)
+    streamed = _onecenter_torque(calculation, becsum_in, becsum_out,
+                                 wavefunctions=np.array(psi), weights=weights)
+    assert np.linalg.norm(whole) > 1e-3
+    np.testing.assert_allclose(streamed, whole, atol=1e-13)

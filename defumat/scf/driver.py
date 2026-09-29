@@ -5462,6 +5462,9 @@ def _onecenter_torque(calculation, becsum_in, becsum_out, meta_c=None,
     from defumat.forces.torque import rotate_texture, rotation_near
     from defumat.scf.orientation import spin_turned
 
+    if wavefunctions is not None and is_host_store(wavefunctions):
+        return _streamed_onecenter_torque(
+            calculation, becsum_in, becsum_out, meta_c, wavefunctions, weights)
     if wavefunctions is not None:
         psi = jnp.asarray(wavefunctions)
 
@@ -5480,6 +5483,54 @@ def _onecenter_torque(calculation, becsum_in, becsum_out, meta_c=None,
         return _paw_deband(ddd_paw, calculation.augmentation, becsum_out)
 
     return -np.asarray(jax.grad(pairing)(jnp.zeros(3)))
+
+
+def _streamed_onecenter_torque(calculation, becsum_in, becsum_out, meta_c,
+                               store, weights) -> np.ndarray:
+    """:func:`_onecenter_torque` through the output states, a k-chunk at a time.
+
+    A streamed store is not moved to the device whole (``GPU-MEMORY-NEXT.md``
+    item 4). The turned ``becsum`` is ``becsum_in + becsum(U(w) psi) -
+    becsum_out``, a sum over k in its ``w`` dependence, so the torque is the
+    pairing's gradient in the turned ``becsum``, ``g``, taken once at ``w = 0``,
+    contracted with each chunk's forward derivative of its raw ``becsum`` along
+    the three generators -- which the one symmetrisation, being linear, then
+    finishes. The same derivative as the whole-set ``grad``, regrouped.
+    """
+    from defumat.scf.orientation import spin_turned
+
+    base = stream_becsum(calculation, store, weights)
+    turned0 = tuple(None if a is None else a + (t - o)
+                    for a, t, o in zip(becsum_in, base, becsum_out))
+
+    def pairing(turned):
+        _, ddd_paw = calculation.onecenter(turned, meta_c)
+        return _paw_deband(ddd_paw, calculation.augmentation, becsum_out)
+
+    gradient = jax.grad(pairing)(turned0)
+    weights = np.asarray(weights)
+    zero = jnp.zeros(3)
+    tangents = None
+    for rows, live in k_chunks(store.shape[1], calculation.k_batch):
+        w = weights[:, rows].copy()
+        w[:, live:] = 0.0
+        w = jnp.asarray(w)
+        psi = jax.device_put(np.ascontiguousarray(store[:, rows]))
+
+        def raw(omega, psi=psi, w=w, rows=rows):
+            return calculation.becsum(spin_turned(psi, omega), w, rows=rows,
+                                      symmetrize=False)
+
+        part = [jax.jvp(raw, (zero,), (axis,))[1] for axis in jnp.eye(3)]
+        tangents = part if tangents is None else [
+            jax.tree_util.tree_map(jnp.add, a, b) for a, b in zip(tangents, part)]
+    torque = []
+    for tangent in tangents:
+        finished = calculation.finish_becsum(tangent)
+        torque.append(sum(
+            float(jnp.sum(g * t)) for g, t in zip(gradient, finished)
+            if g is not None and t is not None))
+    return -np.asarray(torque)
 
 
 def _refuse_rotating_moments(calculation, field, coupled: bool) -> None:
