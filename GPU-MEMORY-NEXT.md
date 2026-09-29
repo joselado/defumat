@@ -149,8 +149,14 @@ below:
   strain. Round-off against the single pass (<= 3e-14 on force and stress) on ultrasoft, PAW,
   DFT+U, noncollinear, LSDA, spin-orbit, norm-conserving and gamma-only cells with a short last
   chunk; `test_forces.py` and `test_stress.py` pass in memory mode against `pw.x` (51 passed,
-  7 skipped). Speed mode keeps the single pass. **Not measured on the card**: the tape it
-  removes is item 3's `nk (npwx nkb + npwx nat + nbnd npwx npol) x 16 B`.
+  7 skipped). Speed mode keeps the single pass. Each chunk's passes run on that chunk's
+  row-subset calculation (`Calculation.at_rows`, passed as traced leaves so every chunk
+  shares one compilation); without it every chunk's backward pass rebuilt every k-point's
+  projector core. **Measured on the GTX 1060**, eight-atom Si at 20 Ry, `nosym`, memory mode,
+  warm, one process per point: force peak **73.9 -> 35.0 MB** at 27 k-points and **167.8 ->
+  39.9 MB** at 64 (the SCF's own peak both times, so the force adds nothing); stress **94.1 ->
+  57.5 MB** and **220.8 -> 62.6 MB**. Time 0.26 -> 1.5 s (force) and 1.0 -> 2.2 s (stress) at
+  27, 0.32 -> 2.9 s and 1.3 -> 4.2 s at 64: one chunk per k-point, two walks.
 * **Item 10** (2026-09-29): Davidson carries the `(nvecx, nbnd)` Ritz coefficients and forms
   `evc`/`hevc` at the top of each step (`ritz`), at the width the solve used. **Bit-identical**
   eigenvalues, states and step counts on `si2-us`, `pt-soc-paw-nosym`, `si8-1k` and a
@@ -193,6 +199,24 @@ below:
   the system.
 * **Item 25** (2026-09-29): recorded in `GPU.md` Phase 4 -- k-sharding divides time, not
   per-device memory; distributing the plane waves by sticks is the memory lever.
+* **Item 12, second bullet** (2026-09-29): the TDDFT frequency axis has a dial, `w_batch`
+  (`batching.resolve_w_batch`: an argument, then `DEFUMAT_W_BATCH`, then the whole axis on a
+  CPU and a 256 MB budget on a card). `chi_0`'s whole-axis assembly held a `(2 npairs, nm, nm)`
+  block; chunks hold `n` blocks of `(2 npairs, nm)`, written into one output
+  (`map_windows`, so a chunk that does not divide `nw` concatenates no tail). Silicon at
+  `nm = 115`, 60 bands, 200 frequencies: **130.8 -> 32.4 / 8.7 MB** per k-point at 32 / 8
+  (compiled, CPU). Every registered kernel is static, so `solve_dyson` iterates the fixed
+  point on the one frequency it depends on and screens the axis once in chunks into a donated
+  output, keeping one `(1, nm, nm)` `fxc`. Bit-identical to the old loop on synthetic data; on
+  silicon `eps_M` agrees to 8e-19 and `chi_0` to 7e-15; the bootstrap at `nw = 200` goes from
+  56.6 to 0.94 s warm (machine loaded). Not measured on the card.
+* **The row-subset `Calculation`** (2026-09-29), the prerequisite items 2 and 6 name:
+  `Calculation.at_rows(rows)` slices every array with a k index (spheres selected, FFT and
+  stick indices, `|k+G|^2`, `ProjectorCore.rows`, `wfcU`) and shares the rest; `npwx` and the
+  stick count stay the whole set's and the k-points keep their weights. On ultrasoft silicon
+  the subset's eigenvalues, `H|psi>` and `becsum` are bit-identical to the whole set's at
+  those points and the velocity operator agrees to 5e-16 (`test_row_subset.py`). The chunked force and
+  stress use it; the response stack does not yet.
 * **Item 1** (the fixed-density solve): an eigenvalue-only solve streams where the store
   does and keeps no states. On eight-atom Si the band path's peak is 102.8 -> 44.8 MB at 200
   points and 383.4 -> 163.6 MB at 800, for 2-3 per cent in time. **Still 0.20 MB per
@@ -222,9 +246,12 @@ none but 10 and 23 measured on the card. What is left, in order:
 1. **Measure the day's changes on the card** -- the chunked force and stress (item 3), the
    streamed post-SCF consumers (item 4), the pair budget (item 12, 1/8/32 sweep), the
    constants (item 17), the real `Q_ij` (item 19) -- each an A/B, one run per process.
-2. **A `Calculation` restricted to a row subset of k** -- the one primitive items 2 and 6
-   both wait on (see item 2).
-3. **Stream the linear-response stack** (item 2) on top of it, the dielectric tensor first.
+2. ~~**A `Calculation` restricted to a row subset of k**~~ -- done (`at_rows`), and the
+   chunked force and stress already run on it.
+3. **Stream the linear-response stack** (item 2) on top of it. The dielectric loop chunks
+   directly with `at_rows` (solve, response density and `becsum` are sums over k); what
+   blocks the default path is the Born charges, a `jvp` of the force gradient over the
+   whole k axis, which needs item 3's split one derivative up.
 4. The small tail: the in-loop orientation diagnostics (item 4),
    the traced movers (item 7), the meta-GGA kinetic tensors (item 18), forward-mode stress
    (item 16, now less needed), item 14's per-`l` transform (time only), the float32 tier
@@ -260,7 +287,7 @@ an 800-point path; the difference should go from ~0.6 MB per k-point to flat.
 
 ### 2. Linear response holds its state whole-k and cannot stream -- priority 1, large
 
-**Open, with a prerequisite named 2026-09-29.** The solve itself chunks cleanly, but the
+**Open; its prerequisite (`Calculation.at_rows`) landed 2026-09-29.** The solve itself chunks cleanly, but the
 bare perturbation does not: `VelocityOperator` takes one `jvp` of `at_kcart` over the
 *whole* k axis, so a chunked `bare` would rebuild every k-point's core once per chunk
 (`nk / k_batch` full rebuilds). What it needs first is a `Calculation` restricted to a

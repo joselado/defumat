@@ -53,6 +53,7 @@ gradients do, so no per-k table becomes a constant of the executable.
 
 from __future__ import annotations
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -177,18 +178,22 @@ def _compiled(calculation, kind: str) -> dict:
     cached = (calculation, entries)
     calculation._chunked_gradient = cached
 
-    def sums(x, big, psi, weights, eigenvalues, rows):
-        moved = _move(with_hoisted(calculation, big), kind, x)
-        return _separable(moved, psi, weights, eigenvalues, rows)[1:]
+    def local(big, rowset):
+        """The calculation on one chunk's k-points, from traced leaves."""
+        return with_rows(with_hoisted(calculation, big), rowset)
 
-    def whole(x, big, becsum_, rho, ns):
-        moved = _move(with_hoisted(calculation, big), kind, x)
+    def sums(x, big, rowset, psi, weights, eigenvalues):
+        moved = _move(local(big, rowset), kind, x)
+        return _separable(moved, psi, weights, eigenvalues, _all(psi))[1:]
+
+    def whole(x, big, rowset, becsum_, rho, ns):
+        moved = _move(local(big, rowset), kind, x)
         return _global(moved, becsum_, rho, ns)
 
-    def pull(x, big, psi, weights, eigenvalues, rows, cotangent):
+    def pull(x, big, rowset, psi, weights, eigenvalues, cotangent):
         (energy, *parts), back = jax.vjp(
-            lambda x: _separable(_move(with_hoisted(calculation, big), kind, x),
-                                 psi, weights, eigenvalues, rows),
+            lambda x: _separable(_move(local(big, rowset), kind, x),
+                                 psi, weights, eigenvalues, _all(psi)),
             x,
         )
         (slope,) = back((jnp.ones_like(energy), *cotangent))
@@ -196,7 +201,7 @@ def _compiled(calculation, kind: str) -> dict:
 
     passes = {
         "sums": jax.jit(sums),
-        "global": jax.jit(jax.value_and_grad(whole, argnums=(0, 2, 3, 4))),
+        "global": jax.jit(jax.value_and_grad(whole, argnums=(0, 3, 4, 5))),
         "pull": jax.jit(pull),
     }
     cached[1][kind] = passes
@@ -223,21 +228,76 @@ def chunked_gradient(calculation, state: FrozenState, kind: str, x,
     big = hoisted(calculation)
     nk = calculation.system.kpoints.nk
     batch = (calculation.k_batch if k_batch is None else k_batch) or nk
+    chunks = list(k_chunks(nk, batch))
 
     becsum_ = rho = ns = None
-    for rows, live in k_chunks(nk, batch):
+    for rows, live in chunks:
         psi, weights, eigenvalues = _chunk(state, rows, live)
-        part = passes["sums"](x, big, psi, weights, eigenvalues, jnp.asarray(rows))
+        part = passes["sums"](x, big, row_leaves(calculation, rows), psi,
+                              weights, eigenvalues)
         becsum_, rho, ns = (_add(becsum_, part[0]), _add(rho, part[1]),
                             _add(ns, part[2]))
 
-    e_glob, (g_x, g_b, g_rho, g_ns) = passes["global"](x, big, becsum_, rho, ns)
+    # The global terms read nothing with a k index; any one chunk's rows stand
+    # in, so that the moved calculation's per-k rebuilds are one chunk's.
+    e_glob, (g_x, g_b, g_rho, g_ns) = passes["global"](
+        x, big, row_leaves(calculation, chunks[0][0]), becsum_, rho, ns)
     energy = e_glob + state.entropy
     gradient = g_x
-    for rows, live in k_chunks(nk, batch):
+    for rows, live in chunks:
         psi, weights, eigenvalues = _chunk(state, rows, live)
-        value, slope = passes["pull"](x, big, psi, weights, eigenvalues,
-                                      jnp.asarray(rows), (g_b, g_rho, g_ns))
+        value, slope = passes["pull"](x, big, row_leaves(calculation, rows),
+                                      psi, weights, eigenvalues,
+                                      (g_b, g_rho, g_ns))
         energy = energy + value
         gradient = gradient + slope
     return energy, gradient
+
+
+#: The :class:`~defumat.scf.driver.Calculation` attributes that carry a k
+#: index -- what :meth:`~defumat.scf.driver.Calculation.at_rows` slices. Inside
+#: the compiled passes they are replaced by one chunk's rows, passed as traced
+#: leaves, so that ``at_positions`` and ``at_strain`` rebuild the projector
+#: core, ``|k+G|^2`` and ``wfcU`` for the chunk's k-points only. Without it
+#: every chunk's backward pass rebuilt every k-point's core -- measured on the
+#: GTX 1060, eight-atom silicon at 64 k-points: the chunked stress 16x slower
+#: than the single pass and its peak still growing with the mesh.
+#: ``system`` stands for its k-point list alone: the rest of it (the cell, the
+#: structure's static bookkeeping) must stay what the passes closed over.
+ROW_FIELDS = ("system", "basis", "basis_kpoints", "_kcrystal", "kinetic",
+              "fft_index", "fft_index_minus", "kplusg", "sticks",
+              "projector_core", "projectors", "wfcU")
+
+
+def row_leaves(calculation, rows) -> tuple:
+    """One chunk's k-indexed attributes, from ``calculation.at_rows(rows)``.
+
+    The plane-wave spheres' ``npw`` is host bookkeeping kept as a *static*
+    field; nothing in the passes reads it and a per-chunk value would compile
+    the passes once per chunk, so it is dropped here.
+    """
+    import dataclasses
+
+    sub = calculation.at_rows(rows)
+    planewaves = dataclasses.replace(sub.basis.planewaves, npw=())
+    sub.basis = eqx.tree_at(lambda basis: basis.planewaves, sub.basis, planewaves)
+    sub._kcrystal = jnp.asarray(sub._kcrystal)
+    return tuple(sub.system.kpoints if name == "system" else getattr(sub, name)
+                 for name in ROW_FIELDS)
+
+
+def with_rows(calculation, leaves):
+    """``calculation`` carrying one chunk's k-indexed attributes (:func:`row_leaves`)."""
+    import copy
+
+    here = copy.copy(calculation)
+    for name, value in zip(ROW_FIELDS, leaves):
+        if name == "system":
+            value = eqx.tree_at(lambda system: system.kpoints, here.system, value)
+        setattr(here, name, value)
+    return here
+
+
+def _all(psi):
+    """Every k-point of a chunk, as the rows of its own row-subset calculation."""
+    return jnp.arange(psi.shape[1])
