@@ -158,6 +158,15 @@ below:
   `david = 4`: on the GTX 1060 **117.0 -> 111.2 MB** at 64 bands one band in flight (one
   band block), 129.43 MB unchanged at 32 bands all in flight (the FFT boxes set it there); on
   the CPU 46.0 -> 44.5 and 126.2 -> 123.4 MB.
+* **Item 19** (2026-09-29): the stored `Q_ij(G)` is real, `R_ij(G)`, with
+  `AugmentationCharge.pair_phase = (-i)^(l_i+l_j)`; the charge, the `D_ij` integrals, the
+  displaced table's complex integrals and `addusforce` put the phase on the small side and
+  contract the real table twice. Bismuthene's relativistic table **1067.9 -> 534.0 MB**, Pt's
+  120.9 -> 60.5 MB (nbytes, CPU). Against the complex construction: table 8.6e-17, charge
+  7.7e-16, integrals 4.5e-15 relative, `qq` exact; the wrong-parity part is exactly zero (the
+  radial transforms store only the allowed `L`). Energies move by at most 1.1e-13 Ry. The
+  storage gate still sizes the complex table, so no cell changes route. Not measured on the
+  card.
 * **Item 1** (the fixed-density solve): an eigenvalue-only solve streams where the store
   does and keeps no states. On eight-atom Si the band path's peak is 102.8 -> 44.8 MB at 200
   points and 383.4 -> 163.6 MB at 800, for 2-3 per cent in time. **Still 0.20 MB per
