@@ -182,6 +182,7 @@ def spiral_spin_orbit_energy(
     nbnd: int | None = None,
     conv_thr: float = 1.0e-10,
     k_batch: int | None | str = "default",
+    calculation=None,
 ) -> SpiralSpinOrbit:
     """``V(q)``: the spin-orbit coupling's first-order energy on a spin spiral.
 
@@ -193,13 +194,19 @@ def spiral_spin_orbit_energy(
     with each spinor component on its own sphere. See the module docstring for
     why only the spin-diagonal expectation is an energy and what the result
     means.
+
+    ``calculation`` is the spiral's own, used rather than a second one built
+    beside it (``GPU-MEMORY-NEXT.md`` item 20); ``k_batch`` is then its.
     """
     from defumat.workflows.anisotropy import _first_order_operator
     from defumat.workflows.nscf import fixed_density_states
 
     _refuse(system, pseudos)
+    if calculation is not None:
+        system, k_batch = calculation.system, calculation.k_batch
     calculation, system, eigenvalues, wavefunctions = fixed_density_states(
         system, pseudos, density, nbnd=nbnd, conv_thr=conv_thr, k_batch=k_batch,
+        calculation=calculation,
     )
     wg, levels = calculation.occupations(jnp.asarray(eigenvalues))
     delta_d, delta_qq = _first_order_operator(calculation, None)

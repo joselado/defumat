@@ -2043,6 +2043,7 @@ class Calculator:
         from defumat.workflows.spiral import run_spiral_scan
 
         return run_spiral_scan(self.system, self.pseudos, wavevectors,
+                               calculation=self.calculation,
                                **{**self._shared_scf_options(), **options})
 
     def get_spiral_relaxation(self, **options):
@@ -2066,6 +2067,7 @@ class Calculator:
         result = self._ground_state("the spiral's first-order spin-orbit energy")
         return spiral_spin_orbit_energy(
             self.system, self.pseudos, result.density,
+            calculation=self.calculation,
             **self._defaults_for(spiral_spin_orbit_energy, options))
 
     # ------------------------------------------------------------------

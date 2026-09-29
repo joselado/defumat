@@ -7927,3 +7927,49 @@ The energy is identical to every printed digit; the band path costs 1.5 per cent
 what its own `Calculation` keeps resident per k-point (0.089 MB measured before the columns
 went real, 0.065 after): the 0.11 MB per k-point left unattributed in "A band path that
 keeps no states" was this build's transient.
+
+## Fourteen memory items, validated on the CPU; four numbers and one refusal (2026-09-29)
+
+`GPU-MEMORY-NEXT.md` items 3, 4, 5, 7, 10, 11, 12, 15, 17, 19, 20, 23, 24 and 25 landed in one
+day. Each is held to round-off (or bit-identity) against the route it replaces on the CPU,
+and the records are in that file's "Done since". **Only what is below was measured**; the
+card A/Bs for the rest are the next thing to take, one run per process.
+
+**Davidson carries its Ritz coefficients, not two band blocks** (item 10). Compiled
+temporary of `_every_k` from `tools/gpu/davidson_memory.py`, `si16-1k-ecut30`, `david = 4`,
+compile only:
+
+| | 64 bands, 1 in flight | 32 bands, all in flight |
+|---|---:|---:|
+| GTX 1060, before | 117.0 MB | 129.43 MB |
+| GTX 1060, after | **111.2 MB** | 129.43 MB |
+| CPU, before | -- | 126.2 MB (46.0 at 1 band) |
+| CPU, after | -- | 123.4 MB (44.5 at 1 band) |
+
+One `(64, 5900)` block is 6.0 MB, so on the card the change removes one block where the
+band blocks set the temporary and nothing where the FFT boxes do. Eigenvalues, states and
+step counts are **bit-identical** on four cells, both routes, cold and seeded.
+
+**The per-k tables out of the gradients' constants** (item 17): ultrasoft silicon at 64
+k-points, `make_jaxpr(...).consts` of the force gradient **2.85 -> 0.29 MB**, the stress's
+0.68 -> 0.58 MB; forces and stresses bit-identical.
+
+**`Q_ij(G)` stored real** (item 19): bismuthene's relativistic table **1067.9 -> 534.0 MB**,
+platinum's 120.9 -> 60.5 MB (`nbytes`); energies move by at most 1.1e-13 Ry.
+
+**The device pool at 0.9** (item 23): `bytes_limit` on the GTX 1060 **4764.7 -> 5452.0 MB**.
+
+**Refused on measurement: the spiral's displaced table, scanned** (item 15's remainder).
+Routing `at_spiral_q`'s traced `Q_ij(G - q)` through the scanned class `at_strain` uses in
+memory mode gave the same `dE/dq` (4e-17) and a **larger** compiled temporary for the global
+`value_and_grad`: 218.6 -> 225.9 MB on the ultrasoft oxygen chain, **261.7 -> 834.4 MB** on
+bcc iron (`Fe.pz-nd-rrkjus`, `nh = 18`, `ngm = 6963`, CPU). The stored displaced table is
+small on every augmented spiral here and the scanned route's per-chunk radial integral is
+not; it was reverted, the same outcome `MEMORY-AUDIT.md` A4 and A11 record for two other
+prescribed fixes.
+
+**What the chunked force and stress cost on the CPU is not yet timed.** They are exact
+(<= 3e-14 against the single pass on eight regimes, and `test_forces.py`/`test_stress.py`
+pass in memory mode against `pw.x`), and the tape they remove is item 3's
+`nk (npwx nkb + npwx nat + nbnd npwx npol) x 16 B`; the card measurement is item 1 of the
+list's remaining order.

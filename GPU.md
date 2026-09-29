@@ -550,6 +550,20 @@ process topology that changes the code rather than its speed: one process holdin
 local devices, or `jax.distributed` across Slurm tasks. Decide that before writing the
 mesh, not after.
 
+**It buys time, not memory per device** (`GPU-MEMORY-NEXT.md` item 25, 2026-09-29). Once the
+SCF streams (`memory_mode = 'memory'`), sharding the k axis divides the *wall clock* by
+`ndev` and leaves each device's peak where it was: every device replicates the
+k-independent set -- the augmentation table, the PAW tensors, the dense-grid fields, which
+are what set the bismuthene and platinum peaks in both modes -- and one k-point's solve,
+which is the per-device peak on a large cell, is not divided at all. **QE's memory lever is
+the other axis**: it distributes the plane waves (`R&G` parallelisation, the sticks), so a
+single k-point's `npwx` and the dense set's `ngm` are split across ranks. The JAX form is to
+shard `npwx` and `ngm` with `jax.sharding`, laid out by the stick decomposition
+`basis/sticks.py` already builds, with one all-to-all between the FFT's `z` and `xy` passes
+and a `psum` for every projection (`calbec`, the subspace matrices). That is the change
+that makes a cell larger than one card run at all; k-sharding is the one that makes a
+fitting cell faster. Recorded as strategy rather than started.
+
 ### Phase 5 — the response path, which is the reason JAX was chosen at all ✅ RUN, BOTH HALVES
 
 **The CPU half is measured (2026-08-26)** and it answers §4 item 3 — the tape

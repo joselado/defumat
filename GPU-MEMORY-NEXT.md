@@ -174,6 +174,20 @@ below:
   symmetry maps (6.9 MB, 48 operations) are now the largest line after the PAW tensors,
   above the real `Q_ij(G)` (3.1 MB). Still absent: the core build's transient and the `qgm`
   accumulator.
+* **Item 5** (2026-09-29): `chern_number(stream=True)` walks the plaquette plane a column
+  at a time, with links across columns taken between two state sets (`overlaps(...,
+  other=)`, `q_ij(b)` included) and only link phases kept, so at most three columns are
+  resident; `streamed_orbital_magnetization_sums` walks the volume mesh a plane at a time
+  through the whole-mesh route's own per-k function, holding at most five planes. Both are
+  the default where the store streams (`DFTSource.streams`) and off on a CPU. Models agree
+  to 1e-12; AlAs flux to 9.6e-9 (NC) and 2.6e-8 (US), shrinking with `conv_thr` (each column
+  is its own solve); iodine `M_LC`/`M_IC` to 3.5e-9/1.2e-9. Bismuthene 12x12: solve output
+  446 -> 37 MB, occupied states 372 -> 93 MB (shapes). 0.96 s against 0.74 s on one CPU
+  core (NC AlAs 6x6). Not measured on the card.
+* **Item 20, third part** (2026-09-29): `run_spiral_scan` and `spiral_spin_orbit_energy`
+  take `calculation=` and the `Calculator` passes its own. Left: `DFTSource._base`.
+* **Item 25** (2026-09-29): recorded in `GPU.md` Phase 4 -- k-sharding divides time, not
+  per-device memory; distributing the plane waves by sticks is the memory lever.
 * **Item 1** (the fixed-density solve): an eigenvalue-only solve streams where the store
   does and keeps no states. On eight-atom Si the band path's peak is 102.8 -> 44.8 MB at 200
   points and 383.4 -> 163.6 MB at 800, for 2-3 per cent in time. **Still 0.20 MB per
@@ -196,7 +210,20 @@ default mode:
    callers; the band path's own `Calculation` is what grows now (items 6, 20).
 6. ~~**Factor the PAW one-centre tensors** (item 18)~~ -- done, 1309.6 -> 411.3 MB.
 
-Then the rest by priority.
+Then the rest by priority. **As of 2026-09-29** items 3, 4, 5, 7, 10, 11, 12, 17, 19, 20,
+23, 24 and 25 are done or partly done (see "Done since"), all validated on the CPU and
+none but 10 and 23 measured on the card. What is left, in order:
+
+1. **Measure the day's changes on the card** -- the chunked force and stress (item 3), the
+   streamed post-SCF consumers (item 4), the pair budget (item 12, 1/8/32 sweep), the
+   constants (item 17), the real `Q_ij` (item 19) -- each an A/B, one run per process.
+2. **A `Calculation` restricted to a row subset of k** -- the one primitive items 2 and 6
+   both wait on (see item 2).
+3. **Stream the linear-response stack** (item 2) on top of it, the dielectric tensor first.
+4. The small tail: `DFTSource._base` (item 20), the in-loop orientation diagnostics (item 4),
+   the traced movers (item 7), the meta-GGA kinetic tensors (item 18), forward-mode stress
+   (item 16, now less needed), item 14's per-`l` transform (time only), the float32 tier
+   (item 26).
 
 ---
 
@@ -228,6 +255,13 @@ an 800-point path; the difference should go from ~0.6 MB per k-point to flat.
 
 ### 2. Linear response holds its state whole-k and cannot stream -- priority 1, large
 
+**Open, with a prerequisite named 2026-09-29.** The solve itself chunks cleanly, but the
+bare perturbation does not: `VelocityOperator` takes one `jvp` of `at_kcart` over the
+*whole* k axis, so a chunked `bare` would rebuild every k-point's core once per chunk
+(`nk / k_batch` full rebuilds). What it needs first is a `Calculation` restricted to a
+row subset of k -- plane waves *selected* (`_planewaves_rows`), per-k tables sliced, core
+rows, `wfcU` rows -- which is item 6's third bullet. Build that, then this.
+
 `SternheimerSolver` does `self.psi = jnp.asarray(psi)[:, :, :keep]` (`sternheimer.py:317`)
 and stacks every block of `dpsi` on the device; `efield.py:296` and `phonon.py:383/385/
 430/440` upload the whole store, and a streamed (numpy) store is re-uploaded per call. It
@@ -247,6 +281,8 @@ process, Si8 at 27/64/125/216 k: SCF only, + dielectric, + one atom's phonon col
 
 ### 3. Forces and stress put the whole k axis on one tape -- priority 2, large
 
+**Done 2026-09-29** (see "Done since"; `forces/chunked.py`).
+
 `energy_at` reads `moved.projectors.vkb` and `state.wavefunctions` whole, and the force
 and stress are single `jit(grad)` calls (`forces/autodiff.py`, `stress/autodiff.py`).
 Force tape: `nk (npwx nkb + npwx nat + nbnd npwx npol) x 16 B`; the stress adds
@@ -263,6 +299,9 @@ the whole sums; a second walk pulling each chunk's `(e_c, b_c, ns_c)` back with 
 
 ### 4. Post-SCF consumers move a streamed store to the device whole -- priority 2, medium
 
+**Done 2026-09-29** for the consumers named below (see "Done since"); the in-loop
+diagnostics in the second paragraph are still open.
+
 `Calculation.density` has no stream branch (`driver.py:4098`) and `stm.py:205`,
 `sfac.py:197` call it with `result.wavefunctions`; `projwfc/projections.py:341-343`,
 `angular_momentum.py:301`, `relax.py:520` (every ultrasoft step), `anisotropy.py:780` do
@@ -277,6 +316,8 @@ orientation stepper turns the whole store on the device. Fix: forward mode per c
 against a `d(pairing)/d(becsum)` computed once.
 
 ### 5. The Chern number and the orbital magnetization hold the whole mesh -- priority 2, medium
+
+**Done 2026-09-29** (see "Done since"); on by default where the store streams.
 
 `chern_number` diagonalises the whole plane at once (`invariants.py:132`,
 `topology.py:271-294`) and `build_plane_wave_states` builds the whole-k `vkb` for `becp`
@@ -310,7 +351,8 @@ every Davidson call whole through `HubbardTerm`. Three pieces, in order of cost:
   every intermediate live (`projectors.py:359-415`); at 216 k on Si8 that setup transient
   (90.8 MB, measured) is the run's peak. Chunk it through `_planewaves_rows` /
   `_kpoints_rows`, which already exist for the streamed start.
-* **A chunk-local Hamiltonian** -- large. `rows(rows)` methods on `Hamiltonian`,
+* **A chunk-local Hamiltonian** -- large, and the prerequisite item 2 names too (a
+  `Calculation` restricted to a row subset of k). Open. `rows(rows)` methods on `Hamiltonian`,
   `SpinorHamiltonian`, `Projectors`, `HubbardTerm`, `Sticks`, with the per-k leaves in
   host numpy and `device_put` per chunk like the store. `npw` must stay the global static
   tuple (it sets the Davidson subspace). This is what makes memory mode truly flat in
@@ -318,7 +360,8 @@ every Davidson call whole through `HubbardTerm`. Three pieces, in order of cost:
 
 ### 7. `projectors='rebuild'` does not reach the traced movers or the response -- priority 2
 
-**First half done 2026-09-28** (the misplaced line); the rest is open.
+**First half done 2026-09-28** (the misplaced line); **the `becsum` and response sites done
+2026-09-29** (see "Done since"); the traced movers are still open.
 
 `at_strain` (`driver.py:3050`), `at_kcart` (`:3299`) and `at_spiral_q(rebuild_basis=False)`
 (`:3412`) still build a stored set; they run under the stress `grad`, the velocity `jvp`
@@ -377,6 +420,8 @@ never sees the mode: a static field on the Hamiltonian, or a value resolved in t
 
 ### 10. Davidson carries two band blocks it could rebuild -- priority 2, medium
 
+**Done 2026-09-29**, bit-identical (see "Done since").
+
 The `while_loop` state carries `evc` and `hevc` (`davidson.py:606-614`), so both are live
 through the correction block's `h_psi`, which is the step's FFT peak: `2 k_in_flight
 nbnd npol npwx x 16 B` -- 4.03 GB of the NiBr2 slab's 28.7 GB per-k stage at
@@ -388,6 +433,8 @@ re-validated bit for bit on the reference cells.
 
 ### 11. Donate the streamed Davidson input -- priority 2, small
 
+**Done 2026-09-29** (see "Done since").
+
 `davidson.py:977-999` names the robustness retry's reuse of `psi0` as the only thing
 blocking `donate_argnums`. On the streamed path `psi0` is a fresh `device_put` of a host
 slice that the host still holds, so a retry can re-fetch it. `MEMORY-AUDIT.md` A16
@@ -398,7 +445,8 @@ donating variant of `_every_k` used only when the caller passes a way to rebuild
 
 ### 12. The response's pair and frequency axes -- priority 2
 
-* **`chi_0`'s pair axis defaults to the band dial**, which is `all` on any card in both
+* **Done 2026-09-29 (a budget, not yet swept on the card).** **`chi_0`'s pair axis
+  defaults to the band dial**, which is `all` on any card in both
   modes (`tddft/chi0.py:468`), so every pair's box is in flight -- the module's own 26 GB
   case comes back on a GPU (`D1` was closed on a CPU, where the band default is 1). Give the
   pair axis its own finite default and measure 1/8/32 on the card. Small.
@@ -458,8 +506,15 @@ stress on Si8 at 8/27/64/216 k before and after; report MB per k-point.
 ### 15. The stored augmentation table is assembled on the strain tape -- priority 2, small
 
 **Done 2026-09-28** (see "Done since"; `PERFORMANCE.md`, "The augmentation table on the
-stress tape"). Not done: the spin spiral's displaced table `Q_ij(G - q)`, which `dE/dq`
-rebuilds under its gradient through the stored route in the same way.
+stress tape"). **The spin spiral's displaced table `Q_ij(G - q)` was tried the same way on
+2026-09-29 and measured worse**: routing `at_spiral_q`'s traced rebuild through the scanned
+class (with the table's `|b|` margin skipped for the exact integral, so a traced shift
+passes) gave the same `dE/dq` to 4e-17 on the ultrasoft oxygen chain, and made the global
+`value_and_grad`'s compiled temporary **larger** -- 218.6 -> 225.9 MB on the oxygen chain,
+**261.7 -> 834.4 MB** on bcc iron (`Fe.pz-nd-rrkjus`, `nh = 18`, `ngm = 6963`, `spiral_q =
+0.1`, CPU). The stored displaced table is small on every augmented spiral cell in the tree
+and the scanned route's per-chunk radial integral outweighs it; the change was reverted.
+It may win on a spiral with a far larger `ngm`, which has not been sized.
 
 **Measured 2026-09-28, and the prescription below does not yet hold.** After items 13/14
 this is the largest thing left on BN's stress tape: its 1.42 GiB (CPU) is headed by
@@ -497,6 +552,9 @@ matter less once items 13-15 land -- measure first.
 
 ### 17. Compiled gradients still embed k-sized constants -- priority 2, small
 
+**Done 2026-09-29** by extending `HOISTED_FIELDS` rather than partitioning the whole
+`Calculation` (see "Done since").
+
 `HOISTED_FIELDS = ('paw', 'augmentation')` (`forces/energy.py:109`); the force and stress
 `jit`s close over the `Calculation`, so the projector core, `wfcU` and the `(nsym, ngm)`
 symmetry maps become executable constants. Hoisting the first two took one-atom Pt's
@@ -531,6 +589,8 @@ expected to fall by about 0.88 GB with the energy identical to 1e-12 Ry.
 
 ### 19. `Q_ij(G)` is a real table times a known phase -- priority 2, medium
 
+**Done 2026-09-29** (see "Done since").
+
 `_assemble_qgm` sums `(-i)^l x` real Gaunt x real `Y_LM` x real radial terms, and real
 Gaunt coefficients vanish unless `l_i + l_j + L` is even, so `Q_ij(G) = (-i)^(l_i+l_j)`
 times a real number, stored complex128: 1.12 GB for bismuthene's relativistic dataset, and
@@ -541,6 +601,8 @@ entries are ~1e-16 rather than 0 (the Gaunt table comes from a matrix inverse), 
 check is round-off, not equality.
 
 ### 20. Post-SCF workflows build a second `Calculation` -- priority 2, medium
+
+**Done 2026-09-29** except `DFTSource._base` (see "Done since").
 
 `get_bands`/`get_nscf`/`get_dos` pass no calculation, so `nscf.py:196-197` builds another
 beside the facade's own, which stays alive; `pdos`, `stm`, `sts`, `transport`, `sfac` (with
@@ -577,6 +639,9 @@ The seed half is `MEMORY-AUDIT.md` A6(iii)/B2, open.
 
 ### 23. The device pool is left at JAX's 75 per cent -- priority 2, small
 
+**Done 2026-09-29** (see "Done since"). The allocator alternatives (`cuda_async`, `vmm`)
+are still untried.
+
 `XLA_CLIENT_MEM_FRACTION` (and its deprecated `XLA_PYTHON_CLIENT_MEM_FRACTION`; setting
 both raises) is untouched by the package; on this card the pool is 4.76 GB of 6. About 0.9
 gives roughly +0.95 GB here, and the H200 entry in `PERFORMANCE.md` died 5 GiB over the
@@ -587,7 +652,9 @@ fragmentation question. A capacity lever rather than a reduction.
 
 ### 24. `sizing.py` misses the stages that set the peak -- priority 3, an enabler
 
-**Partly done 2026-09-28**: `wfc_store` and the start (D10) are in; the rest below is not.
+**Partly done 2026-09-28**: `wfc_store` and the start (D10) are in; **2026-09-29** the
+per-k tables, the symmetry maps and `wfcU` (see "Done since"). The core build's transient
+and the `qgm` accumulator are still absent.
 
 `peak_bytes` is `resident + max(eigensolver buffer, augmentation Bessel transient)`
 (`sizing.py:320-335`): the start (D10), the core build, the `qgm` accumulator, `wfcU`, the

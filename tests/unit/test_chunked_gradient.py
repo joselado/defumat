@@ -98,3 +98,28 @@ def test_a_streamed_state_takes_the_chunked_route_without_being_asked():
     np.testing.assert_allclose(
         compute_forces(calculation, streamed).unsymmetrized,
         compute_forces(calculation, on_device).unsymmetrized, atol=1e-12)
+
+
+def test_a_moved_calculation_reuses_the_compiled_force_passes():
+    """A relaxation step does not recompile the chunked force.
+
+    ``at_positions`` copies the instance dict and the force's passes depend on
+    the geometry only through their argument, so the moved calculation reuses
+    them -- and the gradient there is still the single pass's at the new
+    positions. A strain changes what they close over, so it drops them.
+    """
+    calculator, result = _converged()
+    calculation = calculator.calculation
+    state = state_from_result(result)
+    positions = calculation.system.structure.positions
+    chunked_gradient(calculation, state, "positions", positions, k_batch=3)
+    passes = calculation._chunked_gradient[1]["positions"]
+
+    nudged = positions + jnp.asarray([[0.01, 0.0, 0.0], [0.0, 0.0, 0.0]])
+    moved = calculation.at_positions(nudged)
+    _, gradient = chunked_gradient(moved, state, "positions", nudged, k_batch=3)
+    assert moved._chunked_gradient[1]["positions"] is passes
+    single = force_gradient(moved)(nudged, state, hoisted(moved))
+    np.testing.assert_allclose(np.asarray(gradient), np.asarray(single), atol=1e-12)
+    assert "_chunked_gradient" not in calculation.at_strain(
+        jnp.zeros((3, 3))).__dict__

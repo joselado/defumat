@@ -268,6 +268,7 @@ def run_spiral_scan(
     wavevectors,
     keep_results: bool = False,
     gradients: bool = False,
+    calculation=None,
     **scf_options,
 ) -> SpiralScan:
     """One SCF per wavevector, sharing everything that does not depend on ``q``.
@@ -284,6 +285,12 @@ def run_spiral_scan(
             the scan already has, so it costs one gradient per point and no
             further SCF; what it asks for in return is a tighter ``conv_thr``,
             since a derivative needs a better density than an energy does.
+        calculation: the caller's own :class:`~defumat.scf.driver.Calculation`
+            of this system, moved to each wavevector with ``at_spiral_q``
+            rather than a second one built beside it -- it keeps the caller's
+            memory mode and shares its k-independent tables
+            (``GPU-MEMORY-NEXT.md`` item 20). ``Calculator.get_spiral_scan``
+            passes its own.
     """
     wavevectors = np.asarray(wavevectors, dtype=float).reshape(-1, 3)
     if not system.spiral:
@@ -292,7 +299,10 @@ def run_spiral_scan(
             "the run noncollinear, symmetry-free and two-sphered"
         )
 
-    base = Calculation(system, pseudos, k_batch=scf_options.pop("k_batch", "default"))
+    k_batch = scf_options.pop("k_batch", "default")
+    base = (calculation if calculation is not None
+            else Calculation(system, pseudos, k_batch=k_batch))
+    calculation = None
     if gradients:
         # Ask before the first SCF rather than after it. The refusals live on
         # the gradient, not the scan, so an unsupported spiral would otherwise

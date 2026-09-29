@@ -3123,6 +3123,7 @@ class Calculation:
         strained.__dict__.pop("_spiral_gradient", None)
         strained.__dict__.pop("_spiral_gradient_chunk", None)
         strained.__dict__.pop("_energy_gradient", None)
+        strained.__dict__.pop("_chunked_gradient", None)
         strained.__dict__.pop("_analytic_terms", None)
         strained.__dict__.pop("_tetrahedra", None)
 
@@ -3287,6 +3288,7 @@ class Calculation:
         # ``at_positions`` legitimately -- but it closes over this k-set and its
         # weights, which is what changes here.
         moved.__dict__.pop("_energy_gradient", None)
+        moved.__dict__.pop("_chunked_gradient", None)
         # Where the arrays are, recorded by :meth:`at_kcart` and
         # :meth:`at_strain`, is the k-set that is being replaced: a velocity
         # operator built on the result would otherwise differentiate around the
@@ -3426,6 +3428,7 @@ class Calculation:
         # named module writes, so it is gone rather than kept as a placeholder.
         moved.__dict__.pop("_tetrahedra", None)
         moved.__dict__.pop("_energy_gradient", None)
+        moved.__dict__.pop("_chunked_gradient", None)
 
         moved.kinetic = planewaves.kinetic(smooth, self.basis_kpoints, cell, kcart)
         moved.projector_core = build_projector_core(
@@ -3534,6 +3537,11 @@ class Calculation:
                         "instead of following its gradient"
                     )
                 qcart = cell.k_to_cartesian(jnp.asarray(q_crystal)) * cell.tpiba
+                # **Stored in both modes, and that was measured**: the scanned
+                # route ``at_strain`` takes in memory mode made ``dE/dq``'s global
+                # tape *larger* on the one augmented spiral sized for it -- bcc
+                # iron, ``nh = 18``, ``ngm = 6963``: 834 MB scanned against 262
+                # MB stored (``GPU-MEMORY-NEXT.md`` item 15).
                 moved.cross_augmentation = build_augmentation(
                     self.pseudos, self.system.structure, cell, self.basis.dense,
                     shift=-qcart,

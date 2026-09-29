@@ -157,16 +157,25 @@ def _add(total, part):
 def _compiled(calculation, kind: str) -> dict:
     """The three compiled passes for ``calculation``, built once and cached on it.
 
-    Keyed on the calculation itself, as the single-pass stress gradient is: the
-    passes close over it, and a copy inherited through ``at_positions`` or
-    ``at_strain`` would answer at the geometry it was compiled at.
+    **The force's passes are inherited, the stress's are not**, which is the
+    single-pass gradients' own rule. The force depends on the geometry only
+    through ``x`` -- everything position-dependent is rebuilt inside, and
+    :func:`~defumat.forces.energy.with_hoisted` brings the moved calculation's
+    large arrays -- so a calculation moved by ``at_positions``, which copies
+    the instance dict, reuses the compiled passes at every step of a
+    relaxation instead of retracing them. The movers that change what the
+    passes close over (``at_strain``, ``at_kcart``, ``at_kpoints``) drop the
+    entry. The stress's passes strain the cell they closed over, so they are
+    keyed on the calculation itself.
     """
     cached = calculation.__dict__.get("_chunked_gradient")
-    if cached is not None and cached[0] is calculation and kind in cached[1]:
-        return cached[1][kind]
-    if cached is None or cached[0] is not calculation:
-        cached = (calculation, {})
-        calculation._chunked_gradient = cached
+    entries = {} if cached is None else {
+        name: passes for name, passes in cached[1].items()
+        if name == "positions" or cached[0] is calculation}
+    if kind in entries:
+        return entries[kind]
+    cached = (calculation, entries)
+    calculation._chunked_gradient = cached
 
     def sums(x, big, psi, weights, eigenvalues, rows):
         moved = _move(with_hoisted(calculation, big), kind, x)
