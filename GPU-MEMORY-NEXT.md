@@ -303,9 +303,8 @@ but 24 and 25 have been measured on the card, two as nulls. What is left, in ord
    blocks the default path is the Born charges, a `jvp` of the force gradient over the
    whole k axis, which needs item 3's split one derivative up.
 4. The small tail: a dense NSCF/DOS/PDOS mesh a block at a time (item 6's third bullet;
-   the band path is done), the speed-mode ground state (item 22, a decision about what
-   speed mode means), item 14's per-`l` transform (time only), and the float32 tier's
-   setup cast (item 26, its first blocker named). Items 7 and 16 are closed by verdict.
+   the band path is done), item 14's per-`l` transform (time only), and the float32 tier's
+   setup cast (item 26, its first blocker named). Items 7, 16 and 22 are closed by verdict.
 
 ---
 
@@ -758,6 +757,12 @@ extra 1.12 GB `Q_ij(G)` on bismuthene. **Fix**: A2's lines -- `result = None` at
 each loop body, `del previous` after `_advance`. No numbers move.
 
 ### 22. In speed mode the cached ground state stays on the device -- priority 3, small
+
+**Measured, and not worth changing what speed mode means (2026-09-29).** On
+`bismuthene-soc-small` in speed mode the cached store is **21.8 MB** and the SCF + 13-point
+band path peaks at 3203.1 MB (3203.9 on a second run), so parking the store on the host
+would save at most 0.7 per cent of the peak while making every later consumer stream. Left
+as it is unless a cell turns up whose store is a real fraction of its peak.
 
 `Calculator._scf` and a derived calculator's seed keep a device store under every later
 `get_*` in speed mode (`calculator.py:767`, `:2243`). Park it to host after the SCF (35 ms
