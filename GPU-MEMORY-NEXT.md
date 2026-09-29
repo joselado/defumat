@@ -307,8 +307,9 @@ the whole sums; a second walk pulling each chunk's `(e_c, b_c, ns_c)` back with 
 **Done 2026-09-29** for the consumers named below (see "Done since"), and the PAW
 orientation torque of the second paragraph (`_streamed_onecenter_torque`: the pairing's
 gradient in the turned `becsum` once, contracted with each chunk's forward derivative;
-1.6e-16 against the whole-set `grad` on a torque of 0.04). The orientation stepper's turn of
-the store is still whole.
+1.6e-16 against the whole-set `grad` on a torque of 0.04), and the orientation stepper, which
+now turns a streamed store on the host and hands it to the chunked `becsum` and density
+(spin-orbit PAW nickel, `rotate_moments`, five iterations: 6e-10 Ry between the stores).
 
 `Calculation.density` has no stream branch (`driver.py:4098`) and `stm.py:205`,
 `sfac.py:197` call it with `result.wavefunctions`; `projwfc/projections.py:341-343`,

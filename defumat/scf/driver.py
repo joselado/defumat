@@ -6989,8 +6989,13 @@ def run_scf(
                 # ``becsum`` residual of 0.1 that never closed.
                 shifts = [None] * len(shapes)
                 if calculation.is_paw:
-                    turned_states = jnp.asarray(rotate_spinors(
-                        np.asarray(fetch_wavefunctions(wavefunctions)), step))
+                    # Turned on the host; a streamed store stays there and the
+                    # density and ``becsum`` walk it a chunk at a time
+                    # (``GPU-MEMORY-NEXT.md`` item 4).
+                    turned_states = rotate_spinors(
+                        np.asarray(fetch_wavefunctions(wavefunctions)), step)
+                    if wfc_store != "stream":
+                        turned_states = jnp.asarray(turned_states)
                     turned_becsum = calculation.becsum(turned_states, wg)
                     turned_density = calculation.density(turned_states, wg,
                                                          turned_becsum)
@@ -7032,9 +7037,10 @@ def run_scf(
                     lambda vector: turn_packed(vector, shifted=False),
                 )
                 if wavefunctions is not None:
+                    turned = rotate_spinors(
+                        np.asarray(fetch_wavefunctions(wavefunctions)), step)
                     wavefunctions = park_wavefunctions(
-                        jnp.asarray(rotate_spinors(
-                            np.asarray(fetch_wavefunctions(wavefunctions)), step)),
+                        turned if wfc_store == "stream" else jnp.asarray(turned),
                         wfc_store,
                     )
                 if verbose:
