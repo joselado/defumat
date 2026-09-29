@@ -116,7 +116,7 @@ import numpy as np
 
 from defumat.basis.fft import g_to_r, r_to_g
 from defumat.basis.gvectors import refuse_gamma_storage
-from defumat.batching import map_axis, resolve_band_batch, resolve_k_batch, sum_k
+from defumat.batching import map_axis, resolve_k_batch, resolve_pair_batch, sum_k
 from defumat.response.velocity import VelocityOperator
 from defumat.units import E2, FPI
 from defumat.system.kpoints import is_reduced
@@ -421,9 +421,12 @@ def independent_response(
             inside one k-point. One of them is a whole complex field on the
             smooth grid, so this is the dial that decides whether the phase's
             largest array is ``npairs`` FFT boxes or a handful; the default is
-            the band dial (``DEFUMAT_BAND_BATCH``), since a pair density and a
-            band in real space are the same object. Every chunk goes through
-            the same transform, so the answer does not depend on it.
+            the band dial (``DEFUMAT_BAND_BATCH``, one on a CPU), since a pair
+            density and a band in real space are the same object -- except on
+            an accelerator, where the band dial's "all" would be every pair,
+            and the default is a chunk budgeted to about 256 MB of boxes
+            (:func:`~defumat.batching.resolve_pair_batch`). Every chunk goes
+            through the same transform, so the answer does not depend on it.
 
     Returns:
         A :class:`ChiZero`. Nothing is symmetrised: on the full grid there is
@@ -465,7 +468,9 @@ def independent_response(
     volume = calculation.system.cell.volume
     mask = jnp.asarray(calculation.basis.planewaves.mask)
     batch = resolve_k_batch(k_batch)
-    pairs = resolve_band_batch(pair_batch)
+    pairs = resolve_pair_batch(
+        pair_batch, npairs=int(rows.size),
+        box_bytes=int(np.prod(grid)) * np.dtype(precision.complex).itemsize)
 
     def one_k(arrays):
         psi, fft_index, band_mask, eig, occupation, element = arrays

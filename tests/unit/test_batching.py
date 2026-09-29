@@ -440,3 +440,26 @@ def test_a_single_k_point_is_the_same_computation_under_the_new_default():
                                       2 * xs)
         np.testing.assert_array_equal(sum_k(lambda a: 2 * a, xs, batch=batch),
                                       2 * xs[0])
+
+
+def test_the_pair_axis_has_a_budget_on_a_card_and_the_band_dial_on_a_cpu(
+        monkeypatch):
+    """``GPU-MEMORY-NEXT.md`` item 12: ``chi_0``'s pairs are not the bands.
+
+    On a card the band dial's default is every band, which for the pair axis
+    is every occupied-empty pair's FFT box at once. So there the default is a
+    budget, and it fires: a thousand 1 MB pairs come back chunked.
+    """
+    from defumat import batching
+
+    monkeypatch.delenv("DEFUMAT_BAND_BATCH", raising=False)
+    box = 2**20
+    monkeypatch.setattr(batching, "_backend", lambda: "cpu")
+    assert batching.resolve_pair_batch(box_bytes=box, npairs=1000) == 1
+    monkeypatch.setattr(batching, "_backend", lambda: "gpu")
+    chunk = batching.resolve_pair_batch(box_bytes=box, npairs=1000)
+    assert chunk == batching.PAIR_BUDGET_BYTES // (2 * box) < 1000
+    assert batching.resolve_pair_batch(box_bytes=box, npairs=10) is None
+    assert batching.resolve_pair_batch(8, box_bytes=box, npairs=1000) == 8
+    monkeypatch.setenv("DEFUMAT_BAND_BATCH", "4")
+    assert batching.resolve_pair_batch(box_bytes=box, npairs=1000) == 4

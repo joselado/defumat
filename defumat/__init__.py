@@ -94,6 +94,48 @@ def _limit_thread_pool() -> None:
 _limit_thread_pool()
 
 
+#: The share of an accelerator's memory JAX's allocator pool may take when
+#: nothing else has set it. JAX's own default is 0.75, which on a 6 GB card is
+#: a 4.76 GB pool; 0.9 gives about 0.95 GB more there, and a large cell dies at
+#: the pool's edge rather than the card's (``GPU-MEMORY-NEXT.md`` item 23).
+DEFAULT_DEVICE_FRACTION = 0.9
+
+
+def _widen_device_pool() -> None:
+    """Let the accelerator's pool take :data:`DEFAULT_DEVICE_FRACTION`, unless told otherwise.
+
+    It sets ``XLA_CLIENT_MEM_FRACTION``, which JAX reads when the backend
+    starts -- so this has to run before any array exists, and has no effect on
+    a process that used JAX before importing this package. Anything already
+    said wins: either spelling of the fraction (setting both is an error in
+    JAX, so neither is touched when one is there), or ``DEFUMAT_MEM_FRACTION``,
+    which takes a number in ``(0, 1]`` or ``off`` for JAX's own default. A CPU
+    backend ignores the variable, so on a CPU this changes nothing.
+    """
+    if any(_os.environ.get(name) is not None for name in (
+            "XLA_CLIENT_MEM_FRACTION", "XLA_PYTHON_CLIENT_MEM_FRACTION")):
+        return
+    setting = (_environ_get("DEFUMAT_MEM_FRACTION", "") or "").strip().lower()
+    if setting in ("0", "off", "none", "false"):
+        return
+    fraction = DEFAULT_DEVICE_FRACTION
+    if setting:
+        try:
+            fraction = float(setting)
+            if not 0.0 < fraction <= 1.0:
+                raise ValueError(setting)
+        except ValueError:
+            _warnings.warn(
+                f"ignoring DEFUMAT_MEM_FRACTION={setting!r}: expected a number "
+                f"in (0, 1] or 'off'; using {DEFAULT_DEVICE_FRACTION}",
+                RuntimeWarning, stacklevel=2)
+            fraction = DEFAULT_DEVICE_FRACTION
+    _os.environ["XLA_CLIENT_MEM_FRACTION"] = f"{fraction:g}"
+
+
+_widen_device_pool()
+
+
 def _enable_compilation_cache() -> None:
     """Point XLA at a persistent cache, unless the user has said not to.
 

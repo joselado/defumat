@@ -127,6 +127,20 @@ below:
   (`_every_k_donating`), and the robust retry is handed a fresh copy from the host store
   (`psi0_again`). `test_solvers.py` forces the retry and checks both halves. Not measured on
   the card.
+* **Item 12, first bullet** (2026-09-29): `chi_0`'s pair axis has its own default
+  (`batching.resolve_pair_batch`): the band dial's value on a CPU and wherever
+  `DEFUMAT_BAND_BATCH` or an argument says, and on an accelerator the largest chunk whose
+  pair boxes fit `PAIR_BUDGET_BYTES = 256 MB` rather than every pair. The budget is a guess
+  until the 1/8/32 sweep on the card is taken; nothing changes on a CPU.
+* **Item 23** (2026-09-29): importing the package sets `XLA_CLIENT_MEM_FRACTION = 0.9` unless
+  either spelling is already set or `DEFUMAT_MEM_FRACTION` says otherwise (`off`, or a number).
+  On the GTX 1060 the pool is **5452 MB against 4765 MB** (`bytes_limit`, measured).
+* **Item 17** (2026-09-29): `HOISTED_FIELDS` adds the projector core, `|k+G|^2`, the FFT
+  indices, a meta-GGA's `k + G`, `vltot` and the core charge. Ultrasoft silicon at 64
+  k-points: the force gradient's constants **2.85 -> 0.29 MB**, the stress's 0.68 -> 0.58 MB
+  (`make_jaxpr(...).consts`); forces and stress bit-identical to the old tuple on ultrasoft,
+  PAW, noncollinear, DFT+U and LSDA cells. Whether a card keeps a second copy of a constant
+  is still unmeasured.
 * **Item 1** (the fixed-density solve): an eigenvalue-only solve streams where the store
   does and keeps no states. On eight-atom Si the band path's peak is 102.8 -> 44.8 MB at 200
   points and 383.4 -> 163.6 MB at 800, for 2-3 per cent in time. **Still 0.20 MB per

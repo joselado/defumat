@@ -209,3 +209,28 @@ def test_the_suite_widens_the_mask_that_the_package_narrows():
         f"{conftest.TEST_THREADS}: conftest must set DEFUMAT_THREADS before "
         f"anything imports defumat"
     )
+
+
+def test_the_device_pool_is_widened_unless_something_else_set_it(monkeypatch):
+    """``GPU-MEMORY-NEXT.md`` item 23: 0.9 of the card, and nothing overridden."""
+    for name in ("XLA_CLIENT_MEM_FRACTION", "XLA_PYTHON_CLIENT_MEM_FRACTION",
+                 "DEFUMAT_MEM_FRACTION"):
+        monkeypatch.delenv(name, raising=False)
+    defumat._widen_device_pool()
+    assert os.environ["XLA_CLIENT_MEM_FRACTION"] == "0.9"
+
+    monkeypatch.delenv("XLA_CLIENT_MEM_FRACTION")
+    monkeypatch.setenv("DEFUMAT_MEM_FRACTION", "0.8")
+    defumat._widen_device_pool()
+    assert os.environ["XLA_CLIENT_MEM_FRACTION"] == "0.8"
+
+    monkeypatch.delenv("XLA_CLIENT_MEM_FRACTION")
+    monkeypatch.setenv("DEFUMAT_MEM_FRACTION", "off")
+    defumat._widen_device_pool()
+    assert "XLA_CLIENT_MEM_FRACTION" not in os.environ
+
+    # The deprecated spelling is someone's choice too, and setting both raises.
+    monkeypatch.delenv("DEFUMAT_MEM_FRACTION")
+    monkeypatch.setenv("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.5")
+    defumat._widen_device_pool()
+    assert "XLA_CLIENT_MEM_FRACTION" not in os.environ

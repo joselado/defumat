@@ -110,7 +110,16 @@ __all__ = ["FrozenState", "frozen_energy", "energy_at", "reject_spinors", "rejec
 #: Both are ``equinox`` modules and therefore pytrees, so they cross the
 #: boundary as ordinary arguments. ``None`` is kept as ``None`` so that a
 #: norm-conserving run has a stable pytree structure and does not retrace.
-HOISTED_FIELDS = ("paw", "augmentation")
+#:
+#: **The per-k tables go the same way** (``GPU-MEMORY-NEXT.md`` item 17): the
+#: projector core's columns and ``k+G``, ``|k+G|^2``, the FFT indices and
+#: ``k + G`` for a meta-GGA are ``nk npwx``-sized, so once the two above were
+#: arguments they were the largest constants left -- 2.8 MB of the force's 2.9
+#: on ultrasoft silicon at 64 k-points, 253 MB of core on the nbse2 cell -- and
+#: they grow with the mesh where nothing else in the executable does. The
+#: dense-grid ``vltot`` and core charge go with them.
+HOISTED_FIELDS = ("paw", "augmentation", "projector_core", "kinetic",
+                  "fft_index", "fft_index_minus", "kplusg", "vltot", "rho_core")
 
 
 def hoisted(calculation) -> tuple:

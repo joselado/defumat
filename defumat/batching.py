@@ -328,7 +328,8 @@ from jax import lax
 from ._envcompat import environ_get
 
 __all__ = ["DEFAULT_K_BATCH", "resolve_k_batch", "map_k", "sum_k",
-           "DEFAULT_BAND_BATCH", "resolve_band_batch", "map_bands",
+           "DEFAULT_BAND_BATCH", "resolve_band_batch", "resolve_pair_batch",
+           "map_bands",
            "sum_bands", "map_axis",
            "PROJECTOR_STORES", "resolve_projectors",
            "WFC_STORES", "resolve_wfc_store", "park_wavefunctions",
@@ -728,6 +729,37 @@ def _resolve_band_batch(requested: int | None | str = "default") -> int | None:
 #: :func:`defumat.sizing.estimate_size`, which has to size the bands in flight
 #: the way a run would resolve them -- had to reach for the private one.
 resolve_band_batch = _resolve_band_batch
+
+
+#: What a sum-over-states response's **pair** axis may hold in flight on an
+#: accelerator when nothing chose a chunk: the pair products and their
+#: transforms, about two complex FFT boxes per pair. The band dial's own
+#: accelerator default is the whole axis, which is right for bands (``nbnd``
+#: boxes) and not for pairs (``nocc x nempty`` of them: 26 GB on the cell
+#: :mod:`defumat.tddft.chi0` is written against). Not yet tuned on a card.
+PAIR_BUDGET_BYTES = 256 * 2**20
+
+
+def resolve_pair_batch(requested: int | None | str = "default", *,
+                       box_bytes: int, npairs: int) -> int | None:
+    """The pair axis's chunk: an argument, then ``DEFUMAT_BAND_BATCH``, then a budget.
+
+    One pair density in flight is the same object one band in real space is,
+    so an explicit value and the band dial's environment variable are read as
+    :func:`resolve_band_batch` reads them, and on a CPU the platform default is
+    the band dial's (one). On an accelerator the band dial would say "all",
+    and here that is ``npairs`` boxes -- so the default is the largest chunk
+    whose boxes fit :data:`PAIR_BUDGET_BYTES` (``GPU-MEMORY-NEXT.md`` item 12),
+    ``None`` when that is every pair. The chunk never changes the answer.
+    """
+    if requested != "default" or _from_environment(
+            "DEFUMAT_BAND_BATCH") is not _UNSET:
+        return _resolve_band_batch(requested)
+    platform = _platform_default()
+    if platform is not None:
+        return platform
+    fit = max(1, int(PAIR_BUDGET_BYTES // max(1, 2 * box_bytes)))
+    return None if fit >= npairs else fit
 
 
 def sum_bands(fn, xs, *, batch: int | None | str = "default"):
