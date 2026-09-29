@@ -393,7 +393,11 @@ def _require_a_matching_calculation(calculation, kpoints, k_batch, david) -> Non
             "fixed when the calculation is built, so pass david = None or build "
             "the calculation with the value wanted"
         )
-    if resolve_k_batch(k_batch) != calculation.k_batch:
+    # ``"default"`` defers to the calculation: it says nothing about the chunk,
+    # and resolving it through the platform's preset would refuse a speed-mode
+    # calculation on a card (built at ``None``) handed over by its own caller.
+    explicit = not (isinstance(k_batch, str) and k_batch == "default")
+    if explicit and resolve_k_batch(k_batch) != calculation.k_batch:
         raise ValueError(
             f"fixed_density_states was given k_batch = {k_batch!r} with a "
             f"calculation built at k_batch = {calculation.k_batch!r}: the chunk "

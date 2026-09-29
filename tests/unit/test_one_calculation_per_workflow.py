@@ -216,3 +216,20 @@ def test_a_threaded_calculation_built_otherwise_is_refused(
             system, pseudos, None, calculation=_a_built_calculation(),
             **arguments,
         )
+
+
+def test_a_default_chunk_defers_to_the_threaded_calculation():
+    """``k_batch = "default"`` says nothing, so it cannot disagree.
+
+    Resolved through the platform's preset it used to refuse a speed-mode
+    calculation on a card (built at ``None``, the preset saying 1) that its own
+    caller handed over. An explicit value that differs is still refused.
+    """
+    from defumat.workflows.nscf import _require_a_matching_calculation
+
+    for built in (None, 1, 3):
+        _require_a_matching_calculation(
+            _a_built_calculation(k_batch=built), None, "default", None)
+    with pytest.raises(ValueError, match="chunk size is fixed"):
+        _require_a_matching_calculation(
+            _a_built_calculation(k_batch=None), None, 2, None)

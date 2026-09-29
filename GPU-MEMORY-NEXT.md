@@ -484,7 +484,12 @@ donating variant of `_every_k` used only when the caller passes a way to rebuild
 
 ### 12. The response's pair and frequency axes -- priority 2
 
-* **Done 2026-09-29 (a budget, not yet swept on the card).** **`chi_0`'s pair axis
+* **Done 2026-09-29 (a budget; the card sweep was not discriminating).** Swept on the GTX
+  1060 on the TDDFT silicon cell (`si-epsilon-unshifted-nosym`, 60 bands, `ecut_response =
+  8`, 224 pairs): the peak is 2613.9 MB at every pair batch -- all, 1, 8, 32 and the budget --
+  and `chi_0` identical, because 224 pair boxes on this grid are about 29 MB and the peak is
+  set elsewhere. The budget is unmeasured on a cell where the pair axis is the peak.
+  **`chi_0`'s pair axis
   defaults to the band dial**, which is `all` on any card in both
   modes (`tddft/chi0.py:468`), so every pair's box is in flight -- the module's own 26 GB
   case comes back on a GPU (`D1` was closed on a CPU, where the band default is 1). Give the
