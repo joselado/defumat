@@ -157,22 +157,26 @@ def _selected_plane_waves(gvectors, kpoints, cell, ecutwfc, gamma_only):
 
 
 def sphere_widths(gvectors: GVectors, kpoints: KPoints, cell: Cell,
-                  ecutwfc: float, gamma_only: bool = False) -> tuple[int, int]:
-    """``(npwx, nsticks)`` over a k-list, without building the basis.
+                  ecutwfc: float, gamma_only: bool = False) -> tuple[int, int, int]:
+    """``(npwx, nsticks, npw_min)`` over a k-list, without building the basis.
 
     What a caller walking a long k-list in blocks needs first, so that every
     block can be padded to the whole list's widths and share one compilation
     (:func:`build_plane_wave_basis`'s ``npwx``,
     :func:`~defumat.basis.sticks.build_sticks`' ``nsticks``). A stick is an
     ``(x, y)`` column of the box, and the box index runs ``z`` fastest.
+    ``npw_min`` is the smallest sphere, which is the eigensolver's cap
+    (:attr:`~defumat.scf.driver.Calculation.hamiltonian_npw`).
     """
     box = np.asarray(gvectors.fft_index)
     n3 = int(gvectors.grid[2])
     npwx = nsticks = 0
+    npw_min = None
     for chosen in _selected_plane_waves(gvectors, kpoints, cell, ecutwfc, gamma_only):
         npwx = max(npwx, len(chosen))
+        npw_min = len(chosen) if npw_min is None else min(npw_min, len(chosen))
         nsticks = max(nsticks, len(np.unique(box[chosen] // n3)))
-    return npwx, nsticks
+    return npwx, nsticks, npw_min
 
 
 def build_plane_wave_basis(

@@ -8137,3 +8137,45 @@ held as those factors, the angular table shared by both spheres. Silicon PAW und
 **10.5 MB -> 0.30 MB**, the one-centre `ddd` at a random `becsum` the same to 4.4e-16 at
 `nspin` 1 and 2 and the energy identically (`tb09` puts nothing in it). At platinum's
 `nh = 34`, `nlm = 25`, `mesh = 1277` the formed pair would have been 590 MB.
+
+## A band path a block at a time, two verdicts, and float32's first blocker (GTX 1060, 2026-09-29)
+
+**A long band path in memory mode** (`GPU-MEMORY-NEXT.md` item 6's third bullet, for the
+k-set where it grows). Moved onto with `at_kpoints`, a path held every point's per-k tables
+on the card -- the sphere, its box and stick indices, `|k+G|^2`, the projector core --
+while the streamed solve walked the points in chunks. `run_bands` now builds each block of
+points as its own `at_kpoints` where the tables would pass `KSET_BLOCK_BYTES` (64 MB),
+padded to the whole path's `(npwx, nsticks)` and reporting its minimum `npw` to the
+eigensolver, so every block is one compilation. NbSe2 monolayer (`nbse2-monolayer.in`, 25
+k-points, `npwx = 5421`, SCF peak 143-151 MB), a Gamma-M-K-Gamma path, memory mode:
+
+| path | before | after |
+|---:|---:|---:|
+| 91 points | 301.6 MB | **206.1 MB** |
+| 181 points | (about 450 MB at 1.65 MB a point) | **205.9 MB** |
+
+The bands are the same to every printed digit. **What the blocks cost in time** is taken
+on the CPU, because the card was thermally throttled for every run this afternoon (94 C,
+860 of 1911 MHz at 17:14, and two identical runs of the 91-point path read 154 and 273 s):
+a 240-point silicon path with the store forced to stream takes **3.28 s whole and
+3.34-3.36 s in four blocks**, two runs each, warm. The first version recompiled the
+eigensolver once per block -- the Hamiltonian holds each k-point's `npw` as a static tuple
+for the subspace cap -- until each block carried the whole path's minimum
+(`Calculation.hamiltonian_npw`), which is the cap the path taken whole has.
+
+**Two items closed by verdict rather than code**, from numbers already on the card.
+Forward-mode stress (item 16): the chunked stress adds about 22 MB to the SCF's peak on
+eight-atom Si whatever the mesh and nothing on bismuthene (2393.5 MB, the SCF's own), so
+the reverse tape is one chunk's and a forward method would buy nothing for 9x the work.
+The traced movers (item 7): the force and stress chunks move each chunk's own row-subset
+calculation, the spiral's `dE/dq` builds projectors on the chunk's rows only, and what is
+left whole-k is `at_kcart` under the velocity operator, which is the response stack.
+
+**Single precision, time-boxed** (item 26). `benchmarks/si8-1k.in` built with
+`precision=SINGLE` stops in its first Davidson step: the states are complex64 and
+`H|psi>` complex128, so writing the expansion into the basis fails on the dtype. The setup
+arrays built from the pseudopotentials' radial tables do not read the precision policy --
+`vltot`, the starting density and with it `v_scf`, and the bare `D_ij` are float64 in a
+single-precision run -- and casting `vltot` alone does not get past the same line. The fix
+is one cast of the setup leaves to the policy wherever a `Calculation` is built or moved,
+with the deliberate float64 exceptions `GPU-MEMORY-NEXT.md` names; not started.

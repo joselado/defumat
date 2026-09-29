@@ -3248,9 +3248,11 @@ class Calculation:
     def at_kpoints(self, kpoints, widths: tuple[int, int] | None = None) -> "Calculation":
         """The same calculation on a different k-point list.
 
-        ``widths`` is ``(npwx, nsticks)`` to pad to, for a block of a longer
-        list walked a block at a time (:func:`~defumat.basis.planewaves.
-        sphere_widths`): every block then has one shape and one compilation.
+        ``widths`` is ``(npwx, nsticks, npw_min)`` over a longer list this is
+        one block of, walked a block at a time (:func:`~defumat.basis.
+        planewaves.sphere_widths`): every block is padded to the first two and
+        reports the third to its Hamiltonians (:attr:`hamiltonian_npw`), so the
+        blocks have one shape and one compilation.
 
         The counterpart of :meth:`at_positions` on the other axis, and it exists
         for the same reason: **almost nothing depends on which k-points are
@@ -3323,7 +3325,8 @@ class Calculation:
         moved._kcrystal = np.asarray(kpoints.crystal(self.system.cell))
 
         smooth, cell = self.basis.smooth, self.system.cell
-        npwx, nsticks = widths if widths is not None else (None, None)
+        npwx, nsticks, npw_floor = widths if widths is not None else (None,) * 3
+        moved.npw_floor = npw_floor
         planewaves = build_plane_wave_basis(smooth, kpoints, cell, system.ecutwfc,
                                             npwx=npwx)
         moved.basis = Basis(
@@ -3357,6 +3360,22 @@ class Calculation:
         if self.hubbard is not None:
             moved.wfcU = moved._build_hubbard_projectors()
         return moved
+
+    @property
+    def hamiltonian_npw(self) -> tuple[int, ...]:
+        """The per-k plane-wave counts a Hamiltonian is built with.
+
+        The sphere's own, except on a block of a longer k-list
+        (:meth:`at_kpoints` with ``widths``), where every entry is the whole
+        list's smallest. A Hamiltonian reads the counts only for the
+        eigensolver's cap, ``npol min_k npw``, and holds them **static**, so a
+        block's own counts would recompile the solve once per block; the whole
+        list's minimum is also exactly the cap the unblocked list has.
+        """
+        floor = getattr(self, "npw_floor", None)
+        if floor is None:
+            return self.basis.planewaves.npw
+        return (int(floor),) * len(self.basis.planewaves.npw)
 
     def band_count(self, nbnd: int | None = None) -> int:
         """``nbnd`` if given, else the system's, else QE's default for this run."""
@@ -4555,7 +4574,7 @@ class Calculation:
                 fft_index=self.fft_index,
                 fft_index_minus=self.fft_index_minus,
                 mask=self.basis.planewaves.mask,
-                npw=self.basis.planewaves.npw,
+                npw=self.hamiltonian_npw,
                 projectors=self.projectors,
                 grid=self.basis.smooth.grid,
                 resolves_differences=self.resolves_differences,
@@ -4586,7 +4605,7 @@ class Calculation:
             sticks=self.sticks,
             fft_index=self.fft_index,
             mask=self.basis.planewaves.mask,
-            npw=self.basis.planewaves.npw,
+            npw=self.hamiltonian_npw,
             projectors=self.projectors,
             deeq=deeq,
             grid=self.basis.smooth.grid,

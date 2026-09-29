@@ -483,8 +483,8 @@ def kset_blocks(calculation, kpoints):
     800-point path. Where the store streams and the tables would pass
     :data:`KSET_BLOCK_BYTES`, the set is cut into blocks of
     :func:`~defumat.batching.k_chunks` (the last padded with repeats), each is
-    its own ``at_kpoints``, and ``widths`` -- ``(npwx, nsticks)`` over the whole
-    set -- pads every block to one shape, so they share one compilation.
+    its own ``at_kpoints``, and ``widths`` -- ``(npwx, nsticks, npw_min)`` over
+    the whole set -- gives every block one shape, so they share one compilation.
     ``None`` walks the set whole: on a CPU, in speed mode, for a spiral (which
     ``at_kpoints`` refuses) and for a set that fits.
     """

@@ -76,7 +76,7 @@ def test_a_path_in_blocks_is_the_path_whole(pseudo_dir, monkeypatch):
     def recording(self, kpoints, widths=None):
         moved = original(self, kpoints, widths=widths)
         shapes.append((moved.basis.planewaves.indices.shape,
-                       moved.sticks.columns.shape))
+                       moved.sticks.columns.shape, moved.hamiltonian_npw))
         return moved
 
     monkeypatch.setattr(Calculation, "at_kpoints", recording)
@@ -84,6 +84,9 @@ def test_a_path_in_blocks_is_the_path_whole(pseudo_dir, monkeypatch):
                         path, **options)
     assert len(shapes) == 3 and len(set(shapes)) == 1, shapes
     assert shapes[0][0][1] == widths[0] and shapes[0][1][1] == widths[1]
+    # The eigensolver's static plane-wave counts too: the whole path's minimum,
+    # which is the cap the path taken whole has.
+    assert shapes[0][2] == (widths[2],) * 3
     np.testing.assert_allclose(blocked.eigenvalues, whole.eigenvalues,
                                rtol=0, atol=1e-8)
     np.testing.assert_allclose(np.asarray(blocked.kpoints.coords),

@@ -269,6 +269,12 @@ below:
 * **Item 18, the meta-GGA half** (`246f355`): the PAW kinetic maps are held as their factors,
   10.5 -> 0.30 MB on silicon PAW under `tb09`, `ddd` to 4.4e-16.
 
+* **Item 6's third bullet, for a band path** (`19d4aa4`, see item 6): NbSe2's path flat at
+  206 MB from 91 to 181 points, where it was 301.6 MB at 91 and growing 1.65 MB a point.
+* **Verdicts** (2026-09-29): item 7's traced movers need nothing outside item 2, and item
+  16's forward-mode stress is not needed on any cell here (see each item). Item 26's first
+  blocker is named: setup arrays built from the radial tables ignore the precision policy.
+
 ## Suggested order
 
 Cheap and certain first, then the two that decide whether the large cells run in the
@@ -296,11 +302,10 @@ but 24 and 25 have been measured on the card, two as nulls. What is left, in ord
    directly with `at_rows` (solve, response density and `becsum` are sums over k); what
    blocks the default path is the Born charges, a `jvp` of the force gradient over the
    whole k axis, which needs item 3's split one derivative up.
-4. The small tail: a derived k-set's per-k tables (item 6's third bullet, for a band path
-   or a dense mesh; the SCF's own mesh is modest, and QE keeps `igk_k` for every k too),
-   the traced movers (item 7), forward-mode stress (item 16), the speed-mode ground state
-   (item 22, a decision about what speed mode means), item 14's per-`l` transform (time
-   only), the float32 tier (item 26).
+4. The small tail: a dense NSCF/DOS/PDOS mesh a block at a time (item 6's third bullet;
+   the band path is done), the speed-mode ground state (item 22, a decision about what
+   speed mode means), item 14's per-`l` transform (time only), and the float32 tier's
+   setup cast (item 26, its first blocker named). Items 7 and 16 are closed by verdict.
 
 ---
 
@@ -438,8 +443,33 @@ every Davidson call whole through `HubbardTerm`. Three pieces, in order of cost:
   host numpy and `device_put` per chunk like the store. `npw` must stay the global static
   tuple (it sets the Davidson subspace). This is what makes memory mode truly flat in
   `nk`.
+  **Done 2026-09-29 for a band path, which is where it grows** (`19d4aa4`): the SCF's own
+  mesh is modest and read every iteration, and QE keeps `igk_k` for every k-point too, so
+  its tables stay; a band path is long and read once. `run_bands` in memory mode, where the
+  store streams and the path's tables would pass `KSET_BLOCK_BYTES` (64 MB), builds each
+  block of points as its own `at_kpoints`, padded to the whole path's `(npwx, nsticks)`
+  (`basis.planewaves.sphere_widths`) so every block shares one compilation -- a per-block
+  width would recompile per block, the Berry-string trap. NbSe2 monolayer (SCF 143 MB):
+  a 91-point path **301.6 -> 206.1 MB**, 181 points **205.9 MB**, flat where it grew 1.65 MB
+  a point; the bands identical to every printed digit. The Hamiltonian's static per-k
+  plane-wave counts differ block to block and recompiled the solve per block until each
+  block carried the whole path's minimum (`Calculation.hamiltonian_npw`, which is the cap
+  the unblocked path has); since, a 240-point silicon path streamed on the CPU takes 3.34 s
+  in four blocks against 3.28 s whole. **Not done**: a dense NSCF, DOS or
+  PDOS mesh moved onto the same way -- its occupations need the Fermi level over the whole
+  set, and the tetrahedron scheme the whole grid's corners, so it is a second design.
 
 ### 7. `projectors='rebuild'` does not reach the traced movers or the response -- priority 2
+
+**The traced movers: nothing left to do outside item 2 (verdict, 2026-09-29).** In memory
+mode each one now runs on a chunk's own k-points: the chunked force and stress move each
+chunk's row-subset calculation (`at_rows`, then `at_strain`), so the core rebuilt under the
+strain is that chunk's (measured flat in nk on the card, item 3), and the spiral's `dE/dq`
+builds its projectors on the chunk's rows only (`forces/spiral.q_dependent_energy`). The
+global pass's `at_spiral_q` still builds a whole-k set that nothing it returns reads;
+whether XLA drops it from that compiled pass is not measured. The
+one traced mover still taken whole-k is `at_kcart` under the velocity operator's `jvp`,
+which is the response stack, item 2. Speed mode keeps the single pass by design.
 
 **First half done 2026-09-28** (the misplaced line); **the `becsum` and response sites done
 2026-09-29** (see "Done since"); the traced movers are still open.
@@ -634,6 +664,14 @@ interpolation.
 
 ### 16. Forward-mode stress, and forward-over-forward for piezo and elastic -- priority 2/3
 
+**Not needed for the stress on any cell here (verdict, 2026-09-29).** Measured on the
+card: in memory mode the chunked stress adds about 22 MB to the SCF's peak whatever the
+mesh (eight-atom Si, 57.5 MB at 27 k-points and 62.6 at 64), and bismuthene's SCF plus
+stress peaks at the SCF's own 2393.5 MB; BN's stress, the one that died, runs at 2052.9 MB.
+The reverse tape is one chunk's, which is what a forward method would have bought, at 9x
+the work. The piezoelectric and elastic assemblies are the response stack's and go with
+item 2.
+
 A `forward` stress method -- nine `jax.jvp` with unit strains, compiled once -- holds the
 forward working set plus one tangent instead of the reverse tape, for about 9x the work;
 `MEMORY-AUDIT.md` C1 is "one measurement from decidable". Select it in memory mode when
@@ -772,3 +810,16 @@ is unknown (`GPU.md` §4 item 2 and Phase 3; `AUDIT-2026-09-18.md` names a Stern
 mismatch and dtype-less constructions). Build the tier on this card -- eight-atom Si,
 `precision=SINGLE`, memory mode -- keeping the density accumulation and the Davidson
 overlaps in float64 and `jax_default_matmul_precision='highest'`, before exposing it.
+
+**The first blocker, named (2026-09-29, time-boxed).** `benchmarks/si8-1k.in` built with
+`precision=SINGLE` fails in its first Davidson step, 1.5 s in: `lax.dynamic_update_slice
+requires arguments to have the same dtypes, got complex64, complex128` (`davidson.py`, the
+expansion written into the basis). The states are complex64 and `H|psi>` comes back
+complex128, because **the setup arrays built from the pseudopotentials' radial tables do
+not read the precision policy**: `vltot` is float64, the starting density is float64 and
+with it `v_scf`, and the bare `D_ij` is float64 (the projector core's columns are float64
+too, but `vkb` comes out complex64). Casting `vltot` alone does not get past the same line.
+The fix is one cast of every real and complex setup leaf to the policy's dtypes where
+`Calculation` is built and wherever an `at_*` mover rebuilds one, with the float64
+exceptions the paragraph above names kept deliberately -- a design decision rather than a
+line, so it stops here. `sizing.py` already says `_build_species` does not read the policy.
