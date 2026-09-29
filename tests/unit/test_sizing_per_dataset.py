@@ -32,6 +32,7 @@ import dataclasses
 import warnings
 from pathlib import Path
 
+import jax
 import numpy as np
 import pytest
 
@@ -214,16 +215,19 @@ def test_the_onecentre_line_is_what_build_paw_allocates(
     (species,) = held.values()
     assert (species.kinetic_ae is not None) is meta
     assert (species.radial_rel is not None) is relativistic
-    built = sum(
-        getattr(species, name).nbytes for name in TENSORS
-        if getattr(species, name) is not None
-    )
+    # Each array once: the two meta-GGA maps share their angular table.
+    held_arrays = {}
+    for name in TENSORS:
+        value = getattr(species, name)
+        if value is not None:
+            for leaf in jax.tree_util.tree_leaves(value):
+                held_arrays[id(leaf)] = leaf
+    built = sum(leaf.nbytes for leaf in held_arrays.values())
     assert estimate.arrays[ONECENTRE] == built
-    # And the density maps are factored: nothing of ``(nh, nh, nlm, mesh)``
-    # is held but the two meta-GGA tensors.
+    # And every map is factored, the meta-GGA ones included: nothing of
+    # ``(nh, nh, nlm, mesh)`` is held.
     product = species.nh**2 * species.nlm * species.r.shape[0] * 8
-    kinetic = 2 * product if meta else 0
-    assert built - kinetic < product
+    assert built < product
 
 
 def test_each_line_is_keyed_on_what_its_own_setup_reads(pseudo_dir):

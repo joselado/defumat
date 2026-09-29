@@ -818,8 +818,10 @@ def estimate_size(
     #
     #     [nlm nh^2 + nh nbeta + nbeta^2 mesh (1 + nlm + [ae_wfc_rel])] zr
     #
-    # and a meta-GGA adds ``kinetic_ae``/``kinetic_ps``, which are still
-    # ``(nh, nh, nlm, mesh)`` each: ``2 nh^2 nlm mesh zr``. ``nlm = (l_max_rho
+    # and a meta-GGA adds ``kinetic_ae``/``kinetic_ps``, factored the same way
+    # since 2026-09-29: one shared angular table ``(nlm, nh, nh)`` and two
+    # ``(nh, mesh)`` radial factors per sphere, ``(nlm nh^2 + 4 nh mesh) zr``
+    # where the formed maps were ``2 nh^2 nlm mesh zr``. ``nlm = (l_max_rho
     # + 1)^2`` from the header and ``mesh`` the whole radial mesh rather than
     # ``kkbeta``, because the energies are integrated to the end of it. Until
     # ``GPU-MEMORY-NEXT.md`` item 18 the density maps were products of the two
@@ -855,7 +857,7 @@ def estimate_size(
         onecentre_bytes += (
             nlm * nh * nh + nh * nbeta
             + nbeta * nbeta * pseudo.mesh * (1 + nlm + int(relativistic))
-            + 2 * int(functional.is_meta) * nh * nh * nlm * pseudo.mesh
+            + int(functional.is_meta) * (nlm * nh * nh + 4 * nh * pseudo.mesh)
         ) * zr
     if onecentre_bytes:
         arrays["PAW one-centre tables"] = onecentre_bytes

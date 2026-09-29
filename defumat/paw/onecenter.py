@@ -70,6 +70,35 @@ from defumat.xc.functional import Functional, local_spin_frame
 __all__ = ["PawSpecies", "PawCorrections", "build_paw", "onecenter_species"]
 
 
+class KineticFactors(eqx.Module):
+    """The ``becsum -> r^2 tau_lm`` map of one sphere, held as its factors.
+
+    ``tau_lm(r) = sum_ij becsum_ij [C_lij D_i(r) D_j(r) + B_lij R_i(r) R_j(r)]``
+    with ``C`` the density's own Gaunt table (:attr:`PawSpecies.coefficients`),
+    ``B`` the angular term's (:func:`_kinetic_angular_coefficients`), ``D_i =
+    r R_i'`` and ``R_i`` the partial wave over ``r``, both zero from ``iraug``.
+    Formed, the map was ``(nh, nh, nlm, mesh)``: ``nh^2 nlm mesh`` against
+    ``nlm nh^2 + 2 nh mesh`` here (:func:`_kinetic_tensor`).
+    """
+
+    bcoef: jnp.ndarray  # (nlm, nh, nh), shared by the two spheres
+    derivative: jnp.ndarray  # (nh, mesh): r dR_i/dr
+    radial: jnp.ndarray  # (nh, mesh): R_i
+
+    @property
+    def nbytes(self) -> int:
+        return self.bcoef.nbytes + self.derivative.nbytes + self.radial.nbytes
+
+    def contract(self, becsum: jnp.ndarray, coefficients: jnp.ndarray) -> jnp.ndarray:
+        """``(nspin, nlm, mesh)``: ``r^2 tau_lm`` from ``(nspin, nh, nh)`` ``becsum``."""
+        return (
+            jnp.einsum("sij,lij,ir,jr->slr", becsum, coefficients,
+                       self.derivative, self.derivative, optimize="optimal")
+            + jnp.einsum("sij,lij,ir,jr->slr", becsum, self.bcoef,
+                         self.radial, self.radial, optimize="optimal")
+        )
+
+
 class PawSpecies(eqx.Module):
     """Everything one PAW species contributes, precomputed on its radial mesh.
 
@@ -116,14 +145,13 @@ class PawSpecies(eqx.Module):
     dx: float = eqx.field(static=True)
     nlm: int = eqx.field(static=True)
     nh: int = eqx.field(static=True)
-    #: The density tensors' counterparts for the **kinetic energy density**, or
-    #: ``None`` when the functional is not a meta-GGA:
-    #: ``tau_lm = einsum('ij,ijlr->lr', becsum, t)``, holding ``r^2 tau_lm`` in
-    #: **Ry** exactly as the density tensors hold ``r^2 rho_lm``. Built by
-    #: :func:`_kinetic_tensor`, and the reason a potential-only meta-GGA can
-    #: have PAW at all.
-    kinetic_ae: jnp.ndarray | None = None
-    kinetic_ps: jnp.ndarray | None = None
+    #: The density maps' counterparts for the **kinetic energy density**, or
+    #: ``None`` when the functional is not a meta-GGA: ``r^2 tau_lm`` in **Ry**
+    #: from ``becsum`` (:meth:`KineticFactors.contract`), exactly as the density
+    #: maps give ``r^2 rho_lm``. Built by :func:`_kinetic_tensor`, and the reason
+    #: a potential-only meta-GGA can have PAW at all.
+    kinetic_ae: KineticFactors | None = None
+    kinetic_ps: KineticFactors | None = None
     #: ``(nbeta, nbeta, mesh)`` ``pfunc_rel``, times ``soc_scale``, and ``None``
     #: unless the dataset is fully relativistic. The *small* component of the
     #: Dirac partial waves carries magnetization of its own, and it enters the
@@ -344,7 +372,7 @@ def onecenter_species(paw: PawSpecies, becsum: jnp.ndarray, meta_c=None, axis=No
             # ``ddd`` contraction below is still right for it is the point of
             # the phase -- see :func:`_meta_exchange_onecenter`.
             v_xc = v_xc + _meta_exchange_onecenter(
-                rho_lm, jnp.einsum("sij,ijlr->slr", becsum, kinetic), paw, meta_c
+                rho_lm, kinetic.contract(becsum, paw.coefficients), paw, meta_c
             )
 
         # The Hartree potential is the same in both channels: it is a functional
@@ -700,15 +728,15 @@ def _meta_exchange_onecenter(rho_lm, tau_lm, paw: PawSpecies, meta_c=None):
     )
 
 
-def _kinetic_tensor(waves, coefficients, angular, lm_of, r, iraug, nlm):
-    """The ``becsum -> r^2 tau_lm`` tensor for one set of partial waves.
+def _kinetic_tensor(waves, bcoef, r, iraug):
+    """The ``becsum -> r^2 tau_lm`` map for one set of partial waves, factored.
 
     Args:
         waves: ``(nh, mesh)`` the tabulated ``u_i(r) = r phi_i(r)``, already
             selected per projector channel.
-        coefficients: ``(nlm, nh, nh)`` the Clebsch-Gordan expansion of
-            ``Y_i Y_j``, which the density tensor uses too.
-        lm_of: ``(nh,)`` which harmonic each channel carries.
+        bcoef: ``(nlm, nh, nh)`` the angular term's expansion,
+            :func:`_kinetic_angular_coefficients`, which does not depend on the
+            partial waves and so is shared by the all-electron and pseudo maps.
 
     The kinetic energy density of a set of partial waves is
 
@@ -760,10 +788,28 @@ def _kinetic_tensor(waves, coefficients, angular, lm_of, r, iraug, nlm):
     derivative = _np.asarray(
         radial_derivative(jnp.asarray(radial), jnp.asarray(r))
     )                                                          # dR_i/dr
+    # **Factored, not formed** (``GPU-MEMORY-NEXT.md`` item 18's meta-GGA
+    # half). Each term is a coefficient table times a product of two per-channel
+    # radial functions, so ``tau_lm`` is contracted from the factors and no
+    # ``(nh, nh, nlm, mesh)`` array exists: the radial term's ``r^2`` goes on
+    # ``r R'_i`` and the angular term's is already in ``R_i R_j`` (see above).
+    # Zeroing a factor from ``iraug`` zeroes every product there, which is what
+    # the formed tensor's ``[..., iraug:] = 0`` did.
+    scaled = derivative * r
+    scaled[:, iraug:] = 0.0
+    radial = _np.array(radial)
+    radial[:, iraug:] = 0.0
+    return KineticFactors(bcoef=bcoef, derivative=jnp.asarray(scaled),
+                          radial=jnp.asarray(radial))
 
-    # (nh, nh, mesh): the two radial products, each already carrying its r^2.
-    radial_product = _np.einsum("ir,jr->ijr", derivative, derivative) * (r**2)
-    angular_product = _np.einsum("ir,jr->ijr", radial, radial)
+
+def _kinetic_angular_coefficients(angular, lm_of, nlm):
+    """``Bcoef[lm, i, j] = sum_x w_x Y_lm(x) (grad_Omega Y_i . grad_Omega Y_j)_x``.
+
+    The angular half of :func:`_kinetic_tensor`, by quadrature on the angular
+    grid; it depends on the harmonics alone, so one table serves both spheres.
+    """
+    import numpy as _np
 
     dylmt = _np.asarray(angular.dylmt)
     dylmp = _np.asarray(angular.dylmp)
@@ -771,14 +817,8 @@ def _kinetic_tensor(waves, coefficients, angular, lm_of, r, iraug, nlm):
         _np.einsum("xi,xj->ijx", dylmt[:, lm_of], dylmt[:, lm_of])
         + _np.einsum("xi,xj->ijx", dylmp[:, lm_of], dylmp[:, lm_of])
     )
-    bcoef = _np.einsum("xl,ijx->lij", _np.asarray(angular.weighted_ylm)[:, :nlm], overlap)
-
-    tensor = (
-        _np.einsum("lij,ijr->ijlr", coefficients, radial_product)
-        + _np.einsum("lij,ijr->ijlr", bcoef, angular_product)
-    )
-    tensor[:, :, :, iraug:] = 0.0
-    return jnp.asarray(tensor)
+    return jnp.asarray(_np.einsum(
+        "xl,ijx->lij", _np.asarray(angular.weighted_ylm)[:, :nlm], overlap))
 
 
 def build_paw(
@@ -995,10 +1035,11 @@ def _build_species(
         nlm=nlm,
         nh=nh,
         kinetic_ae=None if not functional.is_meta else _kinetic_tensor(
-            ae[beta_of], coefficients, angular_grid, lm_of, pseudo.r, iraug, nlm
+            ae[beta_of], (bcoef := _kinetic_angular_coefficients(
+                angular_grid, lm_of, nlm)), pseudo.r, iraug,
         ),
         kinetic_ps=None if not functional.is_meta else _kinetic_tensor(
-            ps[beta_of], coefficients, angular_grid, lm_of, pseudo.r, iraug, nlm
+            ps[beta_of], bcoef, pseudo.r, iraug,
         ),
         radial_rel=radial_rel,
     )
