@@ -253,6 +253,22 @@ below:
   `device_put` (the streamed store already did): eight-atom Si, 216 k-points, setup peak
   38.5 -> 35.4 MB. Other `jnp.asarray` uploads of large host arrays have not been audited.
 
+* **The day's items on the card** (2026-09-29, `PERFORMANCE.md`, "The projected DOS, the
+  pairs and the rest, on the card"): item 4's windowed structure factor 160.2 -> 59.0 MB
+  (the SCF's own); item 20's band path on the calculator's setup 2986.4 -> 2393.5 MB on
+  bismuthene; the pair budget 895.8 -> 342.2 MB where the pairs are the peak (80 bands on
+  eight-atom Si). **Two nulls**: item 7 on AlAs's wedge (326.5 / 325.4 MB, too few k-points
+  for the whole-k set to matter) and item 11 on bismuthene (3457.4 both; one block under an
+  augmentation-table peak) and on the hydrogen chain, whose peak is the eigensolver's
+  (3936.1 both).
+* **The projected DOS on the SCF's own k-points** (`ed1ef29`, found measuring item 4): the
+  atomic projectors were built whole-k and the smearing DOS formed its `(nE, nk, nbnd)`
+  intermediate six times over. Blocks of k-points on `at_rows` for the first, 16 MB energy
+  blocks in one compiled kernel for the second: eight-atom Si, `nosym`, 216 k-points,
+  **645.6 -> 96.2 MB** against an 86 MB store, the PDOS identical.
+* **Item 18, the meta-GGA half** (`246f355`): the PAW kinetic maps are held as their factors,
+  10.5 -> 0.30 MB on silicon PAW under `tb09`, `ddd` to 4.4e-16.
+
 ## Suggested order
 
 Cheap and certain first, then the two that decide whether the large cells run in the
@@ -269,23 +285,22 @@ default mode:
    callers; the band path's own `Calculation` is what grows now (items 6, 20).
 6. ~~**Factor the PAW one-centre tensors** (item 18)~~ -- done, 1309.6 -> 411.3 MB.
 
-Then the rest by priority. **As of 2026-09-29** items 3, 4, 5, 7, 10, 11, 12, 17, 19, 20,
-23, 24 and 25 are done or partly done (see "Done since"), all validated on the CPU and
-none but 10 and 23 measured on the card. What is left, in order:
+Then the rest by priority. **As of the evening of 2026-09-29** items 3, 4, 5, 7, 10, 11, 12,
+17, 18, 19, 20, 23, 24 and 25 are done or partly done (see "Done since"), and all of them
+but 24 and 25 have been measured on the card, two as nulls. What is left, in order:
 
-1. **Measure the day's changes on the card** -- the chunked force and stress (item 3), the
-   streamed post-SCF consumers (item 4), the pair budget (item 12, 1/8/32 sweep), the
-   constants (item 17), the real `Q_ij` (item 19) -- each an A/B, one run per process.
+1. ~~**Measure the day's changes on the card**~~ -- done, including the nulls.
 2. ~~**A `Calculation` restricted to a row subset of k**~~ -- done (`at_rows`), and the
    chunked force and stress already run on it.
 3. **Stream the linear-response stack** (item 2) on top of it. The dielectric loop chunks
    directly with `at_rows` (solve, response density and `becsum` are sums over k); what
    blocks the default path is the Born charges, a `jvp` of the force gradient over the
    whole k axis, which needs item 3's split one derivative up.
-4. The small tail: the in-loop orientation diagnostics (item 4),
-   the traced movers (item 7), the meta-GGA kinetic tensors (item 18), forward-mode stress
-   (item 16, now less needed), item 14's per-`l` transform (time only), the float32 tier
-   (item 26).
+4. The small tail: a derived k-set's per-k tables (item 6's third bullet, for a band path
+   or a dense mesh; the SCF's own mesh is modest, and QE keeps `igk_k` for every k too),
+   the traced movers (item 7), forward-mode stress (item 16), the speed-mode ground state
+   (item 22, a decision about what speed mode means), item 14's per-`l` transform (time
+   only), the float32 tier (item 26).
 
 ---
 

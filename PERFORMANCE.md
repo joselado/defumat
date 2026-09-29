@@ -8000,6 +8000,10 @@ The first row is mostly the real `Q_ij(G)` (item 19: the resident table halves a
 complex assembly transient goes); the second is the column-streamed plane (item 5), whose
 states never exceed the SCF's own peak; the third the state-keeping streamed solve and the
 chunked projections (items 1 and 4), where the whole-k atomic projectors are what is left.
+*That undersold what was left*: on a grid with few irreducible points the atomic projectors
+are small, and on eight-atom Si with `nosym` and 216 k-points the same PDOS on the SCF's own
+k-points peaked at 646.0 MB -- the whole-k projectors and the smearing intermediate, 600 MB
+between them; both are fixed below ("The projected DOS, the pairs and the rest, on the card").
 
 ## The 2.6 GB silicon spectrum was speed mode; the dials are now re-sized for a solve's bands (GTX 1060, 2026-09-29)
 
@@ -8067,3 +8071,69 @@ array frees it when it was an argument and leaves the 256 MB in use when it was 
 constant, for as long as the compiled function lives (`tools`-free script, one process
 per case, run twice). So hoisting the per-k tables bought nothing in peak on the card;
 what it changes is how long a table the program has dropped stays on the device.
+
+## The projected DOS, the pairs and the rest, on the card (GTX 1060, 2026-09-29)
+
+`GPU-MEMORY-NEXT.md` items validated on the CPU this morning, measured on the card. Each
+row is one process per run, run twice and the second taken, memory mode; "before" is the
+commit before the change and "after" the commit that made it, in worktrees, except where
+the change is a switch (item 20, the pair batch), which is measured both ways on one code
+state. Every pair of runs gives the same number to every printed digit.
+
+| item | chain | before | after |
+|---|---|---:|---:|
+| 4 | Si8, 20 Ry, `nosym`, 216 k: SCF, then structure factors with an energy window | 160.2 MB | **59.0 MB** (the SCF's own) |
+| 4 | same SCF, then a projected DOS on its own k-points | 678.3 MB | 646.0 MB |
+| (below) | same, after `ed1ef29` | 646.0 MB | **96.2 MB** |
+| 7 | `alas-epsilon-us.in` (4x4x4 shifted, the wedge): SCF + dielectric tensor | 326.5 MB | 325.4 MB |
+| 11 | `bismuthene-soc-small.in`: SCF | 3457.4 MB | 3457.4 MB |
+| 11 | `benchmarks/h40-chain-lsda.in` (one k-point, the eigensolver's peak): three SCF iterations | 3936.1 MB | 3936.1 MB |
+| 12 | Si8, 20 Ry, 2x2x2 unshifted `nosym`, 80 bands (1024 pairs): `get_absorption`, pair batch all / budget / 32 | 895.8 MB | **342.2** / 170.9 MB |
+| 20 | `bismuthene-soc-small`: SCF + a 13-point band path, a second setup against the calculator's | 2986.4 MB | **2393.5 MB** (the SCF's own) |
+
+**Two nulls, and why they are nulls rather than passes.** Item 7 walks the lazy projector
+set per k-point in the response's `becsum` instead of stacking it; AlAs's wedge has a few
+k-points and its whole-k set is small, so there is nothing to see on this cell and no cell
+here has a large enough response k-set to show it. Item 11 donates the Davidson start to
+the solve, which saves one block; bismuthene's peak is the augmentation table's (item 19 is
+what moved it, 3457.4 -> 2393.5 MB), so one block cannot show under it -- and on the hydrogen chain, whose peak *is* the
+eigensolver's, it does not show either: 3936.1 MB both, so on this card the donation buys
+no peak that `peak_bytes_in_use` can see. The pair budget is
+the item-12 sweep that was not discriminating on the two-atom cell: here the pair densities
+are 880 MB at once and the budget takes the spectrum to 38 per cent of that, identical to
+every printed digit, 41-46 s against 46-51 s. A batch of 32 halves it again at no visible
+cost in time, so the 256 MB budget is not tight; one cell is not enough to retune it.
+
+**The projected DOS** (`ed1ef29`). On the SCF's own k-points a PDOS reads the store the SCF
+left, and with `nosym` and 216 k-points it took the card from the SCF's 59.0 MB to 645.6 MB
+at this branch's head, for an 86 MB store. Stage by stage in one process:
+
+| stage | before | after |
+|---|---:|---:|
+| SCF | 59.0 MB | 59.0 MB |
+| + `atomic_projections` | (not separated) | 79.9 MB |
+| + the DOS integration (`get_pdos`) | 645.6 MB | **96.2 MB** |
+
+Two things were whole. `atomic_projections` built the atomic projector set for every
+k-point at once, `nk npol npwx natomwfc` complex (180 MB here) with the orthonormalisation's
+copies beside it; in memory mode it is now built on each block of k-points' row-subset
+calculation (`at_rows`, `PROJECTOR_BLOCK_BYTES = 16 MB`), and since `orthoUwfc`
+orthonormalises per k the blocks are the whole build to 1e-12 of the largest projection
+(ultrasoft Si and spin-orbit Pt, a padded last block, a device array and a host store,
+`test_projection_blocks.py`) -- 645.6 -> 255.8 MB. And the smearing DOS formed its
+`(nE, nk, nbnd)` intermediate op by op, each smearing function's temporaries a buffer of
+its own: 1214 energies x 216 k x 16 bands is 33.6 MB a copy and about six were alive. The
+module said the intermediate was too small to chunk; it grows as `nE nk nbnd`, 1.9 GB a
+copy at 1000 k-points and 200 bands. It now walks the energy grid in 16 MB blocks
+(`SMEARING_CHUNK_BYTES`) -- 255.8 -> 144.0 MB -- inside one compiled kernel, so the argument
+and the smearing function fuse into the operand the contraction reads -- 144.0 -> 96.2 MB.
+The projected DOS is the same to every printed digit. The first run of each state reads up
+to 37 MB higher; that is the compile cache, and the second run is the one in the table.
+
+**The PAW kinetic maps** (`246f355`, item 18's meta-GGA half). A meta-GGA's two one-centre
+`becsum -> r^2 tau_lm` maps were formed `(nh, nh, nlm, mesh)` tensors; each term is a
+coefficient table times a product of two per-channel radial functions, so they are now
+held as those factors, the angular table shared by both spheres. Silicon PAW under `tb09`:
+**10.5 MB -> 0.30 MB**, the one-centre `ddd` at a random `becsum` the same to 4.4e-16 at
+`nspin` 1 and 2 and the energy identically (`tb09` puts nothing in it). At platinum's
+`nh = 34`, `nlm = 25`, `mesh = 1277` the formed pair would have been 590 MB.
