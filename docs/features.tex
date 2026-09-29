@@ -3419,6 +3419,19 @@ kernel-matched on purpose, since differencing a bootstrap number against a
 Sternheimer one that contains $f_{\mathrm{xc}}$ would measure the kernel
 instead.
 
+Two memory dials bound the working set without touching the answer, since the
+pairs and the frequencies are each independent. \code{pair\_batch} is how many
+occupied--empty pair densities are formed at once (each is a whole box on the
+smooth grid): the band dial's value on a CPU, and on a GPU a chunk sized to about
+256~MB of boxes rather than every pair. \code{w\_batch}
+(\code{DEFUMAT\_W\_BATCH}) is how many frequencies are assembled and screened at
+once: the whole axis on a CPU, and a chunk sized to about 256~MB on a GPU.
+
+\begin{pycode}
+spectrum = run_absorption(system, pseudos, scf.density, omega,
+                          nbnd=60, ecut_response=8.0, w_batch=16)
+\end{pycode}
+
 \textbf{A trap that is invisible in the answer:} the macroscopic dielectric
 function is the inverse of the $3\times3$ \emph{head} of $\epsilon^{-1}$, not
 the head of the inverse of the whole matrix. The second is the microscopic
@@ -6959,20 +6972,38 @@ bounds what grows with the $k$-mesh and nothing else}: a peak set by the
 augmentation tables, the dense grid or one $k$-point's band block is the same
 in both modes --- on seven-$k$ spin-orbit bismuthene and eight-$k$ PAW platinum
 the two peaks agree within 1.5\%. \textbf{A streamed result's wavefunctions are
-a host array}, and what reads them whole --- the stress an input asks for with
-\code{tstress}, a force, a response --- moves them to the card whole; $dE/d\mathbf
-q$ is the one derivative that walks them a chunk at a time. \textbf{The host
+a host array}, and most of what reads them walks them a chunk at a time too: the
+force and the stress (each chunk's share of the gradient pulled back through the
+whole-cell terms, so the force adds nothing to the SCF's peak), $dE/d\mathbf q$,
+the density and projector occupations, a projected DOS, an STM image, the
+structure factors, the site moments, the Berry curvature and the orbital
+magnetization. \textbf{What still moves them to the card whole} is the
+linear-response stack --- the dielectric tensor, Born charges, phonons, Raman ---
+and the sum-over-states spectra. \textbf{The host
 must hold the set} ($n_{\rm spin} n_k n_{\rm bnd} n_{\rm pwx} n_{\rm pol}$
 complex), which is the point but is not free. And \textbf{the fall-back from
 \code{'speed'} fires only where the preset is what would run}: with a
 \code{k\_batch} or \code{projectors} of your own, or \code{DEFUMAT\_K\_BATCH},
 the estimate would describe another calculation, so nothing is checked.
-\textbf{A mode given to a \code{Calculator} configures its own setup}, which is
-what its SCF, forces, stress and $dE/d\mathbf q$ run on; a post-SCF method that
-builds a setup of its own --- bands, DOS, PDOS, STM, transport, the spiral scan
---- resolves its mode from \code{DEFUMAT\_MEMORY\_MODE} and the platform, so set
-the environment variable when those must follow a non-default mode.
+\textbf{A mode given to a \code{Calculator} configures its own setup}, and the
+calculator's post-SCF methods --- bands, NSCF, DOS, PDOS, STM, transport,
+structure factors, the spiral scan, the topological invariants --- run on that
+same setup, moved to their own $k$-points where they need others, so they follow
+its mode. The magnetic-anisotropy force theorem and torque build a setup of
+their own, because they rotate the moments; they resolve the mode from
+\code{DEFUMAT\_MEMORY\_MODE} and the platform.
 \end{refuses}
+
+\textbf{The card's pool.} Importing \code{defumat} lets the device allocator take
+90\% of the card instead of JAX's own 75\% (on a 6~GB card, 5.45~GB rather than
+4.76), by setting \code{XLA\_CLIENT\_MEM\_FRACTION} before the backend starts.
+A value you set yourself, in either spelling of that variable, is left alone;
+\code{DEFUMAT\_MEM\_FRACTION} takes a number in $(0, 1]$, or \code{off} for
+JAX's default --- which is what to use when another program shares the card.
+
+\begin{shcode}
+DEFUMAT_MEM_FRACTION=off python3 run.py
+\end{shcode}
 
 \textbf{Two batching dials} control how much is in flight. The band dial
 follows the platform: on a CPU, \qe's loop --- one band at a time, which is what

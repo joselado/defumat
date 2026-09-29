@@ -309,11 +309,14 @@ line (``host_offloader.cc: ... Converting into host compute``). So the store
 must never reach a kernel whole, and the one form that makes that structural is
 a numpy array sliced on the host: 102 MB moves in about 35 ms each way.
 
-**Only the SCF loop parks anything.** :func:`~defumat.workflows.nscf.run_nscf`
-and the band-structure path hold a full-k store of their own and are *not*
-covered: they diagonalise once, so there is no span between two solves to park
-across, and what they would want instead is to never stack the set at all. That
-is a different change and is not this one.
+**Only the SCF loop parks anything; the fixed-density solves never stack the
+set.** :func:`~defumat.workflows.nscf.run_nscf` and the band-structure path
+diagonalise once, so there is no span between two solves to park across. Where
+the store streams they solve a chunk at a time from scratch instead
+(:mod:`defumat.scf.streaming`): a caller that wants energies drops each
+chunk's states as they come back, and one that keeps them gets a numpy store,
+which the consumers walk a chunk at a time (``GPU-MEMORY-NEXT.md`` items 1
+and 4).
 """
 
 from __future__ import annotations

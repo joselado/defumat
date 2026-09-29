@@ -5585,7 +5585,14 @@ distinct datasets with `_projector_dataset_key` and `_paw_dataset_key`.
   `si2-nosym` has one label. `batching.py:583`'s comment still says one column per
   species channel.
 
-## 4. The Calculator facade builds its own `Calculation` per `get_*` call **[opened 2026-09-23]**
+## 4. The Calculator facade builds its own `Calculation` per `get_*` call **[closed 2026-09-28/29, `GPU-MEMORY-NEXT.md` item 20]**
+
+**Closed.** `at_kpoints` keeps `projectors = "rebuild"` since 2026-09-28, and the facade now
+passes its own `Calculation` to bands, NSCF, DOS, PDOS, STM, STS, both transports, the
+structure factors, the spiral scan, the spiral spin-orbit energy and the four topology
+workflows (moved with `at_kpoints` where the k-set differs). With the same options the
+results are identical to a fresh setup's. The force theorem and the torque still build their
+own, because they rotate the system. What follows is the text as opened.
 
 H3 took the discarded builds out of the workflows, and a workflow can now take a built
 `Calculation`, but the facade does not pass it one, because moving a cached calculation to
