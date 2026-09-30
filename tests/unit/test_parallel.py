@@ -12,6 +12,11 @@ with one fixed key per k-point (``Calculation.starting_wavefunctions``), so the
 split cannot change where the SCF starts. Its guard, removing the all-reduce,
 must move the energy by far more than that, which is what shows the invariance
 test can see a pool that sums only its own share.
+
+Every test that starts processes is ``slow``: each pays a process start, the
+distributed handshake and a cold compile, 15 to 30 s, and none is a number
+against a reference code, which is the gate's rule (the ``test-runs`` skill).
+The split, the store and the refusals stay in the gate.
 """
 
 from __future__ import annotations
@@ -170,6 +175,7 @@ COMMUNICATOR_SCRIPT = textwrap.dedent("""
 """)
 
 
+@pytest.mark.slow
 def test_collectives_over_two_processes():
     results = _run_pools(COMMUNICATOR_SCRIPT, 2)
     for result in results:
@@ -215,6 +221,7 @@ def serial_silicon():
     return _run_pools(SCF_SCRIPT, 1, SILICON_8K, 0)[0]
 
 
+@pytest.mark.slow
 def test_two_pools_reproduce_one(serial_silicon):
     pooled = _run_pools(SCF_SCRIPT, 2, SILICON_8K, 0)
     for result in pooled:
