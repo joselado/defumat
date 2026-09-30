@@ -61,6 +61,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.forces import compute_forces
+from defumat.parallel import current_pools
 from defumat.relax import get_ion_dynamics
 from defumat.relax.bfgs import BFGSSettings
 from defumat.relax.cell import cell_dofree_mask
@@ -239,6 +240,9 @@ def run_vc_relax(
     ``&control``, ``&ions`` and ``&cell`` said, or QE's default where they said
     nothing (:class:`~defumat.relax.settings.RelaxSettings`).
     """
+    pools = current_pools()
+    if pools.size > 1 and pools.rank != 0:
+        verbose = False
     settings = system.relax
     press = settings.press if press is None else press
     press_conv_thr = (
@@ -305,9 +309,17 @@ def run_vc_relax(
         cell = np.asarray(current.system.cell.at)
         volume = float(current.system.cell.volume)
 
+        energy, force_values, stress_values = (result.total_energy, forces.forces,
+                                               stress.tensor)
+        if pools.size > 1:
+            # Rank 0's energy, forces and stress are every pool's, so that no
+            # pool moves the atoms or the cell differently.
+            energy, force_values, stress_values = pools.broadcast(
+                (np.asarray(energy), np.asarray(force_values), np.asarray(stress_values)))
+            energy = float(energy)
         moved, converged = optimizer.step(
-            positions, result.total_energy, forces.forces * free,
-            stress=stress.tensor,
+            positions, energy, force_values * free,
+            stress=stress_values,
         )
         charges, moments = site_magnetization(result)
         steps.append(VCRelaxStep(

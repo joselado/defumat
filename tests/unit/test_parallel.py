@@ -106,10 +106,9 @@ def test_refusals_name_what_pools_do_not_cover():
     calculation = SimpleNamespace(system=SimpleNamespace(kpoints=SimpleNamespace(nk=8)),
                                   spiral=False)
     quiet = dict(starting_from=None, starting_wavefunctions=None, checkpointing=False,
-                 tstress=False, residual_solver=False, rotate_moments=False, field=None)
+                 residual_solver=False, rotate_moments=False, field=None)
     _refuse_under_pools(pools, calculation, **quiet)
-    for name, value, words in [("tstress", True, "tstress"),
-                               ("checkpointing", True, "checkpoint_dir"),
+    for name, value, words in [("checkpointing", True, "checkpoint_dir"),
                                ("rotate_moments", True, "rotate_moments"),
                                ("field", object(), "magnetic field")]:
         with pytest.raises(NotImplementedError, match=words):
@@ -184,6 +183,26 @@ COMMUNICATOR_SCRIPT = textwrap.dedent("""
 
 
 @pytest.mark.slow
+def test_the_facade_refuses_what_is_not_pool_aware(monkeypatch):
+    """Every ``get_*`` outside ``POOL_AWARE`` refuses under pools, by name."""
+    import inspect
+
+    import defumat.parallel as parallel
+    from defumat.calculator import POOL_AWARE, Calculator
+
+    guarded = {name for name, method in vars(Calculator).items()
+               if name.startswith("get_") and inspect.isfunction(method)
+               and hasattr(method, "__wrapped__")}
+    getters = {name for name, method in vars(Calculator).items()
+               if name.startswith("get_") and inspect.isfunction(method)}
+    assert guarded == getters - POOL_AWARE
+    assert POOL_AWARE <= getters
+    monkeypatch.setattr(parallel, "_CURRENT", Pools(_FakeCommunicator(2, 0)))
+    with pytest.raises(NotImplementedError, match="get_bands is not available"):
+        Calculator.get_bands(object())
+
+
+@pytest.mark.slow
 def test_collectives_over_two_processes():
     results = _run_pools(COMMUNICATOR_SCRIPT, 2)
     for result in results:
@@ -219,7 +238,17 @@ SCF_SCRIPT = textwrap.dedent("""
                     for s in system.structure.species)
     result = run_scf(system, pseudos, conv_thr=1e-12 if iterations == 100 else 1e-16,
                      max_iterations=iterations)
+    forces = stress = None
+    if len(sys.argv) > 4 and sys.argv[4] == "forces":
+        from defumat.forces import compute_forces
+        from defumat.scf.driver import Calculation
+        from defumat.stress import compute_stress
+        calculation = Calculation(system, pseudos)
+        result = run_scf(system, pseudos, conv_thr=1e-12, calculation=calculation)
+        forces = np.asarray(compute_forces(calculation, result).forces).tolist()
+        stress = np.asarray(compute_stress(calculation, result).tensor).tolist()
     print(json.dumps({"rank": current_pools().rank, "energy": float(result.total_energy),
+                      "forces": forces, "stress": stress,
                       "iterations": result.iterations,
                       "eigenvalues": np.asarray(result.eigenvalues).ravel().tolist(),
                       "store": type(result.wavefunctions).__name__}))
@@ -274,3 +303,55 @@ def test_pools_reproduce_one_on_a_noncollinear_magnet():
     for result in pooled:
         assert abs(result["energy"] - serial["energy"]) < 1e-10
         assert result["iterations"] == serial["iterations"] == 8
+
+
+SILICON_DISPLACED_8K = SILICON_8K.replace(" Si 0.25 0.25 0.25", " Si 0.27 0.25 0.24")
+
+
+@pytest.mark.slow
+def test_pooled_forces_and_stress_reproduce_one_pool():
+    """One pool takes the single-pass gradient; two walk their rows and reduce.
+
+    Two routes that share nothing but the energy expression, which agreed to
+    every printed digit when measured: forces to 1e-12 Ry/bohr, stress to 1e-10.
+    """
+    serial = _run_pools(SCF_SCRIPT, 1, SILICON_DISPLACED_8K, 0, 100, "forces")[0]
+    pooled = _run_pools(SCF_SCRIPT, 2, SILICON_DISPLACED_8K, 0, 100, "forces")
+    assert np.abs(np.asarray(serial["forces"])).max() > 1e-2, "a force worth testing"
+    for result in pooled:
+        assert np.allclose(result["forces"], serial["forces"], atol=1e-10)
+        assert np.allclose(result["stress"], serial["stress"], atol=1e-9)
+
+
+RELAX_SCRIPT = textwrap.dedent("""
+    import json, sys, tempfile, warnings
+    warnings.simplefilter("ignore")
+    from pathlib import Path
+    import numpy as np
+    import defumat
+    from defumat import Calculator
+    from defumat.parallel import current_pools
+    with tempfile.NamedTemporaryFile("w", suffix=".in", delete=False) as f:
+        f.write(sys.argv[1])
+    calculator = Calculator.from_file(f.name, pseudo_dir="tests/data/pseudo")
+    result = calculator.get_relax(conv_thr=1e-10)
+    print(json.dumps({"rank": current_pools().rank,
+                      "energies": [s.total_energy for s in result.steps],
+                      "positions": np.asarray(result.steps[-1].positions).tolist(),
+                      "converged": bool(result.converged)}))
+""")
+
+
+@pytest.mark.slow
+def test_a_pooled_relaxation_takes_the_same_steps():
+    """Rank 0's energy and forces drive every pool's optimizer.
+
+    Measured: four ionic steps both ways, the energies equal to 1e-10 Ry and
+    the final positions to 1e-8 bohr.
+    """
+    serial = _run_pools(RELAX_SCRIPT, 1, SILICON_DISPLACED_8K, timeout=900)[0]
+    pooled = _run_pools(RELAX_SCRIPT, 2, SILICON_DISPLACED_8K, timeout=900)
+    for result in pooled:
+        assert result["converged"] and len(result["energies"]) == len(serial["energies"])
+        assert np.allclose(result["energies"], serial["energies"], atol=1e-9)
+        assert np.allclose(result["positions"], serial["positions"], atol=1e-7)

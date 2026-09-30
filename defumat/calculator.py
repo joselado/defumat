@@ -2502,3 +2502,35 @@ def _spinor_leg(spinor):
         }
     system, pseudos = spinor
     return system, pseudos, {}
+
+
+#: The facade methods that run under k-point pools (:mod:`defumat.parallel`,
+#: ``DEFUMAT_POOLS``): the ground state, the force and the stress, which walk
+#: each pool's own k-points and reduce, and the relaxations built on them.
+#: Every other ``get_*`` refuses by name under pools rather than reading one
+#: pool's share of the wavefunctions as though it were the whole set.
+POOL_AWARE = frozenset({"get_scf", "get_forces", "get_stress", "get_relax"})
+
+
+def _refused_under_pools(name, method):
+    import functools
+
+    from defumat.parallel import current_pools
+
+    @functools.wraps(method)
+    def guarded(self, *args, **kwargs):
+        if current_pools().size > 1:
+            raise NotImplementedError(
+                f"Calculator.{name} is not available with k-point pools yet "
+                f"(DEFUMAT_POOLS); only {', '.join(sorted(POOL_AWARE))} are. Run "
+                "it with DEFUMAT_POOLS unset, starting from a pooled ground "
+                "state's density if that helps.")
+        return method(self, *args, **kwargs)
+
+    return guarded
+
+
+for _name, _method in list(vars(Calculator).items()):
+    if _name.startswith("get_") and inspect.isfunction(_method) and _name not in POOL_AWARE:
+        setattr(Calculator, _name, _refused_under_pools(_name, _method))
+del _name, _method

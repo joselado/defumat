@@ -53,6 +53,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.forces import compute_forces
+from defumat.parallel import current_pools
 from defumat.relax import get_ion_dynamics
 from defumat.relax.bfgs import BFGSSettings
 from defumat.scf.driver import Calculation, SCFResult, run_scf
@@ -355,6 +356,14 @@ def run_relax(
     steps: list[RelaxStep] = []
     density = becsum = None
     converged = False
+    pools = current_pools()
+    if pools.size > 1:
+        if checkpoint_dir is not None:
+            raise NotImplementedError(
+                "checkpoint_dir is not available with k-point pools yet: the "
+                "saved state would hold one pool's share of the wavefunctions")
+        if pools.rank != 0:
+            verbose = False
 
     if resumed_state is not None:
         density, becsum = resumed_state.density, resumed_state.becsum
@@ -387,9 +396,16 @@ def run_relax(
         )
         forces = compute_forces(calculation, result, method=force_method)
         positions = np.asarray(calculation.system.structure.positions)
+        energy, force_values = result.total_energy, forces.forces
+        if pools.size > 1:
+            # Every pool takes the optimizer's step; rank 0's energy and forces
+            # are everyone's, so no pool can move the atoms differently.
+            energy, force_values = pools.broadcast((np.asarray(energy),
+                                                    np.asarray(force_values)))
+            energy = float(energy)
 
         moved, converged = optimizer.step(
-            positions, result.total_energy, forces.forces * free
+            positions, energy, force_values * free
         )
         charges, moments = site_magnetization(result)
         steps.append(RelaxStep(

@@ -135,6 +135,13 @@ def compute_stress(
         if isinstance(result_or_state, FrozenState)
         else state_from_result(result_or_state)
     )
+    from defumat.parallel import PoolStore
+
+    if isinstance(state.wavefunctions, PoolStore) and name != "autodiff":
+        raise NotImplementedError(
+            f"method={name!r} is not available with k-point pools: it reads every "
+            "k-point's states directly, and a pool holds only its share. The "
+            "default autodiff stress walks each pool's rows and reduces.")
 
     raw = np.asarray(get_stress_method(name)(calculation, state), dtype=float)
     rotational = float(np.abs(raw - raw.T).max() / 2.0)

@@ -66,6 +66,7 @@ from defumat.forces.energy import (
 )
 from defumat.hubbard.energy import hubbard_energy
 from defumat.scf.potential import total_charge
+from defumat.parallel import PoolStore, current_pools
 from defumat.scf.streaming import is_host_store
 
 __all__ = ["chunked_gradient", "wants_chunks"]
@@ -79,7 +80,8 @@ def wants_chunks(calculation, state: FrozenState) -> bool:
     default every validated number was taken in, keeps the single pass.
     """
     nk = calculation.system.kpoints.nk
-    if is_host_store(state.wavefunctions):
+    if is_host_store(state.wavefunctions) or isinstance(state.wavefunctions, PoolStore):
+        # A k-point pool's share is walked as the pool's own rows.
         return True
     batch = calculation.k_batch
     return (calculation.memory_mode == "memory" and batch is not None
@@ -143,11 +145,19 @@ def _rows_of(array, rows):
     return jnp.asarray(array)[:, jnp.asarray(rows)]
 
 
-def _chunk(state: FrozenState, rows, live):
-    """``psi``, the weights with the padding zeroed, and the eigenvalues of one chunk."""
+def _chunk(state: FrozenState, rows, live, positions=None):
+    """``psi``, the weights with the padding zeroed, and the eigenvalues of one chunk.
+
+    ``rows`` are global k indices; ``positions``, for a k-point pool's
+    :class:`~defumat.parallel.PoolStore`, are where those rows sit in the
+    pool's own store.
+    """
     weights = np.array(state.weights[:, rows])
     weights[:, live:] = 0.0
-    return (_rows_of(state.wavefunctions, rows), jnp.asarray(weights),
+    store = state.wavefunctions
+    psi = (_rows_of(store.array, positions) if isinstance(store, PoolStore)
+           else _rows_of(store, rows))
+    return (psi, jnp.asarray(weights),
             jnp.asarray(np.asarray(state.eigenvalues)[:, rows]))
 
 
@@ -209,10 +219,17 @@ def _compiled(calculation, kind: str) -> dict:
 
 
 def chunked_gradient(calculation, state: FrozenState, kind: str, x,
-                     k_batch: int | None = None):
+                     k_batch: int | None = None, pools=None):
     """``(E, dE/dx)`` at ``x``, the k axis walked ``k_batch`` at a time.
 
     ``k_batch`` defaults to the calculation's own chunk.
+
+    **Under k-point pools** (a :class:`~defumat.parallel.PoolStore` state) each
+    pool walks its own rows: the forward walk's raw sums are all-reduced
+    before the global terms are evaluated at them, every pool evaluates those
+    terms identically, the pull-back walk's separable energy and gradient are
+    all-reduced, and the global gradient is added once, after the reduction --
+    so no k-independent term is counted once per pool.
 
     ``kind`` is ``"positions"`` (``x`` the ``(nat, 3)`` positions, for the
     force) or ``"strain"`` (``x`` the ``(3, 3)`` strain, for the stress). The
@@ -228,30 +245,41 @@ def chunked_gradient(calculation, state: FrozenState, kind: str, x,
     big = hoisted(calculation)
     nk = calculation.system.kpoints.nk
     batch = (calculation.k_batch if k_batch is None else k_batch) or nk
-    chunks = list(k_chunks(nk, batch))
+    store = state.wavefunctions
+    pooled = isinstance(store, PoolStore)
+    if pooled:
+        pools = current_pools() if pools is None else pools
+        chunks = [(store.rows[positions], live, positions)
+                  for positions, live in k_chunks(len(store.rows), batch)]
+    else:
+        chunks = [(rows, live, None) for rows, live in k_chunks(nk, batch)]
 
     becsum_ = rho = ns = None
-    for rows, live in chunks:
-        psi, weights, eigenvalues = _chunk(state, rows, live)
+    for rows, live, positions in chunks:
+        psi, weights, eigenvalues = _chunk(state, rows, live, positions)
         part = passes["sums"](x, big, row_leaves(calculation, rows), psi,
                               weights, eigenvalues)
         becsum_, rho, ns = (_add(becsum_, part[0]), _add(rho, part[1]),
                             _add(ns, part[2]))
+    if pooled:
+        becsum_, rho, ns = pools.allreduce_sum((becsum_, rho, ns))
 
     # The global terms read nothing with a k index; any one chunk's rows stand
     # in, so that the moved calculation's per-k rebuilds are one chunk's.
     e_glob, (g_x, g_b, g_rho, g_ns) = passes["global"](
         x, big, row_leaves(calculation, chunks[0][0]), becsum_, rho, ns)
-    energy = e_glob + state.entropy
-    gradient = g_x
-    for rows, live in chunks:
-        psi, weights, eigenvalues = _chunk(state, rows, live)
+    separable = 0.0
+    pulled = jnp.zeros_like(g_x)
+    for rows, live, positions in chunks:
+        psi, weights, eigenvalues = _chunk(state, rows, live, positions)
         value, slope = passes["pull"](x, big, row_leaves(calculation, rows),
                                       psi, weights, eigenvalues,
                                       (g_b, g_rho, g_ns))
-        energy = energy + value
-        gradient = gradient + slope
-    return energy, gradient
+        separable = separable + value
+        pulled = pulled + slope
+    if pooled:
+        separable, pulled = pools.allreduce_sum((jnp.asarray(separable), pulled))
+    return e_glob + state.entropy + separable, g_x + pulled
 
 
 #: The :class:`~defumat.scf.driver.Calculation` attributes that carry a k

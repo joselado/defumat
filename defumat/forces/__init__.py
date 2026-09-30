@@ -130,6 +130,13 @@ def compute_forces(calculation, result_or_state, method: str | None = None) -> F
     # a force, and a run under a magnetic field came back with one from either.
     reject_potential_only(calculation)
     reject_magnetic_field(calculation)
+    from defumat.parallel import PoolStore
+
+    if isinstance(state.wavefunctions, PoolStore) and name != "autodiff":
+        raise NotImplementedError(
+            f"method={name!r} is not available with k-point pools: it reads every "
+            "k-point's states directly, and a pool holds only its share. The "
+            "default autodiff force walks each pool's rows and reduces.")
     raw = get_force_method(name)(calculation, state)
 
     terms = {}

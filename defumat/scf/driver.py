@@ -5745,7 +5745,7 @@ def _refuse_rotating_moments(calculation, field, coupled: bool) -> None:
 
 
 def _refuse_under_pools(pools, calculation, *, starting_from,
-                        starting_wavefunctions, checkpointing, tstress,
+                        starting_wavefunctions, checkpointing,
                         residual_solver, rotate_moments, field) -> None:
     """Refuse by name what the k-point pools do not cover yet.
 
@@ -5766,8 +5766,6 @@ def _refuse_under_pools(pools, calculation, *, starting_from,
         refused.append("starting_from / starting_wavefunctions (a whole-set span)")
     if checkpointing:
         refused.append("checkpoint_dir (the store is per pool)")
-    if tstress:
-        refused.append("tstress (the stress reads every k-point's states)")
     if residual_solver:
         refused.append("a residual scf_solver (it differentiates the whole set)")
     if rotate_moments:
@@ -6424,7 +6422,6 @@ def run_scf(
             pools, calculation, starting_from=starting_from,
             starting_wavefunctions=starting_wavefunctions,
             checkpointing=checkpointing,
-            tstress=system.tstress if tstress is None else tstress,
             residual_solver=get_scf_solver(scf_solver) is not None,
             rotate_moments=rotate_moments, field=field,
         )
