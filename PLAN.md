@@ -261,15 +261,14 @@ because that is what decides whether it is a session or a phase.
   physical coupling where the first order leaves two axes at zero; and a converged value for
   the validation chain, whose first order changes sign between 34 and 40 Ry.
 - **k-point pools beyond the ground state, forces, stress and relaxations** (P124). Refused
-  by name under `DEFUMAT_POOLS > 1`: spin spirals, `starting_from` and
-  `starting_wavefunctions`, checkpoints (SCF and relaxation), a residual `scf_solver`,
-  `rotate_moments`, magnetic fields and constraints, the analytic force and stress, and every
-  `Calculator.get_*` outside `get_scf`, `get_forces`, `get_stress`, `get_relax`. Not
-  measured: a server node (the numbers are six desktop cores), and the 40-site, 50-core
-  cell the phase was asked for. Not done: splitting a k-point's `(spin, k)` pairs across
-  pools, cost-aware assignment of the k-points (Gamma needs twice the Davidson steps),
-  sharing the k-independent work every pool repeats, and the plane-wave distribution
-  inside one k-point for cells with fewer k-points than pools.
+  by name under `DEFUMAT_POOLS > 1`: a residual `scf_solver`, the analytic force and
+  stress, and every `Calculator.get_*` outside `get_scf`, `get_forces`, `get_stress`,
+  `get_relax`. Not measured: a server node (three exclusive Milan jobs queued), and the
+  40-site, 50-core cell (Si40, `tools/parallel/inputs/si40-27k.in`). Not done: splitting a
+  k-point's `(spin, k)` pairs across pools, sharing the k-independent work every pool
+  repeats, and the parallelism inside one k-point, which needs the Davidson's dense algebra
+  distributed and not only `h_psi` (measured: `h_psi` alone split makes a whole SCF
+  slower).
 - **The force on an atom of a spin spiral** — the two components live on different
   plane-wave spheres, so the nonlocal term needs the projectors of both. `dE/dq` (P21) is
   what a spiral has instead.
@@ -23164,3 +23163,79 @@ dispatched density kernel was charged to the all-reduce until the collective's i
 waited for (a 155 ms all-reduce that was 11 ms). A single run on the shared test machine
 read a 13 per cent regression that an A/B across the commit showed to be noise.
 
+
+**The production regimes, the stop, the memory and the balance (2026-09-30, evening).**
+The ranked open list's items 1 to 6, the plan reviewed by a Fable subagent against the
+code first (`PARALLEL-NEXT.local.md`, "What the review changed"). Every number below is
+at a fixed iteration count unless it says converged, and every pooled test is in
+`tests/unit/test_parallel.py` (slow).
+
+- *Spin spirals* needed no code: the streamed passes hand the kernels global k rows and
+  the spiral's Hamiltonian, `becsum` and density map each to its two basis rows.
+  `h-chain-spiral.in` at 1, 2 and 3 pools 5e-15 Ry, the ultrasoft `o-chain-spiral-us.in`
+  7e-14; the dropped reduction moves the energy.
+- *Seeds*: a whole-set span is sliced to the pool's rows, a pool's own `PoolStore` taken
+  by position and promoted row by row; a span from another layout is refused by name.
+  Continued from a pooled and from a whole-set result, each in at most two iterations to
+  1e-10 Ry.
+- *Checkpoints*: every pool writes `scf_iteration.it<N>.rows<a>-<b>.npz`, then a barrier,
+  then rank 0 the state and the mixer and deletes older iterations' rows, so a kill at any
+  point leaves one checkpoint whole. A load assembles the rows the process holds from any
+  file. Stopped by two pools at iteration 4, resumed by two, three and one process: each
+  converges in the uninterrupted count, 1e-10 Ry from it, and repeats its iteration 5 to
+  1e-11, where a resume whose states were dropped behind the restored density misses it by
+  more than 1e-9 (the witness, checked to fire). A missing rows file is refused by every
+  pool at once. A pooled relaxation checkpoints from rank 0 without the states and resumes
+  in the uninterrupted step count.
+- *SIGTERM*: JAX's preemption service (`jax_enable_preemption_service`, on by default)
+  catches it in every pooled process; `parallel.poll_stop` calls
+  `reached_preemption_sync_point` once per SCF iteration on a process-wide counter and
+  latches the answer. Whichever of two pools is signalled, both stop at the same
+  iteration with its checkpoint; with the poll disabled the same run ignores the signal
+  and converges at iteration 63 (the witness). A relaxation stops before taking a force
+  from the unconverged state. A job asks for `--signal=TERM@<lead>`.
+- *A dead pool*: on one machine the others are aborted by the coordination service when
+  its heartbeat stops (23 s after the death at `DEFUMAT_POOL_HEARTBEAT=20`); across two
+  Triton nodes under `srun` their all-reduce fails in 0.2 s and the step is cancelled.
+- *Fields and constraints*: the controller's six driven leaves are rank 0's after every
+  step. Iron driven to 2 Bohr magnetons by Elk's feedback at 8 k-points: energy 1e-10 Ry,
+  moment 1e-9, field 1e-10, the two pools' fields bit-identical.
+- *`rotate_moments`*: the torque is rank 0's before the stepper's quasi-Newton history
+  sees it; the states, and PAW's turned `becsum` and density, are each pool's rows,
+  reduced; the one-centre torque's tangents are summed across pools before the
+  symmetrisation. Ultrasoft cobalt at 18 k-points turning from iteration 7, and the PAW
+  nickel anisotropy cell with the stepper started at once: 1e-10 Ry, the moment 1e-9, the
+  torque 1e-10; a run that does not turn lands elsewhere in both.
+- *Only rank 0 mixes*; the others hold no history.
+- *Memory* (`tools/parallel/pool_memory.py`, ultrasoft Si40 at 27 k-points): in `store`
+  mode every pool held every k-point's projectors, 3.49 GiB a rank at construction and a
+  4.38 GiB peak at three pools against 5.57 for one process, so three pools held 13.1 GiB.
+  Rebuilding them costs 6 to 12 per cent of an iteration (si64 7525 against 6804 ms, si8
+  ultrasoft 117 against 111, the si16 ultrasoft spinor 10266 against 9186, one core on
+  D22), so a pool now stores its own basis rows and rebuilds any other when asked
+  (`Projectors.row_map`): 1.98 GiB a rank at construction and a 2.85 GiB peak, the
+  projectors down from about 1.9 GiB to 0.64, the energy to 1e-13 Ry. `Q_ij(G)` is not the
+  lever the plan assumed: above 2 GiB it is rebuilt in chunks and held on no rank.
+- *Balance*: the k-points go to pools longest first on their plane-wave count, the Gamma
+  point counted twice (`parallel.balance`, `_k_costs`), and the gather scatters by row;
+  `DEFUMAT_POOL_BALANCE=blocks` gives back the contiguous blocks. Static on purpose: a
+  solve timed at the second iteration runs at a loose threshold. Measured on D22, pools of
+  one performance core, two alternated runs each, ms per iteration: the magnetic si16
+  spinor at 6 k-points on four pools 2643 and 2652 balanced against 2805 and 2799 in
+  blocks, **5.6 per cent**, less than the Gamma point's doubled weight predicts (a third),
+  so Gamma costs about 1.2 of another k-point in the converged regime there; si16 at 12
+  k-points on five pools 844 and 837 against 846 and 839, no change.
+- *gloo*: `DEFUMAT_POOL_INTERFACE` passes the interface to `make_gloo_tcp_collectives`,
+  which JAX never does; on Triton the node name resolves to `eth0` and an 83 MB all-reduce
+  between two nodes took 868 ms. The first collective of a run is preceded by a
+  coordination-service barrier (`Pools.barrier`), because gloo's context creation timed
+  out when three pools reached it at uneven times.
+- *Inside one k-point* (phase 4): band groups as independent loops in one executable give
+  nothing (si64 `h_psi` 525 ms one loop, about 1000 ms with 2 to 8, four cores); the bands
+  split over CPU devices of one process give 6.8x on six cores for `h_psi` alone (152 ms
+  against about 1040 on one core, 512 threaded); but a whole SCF with only `h_psi` split is
+  *slower* (si64 6290 against 3507 ms at six cores), because the rest of the solve runs
+  replicated on every device. A useful split distributes the Davidson's dense algebra as
+  well, which is a phase of its own, and waits for the Milan thread table.
+- *Not measured yet*: everything on Milan (the three exclusive jobs are queued), the ib0
+  interface's speed, and the balance's gain, which needs more k-points than pools.

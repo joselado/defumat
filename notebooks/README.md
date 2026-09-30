@@ -281,7 +281,7 @@ order of magnitude it is rather than as current to the second.
 | `09` | 6 | `25` | 28 | `10` | 50 | `43` | 173 |
 | `02` | 8 | `18` | 29 | `29` | 59 | `27` | 178 |
 | `37` | 9 | `12` | 30 | `11` | 81 | `44` | 191 |
-| `03` | 86 | `21` | 30 | `45` | 85 | `17` | 203 |
+| `03` | 100 | `21` | 30 | `45` | 85 | `17` | 203 |
 | `05` | 10 | `15` | 31 | `14` | 89 | `38` | 242 |
 | `04` | 122 | `24` | 31 | `26` | 109 | `19` | 243 |
 | `22` | 12 | `28` | 90 | `33` | 115 | `36` | 244 |
@@ -336,6 +336,11 @@ was taken through `tools/export_notebooks.sh`, which does not pin the thread poo
 the 131 s is a single-core number. What the added section costs on its own is three
 conductivities on a 4x4x4 grid, measured separately at 47 s together, so the notebook is
 comfortably inside the ceiling either way and the rest of the difference is the core count.
+
+`03` reads **100 s** on 2026-09-30 with its restart in it, a checkpoint written by two
+k-point pools and finished by one process, against 86 s before. It is taken through
+`tools/export_notebooks.sh`, which does not pin the thread pool, so it is a ceiling check
+rather than a delta, the caveat the entries below carry.
 
 `04` reads **122 s** on 2026-09-18 with its absorption section in it, against 12 s before.
 The added section is three optical conductivities on a 4x4x4 grid, measured on their own at

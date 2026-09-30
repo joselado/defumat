@@ -823,6 +823,49 @@ against 595 and 648, the last with one sample at 697 ms. That machine has interm
 interference (Microsoft Defender's scanner is the only other process that shows), so a
 single run's outlier there is not a regression until an A/B says so.
 
+### What a pool holds, what rebuilding the projectors costs, and one k-point on several devices (2026-09-30)
+
+**Every pool held every k-point's projectors, and that was most of what it
+replicated.** Ultrasoft Si40 at 27 k-points without symmetry, two iterations,
+peak resident set per rank (`tools/parallel/pool_memory.py`, `ru_maxrss`), GiB,
+D22 unless marked:
+
+| layout | after the `Calculation` | after the SCF |
+|---|---|---|
+| 1 process, `store` | 3.50 | 5.57 |
+| 1 process, `rebuild` | 1.53 | 3.93 |
+| 3 pools, `store`, whole store | 3.49 each | 4.38 each |
+| 3 pools, `rebuild` | 1.52 to 1.68 | 2.45 to 2.54 |
+| 3 pools, `store`, each pool's rows (workstation) | 1.94 to 2.01 | 2.83 to 2.89 |
+
+The workstation's import baseline is 0.26 GiB where D22's is 0.53 (its cache
+setting), so net of it the rows-only store holds about 0.64 GiB of projectors a
+pool, a third of the 1.9 the estimate gives for the whole store. The energy is
+the same in every row to 1e-13 Ry.
+
+**Rebuilding them instead costs 6 to 12 per cent**, which is why the pools store
+their own rows rather than switching to `rebuild`. One core on D22, six fixed
+iterations, median of three warm runs, ms per iteration: si64 6804 stored
+against 7525 rebuilt (10.6 per cent), si8 ultrasoft 111.0 against 117.4 (5.7),
+the si16 ultrasoft magnetic spinor at 6 k-points 9186 against 10266 (11.8), the
+energies identical.
+
+**Inside one k-point: devices split `h_psi`, and a whole solve does not follow.**
+`h_psi` over all bands of si64 on D22's performance cores: 525 ms threaded at
+four cores and 512 at six, against 217 and 152 with the bands split over as many
+CPU devices of one process (`tools/parallel/band_devices.py`), where one core is
+about 1040; independent band loops in one executable (`band_groups.py`) give
+about 1000 ms, worse than one loop. A whole warm SCF with only `h_psi` split
+(`scf_devices.py`) is slower, 6290 against 3507 ms at six cores, because the
+rest of the solve then runs replicated on every device. `PLAN.md` P124 has the
+tables.
+
+**Balancing the k-points by cost** (longest first on the plane-wave count, the
+Gamma point counted twice) against contiguous blocks, D22, one core a pool:
+the magnetic si16 spinor on four pools 2643/2652 against 2805/2799 ms per
+iteration (5.6 per cent), si16 at 12 k-points on five pools 844/837 against
+846/839 (none).
+
 ### The same mask is a deadlock, and the suite pays 11% not to hit it (2026-09-13)
 
 **The fastest setting is the one that hangs.** XLA's CPU pool is sized from that

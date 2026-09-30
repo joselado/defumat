@@ -90,10 +90,10 @@ for name in ("si-1k.in", "si-1k-ecut40.in"):
                                    exact_ms / dav_ms, agreement))
 ```
 
-      si-1k.in          npw   180   form H + eigh     13.9 ms   Davidson   10.9 ms  ( 1.3x)   agree to 1e-13 Ry
+      si-1k.in          npw   180   form H + eigh     15.2 ms   Davidson   13.4 ms  ( 1.1x)   agree to 1e-13 Ry
 
 
-      si-1k-ecut40.in   npw  1131   form H + eigh   1256.6 ms   Davidson   72.2 ms  (17.4x)   agree to 1e-13 Ry
+      si-1k-ecut40.in   npw  1131   form H + eigh   1268.0 ms   Davidson   67.6 ms  (18.8x)   agree to 1e-13 Ry
 
 
 ## Asking for only as much accuracy as the density deserves
@@ -162,10 +162,10 @@ for label, variant in (("full grid", full), ("irreducible wedge", wedge)):
       48 symmetry operations
 
 
-      full grid          8 k-points     25.1 ms/iteration   E = -15.794495571 Ry
+      full grid          8 k-points     24.4 ms/iteration   E = -15.794495571 Ry
 
 
-      irreducible wedge  2 k-points     12.9 ms/iteration   E = -15.794495571 Ry
+      irreducible wedge  2 k-points     13.0 ms/iteration   E = -15.794495571 Ry
 
 
 ## Against Quantum ESPRESSO, single core
@@ -193,7 +193,7 @@ What does a core buy when it is given its own k-points instead of a share of one
 threads? Inside one k-point the work is a chain of operations each the size of one band's
 transform, too fine for threads to pay much, so the cores go to the k-points, which is
 `pw.x -nk`. `DEFUMAT_POOLS` runs one calculation as that many processes, each diagonalising
-its own block of k-points; the density and the decisions are shared every iteration, and the
+its own share of the k-points; the density and the decisions are shared every iteration, and the
 numbers are those of one process to round-off. Below, silicon with one atom displaced, on a
 2x2x2 grid without symmetry (eight k-points), as one process and as two pools; the same
 script runs in every pool.
@@ -222,8 +222,8 @@ work = Path(tempfile.mkdtemp())
 (work / "scf.in").write_text(source)
 
 
-def run_pools(size):
-    """The script as `size` pools, each on its own core; rank 0's line back."""
+def run_pools(size, script=None, *args):
+    """A script as `size` pools, each on its own core; rank 0's line back."""
     with socket.socket() as sock:
         sock.bind(("localhost", 0))
         port = sock.getsockname()[1]
@@ -237,7 +237,7 @@ def run_pools(size):
             env.update(DEFUMAT_POOLS=str(size), DEFUMAT_POOL_RANK=str(rank),
                        DEFUMAT_COORDINATOR=f"localhost:{port}")
         processes.append(subprocess.Popen(
-            [sys.executable, "-c", SCRIPT, str(PSEUDO.resolve())], cwd=work, env=env,
+            [sys.executable, "-c", script or SCRIPT, str(PSEUDO.resolve()), *map(str, args)], cwd=work, env=env,
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True))
     lines = [process.communicate(timeout=600)[0] for process in processes]
     return json.loads(lines[0].strip().splitlines()[-1])
@@ -252,7 +252,7 @@ print(f"difference    {abs(one['energy'] - two['energy']):.1e} Ry   "
 
     one process   E = -15.6047514426 Ry   max |F| = 0.0751105304 Ry/bohr
     two pools     E = -15.6047514426 Ry   max |F| = 0.0751105304 Ry/bohr
-    difference    1.8e-15 Ry   8.3e-16 Ry/bohr
+    difference    0.0e+00 Ry   3.6e-16 Ry/bohr
 
 
 The two agree to round-off, the energy and the force alike: one process takes the force
@@ -262,6 +262,53 @@ results, and those are two routes to the same derivative.
 What the pools are worth is a measurement on identical cores, so it is quoted here rather
 than re-run: six performance cores of an i5-12600K, every process and every `pw.x` MPI rank
 pinned to its own core, cells without symmetry, speedup over the same code on one core.
+
+A long run on a cluster ends at its wall clock, and a pooled one ends with every pool at the
+same iteration: a SIGTERM reaching any pool, which a Slurm job asks for early with
+`#SBATCH --signal=TERM@600`, stops them all there, and each writes its own share of the
+states beside the density and the mixing history. Nothing in that checkpoint belongs to the
+pool count, so the run can continue with more pools, fewer, or in one process. Below, two
+pools stop after four iterations, one process finishes the run, and the same run
+uninterrupted is the reference.
+
+
+
+```python
+RESTART = textwrap.dedent("""
+    import json, sys, warnings
+    warnings.simplefilter("ignore")
+    from defumat import Calculator
+    from defumat.parallel import current_pools
+    from defumat.scf.driver import run_scf
+    calc = Calculator.from_file("scf.in", pseudo_dir=sys.argv[1], announce=False)
+    mode = sys.argv[2]
+    result = run_scf(calc.system, calc.pseudos, conv_thr=1e-10, verbose=False,
+                     checkpoint_dir=None if mode == "whole" else "checkpoint",
+                     max_iterations=4 if mode == "stop" else 100)
+    if current_pools().rank == 0:
+        print(json.dumps({"energy": result.total_energy, "iterations": result.iterations,
+                          "converged": bool(result.converged)}))
+""")
+
+stopped = run_pools(2, RESTART, "stop")
+finished = run_pools(1, RESTART, "resume")
+whole = run_pools(1, RESTART, "whole")
+print(f"two pools, stopped    iteration {stopped['iterations']:2d}   converged {stopped['converged']}")
+print(f"one process, resumed  iteration {finished['iterations']:2d}   E = {finished['energy']:.10f} Ry")
+print(f"uninterrupted         iteration {whole['iterations']:2d}   E = {whole['energy']:.10f} Ry")
+print(f"difference            {abs(finished['energy'] - whole['energy']):.1e} Ry")
+```
+
+    two pools, stopped    iteration  4   converged False
+    one process, resumed  iteration  8   E = -15.6047514426 Ry
+    uninterrupted         iteration  8   E = -15.6047514426 Ry
+    difference            1.8e-15 Ry
+
+
+The resumed run finishes at the same iteration as the uninterrupted one and on the same
+energy to round-off: it continued the calculation rather than repeating it, with the density,
+the mixing history and both pools' states carried from two processes to one.
+
 
 
 ```python
@@ -295,7 +342,7 @@ plt.show()
 
 
     
-![png](03_eigensolver_and_performance_files/03_eigensolver_and_performance_12_0.png)
+![png](03_eigensolver_and_performance_files/03_eigensolver_and_performance_15_0.png)
     
 
 

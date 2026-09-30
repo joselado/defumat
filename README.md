@@ -96,12 +96,16 @@ decisions are shared between them every iteration. The script is unchanged; unde
 launch is
 
 ```bash
+#SBATCH --signal=TERM@600
 export DEFUMAT_POOLS=$SLURM_NTASKS DEFUMAT_THREADS=$SLURM_CPUS_PER_TASK
 srun python3 run.py
 ```
 
 and the numbers are those of one process to round-off. The ground state, forces, stress
-and relaxations run this way; everything else refuses by name under pools. On six identical
+and relaxations run this way, including spin spirals, magnetic fields and constraints, the
+moments turned inside the SCF, seeds and checkpoints; a checkpoint written by pools resumes
+at any pool count, and a SIGTERM stops every pool at the same iteration with one written.
+Everything else refuses by name under pools. On six identical
 desktop cores six pools reach 80 to 91 per cent of `pw.x -nk 6`'s speedup on scalar cells
 and 65 per cent on a magnetic spinor one. The user guide's performance section has the
 launch on one machine, the measurements and what is refused.

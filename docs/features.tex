@@ -7228,7 +7228,7 @@ pay little for it: on six identical desktop cores a $k$-point gains 1.33x from
 four threads at sixteen atoms and 2.16x from six at sixty-four. So the cores go
 to the $k$-points, which is \code{pw.x -nk}: \code{DEFUMAT\_POOLS} runs one
 calculation as that many processes, each holding and diagonalising its own
-contiguous block of $k$-points, and the pools meet where \qe's do --- the raw
+share of the $k$-points, and the pools meet where \qe's do --- the raw
 sums over $k$ (the density, \code{becsum}, $\tau$, $n_s$) are all-reduced before
 they are finished, the eigenvalues are gathered so that every pool evaluates the
 occupations on the whole set, and rank~0's accuracy, convergence decision and
@@ -7268,6 +7268,40 @@ silicon at eight $k$-points the forces agree with one process to
 $10^{-12}$~Ry/bohr and the stress to $10^{-10}$, and a relaxation takes the same
 steps.
 
+The regimes a production run is in go through unchanged: a spin spiral, whose
+two components on their two spheres the kernels already address from one $k$
+row; a magnetic field or a fixed-spin-moment constraint, whose controller steps
+on rank~0's output and hands its field to every pool; the moments turned inside
+the SCF (\code{rotate\_moments}), whose torque is rank~0's before the stepper
+sees it; and a seed or a checkpoint. A checkpoint is every pool's rows in a file
+stamped with the iteration, written before rank~0 writes the state and the
+mixer, so a kill at any moment leaves one whole checkpoint, and a restart reads
+the rows it needs from whichever files hold them --- at the same pool count, at
+another, or in one process. The $k$-points are dealt out longest first on their
+plane-wave count, the $\Gamma$ point counted twice, so that the pool holding the
+most expensive one takes fewer others. Only rank~0 mixes, and the others hold no
+history.
+
+\textbf{Stopping a pooled job.} A pooled process does not die of SIGTERM: JAX's
+preemption service catches it, tells every other pool, and the pools agree on an
+iteration at which all of them stop and write their checkpoint. A Slurm job asks
+for the warning early enough for that, at least two SCF iterations and one
+checkpoint write before the wall clock:
+
+\begin{shcode}
+#SBATCH --signal=TERM@600
+srun python3 run.py            # every pool stops at the same iteration, checkpointed
+\end{shcode}
+
+\noindent A pool that dies ends the job rather than hanging it: across nodes
+\code{srun} cancels the step at once, and on one machine the others are aborted
+when the coordination service misses the dead pool's heartbeat,
+\code{DEFUMAT\_POOL\_HEARTBEAT} seconds later (100 by default). Between nodes the
+collectives go over whatever address the node's name resolves to, which on
+Triton is its Ethernet interface at about 100~MB/s;
+\code{DEFUMAT\_POOL\_INTERFACE=ib0} puts them on another interface, and a name the
+node does not have stops the run at start-up.
+
 \textbf{What pools measured against \code{pw.x -nk}.} Six identical cores of an
 i5-12600K, every defumat process and every \code{pw.x} MPI rank pinned to its own
 core, cells without symmetry, speedup over the same code on one core:
@@ -7305,17 +7339,12 @@ or \code{off} for the whole box, which is what a GPU keeps.
 
 \begin{refuses}
 Under \code{DEFUMAT\_POOLS} greater than one, refused by name before anything
-runs: more pools than $k$-points; a spin spiral (its two components live on two
-spheres); \code{starting\_from} and \code{starting\_wavefunctions} (a whole-set
-span); a checkpoint, in the SCF and in a relaxation (the store is per pool); a
-residual \code{scf\_solver}; \code{rotate\_moments}; a magnetic field or a
-constraint (its controller has not been checked to decide identically on every
-pool); the analytic force and stress (they read every $k$-point's states); and
-every \code{Calculator} method outside \code{get\_scf}, \code{get\_forces},
-\code{get\_stress} and \code{get\_relax}. A PAW noncollinear run does not report
-its orientation torque under pools, since its one-centre part reads the states.
-A pooled process ignores SIGTERM, so \code{timeout} and a scheduler's warning do
-not stop it; \code{max\_seconds} is the graceful stop and SIGKILL the forced one.
+runs: more pools than $k$-points; a residual \code{scf\_solver} (it
+differentiates the whole set in one gradient); the analytic force and stress
+(they read every $k$-point's states); and every \code{Calculator} method outside
+\code{get\_scf}, \code{get\_forces}, \code{get\_stress} and \code{get\_relax}.
+A seed whose states were held by a different pool layout is refused rather than
+read from the wrong $k$-point; seed from its density, or run with its pool count.
 \end{refuses}
 
 \textbf{Precision.} Every dtype comes from \code{config.Precision}; x64 is
