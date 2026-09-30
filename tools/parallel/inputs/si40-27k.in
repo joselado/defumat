@@ -1,0 +1,64 @@
+! Forty silicon atoms without symmetry on a 3x3x3 grid: 27 k-points, the P124 target.
+! The cubic cell of si8-1k-ecut30.in stacked five deep along z (ibrav 6, c/a = 5),
+! at the production cutoff of the other *-ecut30 cells. nosym and noinv keep the
+! whole unshifted grid, 27 points, which is what a magnetic spin-orbit run without
+! symmetry would have to walk; the point is the number of k-points and the size of
+! each one, not the physics of silicon. 160 electrons, 80 bands.
+ &control
+    outdir = './tmp', prefix = 'si40-27k',
+    calculation = 'scf'
+ /
+ &system
+    ibrav=6, celldm(1) =10.20, celldm(3) =5.0,
+    nat=40, ntyp=1,
+    ecutwfc=30.0,
+    nosym = .true., noinv = .true.
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-vbc.UPF
+ATOMIC_POSITIONS crystal
+ Si  0.00000  0.00000  0.00000
+ Si  0.00000  0.50000  0.10000
+ Si  0.50000  0.00000  0.10000
+ Si  0.50000  0.50000  0.00000
+ Si  0.25000  0.25000  0.05000
+ Si  0.25000  0.75000  0.15000
+ Si  0.75000  0.25000  0.15000
+ Si  0.75000  0.75000  0.05000
+ Si  0.00000  0.00000  0.20000
+ Si  0.00000  0.50000  0.30000
+ Si  0.50000  0.00000  0.30000
+ Si  0.50000  0.50000  0.20000
+ Si  0.25000  0.25000  0.25000
+ Si  0.25000  0.75000  0.35000
+ Si  0.75000  0.25000  0.35000
+ Si  0.75000  0.75000  0.25000
+ Si  0.00000  0.00000  0.40000
+ Si  0.00000  0.50000  0.50000
+ Si  0.50000  0.00000  0.50000
+ Si  0.50000  0.50000  0.40000
+ Si  0.25000  0.25000  0.45000
+ Si  0.25000  0.75000  0.55000
+ Si  0.75000  0.25000  0.55000
+ Si  0.75000  0.75000  0.45000
+ Si  0.00000  0.00000  0.60000
+ Si  0.00000  0.50000  0.70000
+ Si  0.50000  0.00000  0.70000
+ Si  0.50000  0.50000  0.60000
+ Si  0.25000  0.25000  0.65000
+ Si  0.25000  0.75000  0.75000
+ Si  0.75000  0.25000  0.75000
+ Si  0.75000  0.75000  0.65000
+ Si  0.00000  0.00000  0.80000
+ Si  0.00000  0.50000  0.90000
+ Si  0.50000  0.00000  0.90000
+ Si  0.50000  0.50000  0.80000
+ Si  0.25000  0.25000  0.85000
+ Si  0.25000  0.75000  0.95000
+ Si  0.75000  0.25000  0.95000
+ Si  0.75000  0.75000  0.85000
+K_POINTS automatic
+ 3 3 3 0 0 0
