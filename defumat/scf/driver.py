@@ -5823,6 +5823,30 @@ def _write_pooled_checkpoint(directory, state, mixer, iteration, verbose, pools)
     return True
 
 
+#: The leaves of a :class:`~defumat.scf.fields.MagneticField` its controller
+#: changes between iterations; everything else on it is the input's.
+_DRIVEN_FIELD_LEAVES = ("uniform", "atomic", "previous_uniform", "previous_moment",
+                        "previous_atomic", "previous_site_moments")
+
+
+def _broadcast_field(field, pools):
+    """Rank 0's field, after its controller has stepped, on every pool.
+
+    ``feedback`` steps on the output density, which every pool finishes itself
+    from the reduced sums, so pools whose reductions differ in the last bit
+    would drive the field to different values and the secant's history with
+    it. The driven leaves go out from rank 0; the integration spheres and the
+    targets are the input's and stay. A leaf that is ``None`` is ``None`` on
+    every pool at the same iteration, since each one is set by the same step.
+    """
+    shared = pools.broadcast(tuple(getattr(field, name) for name in _DRIVEN_FIELD_LEAVES))
+    for name, value in zip(_DRIVEN_FIELD_LEAVES, shared):
+        if value is not None:
+            field = eqx.tree_at(lambda f, name=name: getattr(f, name), field,
+                                jnp.asarray(value), is_leaf=lambda x: x is None)
+    return field
+
+
 def _refuse_under_pools(pools, calculation, *, checkpointing,
                         residual_solver, rotate_moments, field) -> None:
     """Refuse by name what the k-point pools do not cover yet.
@@ -5854,9 +5878,10 @@ def _refuse_under_pools(pools, calculation, *, checkpointing,
     if rotate_moments:
         refused.append("rotate_moments (its PAW torque reads every k-point's "
                        "states)")
-    if field is not None:
-        refused.append("a magnetic field or constraint (its controller has not "
-                       "been checked to decide identically on every pool)")
+    # A field or a constraint is not refused: ``converged`` reads the broadcast
+    # ``accuracy`` and ``field.satisfied`` and is broadcast itself, and the
+    # controller's driven leaves are rank 0's after every step
+    # (``_broadcast_field``).
     if refused:
         raise NotImplementedError(
             "not available with k-point pools yet: " + "; ".join(refused)
@@ -7359,6 +7384,8 @@ def run_scf(
                 # the next field than the atomic guess, and the field moves by
                 # less each time.
                 field = field.feedback(rho_out, calculation.system.cell)
+            if pooled:
+                field = _broadcast_field(field, pools)
         if (stepper is not None and orientation_torque is not None
                 and float(np.linalg.norm(acting_torque)) > torque_conv_thr):
             # **No step below the threshold.** There the torque is at its own

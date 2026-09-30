@@ -110,8 +110,8 @@ def test_refusals_name_what_pools_do_not_cover():
                  field=None)
     _refuse_under_pools(pools, calculation, **quiet)
     _refuse_under_pools(pools, calculation, **{**quiet, "checkpointing": True})
-    for name, value, words in [("rotate_moments", True, "rotate_moments"),
-                               ("field", object(), "magnetic field")]:
+    _refuse_under_pools(pools, calculation, **{**quiet, "field": object()})
+    for name, value, words in [("rotate_moments", True, "rotate_moments")]:
         with pytest.raises(NotImplementedError, match=words):
             _refuse_under_pools(pools, calculation, **{**quiet, name: value})
     few = SimpleNamespace(system=SimpleNamespace(kpoints=SimpleNamespace(nk=1)), spiral=False)
@@ -719,3 +719,33 @@ def test_a_sigterm_stops_every_pool_at_the_same_iteration(tmp_path, victim):
         stamp = f".it{result['iterations']:06d}."
         assert "scf_iteration.npz" in result["files"]
         assert sum(stamp in name for name in result["files"]) == 2
+
+
+IRON_FSM_8K = (REPO / "tests" / "data" / "qe" / "fe-fsm.in").read_text()
+IRON_FSM_8K = IRON_FSM_8K[: IRON_FSM_8K.upper().index("K_POINTS")] \
+    + "K_POINTS automatic\n 2 2 2 0 0 0\n"
+
+FIELD_SCRIPT = SCF_SCRIPT.replace(
+    'print(json.dumps({"rank": current_pools().rank, "energy": float(result.total_energy),',
+    'print(json.dumps({"rank": current_pools().rank, "energy": float(result.total_energy),\n'
+    '                  "field": np.asarray(result.magnetic_field.uniform).tolist(),\n'
+    '                  "moment": float(result.magnetization),')
+
+
+@pytest.mark.slow
+def test_pools_reproduce_one_under_a_fixed_spin_moment_constraint():
+    """Iron driven to 2 Bohr magnetons by Elk's feedback, at 8 k-points.
+
+    ``fsm_update = 'elk'`` steps the field after every iteration from the output
+    density, which each pool finishes itself; rank 0's field is everyone's after
+    the step. After eight iterations the energy, the moment and the driven field
+    must be one pool's, and identical on both pools.
+    """
+    serial = _run_pools(FIELD_SCRIPT, 1, IRON_FSM_8K, 0, 8, timeout=900)[0]
+    pooled = _run_pools(FIELD_SCRIPT, 2, IRON_FSM_8K, 0, 8, timeout=900)
+    assert np.abs(serial["field"]).max() > 1e-4, "a field that was driven"
+    for result in pooled:
+        assert abs(result["energy"] - serial["energy"]) < 1e-10
+        assert abs(result["moment"] - serial["moment"]) < 1e-9
+        assert np.allclose(result["field"], serial["field"], atol=1e-10)
+    assert pooled[0]["field"] == pooled[1]["field"]
