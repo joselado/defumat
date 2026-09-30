@@ -703,6 +703,43 @@ this does not say is whether a production-sized box, where one band's FFT takes
 30 ms on one core, threads better, nor anything about a server core; both need a
 server node.
 
+### k-point pools against `pw.x -nk` (2026-09-30)
+
+What does a core buy when it is given its own k-points instead of a share of one k-point's
+threads? `DEFUMAT_POOLS` (`defumat/parallel.py`) splits one SCF over processes by k-point,
+`pw.x -nk`'s decomposition, and the comparison is on the same six identical performance
+cores of the i5-12600K as above, every defumat process and every `pw.x` MPI rank pinned to
+its own CPU with `taskset`; `pw.x` 7.5 is built with Open MPI 4.1.6 against OpenBLAS and
+FFTW3. Cells without symmetry, so that the k-points are the whole grid. ms per iteration,
+median of two warm runs, speedup over the same code on one core:
+
+| cell | defumat 1 core | 1 pool x 6 threads | 3 pools x 2 | 6 pools x 1 | `pw.x` 1 rank | `pw.x` 3 ranks, `-nk 3` | `pw.x` 6 ranks, `-nk 6` |
+|---|---|---|---|---|---|---|---|
+| si16, 3x2x2, 12 k | 2573 | 1.35x | 3.13x | 3.99x | 1558 | 2.69x | 5.09x |
+| si32, 3x2x1, 6 k | 6804 | 1.68x | 3.46x | 3.58x | 3727 | 2.84x | 5.06x |
+| si16 spinor, 3x2x1, 6 k | 5928 | 1.40x | 2.84x | 2.79x | 3712 | 2.78x | 4.92x |
+
+**Pools give what threads could not**, 3.99x against 1.35x on si16, and six pools reach
+**78, 71 and 58 per cent of `pw.x`'s speedup**; one core of this code is 1.6 to 1.8x slower
+than one rank of `pw.x`, as the single-core table at the top of this file says. Every pool
+count gives the same total energy to 1e-13 Ry, 3e-11 on the spinor cell at `conv_thr =
+1e-10`. The spinor cell stops gaining after three pools.
+
+**The pool layer is 5 to 7 per cent of si32's iteration at six pools; the rest is how a core
+slows down under load.** Timed per rank with the solver and the collectives wrapped from
+outside, the collective's inputs waited for before its clock starts (an asynchronously
+dispatched density kernel is otherwise charged to it, which first read as a 155 ms
+all-reduce): the k-point's solve 1.49 s, the density pass 0.30 s, the collectives 25 ms
+(all-reduce 11 ms, broadcasts 13 ms), and 50 to 100 ms of waiting for the slowest pool. One
+k-point's solve and density take 1.79 s with six pools running against 1.13 s alone,
+**1.58x**, where `pw.x`'s time per k-point goes from 621 to 736 ms, **1.19x**. Six
+*independent* single-k si32 runs at once show the same without any pool code, 1202 ms alone
+against 1537 to 1756 ms together, which is the shared memory bandwidth, the shared L3 and
+the lower all-core clock. So closing the gap to QE is a matter of the single-k kernels'
+memory traffic rather than of the pools, and a server core with less bandwidth per core
+than this desktop will make it matter more. Hyperthreads do not help the pools: six pools
+of two hardware threads measure the same as six of one.
+
 ### The same mask is a deadlock, and the suite pays 11% not to hit it (2026-09-13)
 
 **The fastest setting is the one that hangs.** XLA's CPU pool is sized from that
