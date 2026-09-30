@@ -630,6 +630,15 @@ CPUs on import — **1.7x faster out of the box** — with `DEFUMAT_THREADS` to
 change or disable it, and it only ever *narrows*, so an outer `taskset` or a
 scheduler's allocation is respected.
 
+**Corrected 2026-09-30: the slowdown past four is the chip, not the pool.** The
+machine these rows were taken on is a Core Ultra 5 225U, whose CPUs 0-3 are two
+performance cores with their hyperthreads, 4-11 eight efficiency cores and 12-13
+two low-power cores outside the L3, so the four-CPU mask is two cores with SMT
+and every column past it adds slower cores, where XLA's evenly split work waits
+for the slowest thread. "Not an artefact of small cases" does not follow from
+this table. What survives on identical cores, which is the conclusion and the
+default of four, is in "On identical cores the conclusion holds" below.
+
 Nothing else moves it: `OMP_NUM_THREADS` changes the time by a few percent
 (64 → 56 → 63 ms for 1, 4, 14) because it is not what sizes the pool. That is
 also why the affinity mask, rather than any environment variable, is what the
@@ -642,6 +651,57 @@ k-points, which is exactly why the k index leads every wavefunction-shaped array
 (`PLAN.md` §5). `metal.in` has ten independent k-points and runs them through one
 thread pool; sharding them across CPU devices is a factor the thread pool cannot
 give.
+
+### On identical cores the conclusion holds (2026-09-30)
+
+Is the flat curve above the efficiency cores or the workload? A desktop
+i5-12600K separates the two, since its performance cores (CPUs 0-11, siblings
+`2k, 2k+1`) are identical and its four efficiency cores (12-15) can be left out.
+Each row is one fresh process with the mask set by `taskset` before Python
+starts and `DEFUMAT_THREADS=off`, the compiling run discarded, then the median of
+five warm SCF runs, in ms per iteration (`tools/parallel/thread_scan.sh`, whose
+header carries the masks); all 25 runs gave the same total energy to 1e-13 Ry.
+
+| cores | `si8-1k-ecut30` | `si16-1k-ecut30` | `si16`, `band_batch = T` |
+|---|---|---|---|
+| 1 P | 59.7 | 242.3 | |
+| 2 P | 55.1 | 201.5 | 214.9 |
+| 4 P | 55.8 | 181.8 | 226.7 |
+| 6 P | 72.2 | 181.8 | 405.3 |
+| 6 P with SMT (12 CPUs) | 69.3 | 179.5 | |
+| 4 E | 105.8 | 389.0 | |
+| 4 P + 4 E | 122.4 | 238.2 | |
+| 6 P + 4 E | 127.9 | 234.2 | |
+| all 16 | 106.4 | 219.0 | |
+| 4 P, `band_batch = all` | 71.9 | 269.5 | |
+| 6 P, `band_batch = all` | 120.5 | 279.7 | |
+
+On identical cores the best a k-point gets from threads is **1.08x** on `si8`
+and **1.33x** on `si16`, both by four cores, with nothing from four to six, which
+is the table above without its cliff; adding the efficiency cores to four
+performance cores costs **2.2x** on `si8` and **1.31x** on `si16`, which is the
+cliff. Batching the bands loses at every width, whether the batch is every band
+or as many bands as cores, so `band_batch = 1` stays right on a CPU.
+
+**The kernels do thread, which says where the time goes.** Timed bare at one,
+four and six cores (`tools/parallel/kernel_threads.py`), one FFT of a `48^3` box
+takes 0.60, 0.23 and 0.16 ms, of `96^3` 5.37, 1.74 and 1.34 ms, of a
+`200 x 240 x 54` box 29.9, 10.6 and 9.1 ms, and a complex `400 x 20000 x 400`
+product 701, 190 and 128 ms. `tools/benchmark.py` on `si16-1k-ecut30` (FFT box
+`36 x 36 x 72`, `npwx = 5900`) at one and four cores gives `h_psi` over all bands
+57 and 38 ms, one Davidson solve 1.61 and 1.20 s, and `v_of_rho` 25 and 15 ms. So
+an iteration is a chain of operations each the size of one band's transform on a
+small box or a subspace product over a few dozen bands, too small for a pool of
+threads to pay, meaning that the diagnosis above was right and only its evidence
+was confounded.
+
+Two consequences. The default of four needs no change: two and four cores are
+equal on both cells and six costs. And a core spent on another k-point is worth
+more than a core spent on a thread: two one-core runs do two `si16` k-points in
+242 ms where one two-core run does one in 201 ms, 1.66x the work per core. What
+this does not say is whether a production-sized box, where one band's FFT takes
+30 ms on one core, threads better, nor anything about a server core; both need a
+server node.
 
 ### The same mask is a deadlock, and the suite pays 11% not to hit it (2026-09-13)
 
