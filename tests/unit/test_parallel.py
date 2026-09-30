@@ -111,7 +111,8 @@ def test_refusals_name_what_pools_do_not_cover():
     _refuse_under_pools(pools, calculation, **quiet)
     _refuse_under_pools(pools, calculation, **{**quiet, "checkpointing": True})
     _refuse_under_pools(pools, calculation, **{**quiet, "field": object()})
-    for name, value, words in [("rotate_moments", True, "rotate_moments")]:
+    _refuse_under_pools(pools, calculation, **{**quiet, "rotate_moments": True})
+    for name, value, words in [("residual_solver", True, "residual scf_solver")]:
         with pytest.raises(NotImplementedError, match=words):
             _refuse_under_pools(pools, calculation, **{**quiet, name: value})
     few = SimpleNamespace(system=SimpleNamespace(kpoints=SimpleNamespace(nk=1)), spiral=False)
@@ -749,3 +750,67 @@ def test_pools_reproduce_one_under_a_fixed_spin_moment_constraint():
         assert abs(result["moment"] - serial["moment"]) < 1e-9
         assert np.allclose(result["field"], serial["field"], atol=1e-10)
     assert pooled[0]["field"] == pooled[1]["field"]
+
+
+ROTATE_SCRIPT = textwrap.dedent("""
+    import json, sys, tempfile, warnings
+    warnings.simplefilter("ignore")
+    from pathlib import Path
+    import numpy as np
+    import defumat
+    from defumat.parallel import current_pools
+    from defumat.io.pwin import read_pw_input
+    from defumat.pseudo import read_upf
+    from defumat.scf.driver import run_scf
+    from defumat.system import build_system
+    text, iterations, turn = sys.argv[1], int(sys.argv[2]), sys.argv[3] == "1"
+    start = float(sys.argv[4])
+    with tempfile.NamedTemporaryFile("w", suffix=".in", delete=False) as f:
+        f.write(text)
+    system = build_system(read_pw_input(Path(f.name)))
+    pseudos = tuple(read_upf(Path("tests/data/pseudo") / s.pseudo_file)
+                    for s in system.structure.species)
+    result = run_scf(system, pseudos, conv_thr=1e-16, max_iterations=iterations,
+                     rotate_moments=turn, rotation_start=start, verbose=False)
+    print(json.dumps({"rank": current_pools().rank,
+                      "energy": float(result.total_energy),
+                      "moment": list(map(float, result.magnetization_vector)),
+                      "torque": list(map(float, result.orientation_torque))}))
+""")
+
+COBALT_OBLIQUE = (REPO / "tests" / "data" / "qe" / "co-tetragonal-relaxed-mae.in").read_text(
+    ).replace("angle1(1) = 0.0, angle2(1) = 0.0,", "angle1(1) = 45.0, angle2(1) = 0.0,")
+
+# The PAW anisotropy cell at 45 degrees, at a cutoff and a mesh a test can
+# afford. It is far from converged in a few iterations, so the stepper is told
+# to start at once (``rotation_start = 1``): the turn of the PAW states, and the
+# ``becsum`` and density rebuilt from them, are what this case is for.
+NICKEL_PAW_OBLIQUE = (REPO / "tests" / "data" / "qe" / "ni-tetragonal-relaxed-mae-paw.in"
+                      ).read_text().replace(
+    "angle1(1) = 0.0, angle2(1) = 0.0,", "angle1(1) = 45.0, angle2(1) = 0.0,").replace(
+    "ecutwfc = 75.0, ecutrho = 480.0,", "ecutwfc = 45.0, ecutrho = 360.0,").replace(
+    "3 3 2 0 0 0", "2 2 2 0 0 0")
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("text, iterations, start", [(COBALT_OBLIQUE, 10, 1e-5),
+                                                     (NICKEL_PAW_OBLIQUE, 5, 1.0)],
+                         ids=["ultrasoft-cobalt", "paw-nickel"])
+def test_pools_reproduce_one_when_the_moments_are_turned(text, iterations, start):
+    """``rotate_moments``: the torque is rank 0's, the turns are each pool's rows.
+
+    The stepper keeps a quasi-Newton history of the torques it is handed and
+    turns the states and, on PAW, rebuilds ``becsum`` and the density from the
+    turned states, all of which are per k-point work reduced across the pools.
+    After a fixed number of iterations with the moments turned, one pool and two
+    must agree; a run that does not turn must land somewhere else, which is what
+    shows the stepper acted.
+    """
+    serial = _run_pools(ROTATE_SCRIPT, 1, text, iterations, 1, start, timeout=1500)[0]
+    still = _run_pools(ROTATE_SCRIPT, 1, text, iterations, 0, start, timeout=1500)[0]
+    assert abs(serial["energy"] - still["energy"]) > 1e-8
+    pooled = _run_pools(ROTATE_SCRIPT, 2, text, iterations, 1, start, timeout=1500)
+    for result in pooled:
+        assert abs(result["energy"] - serial["energy"]) < 1e-10
+        assert np.allclose(result["moment"], serial["moment"], atol=1e-9)
+        assert np.allclose(result["torque"], serial["torque"], atol=1e-10)

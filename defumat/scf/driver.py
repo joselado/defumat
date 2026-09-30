@@ -5664,7 +5664,8 @@ def _onecenter_torque(calculation, becsum_in, becsum_out, meta_c=None,
     from defumat.forces.torque import rotate_texture, rotation_near
     from defumat.scf.orientation import spin_turned
 
-    if wavefunctions is not None and is_host_store(wavefunctions):
+    if wavefunctions is not None and (is_host_store(wavefunctions)
+                                      or isinstance(wavefunctions, PoolStore)):
         return _streamed_onecenter_torque(
             calculation, becsum_in, becsum_out, meta_c, wavefunctions, weights)
     if wavefunctions is not None:
@@ -5701,9 +5702,20 @@ def _streamed_onecenter_torque(calculation, becsum_in, becsum_out, meta_c,
     """
     from defumat.scf.orientation import spin_turned
 
-    base = stream_becsum(calculation, store, weights)
-    turned0 = tuple(None if a is None else a + (t - o)
-                    for a, t, o in zip(becsum_in, base, becsum_out))
+    pooled = isinstance(store, PoolStore)
+    if pooled:
+        # **A k-point pool's rows.** The base ``becsum`` of the output states is
+        # ``becsum_out`` itself, to the order of the sums over k, so the turned
+        # set at ``w = 0`` is ``becsum_in``; the tangents below are walked over
+        # the pool's rows and summed across the pools before the one
+        # symmetrisation, which is linear.
+        array, held = store.array, store.rows
+        turned0 = tuple(becsum_in)
+    else:
+        array, held = store, np.arange(store.shape[1])
+        base = stream_becsum(calculation, store, weights)
+        turned0 = tuple(None if a is None else a + (t - o)
+                        for a, t, o in zip(becsum_in, base, becsum_out))
 
     def pairing(turned):
         _, ddd_paw = calculation.onecenter(turned, meta_c)
@@ -5713,11 +5725,12 @@ def _streamed_onecenter_torque(calculation, becsum_in, becsum_out, meta_c,
     weights = np.asarray(weights)
     zero = jnp.zeros(3)
     tangents = None
-    for rows, live in k_chunks(store.shape[1], calculation.k_batch):
+    for positions, live in k_chunks(len(held), calculation.k_batch):
+        rows = held[positions]
         w = weights[:, rows].copy()
         w[:, live:] = 0.0
         w = jnp.asarray(w)
-        psi = jax.device_put(np.ascontiguousarray(store[:, rows]))
+        psi = jax.device_put(np.ascontiguousarray(array[:, positions]))
 
         def raw(omega, psi=psi, w=w, rows=rows):
             return calculation.becsum(spin_turned(psi, omega), w, rows=rows,
@@ -5726,6 +5739,8 @@ def _streamed_onecenter_torque(calculation, becsum_in, becsum_out, meta_c,
         part = [jax.jvp(raw, (zero,), (axis,))[1] for axis in jnp.eye(3)]
         tangents = part if tangents is None else [
             jax.tree_util.tree_map(jnp.add, a, b) for a, b in zip(tangents, part)]
+    if pooled:
+        tangents = list(current_pools().allreduce_sum(tuple(tangents)))
     torque = []
     for tangent in tangents:
         finished = calculation.finish_becsum(tangent)
@@ -5875,9 +5890,9 @@ def _refuse_under_pools(pools, calculation, *, checkpointing,
     # assembles the rows it holds (``checkpoint.load_state(rows=...)``).
     if residual_solver:
         refused.append("a residual scf_solver (it differentiates the whole set)")
-    if rotate_moments:
-        refused.append("rotate_moments (its PAW torque reads every k-point's "
-                       "states)")
+    # ``rotate_moments`` is not refused: the torque is rank 0's before the
+    # stepper sees it, and the states it turns and the sums it rebuilds from
+    # them are each pool's rows, reduced.
     # A field or a constraint is not refused: ``converged`` reads the broadcast
     # ``accuracy`` and ``field.satisfied`` and is broadcast itself, and the
     # controller's driven leaves are rank 0's after every step
@@ -6550,19 +6565,6 @@ def run_scf(
             residual_solver=get_scf_solver(scf_solver) is not None,
             rotate_moments=rotate_moments, field=field,
         )
-        if track_orientation and calculation.is_paw:
-            # The orientation torque is a diagnostic here (``rotate_moments``
-            # is refused above). Its plane-wave part reads only the reduced
-            # output density, but PAW's one-centre part turns the output
-            # states themselves (``_onecenter_torque``), which a pool holds
-            # only a share of; a torque without that part would be reported as
-            # if it were whole, so none is reported.
-            if verbose:
-                warnings.warn(
-                    "k-point pools: the orientation torque of a PAW "
-                    "noncollinear run is not reported (its one-centre part "
-                    "reads every k-point's states)", RuntimeWarning, stacklevel=2)
-            track_orientation = report_orientation = False
         # A pool keeps its own rows in host memory and walks them: the
         # streamed passes are the ones that take ``rows``.
         wfc_store = "stream"
@@ -7056,6 +7058,11 @@ def run_scf(
                 torque_now = torque_now + _onecenter_torque(
                     calculation, becsum_state, becsum_out, _meta_c(potential),
                     wavefunctions=fetch_wavefunctions(wavefunctions), weights=wg)
+            if pooled:
+                # The stepper keeps a quasi-Newton history of the torques it is
+                # handed, so a torque that differs between pools in its last bit
+                # would turn them by different angles; rank 0's is everyone's.
+                torque_now = np.asarray(pools.broadcast(np.asarray(torque_now)))
             orientation_torque = tuple(float(x) for x in torque_now)
             if stepper is not None:
                 # What Route C acts on: the torque without the turns the texture
@@ -7422,13 +7429,24 @@ def run_scf(
                     # Turned on the host; a streamed store stays there and the
                     # density and ``becsum`` walk it a chunk at a time
                     # (``GPU-MEMORY-NEXT.md`` item 4).
-                    turned_states = rotate_spinors(
-                        np.asarray(fetch_wavefunctions(wavefunctions)), step)
-                    if wfc_store != "stream":
-                        turned_states = jnp.asarray(turned_states)
-                    turned_becsum = calculation.becsum(turned_states, wg)
-                    turned_density = calculation.density(turned_states, wg,
-                                                         turned_becsum)
+                    if pooled:
+                        # Each pool turns its own rows; ``becsum`` and the
+                        # density are sums over k, reduced before they are
+                        # finished, as the iteration's own are.
+                        turned_states = PoolStore(
+                            rotate_spinors(wavefunctions.array, step),
+                            wavefunctions.rows, wavefunctions.nk)
+                        turned_becsum, turned_density, _, _ = stream_densities(
+                            calculation, turned_states, wg,
+                            reduce=pools.allreduce_sum)
+                    else:
+                        turned_states = rotate_spinors(
+                            np.asarray(fetch_wavefunctions(wavefunctions)), step)
+                        if wfc_store != "stream":
+                            turned_states = jnp.asarray(turned_states)
+                        turned_becsum = calculation.becsum(turned_states, wg)
+                        turned_density = calculation.density(turned_states, wg,
+                                                             turned_becsum)
                     shifts = [np.asarray(turned_density)
                               - np.asarray(rotate_texture(rho_out, turn))] + [
                         np.asarray(t) - np.asarray(rotate_texture(o, turn))
@@ -7466,7 +7484,11 @@ def run_scf(
                     turn_packed,
                     lambda vector: turn_packed(vector, shifted=False),
                 )
-                if wavefunctions is not None:
+                if isinstance(wavefunctions, PoolStore):
+                    wavefunctions = PoolStore(
+                        rotate_spinors(wavefunctions.array, step),
+                        wavefunctions.rows, wavefunctions.nk)
+                elif wavefunctions is not None:
                     turned = rotate_spinors(
                         np.asarray(fetch_wavefunctions(wavefunctions)), step)
                     wavefunctions = park_wavefunctions(
