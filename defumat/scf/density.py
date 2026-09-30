@@ -23,8 +23,8 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
-from defumat.basis.fft import g_to_r, g_to_r_gamma
-from defumat.batching import resolve_k_batch, sum_bands, sum_k
+from defumat.basis.fft import g_to_r, g_to_r_gamma, sticks_density
+from defumat.batching import resolve_band_batch, resolve_k_batch, sum_bands, sum_k
 from defumat.system.cell import Cell
 
 __all__ = ["sum_band", "band_density", "becsum", "spinor_sum_band",
@@ -35,7 +35,8 @@ __all__ = ["sum_band", "band_density", "becsum", "spinor_sum_band",
 
 def band_density(psi: jnp.ndarray, fft_index: jnp.ndarray, grid, weights: jnp.ndarray,
                  cell: Cell, fft_index_minus: jnp.ndarray | None = None,
-                 band_batch: int | None | str = "default"):
+                 band_batch: int | None | str = "default", sticks=None,
+                 columns=None, index=None, plane_chunk: int | None = None):
     """Contribution of one k-point's bands to the density.
 
     Args:
@@ -51,7 +52,19 @@ def band_density(psi: jnp.ndarray, fft_index: jnp.ndarray, grid, weights: jnp.nd
             once the field is rebuilt from both halves. The doubling in
             ``sum_band.f90``'s gamma branch belongs to its two-bands-per-FFT
             packing, which is a speed device this does not use.
+        sticks, columns, index, plane_chunk: the stick layout of this
+            k-point and the ``z``-plane chunk. With all four, and one band at a
+            time, the bands go through the grid a chunk of planes at a time
+            (:func:`~defumat.basis.fft.sticks_density`) instead of as whole
+            boxes; the density is the same to round-off.
     """
+    if (plane_chunk is not None and sticks is not None and fft_index_minus is None
+            and resolve_band_batch(band_batch) == 1):
+        return sticks_density(
+            psi, weights, sticks, columns, index,
+            lambda field: jnp.real(jnp.conj(field) * field)[None], 1, plane_chunk,
+        )[0] / cell.volume
+
     def one_band(arrays):
         state, weight = arrays
         if fft_index_minus is not None:
@@ -80,7 +93,8 @@ def band_density(psi: jnp.ndarray, fft_index: jnp.ndarray, grid, weights: jnp.nd
 def sum_band(psi, fft_index, grid, weights, cell: Cell,
              k_batch: int | None | str = "default",
              fft_index_minus=None,
-             band_batch: int | None | str = "default") -> jnp.ndarray:
+             band_batch: int | None | str = "default",
+             sticks=None, plane_chunk: int | None = None) -> jnp.ndarray:
     """The density from every k-point, ``(nspin, n1, n2, n3)`` and real.
 
     Args:
@@ -97,6 +111,21 @@ def sum_band(psi, fft_index, grid, weights, cell: Cell,
     working set in the code after the Davidson subspace.
     """
     batch = resolve_k_batch(k_batch)
+
+    if sticks is not None and plane_chunk is not None and fft_index_minus is None:
+        # ``sticks`` carries this call's k-points' rows, as ``fft_index`` does.
+        def channel(states, occupations):
+            def one_k(arrays):
+                state, columns, index, occupation = arrays
+                return band_density(state, None, grid, occupation, cell,
+                                    band_batch=band_batch, sticks=sticks,
+                                    columns=columns, index=index,
+                                    plane_chunk=plane_chunk)
+
+            return sum_k(one_k, (states, sticks.columns, sticks.index, occupations),
+                         batch=batch)
+
+        return jax.vmap(channel)(psi, weights)
 
     if fft_index_minus is not None:
         def channel(states, occupations):
@@ -398,7 +427,8 @@ def _becsum_species(projections, weights, channels):
 
 
 def spinor_band_density(psi, fft_index, grid, weights, cell: Cell, nspin_mag: int,
-                        band_batch: int | None | str = "default"):
+                        band_batch: int | None | str = "default", sticks=None,
+                        columns=None, index=None, plane_chunk: int | None = None):
     """One k-point's contribution to a noncollinear density.
 
     Args:
@@ -433,6 +463,27 @@ def spinor_band_density(psi, fft_index, grid, weights, cell: Cell, nspin_mag: in
     nothing else, so it moves the density by round-off.
     """
     npwx = psi.shape[-1] // 2
+
+    def pauli(field):
+        """``(n, m_x, m_y, m_z)`` -- or ``n`` alone -- from the two components."""
+        up, down = field[0], field[1]
+        up_density = jnp.real(jnp.conj(up) * up)
+        down_density = jnp.real(jnp.conj(down) * down)
+        charge = up_density + down_density
+        if nspin_mag == 1:
+            return charge[None]
+        cross = jnp.conj(up) * down
+        return jnp.stack([charge, 2.0 * jnp.real(cross), 2.0 * jnp.imag(cross),
+                          up_density - down_density])
+
+    if (plane_chunk is not None and sticks is not None
+            and resolve_band_batch(band_batch) == 1):
+        # The stick layout serves one sphere; a spiral's two components are on
+        # two, and it keeps the whole-box path below.
+        states = psi.reshape(psi.shape[:-1] + (2, npwx))
+        return sticks_density(states, weights, sticks, columns, index, pauli,
+                              nspin_mag, plane_chunk) / cell.volume
+
     fft_index = jnp.asarray(fft_index)
 
     def one_band(arrays):
@@ -475,13 +526,24 @@ def spinor_band_density(psi, fft_index, grid, weights, cell: Cell, nspin_mag: in
 
 def spinor_sum_band(psi, fft_index, grid, weights, cell: Cell, nspin_mag: int,
                     k_batch: int | None | str = "default",
-                    band_batch: int | None | str = "default"):
+                    band_batch: int | None | str = "default",
+                    sticks=None, plane_chunk: int | None = None):
     """A noncollinear density from every k-point, ``(nspin_mag, n1, n2, n3)``.
 
     Args:
         psi: ``(nk, nbnd, 2 npwx)``.
         weights: ``(nk, nbnd)``.
     """
+    if sticks is not None and plane_chunk is not None:
+        def one_k_sticks(arrays):
+            state, columns, index, occupation = arrays
+            return spinor_band_density(state, None, grid, occupation, cell, nspin_mag,
+                                       band_batch, sticks=sticks, columns=columns,
+                                       index=index, plane_chunk=plane_chunk)
+
+        return sum_k(one_k_sticks, (psi, sticks.columns, sticks.index, weights),
+                     batch=resolve_k_batch(k_batch))
+
     def one_k(arrays):
         state, index, occupation = arrays
         return spinor_band_density(state, index, grid, occupation, cell, nspin_mag,

@@ -61,7 +61,7 @@ import numpy as np
 from defumat.basis.builder import Basis, build_basis
 from defumat.basis.planewaves import build_plane_wave_basis
 from defumat.basis.interpolate import to_dense, to_smooth
-from defumat.basis.sticks import build_sticks
+from defumat.basis.sticks import Sticks, build_sticks
 from defumat.basis.fft import g_to_r, r_to_g
 from defumat.hamiltonian.noncollinear import SpinorHamiltonian
 from defumat.hamiltonian.operator import Hamiltonian
@@ -381,9 +381,10 @@ def _symmetrize_noncollinear(rho_r, fft_index, grid, maps, rotations):
     return jax.vmap(lambda rho_g: jnp.real(g_to_r(rho_g, fft_index, grid)))(stacked)
 
 
-@partial(jax.jit, static_argnames=("grid", "k_batch", "band_batch"))
+@partial(jax.jit, static_argnames=("grid", "k_batch", "band_batch", "plane_chunk"))
 def _density_of_bands(psi, fft_index, grid, weights, cell, k_batch,
-                      fft_index_minus=None, band_batch="default"):
+                      fft_index_minus=None, band_batch="default", sticks=None,
+                      plane_chunk=None):
     """``sum_band`` on the smooth grid, in one kernel.
 
     The symmetrisation used to be fused in here. It cannot be any more: it acts
@@ -391,7 +392,8 @@ def _density_of_bands(psi, fft_index, grid, weights, cell, k_batch,
     first.
     """
     return sum_band(psi, fft_index, grid, weights, cell, k_batch,
-                    fft_index_minus=fft_index_minus, band_batch=band_batch)
+                    fft_index_minus=fft_index_minus, band_batch=band_batch,
+                    sticks=sticks, plane_chunk=plane_chunk)
 
 
 @partial(jax.jit, static_argnames=("grid", "k_batch", "gamma_only", "band_batch"))
@@ -908,12 +910,13 @@ def _kpoints_rows(kpoints, rows):
     )
 
 
-@partial(jax.jit, static_argnames=("grid", "nspin_mag", "k_batch", "band_batch"))
+@partial(jax.jit, static_argnames=("grid", "nspin_mag", "k_batch", "band_batch",
+                                   "plane_chunk"))
 def _spinor_density_of_bands(psi, fft_index, grid, weights, cell, nspin_mag, k_batch,
-                             band_batch="default"):
+                             band_batch="default", sticks=None, plane_chunk=None):
     """``sum_band`` for spinors, in one kernel."""
     return spinor_sum_band(psi, fft_index, grid, weights, cell, nspin_mag, k_batch,
-                           band_batch)
+                           band_batch, sticks=sticks, plane_chunk=plane_chunk)
 
 
 @partial(jax.jit, static_argnums=(3,))
@@ -4442,12 +4445,25 @@ class Calculation:
         arguments hold, and the per-k FFT indices are sliced to match.
         """
         smooth = self.basis.smooth
+        # The stick layout and the plane chunk, when the bands can go through
+        # the grid a chunk of planes at a time (:func:`~defumat.basis.fft.
+        # sticks_density`): not for a spiral, whose two components live on two
+        # spheres, nor for gamma storage, whose half sphere the layout does not
+        # describe.
+        sticks = None
+        if (self.plane_chunk is not None and self.sticks is not None
+                and not self.spiral and self.fft_index_minus is None):
+            sticks = self.sticks if rows is None else Sticks(
+                columns=self.sticks.columns[self.basis_rows(rows)],
+                index=self.sticks.index[self.basis_rows(rows)],
+                grid=self.sticks.grid, nsticks=self.sticks.nsticks)
+        plane_chunk = self.plane_chunk if sticks is not None else None
         if self.noncolin:
             index = self.state_fft_index
             return _spinor_density_of_bands(
                 wavefunctions[0], index if rows is None else index[rows],
                 smooth.grid, weights[0], self.system.cell, self.nspin_mag,
-                self.k_batch, self.band_batch,
+                self.k_batch, self.band_batch, sticks=sticks, plane_chunk=plane_chunk,
             )
         index, minus = self.fft_index, self.fft_index_minus
         if rows is not None:
@@ -4456,6 +4472,7 @@ class Calculation:
         return _density_of_bands(
             wavefunctions, index, smooth.grid, weights, self.system.cell,
             self.k_batch, fft_index_minus=minus, band_batch=self.band_batch,
+            sticks=sticks, plane_chunk=plane_chunk,
         )
 
     def finish_density(self, rho_smooth, becsum_) -> jnp.ndarray:

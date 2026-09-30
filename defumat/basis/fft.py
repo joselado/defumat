@@ -270,6 +270,58 @@ def sticks_local(coefficients: jnp.ndarray, sticks, columns, index, apply,
     return out.reshape(lead + (nsticks * n3,))[..., index]
 
 
+def sticks_density(states: jnp.ndarray, weights: jnp.ndarray, sticks, columns, index,
+                   combine, ncomp: int, plane_chunk: int) -> jnp.ndarray:
+    """``sum_b w_b combine(psi_b(r))`` on the grid, a chunk of ``z`` planes at a time.
+
+    ``sum_band``'s band loop done the way :func:`sticks_local` does the local
+    term: each band goes through the ``z`` transform on its sticks, and then a
+    chunk of planes at a time through the ``xy`` transform, and its
+    contribution is added straight into those planes of the density, so no
+    band's box is ever built whole. ``states`` is ``(nbnd, ..., npwx)`` -- any
+    axes between the band and the plane wave (the two spinor components) ride
+    along -- and ``weights`` is ``(nbnd,)``. ``combine(field)`` maps one chunk's
+    field, ``(..., chunk, n1, n2)``, to its ``(ncomp, chunk, n1, n2)`` real
+    contribution: ``|psi|^2`` for a scalar density, the Pauli components for a
+    spinor. Returns ``(ncomp, n1, n2, n3)``, not yet divided by the volume.
+
+    The bands are walked one at a time and the chunks inside each, both as
+    loops that compile once and differentiate; the density is carried through
+    both and updated in place. The transforms are the ones the whole-box path
+    makes, issued in a different order, so the density changes by round-off.
+    """
+    n1, n2, n3 = sticks.grid
+    nsticks = sticks.nsticks
+    lead = states.shape[1:-1]
+    chunk = max(1, min(int(plane_chunk), n3))
+    nchunks = -(-n3 // chunk)
+    padded = nchunks * chunk
+    real = jnp.zeros((), states.dtype).real.dtype
+    total = jnp.zeros((ncomp, padded, n1 * n2), real)
+
+    def one_band(rho, pair):
+        state, weight = pair
+        compact = jnp.zeros(lead + (nsticks * n3,), states.dtype).at[..., index].add(state)
+        compact = jnp.fft.ifft(compact.reshape(lead + (nsticks, n3)), axis=-1) * n3
+        planes = jnp.moveaxis(compact, -1, -2)
+        planes = jnp.pad(planes, [(0, 0)] * len(lead) + [(0, padded - n3), (0, 0)])
+
+        def one_chunk(j, rho):
+            start = j * chunk
+            here = jax.lax.dynamic_slice_in_dim(planes, start, chunk, axis=-2)
+            box = jnp.zeros(lead + (chunk, n1 * n2), states.dtype).at[..., columns].set(here)
+            field = jnp.fft.ifftn(box.reshape(lead + (chunk, n1, n2)), axes=(-2, -1)) * (n1 * n2)
+            add = weight * combine(field).reshape(ncomp, chunk, n1 * n2)
+            now = jax.lax.dynamic_slice_in_dim(rho, start, chunk, axis=1)
+            return jax.lax.dynamic_update_slice_in_dim(rho, now + add, start, axis=1)
+
+        return jax.lax.fori_loop(0, nchunks, one_chunk, rho), None
+
+    total, _ = jax.lax.scan(one_band, total, (states, weights))
+    total = total[:, :n3].reshape(ncomp, n3, n1, n2)
+    return jnp.moveaxis(total, 1, -1)
+
+
 def r_to_sticks(field: jnp.ndarray, sticks, columns, index) -> jnp.ndarray:
     """The inverse of :func:`sticks_to_r`, back to sphere coefficients.
 

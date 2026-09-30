@@ -97,3 +97,31 @@ def test_the_dial_follows_the_platform_and_the_environment(monkeypatch):
     assert resolve_plane_chunk(grid, 16) == 8
     assert resolve_plane_chunk(grid, 16, requested=None) is None
     assert resolve_plane_chunk(grid, 16, requested=500) == 144
+
+
+def _compare_density(calculation: Calculation, chunk: int) -> None:
+    """``sum_band`` through plane chunks against the whole-box path, to round-off."""
+    potential = calculation.potential(calculation.starting_density())
+    hamiltonians = calculation.hamiltonian(potential.v_scf)
+    states = calculation.starting_wavefunctions(hamiltonians, 4)
+    rng = np.random.default_rng(1)
+    weights = jnp.asarray(rng.uniform(0.1, 1.0, states.shape[:3]))
+    assert calculation.sticks.grid[2] % chunk != 0
+    calculation.plane_chunk = None
+    reference = calculation.smooth_density(states, weights)
+    calculation.plane_chunk = chunk
+    result = calculation.smooth_density(states, weights)
+    assert result.shape == reference.shape
+    scale = float(jnp.max(jnp.abs(reference)))
+    assert float(jnp.max(jnp.abs(result - reference))) < 1e-13 * scale
+
+
+def test_scalar_density_is_the_same_in_chunks():
+    _compare_density(_calculation(), chunk=3)
+
+
+def test_spinor_density_is_the_same_in_chunks():
+    calculation = _calculation(
+        ",\n  noncolin = .true., nosym = .true., noinv = .true.,\n"
+        "  starting_magnetization(1) = 0.5, angle1(1) = 45.0, angle2(1) = 30.0")
+    _compare_density(calculation, chunk=4)
