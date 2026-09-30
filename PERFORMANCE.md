@@ -720,25 +720,37 @@ median of two warm runs, speedup over the same code on one core:
 | si16 spinor, 3x2x1, 6 k | 5928 | 1.40x | 2.84x | 2.79x | 3712 | 2.78x | 4.92x |
 
 **Pools give what threads could not**, 3.99x against 1.35x on si16, and six pools reach
-**78, 71 and 58 per cent of `pw.x`'s speedup**; one core of this code is 1.6 to 1.8x slower
-than one rank of `pw.x`, as the single-core table at the top of this file says. Every pool
-count gives the same total energy to 1e-13 Ry, 3e-11 on the spinor cell at `conv_thr =
-1e-10`. The spinor cell stops gaining after three pools.
+**78, 71 and 58 per cent of `pw.x`'s speedup**. Every pool count gives the same total
+energy to 1e-13 Ry, 3e-11 on the spinor cell at `conv_thr = 1e-10`. The spinor cell stops
+gaining after three pools. Per iteration one core of this code is 1.6 to 1.8x slower than
+one rank of `pw.x`; **per SCF the gap is smaller**, because `pw.x` needs 11 to 17 iterations
+where this code needs 7 to 15: si32 on one core is 61 s against 56 s, 1.09x.
 
-**The pool layer is 5 to 7 per cent of si32's iteration at six pools; the rest is how a core
-slows down under load.** Timed per rank with the solver and the collectives wrapped from
-outside, the collective's inputs waited for before its clock starts (an asynchronously
-dispatched density kernel is otherwise charged to it, which first read as a 155 ms
-all-reduce): the k-point's solve 1.49 s, the density pass 0.30 s, the collectives 25 ms
-(all-reduce 11 ms, broadcasts 13 ms), and 50 to 100 ms of waiting for the slowest pool. One
-k-point's solve and density take 1.79 s with six pools running against 1.13 s alone,
-**1.58x**, where `pw.x`'s time per k-point goes from 621 to 736 ms, **1.19x**. Six
-*independent* single-k si32 runs at once show the same without any pool code, 1202 ms alone
-against 1537 to 1756 ms together, which is the shared memory bandwidth, the shared L3 and
-the lower all-core clock. So closing the gap to QE is a matter of the single-k kernels'
-memory traffic rather than of the pools, and a server core with less bandwidth per core
-than this desktop will make it matter more. Hyperthreads do not help the pools: six pools
-of two hardware threads measure the same as six of one.
+**Where six one-core pools spend si32's 1.9 s iteration, against one core alone.** Timed
+per rank with the solver and the collectives wrapped from outside, the collective's inputs
+waited for before its clock starts (an asynchronously dispatched density kernel is
+otherwise charged to it, which first read as a 155 ms all-reduce), and the one-core
+baseline taken through the same streamed path on the same k-points:
+
+| per iteration, per k-point | one core alone | six pools | ratio |
+|---|---|---|---|
+| the solve | 1.01 s | 1.48 s | 1.47x |
+| the density pass, with its all-reduce | 0.087 s | 0.16 s | 1.84x |
+| waiting for the slowest pool (gather) | -- | 0.05 to 0.10 s | |
+| broadcasts | -- | 0.013 s | |
+
+The streamed store the pools use costs 3 per cent on one core (7000 against 6783 ms per
+iteration, resident), and the collectives about 1.3 per cent. **So most of the loss is the
+solve running 1.47x slower when six pools run at once**, where `pw.x`'s time per k-point
+goes from 621 to 736 ms, 1.19x. Six *unsynchronised* independent single-k si32 runs slow
+down 1.28x (five of the six; the sixth 1.46x), which is the shared memory bandwidth, the
+shared L3 and the lower all-core clock, **and it does not account for all of the 1.47x**.
+The candidate for the rest is that pools run in lockstep, all six in the same phase of the
+solve at once and so at the memory at once, where independent runs drift apart; that is not
+verified. Either way the lever is the single-k kernels' memory traffic rather than the pool
+layer, and a server core with less bandwidth per core than this desktop will make it matter
+more. Hyperthreads do not help the pools: six pools of two hardware threads measure the
+same as six of one.
 
 ### The same mask is a deadlock, and the suite pays 11% not to hit it (2026-09-13)
 
