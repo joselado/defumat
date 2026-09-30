@@ -19,7 +19,9 @@
 # (PERFORMANCE.md, "Threads", has what it returned.)
 #
 # Environment: PYTHON (default python3), CELLS (benchmark inputs, default
-# "si8-1k-ecut30.in si16-1k-ecut30.in"), REPEATS (default 5), OUT (default
+# "si8-1k-ecut30.in si16-1k-ecut30.in"; a path containing a slash is used as
+# given), REPEATS (default 5), MAX_ITERATIONS (unset runs every SCF to
+# convergence; set, time_scf.py stops each SCF there), OUT (default
 # thread-scan.jsonl in the current directory). DEFUMAT_CACHE_DIR is left to the
 # caller; point it at local disk on a machine whose home is a network mount.
 set -u
@@ -39,8 +41,9 @@ for cell in $CELLS; do
   for entry in $MASKS; do
     IFS=: read -r label cpus band <<< "$entry"
     if [ -n "$band" ]; then export DEFUMAT_BAND_BATCH=$band; else unset DEFUMAT_BAND_BATCH; fi
+    case "$cell" in */*) input=$cell ;; *) input=$REPO/benchmarks/$cell ;; esac
     taskset -c "$cpus" "$PYTHON" "$REPO/tools/parallel/time_scf.py" \
-        "$REPO/benchmarks/$cell" "$REPEATS" "$label" >> "$OUT" \
+        "$input" "$REPEATS" "$label" ${MAX_ITERATIONS:+--max-iterations "$MAX_ITERATIONS"} >> "$OUT" \
       || echo "{\"label\": \"$label\", \"input\": \"$cell\", \"failed\": true}" >> "$OUT"
   done
 done

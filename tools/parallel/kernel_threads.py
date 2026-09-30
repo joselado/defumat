@@ -7,6 +7,12 @@ with the thread count, this says whether the kernels it is made of do. A
 single transform of one band's box, eight of them batched, and a
 ``(20000 x 400)^H (20000 x 400)`` product, each the median of seven compiled
 calls. The third box is the 45-atom NiBr2 slab's smooth grid.
+
+It runs on the default backend, so with ``JAX_PLATFORMS`` unset on a machine
+with a card it times the card, and the real ``4096^2`` products in float32 and
+float64 give the device's float64 rate as a ratio, measured rather than read
+off a specification: a workstation card can be a thirty-second of its float32
+rate, and every correctness claim here is made in float64.
 """
 
 from __future__ import annotations
@@ -37,7 +43,7 @@ def median_ms(fn, *args, n=7):
 
 def main() -> None:
     rng = np.random.default_rng(0)
-    out = {"cpus": len(os.sched_getaffinity(0))}
+    out = {"cpus": len(os.sched_getaffinity(0)), "backend": jax.default_backend()}
     for box in BOXES:
         one = jnp.asarray(rng.standard_normal(box) + 1j * rng.standard_normal(box))
         out[f"fft{box}"] = median_ms(jax.jit(jnp.fft.fftn), one)
@@ -48,6 +54,9 @@ def main() -> None:
     block = jnp.asarray(rng.standard_normal((20000, 400))
                         + 1j * rng.standard_normal((20000, 400)))
     out["zgemm 400x20000x400"] = median_ms(jax.jit(lambda m: m.conj().T @ m), block)
+    for dtype in (jnp.float32, jnp.float64):
+        square = jnp.asarray(rng.standard_normal((4096, 4096)), dtype=dtype)
+        out[f"matmul 4096 {jnp.dtype(dtype).name}"] = median_ms(jax.jit(lambda m: m @ m), square)
     print(json.dumps(out), flush=True)
 
 
