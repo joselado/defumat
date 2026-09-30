@@ -804,6 +804,25 @@ alone on this cell: 98 Davidson steps over 19 SCF iterations at Gamma against 42
 at `(1/3, 0, 0)`, and this code 54 over 14 against 25 over 8, with the energies agreeing to
 every printed digit.
 
+**The density a chunk of planes at a time, too** (`sticks_density`, `90b50bd`): `sum_band`
+took each band through a full-box `g_to_r` and carried a box from band to band, and now
+goes through the `z` transform on the sticks and a chunk of planes at a time through the
+rest, adding into those planes of the density. Six one-core pools, ms per iteration:
+
+| cell | original | plane-chunked `h_psi` | and the density | speedup | share of `pw.x`'s speedup |
+|---|---|---|---|---|---|
+| si32, 6 k | 1902.3 | 1503.9 | 1413.4 | 4.59x | **91 per cent** |
+| si16, 12 k | 644.9 | 613.8 | 595 to 613 | about 4.1x | about 80 per cent |
+| si16 magnetic spinor, 6 k | 2122.8 | 2021.0 | 1921.1 | 3.19x | 65 per cent |
+
+The spinor's one core recovered most of what the 3-plane `h_psi` chunks cost it (6124 ms
+against 5928 originally and 6433 before the density change). **The si16 line is an A/B,
+not a single run**: the first run read 694 ms (684 and 704), and the commit before the
+density change against this one, alternated twice on the same cores, read 608 and 614
+against 595 and 648, the last with one sample at 697 ms. That machine has intermittent
+interference (Microsoft Defender's scanner is the only other process that shows), so a
+single run's outlier there is not a regression until an A/B says so.
+
 ### The same mask is a deadlock, and the suite pays 11% not to hit it (2026-09-13)
 
 **The fastest setting is the one that hangs.** XLA's CPU pool is sized from that
