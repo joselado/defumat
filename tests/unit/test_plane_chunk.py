@@ -85,8 +85,10 @@ def test_spinor_local_term_is_the_same_in_chunks():
 def test_the_dial_follows_the_platform_and_the_environment(monkeypatch):
     grid = (36, 36, 144)
     monkeypatch.delenv("DEFUMAT_PLANE_CHUNK", raising=False)
-    # On a CPU: the byte budget's worth of planes, at least one, at most n3.
-    assert resolve_plane_chunk(grid, 16) == PLANE_CHUNK_BYTES // (36 * 36 * 16)
+    # On a CPU: the byte budget's worth of planes, at least one, at most n3,
+    # a plane counting its wavefunction components twice and the potential's once.
+    assert resolve_plane_chunk(grid, 16) == int(PLANE_CHUNK_BYTES // (36 * 36 * 16 * 2.5))
+    assert resolve_plane_chunk(grid, 16, fields=2, potentials=4) == 3
     assert resolve_plane_chunk((400, 400, 10), 16) == 1
     assert resolve_plane_chunk((4, 4, 3), 16) == 3
     monkeypatch.setenv("DEFUMAT_PLANE_CHUNK", "off")

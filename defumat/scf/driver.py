@@ -2068,7 +2068,8 @@ class Calculation:
         #: (:func:`~defumat.batching.resolve_plane_chunk`): a plane budget on a
         #: CPU, the whole box on an accelerator. Carried by every Hamiltonian.
         self.plane_chunk = resolve_plane_chunk(
-            smooth.grid, jnp.dtype(system.cell.precision.complex).itemsize)
+            smooth.grid, jnp.dtype(system.cell.precision.complex).itemsize,
+            fields=system.npol, potentials=self.nspin_mag if self.noncolin else 1)
 
         # The projectors are built in two halves -- the species-dependent
         # columns once, the structure factor per geometry -- so that moving the

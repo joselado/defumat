@@ -768,29 +768,36 @@ def _resolve_band_batch(requested: int | None | str = "default") -> int | None:
     return value
 
 
-#: How many bytes of ``z`` planes the local term takes through its ``xy``
-#: transforms, product and transforms back at once on a CPU
-#: (:func:`~defumat.basis.fft.sticks_local`). Measured on an i5-12600K over the
-#: local term of 64 bands: 16 planes of si32's ``36x36`` (330 KB) and 8 (165 KB)
-#: were within 1 per cent of each other and the best, 36 (740 KB) was 6 per cent
-#: slower and single planes 21 per cent, so the budget sits between the two
-#: best and is meant to stay inside a core's private L2. A plane larger than
-#: the budget is taken one at a time.
+#: How many bytes of working set the local term keeps per chunk of ``z``
+#: planes on a CPU (:func:`~defumat.basis.fft.sticks_local`), counted by
+#: :func:`resolve_plane_chunk` as each plane's wavefunction components twice
+#: (the field and its product) and the potential's components once, in real
+#: numbers. Measured on an i5-12600K over the local term of 64 bands: on si32's
+#: ``36x36`` planes 8 and 16 planes were within 1 per cent of each other and
+#: the best, and on the magnetic spinor si16 cell 2 and 4 planes were the best
+#: while 7 and 15 fell off a cliff (163 ms alone against 124 at 4, and 247 six
+#: at once against 126), the components and the four-component potential
+#: having pushed the chunk out of the core's L2. This budget gives 7 planes on
+#: the first and 3 on the second.
 PLANE_CHUNK_BYTES = 384 * 1024
 
 
 def resolve_plane_chunk(grid, itemsize: int,
-                        requested: int | None | str = "default") -> int | None:
+                        requested: int | None | str = "default", *,
+                        fields: int = 1, potentials: int = 1) -> int | None:
     """The local term's ``z``-plane chunk: an argument, then ``DEFUMAT_PLANE_CHUNK``, then the platform.
 
     ``None`` takes the whole box through each step in turn, which is what every
     accelerator does, since a card wants the batch that a cache does not and a
     loop of plane-sized kernels would be launch-bound there. On a CPU the
-    default is :data:`PLANE_CHUNK_BYTES` worth of planes of the stick layout's
-    ``(n1, n2)``, at least one and at most ``n3``. ``DEFUMAT_PLANE_CHUNK`` takes
-    a plane count, or ``all``/``0``/``off``/``none`` for the whole box. The
-    chunk is not visible in any result: the transforms are the same and only
-    the order they are issued in changes.
+    default is as many planes as fit :data:`PLANE_CHUNK_BYTES`, a plane costing
+    ``n1 n2 (2 fields itemsize + potentials itemsize / 2)`` -- ``fields`` the
+    wavefunction's spinor components (``npol``) and ``potentials`` the
+    components of the potential multiplying them (``nspin_mag`` for a spinor,
+    1 otherwise) -- at least one plane and at most ``n3``.
+    ``DEFUMAT_PLANE_CHUNK`` takes a plane count, or ``all``/``0``/``off``/``none``
+    for the whole box. The chunk is not visible in any result: the transforms
+    are the same and only the order they are issued in changes.
     """
     n1, n2, n3 = (int(n) for n in grid)
     if isinstance(requested, str) and requested == "default":
@@ -800,7 +807,8 @@ def resolve_plane_chunk(grid, itemsize: int,
         elif _backend() != "cpu":
             return None
         else:
-            return max(1, min(n3, PLANE_CHUNK_BYTES // max(1, n1 * n2 * int(itemsize))))
+            plane = n1 * n2 * int(itemsize) * (2 * int(fields) + int(potentials) / 2)
+            return max(1, min(n3, int(PLANE_CHUNK_BYTES // max(1.0, plane))))
     if requested is None:
         return None
     if isinstance(requested, str):
