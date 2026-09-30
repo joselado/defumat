@@ -752,6 +752,58 @@ layer, and a server core with less bandwidth per core than this desktop will mak
 more. Hyperthreads do not help the pools: six pools of two hardware threads measure the
 same as six of one.
 
+### The local term a chunk of planes at a time (2026-09-30)
+
+Why does a pool's solve slow down when six run at once, and QE's much less? Profiled
+operation by operation on si32, one profiler alone against six at once, the dense
+subspace algebra does not notice the others (`eigh` 1.02x, the Ritz rotations 1.02x,
+the projection 1.03x) and `h_psi` does, **1.50x**. Its local term took each band's
+`36x36x144` box, 3 MB, through the `xy` transform (two full passes over the box), the
+product with `V` and the transform back in turn, which streams the box through the
+shared L3 several times per band; six cores doing that at once saturate it. Between the
+two `z` passes, which run on the sticks, everything is plane-local, so
+`defumat.basis.fft.sticks_local` takes a chunk of planes through the transforms and the
+product while it sits in a core's private L2. The local term of 64 bands, ms, median of
+seven, same answer to the last bit:
+
+| cell | whole box, alone | whole box, six at once | chunked, alone | chunked, six at once |
+|---|---|---|---|---|
+| si32, `36x36x144`, 16 planes | 111.5 | 232 | 99.0 | 99.4 |
+| si64, `36x36x288`, 16 planes | 238.5 | 598 to 619 | 201.5 | 214 to 224 |
+| si16 magnetic spinor, `36x36x72`, 4 planes | 117 | 255 to 263 | 124 | 126 to 135 |
+
+**The chunk has to fit, and a spinor falls off a cliff when it does not**: on the spinor
+cell 7 and 15 planes took 163 ms alone and 247 six at once, worse than the whole box,
+because the second component and the four-component potential ride along with every
+plane. `resolve_plane_chunk` therefore counts a plane as `n1 n2 (2 npol itemsize +
+nspin_mag itemsize / 2)` against a 384 KB budget, which gives 7 planes on a scalar
+`36x36` plane (8 and 16 measured within 1 per cent of each other) and 3 on the magnetic
+spinor. A card keeps the whole box: a loop of plane-sized kernels is launch-bound there.
+`DEFUMAT_PLANE_CHUNK` overrides; an SCF gives the same energy and eigenvalues to the last
+digit either way (`tests/unit/test_plane_chunk.py` pins `H psi` to 1e-13).
+
+**What it did for the pools**, the same cells and pinning as "k-point pools against `pw.x
+-nk`" above, ms per iteration at six one-core pools, speedup over this code's own one
+core, and that speedup as a share of `pw.x -nk 6`'s:
+
+| cell | before | after | speedup after | share of `pw.x`'s speedup |
+|---|---|---|---|---|
+| si16, 12 k | 644.9 | 613.8 | 4.08x | 80 per cent (was 78) |
+| si32, 6 k | 1902.3 | 1503.9 | 4.37x | **86 per cent** (was 71) |
+| si16 magnetic spinor, 6 k | 2122.8 | 2021.0 | 3.18x | 65 per cent (was 57) |
+
+One core is 3 per cent faster on the scalar cells and **8 per cent slower on the spinor**
+(6433 against 5928 ms), where 3-plane chunks pay loop overhead the whole box does not.
+**The spinor's pools are held back by something else**, timed per rank as before: the
+first k-point, Gamma on this unshifted 3x2x1 grid, needs 60 Davidson steps per SCF where
+the other five need 32 to 34, so at one k-point per pool five pools spend 360 to 440 ms of
+a 2023 ms iteration waiting for it; the k-independent work every pool repeats is about 240
+ms (the noncollinear `v_of_rho` 72 ms of it, the mixing 9 ms a step, the rest thinly
+spread); and the four-component density pass 186 ms. Gamma is harder in `pw.x` too, run
+alone on this cell: 98 Davidson steps over 19 SCF iterations at Gamma against 42 over 15
+at `(1/3, 0, 0)`, and this code 54 over 14 against 25 over 8, with the energies agreeing to
+every printed digit.
+
 ### The same mask is a deadlock, and the suite pays 11% not to hit it (2026-09-13)
 
 **The fastest setting is the one that hangs.** XLA's CPU pool is sized from that
