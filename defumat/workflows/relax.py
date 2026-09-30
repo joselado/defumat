@@ -45,6 +45,8 @@ cell. Two runs, each with its setup done once.
 
 from __future__ import annotations
 
+import dataclasses
+
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -53,7 +55,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.forces import compute_forces
-from defumat.parallel import current_pools
+from defumat.parallel import current_pools, stop_latched
 from defumat.relax import get_ion_dynamics
 from defumat.relax.bfgs import BFGSSettings
 from defumat.scf.driver import Calculation, SCFResult, run_scf
@@ -357,13 +359,8 @@ def run_relax(
     density = becsum = None
     converged = False
     pools = current_pools()
-    if pools.size > 1:
-        if checkpoint_dir is not None:
-            raise NotImplementedError(
-                "checkpoint_dir is not available with k-point pools yet: the "
-                "saved state would hold one pool's share of the wavefunctions")
-        if pools.rank != 0:
-            verbose = False
+    if pools.size > 1 and pools.rank != 0:
+        verbose = False
 
     if resumed_state is not None:
         density, becsum = resumed_state.density, resumed_state.becsum
@@ -394,6 +391,16 @@ def run_relax(
             verbose=verbose,
             **scf_options,
         )
+        if pools.size > 1 and stop_latched():
+            # A SIGTERM reached the pools during this step's SCF, which stopped
+            # every pool at the same iteration (``parallel.poll_stop``). Its
+            # state is not converged, so no force is taken from it and no step:
+            # the checkpoint of the previous step stays the one a resume runs.
+            if verbose:
+                print(f"ionic step {index:3d}   stopped by a SIGTERM before its SCF "
+                      f"converged; the last completed step is what a resume "
+                      f"continues from")
+            break
         forces = compute_forces(calculation, result, method=force_method)
         positions = np.asarray(calculation.system.structure.positions)
         energy, force_values = result.total_energy, forces.forces
@@ -443,12 +450,19 @@ def run_relax(
                 ),
             )
 
-        if checkpoint_dir is not None:
+        if checkpoint_dir is not None and pools.rank == 0:
             # Written after the step is decided and before it is taken, so what
             # a resume finds is a geometry to *run*, together with the state and
             # the history that produced it. The optimizer goes last: it is the
             # file whose presence says the record is complete.
-            save_state(result, state_path)
+            #
+            # **Under k-point pools rank 0 writes it, without the states.** A
+            # resume seeds the next SCF from the density and ``becsum`` alone
+            # (above), every pool reads the same file, and a pool's store is a
+            # share of the set that no single file here could hold whole; the
+            # optimizer and the step are rank 0's, which every pool followed.
+            save_state(dataclasses.replace(result, wavefunctions=None)
+                       if pools.size > 1 else result, state_path)
             step_path.write_text(json.dumps({
                 "index": index,
                 "next_positions": np.asarray(moved).tolist(),
@@ -457,6 +471,10 @@ def run_relax(
                 "max_force": float(forces.max_force),
             }))
             save_optimizer(optimizer, optimizer_path)
+        if checkpoint_dir is not None and pools.size > 1:
+            # No pool takes the next step before rank 0's record of this one is
+            # on disk, so a job stopped from any rank finds it complete.
+            pools.broadcast_flag(True)
 
         previous = calculation
         calculation = calculation.at_positions(jnp.asarray(moved))

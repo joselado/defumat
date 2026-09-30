@@ -82,7 +82,8 @@ import numpy as np
 
 __all__ = [
     "PoolStore", "Pools", "current_pools", "register_communicator",
-    "start_from_environment", "pool_count_from_environment",
+    "start_from_environment", "pool_count_from_environment", "poll_stop",
+    "stop_latched",
 ]
 
 _COMMUNICATORS: dict[str, type] = {}
@@ -348,6 +349,53 @@ class Pools:
 
     def broadcast_flag(self, value) -> bool:
         return bool(np.asarray(self.broadcast(np.asarray(bool(value), dtype=np.int32))))
+
+
+#: The preemption protocol's step id and its answer, process-wide. See
+#: :func:`poll_stop`.
+_STOP_STEP = 0
+_STOP_LATCHED = False
+
+
+def poll_stop() -> bool:
+    """Whether a SIGTERM has reached any pool, answered identically on every pool.
+
+    **A pooled process does not die of SIGTERM, and this is how it stops.**
+    ``jax.distributed.initialize`` starts JAX's preemption service, whose
+    handler (C++, invisible to :func:`signal.getsignal`) catches the signal,
+    tells every other task, and agrees with them on a step at which all of them
+    stop: ``multihost_utils.reached_preemption_sync_point(step)`` is True at that
+    step on every pool and nowhere else. Measured 2026-09-30 with two pools in
+    lockstep through an all-reduce: SIGTERM to either rank, both answered True at
+    the same step and exited cleanly; a call costs under a microsecond and never
+    blocks, since the protocol runs on the service's own threads.
+
+    Three rules the protocol imposes, all kept here rather than at call sites.
+    The step id must pass through every integer, so it is one process-wide
+    counter advanced by exactly one call per SCF iteration (``run_scf``'s loop
+    top), never reset across the SCF runs of a relaxation. The True is given
+    once, so it is **latched**, and every later call returns it too. And a
+    single process has no service and no handler, so it answers False and a
+    SIGTERM ends it as it always has.
+
+    A job that wants the stop before Slurm's kill asks for the warning early:
+    ``#SBATCH --signal=TERM@<seconds>``, with the lead at least two SCF
+    iterations plus a checkpoint write, since the agreed step can be the one
+    after next.
+    """
+    global _STOP_STEP, _STOP_LATCHED
+    if not _STARTED:
+        return False
+    if not _STOP_LATCHED:
+        from jax.experimental import multihost_utils
+        _STOP_LATCHED = bool(multihost_utils.reached_preemption_sync_point(_STOP_STEP))
+        _STOP_STEP += 1
+    return _STOP_LATCHED
+
+
+def stop_latched() -> bool:
+    """Whether :func:`poll_stop` has answered True; reads the latch without polling."""
+    return _STOP_LATCHED
 
 
 _CURRENT: Pools | None = None

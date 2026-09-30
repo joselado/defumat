@@ -111,7 +111,7 @@ from defumat.batching import (
 from defumat.scf.continuation import (
     ContinuedState, continued_state, depolarize_tau,
 )
-from defumat.parallel import PoolStore, current_pools
+from defumat.parallel import PoolStore, current_pools, poll_stop
 from defumat.scf.streaming import (
     is_host_store, stream_becsum, stream_densities, stream_diagonalize,
     stream_start,
@@ -5034,14 +5034,37 @@ class Calculation:
             # basis list is the doubled one (``k +- q/2``) while its *states*
             # number one per physical k-point.
             nk = hamiltonians[0].nk
-            if np.shape(span)[-1] != expected or np.shape(span)[-3] != nk:
+            held, sliced = nk, False
+            if isinstance(span, PoolStore):
+                # **A k-point pool's span is addressed by position, not by
+                # row.** Its array holds the rows ``span.rows`` names, so the
+                # global rows asked for are looked up there; a row it does not
+                # hold is a seed from a different pool layout, refused rather
+                # than read from the wrong k-point.
+                if span.nk != nk or span.array.shape[-1] != expected:
+                    raise ValueError(
+                        f"a pool's span of {span.nk} k-points and "
+                        f"{span.array.shape[-1]} coefficients per state; this "
+                        f"calculation needs {nk} and {expected}")
+                wanted = np.arange(nk) if rows is None else np.asarray(rows)
+                where = {int(row): position for position, row in enumerate(span.rows)}
+                missing_rows = [int(row) for row in wanted if int(row) not in where]
+                if missing_rows:
+                    raise NotImplementedError(
+                        f"the seed's states were held by a different k-point pool "
+                        f"layout: this pool needs rows {missing_rows} and the seed "
+                        f"holds {span.rows[0]} to {span.rows[-1]}; run with the "
+                        f"seed's pool count, or seed from the density alone")
+                span = span.array[..., [where[int(row)] for row in wanted], :, :]
+                held, sliced = len(wanted), True
+            if np.shape(span)[-1] != expected or np.shape(span)[-3] != held:
                 raise ValueError(
                     f"span has shape {tuple(np.shape(span))}; this calculation "
                     f"needs (..., {nk}, nvec, {expected})"
                 )
             # Sliced where it lives -- a streamed run's span is a host array,
             # and bringing it across whole is what streaming exists to avoid.
-            atomic = jnp.asarray(span if rows is None else span[..., rows, :, :])
+            atomic = jnp.asarray(span if rows is None or sliced else span[..., rows, :, :])
 
         # One span per channel, or one shared by all of them -- which is what
         # the atomic orbitals are, since what splits the channels is the
@@ -5411,7 +5434,7 @@ class _InProgressState:
         self.hubbard_setup = None
 
 
-def _write_checkpoint(directory, state, mixer, iteration, verbose):
+def _write_checkpoint(directory, state, mixer, iteration, verbose, pools=None):
     """One checkpoint: the state and the mixer's history, beside each other.
 
     **Both, or neither is worth writing.** A resume that restores the density
@@ -5428,6 +5451,9 @@ def _write_checkpoint(directory, state, mixer, iteration, verbose):
     from defumat.scf.checkpoint import save_mixer, save_state
 
     directory = Path(directory)
+    if isinstance(state.wavefunctions, PoolStore):
+        return _write_pooled_checkpoint(directory, state, mixer, iteration,
+                                        verbose, pools)
     try:
         save_state(state, directory / SCF_CHECKPOINT)
         save_mixer(mixer, directory / SCF_MIXER)
@@ -5744,8 +5770,60 @@ def _refuse_rotating_moments(calculation, field, coupled: bool) -> None:
         )
 
 
-def _refuse_under_pools(pools, calculation, *, starting_from,
-                        starting_wavefunctions, checkpointing,
+def _write_pooled_checkpoint(directory, state, mixer, iteration, verbose, pools):
+    """A checkpoint written by k-point pools: every pool's rows, then rank 0's state.
+
+    **The order is what keeps the set whole.** Every pool writes its rows to a
+    file stamped with this iteration (:func:`~defumat.scf.checkpoint.save_pool_rows`);
+    only when all of them have succeeded does rank 0 write the state file and
+    the mixer, which is what a resume looks for; and only then are the rows
+    files of older iterations deleted. A kill at any point leaves either the
+    previous checkpoint whole or this one whole. Every decision -- refused,
+    failed, written -- is the same on every rank, since the next cadence and the
+    run's ``checkpointing`` flag depend on it.
+
+    **Only rank 0's mixer is written, and it is the only one there is**: the
+    other pools do not mix (their input is rank 0's mixed state, broadcast), so
+    every pool restores this history on resume.
+    """
+    from defumat.scf.checkpoint import (
+        _refusal, remove_stale_pool_rows, save_mixer, save_pool_rows, save_state)
+
+    refused = _refusal(state)
+    if refused is not None:
+        if verbose:
+            print(f"  checkpointing is off for this run: {refused}")
+        return False
+    path = directory / SCF_CHECKPOINT
+    try:
+        save_pool_rows(state.wavefunctions, path, iteration)
+        failed = 0.0
+    except OSError as failure:
+        failed = 1.0
+        print(f"  checkpoint at iteration {iteration}: pool {pools.rank} could not "
+              f"write its rows: {failure}")
+    if float(np.asarray(pools.allreduce_sum(np.asarray([failed])))[0]) > 0:
+        if verbose:
+            print(f"  checkpoint at iteration {iteration} skipped: a pool's rows "
+                  f"were not written, and the previous checkpoint is kept")
+        return True
+    written = True
+    if pools.rank == 0:
+        try:
+            save_state(state, path)
+            save_mixer(mixer, directory / SCF_MIXER)
+            remove_stale_pool_rows(path, iteration)
+        except OSError as failure:
+            written = False
+            print(f"  checkpoint at iteration {iteration} failed: {failure}")
+    written = pools.broadcast_flag(written)
+    if verbose and written:
+        print(f"  checkpoint written at iteration {iteration} -> {directory} "
+              f"({pools.size} pools' rows beside the state)")
+    return True
+
+
+def _refuse_under_pools(pools, calculation, *, checkpointing,
                         residual_solver, rotate_moments, field) -> None:
     """Refuse by name what the k-point pools do not cover yet.
 
@@ -5764,10 +5842,13 @@ def _refuse_under_pools(pools, calculation, *, starting_from,
     # basis rows themselves (``basis_rows``), so a pool's rows need nothing
     # more. Measured: ``h-chain-spiral.in`` at 1, 2 and 3 pools, 5e-15 Ry after
     # six iterations; the ultrasoft ``o-chain-spiral-us.in``, 7e-14.
-    if starting_from is not None or starting_wavefunctions is not None:
-        refused.append("starting_from / starting_wavefunctions (a whole-set span)")
-    if checkpointing:
-        refused.append("checkpoint_dir (the store is per pool)")
+    # A seed is not refused: a whole-set span is sliced to the pool's rows by
+    # ``stream_start``, and a pool's own span (a ``PoolStore``, what a pooled
+    # result carries) is taken by position when its rows are this pool's and
+    # refused by name inside ``starting_wavefunctions`` when they are not.
+    # A checkpoint is not refused: every pool writes its rows and rank 0 the
+    # state (``_write_pooled_checkpoint``), and a load of any pool count
+    # assembles the rows it holds (``checkpoint.load_state(rows=...)``).
     if residual_solver:
         refused.append("a residual scf_solver (it differentiates the whole set)")
     if rotate_moments:
@@ -6010,10 +6091,29 @@ def run_scf(
             and (Path(checkpoint_dir) / SCF_CHECKPOINT).exists()):
         from defumat.scf.checkpoint import load_state
 
-        starting_from = load_state(
-            Path(checkpoint_dir) / SCF_CHECKPOINT,
-            system=system, calculation=calculation,
-        )
+        try:
+            starting_from = load_state(
+                Path(checkpoint_dir) / SCF_CHECKPOINT,
+                system=system, calculation=calculation,
+                # A pool loads the rows it will hold, from whichever rows files
+                # hold them, so the pool count may change across a restart.
+                rows=(pools.rows(calculation.system.kpoints.nk) if pooled else None),
+            )
+            unreadable = None
+        except (ValueError, OSError) as failure:
+            if not pooled:
+                raise
+            unreadable = failure
+        if pooled and float(np.asarray(pools.allreduce_sum(
+                np.asarray([0.0 if unreadable is None else 1.0])))[0]) > 0:
+            # **Every pool refuses together.** A pool whose rows are missing would
+            # raise alone and the others would wait in their next collective
+            # until the heartbeat aborted them, a hundred seconds later and with
+            # nothing in their log saying why.
+            raise ValueError(
+                f"the checkpoint in {checkpoint_dir} could not be read by every "
+                f"k-point pool; this pool (rank {pools.rank}): "
+                f"{'read its rows' if unreadable is None else unreadable}")
         resumed_state = starting_from
         # **The checkpoint wins over a seed the caller also passed, rather than
         # raising.** The recovery this feature advertises is "resubmit the same
@@ -6421,9 +6521,7 @@ def run_scf(
     wfc_store = resolve_wfc_store(wfc_store, calculation.memory_mode)
     if pooled:
         _refuse_under_pools(
-            pools, calculation, starting_from=starting_from,
-            starting_wavefunctions=starting_wavefunctions,
-            checkpointing=checkpointing,
+            pools, calculation, checkpointing=checkpointing,
             residual_solver=get_scf_solver(scf_solver) is not None,
             rotate_moments=rotate_moments, field=field,
         )
@@ -6603,9 +6701,18 @@ def run_scf(
         # for a restart either.
         late = (iteration > resumed_at + 1 and max_seconds is not None
                 and time.time() - started_at > max_seconds)
-        if pooled and max_seconds is not None:
-            # Each rank's clock is its own; rank 0 owns the deadline.
-            late = pools.broadcast_flag(late)
+        signalled = False
+        if pooled:
+            # **A SIGTERM stops the pools together** (:func:`poll_stop`). The
+            # poll is made at every iteration top, the first included, because
+            # the preemption protocol's step id must pass through every integer;
+            # its answer is latched, so a notice that arrives during the first
+            # iteration is acted on at the second, which is the first that has a
+            # state to write. Each rank's clock is its own and rank 0 owns both
+            # decisions, so the flag is broadcast whether or not a deadline was
+            # set.
+            signalled = poll_stop() and iteration > resumed_at + 1
+            late = pools.broadcast_flag(late or signalled)
         if late:
             # ``check_stop_now`` in ``electrons.f90``: the loop stops itself
             # before the scheduler does, so the checkpoint below is written
@@ -6615,8 +6722,9 @@ def run_scf(
             # every other caller.
             stopped_early = True
             if verbose:
-                print(f"  stopping at iteration {iteration}: max_seconds "
-                      f"({max_seconds:g} s) reached")
+                reason = ("a SIGTERM reached the k-point pools" if signalled
+                          else f"max_seconds ({max_seconds:g} s) reached")
+                print(f"  stopping at iteration {iteration}: {reason}")
             break
         # The **absolute** iteration number: ``next_ethr``'s two special cases
         # are "the first iteration keeps the incoming threshold" and "the second
@@ -7188,17 +7296,30 @@ def run_scf(
         # ``IF (xclib_dft_is('meta') .OR. lxdm)``). It was replaced until
         # 2026-09-20 on a justification read off ``mix_rho.f90``, which does not
         # mention ``kin_r`` because it works through those helpers.
-        rho, becsum_state, ns_state, mixed_tau = _mix(
-            mixer, rho, rho_out, becsum_state, becsum_out,
-            ns_state if calculation.is_hubbard else None,
-            ns_out if calculation.is_hubbard else None,
-            # ``tau_out`` exists only on the meta branch, so it is reached
-            # through ``tau_state`` rather than named unconditionally: an LDA
-            # run never assigns it.
-            tau_state, tau_out if tau_state is not None else None,
-        )
-        if tau_state is not None:
-            tau_state = mixed_tau
+        if pooled and pools.rank != 0:
+            # **Only the root pool mixes** (``mix_rho`` runs on the root in
+            # ``electrons.f90`` too): its result is every pool's through the
+            # broadcast below, so a history here would be ``mixing_ndim`` dense
+            # densities held for nothing -- about 1.3 GB a pool on the NiBr2 slab.
+            # What goes into the broadcast from this side is a placeholder of the
+            # same structure, which ``broadcast_one_to_all`` replaces.
+            rho, becsum_state = rho_out, becsum_out
+            if calculation.is_hubbard:
+                ns_state = ns_out
+            if tau_state is not None:
+                tau_state = tau_out
+        else:
+            rho, becsum_state, ns_state, mixed_tau = _mix(
+                mixer, rho, rho_out, becsum_state, becsum_out,
+                ns_state if calculation.is_hubbard else None,
+                ns_out if calculation.is_hubbard else None,
+                # ``tau_out`` exists only on the meta branch, so it is reached
+                # through ``tau_state`` rather than named unconditionally: an
+                # LDA run never assigns it.
+                tau_state, tau_out if tau_state is not None else None,
+            )
+            if tau_state is not None:
+                tau_state = mixed_tau
         if pooled:
             # ``electrons.f90:877``: the root pool's mixed density is every
             # pool's, so that pools whose reductions differ in the last bit (an
@@ -7365,7 +7486,7 @@ def run_scf(
                         None if magnetization is None else magnetization[1]),
                     magnetization_vector=moment,
                 ),
-                mixer, iteration, verbose,
+                mixer, iteration, verbose, pools,
             )
 
     # ``iteration > resumed_at + 1`` is "at least one iteration body ran": a
@@ -7399,7 +7520,7 @@ def run_scf(
                     None if magnetization is None else magnetization[1]),
                 magnetization_vector=moment,
             ),
-            mixer, completed, verbose,
+            mixer, completed, verbose, pools,
         )
 
     _warn_if_the_field_did_not_fade(

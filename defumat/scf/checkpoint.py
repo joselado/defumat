@@ -79,10 +79,11 @@ from pathlib import Path
 import jax.numpy as jnp
 import numpy as np
 
+from defumat.parallel import PoolStore
 from defumat.scf.fields import FEEDBACK
 
 __all__ = ["save_state", "load_state", "state_fingerprint",
-           "save_mixer", "load_mixer"]
+           "save_mixer", "load_mixer", "save_pool_rows", "remove_stale_pool_rows"]
 
 #: Array-valued fields, stored as their own entries in the ``.npz``. ``None`` is
 #: representable: the key is simply absent.
@@ -167,7 +168,12 @@ def state_fingerprint(result) -> dict:
     what :func:`~defumat.scf.continuation._check_grid` checks, one layer down.
     """
     density = np.shape(result.density)
-    wavefunctions = np.shape(result.wavefunctions)
+    store = result.wavefunctions
+    # A k-point pool's store is fingerprinted as the whole set it is a share
+    # of, so that a checkpoint written by pools and one written by a single
+    # process describe the same state the same way.
+    wavefunctions = ((store.array.shape[0], store.nk) + store.array.shape[2:]
+                     if isinstance(store, PoolStore) else np.shape(store))
     system = getattr(result, "system", None)
     return {
         "density_shape": list(density),
@@ -229,6 +235,14 @@ def save_state(result, path) -> Path:
     payload, meta = {}, {"format": FORMAT_VERSION}
     for name in _ARRAYS:
         value = getattr(result, name, None)
+        if isinstance(value, PoolStore):
+            # Each pool writes its own rows (:func:`save_pool_rows`), before
+            # this file; what this file records is which set of rows files
+            # belongs to it, by the iteration they were written at.
+            meta["pooled_wavefunctions"] = {
+                "iterations": int(getattr(result, "iterations", 0) or 0),
+                "nk": int(value.nk)}
+            continue
         if value is not None:
             payload[name] = np.asarray(value)
     for name in _SCALARS:
@@ -252,7 +266,7 @@ def save_state(result, path) -> Path:
     return path
 
 
-def load_state(path, system=None, calculation=None, strict: bool = True):
+def load_state(path, system=None, calculation=None, strict: bool = True, rows=None):
     """Read back what :func:`save_state` wrote.
 
     Args:
@@ -264,6 +278,11 @@ def load_state(path, system=None, calculation=None, strict: bool = True):
             catches a cutoff change that the fingerprint alone would not.
         strict: whether a fingerprint mismatch raises. ``False`` warns instead,
             which is for inspecting a file rather than for running from one.
+        rows: the global k rows a k-point pool holds, which makes the
+            wavefunctions come back as that pool's
+            :class:`~defumat.parallel.PoolStore`; ``None`` returns the whole
+            set. Either works on a file written by pools or by one process,
+            so a restart may change the pool count.
 
     **What comes back is a state, not a report.** ``stress``, ``solver`` and
     ``history`` describe the run that produced the file and are not stored, so
@@ -310,6 +329,19 @@ def load_state(path, system=None, calculation=None, strict: bool = True):
             jnp.asarray(handle[f"becsum_{index}"])
             for index in range(int(meta.get("nbecsum", 0)))
         )
+    pooled = meta.get("pooled_wavefunctions")
+    # A state may be written without its states (a pooled relaxation's rank 0
+    # does, since its resume reads the density and ``becsum`` alone); it comes
+    # back with ``None`` there, which a continuation reads as "start the states
+    # from the atomic orbitals".
+    arrays.setdefault("wavefunctions", None)
+    if pooled is not None:
+        arrays["wavefunctions"] = _gather_pool_rows(
+            path, int(pooled["iterations"]), int(pooled["nk"]), rows)
+    elif rows is not None and "wavefunctions" in arrays:
+        whole = arrays["wavefunctions"]
+        arrays["wavefunctions"] = PoolStore(
+            np.ascontiguousarray(whole[:, np.asarray(rows)]), rows, whole.shape[1])
 
     result = SCFResult(
         **fields, **arrays, becsum=becsum, system=system,
@@ -332,6 +364,85 @@ def load_state(path, system=None, calculation=None, strict: bool = True):
                 f"uses {grid}: the cell or a cutoff has changed"
             )
     return result
+
+
+def _rows_file(path, iterations: int, rows) -> Path:
+    """``<stem>.it<N>.rows<first>-<last>.npz`` beside the state file ``path``."""
+    path = Path(path)
+    stem = path.name[: -len(".npz")] if path.name.endswith(".npz") else path.name
+    return path.with_name(f"{stem}.it{iterations:06d}.rows{int(rows[0]):06d}-"
+                          f"{int(rows[-1]):06d}.npz")
+
+
+def _rows_files(path, iterations: int | None = None) -> list[Path]:
+    path = Path(path)
+    stem = path.name[: -len(".npz")] if path.name.endswith(".npz") else path.name
+    stamp = "*" if iterations is None else f"{iterations:06d}"
+    return sorted(path.parent.glob(f"{stem}.it{stamp}.rows*.npz"))
+
+
+def save_pool_rows(store: PoolStore, path, iterations: int) -> Path:
+    """One k-point pool's rows of the store, stamped with the iteration they belong to.
+
+    Written **before** the state file of the same iteration and never over a
+    file of another iteration, since the stamp is in the name: a job killed
+    between the two writes leaves the previous iteration's state file and its
+    rows files whole, and the new rows files as orphans that
+    :func:`remove_stale_pool_rows` clears once a state file names them. The
+    file holds the rows' global indices, so a load with any pool count finds
+    the rows it needs by reading them.
+    """
+    target = _rows_file(path, iterations, store.rows)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    scratch = target.with_name(target.name + ".partial.npz")
+    np.savez(scratch, rows=np.asarray(store.rows), nk=np.asarray(store.nk),
+             iterations=np.asarray(iterations), array=store.array)
+    scratch.replace(target)
+    return target
+
+
+def remove_stale_pool_rows(path, iterations: int) -> None:
+    """Delete the rows files beside ``path`` that belong to any other iteration."""
+    for stale in _rows_files(path):
+        if f".it{iterations:06d}." not in stale.name:
+            stale.unlink(missing_ok=True)
+
+
+def _gather_pool_rows(path, iterations: int, nk: int, rows):
+    """The rows a process needs, read from the rows files of ``iterations``.
+
+    ``rows = None`` assembles the whole set. A row no file holds is refused
+    rather than filled: a store with a hole would start that k-point from
+    whatever the array held, which converges to something plausible.
+    """
+    wanted = np.arange(nk) if rows is None else np.asarray(rows)
+    found: dict[int, tuple[Path, int]] = {}
+    for file in _rows_files(path, iterations):
+        with np.load(file, allow_pickle=False) as handle:
+            if int(handle["iterations"]) != iterations or int(handle["nk"]) != nk:
+                continue
+            for position, row in enumerate(np.asarray(handle["rows"])):
+                found.setdefault(int(row), (file, position))
+    missing = [int(row) for row in wanted if int(row) not in found]
+    if missing:
+        raise ValueError(
+            f"{path} was written by k-point pools at iteration {iterations} and no "
+            f"rows file of that iteration holds k rows {missing}; the rows files "
+            f"are {[f.name for f in _rows_files(path)]}")
+    store = None
+    by_file: dict[Path, list[tuple[int, int]]] = {}
+    for index, row in enumerate(wanted):
+        file, position = found[int(row)]
+        by_file.setdefault(file, []).append((index, position))
+    for file, pairs in by_file.items():
+        with np.load(file, allow_pickle=False) as handle:
+            array = handle["array"]
+            if store is None:
+                store = np.empty((array.shape[0], len(wanted)) + array.shape[2:],
+                                 array.dtype)
+            for index, position in pairs:
+                store[:, index] = array[:, position]
+    return store if rows is None else PoolStore(store, wanted, nk)
 
 
 def _check_fingerprint(stored, rebuilt, path, strict) -> None:

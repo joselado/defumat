@@ -26,6 +26,7 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 import textwrap
 from pathlib import Path
 
@@ -105,11 +106,11 @@ def test_refusals_name_what_pools_do_not_cover():
     pools = Pools(_FakeCommunicator(2, 0))
     calculation = SimpleNamespace(system=SimpleNamespace(kpoints=SimpleNamespace(nk=8)),
                                   spiral=False)
-    quiet = dict(starting_from=None, starting_wavefunctions=None, checkpointing=False,
-                 residual_solver=False, rotate_moments=False, field=None)
+    quiet = dict(checkpointing=False, residual_solver=False, rotate_moments=False,
+                 field=None)
     _refuse_under_pools(pools, calculation, **quiet)
-    for name, value, words in [("checkpointing", True, "checkpoint_dir"),
-                               ("rotate_moments", True, "rotate_moments"),
+    _refuse_under_pools(pools, calculation, **{**quiet, "checkpointing": True})
+    for name, value, words in [("rotate_moments", True, "rotate_moments"),
                                ("field", object(), "magnetic field")]:
         with pytest.raises(NotImplementedError, match=words):
             _refuse_under_pools(pools, calculation, **{**quiet, name: value})
@@ -447,3 +448,274 @@ def test_pools_reproduce_one_on_a_spin_spiral(name, iterations):
     if name.startswith("h-chain"):
         broken = _run_pools(SPIRAL_SCRIPT, 2, path, 1, iterations, timeout=900)
         assert abs(broken[0]["energy"] - serial["energy"]) > 1e-4
+
+
+CONTINUE_SCRIPT = textwrap.dedent("""
+    import json, sys, tempfile, warnings
+    warnings.simplefilter("ignore")
+    from pathlib import Path
+    import defumat
+    from defumat.parallel import Pools, SerialCommunicator, current_pools
+    from defumat.io.pwin import read_pw_input
+    from defumat.pseudo import read_upf
+    from defumat.scf.driver import Calculation, run_scf
+    from defumat.system import build_system
+    with tempfile.NamedTemporaryFile("w", suffix=".in", delete=False) as f:
+        f.write(sys.argv[1])
+    system = build_system(read_pw_input(Path(f.name)))
+    pseudos = tuple(read_upf(Path("tests/data/pseudo") / s.pseudo_file)
+                    for s in system.structure.species)
+    calculation = Calculation(system, pseudos)
+    first = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-12)
+    again = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-12,
+                    starting_from=first)
+    serial = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-12,
+                     pools=Pools(SerialCommunicator()))
+    from_serial = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-12,
+                          starting_from=serial)
+    print(json.dumps({"rank": current_pools().rank,
+                      "first": float(first.total_energy), "first_it": first.iterations,
+                      "again": float(again.total_energy), "again_it": again.iterations,
+                      "serial": float(serial.total_energy),
+                      "from_serial": float(from_serial.total_energy),
+                      "from_serial_it": from_serial.iterations,
+                      "seed_store": type(first.wavefunctions).__name__,
+                      "serial_store": type(serial.wavefunctions).__name__}))
+""")
+
+
+@pytest.mark.slow
+def test_a_pooled_run_continues_from_a_pooled_or_a_whole_set_seed():
+    """Both seeds a pool can meet: its own rows, and a whole set sliced to them.
+
+    A continuation from a converged state must land on the same energy in one
+    or two iterations; restarting from the atomic orbitals instead (what a span
+    dropped for the wrong k count does, behind a warning) takes the full count.
+    """
+    for result in _run_pools(CONTINUE_SCRIPT, 2, SILICON_8K, timeout=900):
+        assert result["seed_store"] == "PoolStore" and result["serial_store"] != "PoolStore"
+        assert abs(result["again"] - result["first"]) < 1e-10
+        assert abs(result["from_serial"] - result["serial"]) < 1e-10
+        assert abs(result["serial"] - result["first"]) < 1e-10
+        assert result["again_it"] <= 2 and result["from_serial_it"] <= 2
+        assert result["first_it"] > 4
+
+
+def test_a_span_from_another_pool_layout_is_refused_by_name():
+    """A pool's span holding other rows must not be read by position."""
+    from defumat.io.pwin import read_pw_input
+    from defumat.pseudo import read_upf
+    from defumat.scf.driver import Calculation
+    from defumat.system import build_system
+
+    with tempfile.NamedTemporaryFile("w", suffix=".in", delete=False) as handle:
+        handle.write(SILICON_8K)
+    system = build_system(read_pw_input(Path(handle.name)))
+    pseudos = tuple(read_upf(REPO / "tests" / "data" / "pseudo" / s.pseudo_file)
+                    for s in system.structure.species)
+    calculation = Calculation(system, pseudos)
+    hamiltonians = calculation.hamiltonian(
+        calculation.potential(calculation.starting_density()).v_scf)
+    npwx = calculation.basis.npwx
+    span = PoolStore(np.ones((1, 2, 4, npwx), complex), [0, 1], nk=8)
+    taken = calculation.starting_wavefunctions(hamiltonians, 4, span=span, rows=[1])
+    assert np.shape(taken)[1] == 1
+    with pytest.raises(NotImplementedError, match="different k-point pool layout"):
+        calculation.starting_wavefunctions(hamiltonians, 4, span=span, rows=[2, 3])
+
+
+CHECKPOINT_SCRIPT = textwrap.dedent("""
+    import json, sys, tempfile, warnings
+    warnings.simplefilter("ignore")
+    from pathlib import Path
+    import defumat
+    from defumat.parallel import current_pools
+    from defumat.io.pwin import read_pw_input
+    from defumat.pseudo import read_upf
+    from defumat.scf.driver import run_scf
+    from defumat.system import build_system
+    text, directory, mode = sys.argv[1], sys.argv[2], sys.argv[3]
+    with tempfile.NamedTemporaryFile("w", suffix=".in", delete=False) as f:
+        f.write(text)
+    system = build_system(read_pw_input(Path(f.name)))
+    pseudos = tuple(read_upf(Path("tests/data/pseudo") / s.pseudo_file)
+                    for s in system.structure.species)
+    if mode == "resume-drop":
+        # What a span dropped for the wrong k count does: the density and the
+        # mixer come back and the states restart from the atomic orbitals.
+        import defumat.scf.continuation as continuation
+        continuation.promote_wavefunctions = lambda result, calculation: None
+    options = {"whole": {}, "stop": {"max_iterations": 4, "checkpoint_dir": directory,
+                                     "checkpoint_every": 2},
+               "resume": {"checkpoint_dir": directory},
+               "resume-drop": {"checkpoint_dir": directory}}[mode]
+    result = run_scf(system, pseudos, conv_thr=1e-12, **options)
+    print(json.dumps({"rank": current_pools().rank, "energy": float(result.total_energy),
+                      "iterations": result.iterations, "converged": bool(result.converged),
+                      "history": [(h["iteration"], h["total_energy"])
+                                  for h in result.history],
+                      "files": sorted(p.name for p in Path(directory).glob("*"))}))
+""")
+
+
+@pytest.mark.slow
+def test_a_pooled_checkpoint_resumes_at_any_pool_count(tmp_path):
+    """Written by two pools, resumed by two, by three and by one process.
+
+    The resumed run must converge in the same total number of iterations as the
+    uninterrupted one and to the same energy, which is the serial restart test's
+    bar (``test_scf_restart.py``); a store that came back with the wrong rows or
+    from the atomic orbitals would cost iterations. Only one iteration's rows
+    files may be left beside the state file, and only after it is written.
+    """
+    import shutil
+
+    whole = _run_pools(CHECKPOINT_SCRIPT, 2, SILICON_8K, tmp_path / "unused", "whole",
+                       timeout=900)[0]
+    stopped_dir = tmp_path / "stopped"
+    stopped = _run_pools(CHECKPOINT_SCRIPT, 2, SILICON_8K, stopped_dir, "stop",
+                         timeout=900)[0]
+    assert not stopped["converged"] and stopped["iterations"] == 4
+    rows_files = [name for name in stopped["files"] if ".rows" in name]
+    assert len(rows_files) == 2 and all(".it000004." in name for name in rows_files)
+    assert "scf_iteration.npz" in stopped["files"] and "scf_mixer.npz" in stopped["files"]
+    energies = dict(whole["history"])
+    for size in (2, 3, 1):
+        directory = tmp_path / f"resume{size}"
+        shutil.copytree(stopped_dir, directory)
+        for result in _run_pools(CHECKPOINT_SCRIPT, size, SILICON_8K, directory,
+                                 "resume", timeout=900):
+            assert result["converged"]
+            assert result["iterations"] == whole["iterations"], size
+            assert abs(result["energy"] - whole["energy"]) < 1e-10, size
+            # It resumed rather than restarted: ``iterations`` is absolute, so a
+            # fresh start would pass the two lines above. The first iteration
+            # back is iteration 5, and it is the uninterrupted run's iteration 5
+            # to round-off, which it can only be if the states came back too.
+            first, energy = result["history"][0]
+            assert first == 5 and len(result["history"]) == whole["iterations"] - 4
+            assert abs(energy - energies[5]) < 1e-11, (size, energy - energies[5])
+    # The witness fires: states dropped behind the restored density leave
+    # iteration 5 somewhere else.
+    directory = tmp_path / "dropped"
+    shutil.copytree(stopped_dir, directory)
+    dropped = _run_pools(CHECKPOINT_SCRIPT, 2, SILICON_8K, directory, "resume-drop",
+                         timeout=900)[0]
+    assert abs(dict(dropped["history"])[5] - energies[5]) > 1e-9
+    # A rows file missing is refused by name, not a store with a hole.
+    directory = tmp_path / "holed"
+    shutil.copytree(stopped_dir, directory)
+    next(directory.glob("*.rows*.npz")).unlink()
+    for code, _, err in _start_pools(CHECKPOINT_SCRIPT, 2, SILICON_8K, directory,
+                                     "resume", timeout=900):
+        assert code != 0 and "could not be read by every k-point pool" in err
+    assert any("no rows file of that iteration holds" in err
+               for _, _, err in _start_pools(CHECKPOINT_SCRIPT, 2, SILICON_8K, directory,
+                                             "resume", timeout=900))
+
+
+RELAX_CHECKPOINT_SCRIPT = textwrap.dedent("""
+    import json, sys, tempfile, warnings
+    warnings.simplefilter("ignore")
+    from pathlib import Path
+    import numpy as np
+    import defumat
+    from defumat.io.pwin import read_pw_input
+    from defumat.parallel import current_pools
+    from defumat.pseudo import read_upf
+    from defumat.system import build_system
+    from defumat.workflows.relax import run_relax
+    text, directory, nstep = sys.argv[1], sys.argv[2], int(sys.argv[3])
+    with tempfile.NamedTemporaryFile("w", suffix=".in", delete=False) as f:
+        f.write(text)
+    system = build_system(read_pw_input(Path(f.name)))
+    pseudos = tuple(read_upf(Path("tests/data/pseudo") / s.pseudo_file)
+                    for s in system.structure.species)
+    result = run_relax(system, pseudos, nstep=nstep, conv_thr=1e-10,
+                       checkpoint_dir=None if directory == "-" else directory)
+    print(json.dumps({"rank": current_pools().rank, "steps": len(result.steps),
+                      "converged": bool(result.converged),
+                      "energy": float(result.scf.total_energy),
+                      "positions": np.asarray(result.system.structure.positions).tolist(),
+                      "files": sorted(p.name for p in Path(directory).glob("*"))
+                               if directory != "-" else []}))
+""")
+
+
+@pytest.mark.slow
+def test_a_pooled_relaxation_checkpoint_resumes_where_it_stopped(tmp_path):
+    """Rank 0 writes the step, the optimizer and a state without the states.
+
+    The serial test's bar: stopping at step 2 and resuming costs the same total
+    number of ionic steps as not stopping, which only holds if the optimizer's
+    history crossed the file, and the resumed geometry and energy are the
+    uninterrupted run's.
+    """
+    whole = _run_pools(RELAX_CHECKPOINT_SCRIPT, 2, SILICON_DISPLACED_8K, "-", 20,
+                       timeout=1500)[0]
+    stopped = _run_pools(RELAX_CHECKPOINT_SCRIPT, 2, SILICON_DISPLACED_8K,
+                         tmp_path, 2, timeout=1500)[0]
+    assert not stopped["converged"] and stopped["steps"] == 2
+    assert set(stopped["files"]) == {"scf_state.npz", "optimizer.npz", "relax_step.json"}
+    resumed = _run_pools(RELAX_CHECKPOINT_SCRIPT, 2, SILICON_DISPLACED_8K,
+                         tmp_path, 20, timeout=1500)
+    for result in resumed:
+        assert whole["converged"] and result["converged"]
+        assert stopped["steps"] + result["steps"] == whole["steps"]
+        assert abs(result["energy"] - whole["energy"]) < 1e-9
+        assert np.allclose(result["positions"], whole["positions"], atol=1e-5)
+
+
+SIGTERM_SCRIPT = textwrap.dedent("""
+    import json, os, signal, sys, tempfile, threading, warnings
+    warnings.simplefilter("ignore")
+    from pathlib import Path
+    import defumat
+    from defumat.parallel import current_pools
+    from defumat.io.pwin import read_pw_input
+    from defumat.pseudo import read_upf
+    from defumat.scf.driver import Calculation, run_scf
+    from defumat.system import build_system
+    text, directory, victim = sys.argv[1], sys.argv[2], int(sys.argv[3])
+    with tempfile.NamedTemporaryFile("w", suffix=".in", delete=False) as f:
+        f.write(text)
+    system = build_system(read_pw_input(Path(f.name)))
+    pseudos = tuple(read_upf(Path("tests/data/pseudo") / s.pseudo_file)
+                    for s in system.structure.species)
+    calculation = Calculation(system, pseudos)
+    run_scf(system, pseudos, calculation=calculation, max_iterations=2, verbose=False)
+    pools = current_pools()
+    if pools.rank == victim:
+        threading.Timer(1.0, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
+    result = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-30,
+                     max_iterations=400, checkpoint_dir=directory,
+                     checkpoint_every=1000, verbose=False)
+    print(json.dumps({"rank": pools.rank, "iterations": result.iterations,
+                      "converged": bool(result.converged),
+                      "files": sorted(p.name for p in Path(directory).glob("*"))}))
+""")
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("victim", [0, 1])
+def test_a_sigterm_stops_every_pool_at_the_same_iteration(tmp_path, victim):
+    """JAX's preemption service catches the signal; the pools agree where to stop.
+
+    Whichever pool is signalled, every pool leaves the loop at the same
+    iteration, long before its iteration budget, exits cleanly and leaves the
+    checkpoint of that iteration, which is what a Slurm ``--signal=TERM@`` lead
+    buys a job at its wall clock.
+
+    **``not converged`` is the witness, and it was checked to fire.** Unsignalled,
+    this SCF converges at iteration 63 even at ``conv_thr = 1e-30``, because its
+    residual reaches exactly zero; with the poll disabled the signalled pools did
+    the same, 63 iterations and converged, so a pool that ignored the notice
+    fails here.
+    """
+    results = _run_pools(SIGTERM_SCRIPT, 2, SILICON_8K, tmp_path, victim, timeout=600)
+    assert results[0]["iterations"] == results[1]["iterations"] < 400
+    for result in results:
+        assert not result["converged"]
+        stamp = f".it{result['iterations']:06d}."
+        assert "scf_iteration.npz" in result["files"]
+        assert sum(stamp in name for name in result["files"]) == 2

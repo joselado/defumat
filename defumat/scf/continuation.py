@@ -82,6 +82,7 @@ import numpy as np
 
 from defumat.hubbard.occupations import (
     ns_components, spinor_ns_components, spinor_ns_from_components)
+from defumat.parallel import PoolStore
 from defumat.scf.fields import VANISHING_MOMENT
 
 #: Above this, a spinor occupation matrix's off-diagonal spin blocks carry real
@@ -900,6 +901,24 @@ def promote_wavefunctions(result, calculation):
     psi = getattr(result, "wavefunctions", None)
     if psi is None:
         return None
+    # **A k-point pool's share is promoted as its rows and stays a pool's**
+    # (:mod:`defumat.parallel`): every branch below acts row by row, so the rows
+    # it holds are the rows it hands on, and the target's start takes them by
+    # position. The k count tested is the whole set's, which the store carries;
+    # testing the rows held would drop every pool's span as "the wrong number of
+    # k-points" and restart it from the atomic orbitals behind a warning.
+    pool = psi if isinstance(psi, PoolStore) else None
+    if pool is not None:
+        psi = pool.array
+    promoted = _promote_rows(psi, pool.nk if pool is not None else None,
+                             result, calculation)
+    if pool is None or promoted is None:
+        return promoted
+    return PoolStore(np.asarray(promoted), pool.rows, pool.nk)
+
+
+def _promote_rows(psi, held_nk, result, calculation):
+    """:func:`promote_wavefunctions` on an array of rows; ``held_nk`` is a pool's whole-set count."""
     # **Where the source set lives, it stays**: a streamed result or a loaded
     # checkpoint holds it in host RAM, and the target's start slices the span a
     # chunk at a time when it streams, so the promotion is done in numpy there
@@ -911,9 +930,10 @@ def promote_wavefunctions(result, calculation):
     # the basis list -- that one is doubled, ``k + q/2`` beside ``k - q/2``.
     nk = calculation.system.kpoints.nk
     source_npol = 2 if int(result.nspin) == 4 else 1
-    if psi.shape[1] != nk or psi.shape[-1] != source_npol * npwx:
+    source_nk = psi.shape[1] if held_nk is None else held_nk
+    if source_nk != nk or psi.shape[-1] != source_npol * npwx:
         return _dropped(
-            f"the source run has {psi.shape[1]} k-points and {psi.shape[-1]} "
+            f"the source run has {source_nk} k-points and {psi.shape[-1]} "
             f"coefficients per state where the target has {nk} and "
             f"{calculation.npol * npwx}"
         )
