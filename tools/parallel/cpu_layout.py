@@ -20,19 +20,28 @@ core, for a measurement of SMT itself.
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 
 
 def cores(smt: bool = False) -> list[list[int]]:
-    """Physical cores in cache order, each the list of its hardware threads."""
+    """Physical cores in cache order, each the list of its hardware threads.
+
+    Only CPUs this process may run on are listed: on a node shared with other
+    jobs the Slurm allocation is a subset of what ``lscpu`` reports, and a
+    ``taskset`` onto a CPU outside it fails.
+    """
     text = subprocess.run(["lscpu", "-p=CPU,CORE,SOCKET,NODE,CACHE"],
                           capture_output=True, text=True, check=True).stdout
+    allowed = os.sched_getaffinity(0)
     by_core: dict[tuple, list[int]] = {}
     for line in text.splitlines():
         if not line or line.startswith("#"):
             continue
         cpu, core, socket, node, cache = (line.split(",") + [""] * 5)[:5]
+        if int(cpu) not in allowed:
+            continue
         llc = cache.split(":")[-1] if cache else ""
         key = (int(socket or 0), int(node or 0), int(llc or 0), int(core))
         by_core.setdefault(key, []).append(int(cpu))
@@ -60,6 +69,10 @@ def main() -> None:
     if args.describe:
         for index, threads in enumerate(cores(smt=True)):
             print(index, threads)
+        return
+    if args.processes == 0:
+        # ``cpu_layout.py 0 T``: how many processes of T cores the allowed CPUs hold.
+        print(len(cores(args.smt)) // args.width)
         return
     if args.processes is None or args.width is None:
         parser.error("give the process count and the width")

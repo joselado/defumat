@@ -33,22 +33,24 @@
 # ---- the #SBATCH values ----
 #
 # partition   batch-milan: 2 sockets of 64 cores, ThreadsPerCore=1, 510 GB.
-# exclusive   a timing on a shared node shares its L3 and memory channels with
-#             whatever else runs there (milan6 read CPULoad=128.78 on 2026-09-30);
-#             Triton's reference lists --exclusive "for large parallel jobs".
-# ntasks      128 x 1 CPU, so that mpirun sees 128 slots for pw.x (it dies in the
-#             launcher under --ntasks=1, CLAUDE.local.md); this code's processes
-#             are started by the scripts and pinned with taskset.
-# mem         480G of the 510: 128 si32 copies at about 1 GB, bi20-soc at 35 GB.
+# ntasks      120 x 1 CPU, not the whole node and not --exclusive: an exclusive
+#             Milan job waited a day on 2026-09-30 while milan1, 4 and 30 each had
+#             122 to 126 cores idle, so the job takes most of a node beside a
+#             small neighbour and says so. Pass --exclusive --ntasks=128 --mem=480G
+#             on the command line for a clean node. mpirun sees the tasks as its
+#             slots for pw.x (it dies in the launcher under --ntasks=1,
+#             CLAUDE.local.md); this code's processes are started by the scripts
+#             and pinned with taskset inside the allocation (cpu_layout.py reads
+#             the job's own CPUs).
+# mem         340G: 120 si32 copies at about 1 GB, bi20-soc at 35 GB.
 # time        10:00:00 against an estimate of 5 to 6 hours from D22's per-core
 #             speeds; the blocks write as they go.
 #SBATCH --job-name=defumat-par-milan
 #SBATCH --partition=batch-milan
 #SBATCH --nodes=1
-#SBATCH --exclusive
-#SBATCH --ntasks=128
+#SBATCH --ntasks=120
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=480G
+#SBATCH --mem=340G
 #SBATCH --time=10:00:00
 #SBATCH --output=/scratch/work/ladovj1/calculations/parallel-milan/out/milan-%j.out
 #SBATCH --error=/scratch/work/ladovj1/calculations/parallel-milan/out/milan-%j.err
@@ -75,6 +77,7 @@ first() { "$PYTHON" "$P/cpu_layout.py" 1 "$1"; }
 
 if has topology; then
   { lscpu; lscpu -e; } > topology.txt 2>&1
+  { echo "job CPUs: $(taskset -pc $$)"; scontrol show node "$(hostname -s)" | grep -E "CPUAlloc|CPULoad"; } >> topology.txt 2>&1
   lscpu -p=CPU,CORE,SOCKET,NODE,CACHE > topology.csv 2>&1
   numactl -H >> topology.txt 2>&1 || echo "numactl not present" >> topology.txt
   "$PYTHON" "$P/cpu_layout.py" --describe > layout.txt
@@ -92,13 +95,14 @@ fi
 
 if has copies; then
   export OUT=$WORK/copies.jsonl
+  # As many copies as the job's own cores hold (128 / T on a whole node).
   for T in 1 2 4; do
     "$P/copies.sh" "$B/si32-1k-ecut30.in" si32 1 $T
-    "$P/copies.sh" "$B/si32-1k-ecut30.in" si32 $((128 / T)) $T
+    "$P/copies.sh" "$B/si32-1k-ecut30.in" si32 "$("$PYTHON" "$P/cpu_layout.py" 0 $T)" $T
   done
   for T in 4 8; do
     REPEATS=2 "$P/copies.sh" "$B/si64-1k-ecut30.in" si64 1 $T
-    REPEATS=2 "$P/copies.sh" "$B/si64-1k-ecut30.in" si64 $((128 / T)) $T
+    REPEATS=2 "$P/copies.sh" "$B/si64-1k-ecut30.in" si64 "$("$PYTHON" "$P/cpu_layout.py" 0 $T)" $T
   done
 fi
 
