@@ -418,3 +418,32 @@ def test_a_dead_pool_takes_the_others_down_within_the_heartbeat():
     for code, out, _ in outcomes[:-1]:
         assert code != 0 and "survived" not in out
     assert elapsed < 120
+
+
+SPIRAL_SCRIPT = SCF_SCRIPT.replace(
+    "text, drop_reduce = sys.argv[1], sys.argv[2] == \"1\"",
+    "text, drop_reduce = Path(sys.argv[1]).read_text(), sys.argv[2] == \"1\"")
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("name, iterations", [("h-chain-spiral.in", 6),
+                                              ("o-chain-spiral-us.in", 5)])
+def test_pools_reproduce_one_on_a_spin_spiral(name, iterations):
+    """A spiral's k row carries two basis rows, and the pools need nothing more.
+
+    The up component lives at ``k + q/2`` and the down at ``k - q/2``, each on
+    its own sphere, and the streamed passes hand the kernels global k rows that
+    the spiral's Hamiltonian, ``becsum`` and density map to both. Measured at a
+    fixed iteration count: 5e-15 Ry at 1, 2 and 3 pools on the hydrogen chain,
+    7e-14 at 1 and 2 on the ultrasoft oxygen chain, whose augmentation charge is
+    the table displaced by ``q``. The dropped reduction must move the energy.
+    """
+    path = str(REPO / "tests" / "data" / "qe" / name)
+    serial = _run_pools(SPIRAL_SCRIPT, 1, path, 0, iterations, timeout=900)[0]
+    pooled = _run_pools(SPIRAL_SCRIPT, 2, path, 0, iterations, timeout=900)
+    for result in pooled:
+        assert abs(result["energy"] - serial["energy"]) < 1e-10
+        assert result["store"] == "PoolStore"
+    if name.startswith("h-chain"):
+        broken = _run_pools(SPIRAL_SCRIPT, 2, path, 1, iterations, timeout=900)
+        assert abs(broken[0]["energy"] - serial["energy"]) > 1e-4

@@ -5759,9 +5759,11 @@ def _refuse_under_pools(pools, calculation, *, starting_from,
     if nk < pools.size:
         refused.append(f"{pools.size} pools for {nk} k-points (a pool with no "
                        "k-point has nothing to do)")
-    if calculation.spiral:
-        refused.append("a spin spiral (its basis list is the doubled k + q/2, "
-                       "k - q/2 one)")
+    # A spin spiral is not refused: the streamed passes address a k row and the
+    # spiral's Hamiltonian, ``becsum`` and density kernels map it to its two
+    # basis rows themselves (``basis_rows``), so a pool's rows need nothing
+    # more. Measured: ``h-chain-spiral.in`` at 1, 2 and 3 pools, 5e-15 Ry after
+    # six iterations; the ultrasoft ``o-chain-spiral-us.in``, 7e-14.
     if starting_from is not None or starting_wavefunctions is not None:
         refused.append("starting_from / starting_wavefunctions (a whole-set span)")
     if checkpointing:
