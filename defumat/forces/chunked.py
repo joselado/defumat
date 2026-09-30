@@ -323,6 +323,9 @@ def with_rows(calculation, leaves):
         if name == "system":
             value = eqx.tree_at(lambda system: system.kpoints, here.system, value)
         setattr(here, name, value)
+    # The chunk's projectors are its own rows, stored whole (``at_rows``); a
+    # k-point pool's row list indexes the whole set and must not follow them.
+    here.projector_rows = None
     return here
 
 

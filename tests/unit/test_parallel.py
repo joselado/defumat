@@ -814,3 +814,40 @@ def test_pools_reproduce_one_when_the_moments_are_turned(text, iterations, start
         assert abs(result["energy"] - serial["energy"]) < 1e-10
         assert np.allclose(result["moment"], serial["moment"], atol=1e-9)
         assert np.allclose(result["torque"], serial["torque"], atol=1e-10)
+
+
+def test_the_balanced_assignment_covers_every_row_once_and_evens_the_load():
+    """Longest first: the Gamma point, counted twice, takes fewer others."""
+    from defumat.parallel import balance
+
+    costs = np.array([2.0] + [1.0] * 7)
+    sets = balance(costs, 3)
+    assert np.array_equal(np.sort(np.concatenate(sets)), np.arange(8))
+    assert [len(s) for s in sets] == [2, 3, 3] and 0 in sets[0]
+    loads = [costs[s].sum() for s in sets]
+    assert max(loads) - min(loads) <= 1.0
+    # Equal costs and a pool count that divides: equal shares, like the blocks.
+    assert [len(s) for s in balance(np.ones(12), 4)] == [3, 3, 3, 3]
+    # Every pool computes every pool's rows from the same numbers.
+    pools = [Pools(_FakeCommunicator(3, rank)) for rank in range(3)]
+    assert all(np.array_equal(p.rows(8, costs=costs), sets[p.rank]) for p in pools)
+
+
+GATHER_ROWS_SCRIPT = textwrap.dedent("""
+    import json
+    import numpy as np
+    import defumat
+    from defumat.parallel import balance, current_pools
+    p = current_pools()
+    rows = balance(np.array([3.0, 1.0, 1.0, 2.0, 1.0]), p.size)[p.rank]
+    local = np.asarray(rows, float)[None, :, None] * np.ones((1, 1, 2))
+    whole = p.gather_k(local, 5, rows=rows)
+    print(json.dumps({"rank": p.rank, "rows": rows.tolist(),
+                      "whole": whole[0, :, 0].tolist()}))
+""")
+
+
+@pytest.mark.slow
+def test_the_gather_scatters_any_rows_into_global_order():
+    for result in _run_pools(GATHER_ROWS_SCRIPT, 2):
+        assert result["whole"] == [0.0, 1.0, 2.0, 3.0, 4.0]

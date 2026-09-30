@@ -155,6 +155,13 @@ class Projectors(eqx.Module):
     #: datasets is about twenty however many species labels name them.
     core: "ProjectorCore | None" = None
     positions: jnp.ndarray | None = None
+    #: ``(nk_basis,)`` positions in :attr:`stored` of each basis row, ``-1``
+    #: where the row is not held, or ``None`` when every row is. Set only on a
+    #: **k-point pool's** set (:meth:`ProjectorCore.at_positions` with
+    #: ``rows``), which stores the rows its own k-points read and rebuilds any
+    #: other from :attr:`core`, so a consumer that asks for another pool's row
+    #: gets the right array rather than a neighbour's.
+    row_map: jnp.ndarray | None = None
 
     @property
     def is_lazy(self) -> bool:
@@ -174,6 +181,8 @@ class Projectors(eqx.Module):
 
     @property
     def nk(self) -> int:
+        if self.row_map is not None:
+            return self.row_map.shape[0]
         return (self.core.columns.shape[0] if self.stored is None
                 else self.stored.shape[0])
 
@@ -186,7 +195,7 @@ class Projectors(eqx.Module):
         laziness. Inside the eigensolver, where the whole-k array *is* the
         memory problem, use :meth:`at_k` instead.
         """
-        if self.stored is not None:
+        if self.stored is not None and self.row_map is None:
             return self.stored
         return _apply_phases(
             self.core.columns, self.core.kg, self.positions, self.core.mask,
@@ -211,8 +220,20 @@ class Projectors(eqx.Module):
         would otherwise hold is the larger cost. What rebuilding does cost is
         ``nat npwx`` complex exponentials per call.
         """
-        if self.stored is not None:
+        if self.stored is not None and self.row_map is None:
             return self.stored[ik]
+        if self.row_map is not None:
+            # A pool's set: its own rows from the store, any other rebuilt. With
+            # one k-point per chunk ``ik`` is a scalar and the ``cond`` takes one
+            # branch; under a ``vmap`` it evaluates both, which is the rebuild's
+            # cost and never a wrong row.
+            local = self.row_map[ik]
+            return jax.lax.cond(local >= 0,
+                                lambda: self.stored[jnp.maximum(local, 0)],
+                                lambda: self._rebuilt(ik))
+        return self._rebuilt(ik)
+
+    def _rebuilt(self, ik) -> jnp.ndarray:
         return _apply_phases(
             self.core.columns[ik], self.core.kg[ik], self.positions,
             self.core.mask[ik], jnp.asarray(self.core.atom_of_channel),
@@ -290,7 +311,7 @@ class ProjectorCore(eqx.Module):
         )
 
     def at_positions(self, positions: jnp.ndarray, qq=None,
-                     lazy: bool = False) -> Projectors:
+                     lazy: bool = False, rows=None) -> Projectors:
         """The projectors for atoms at ``positions`` (cartesian, bohr).
 
         ``lazy`` returns a set that holds *this core* and the positions instead
@@ -305,6 +326,26 @@ class ProjectorCore(eqx.Module):
                 stored=None, dij=self.dij,
                 atom_of_channel=self.atom_of_channel, qq=qq,
                 core=self, positions=positions,
+            )
+        if rows is not None:
+            # **A k-point pool stores its own basis rows only.** Every pool held
+            # every k-point's ``(npwx, nkb)`` in ``store`` mode, which was the
+            # largest array a pool replicated: 1.9 GiB of a 4.4 GiB rank on
+            # ultrasoft Si40 at 27 k-points, and 14 GB a rank on the NiBr2 slab.
+            # Rebuilding instead (``projectors = 'rebuild'``) frees it at 6 to 11
+            # per cent of an iteration; holding the pool's rows frees it at none.
+            rows = np.asarray(rows, dtype=int)
+            stored = _apply_phases(
+                self.columns[rows], self.kg[rows], positions, self.mask[rows],
+                jnp.asarray(self.atom_of_channel), self.column_of_channel,
+                self.phase_of_column,
+            ).astype(self.complex_dtype)
+            row_map = np.full(self.columns.shape[0], -1, dtype=np.int32)
+            row_map[rows] = np.arange(len(rows), dtype=np.int32)
+            return Projectors(
+                stored=stored, dij=self.dij,
+                atom_of_channel=self.atom_of_channel, qq=qq,
+                core=self, positions=positions, row_map=jnp.asarray(row_map),
             )
         vkb = _apply_phases(
             self.columns, self.kg, positions, self.mask,

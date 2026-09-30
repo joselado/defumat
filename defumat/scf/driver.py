@@ -821,6 +821,16 @@ def _projector_rows(projectors, rows):
     """
     if projectors.is_lazy:
         return jax.vmap(projectors.at_k)(rows)
+    if projectors.row_map is not None:
+        # A k-point pool's set: its own rows gathered from the store when every
+        # row asked for is held and the rows are known here, otherwise each one
+        # through ``at_k``, which rebuilds any row the pool does not hold.
+        if not isinstance(rows, jax.core.Tracer) and not isinstance(
+                projectors.row_map, jax.core.Tracer):
+            local = np.asarray(projectors.row_map)[np.asarray(rows)]
+            if np.all(local >= 0):
+                return projectors.stored[jnp.asarray(local)]
+        return jax.vmap(projectors.at_k)(rows)
     return projectors.stored[rows]
 
 
@@ -2090,9 +2100,19 @@ class Calculation:
         # It is a **resident**-set dial, so unlike ``k_batch`` it sits under
         # every stage rather than inside one. See :mod:`defumat.batching`.
         self.projector_storage = resolve_projectors(projectors, self.memory_mode)
+        #: The basis rows whose projectors this process stores, or ``None`` for
+        #: all of them. Under k-point pools in ``store`` mode it is the pool's
+        #: own rows -- the same longest-first share ``run_scf`` walks
+        #: (:func:`_k_costs`) -- and any other row is rebuilt when it is asked
+        #: for (:attr:`~defumat.pseudo.projectors.Projectors.row_map`).
+        self.projector_rows = None
+        pools = current_pools()
+        if pools.size > 1 and self.projector_storage == "store":
+            self.projector_rows = np.asarray(self.basis_rows(
+                pools.rows(system.kpoints.nk, costs=_k_costs(self))))
         self.projectors = self.projector_core.at_positions(
             system.structure.positions,
-            lazy=self.projector_storage == "rebuild",
+            lazy=self.projector_storage == "rebuild", rows=self.projector_rows,
         )
 
         # The augmentation charge lives on the *dense* grid: it is sharply
@@ -2962,6 +2982,7 @@ class Calculation:
         qq = None if self.projectors.qq is None else self.projectors.qq
         moved.projectors = self.projector_core.at_positions(
             positions, qq=qq, lazy=self.projector_storage == "rebuild",
+            rows=self.projector_rows,
         )
         if self.augmentation is not None:
             moved.augmentation = self.augmentation.at_positions(
@@ -3360,6 +3381,7 @@ class Calculation:
         # The storage dial follows the calculation across a new k-set; it used
         # to be dropped here, so every band path and every derived mesh stored
         # the whole-k ``vkb`` whatever ``projectors`` said.
+        moved.projector_rows = None
         moved.projectors = moved.projector_core.at_positions(
             system.structure.positions, qq=self.projectors.qq,
             lazy=self.projector_storage == "rebuild",
@@ -3494,6 +3516,7 @@ class Calculation:
             lambda sticks: (sticks.columns, sticks.index), self.sticks,
             (self.sticks.columns[rows], self.sticks.index[rows]))
         moved.projector_core = self.projector_core.rows(rows)
+        moved.projector_rows = None
         moved.projectors = moved.projector_core.at_positions(
             self.system.structure.positions, qq=self.projectors.qq,
             lazy=self.projector_storage == "rebuild",
@@ -3759,7 +3782,7 @@ class Calculation:
         # one store the whole-k ``vkb(k +- q/2)`` in ``memory`` mode.
         moved.projectors = moved.projector_core.at_positions(
             system.structure.positions, qq=self.projectors.qq,
-            lazy=self.projector_storage == "rebuild",
+            lazy=self.projector_storage == "rebuild", rows=self.projector_rows,
         )
         return moved
 
@@ -5862,6 +5885,30 @@ def _broadcast_field(field, pools):
     return field
 
 
+def _k_costs(calculation) -> np.ndarray:
+    """What each k-point's solve costs relative to the others, for :func:`~defumat.parallel.balance`.
+
+    Its plane waves (both spheres of a spiral's state), which is what ``h_psi``
+    and the subspace products scale with, and **twice that at the Gamma point**,
+    which took 60 Davidson steps per SCF where five other k-points took 32 to 34
+    on the magnetic spinor si16 cell (``PERFORMANCE.md``, the pools against
+    ``pw.x -nk``), and 98 against 42 in ``pw.x`` itself on the same cell. It is
+    a static estimate on purpose: a solve timed at the second iteration runs at
+    a loose threshold and does not predict the converged regime.
+    ``DEFUMAT_POOL_BALANCE=blocks`` returns ``None``, which gives back the
+    contiguous blocks, for an A/B.
+    """
+    if (os.environ.get("DEFUMAT_POOL_BALANCE") or "").strip().lower() == "blocks":
+        # The contiguous blocks of ``divide_et_impera``, kept for an A/B.
+        return None
+    mask = np.asarray(calculation.basis.planewaves.mask)
+    nk = calculation.system.kpoints.nk
+    costs = np.array([float(mask[np.asarray(calculation.basis_rows(np.array([k])))].sum())
+                      for k in range(nk)])
+    gamma = np.all(np.abs(np.asarray(calculation.system.kpoints.coords)) < 1e-10, axis=1)
+    return np.where(gamma, 2.0 * costs, costs)
+
+
 def _refuse_under_pools(pools, calculation, *, checkpointing,
                         residual_solver, rotate_moments, field) -> None:
     """Refuse by name what the k-point pools do not cover yet.
@@ -6109,6 +6156,15 @@ def run_scf(
         david=david, projectors=projectors, memory_mode=memory_mode,
         band_batch=band_batch,
     )
+    # The rows this pool holds, fixed for the run and computed before a resume
+    # needs them: longest-first on each k-point's estimated cost, so that a pool
+    # holding the Gamma point takes fewer others (``parallel.balance``).
+    pool_rows = (pools.rows(calculation.system.kpoints.nk, costs=_k_costs(calculation))
+                 if pooled else None)
+    if pooled:
+        # Every pool has built its calculation before the first collective, so
+        # gloo's context is made with all of them present (``Pools.barrier``).
+        pools.barrier("run_scf")
     nbnd = nbnd or system.nbnd or default_nbnd(
         calculation.nelec,
         system.occupations,
@@ -6137,7 +6193,7 @@ def run_scf(
                 system=system, calculation=calculation,
                 # A pool loads the rows it will hold, from whichever rows files
                 # hold them, so the pool count may change across a restart.
-                rows=(pools.rows(calculation.system.kpoints.nk) if pooled else None),
+                rows=pool_rows,
             )
             unreadable = None
         except (ValueError, OSError) as failure:
@@ -6568,7 +6624,6 @@ def run_scf(
         # A pool keeps its own rows in host memory and walks them: the
         # streamed passes are the ones that take ``rows``.
         wfc_store = "stream"
-        pool_rows = pools.rows(calculation.system.kpoints.nk)
     streaming = wfc_store == "stream"
     if verbose:
         # **What is in force, said once.** All three of these are resolved from
@@ -6860,9 +6915,9 @@ def run_scf(
                     # tetrahedra), so every pool evaluates them on the whole
                     # set; the step counts come along for the printed average.
                     nk_all = calculation.system.kpoints.nk
-                    eigenvalues = pools.gather_k(eigenvalues, nk_all)
-                    steps = pools.gather_k(steps, nk_all)
-                    unsettled = pools.gather_k(unsettled, nk_all)
+                    eigenvalues = pools.gather_k(eigenvalues, nk_all, rows=pool_rows)
+                    steps = pools.gather_k(steps, nk_all, rows=pool_rows)
+                    unsettled = pools.gather_k(unsettled, nk_all, rows=pool_rows)
                 eigenvalues = jnp.asarray(eigenvalues)
             else:
                 wavefunctions = fetch_wavefunctions(wavefunctions)

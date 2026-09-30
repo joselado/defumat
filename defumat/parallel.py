@@ -83,7 +83,7 @@ import numpy as np
 __all__ = [
     "PoolStore", "Pools", "current_pools", "register_communicator",
     "start_from_environment", "pool_count_from_environment", "poll_stop",
-    "stop_latched",
+    "stop_latched", "balance",
 ]
 
 _COMMUNICATORS: dict[str, type] = {}
@@ -314,29 +314,53 @@ class Pools:
         base, extra = divmod(nk, self.size)
         return [base + (1 if pool < extra else 0) for pool in range(self.size)]
 
-    def rows(self, nk: int) -> np.ndarray:
-        """The global k indices this pool owns."""
-        counts = self.counts(nk)
-        start = sum(counts[: self.rank])
-        return np.arange(start, start + counts[self.rank])
+    def rows(self, nk: int, costs=None) -> np.ndarray:
+        """The global k indices this pool owns.
 
-    def gather_k(self, local, nk: int, axis: int = 1) -> np.ndarray:
+        Without ``costs``, contiguous blocks (:meth:`counts`). With them, the
+        longest-processing-time assignment of :func:`balance`, so that a pool
+        holding an expensive k-point takes fewer others; either way every pool
+        computes the same answer from the same numbers, which is what lets each
+        one work out its own rows without asking the others.
+        """
+        if costs is None:
+            counts = self.counts(nk)
+            start = sum(counts[: self.rank])
+            return np.arange(start, start + counts[self.rank])
+        return balance(np.asarray(costs, dtype=float), self.size)[self.rank]
+
+    def gather_k(self, local, nk: int, axis: int = 1, rows=None) -> np.ndarray:
         """Every pool's ``local`` rows along ``axis``, in global k order.
 
-        Uneven splits are padded to the largest share for the transport and
-        trimmed after it.
+        ``rows`` is this pool's global k indices, which is what lets the rows be
+        any set (:func:`balance`); without it the pools are taken to hold the
+        contiguous blocks of :meth:`counts`. Uneven shares are padded to the
+        largest for the transport and trimmed after it.
         """
         local = np.asarray(local)
-        counts = self.counts(nk)
         if self.size == 1:
             return local
-        width = max(counts)
+        if rows is None:
+            counts = self.counts(nk)
+            start = sum(counts[: self.rank])
+            rows = np.arange(start, start + counts[self.rank])
+        rows = np.asarray(rows)
+        shares = np.asarray(self.communicator.allgather(np.asarray([len(rows)])))[:, 0]
+        width = int(shares.max())
         pad = [(0, 0)] * local.ndim
         pad[axis] = (0, width - local.shape[axis])
         gathered = self.communicator.allgather(np.pad(local, pad))
-        pieces = [np.take(gathered[pool], np.arange(counts[pool]), axis=axis)
-                  for pool in range(self.size)]
-        return np.concatenate(pieces, axis=axis)
+        where = self.communicator.allgather(np.pad(rows, (0, width - len(rows)),
+                                                   constant_values=-1))
+        shape = list(local.shape)
+        shape[axis] = nk
+        whole = np.empty(shape, local.dtype)
+        for pool in range(self.size):
+            held = np.asarray(where[pool])[: int(shares[pool])]
+            index = [slice(None)] * local.ndim
+            index[axis] = held
+            whole[tuple(index)] = np.take(gathered[pool], np.arange(len(held)), axis=axis)
+        return whole
 
     def allreduce_sum(self, tree):
         return self.communicator.allreduce_sum(tree)
@@ -347,8 +371,52 @@ class Pools:
     def broadcast_scalar(self, value) -> float:
         return float(np.asarray(self.broadcast(np.asarray(value, dtype=np.float64))))
 
+    def barrier(self, name: str) -> None:
+        """Wait until every pool reaches ``name``, over the coordination service.
+
+        **Not a collective, and that is the point.** gloo builds its context at
+        the first collective a set of processes makes, and gives up with
+        ``Gloo context initialization failed: ... Connect timeout`` when one of
+        them arrives much later than the others -- measured on ultrasoft Si40,
+        three pools building their ``Calculation`` at uneven speeds. This waits
+        on the coordination service instead, whose timeout is
+        ``DEFUMAT_POOL_TIMEOUT`` (300 s), so the collective after it starts
+        with every pool present. Each name is used once per process, which a
+        counter guarantees.
+        """
+        if self.size == 1:
+            return
+        global _BARRIERS
+        _BARRIERS += 1
+        from jax._src import distributed
+
+        timeout = int((os.environ.get("DEFUMAT_POOL_TIMEOUT") or "300").strip())
+        distributed.global_state.client.wait_at_barrier(
+            f"defumat-{name}-{_BARRIERS}", timeout * 1000)
+
     def broadcast_flag(self, value) -> bool:
         return bool(np.asarray(self.broadcast(np.asarray(bool(value), dtype=np.int32))))
+
+
+def balance(costs: np.ndarray, size: int) -> list[np.ndarray]:
+    """``size`` sets of k rows with loads as even as the longest-first rule makes them.
+
+    Graham's longest-processing-time assignment: the k-points in decreasing
+    cost, each to the pool with the least load so far, ties to the lower rank.
+    Its makespan is within 4/3 of the best possible, it needs nothing but the
+    costs, and it is deterministic, so every pool computes every pool's rows.
+    With equal costs and ``size`` dividing the count it gives each pool the
+    same number of rows, as the contiguous split does. Each set is returned
+    sorted.
+    """
+    order = sorted(range(len(costs)), key=lambda k: (-float(costs[k]), k))
+    loads = [0.0] * size
+    held: list[list[int]] = [[] for _ in range(size)]
+    for k in order:
+        pool = min(range(size), key=lambda p: (loads[p], p))
+        held[pool].append(k)
+        loads[pool] += float(costs[k])
+    return [np.asarray(sorted(rows), dtype=int) for rows in held]
 
 
 #: The preemption protocol's step id and its answer, process-wide. See
@@ -399,6 +467,7 @@ def stop_latched() -> bool:
 
 
 _CURRENT: Pools | None = None
+_BARRIERS = 0
 
 
 def current_pools() -> Pools:
