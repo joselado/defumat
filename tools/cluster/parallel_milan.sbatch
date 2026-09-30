@@ -42,7 +42,11 @@
 #             CLAUDE.local.md); this code's processes are started by the scripts
 #             and pinned with taskset inside the allocation (cpu_layout.py reads
 #             the job's own CPUs).
-# mem         340G: 120 si32 copies at about 1 GB, bi20-soc at 35 GB.
+# mem         340G: 120 si32 copies at about 1 GB, bi20-soc at 35 GB. On
+#             2026-09-30 the nodes with idle cores had 84 to 105 GB left to
+#             allocate (their small neighbours had reserved 405 GB), so the
+#             blocks went in separately with --mem of 80 to 100G, --ntasks 64
+#             or 120, and MAX_COPIES=96 for the copies.
 # time        10:00:00 against an estimate of 5 to 6 hours from D22's per-core
 #             speeds; the blocks write as they go.
 #SBATCH --job-name=defumat-par-milan
@@ -95,14 +99,16 @@ fi
 
 if has copies; then
   export OUT=$WORK/copies.jsonl
-  # As many copies as the job's own cores hold (128 / T on a whole node).
+  # As many copies as the job's own cores hold (128 / T on a whole node), and
+  # at most MAX_COPIES, for a job whose memory is the tighter limit.
+  copies() { local n; n=$("$PYTHON" "$P/cpu_layout.py" 0 "$1"); echo $(( n < ${MAX_COPIES:-9999} ? n : ${MAX_COPIES:-9999} )); }
   for T in 1 2 4; do
     "$P/copies.sh" "$B/si32-1k-ecut30.in" si32 1 $T
-    "$P/copies.sh" "$B/si32-1k-ecut30.in" si32 "$("$PYTHON" "$P/cpu_layout.py" 0 $T)" $T
+    "$P/copies.sh" "$B/si32-1k-ecut30.in" si32 "$(copies $T)" $T
   done
   for T in 4 8; do
     REPEATS=2 "$P/copies.sh" "$B/si64-1k-ecut30.in" si64 1 $T
-    REPEATS=2 "$P/copies.sh" "$B/si64-1k-ecut30.in" si64 "$("$PYTHON" "$P/cpu_layout.py" 0 $T)" $T
+    REPEATS=2 "$P/copies.sh" "$B/si64-1k-ecut30.in" si64 "$(copies $T)" $T
   done
 fi
 
