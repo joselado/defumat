@@ -125,7 +125,7 @@ want a number.
 | | |
 |---|---|
 | [`01_silicon_setup`](01_silicon_setup.ipynb) | Input file to cell to k-points to the plane-wave basis, and what a cutoff can represent |
-| [`03_eigensolver_and_performance`](03_eigensolver_and_performance.ipynb) | What an iterative eigensolver saves over a dense one, and the single-core comparison with QE |
+| [`03_eigensolver_and_performance`](03_eigensolver_and_performance.ipynb) | What an iterative eigensolver saves over a dense one, the single-core comparison with QE, and one calculation on many cores |
 | [`17_reaching_self_consistency`](17_reaching_self_consistency.ipynb) | Charge sloshing and Kerker screening, and the unstable magnetic solutions a mixer cannot reach |
 
 ## In file order
@@ -135,7 +135,7 @@ want a number.
 | [`00_the_calculator.ipynb`](00_the_calculator.ipynb) | One object with a method per calculation, and the caching and immutability rules behind it |
 | [`01_silicon_setup.ipynb`](01_silicon_setup.ipynb) | Input file to cell to k-points to the plane-wave basis, and what a cutoff can represent |
 | [`02_silicon_scf_and_bands.ipynb`](02_silicon_scf_and_bands.ipynb) | The SCF, the energy term by term (1e-9 Ry against QE), silicon's band structure and its covalent bond |
-| [`03_eigensolver_and_performance.ipynb`](03_eigensolver_and_performance.ipynb) | What an iterative eigensolver saves over a dense one, and the single-core comparison with QE |
+| [`03_eigensolver_and_performance.ipynb`](03_eigensolver_and_performance.ipynb) | What an iterative eigensolver saves over a dense one, the single-core comparison with QE, and one calculation on many cores |
 | [`04_ultrasoft_and_paw.ipynb`](04_ultrasoft_and_paw.ipynb) | Softer pseudopotentials: the augmentation charge, the overlap operator, the charge identity it has to satisfy, and the absorption spectrum three descriptions of the core region have to agree on |
 | [`05_gradient_corrections.ipynb`](05_gradient_corrections.ipynb) | PBE, revPBE and PBEsol, what each is fitted for, and the bands they give |
 | [`06_density_of_states.ipynb`](06_density_of_states.ipynb) | Smearing and tetrahedra, silicon's gap as what separates them, and free-electron aluminium |
@@ -281,7 +281,7 @@ order of magnitude it is rather than as current to the second.
 | `09` | 6 | `25` | 28 | `10` | 50 | `43` | 173 |
 | `02` | 8 | `18` | 29 | `29` | 59 | `27` | 178 |
 | `37` | 9 | `12` | 30 | `11` | 81 | `44` | 191 |
-| `03` | 10 | `21` | 30 | `45` | 85 | `17` | 203 |
+| `03` | 86 | `21` | 30 | `45` | 85 | `17` | 203 |
 | `05` | 10 | `15` | 31 | `14` | 89 | `38` | 242 |
 | `04` | 122 | `24` | 31 | `26` | 109 | `19` | 243 |
 | `22` | 12 | `28` | 90 | `33` | 115 | `36` | 244 |

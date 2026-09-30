@@ -260,6 +260,16 @@ because that is what decides whether it is a session or a phase.
   second-order energy's dependence on the spiral's axis, which is what picks its plane at the
   physical coupling where the first order leaves two axes at zero; and a converged value for
   the validation chain, whose first order changes sign between 34 and 40 Ry.
+- **k-point pools beyond the ground state, forces, stress and relaxations** (P124). Refused
+  by name under `DEFUMAT_POOLS > 1`: spin spirals, `starting_from` and
+  `starting_wavefunctions`, checkpoints (SCF and relaxation), a residual `scf_solver`,
+  `rotate_moments`, magnetic fields and constraints, the analytic force and stress, and every
+  `Calculator.get_*` outside `get_scf`, `get_forces`, `get_stress`, `get_relax`. Not
+  measured: a server node (the numbers are six desktop cores), and the 40-site, 50-core
+  cell the phase was asked for. Not done: splitting a k-point's `(spin, k)` pairs across
+  pools, cost-aware assignment of the k-points (Gamma needs twice the Davidson steps),
+  sharing the k-independent work every pool repeats, and the plane-wave distribution
+  inside one k-point for cells with fewer k-points than pools.
 - **The force on an atom of a spin spiral** — the two components live on different
   plane-wave spheres, so the nonlocal term needs the projectors of both. `dE/dq` (P21) is
   what a spiral has instead.
@@ -23079,3 +23089,78 @@ interior value when any dataset is ultrasoft or PAW (a scalar-relativistic ultra
 included, so the rule has one statement), and `SpinOrbitCoupling` keeps its own refusal for
 an augmented relativistic species. The scaled-coupling test uses the knob rather than
 setting `dvan_so` by hand.
+
+### P124 -- One calculation on many cores: k-point pools, and the local term and the density a chunk of planes at a time. ✅ DONE for the SCF, forces, stress and relaxations on six desktop cores; a server node and the 40-site target are not measured.
+
+**The question**, the user's (2026-09-30): use 50 cores well on one calculation of a
+40-site cell without symmetry, with scalability like QE's. Without symmetry, and for a
+magnet with spin-orbit coupling without time reversal either, the k-points are the whole
+grid, 16 to 36 for usual meshes, so the lever is `pw.x -nk`.
+
+**Threads first, because the plan rested on them.** The "four threads is best" table in
+the "Threads" section of `PERFORMANCE.md` had been taken on a hybrid laptop chip (two
+performance cores with SMT, eight efficiency cores). Re-measured on the six identical
+performance cores of an i5-12600K: a k-point gains 1.08x (si8) and 1.33x (si16) from four
+threads and 2.16x at six on si64; the kernels themselves thread (a bare FFT 2.6 to 3.8x,
+a complex product 3.7 to 5.5x), what an iteration is made of does not. Batching bands loses
+at `band_batch = T` and at every band. So a core spent on another k-point is worth 1.66
+cores spent on a thread at si16's size (`973d47a`).
+
+**The pools** (`defumat/parallel.py`, `4764e9e`). `DEFUMAT_POOLS=P` joins `P` processes
+through `jax.distributed` at import (gloo on a CPU, no MPI installation; the Triton venv has
+no `mpi4py`). A pool walks its own contiguous block of k-points through the streamed store,
+whose passes take the pool's rows, so `at_rows` is not used and the Hamiltonians, the
+eigensolver and the density kernels are the whole calculation's: the Davidson cap is the
+whole set's and every pool compiles the serial executables. The raw `becsum`, density,
+`tau` and `ns` are all-reduced before they are finished; the eigenvalues are gathered so
+the occupations run on the whole set; rank 0's accuracy, final convergence, deadline and
+mixed state are broadcast (`electrons.f90:877-879`). A pool's store is a `PoolStore`,
+deliberately not an `ndarray`, so an unconverted whole-set consumer fails instead of reading
+the wrong k-points. A Fable review of the plan (2026-09-30) found the three consequential
+gaps an `at_rows` design would have had (occupations on the pool's weights, a per-pool
+Davidson cap, the deadline on each rank's clock); the streamed design avoids the first two
+and broadcasts the third.
+
+**Invariance.** Energy after a fixed number of iterations at 1, 2 and 3 pools: silicon at
+27 k-points 9e-15 Ry, a noncollinear magnetic iron metal 1.2e-13, PAW silicon identical,
+a `tb09` meta-GGA 5e-15, a collinear cobalt metal 1.3e-12, O2 with two Fermi levels 5e-15,
+noncollinear DFT+U with spin-orbit coupling 8.6e-14, and the cobalt helix with spin-orbit
+coupling 3.1e-12 at iteration 3. The helix's later spread (2.2e-4 at iteration 8) is not a
+pool defect: one pool with a different k-sum order parts by 8.7e-5 at iteration 6, the
+early SCF being unstable. Removing the all-reduce moves the energy by more than 1e-3 Ry,
+the guard (`tests/unit/test_parallel.py`, slow).
+
+**Against `pw.x -nk` on the same pinned cores** (`pw.x` 7.5 built with Open MPI 4.1.6,
+OpenBLAS and FFTW3). First pass: six pools reached 78, 71 and 58 per cent of `pw.x -nk 6`'s
+speedup on si16 (12 k), si32 (6 k) and a magnetic si16 spinor (6 k). Timed per rank, the
+pool layer was 5 to 7 per cent (collectives 25 ms, waiting 50 to 100 ms); the rest was the
+solve slowing 1.47x with six pools running, and profiling it one operation at a time
+against six copies put all of that in `h_psi` (1.50x) and none in the dense algebra.
+
+**The fix: the local term and the density a chunk of z planes at a time.** Between the two
+z passes everything is plane-local, so `sticks_local` (`1a9d89e`, budget `33a7c25`) and
+`sticks_density` (`90b50bd`, `5dd826b`) take a chunk of planes through the xy transforms and
+the product or `w|psi|^2` while it sits in L2. The local term of 64 bands on si32: 111 ms
+alone and 232 six at once whole, 99 both ways chunked, bit-identical. The budget counts
+the spinor components and the potential (a spinor at 7 or 15 planes fell off a cliff, 163
+ms alone against 124 at 4). CPU default, whole box on a card, `DEFUMAT_PLANE_CHUNK`. Six
+pools after both: **si32 4.59x, 91 per cent of `pw.x`'s speedup; si16 about 4.1x, about 80;
+the spinor 3.19x, 65**. The spinor is held back by its Gamma point needing twice the
+Davidson steps (in `pw.x` too, run alone: 98 steps over 19 iterations against 42 over 15 at
+another k-point), which at one k-point per pool makes the others wait, and by about 240 ms
+of k-independent work every pool repeats, the noncollinear `v_of_rho` 72 ms of it.
+
+**Forces, stress and relaxations** (`df1e3ea`). The chunked force and stress walk each
+pool's rows, all-reduce the forward sums and the pulled-back gradient, and add the global
+gradient once; one pool (single pass) against two or three (pooled walk) agree to 1e-12
+Ry/bohr and 1e-10 in the stress. A relaxation broadcasts rank 0's energy, forces and stress
+before the optimizer's step and takes the same four steps at one and two pools. The
+`Calculator` wraps every `get_*` outside `POOL_AWARE` with a refusal by name.
+
+**Traps met.** A pooled process ignores SIGTERM (`kill -9` needed; the likeliest cause is a
+handler `jax.distributed` installs, not verified). The first run with pools compiles 11 to
+18 s longer (the kernel cache most likely keys on the device topology). An asynchronously
+dispatched density kernel was charged to the all-reduce until the collective's inputs were
+waited for (a 155 ms all-reduce that was 11 ms). A single run on the shared test machine
+read a 13 per cent regression that an A/B across the commit showed to be noise.
+

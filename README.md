@@ -87,6 +87,25 @@ x-axis for a plot, and `bands.plot()` draws one with the zero at the Fermi level
 the SCF found. The gap comes out small because LDA underestimates gaps, which is
 the functional and not the code: Quantum ESPRESSO gives the same answer.
 
+## One calculation on many cores
+
+Inside one k-point the work is too fine-grained for threads to pay much, so the cores go to
+the k-points instead, which is `pw.x -nk`: `DEFUMAT_POOLS` runs one calculation as that many
+processes, each diagonalising its own share of the k-points, and the density and the
+decisions are shared between them every iteration. The script is unchanged; under Slurm the
+launch is
+
+```bash
+export DEFUMAT_POOLS=$SLURM_NTASKS DEFUMAT_THREADS=$SLURM_CPUS_PER_TASK
+srun python3 run.py
+```
+
+and the numbers are those of one process to round-off. The ground state, forces, stress
+and relaxations run this way; everything else refuses by name under pools. On six identical
+desktop cores six pools reach 80 to 91 per cent of `pw.x -nk 6`'s speedup on scalar cells
+and 65 per cent on a magnetic spinor one. The user guide's performance section has the
+launch on one machine, the measurements and what is refused.
+
 ## What you can compute
 
 One functional is written down, the Kohn-Sham total energy of the wavefunctions,

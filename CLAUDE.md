@@ -229,6 +229,18 @@ in `docs/features.tex`'s amber boxes.
   density is built not to look like it. A spin-polarized state, a spiral, DFT+U, an element
   with a **core** and a *fixed* Elk density are refused by name.
 
+**One calculation on many cores** (P124, `defumat/parallel.py`): `DEFUMAT_POOLS` runs
+one calculation as that many processes by k-point, `pw.x -nk`, joined through
+`jax.distributed` at import. A pool walks its own rows through the **streamed** store, the
+raw sums over k are all-reduced before they are finished, the occupations run on the whole
+set from gathered eigenvalues, and **every decision is broadcast from rank 0**, since
+pools with unequal thread counts can differ in the last bit. A pool's store is a
+`PoolStore`, not an `ndarray`, so a whole-set consumer fails instead of misreading it. The
+SCF, forces, stress and relaxations are pool-aware; every other `Calculator.get_*`
+refuses by name. On a CPU the local term and the density go through the grid a chunk of
+`z` planes at a time (`sticks_local`, `sticks_density`, `DEFUMAT_PLANE_CHUNK`), which is
+what keeps a core from slowing down when others share its memory.
+
 **Gamma-only storage** (P68) is a **memory** feature rather than a speed one:
 `K_POINTS gamma` stores one plane wave of each `(G, -G)` pair, which halves `npwx` and
 every array a band lives in — 96 GB against 189 on a 157-atom slab. **Only the

@@ -7220,6 +7220,104 @@ and its SCF iteration 1.40~s against 1.28~s. On two atoms it is the other way,
 batching dials it is a loop bound over an exact sum and is invisible in a result
 beyond round-off.
 
+\textbf{One calculation on many cores: $k$-point pools.} What does a core buy
+when it is given its own $k$-points instead of a share of one $k$-point's
+threads? Inside one $k$-point the work is a chain of operations each the size of
+one band's transform or a subspace product over a few dozen bands, and threads
+pay little for it: on six identical desktop cores a $k$-point gains 1.33x from
+four threads at sixteen atoms and 2.16x from six at sixty-four. So the cores go
+to the $k$-points, which is \code{pw.x -nk}: \code{DEFUMAT\_POOLS} runs one
+calculation as that many processes, each holding and diagonalising its own
+contiguous block of $k$-points, and the pools meet where \qe's do --- the raw
+sums over $k$ (the density, \code{becsum}, $\tau$, $n_s$) are all-reduced before
+they are finished, the eigenvalues are gathered so that every pool evaluates the
+occupations on the whole set, and rank~0's accuracy, convergence decision and
+mixed density are broadcast so that no pool can decide differently. The numbers
+are those of one process to round-off; the pool count changes only the order the
+$k$ contributions are added in. A run without symmetry --- a magnet with
+spin-orbit coupling, a texture no crystal operation keeps --- has the whole grid
+as its $k$-points, which is where pools pay most. Launched by hand on one machine,
+each pool with its rank, one coordinator address and its own core:
+
+\begin{shcode}
+export DEFUMAT_POOLS=2 DEFUMAT_COORDINATOR=localhost:23456 DEFUMAT_THREADS=1 JAX_PLATFORMS=cpu
+DEFUMAT_POOL_RANK=0 taskset -c 0 python3 run.py &
+DEFUMAT_POOL_RANK=1 taskset -c 2 python3 run.py
+\end{shcode}
+
+\noindent with \code{run.py} an ordinary script, which every pool runs whole:
+
+\begin{lstlisting}[language=Python]
+from defumat import Calculator
+from defumat.parallel import current_pools
+
+calc = Calculator.from_file("scf.in")
+result = calc.get_scf()
+forces = calc.get_forces()
+if current_pools().rank == 0:
+    print(result.total_energy, forces.max_force)
+\end{lstlisting}
+
+\noindent Under Slurm the rank and the coordinator come from the job, so
+\code{export DEFUMAT\_POOLS=\$SLURM\_NTASKS DEFUMAT\_THREADS=\$SLURM\_CPUS\_PER\_TASK}
+and \code{srun python3 run.py} is the whole launch. \code{get\_scf},
+\code{get\_forces}, \code{get\_stress} and \code{get\_relax} run under pools: the
+force and the stress walk each pool's rows and reduce, and a relaxation steps
+every pool's optimizer from rank~0's energy, forces and stress. On displaced
+silicon at eight $k$-points the forces agree with one process to
+$10^{-12}$~Ry/bohr and the stress to $10^{-10}$, and a relaxation takes the same
+steps.
+
+\textbf{What pools measured against \code{pw.x -nk}.} Six identical cores of an
+i5-12600K, every defumat process and every \code{pw.x} MPI rank pinned to its own
+core, cells without symmetry, speedup over the same code on one core:
+
+\begin{center}
+\begin{tabular}{lcccc}
+\toprule
+cell, $k$-points & 1 process $\times$ 6 threads & 6 pools $\times$ 1 core & \code{pw.x -nk 6} & share of \qe's \\
+\midrule
+si16, 12 & 1.35x & about 4.1x & 5.09x & about 80\% \\
+si32, 6 & 1.70x & 4.59x & 5.06x & 91\% \\
+si16 magnetic spinor, 6 & 1.33x & 3.19x & 4.92x & 65\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent What the pool layer itself costs is 5--7\% of an iteration (the
+collectives about 1\%, the rest waiting for the slowest pool); the spinor is held
+back by its $\Gamma$ point needing twice the Davidson steps of the other
+$k$-points --- \code{pw.x} shows the same, run alone --- and by the
+$k$-independent work every pool repeats. \code{PERFORMANCE.md} has the timings,
+the per-rank breakdown and the one A/B that a noisy single run needed.
+
+\textbf{The local term and the density a chunk of planes at a time.} Six processes
+sharing a memory system slowed \code{h\_psi} 1.5x where the dense algebra did not
+notice them, because each band's box was streamed through the shared cache
+several times. Between the two $z$ transforms, which run on the sticks,
+everything is plane-local, so on a CPU the local term and the density take a
+chunk of $z$ planes through the $xy$ transforms and the product (or
+$w|\psi|^2$) while it sits in a core's own cache: on si32's box the local term of
+64 bands went from 111~ms alone and 232~ms six at once to 99~ms both ways, with
+the same answer. The chunk is sized from a 384~KB budget that counts the spinor
+components and the potential's; \code{DEFUMAT\_PLANE\_CHUNK} takes a plane count,
+or \code{off} for the whole box, which is what a GPU keeps.
+
+\begin{refuses}
+Under \code{DEFUMAT\_POOLS} greater than one, refused by name before anything
+runs: more pools than $k$-points; a spin spiral (its two components live on two
+spheres); \code{starting\_from} and \code{starting\_wavefunctions} (a whole-set
+span); a checkpoint, in the SCF and in a relaxation (the store is per pool); a
+residual \code{scf\_solver}; \code{rotate\_moments}; a magnetic field or a
+constraint (its controller has not been checked to decide identically on every
+pool); the analytic force and stress (they read every $k$-point's states); and
+every \code{Calculator} method outside \code{get\_scf}, \code{get\_forces},
+\code{get\_stress} and \code{get\_relax}. A PAW noncollinear run does not report
+its orientation torque under pools, since its one-centre part reads the states.
+A pooled process ignores SIGTERM, so \code{timeout} and a scheduler's warning do
+not stop it; \code{max\_seconds} is the graceful stop and SIGKILL the forced one.
+\end{refuses}
+
 \textbf{Precision.} Every dtype comes from \code{config.Precision}; x64 is
 enabled before any array exists, and all validation is float64. float32 is a
 performance mode and \textbf{never one a correctness claim is made in}.

@@ -90,10 +90,10 @@ for name in ("si-1k.in", "si-1k-ecut40.in"):
                                    exact_ms / dav_ms, agreement))
 ```
 
-      si-1k.in          npw   180   form H + eigh      5.3 ms   Davidson    4.6 ms  ( 1.2x)   agree to 1e-13 Ry
+      si-1k.in          npw   180   form H + eigh     13.9 ms   Davidson   10.9 ms  ( 1.3x)   agree to 1e-13 Ry
 
 
-      si-1k-ecut40.in   npw  1131   form H + eigh    497.5 ms   Davidson   29.9 ms  (16.7x)   agree to 1e-13 Ry
+      si-1k-ecut40.in   npw  1131   form H + eigh   1256.6 ms   Davidson   72.2 ms  (17.4x)   agree to 1e-13 Ry
 
 
 ## Asking for only as much accuracy as the density deserves
@@ -162,10 +162,10 @@ for label, variant in (("full grid", full), ("irreducible wedge", wedge)):
       48 symmetry operations
 
 
-      full grid          8 k-points      8.0 ms/iteration   E = -15.794495571 Ry
+      full grid          8 k-points     25.1 ms/iteration   E = -15.794495571 Ry
 
 
-      irreducible wedge  2 k-points      3.6 ms/iteration   E = -15.794495571 Ry
+      irreducible wedge  2 k-points     12.9 ms/iteration   E = -15.794495571 Ry
 
 
 ## Against Quantum ESPRESSO, single core
@@ -187,6 +187,123 @@ for like statement about cost, and it says a production-sized cell is within rea
 core. The parallel axis beyond that is the k-points, which are independent of each other
 and never mixed until the density is accumulated.
 
+## One calculation on many cores: k-point pools
+
+What does a core buy when it is given its own k-points instead of a share of one k-point's
+threads? Inside one k-point the work is a chain of operations each the size of one band's
+transform, too fine for threads to pay much, so the cores go to the k-points, which is
+`pw.x -nk`. `DEFUMAT_POOLS` runs one calculation as that many processes, each diagonalising
+its own block of k-points; the density and the decisions are shared every iteration, and the
+numbers are those of one process to round-off. Below, silicon with one atom displaced, on a
+2x2x2 grid without symmetry (eight k-points), as one process and as two pools; the same
+script runs in every pool.
+
+
+```python
+import json, os, socket, subprocess, sys, tempfile, textwrap
+
+SCRIPT = textwrap.dedent("""
+    import json, sys, warnings
+    warnings.simplefilter("ignore")
+    from defumat import Calculator
+    from defumat.parallel import current_pools
+    calc = Calculator.from_file("scf.in", pseudo_dir=sys.argv[1], announce=False)
+    result = calc.get_scf(conv_thr=1e-10)
+    forces = calc.get_forces()
+    if current_pools().rank == 0:
+        print(json.dumps({"energy": result.total_energy, "max_force": forces.max_force}))
+""")
+
+source = (BENCH / "si-1k.in").read_text()
+source = source[: source.index("K_POINTS")] + "K_POINTS automatic\n 2 2 2 0 0 0\n"
+source = source.replace("ecutwfc=12.0", "ecutwfc=12.0, nosym=.true., noinv=.true.")
+source = source.replace(" Si 0.25 0.25 0.25", " Si 0.27 0.25 0.24")
+work = Path(tempfile.mkdtemp())
+(work / "scf.in").write_text(source)
+
+
+def run_pools(size):
+    """The script as `size` pools, each on its own core; rank 0's line back."""
+    with socket.socket() as sock:
+        sock.bind(("localhost", 0))
+        port = sock.getsockname()[1]
+    base = {k: v for k, v in os.environ.items() if not k.startswith("DEFUMAT_POOL")}
+    base.update(JAX_PLATFORMS="cpu", DEFUMAT_THREADS="1",
+                PYTHONPATH=str(Path("..").resolve()))
+    processes = []
+    for rank in range(size):
+        env = dict(base)
+        if size > 1:
+            env.update(DEFUMAT_POOLS=str(size), DEFUMAT_POOL_RANK=str(rank),
+                       DEFUMAT_COORDINATOR=f"localhost:{port}")
+        processes.append(subprocess.Popen(
+            [sys.executable, "-c", SCRIPT, str(PSEUDO.resolve())], cwd=work, env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True))
+    lines = [process.communicate(timeout=600)[0] for process in processes]
+    return json.loads(lines[0].strip().splitlines()[-1])
+
+
+one, two = run_pools(1), run_pools(2)
+print(f"one process   E = {one['energy']:.10f} Ry   max |F| = {one['max_force']:.10f} Ry/bohr")
+print(f"two pools     E = {two['energy']:.10f} Ry   max |F| = {two['max_force']:.10f} Ry/bohr")
+print(f"difference    {abs(one['energy'] - two['energy']):.1e} Ry   "
+      f"{abs(one['max_force'] - two['max_force']):.1e} Ry/bohr")
+```
+
+    one process   E = -15.6047514426 Ry   max |F| = 0.0751105304 Ry/bohr
+    two pools     E = -15.6047514426 Ry   max |F| = 0.0751105304 Ry/bohr
+    difference    1.8e-15 Ry   8.3e-16 Ry/bohr
+
+
+The two agree to round-off, the energy and the force alike: one process takes the force
+from a single gradient over every k-point, the two pools each walk their own and add the
+results, and those are two routes to the same derivative.
+
+What the pools are worth is a measurement on identical cores, so it is quoted here rather
+than re-run: six performance cores of an i5-12600K, every process and every `pw.x` MPI rank
+pinned to its own core, cells without symmetry, speedup over the same code on one core.
+
+
+```python
+cells = ["si16, 12 k-points", "si32, 6 k-points", "si16 magnetic spinor,\n6 k-points"]
+threads = [1.35, 1.70, 1.33]    # one process, six threads
+pools = [4.1, 4.59, 3.19]       # six pools, one core each
+qe = [5.09, 5.06, 4.92]         # pw.x -nk 6, six ranks
+
+fig, ax = plt.subplots(figsize=(7.5, 4.2))
+x = np.arange(len(cells))
+width = 0.26
+series = [("defumat, 1 process x 6 threads", threads, "#2a78d6"),
+          ("defumat, 6 pools x 1 core", pools, "#eb6834"),
+          ("pw.x -nk 6", qe, "#1baf7a")]
+for i, (label, values, color) in enumerate(series):
+    bars = ax.bar(x + (i - 1) * width, values, width - 0.03, label=label, color=color)
+    ax.bar_label(bars, labels=[f"{v:.2f}x" for v in values], padding=2, fontsize=8,
+                 color="#52514e")
+ax.axhline(6, color="#52514e", linestyle="--", linewidth=1)
+ax.text(len(cells) - 0.5, 6.08, "ideal, 6 cores", ha="right", va="bottom", fontsize=8,
+        color="#52514e")
+ax.set_xticks(x, cells)
+ax.set_ylabel("speedup over one core")
+ax.set_ylim(0, 6.8)
+ax.spines[["top", "right"]].set_visible(False)
+ax.legend(frameon=False, fontsize=8, loc="upper left", ncols=3,
+          bbox_to_anchor=(0, 1.12))
+fig.tight_layout()
+plt.show()
+```
+
+
+    
+![png](03_eigensolver_and_performance_files/03_eigensolver_and_performance_12_0.png)
+    
+
+
+Six pools give what threads cannot, about four times one core on the scalar cells, 80 to 91
+per cent of `pw.x`'s own speedup there. The spinor cell reaches 65 per cent, and the reason
+is physical rather than the pools': its Gamma point needs twice the Davidson steps of the
+other k-points, in `pw.x` too, and with one k-point per pool the others wait for it.
+
 ---
 `PERFORMANCE.md` carries the full breakdown. The tests behind this notebook:
-`tests/unit/test_solvers.py`, `tests/regression/test_batching_scf.py`.
+`tests/unit/test_solvers.py`, `tests/regression/test_batching_scf.py`, `tests/unit/test_parallel.py`, `tests/unit/test_plane_chunk.py`.
