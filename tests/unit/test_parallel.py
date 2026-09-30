@@ -55,6 +55,14 @@ K_POINTS automatic
  2 2 2 0 0 0
 """
 
+# The regime the pools are for: a noncollinear magnet (so no time reversal),
+# ultrasoft, smeared, without symmetry -- benchmarks/fe-mag-1k.in on a 2x2x2 grid.
+IRON_NONCOLLINEAR_8K = (REPO / "benchmarks" / "fe-mag-1k.in").read_text()
+IRON_NONCOLLINEAR_8K = IRON_NONCOLLINEAR_8K[: IRON_NONCOLLINEAR_8K.upper().index("K_POINTS")] \
+    + "K_POINTS automatic\n 2 2 2 0 0 0\n"
+IRON_NONCOLLINEAR_8K = IRON_NONCOLLINEAR_8K.replace(
+    "&system", "&system\n  nosym = .true., noinv = .true.,", 1)
+
 
 class _FakeCommunicator:
     def __init__(self, size, rank):
@@ -201,6 +209,7 @@ SCF_SCRIPT = textwrap.dedent("""
     from defumat.scf.driver import run_scf
     from defumat.system import build_system
     text, drop_reduce = sys.argv[1], sys.argv[2] == "1"
+    iterations = int(sys.argv[3]) if len(sys.argv) > 3 else 100
     if drop_reduce:
         Pools.allreduce_sum = lambda self, tree: tree
     with tempfile.NamedTemporaryFile("w", suffix=".in", delete=False) as f:
@@ -208,7 +217,8 @@ SCF_SCRIPT = textwrap.dedent("""
     system = build_system(read_pw_input(Path(f.name)))
     pseudos = tuple(read_upf(Path("tests/data/pseudo") / s.pseudo_file)
                     for s in system.structure.species)
-    result = run_scf(system, pseudos, conv_thr=1e-12)
+    result = run_scf(system, pseudos, conv_thr=1e-12 if iterations == 100 else 1e-16,
+                     max_iterations=iterations)
     print(json.dumps({"rank": current_pools().rank, "energy": float(result.total_energy),
                       "iterations": result.iterations,
                       "eigenvalues": np.asarray(result.eigenvalues).ravel().tolist(),
@@ -244,3 +254,23 @@ def test_the_invariance_test_sees_a_missing_reduction(serial_silicon):
     """The guard: pools that each sum only their own share must fail the test above."""
     broken = _run_pools(SCF_SCRIPT, 2, SILICON_8K, 1)
     assert abs(broken[0]["energy"] - serial_silicon["energy"]) > 1e-3
+
+
+@pytest.mark.slow
+def test_pools_reproduce_one_on_a_noncollinear_magnet():
+    """Iron with a noncollinear moment, ultrasoft, smeared, 8 k-points, no symmetry.
+
+    Compared after eight iterations rather than at convergence: the pools do the
+    same arithmetic up to the order of the k sums, so a pool defect shows at any
+    iteration, and this SCF converges slowly. Measured 1.2e-13 Ry at 1, 2 and 3
+    pools. The four-atom cobalt helix with spin-orbit coupling
+    (``tests/data/qe/co-helix4-soc.in``) is *not* usable here: its early SCF is
+    unstable enough that one pool with a different k-sum order parts by 8.7e-5 Ry
+    at iteration 6, so only its first three iterations (3.1e-12 across pools)
+    test anything, and it is too slow to converge in a test.
+    """
+    serial = _run_pools(SCF_SCRIPT, 1, IRON_NONCOLLINEAR_8K, 0, 8)[0]
+    pooled = _run_pools(SCF_SCRIPT, 2, IRON_NONCOLLINEAR_8K, 0, 8)
+    for result in pooled:
+        assert abs(result["energy"] - serial["energy"]) < 1e-10
+        assert result["iterations"] == serial["iterations"] == 8
