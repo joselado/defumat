@@ -36,6 +36,16 @@ the part that still grows with the mesh.
 
 The weights of a padded chunk's repeated rows are **zero**, so the padding
 contributes nothing to a sum; a padded solve is computed and discarded.
+
+**A k-point pool walks only its own rows** (:mod:`defumat.parallel`). Its
+store is a :class:`~defumat.parallel.PoolStore`, whose ``rows`` name the global
+k index of each of its rows: :func:`stream_start` builds one when handed
+``rows``, and :func:`stream_diagonalize` and :func:`stream_densities` walk its
+positions and address every per-k table, weight and threshold by the global
+row. The eigenvalues come back for the pool's rows only, and the raw sums over
+k are handed to ``reduce`` before they are finished, which is where the pools
+add their shares; a single pool passes the identity, and a plain ``ndarray``
+store is the whole set with ``rows = arange(nk)``.
 """
 
 from __future__ import annotations
@@ -45,6 +55,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.batching import k_chunks
+from defumat.parallel import PoolStore
 
 __all__ = ["stream_start", "stream_diagonalize", "stream_densities",
            "stream_eigenvalues", "stream_states", "stream_becsum",
@@ -68,6 +79,19 @@ def is_host_store(wavefunctions) -> bool:
     return isinstance(wavefunctions, np.ndarray) and wavefunctions.ndim == 4
 
 
+def _unwrap(store):
+    """``(array, global rows)`` of a store: a pool's rows, or the whole set."""
+    if isinstance(store, PoolStore):
+        return store.array, store.rows
+    return store, np.arange(store.shape[1])
+
+
+def _local_chunks(rows, batch):
+    """``(positions, global rows, live)`` for each chunk of a store's rows."""
+    for positions, live in k_chunks(len(rows), batch):
+        yield positions, rows[positions], live
+
+
 def _chunk_weights(weights: np.ndarray, rows, live: int):
     """One chunk's weights, with a padded chunk's repeated rows weighted zero."""
     w = weights[:, rows].copy()
@@ -75,17 +99,25 @@ def _chunk_weights(weights: np.ndarray, rows, live: int):
     return jnp.asarray(w)
 
 
-def stream_start(calculation, hamiltonians, nbnd: int, span=None) -> np.ndarray:
-    """``(nspin, nk, nbnd, ndim)`` starting states, built chunk by chunk into host memory."""
+def stream_start(calculation, hamiltonians, nbnd: int, span=None, rows=None):
+    """``(nspin, nk, nbnd, ndim)`` starting states, built chunk by chunk into host memory.
+
+    ``rows`` builds a k-point pool's share only, and returns it as a
+    :class:`~defumat.parallel.PoolStore`; every piece of the start is per k-point
+    (``Calculation.starting_wavefunctions``), so the shares are the whole set's
+    rows.
+    """
     nk = hamiltonians[0].nk
+    pooled = rows is not None
+    rows = np.arange(nk) if rows is None else np.asarray(rows)
     store = None
-    for rows, live in k_chunks(nk, calculation.k_batch):
+    for positions, chunk_rows, live in _local_chunks(rows, calculation.k_batch):
         chunk = np.asarray(calculation.starting_wavefunctions(
-            hamiltonians, nbnd, span=span, rows=rows))
+            hamiltonians, nbnd, span=span, rows=chunk_rows))
         if store is None:
-            store = np.empty((chunk.shape[0], nk) + chunk.shape[2:], chunk.dtype)
-        store[:, rows[:live]] = chunk[:, :live]
-    return store
+            store = np.empty((chunk.shape[0], len(rows)) + chunk.shape[2:], chunk.dtype)
+        store[:, positions[:live]] = chunk[:, :live]
+    return PoolStore(store, rows, nk) if pooled else store
 
 
 def stream_diagonalize(calculation, hamiltonians, nbnd: int, store: np.ndarray,
@@ -96,7 +128,9 @@ def stream_diagonalize(calculation, hamiltonians, nbnd: int, store: np.ndarray,
     new ones. Returns ``(eigenvalues, steps, unsettled)`` shaped as
     :meth:`~defumat.scf.driver.Calculation.diagonalize` returns them with
     ``return_steps``, as numpy arrays. ``ethr`` is a scalar or the
-    ``(nspin, nk, nbnd)`` per-band array, as there.
+    ``(nspin, nk, nbnd)`` per-band array, as there. A
+    :class:`~defumat.parallel.PoolStore` is solved at its own rows only, and the
+    three arrays then carry those rows, ``(nspin, len(store.rows), ...)``.
 
     **Chunks are settled one at a time, and launching the next one early was
     measured not to help.** On a GTX 1060 (jax 0.11.1) the call that launches a
@@ -117,33 +151,36 @@ def stream_diagonalize(calculation, hamiltonians, nbnd: int, store: np.ndarray,
         raise ValueError(
             f"ethr must be a scalar or a (nspin, nk, nbnd) array, got rank {rank}")
     extra = {} if calculation.david is None else {"david": calculation.david}
-    nspin, nk = len(hamiltonians), hamiltonians[0].nk
+    array, rows = _unwrap(store)
+    nspin, nlocal = len(hamiltonians), len(rows)
     eigenvalues = steps = unsettled = None
     for spin, hamiltonian in enumerate(hamiltonians):
+        # A per-band threshold stays the whole set's: the solve picks its rows
+        # through ``indices``, which are global.
         threshold = ethr[spin] if rank == 3 else ethr
-        for rows, live in k_chunks(nk, calculation.k_batch):
+        for positions, chunk_rows, live in _local_chunks(rows, calculation.k_batch):
             # The chunk's starting block is donated to the solve, which writes
             # its states into the same buffer; the host store still holds the
             # block, which is what a robust retry is handed instead
             # (``GPU-MEMORY-NEXT.md`` item 11).
             energies, states, taken, stuck = calculation.eigensolver(
-                hamiltonian, nbnd, _to_device(store[spin, rows]), threshold,
+                hamiltonian, nbnd, _to_device(array[spin, positions]), threshold,
                 k_batch=calculation.k_batch, return_steps=True,
-                indices=jnp.asarray(rows),
-                psi0_again=lambda spin=spin, rows=rows: _to_device(
-                    store[spin, rows]),
+                indices=jnp.asarray(chunk_rows),
+                psi0_again=lambda spin=spin, positions=positions: _to_device(
+                    array[spin, positions]),
                 **extra,
             )
             energies = np.asarray(energies)
             if eigenvalues is None:
-                eigenvalues = np.empty((nspin, nk, nbnd), energies.dtype)
-                steps = np.empty((nspin, nk), np.asarray(taken).dtype)
-                unsettled = np.empty((nspin, nk), np.asarray(stuck).dtype)
-            live_rows = rows[:live]
-            store[spin, live_rows] = np.asarray(states)[:live]
-            eigenvalues[spin, live_rows] = energies[:live]
-            steps[spin, live_rows] = np.asarray(taken)[:live]
-            unsettled[spin, live_rows] = np.asarray(stuck)[:live]
+                eigenvalues = np.empty((nspin, nlocal, nbnd), energies.dtype)
+                steps = np.empty((nspin, nlocal), np.asarray(taken).dtype)
+                unsettled = np.empty((nspin, nlocal), np.asarray(stuck).dtype)
+            written = positions[:live]
+            array[spin, written] = np.asarray(states)[:live]
+            eigenvalues[spin, written] = energies[:live]
+            steps[spin, written] = np.asarray(taken)[:live]
+            unsettled[spin, written] = np.asarray(stuck)[:live]
     return eigenvalues, steps, unsettled
 
 
@@ -226,9 +263,9 @@ def stream_becsum(calculation, store: np.ndarray, weights) -> tuple:
     return calculation.finish_becsum(total)
 
 
-def stream_densities(calculation, store: np.ndarray, weights, *,
+def stream_densities(calculation, store, weights, *,
                      kinetic: bool = False, hubbard: bool = False,
-                     becsum_=None):
+                     becsum_=None, reduce=None):
     """``(becsum, rho, tau, ns)`` from the streamed store, each finished once.
 
     ``tau`` and ``ns`` are ``None`` unless asked for. ``becsum`` is ``()`` on a
@@ -240,12 +277,12 @@ def stream_densities(calculation, store: np.ndarray, weights, *,
     in.
     """
     weights = np.asarray(weights)
-    nk = store.shape[1]
+    array, store_rows = _unwrap(store)
     accumulate = becsum_ is None
     rho = tau = ns = None
-    for rows, live in k_chunks(nk, calculation.k_batch):
+    for positions, rows, live in _local_chunks(store_rows, calculation.k_batch):
         w = _chunk_weights(weights, rows, live)
-        psi = _to_device(store[:, rows])
+        psi = _to_device(array[:, positions])
         if accumulate:
             becsum_ = _add(becsum_, calculation.becsum(psi, w, rows=rows,
                                                        symmetrize=False))
@@ -257,6 +294,11 @@ def stream_densities(calculation, store: np.ndarray, weights, *,
             ns = _add(ns, calculation.occupation_matrix(
                 psi, w, rows=rows, symmetrize=False))
         del psi
+    if reduce is not None:
+        raw_becsum, rho, tau, ns = reduce(
+            (becsum_ if accumulate else (), rho, tau, ns))
+        if accumulate:
+            becsum_ = raw_becsum
     if accumulate and becsum_:
         becsum_ = calculation.finish_becsum(becsum_)
     rho = calculation.finish_density(rho, becsum_)

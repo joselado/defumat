@@ -84,8 +84,23 @@ def _limit_thread_pool() -> None:
         return
     try:
         available = sorted(affinity(0))
+        # **Several k-point pools sharing one mask take disjoint slices of it**
+        # (``defumat.parallel``): a launcher that starts every pool with the
+        # node's whole mask would otherwise pin them all to the same first
+        # ``wanted`` CPUs. The slice is this pool's local rank on the node; a
+        # launcher that already gave each pool its own mask of ``wanted`` CPUs
+        # (``srun --cpu-bind=cores``) leaves no room for an offset, and the
+        # first ``wanted`` of that mask are the pool's own.
+        start = 0
+        if (_environ_get("DEFUMAT_POOLS", "").strip() or "1") != "1":
+            local = next((_environ_get(name, "").strip() for name in
+                          ("DEFUMAT_POOL_LOCAL_RANK", "SLURM_LOCALID",
+                           "DEFUMAT_POOL_RANK") if _environ_get(name, "").strip()),
+                         "0")
+            if (int(local) + 1) * wanted <= len(available):
+                start = int(local) * wanted
         if 0 < wanted < len(available):
-            _os.sched_setaffinity(0, set(available[:wanted]))
+            _os.sched_setaffinity(0, set(available[start:start + wanted]))
     except OSError as error:  # pragma: no cover - depends on the scheduler
         _warnings.warn(f"could not limit the CPU affinity: {error}",
                        RuntimeWarning, stacklevel=2)
@@ -167,6 +182,21 @@ def _enable_compilation_cache() -> None:
 
 
 _enable_compilation_cache()
+
+
+def _start_pools() -> None:
+    """Join the k-point pools ``DEFUMAT_POOLS`` asks for, before any array exists.
+
+    ``jax.distributed.initialize`` must precede the first computation, so it
+    cannot wait for a driver to ask; see :mod:`defumat.parallel`. A no-op for
+    one pool.
+    """
+    from defumat.parallel import start_from_environment
+
+    start_from_environment()
+
+
+_start_pools()
 
 from defumat import config, units  # noqa: E402
 from defumat.config import DOUBLE, SINGLE, Precision  # noqa: E402

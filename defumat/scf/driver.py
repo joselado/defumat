@@ -110,6 +110,7 @@ from defumat.batching import (
 from defumat.scf.continuation import (
     ContinuedState, continued_state, depolarize_tau,
 )
+from defumat.parallel import PoolStore, current_pools
 from defumat.scf.streaming import (
     is_host_store, stream_becsum, stream_densities, stream_diagonalize,
     stream_start,
@@ -5716,6 +5717,44 @@ def _refuse_rotating_moments(calculation, field, coupled: bool) -> None:
         )
 
 
+def _refuse_under_pools(pools, calculation, *, starting_from,
+                        starting_wavefunctions, checkpointing, tstress,
+                        residual_solver, rotate_moments, field) -> None:
+    """Refuse by name what the k-point pools do not cover yet.
+
+    Each of these reads or writes the whole set's wavefunctions, or takes a
+    decision from a value only one pool holds, and none has been made
+    pool-aware; running it anyway would return a rank-local number or leave
+    one pool waiting at a collective the others have left.
+    """
+    nk = calculation.system.kpoints.nk
+    refused = []
+    if nk < pools.size:
+        refused.append(f"{pools.size} pools for {nk} k-points (a pool with no "
+                       "k-point has nothing to do)")
+    if calculation.spiral:
+        refused.append("a spin spiral (its basis list is the doubled k + q/2, "
+                       "k - q/2 one)")
+    if starting_from is not None or starting_wavefunctions is not None:
+        refused.append("starting_from / starting_wavefunctions (a whole-set span)")
+    if checkpointing:
+        refused.append("checkpoint_dir (the store is per pool)")
+    if tstress:
+        refused.append("tstress (the stress reads every k-point's states)")
+    if residual_solver:
+        refused.append("a residual scf_solver (it differentiates the whole set)")
+    if rotate_moments:
+        refused.append("rotate_moments (its PAW torque reads every k-point's "
+                       "states)")
+    if field is not None:
+        refused.append("a magnetic field or constraint (its controller has not "
+                       "been checked to decide identically on every pool)")
+    if refused:
+        raise NotImplementedError(
+            "not available with k-point pools yet: " + "; ".join(refused)
+            + ". Run with DEFUMAT_POOLS unset (one pool) for these.")
+
+
 def run_scf(
     system: System,
     pseudos: tuple[Pseudopotential, ...],
@@ -5758,6 +5797,7 @@ def run_scf(
     rotation_start: float = 1.0e-5,
     rotation_freeze_phase: bool = True,
     rotation_flat_curvature: float | None = None,
+    pools=None,
 ) -> SCFResult:
     """Run the self-consistent field loop to convergence.
 
@@ -5899,7 +5939,23 @@ def run_scf(
     ``tstress = .true.``, and an optional diagnostic must not be able to fail
     the SCF that produced it. Passing ``tstress=True`` explicitly raises
     instead, because then the caller wants the number.
+
+    **k-point pools** (:mod:`defumat.parallel`, ``pw.x -nk``): ``pools`` is a
+    :class:`~defumat.parallel.Pools`, by default this process's, which is one
+    pool unless ``DEFUMAT_POOLS`` started more. With more than one, every
+    process runs this function on the same input, each diagonalises and sums
+    its own share of the k-points through the streamed store, the raw sums over
+    k are all-reduced before they are finished, the eigenvalues are gathered for
+    the occupations, and rank 0's ``accuracy``, ``converged``, deadline and
+    mixed state are broadcast so that no pool can take a different decision.
+    Only rank 0 prints. The result's ``wavefunctions`` is the pool's own
+    :class:`~defumat.parallel.PoolStore`, which no whole-set consumer can read.
+    What phase 1 does not cover is refused by name before the loop.
     """
+    pools = current_pools() if pools is None else pools
+    pooled = pools.size > 1
+    if pooled and pools.rank != 0:
+        verbose = False
     calculation = calculation or Calculation(
         system, pseudos, diagonalization=diagonalization, k_batch=k_batch,
         david=david, projectors=projectors, memory_mode=memory_mode,
@@ -6336,6 +6392,32 @@ def run_scf(
     # store in host memory for the whole run and moves one k-chunk at a time
     # through every pass that reads it (:mod:`defumat.scf.streaming`).
     wfc_store = resolve_wfc_store(wfc_store, calculation.memory_mode)
+    if pooled:
+        _refuse_under_pools(
+            pools, calculation, starting_from=starting_from,
+            starting_wavefunctions=starting_wavefunctions,
+            checkpointing=checkpointing,
+            tstress=system.tstress if tstress is None else tstress,
+            residual_solver=get_scf_solver(scf_solver) is not None,
+            rotate_moments=rotate_moments, field=field,
+        )
+        if track_orientation and calculation.is_paw:
+            # The orientation torque is a diagnostic here (``rotate_moments``
+            # is refused above). Its plane-wave part reads only the reduced
+            # output density, but PAW's one-centre part turns the output
+            # states themselves (``_onecenter_torque``), which a pool holds
+            # only a share of; a torque without that part would be reported as
+            # if it were whole, so none is reported.
+            if verbose:
+                warnings.warn(
+                    "k-point pools: the orientation torque of a PAW "
+                    "noncollinear run is not reported (its one-centre part "
+                    "reads every k-point's states)", RuntimeWarning, stacklevel=2)
+            track_orientation = report_orientation = False
+        # A pool keeps its own rows in host memory and walks them: the
+        # streamed passes are the ones that take ``rows``.
+        wfc_store = "stream"
+        pool_rows = pools.rows(calculation.system.kpoints.nk)
     streaming = wfc_store == "stream"
     if verbose:
         # **What is in force, said once.** All three of these are resolved from
@@ -6493,8 +6575,12 @@ def run_scf(
         # ``init_run`` has already allocated; here one iteration is the price of
         # having a state to write, and a run with no time for one has no time
         # for a restart either.
-        if (iteration > resumed_at + 1 and max_seconds is not None
-                and time.time() - started_at > max_seconds):
+        late = (iteration > resumed_at + 1 and max_seconds is not None
+                and time.time() - started_at > max_seconds)
+        if pooled and max_seconds is not None:
+            # Each rank's clock is its own; rank 0 owns the deadline.
+            late = pools.broadcast_flag(late)
+        if late:
             # ``check_stop_now`` in ``electrons.f90``: the loop stops itself
             # before the scheduler does, so the checkpoint below is written
             # rather than the process killed between two of them. A wall clock
@@ -6529,7 +6615,8 @@ def run_scf(
         if wavefunctions is None:
             if streaming:
                 wavefunctions = stream_start(
-                    calculation, hamiltonians, nbnd, span=starting_wavefunctions)
+                    calculation, hamiltonians, nbnd, span=starting_wavefunctions,
+                    rows=pool_rows if pooled else None)
             else:
                 wavefunctions = calculation.starting_wavefunctions(
                     hamiltonians, nbnd, span=starting_wavefunctions
@@ -6607,6 +6694,14 @@ def run_scf(
                 wavefunctions = park_wavefunctions(wavefunctions, "stream")
                 eigenvalues, steps, unsettled = stream_diagonalize(
                     calculation, hamiltonians, nbnd, wavefunctions, thresholds)
+                if pooled:
+                    # The occupations read every k-point (a Fermi level, the
+                    # tetrahedra), so every pool evaluates them on the whole
+                    # set; the step counts come along for the printed average.
+                    nk_all = calculation.system.kpoints.nk
+                    eigenvalues = pools.gather_k(eigenvalues, nk_all)
+                    steps = pools.gather_k(steps, nk_all)
+                    unsettled = pools.gather_k(unsettled, nk_all)
                 eigenvalues = jnp.asarray(eigenvalues)
             else:
                 wavefunctions = fetch_wavefunctions(wavefunctions)
@@ -6644,6 +6739,7 @@ def run_scf(
                     calculation, wavefunctions, wg,
                     kinetic=tau_state is not None,
                     hubbard=calculation.is_hubbard,
+                    reduce=pools.allreduce_sum if pooled else None,
                 )
                 if tau_state is not None:
                     tau_out = streamed_tau
@@ -6743,6 +6839,10 @@ def run_scf(
                 accuracy += tau_accuracy_term
             else:
                 tau_accuracy_term = 0.0
+            if pooled:
+                # The retry below, the ``ethr`` schedule and the convergence
+                # test all read ``accuracy``: rank 0's is everyone's.
+                accuracy = pools.broadcast_scalar(accuracy)
 
             if iteration > 1 or attempt > 0 or accuracy >= floor:
                 break
@@ -6827,6 +6927,8 @@ def run_scf(
             # reason this option exists: converged only when it has stopped
             # turning as well.
             converged = False
+        if pooled:
+            converged = pools.broadcast_flag(converged)
         if converged:
             # QE's ``vnew``: the potential the last step did *not* apply,
             # V[rho_out] - V[rho_in]. It is zero at exact self-consistency and it
@@ -7071,6 +7173,12 @@ def run_scf(
         )
         if tau_state is not None:
             tau_state = mixed_tau
+        if pooled:
+            # ``electrons.f90:877``: the root pool's mixed density is every
+            # pool's, so that pools whose reductions differ in the last bit (an
+            # unequal thread count is enough) cannot drift apart.
+            rho, becsum_state, ns_state, tau_state = jax.tree_util.tree_map(
+                jnp.asarray, pools.broadcast((rho, becsum_state, ns_state, tau_state)))
         if field is not None:
             # ``reducebf`` (Elk 5.104), and the fixed-spin-moment feedback, both
             # act between iterations -- after the density is mixed and before

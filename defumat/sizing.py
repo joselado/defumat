@@ -1017,7 +1017,7 @@ def speed_mode_fits(system, pseudos, nbnd: int | None = None,
     """
     import jax
 
-    stats = jax.devices()[0].memory_stats()
+    stats = jax.local_devices()[0].memory_stats()
     if not stats:
         return SpeedCheck(fits=True, estimate=0, available=None, headroom=headroom)
     available = int(stats["bytes_limit"]) - int(stats["bytes_in_use"])
@@ -1085,7 +1085,7 @@ def choose_band_batch(system, pseudos, nbnd: int | None = None,
     if available is None:
         import jax
 
-        stats = jax.devices()[0].memory_stats()
+        stats = jax.local_devices()[0].memory_stats()
         if not stats:
             return BandBatchChoice(band_batch=None, fits=True, estimate=0,
                                    available=None, headroom=headroom)

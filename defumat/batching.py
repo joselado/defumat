@@ -974,7 +974,7 @@ def _host_sharding():
     and the answer cannot change inside a process.
     """
     try:
-        device = jax.devices()[0]
+        device = jax.local_devices()[0]
         kinds = {memory.kind for memory in device.addressable_memories()}
         if "pinned_host" not in kinds:
             return None
@@ -986,7 +986,7 @@ def _host_sharding():
 def _device_sharding():
     try:
         return jax.sharding.SingleDeviceSharding(
-            jax.devices()[0], memory_kind="device")
+            jax.local_devices()[0], memory_kind="device")
     except Exception:
         return None
 
@@ -1019,6 +1019,12 @@ def park_wavefunctions(psi, where: str = "device"):
     diagonalisation.
     """
     if psi is None or where == "device":
+        return psi
+    from defumat.parallel import PoolStore
+
+    if isinstance(psi, PoolStore):
+        # A k-point pool's rows already live in host memory and are walked
+        # there; ``np.array`` on one would refuse, as it is meant to.
         return psi
     _not_traced(psi, "parking")
     if where == "stream":
