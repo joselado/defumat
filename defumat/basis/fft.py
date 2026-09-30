@@ -23,6 +23,7 @@ implementation loses time on GPU.
 
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
 
 __all__ = ["scatter_to_box", "gather_from_box", "g_to_r", "r_to_g",
@@ -202,6 +203,71 @@ def sticks_to_r(coefficients: jnp.ndarray, sticks, columns, index) -> jnp.ndarra
     box = jnp.zeros(lead + (n3, n1 * n2), coefficients.dtype)
     box = box.at[..., columns].set(jnp.moveaxis(compact, -1, -2))
     return jnp.fft.ifftn(box.reshape(lead + (n3, n1, n2)), axes=(-2, -1)) * (n1 * n2)
+
+
+def sticks_local(coefficients: jnp.ndarray, sticks, columns, index, apply,
+                 potential: jnp.ndarray, plane_chunk: int) -> jnp.ndarray:
+    """``r_to_sticks(apply(sticks_to_r(c), V))``, a chunk of ``z`` planes at a time.
+
+    Between the two ``z`` passes, which run on the sticks only, everything the
+    local term does is **plane-local**: for one ``z`` the ``xy`` transform, the
+    pointwise product with that plane of ``V`` and the transform back touch that
+    plane and nothing else. So instead of taking the whole ``(n3, n1, n2)`` box
+    through each step in turn -- the ``xy`` pass as two full passes over the
+    box, then the product, then two more -- a chunk of ``plane_chunk`` planes is
+    taken through all of it while it sits in a core's private cache, and only
+    the stick arrays cross the box. ``cft_2xy`` in QE does the plane transforms
+    on the whole ``psic``; this goes one step further and fuses the product in.
+
+    **It is a memory measure, and it is worth most when cores share memory.**
+    On an i5-12600K the local term of 64 bands on si32's ``36x36x144`` box took
+    111 ms whole and 99 ms in 16-plane chunks on one core, and with six copies
+    running at once 232 ms whole against 99 ms chunked: the whole-box path
+    streams each band's 3 MB box through the shared L3 several times and slows
+    2.1x under load, the chunked one does not slow at all (``PERFORMANCE.md``,
+    "The local term a chunk of planes at a time"). The result is the same to the
+    last bit: the same transforms on the same numbers, issued in a different
+    order.
+
+    ``apply(field, v)`` is the pointwise product for one chunk -- ``field * v``
+    for a scalar potential, :func:`~defumat.hamiltonian.noncollinear.spin_multiply`
+    for a 2x2 one -- with ``field`` shaped ``(..., chunk, n1, n2)`` and ``v`` the
+    matching planes of ``potential``, whose last three axes are the stick
+    layout's ``(n3, n1, n2)``. ``coefficients`` may carry any leading axes (a
+    block of bands, the two spinor components); they ride along untouched. The
+    loop over chunks is a ``lax.map``, so it compiles once and differentiates.
+    """
+    n1, n2, n3 = sticks.grid
+    nsticks = sticks.nsticks
+    lead = coefficients.shape[:-1]
+    chunk = max(1, min(int(plane_chunk), n3))
+    nchunks = -(-n3 // chunk)
+    padded = nchunks * chunk
+
+    compact = jnp.zeros(lead + (nsticks * n3,), coefficients.dtype)
+    compact = compact.at[..., index].add(coefficients)
+    compact = jnp.fft.ifft(compact.reshape(lead + (nsticks, n3)), axis=-1) * n3
+
+    # (..., nsticks, n3) -> (nchunks, ..., chunk, nsticks): the planes of each chunk.
+    planes = jnp.moveaxis(compact, -1, -2)
+    planes = jnp.pad(planes, [(0, 0)] * len(lead) + [(0, padded - n3), (0, 0)])
+    planes = jnp.moveaxis(planes.reshape(lead + (nchunks, chunk, nsticks)), -3, 0)
+    vlead = potential.shape[:-3]
+    v = jnp.pad(potential, [(0, 0)] * len(vlead) + [(0, padded - n3), (0, 0), (0, 0)])
+    v = jnp.moveaxis(v.reshape(vlead + (nchunks, chunk, n1, n2)), -4, 0)
+
+    def one_chunk(pair):
+        sticks_here, v_here = pair
+        box = jnp.zeros(lead + (chunk, n1 * n2), coefficients.dtype)
+        box = box.at[..., columns].set(sticks_here)
+        field = jnp.fft.ifftn(box.reshape(lead + (chunk, n1, n2)), axes=(-2, -1)) * (n1 * n2)
+        back = jnp.fft.fftn(apply(field, v_here), axes=(-2, -1)) / (n1 * n2)
+        return back.reshape(lead + (chunk, n1 * n2))[..., columns]
+
+    out = jax.lax.map(one_chunk, (planes, v))
+    out = jnp.moveaxis(out, 0, -3).reshape(lead + (padded, nsticks))[..., :n3, :]
+    out = jnp.fft.fft(jnp.moveaxis(out, -1, -2), axis=-1) / n3
+    return out.reshape(lead + (nsticks * n3,))[..., index]
 
 
 def r_to_sticks(field: jnp.ndarray, sticks, columns, index) -> jnp.ndarray:

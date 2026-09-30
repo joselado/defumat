@@ -36,7 +36,8 @@ import equinox as eqx
 import jax.numpy as jnp
 
 from defumat.basis.fft import (
-    g_to_r, g_to_r_gamma, gamma_inner, gather_from_box, r_to_sticks, sticks_to_r,
+    g_to_r, g_to_r_gamma, gamma_inner, gather_from_box, r_to_sticks, sticks_local,
+    sticks_to_r,
 )
 from defumat.batching import map_bands
 from defumat.pseudo.projectors import Projectors
@@ -98,6 +99,13 @@ class Hamiltonian(eqx.Module):
     #: ``"default"`` defers to the environment and the platform, which is what
     #: a Hamiltonian built outside a calculation gets.
     band_batch: int | None | str = eqx.field(static=True, default="default")
+    #: How many ``z`` planes :meth:`_local` takes through its ``xy`` transforms
+    #: and product at once on the stick path
+    #: (:func:`~defumat.basis.fft.sticks_local`), or ``None`` for the whole box
+    #: (:func:`~defumat.batching.resolve_plane_chunk`). **Static**, since it is a
+    #: shape. ``None`` by default, so that a Hamiltonian built outside a
+    #: calculation keeps the whole-box path it always had.
+    plane_chunk: int | None = eqx.field(static=True, default=None)
 
     @property
     def gamma_only(self) -> bool:
@@ -305,6 +313,16 @@ class Hamiltonian(eqx.Module):
             return map_bands(block, psi, batch=self.band_batch)
 
         columns, index = self.sticks.columns[ik], self.sticks.index[ik]
+
+        if self.plane_chunk is not None:
+            # The same round trip a chunk of ``z`` planes at a time, with the
+            # product fused in, so that a band's box never streams through the
+            # shared cache whole (:func:`~defumat.basis.fft.sticks_local`).
+            def block(states):
+                return sticks_local(states, self.sticks, columns, index,
+                                    jnp.multiply, self.potential_wave, self.plane_chunk)
+
+            return map_bands(block, psi, batch=self.band_batch)
 
         def block(states):
             field = sticks_to_r(states, self.sticks, columns, index)

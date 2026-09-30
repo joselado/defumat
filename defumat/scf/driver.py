@@ -105,7 +105,8 @@ from defumat.pseudo.spinorbit import (
 )
 from defumat.batching import (
     fetch_wavefunctions, k_chunks, map_k, park_wavefunctions, resolve_band_batch,
-    resolve_k_batch, resolve_memory_mode, resolve_projectors, resolve_wfc_store,
+    resolve_k_batch, resolve_memory_mode, resolve_plane_chunk, resolve_projectors,
+    resolve_wfc_store,
 )
 from defumat.scf.continuation import (
     ContinuedState, continued_state, depolarize_tau,
@@ -2062,6 +2063,12 @@ class Calculation:
 
         # QE's FFT layout for the wavefunction transforms; see basis/sticks.py.
         self.sticks = build_sticks(self.fft_index, planewaves.mask, smooth.grid)
+        #: How many ``z`` planes of that layout ``h_psi``'s local term takes
+        #: through its transforms at once, or ``None`` for the whole box
+        #: (:func:`~defumat.batching.resolve_plane_chunk`): a plane budget on a
+        #: CPU, the whole box on an accelerator. Carried by every Hamiltonian.
+        self.plane_chunk = resolve_plane_chunk(
+            smooth.grid, jnp.dtype(system.cell.precision.complex).itemsize)
 
         # The projectors are built in two halves -- the species-dependent
         # columns once, the structure factor per geometry -- so that moving the
@@ -4582,6 +4589,7 @@ class Calculation:
                 deeq=None if deeq is None else deeq[spin],
                 hubbard=None if hubbard is None else hubbard[spin],
                 band_batch=self.band_batch,
+                plane_chunk=self.plane_chunk,
             ))
         return tuple(hamiltonians)
 
@@ -4614,6 +4622,7 @@ class Calculation:
             qq=self.qq_so,
             hubbard=None if hubbard is None else hubbard[0],
             band_batch=self.band_batch,
+            plane_chunk=self.plane_chunk,
         )
 
     def starting_density(self) -> jnp.ndarray:

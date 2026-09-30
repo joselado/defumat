@@ -40,7 +40,9 @@ from __future__ import annotations
 import equinox as eqx
 import jax.numpy as jnp
 
-from defumat.basis.fft import g_to_r, gather_from_box, r_to_sticks, sticks_to_r
+from defumat.basis.fft import (
+    g_to_r, gather_from_box, r_to_sticks, sticks_local, sticks_to_r,
+)
 from defumat.batching import map_bands
 from defumat.pseudo.projectors import Projectors
 
@@ -135,6 +137,11 @@ class SpinorHamiltonian(eqx.Module):
     #: The band dial, as :attr:`Hamiltonian.band_batch
     #: <defumat.hamiltonian.operator.Hamiltonian.band_batch>` carries it.
     band_batch: int | None | str = eqx.field(static=True, default="default")
+    #: The ``z``-plane chunk of the stick path, as :attr:`Hamiltonian.plane_chunk
+    #: <defumat.hamiltonian.operator.Hamiltonian.plane_chunk>` carries it. A
+    #: spiral keeps the whole-box path: its two components have different
+    #: stick layouts.
+    plane_chunk: int | None = eqx.field(static=True, default=None)
 
     @property
     def gamma_only(self) -> bool:
@@ -352,6 +359,12 @@ class SpinorHamiltonian(eqx.Module):
 
         if not self.spiral:
             columns, index = self.sticks.columns[ik], self.sticks.index[ik]
+            if self.plane_chunk is not None:
+                # Both spinor components ride along as a leading axis, and the
+                # 2x2 product is taken plane by plane with the transforms.
+                return sticks_local(components, self.sticks, columns, index,
+                                    spin_multiply, self.potential_wave,
+                                    self.plane_chunk)
             field = sticks_to_r(components, self.sticks, columns, index)
             product = spin_multiply(field, self.potential_wave)
             return r_to_sticks(product, self.sticks, columns, index)

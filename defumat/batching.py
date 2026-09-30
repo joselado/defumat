@@ -332,6 +332,7 @@ from ._envcompat import environ_get
 
 __all__ = ["DEFAULT_K_BATCH", "resolve_k_batch", "map_k", "sum_k",
            "DEFAULT_BAND_BATCH", "resolve_band_batch", "resolve_pair_batch",
+           "PLANE_CHUNK_BYTES", "resolve_plane_chunk",
            "resolve_w_batch",
            "map_bands",
            "sum_bands", "map_axis", "map_windows",
@@ -765,6 +766,51 @@ def _resolve_band_batch(requested: int | None | str = "default") -> int | None:
         raise ValueError(
             f"band batch must be a positive integer or None, got {requested!r}")
     return value
+
+
+#: How many bytes of ``z`` planes the local term takes through its ``xy``
+#: transforms, product and transforms back at once on a CPU
+#: (:func:`~defumat.basis.fft.sticks_local`). Measured on an i5-12600K over the
+#: local term of 64 bands: 16 planes of si32's ``36x36`` (330 KB) and 8 (165 KB)
+#: were within 1 per cent of each other and the best, 36 (740 KB) was 6 per cent
+#: slower and single planes 21 per cent, so the budget sits between the two
+#: best and is meant to stay inside a core's private L2. A plane larger than
+#: the budget is taken one at a time.
+PLANE_CHUNK_BYTES = 384 * 1024
+
+
+def resolve_plane_chunk(grid, itemsize: int,
+                        requested: int | None | str = "default") -> int | None:
+    """The local term's ``z``-plane chunk: an argument, then ``DEFUMAT_PLANE_CHUNK``, then the platform.
+
+    ``None`` takes the whole box through each step in turn, which is what every
+    accelerator does, since a card wants the batch that a cache does not and a
+    loop of plane-sized kernels would be launch-bound there. On a CPU the
+    default is :data:`PLANE_CHUNK_BYTES` worth of planes of the stick layout's
+    ``(n1, n2)``, at least one and at most ``n3``. ``DEFUMAT_PLANE_CHUNK`` takes
+    a plane count, or ``all``/``0``/``off``/``none`` for the whole box. The
+    chunk is not visible in any result: the transforms are the same and only
+    the order they are issued in changes.
+    """
+    n1, n2, n3 = (int(n) for n in grid)
+    if isinstance(requested, str) and requested == "default":
+        setting = (environ_get("DEFUMAT_PLANE_CHUNK", "") or "").strip().lower()
+        if setting:
+            requested = setting
+        elif _backend() != "cpu":
+            return None
+        else:
+            return max(1, min(n3, PLANE_CHUNK_BYTES // max(1, n1 * n2 * int(itemsize))))
+    if requested is None:
+        return None
+    if isinstance(requested, str):
+        if requested in ("all", "0", "off", "none"):
+            return None
+        requested = int(requested)
+    value = int(requested)
+    if value < 1:
+        return None
+    return min(value, n3)
 
 
 #: The band dial's resolver under a public name, mirroring
