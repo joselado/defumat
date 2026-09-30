@@ -113,17 +113,19 @@ def sum_band(psi, fft_index, grid, weights, cell: Cell,
     batch = resolve_k_batch(k_batch)
 
     if sticks is not None and plane_chunk is not None and fft_index_minus is None:
-        # ``sticks`` carries this call's k-points' rows, as ``fft_index`` does.
+        # ``sticks`` carries this call's k-points' rows, as ``fft_index`` does;
+        # ``fft_index`` still travels, for the whole-box path ``band_density``
+        # falls back to when the band dial is not one band at a time.
         def channel(states, occupations):
             def one_k(arrays):
-                state, columns, index, occupation = arrays
-                return band_density(state, None, grid, occupation, cell,
+                state, box_index, columns, index, occupation = arrays
+                return band_density(state, box_index, grid, occupation, cell,
                                     band_batch=band_batch, sticks=sticks,
                                     columns=columns, index=index,
                                     plane_chunk=plane_chunk)
 
-            return sum_k(one_k, (states, sticks.columns, sticks.index, occupations),
-                         batch=batch)
+            return sum_k(one_k, (states, fft_index, sticks.columns, sticks.index,
+                                 occupations), batch=batch)
 
         return jax.vmap(channel)(psi, weights)
 
@@ -536,13 +538,14 @@ def spinor_sum_band(psi, fft_index, grid, weights, cell: Cell, nspin_mag: int,
     """
     if sticks is not None and plane_chunk is not None:
         def one_k_sticks(arrays):
-            state, columns, index, occupation = arrays
-            return spinor_band_density(state, None, grid, occupation, cell, nspin_mag,
-                                       band_batch, sticks=sticks, columns=columns,
-                                       index=index, plane_chunk=plane_chunk)
+            state, box_index, columns, index, occupation = arrays
+            return spinor_band_density(state, box_index, grid, occupation, cell,
+                                       nspin_mag, band_batch, sticks=sticks,
+                                       columns=columns, index=index,
+                                       plane_chunk=plane_chunk)
 
-        return sum_k(one_k_sticks, (psi, sticks.columns, sticks.index, weights),
-                     batch=resolve_k_batch(k_batch))
+        return sum_k(one_k_sticks, (psi, fft_index, sticks.columns, sticks.index,
+                                    weights), batch=resolve_k_batch(k_batch))
 
     def one_k(arrays):
         state, index, occupation = arrays
