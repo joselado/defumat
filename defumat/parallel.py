@@ -56,8 +56,21 @@ for peers that never come.
 Environment: ``DEFUMAT_POOLS`` (the pool count), ``DEFUMAT_POOL_RANK`` (else
 ``SLURM_PROCID``), ``DEFUMAT_COORDINATOR`` (``host:port`` of rank 0; under
 Slurm it may be left unset and ``jax.distributed`` finds it),
-``DEFUMAT_POOL_TIMEOUT`` (seconds to wait for the peers, 300), and
+``DEFUMAT_POOL_TIMEOUT`` (seconds to wait for the peers, 300),
+``DEFUMAT_POOL_HEARTBEAT`` (seconds without a heartbeat before a peer counts as
+dead, 100), ``DEFUMAT_POOL_INTERFACE`` (the network interface gloo binds to,
+``ib0`` on Triton; unset uses the address the hostname resolves to), and
 ``DEFUMAT_THREADS``, which every pool should set to its width.
+
+**A pool that dies takes the others with it, and does not hang them.**
+Measured 2026-09-30, one rank of three leaving with ``os._exit`` before an
+all-reduce (``tools/parallel/comm_bench.py --kill-after``): on one machine the
+survivors block in the collective until the coordination service misses the
+dead rank's heartbeat and aborts them, exit 134 after the 100 s default; across
+two Triton nodes under ``srun`` their all-reduce fails in 0.2 s with
+``Connection closed by peer`` and ``srun`` cancels the step. Either way the job
+ends rather than holding its allocation, and ``DEFUMAT_POOL_HEARTBEAT`` shortens
+the first case.
 """
 
 from __future__ import annotations
@@ -129,12 +142,47 @@ def start_from_environment() -> None:
             "peers meet"
         )
     timeout = int((os.environ.get("DEFUMAT_POOL_TIMEOUT") or "300").strip())
+    heartbeat = int((os.environ.get("DEFUMAT_POOL_HEARTBEAT") or "100").strip())
+    interface = (os.environ.get("DEFUMAT_POOL_INTERFACE") or "").strip()
+    if interface:
+        _route_gloo_through(interface)
     jax.config.update("jax_cpu_collectives_implementation", "gloo")
     jax.distributed.initialize(
         coordinator_address=coordinator, num_processes=size, process_id=rank,
-        initialization_timeout=timeout,
+        initialization_timeout=timeout, heartbeat_timeout_seconds=heartbeat,
     )
     _STARTED = True
+
+
+def _route_gloo_through(interface: str) -> None:
+    """Make gloo's TCP transport bind to ``interface`` rather than the hostname's address.
+
+    ``jax._src.xla_bridge`` builds the CPU collectives with
+    ``make_gloo_tcp_collectives(distributed_client=...)`` and passes neither of
+    the two keywords that function takes, ``hostname`` and ``interface``, so the
+    transport uses whatever the node's name resolves to. On Triton that is the
+    Ethernet address (``milan3`` is 10.30.250.3, ``eth0``) while the nodes also
+    have ``ib0``: measured 2026-09-30, an 83 MB all-reduce between two nodes took
+    868 ms, about 100 MB/s. The keyword is added by wrapping the constructor
+    before the CPU client exists, which is the one place it can be given; a name
+    the node does not have fails at start-up (``Unable to find address for``),
+    not silently.
+    """
+    import functools
+
+    from jax._src.lib import _jax
+
+    original = _jax.make_gloo_tcp_collectives
+    if getattr(original, "_defumat_interface", None) == interface:
+        return
+
+    @functools.wraps(original)
+    def make(*args, **kwargs):
+        kwargs.setdefault("interface", interface)
+        return original(*args, **kwargs)
+
+    make._defumat_interface = interface
+    _jax.make_gloo_tcp_collectives = make
 
 
 class PoolStore:

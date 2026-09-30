@@ -127,13 +127,15 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
-def _run_pools(script: str, size: int, *args, timeout: float = 300.0) -> list[dict]:
-    """Run ``script`` as ``size`` pools; each rank's last stdout line is JSON."""
+def _start_pools(script: str, size: int, *args, timeout: float = 300.0,
+                 env_extra: dict | None = None) -> list[tuple[int, str, str]]:
+    """Run ``script`` as ``size`` pools; ``(returncode, stdout, stderr)`` per rank."""
     port = _free_port()
     base = {k: v for k, v in os.environ.items()
             if not k.startswith(("DEFUMAT_POOL", "DEFUMAT_COORDINATOR"))}
     base.update(JAX_PLATFORMS="cpu", DEFUMAT_THREADS="2",
                 PYTHONPATH=str(REPO) + os.pathsep + base.get("PYTHONPATH", ""))
+    base.update(env_extra or {})
     processes = []
     for rank in range(size):
         env = dict(base)
@@ -144,16 +146,26 @@ def _run_pools(script: str, size: int, *args, timeout: float = 300.0) -> list[di
         processes.append(subprocess.Popen(
             [sys.executable, "-c", script, *map(str, args)], env=env, cwd=REPO,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True))
-    results = []
+    outcomes = []
     try:
         for process in processes:
             out, err = process.communicate(timeout=timeout)
-            assert process.returncode == 0, err[-2000:]
-            results.append(json.loads(out.strip().splitlines()[-1]))
+            outcomes.append((process.returncode, out, err))
     finally:
         for process in processes:
             if process.poll() is None:
                 process.kill()
+    return outcomes
+
+
+def _run_pools(script: str, size: int, *args, timeout: float = 300.0,
+               env_extra: dict | None = None) -> list[dict]:
+    """Run ``script`` as ``size`` pools; each rank's last stdout line is JSON."""
+    results = []
+    for code, out, err in _start_pools(script, size, *args, timeout=timeout,
+                                       env_extra=env_extra):
+        assert code == 0, err[-2000:]
+        results.append(json.loads(out.strip().splitlines()[-1]))
     return results
 
 
@@ -355,3 +367,54 @@ def test_a_pooled_relaxation_takes_the_same_steps():
         assert result["converged"] and len(result["energies"]) == len(serial["energies"])
         assert np.allclose(result["energies"], serial["energies"], atol=1e-9)
         assert np.allclose(result["positions"], serial["positions"], atol=1e-7)
+
+
+@pytest.mark.slow
+def test_gloo_can_be_routed_through_a_named_interface():
+    """``DEFUMAT_POOL_INTERFACE`` reaches gloo; a name the machine lacks fails at start.
+
+    On Triton the hostname resolves to ``eth0`` and gloo ran at about 100 MB/s
+    between nodes; the interface is how ``ib0`` is chosen instead. A wrong name
+    must stop the run at start-up rather than fall back silently.
+    """
+    for result in _run_pools(COMMUNICATOR_SCRIPT, 2,
+                             env_extra={"DEFUMAT_POOL_INTERFACE": "lo"}):
+        assert np.allclose(result["real"], 3.0)
+    outcomes = _start_pools(COMMUNICATOR_SCRIPT, 2, timeout=120,
+                            env_extra={"DEFUMAT_POOL_INTERFACE": "nosuchif0"})
+    for code, _, err in outcomes:
+        assert code != 0 and "nosuchif0" in err
+
+
+DEAD_POOL_SCRIPT = textwrap.dedent("""
+    import os, time
+    import numpy as np
+    import defumat
+    from defumat.parallel import current_pools
+    p = current_pools()
+    for step in range(20):
+        if p.rank == p.size - 1 and step == 3:
+            os._exit(3)
+        p.allreduce_sum(np.ones(8))
+    print('{"survived": true}')
+""")
+
+
+@pytest.mark.slow
+def test_a_dead_pool_takes_the_others_down_within_the_heartbeat():
+    """One pool leaving must end the run, not hang it.
+
+    Measured: the survivors block in their all-reduce until the coordination
+    service misses the dead rank's heartbeat and aborts them, 23 s after the
+    death at a 20 s heartbeat. A hang would show here as the harness's timeout.
+    """
+    import time
+
+    start = time.perf_counter()
+    outcomes = _start_pools(DEAD_POOL_SCRIPT, 3, timeout=150,
+                            env_extra={"DEFUMAT_POOL_HEARTBEAT": "15"})
+    elapsed = time.perf_counter() - start
+    assert outcomes[-1][0] == 3
+    for code, out, _ in outcomes[:-1]:
+        assert code != 0 and "survived" not in out
+    assert elapsed < 120
