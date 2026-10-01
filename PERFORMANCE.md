@@ -9117,3 +9117,58 @@ small is not bound by arithmetic and single buys nothing per iteration there; th
 chain 36 against 32 iterations, 0.99x; `si32` 13 against 8, 0.76x. Every mixed run's energy is within
 1e-10 Ry of double's. **`'mixed'` stays as the measured opt-in it is; what would make it pay is a switch
 that does not perturb the mixer's history, and that is not found.**
+
+## Two kernels that were loops on a card: the small subspace `eigh` and the stick fill (RTX A2000, 2026-10-01)
+
+**The number to carry: on eight-atom silicon at 20 Ry with 27 k-points, speed mode went from 263 to
+153 ms per SCF iteration and memory mode from 555 to 372, with the Davidson steps and the energies
+unchanged, by two changes to what the card is asked to launch.** Found by profiling one warm SCF with
+`nsys --capture-range=cudaProfilerApi` (the compilation and the autotuning outside the range) on D22,
+`tools/gpu/replay/kern_cats.py` for the categories.
+
+**The subspace `eigh` at 32 rows or fewer was cuSOLVER's Jacobi solver.** jaxlib chooses it below 33
+rows when left to choose, and Davidson's first rungs are that size whenever the band count is: in memory
+mode, one k-point a call, the subspace solve was 1.9 s of 3.2 s of kernel time on the 27-point mesh,
+most of it `syevbj_batch` and its row and column rotations (which the categoriser had filed under
+"other"), against 0.1 s when the 27 k-points go through one batched call in speed mode. One complex128
+matrix, ms per call on the card, error of the eigenvalues against LAPACK:
+
+| m | default | `syevd` (`EighImplementation.QR`) | Jacobi | host LAPACK, `pure_callback` |
+|---|---|---|---|---|
+| 16 | 6.00 (5e-14) | 0.63 (9e-15) | 3.91 | 0.23 |
+| 32 | 6.94 (2e-13) | 1.11 (2e-14) | 6.93 | 0.32 |
+| 64 | 3.57 | 3.56 | 18.6 | 0.71 |
+| 128 | 6.65 | 6.65 | 51.7 | 2.21 |
+| 256 | 13.4 | 13.4 | 170 | 14.2 |
+| 512 | 41.2 | 41.2 | 741 | 123 |
+
+`solvers.subspace._eigh` asks for `syevd` by name; on a CPU every route is LAPACK's `heevd` and nothing
+changes there. The host route would be 2x to 5x faster again up to 128 rows on this card, at the price of
+a host round trip inside the Davidson loop, and is not taken (`GPU-SPEED-NEXT.md`).
+
+**The stick layout's fill of the box was a loop over sticks.** `box.at[..., columns].set(sticks)`, a
+scatter along the box's last axis with strided updates, is one XLA's GPU backend expands into a `while`
+loop over the sticks, a dynamic slice, an add and a dynamic update a stick, in every `h_psi` and once per
+rung of the band ladder in the compiled solve. In the warm 27-point SCF in speed mode those four kernels
+were about 110,000 launches each, and the host spent 1.09 s of the run's 2.2 in `cuLaunchKernel` (522,000
+calls). The fill is a gather through the inverse of the column map (`basis.fft._fill_columns`), one
+kernel: 0.043 against 0.858 ms at 98 sticks and 1.37 against 17.3 at 1200, the same numbers to the last
+bit. A CPU keeps the scatter, where the gather was 2.5 per cent slower on sixteen atoms.
+
+**The SCF, one process per arm, median of three, ms per iteration, steps equal within each row:**
+
+| cell, mode | before | `syevd` | `syevd` and the gather |
+|---|---|---|---|
+| si8 20 Ry, 27 k, memory | 555 | 458 | 372 |
+| si8 20 Ry, 27 k, `k_batch = 'fit'` | 282 | 279 | 167 |
+| si8 20 Ry, 27 k, speed | 275 | 263 | 153 |
+| si8 12 Ry, 1 k, memory | | 20.8 | 18.1 |
+| si16 30 Ry, 1 k, memory | 75.8 | 74.1 | 69.1 |
+| si64 30 Ry, 1 k, memory | 1552 | 1552 | 1512 |
+
+**The FFT layout after the fix**, speed mode: sticks 17.7 against box 16.6 on eight atoms at one k-point,
+63.9 against 70.3 on sixteen, 152.7 against 172.9 on the 27-point mesh, 1424 against 1423 on 64 atoms.
+The stick layout had been losing on a card partly to its own scatter loop; `sticks` stays the default on
+every platform. **A forecast, not a measurement:** both fixes remove fixed costs per call, which a card
+with fast float64 pays in the same absolute amount and over less arithmetic, so their share there should
+be larger than on this card.
