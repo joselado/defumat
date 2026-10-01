@@ -1035,7 +1035,9 @@ class BandBatchChoice:
 
     #: ``None`` for the whole block, which is what memory mode runs whenever
     #: it fits -- a band loop on a card is slower (4.3x at one band on the
-    #: eight-atom silicon cell), so the dial moves only when it has to.
+    #: eight-atom silicon cell on a GTX 1060, measured while the stick fill was
+    #: still a loop on a card; 71.0 against 64.0 ms an iteration on sixteen
+    #: atoms on an RTX A2000 since), so the dial moves only when it has to.
     band_batch: int | None
     #: Whether the estimate at :attr:`band_batch` fits. ``False`` only when not
     #: even one band at a time does, in which case :attr:`band_batch` is 1 and
