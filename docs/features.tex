@@ -7041,10 +7041,10 @@ and the wavefunction store in float32, and keeps the density, the potential, the
 mixer and the energies in float64; the small subspace solves run in double
 whatever the bands do. It is a performance mode and no correctness claim is made
 in it. On an RTX~A2000, a float32 part, the 64-atom silicon SCF to
-\code{conv\_thr=1e-7} takes 2.5~s against 9.5~s in double, at half the device peak
-(1.65 against 3.15~GiB), and its energy is $2.8\times10^{-5}$~Ry from double's at
-the same threshold; on sixteen atoms it is 1.7x, and on a CPU an iteration is
-1.6--1.8x. \code{'mixed'} starts in single and switches the band side to double
+\code{conv\_thr=1e-7} takes 2.3~s against 9.5~s in double in memory mode and 1.9
+against 8.8 in speed mode, at half the device peak (1.65 against 3.15~GiB), and
+its energy is $2.8\times10^{-5}$~Ry from double's at the same threshold; on sixteen
+atoms it is 1.7x, and on a CPU an iteration is 1.6--1.8x. \code{'mixed'} starts in single and switches the band side to double
 inside the same run, at the first iteration whose threshold single cannot deliver,
 keeping the mixer's history, so the state it converges to is a double one (within
 $10^{-10}$~Ry of a double run on every cell tried). It is measured \emph{not} to pay
