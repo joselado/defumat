@@ -23391,6 +23391,12 @@ scatter on a CPU, where the gather was 2.5 per cent slower. Together: speed mode
 27 k-points 263 to 153 ms per iteration, memory mode 555 to 372, `'fit'` 282 to 167, sixteen atoms 74.1
 to 69.1 and 64 atoms 1552 to 1512 in memory mode, the steps and energies unchanged and the CPU's bits too.
 
+**And a compile, not a run.** XLA's GPU backend fused each radial transform's Bessel integrand into its
+reduction and took minutes to compile it (74.6 s and 198 s for bismuth's `l = 0` and `l = 1` projector
+channels; a 20-atom spin-orbit cell did not reach its first Davidson call in 25 minutes);
+`formfactors._radial_values`, an `optimization_barrier` before the reduction, makes it 0.3 and 0.1 s, the
+same bits on both platforms.
+
 **What is not done.** `'fit'` as memory mode's default, and speed mode falling back to the largest
 fitting chunk rather than to one k-point: both change a documented promise, and both are the user's to
 decide. A precision switch that does not perturb the mixer. Single on ultrasoft, PAW, spinors and DFT+U,

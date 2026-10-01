@@ -83,6 +83,13 @@ chunk rather than one k-point. **Open:** a precision switch that keeps the mixer
 (`PLAN.md` P126, "What is not done"). Records: `PERFORMANCE.md`, "A k-chunk sized to the card" and "The
 band side in single precision".
 
+**The radial transforms compiled for minutes on a card** (fixed 2026-10-02, `formfactors._radial_values`;
+`PERFORMANCE.md`, "The radial transforms took minutes to compile on a card"). Card HLO dumps of PAW
+silicon, spin-orbit platinum and spin-orbit bismuth found no other loop in a hot path: radial-table chunks
+at setup, PAW's one-centre loop over atoms, `newd`'s noncollinear integrals in 591 chunks an SCF
+iteration, and the smeared Fermi level's fixed bisection of 100 and 200 trips (QE's `efermig`, left as
+it is: a few hundred small launches an iteration, which matters only for a small metal on a card).
+
 ## 5. The A100-class profile -- priority 3, needs item 1
 
 On the float32 card the stall-free 64-atom kernel time is 47 per cent FFT, 33 per cent cuBLAS, 12 per
