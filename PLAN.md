@@ -23276,3 +23276,52 @@ same code on one core.
   pool's speed**, which is the memory system and not the pools, and it caps what any pool
   layout can do there; the plane-chunk budget (`PLANE_CHUNK_BYTES`) was tuned on D22's 1.25
   MB L2 and Milan's is 512 KB, which is the first thing to try against it.
+
+
+### P125 -- The endgame of an SCF on a card: one Davidson call can be most of the run, and a floor on `ethr` removes it. ✅ DONE for `ethr` at `conv_thr = 1e-10` on a float32 card; tighter requests, a float64 card and the mechanism are open.
+
+**The number.** The 64-atom silicon SCF at `conv_thr = 1e-10` in the default memory mode on an
+RTX A2000 takes **132 s and 14.6 s with the accelerator floor**, because two Davidson calls ran to
+the 100-step budget (`[3, 1, 3, 3, 2, 3, 10, 100, 100]` against `[..., 10, 1, 1]`), with the energy
+within 1e-11 Ry. Sixteen atoms, same default: 192 ms per iteration against 70 (73 steps in one call
+against 1). The CPU is untouched: the same perturbations took exactly 3 steps there.
+
+**What was found.** A per-iteration time on a card is dominated, in the last two iterations of a run at
+`conv_thr = 1e-10`, by one call whose step count is decided by round-off. Perturbing the captured
+call's starting states by 1e-13 relative gave 3 to 100 steps on the card (more than 20 in 60 per
+cent of the seeds with one executable and 5 per cent with another) and 3 every time on the CPU. Every
+dial that changes only rounding (the projector route, the band batch, the FFT layout, the memory mode)
+therefore looked like a speed effect, and four readings recorded earlier were wrong for it: a 13x
+`conv_thr` tax, a 2.7x gap between the memory modes, a factor 2 for `band_batch = 8` at 64 atoms and a
+12 per cent loss for the box layout. The stall is real slow convergence of roots that creep by 3e-13
+to 1e-11 per step with a residual that hardly moves; the quick solves are the ones that stop on
+stagnation, with eigenvalues still up to 5e-11 from their later values. Ruled out as the mechanism: the
+dense eigensolver's accuracy (the card is within 2x of LAPACK from cond(S) 1 to 1e6), `H|psi>`
+reproducibility, the canonical-orthogonalisation retry, and noise in the Ritz values (Rayleigh
+quotients make the stalls longer). Tried and dropped: projecting the correction out of the Ritz span,
+`david = 2` and 3, an exact refresh with a hard restart every 20, 8 and 4 steps.
+
+**The rule** (`batching.resolve_ethr_floor`, `DEFUMAT_ETHR_MIN`): QE's 1e-13 on a CPU;
+`min(3e-12, 0.03 conv_thr)`, never below 1e-13, on an accelerator. 1e-12 cleared the executable
+measured first and not the others (28, 26 and 11 steps at `band_batch` 1, 8 and 16; 100 at 64 atoms in
+memory mode); 3e-12 gave one step in each of the last two iterations on all ten arms run at it. Price
+at `conv_thr = 1e-10`: energy within 5e-12 Ry and band energies within 4e-8 Ry on the symmetric cell,
+and on a displaced sixteen-atom cell the force error goes 3.4e-6 to 6.5e-6 Ry/bohr and the energy
+error 1.8e-11 to 7.6e-11 Ry.
+
+**Also in this phase.** `DEFUMAT_FFT_LAYOUT` (`sticks`, the default, or the fused `box`; `GPU.md`
+Phase 2): equal to round-off, and which is faster is the cell and the card (box 11 per cent faster at 8
+atoms, equal at 16, sticks 4 to 6 per cent faster at 64 on the A2000; sticks 9.5 per cent faster at 16
+on a CPU), so no default follows the platform. `tools/parallel/time_scf.py` prints the Davidson steps
+per iteration, and a time on a card is read against them. The stall-free 64-atom band dial: best at
+`band_batch` 16 to 32, 10 per cent under the whole block, left alone. A kernel profile on the float32
+card: 47 per cent FFT, 33 per cent matrix products, 12 per cent elementwise, 7 per cent dense solve;
+the forecast that the elementwise chain and the subspace solve come first on an A100 is marked as one.
+`test_the_band_dial_reaches_the_spinor_h_psi` had gone stale when a `Calculation` began to resolve its
+band batch at construction and is fixed.
+
+**What is not done.** A request tighter than 1e-10 on a card (the floor follows `conv_thr` down and the
+stall returns: 46 and 100 steps at 1e-11 on 16 and 64 atoms). The V100 and H100 step counts (a Triton
+job). The chaotic range above the floor on larger cells (iteration 7 at 64 atoms takes 4 to 18 steps by
+executable). A stopping rule that is not a change in an eigenvalue. Record: `PERFORMANCE.md`, "The
+endgame on a card is a stall"; guide: `docs/features.tex`, the batching section.
