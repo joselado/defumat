@@ -708,8 +708,9 @@ plausible wrong answer rather than an error. `PLAN.md` has the phase that found 
   the memory modes, a factor 2 for `band_batch = 8` at 64 atoms and a 12 per cent loss for the
   fused box layout. The 64-atom memory-mode SCF took 132 s and takes 14.5 s. **The cause was in the
   solver and not in the threshold**: the subspace solve parked its unused directions at 1000 times
-  the diagonal, which gave the device `eigh` a matrix of norm 3e4 and an absolute error of a few
-  1e-13 against an `ethr` of 1e-13; the factor is 4 (`solvers.davidson.PARK_FACTOR`). A floor under
+  the diagonal, which gave the device `eigh` a matrix of norm 3e4 and an error of 3.4e-12 median in
+  the lowest roots (the host's LAPACK: 2.9e-15) against an `ethr` of 1e-13; the parked rows now sit one above a bound of the reduced live
+  block (`solvers.subspace.generalised_eigh`'s `parked`; a factor of 4 came first). A floor under
   `ethr` of 3e-12 was adopted first, cut the run to 14.6 s, doubled a force error and was withdrawn
   the same day when a replay of one call on both platforms (the inputs of each machine on the
   other, then the subspace solve moved to the host piece by piece) located it. **The lesson is the

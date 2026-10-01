@@ -15,6 +15,11 @@ configuration, with `DEFUMAT_THREADS=off OMP_NUM_THREADS=1 MKL_NUM_THREADS=1` an
   This is what located the cause.
 * `stall_steps.py`: per-step eigenvalue changes of a call at consecutive step caps (`CALL`, `CAPS`).
 * `eigh_noise.py`: the subspace solve's error against SciPy by condition number, on random pairs.
+* `eigh_captured.py`: capture every subspace solve of the sixteen-atom SCF on the card (`CAPTURE=1`), then
+  the error of the lowest roots on the card and the host against the live block alone, with the parked
+  value moved. `eigh_bound.py` adds the Gershgorin-bound park and the live block alone; `eigh_interleaved.py`
+  the per-solve detail and synthetic matrices with Davidson's parked rows interleaved or trailing, up to
+  m = 4096. These are the tables of the review entry in `PERFORMANCE.md`.
 * `kern_cats.py`: groups an `nsys stats -r cuda_gpu_kern_sum -f csv` table into FFT, matrix products,
   dense solve and elementwise.
 

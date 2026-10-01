@@ -2389,6 +2389,8 @@ with `(3 nat, nat, 3)` and runs in under a millisecond. The whole of
 
 ## First contact with a GPU (P10 / GPU.md Phase 0)
 
+**Unaudited for the Davidson stall (marked 2026-10-01).** The card times in this section were taken before the subspace solve stopped parking its idle directions at 1000 times the largest diagonal element of `H`, without the Davidson steps beside them, at thresholds where one call near the end of an SCF could run to the 100-step budget from round-off. A stall only adds steps, so a card time here is an upper bound on what the same run takes now, and a ratio of the card against a CPU or `pw.x` is a lower bound on the card's advantage; a ratio between two card arms can be wrong in either direction, which is what the four corrected readings were ("The endgame on a card is a stall").
+
 **A different metric, and it is never mixed with the one above.** Everything
 else in this file is single-core defumat against single-core Quantum ESPRESSO.
 This section is **GPU defumat against CPU defumat, same input, same code, per
@@ -2483,6 +2485,8 @@ in different orders, so a GPU/CPU pair is expected to differ and does).
 
 ## Does the diagonalisation win on a GPU? (P10 / GPU.md Phase 1, 16 atoms)
 
+**Unaudited for the Davidson stall (marked 2026-10-01).** The card times in this section were taken before the subspace solve stopped parking its idle directions at 1000 times the largest diagonal element of `H`, without the Davidson steps beside them, at thresholds where one call near the end of an SCF could run to the 100-step budget from round-off. A stall only adds steps, so a card time here is an upper bound on what the same run takes now, and a ratio of the card against a CPU or `pw.x` is a lower bound on the card's advantage; a ratio between two card arms can be wrong in either direction, which is what the four corrected readings were ("The endgame on a card is a stall").
+
 Phase 0's 5.44x was on `al10-metal`, which has **ten k-points**, so it could not
 say how much was k-parallelism and how much was the per-k path. These three
 cells are **single k-point by construction**, so no k-parallelism exists to find
@@ -2546,6 +2550,8 @@ iterations suggest.** Quoting a GPU speedup without saying which `conv_thr`
 produced it would be off by 3.6x on this cell.
 
 ### Thirty-two atoms, and the advantage grows
+
+**Unaudited for the Davidson stall (marked 2026-10-01).** The card times in this section were taken before the subspace solve stopped parking its idle directions at 1000 times the largest diagonal element of `H`, without the Davidson steps beside them, at thresholds where one call near the end of an SCF could run to the 100-step budget from round-off. A stall only adds steps, so a card time here is an upper bound on what the same run takes now, and a ratio of the card against a CPU or `pw.x` is a lower bound on the card's advantage; a ratio between two card arms can be wrong in either direction, which is what the four corrected readings were ("The endgame on a card is a stall").
 
 Run 2026-08-25 on the same V100-SXM2-32GB and the same four Milan cores.
 `si32-1k-ecut30` is **32 atoms, 11781 plane waves, 64 bands, FFT 36x36x144** —
@@ -2626,6 +2632,8 @@ so neither code is timed doing I/O the other skips. `benchmarks/si64-1k*.in`:
 64 atoms, 256 electrons, 128 bands.
 
 ### The clean case: `si64-1k`, everything converged to `conv_thr = 1e-10`
+
+**Unaudited for the Davidson stall (marked 2026-10-01).** The card times in this section were taken before the subspace solve stopped parking its idle directions at 1000 times the largest diagonal element of `H`, without the Davidson steps beside them, at thresholds where one call near the end of an SCF could run to the 100-step budget from round-off. A stall only adds steps, so a card time here is an upper bound on what the same run takes now, and a ratio of the card against a CPU or `pw.x` is a lower bound on the card's advantage; a ratio between two card arms can be wrong in either direction, which is what the four corrected readings were ("The endgame on a card is a stall").
 
 Both codes agree on the answer first — **QE -505.71932000 Ry, defumat
 -505.71932002 Ry**, 2e-8 apart — which is what makes the timings comparable at
@@ -2749,6 +2757,8 @@ cores at the tighter threshold, which is *not* a matched comparison and is
 recorded here only so the next session does not have to re-run it.
 
 ## The physics sweep on a GPU, against serial QE (P10 / GPU.md)
+
+**Unaudited for the Davidson stall (marked 2026-10-01).** The card times in this section were taken before the subspace solve stopped parking its idle directions at 1000 times the largest diagonal element of `H`, without the Davidson steps beside them, at thresholds where one call near the end of an SCF could run to the 100-step budget from round-off. A stall only adds steps, so a card time here is an upper bound on what the same run takes now, and a ratio of the card against a CPU or `pw.x` is a lower bound on the card's advantage; a ratio between two card arms can be wrong in either direction, which is what the four corrected readings were ("The endgame on a card is a stall").
 
 **The baseline is one CPU core and the table says so in every row.** `GPU.md`
 §2.3 rules this comparison out by default — the project's metric is single-core
@@ -2909,6 +2919,8 @@ because 11 GB of tape in HBM is the row the phase exists to bound. Per
 `CLAUDE.local.md`, an `sbatch` is proposed rather than submitted.
 
 ## The response path on a GPU (P10 / GPU.md Phase 5, the GPU half)
+
+**Unaudited for the Davidson stall (marked 2026-10-01).** The card times in this section were taken before the subspace solve stopped parking its idle directions at 1000 times the largest diagonal element of `H`, without the Davidson steps beside them, at thresholds where one call near the end of an SCF could run to the 100-step budget from round-off. A stall only adds steps, so a card time here is an upper bound on what the same run takes now, and a ratio of the card against a CPU or `pw.x` is a lower bound on the card's advantage; a ratio between two card arms can be wrong in either direction, which is what the four corrected readings were ("The endgame on a card is a stall").
 
 Run 2026-08-26 at commit `e562427`. **One NVIDIA H200** (`gpu63`, 143771 MiB,
 driver 580.173.02, jax 0.11.1) against **four EPYC Milan cores** (`milan1`, same
@@ -3219,6 +3231,8 @@ already checks the whole tensor against this reference, and `PLAN.md` records
 7.0e-6 across every component.
 
 ## The Davidson step count against `pw.x` on a 157-atom slab (2026-09-04)
+
+**Unaudited for the Davidson stall (marked 2026-10-01).** The card times in this section were taken before the subspace solve stopped parking its idle directions at 1000 times the largest diagonal element of `H`, without the Davidson steps beside them, at thresholds where one call near the end of an SCF could run to the 100-step budget from round-off. A stall only adds steps, so a card time here is an upper bound on what the same run takes now, and a ratio of the card against a CPU or `pw.x` is a lower bound on the card's advantage; a ratio between two card arms can be wrong in either direction, which is what the four corrected readings were ("The endgame on a card is a stall").
 
 **Open, and the headline is the step count rather than any one
 cause**: on the identical input at the identical `diago_david_ndim = 2`,
@@ -7709,6 +7723,8 @@ with unchanged, which the A/B shows directly.
 
 ## What the Kramers-closed ultracell basis costs, at equal size (P121)
 
+**Unaudited for the Davidson stall (marked 2026-10-01).** The card times in this section were taken before the subspace solve stopped parking its idle directions at 1000 times the largest diagonal element of `H`, without the Davidson steps beside them, at thresholds where one call near the end of an SCF could run to the 100-step budget from round-off. A stall only adds steps, so a card time here is an upper bound on what the same run takes now, and a ratio of the card against a CPU or `pw.x` is a lower bound on the card's advantage; a ratio between two card arms can be wrong in either direction, which is what the four corrected readings were ("The endgame on a card is a stall").
+
 The four-cell hydrogen helix of `test_ultracell.py`, reference along the helix axis,
 `kgrid = (1, 2, 2)`, `conv_thr = 1e-10`, `states_conv_thr = 1e-8`, on the workstation, one
 core (`taskset -c 0`, `OMP_NUM_THREADS=1`), nothing else running. Each time is the median
@@ -7750,6 +7766,8 @@ basis buys on this cell is the answer: a remnant of 1.3e-4 against 0.288, and 2.
 lower in the functional the loop minimises (`PLAN.md` P121).
 
 ## The orientation torque and the in-loop rotation against `pw.x` (P122, 2026-09-26)
+
+**Unaudited for the Davidson stall (marked 2026-10-01).** The card times in this section were taken before the subspace solve stopped parking its idle directions at 1000 times the largest diagonal element of `H`, without the Davidson steps beside them, at thresholds where one call near the end of an SCF could run to the 100-step budget from round-off. A stall only adds steps, so a card time here is an upper bound on what the same run takes now, and a ratio of the card against a CPU or `pw.x` is a lower bound on the card's advantage; a ratio between two card arms can be wrong in either direction, which is what the four corrected readings were ("The endgame on a card is a stall").
 
 `tools/compare_orientation.py`, the workstation, one core each by the affinity mask set before
 JAX is imported and inherited by `pw.x` (serial 7.5 build), every defumat number the
@@ -7833,6 +7851,8 @@ larger. The spiral's first-order call adds no array beyond the diagonalisation's
 projections are `(nk, nbnd, nkb)` and the Pauli components of `dD` are `(3, nkb, nkb)`.
 
 ## Two memory modes, and a wavefunction store that streams (GTX 1060, 2026-09-28)
+
+**Unaudited for the Davidson stall (marked 2026-10-01).** The card times in this section were taken before the subspace solve stopped parking its idle directions at 1000 times the largest diagonal element of `H`, without the Davidson steps beside them, at thresholds where one call near the end of an SCF could run to the 100-step budget from round-off. A stall only adds steps, so a card time here is an upper bound on what the same run takes now, and a ratio of the card against a CPU or `pw.x` is a lower bound on the card's advantage; a ratio between two card arms can be wrong in either direction, which is what the four corrected readings were ("The endgame on a card is a stall").
 
 **The first measurements on a card inside the development loop**: a GeForce GTX 1060
 (6 GB; the allocator's `bytes_limit` is 4.76 GB at JAX's default 75 per cent), jax/jaxlib
@@ -7939,6 +7959,8 @@ single 5.57 GiB request from the strain derivative's compiled reverse pass -- in
 modes, since the stress reads the state whole.
 
 ## The stress tape: the radial transforms rematted (GTX 1060, 2026-09-28)
+
+**Unaudited for the Davidson stall (marked 2026-10-01).** The card times in this section were taken before the subspace solve stopped parking its idle directions at 1000 times the largest diagonal element of `H`, without the Davidson steps beside them, at thresholds where one call near the end of an SCF could run to the 100-step budget from round-off. A stall only adds steps, so a card time here is an upper bound on what the same run takes now, and a ratio of the card against a CPU or `pw.x` is a lower bound on the card's advantage; a ratio between two card arms can be wrong in either direction, which is what the four corrected readings were ("The endgame on a card is a stall").
 
 `GPU-MEMORY-NEXT.md` items 13 and 14. `pseudo/formfactors.py`'s four radial transforms
 (`V_loc`, the atomic and core charges, the projectors and atomic orbitals) walked their
@@ -8194,6 +8216,8 @@ keeps no states" was this build's transient.
 
 ## Fourteen memory items, validated on the CPU; five numbers and one refusal (2026-09-29)
 
+**Unaudited for the Davidson stall (marked 2026-10-01).** The card times in this section were taken before the subspace solve stopped parking its idle directions at 1000 times the largest diagonal element of `H`, without the Davidson steps beside them, at thresholds where one call near the end of an SCF could run to the 100-step budget from round-off. A stall only adds steps, so a card time here is an upper bound on what the same run takes now, and a ratio of the card against a CPU or `pw.x` is a lower bound on the card's advantage; a ratio between two card arms can be wrong in either direction, which is what the four corrected readings were ("The endgame on a card is a stall").
+
 `GPU-MEMORY-NEXT.md` items 3, 4, 5, 7, 10, 11, 12, 15, 17, 19, 20, 23, 24 and 25 landed in one
 day. Each is held to round-off (or bit-identity) against the route it replaces on the CPU,
 and the records are in that file's "Done since". **Only what is below was measured**; the
@@ -8337,6 +8361,8 @@ per case, run twice). So hoisting the per-k tables bought nothing in peak on the
 what it changes is how long a table the program has dropped stays on the device.
 
 ## The projected DOS, the pairs and the rest, on the card (GTX 1060, 2026-09-29)
+
+**Unaudited for the Davidson stall (marked 2026-10-01).** The card times in this section were taken before the subspace solve stopped parking its idle directions at 1000 times the largest diagonal element of `H`, without the Davidson steps beside them, at thresholds where one call near the end of an SCF could run to the 100-step budget from round-off. A stall only adds steps, so a card time here is an upper bound on what the same run takes now, and a ratio of the card against a CPU or `pw.x` is a lower bound on the card's advantage; a ratio between two card arms can be wrong in either direction, which is what the four corrected readings were ("The endgame on a card is a stall").
 
 `GPU-MEMORY-NEXT.md` items validated on the CPU this morning, measured on the card. Each
 row is one process per run, run twice and the second taken, memory mode; "before" is the
@@ -8559,12 +8585,17 @@ Cholesky factorisation on the host it takes 63; with only the symmetric `eigh` o
 matrix on the host it takes **3**. The device `eigh` is the one piece. The matrix it is given is not
 a random one: the solver parks every direction of the subspace that it is not using at an
 eigenvalue of `1000 max|diag H| + 1` (about 3e4 against a physical spectrum of 30), so that they
-never enter the lowest roots, which makes the reduced matrix's norm 3e4, and a backward-stable
-eigensolver is accurate to `eps` times that norm in every eigenvalue: 7e-12 here, against a
-threshold of 2e-13. Replaying the card's own call with the factor at 1000, 100, 10 and 3: 73, 3, 3
-and 3 steps. The parked directions need only sit above the live spectrum, which `lambda_max(H)`
-bounds by well under three times the largest diagonal element, so the factor is now 4
-(`solvers.davidson.PARK_FACTOR`).
+never enter the lowest roots, which makes the reduced matrix's norm 3e4; a backward-stable
+eigensolver's error is bounded by `eps` times that norm, 6.5e-12 here, against a threshold of
+2e-13. Replaying the card's own call with the factor at 1000, 100, 10 and 3: 73, 3, 3
+and 3 steps. The factor was then set to 4 (`solvers.davidson.PARK_FACTOR`, since removed). **The
+bound is what the card reaches and the CPU does not** (measured later the same day, "The parked
+value follows the live block" below): on the stalled call's own matrices the card's error is 3.4e-12
+median at the factor of 1000, about half the bound, while the host's LAPACK stays at 2.9e-15 whatever
+the parked value. That is how the random-pair table above and this paragraph are both true: the
+pairs there had no parked rows. The sentence that stood here, that `lambda_max(H)` is well under
+three times the largest diagonal element and so 4 is safe, is true on the cells measured (1.00 to
+1.05) and is not the reason; that entry has the argument.
 
 **The fix at QE's own floor of 1e-13** (the perturbation experiment as above, 20 seeds, card;
 median, maximum, share over 20 steps):
@@ -8837,25 +8868,143 @@ stall was not found on those physics, and not that they are immune. **With the p
 at 4** the same seven cells at QE's floor give the same steps and the same energies to the printed
 digits (37.6, 53.7, 50.1, 44.0, 69.6, 40.4 and 537 ms per iteration), so the fix is neutral on them.
 
+**The parked value follows the live block (a review of the above, the evening of 2026-10-01).**
+The headline holds when re-run at the committed code on the same card (`fc71f8f`, one process per
+arm, the factor set before anything was traced): sixteen atoms in memory mode 75.1 ms per iteration
+with steps `[3, 1, 2, 2, 2, 2, 4, 3, 2]` at the factor of 4, against 188.8 ms and
+`[3, 1, 2, 2, 2, 2, 4, 73, 2]` at 1000; 64 atoms 1598 ms (14.4 s for the nine iterations) with
+`[3, 1, 3, 3, 2, 3, 4, 3, 4]`, against 14730 ms (132.6 s) and `[3, 1, 3, 3, 2, 3, 10, 100, 100]`; the
+two 64-atom energies 8.4e-10 Ry apart. Three things in it were wrong or incomplete.
+
+*What the parked value has to clear.* Only the lowest `nbnd` Ritz values are taken, and during one
+call they never rise: expanding the subspace can only lower each of them (the subspaces are nested,
+Cauchy interlacing) and the refresh keeps exactly the vectors they belong to. So the parked value
+has to exceed the starting block's largest Ritz value and nothing more. Measured on a cold start, that
+is 0.344, 0.271, 0.313 and 0.216 of the largest diagonal element of `H` on `si-1k` (12 Ry),
+`si16-1k-ecut30`, SG15 nickel (`ni-fcc-magnon.in`, 60 Ry) and HGH LiF (`lif-tddft.in`, 80 Ry), and
+`lambda_max(H)` itself, by exact diagonalisation, is 1.05, 1.01, 1.00 and 1.01 of it there: the old
+argument held in practice (the projectors decay at large `G`, so the top of the spectrum is the
+kinetic energy at the cutoff) and was not the reason.
+
+*The retry route multiplied the park.* `subspace._canonical_route` parked its dropped directions at
+1000 times the largest diagonal element of the reduced matrix, and inside a Davidson solve that
+diagonal carried the solver's own parked rows, so the retry handed `eigh` a matrix of norm 4000 times
+`H`'s diagonal: 121001 on a Davidson-shaped pair at 30 Ry with one near-null overlap direction, four
+times the norm that stalled the card. Fixed in `cc21ad4` (a Gershgorin bound of the kept block).
+
+*The card's error follows the norm, the host's does not, and the live block is small.* The 102 subspace
+solves of the stalled sixteen-atom SCF at the factor of 1000 were captured on the card (the run took
+its 73 steps again with the capture in place); 72 had parked rows. For each, the exact lowest 32 roots
+are those of the live block alone, taken by SciPy at its own norm; error of the subspace solve on the
+padded matrix against them, with the parked value moved:
+
+| parked at | norm | card, median | card, worst | card over 1e-13 | host, median and worst |
+|---|---|---|---|---|---|
+| 1000 x max diag | 2.9e4 | 3.4e-12 | 3.7e-11 | 70 of 72 | 2.9e-15, 9.3e-15 |
+| 4 x max diag | 118 | 5.2e-15 | 1.6e-13 | 2 of 72 | 2.9e-15, 9.3e-15 |
+| one above the reduced live block's Gershgorin bound | about 10 | 2.6e-15 | 1.4e-14 | 0 of 72 | |
+| no parked rows (the live block alone) | 6 to 9 | 2.4e-15 | 9.3e-15 | 0 of 72 | |
+
+The card reaches the backward-error bound (`eps` times the norm is 6.5e-12 at 2.9e4) and LAPACK does
+not feel the parked value at all, which reconciles this entry's random-pair table with its cause. The
+live block's own norm is 6.2 Ry median and 9.4 at most, against 118 for the factor of 4, because the
+preconditioned corrections stay at low `G`: on eight-atom silicon at 12 Ry the live block is 2 to 4 Ry
+against a largest diagonal element of 11.2. So the factor of 4 still set the norm, and still left two
+of 72 solves over 1e-13 on the card. **The parked rows now sit one above the Gershgorin bound of the
+reduced live block** (`subspace.generalised_eigh(..., parked=)`, `90e2f8f`), taken after the Cholesky
+reduction because the live block of `H` does not bound the spectrum when `S` is not the identity, and
+the card is then at its floor. The bound follows the live block and not the kinetic energy at the
+cutoff, so the margin no longer shrinks with `ecutwfc`. `PARK_FACTOR` is gone.
+
+*Where the parked rows sit in the matrix does not matter for Davidson.* A synthetic Davidson-shaped
+matrix with parked rows interleaved block by block shows the norm effect on the card and on the host
+alike (at m = 128 and the factor of 1000, 2.8e-12 on the card and 4.0e-12 on the host), and sorting
+them last removes it (1.3e-14 on the card). Davidson's are already trailing, in all 72 captured solves,
+because each correction block is written at `nbase`, right after the live rows, so sorting changes
+nothing there to the last digit. With trailing parked rows the synthetic matrices did not reproduce
+the captured ones below m = 1024, so the size sweep is about the card's `eigh` and not a forecast for
+Davidson: at m = 4096 the factor of 1000 gives 2.2e-13 at 30 Ry and 9.0e-13 at 100 Ry, the factor of
+4 1.05e-14 at both, the host 1.0e-14 at all four.
+
+*The ladder at the bound* (`90e2f8f`, card, one process per arm, `conv_thr = 1e-10` unless stated,
+median of three on sixteen atoms and two on 64, ms per iteration, against the factor-4 rows above):
+
+| arm | steps | ms per iteration |
+|---|---|---|
+| 16 atoms, memory mode default | `[3, 1, 2, 2, 2, 2, 4, 3, 2]` | 75.8 |
+| 16 atoms, speed, whole block | the same | 69.8 |
+| 16 atoms, speed, `band_batch` 1, 8, 16 | the same | 196.6, 82.7, 74.1 |
+| 16 atoms, speed, box layout | the same | 69.4 |
+| 16 atoms, speed, projectors rebuilt | the same | 70.5 |
+| 16 atoms, memory, `conv_thr` 1e-11 | the same | 75.4 |
+| 16 atoms, memory, `conv_thr` 1e-12 | `[..., 4, 3, 2, 1]` | 72.0 |
+| 16 atoms at 60 Ry and 90 Ry, speed, rebuilt | `[3, 1, 2, 2, 2, 2, 4, 2]` | 186.6, 288.5 |
+| 64 atoms, memory mode default | `[3, 1, 3, 3, 2, 3, 4, 3, 2]` | 1552 |
+| 64 atoms, speed, `band_batch` 8 | the same | 1357 |
+| 64 atoms, speed, whole block | the same | 1464 |
+
+Every sixteen-atom arm takes the CPU's steps in every iteration, and the CPU itself is unchanged
+(-126.72076070097079 Ry, the same steps, `90e2f8f`). The three 64-atom arms take identical steps in all
+nine iterations, where at the factor of 4 the last iteration took 2, 3 or 4 depending on the arm, and
+the 64-atom memory-mode SCF is 1552 ms per iteration against 1598, 14.0 s for the run. The energies of
+all arms agree to 1e-13 Ry on 64 atoms and 2e-14 on sixteen. **The other physics at the bound**
+(the seven cells of the paragraph above, memory mode, `conv_thr = 1e-10`, median of two): ultrasoft
+`si8-us-1k` `[3, 1, 3, 2, 2, 3, 3, 2, 2]` as before, 39.2 ms per iteration; PAW 54.4; noncollinear 50.6;
+`fe-mag-1k` 44.6 over 13 iterations; DFT+U 70.6; `al-slab` 41.2 over 28; `h20-chain-lsda` 543 over 32.
+The iteration counts are the factor-4 run's, the times within 3 per cent of it, and no call above 17
+steps; ultrasoft and PAW are the cells where the bound is taken on a reduced matrix whose overlap is
+not the identity.
+
 **Not done, in order of what it would change.** The A100 and H100 step counts, and the V100's, for
-the old 13x entry (a Triton job, which needs a submission this session did not make); the one
-component that differs between the card and the CPU on the Davidson pair is the device `eigh`, on a
-matrix whose norm the parking sets; the random-pair table above has the two within a factor of two at
-every condition number, so it is this pair and not cuSOLVER in general, and whether another card's
-`eigh` has the same error on this matrix is not measured. The dependence on the cutoff: the parked eigenvalue is 4 times the largest diagonal
-element, which is the kinetic energy at the cutoff, so the matrix norm and with it the `eigh`
-error grow with `ecutwfc` (a norm of about 125 at 30 Ry, about 400 at 100); sixteen atoms at 60 and
-90 Ry were clean (above), and nothing larger or hard-pseudopotential was measured. A bound that
-follows the live block's own spectrum (a Gershgorin row sum of the projected `H`) would not depend
-on the cutoff and was not tried. `subspace._canonical_route` (the
-retry, taken when the Cholesky factor is not finite) still parks at 1000 times, for a reason that
-was checked and not only assumed: it parks relative to the diagonal of the *reduced* matrix
-`X^H H X`, which does not bound that matrix's spectrum the way the plane-wave diagonal bounds `H`'s,
-so the Davidson factor cannot be copied there without a bound of its own; it is rare and was not
-measured. `PARK_FACTOR` 3 was only replayed on the one call. A cell where
-the budget warning fires again, which it will say. The floor dial `DEFUMAT_ETHR_MIN` stays as a
-lever. **The 157-atom slab's "12x too many steps" (`OPEN.md`, the memory notes) is not this**, and
+the old 13x entry (a Triton job, which needs a submission no session has made); the one component
+that differs between the card and the CPU on the Davidson pair is the device `eigh`, whose error on
+this A2000 follows the norm of the matrix where LAPACK's does not, and whether another card's does
+the same is not measured. **No longer open** (the review entry above): the cutoff dependence, since
+the parked value now follows the live block rather than the kinetic energy at the cutoff; the
+canonical retry's park, now a bound of its kept block; and the margin of a factor, there being none.
+A cell where the budget warning fires again, which it will say. The floor dial `DEFUMAT_ETHR_MIN`
+stays as a lever. **The 157-atom slab's "12x too many steps" (`OPEN.md`, the memory notes) is not this**, and
 an earlier sentence here said it might be: its iteration 2 resets `ethr` to 1e-2 and takes
 `0.1 dr2 / nelec`, about 1e-3 at its `dr2 = 24.79` and a thousand electrons, ten orders above any
 floor, so the 100-step call there is in the loose regime, where `diago_david_ndim = 2` took 9 to
 20 steps per call on sixteen atoms; the parked-direction factor may still matter there.
+
+## Memory mode on a k-mesh, re-measured with the steps beside it (RTX A2000, 2026-10-01)
+
+**The number to carry: on a k-mesh of a small cell the accelerator default, `memory_mode = 'memory'`,
+costs 1.81x at 27 k-points and 1.85x at 64 against `'speed'`, with the Davidson steps equal between
+the two, and the whole of it but the streamed store is the one k-point per call.** This is the re-run
+the pre-stall audit asked for: the GTX 1060 entry above ("Two memory modes") read 1.3x to 1.6x, `GPU.md`
+quotes "1.6x the time", and both were taken without step counts. The reading stands and is larger on
+this card. Eight-atom silicon at 20 Ry with `nosym`, as there (`benchmarks/si8-1k.in` with
+`ecutwfc = 20, nosym = .true.` and `K_POINTS automatic 3 3 3 0 0 0` or `4 4 4`), `conv_thr = 1e-10`,
+D22, one process per arm, median of two, at `90e2f8f`; the steps are means over the k-points and are
+`[3, 1, 2.7, 2, 2, 2, 2.7, 2]` in every arm at 27 k-points:
+
+| 27 k-points, one dial of the memory preset moved at a time | ms per iteration | device peak |
+|---|---|---|
+| `memory` (one k-point a call, projectors rebuilt, store streamed) | 559 | 0.034 GiB |
+| `memory`, store on the device | 501 | 0.075 GiB |
+| `memory`, projectors stored | 557 | 0.080 GiB |
+| `memory`, both, which is `speed` at one k-point a call | 498, 500 | 0.095 GiB |
+| `memory`, `k_batch = 8` | 414 | 0.246 GiB |
+| `memory`, the whole mesh a call | 323 | 0.817 GiB |
+| `speed` | 308 | 0.827 GiB |
+
+and at 64 k-points `memory` 1299.5 against `speed` 703.2 ms (0.072 against 1.959 GiB). So one k-point
+per call costs about 190 ms of 308, the streamed store 58 ms at one k-point a call and 15 at the
+whole mesh, and the projector rebuild nothing measurable.
+
+**It is not the host round trips inside a Davidson step.** At one k-point a call the solve runs the
+width ladder, whose `lax.switch` branches are host round trips on a card, and `lax.while_loop` reads
+its predicate back every step; a batched call has no ladder. Neither is the cost: with the ladder off
+the same run is slower (692 against 566 ms per iteration at 27 k-points; 95.4 against 75.1 on
+`si16-1k-ecut30`), and XLA's command buffers for loops and conditionals
+(`--xla_gpu_enable_command_buffer=FUSION,CUBLAS,CUBLASLT,CUSTOM_CALL,CONDITIONAL,WHILE`, a fresh cache)
+are slower too, 596, and 601 with `--xla_gpu_graph_min_graph_size=1`. What batching over k amortises is
+the fixed cost of a call, one dispatch per kernel of the solve for one small k-point.
+
+**The size estimate is right at every k-batch measured**: `sizing.estimate_size` with the memory
+preset's other dials gives 0.033, 0.238 and 0.794 GiB at one, 8 and 27 k-points a call, against
+0.034, 0.246 and 0.817 measured, so a k-batch chosen to fit the card from it would be as safe as the
+band batch memory mode already chooses that way.

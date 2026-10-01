@@ -216,6 +216,8 @@ whether a cell runs at all.
 
 ### Phase 0 — first contact: does it run, and does it give the same number? ✅ DONE (bar check 5's cross-job form)
 
+**Unaudited for the Davidson stall (marked 2026-10-01).** The card times in this phase were taken before the subspace solve stopped parking its idle directions at 1000 times the largest diagonal element of `H`, without the Davidson steps beside them, at thresholds where one call near the end of an SCF could run to the 100-step budget from round-off. A stall only adds steps, so a card time here is an upper bound on what the same run takes now, and a ratio of the card against a CPU or `pw.x` is a lower bound on the card's advantage; a ratio between two card arms can be wrong in either direction, which is what the four corrected readings were (`PERFORMANCE.md`, "The endgame on a card is a stall").
+
 **Run 2026-08-25**, Tesla V100-SXM2-16GB on Aalto's Triton, jax 0.11.1 with
 `jax-cuda12-plugin` 0.11.1, against four pinned cores of an EPYC Milan.
 `tools/gpu/` is the harness; the table and the reasoning are in `PERFORMANCE.md`
@@ -352,6 +354,8 @@ The private cluster notes carry the site-specific answers where they are known.
 **Testable without a GPU:** no. This was the gate, and it is open.
 
 ### Phase 1 — where the time actually goes 🔶 FIRST PASS DONE (16 atoms, single-k)
+
+**Unaudited for the Davidson stall (marked 2026-10-01).** The card times in this phase were taken before the subspace solve stopped parking its idle directions at 1000 times the largest diagonal element of `H`, without the Davidson steps beside them, at thresholds where one call near the end of an SCF could run to the 100-step budget from round-off. A stall only adds steps, so a card time here is an upper bound on what the same run takes now, and a ratio of the card against a CPU or `pw.x` is a lower bound on the card's advantage; a ratio between two card arms can be wrong in either direction, which is what the four corrected readings were (`PERFORMANCE.md`, "The endgame on a card is a stall").
 
 **Run 2026-08-25** on a V100-SXM2-32GB against four EPYC Milan cores, on
 `si8-1k-ecut30`, `si16-1k` and `si16-1k-ecut30` — **single-k cells on purpose**,
@@ -586,6 +590,8 @@ that makes a cell larger than one card run at all; k-sharding is the one that ma
 fitting cell faster. Recorded as strategy rather than started.
 
 ### Phase 5 — the response path, which is the reason JAX was chosen at all ✅ RUN, BOTH HALVES
+
+**Unaudited for the Davidson stall (marked 2026-10-01).** The card times in this phase were taken before the subspace solve stopped parking its idle directions at 1000 times the largest diagonal element of `H`, without the Davidson steps beside them, at thresholds where one call near the end of an SCF could run to the 100-step budget from round-off. A stall only adds steps, so a card time here is an upper bound on what the same run takes now, and a ratio of the card against a CPU or `pw.x` is a lower bound on the card's advantage; a ratio between two card arms can be wrong in either direction, which is what the four corrected readings were (`PERFORMANCE.md`, "The endgame on a card is a stall").
 
 **The CPU half is measured (2026-08-26)** and it answers §4 item 3 — the tape
 per property, which is the number that decides the phase. `tools/gpu/phase5.py`

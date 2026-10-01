@@ -8,11 +8,17 @@ where this work corrected them.
 
 **Where the work stands.** The card's endgame stall is fixed at its cause: the Davidson subspace solve
 parked its unused directions at 1000 times the largest diagonal element of `H`, which gave the device
-`eigh` a matrix of norm 3e4 and an error of a few 1e-13, and one call near the end of an SCF at
-`conv_thr = 1e-10` then ran 3 to 100 steps from round-off. `solvers.davidson.PARK_FACTOR` is 4. The
-64-atom memory-mode SCF on D22's RTX A2000 went from 132 s to 14.5 s; the CPU is unchanged. **Everything
-on a card was measured on that one float32 card** (float64 at 1/70 of float32). No V100, A100, H100 or
-H200 was run, and that is the first item below.
+`eigh` a matrix of norm 3e4, and on this card that `eigh`'s error follows the norm (3.4e-12 median on
+the stalled call's own matrices) where the host's LAPACK does not (2.9e-15 whatever the parked value).
+A factor of 4 (`b418095`) cleared the stalls measured and still left 2 of 72 captured solves over
+1e-13; since `90e2f8f` the parked rows sit one above the Gershgorin bound of the reduced live block
+(`subspace.generalised_eigh(..., parked=)`), the card's error is at its floor (1.4e-14 at worst), and
+every arm of the ladder takes the same steps, sixteen atoms the CPU's in every iteration. The 64-atom
+memory-mode SCF on D22's RTX A2000 went from 132 s to 14.5 s at the factor of 4 and 14.0 s at the
+bound; the CPU is unchanged to the printed digits. **Everything on a card was measured on that one
+float32 card** (float64 at 1/70 of float32). No V100, A100, H100 or H200 was run, and that is the first
+item below. `PERFORMANCE.md`, "The endgame on a card is a stall", has the review entry ("The parked
+value follows the live block").
 
 **How to read the numbers.** *Measured* means taken on the A2000 with the stated steps. A forecast says
 so. The rule that cost four wrong readings: **a time on a card is not a measurement until the Davidson
@@ -33,45 +39,35 @@ Davidson pair is the device `eigh`, the random-pair test had the two within 2x, 
 whether an A100's or an H100's `eigh` has the same error on a norm-3e4 matrix.
 
 **Needs first:** a submission the user approves (`sbatch` is never run here). One short GPU job on one
-card: `stall_stats.py` on `si16-1k-ecut30` at the old factor (`PARK_FACTOR = 1000`) and at 4, then
-`call_xplat.py` export, replay and `HOSTEIGH=eigh`, then `time_scf.py` on `si16` and `si64` in the
+card: `stall_stats.py` on `si16-1k-ecut30` at a commit with the old factor (`b418095^`, 1000) and at
+the current one, then `call_xplat.py` export, replay and `HOSTEIGH=eigh`, then the captured-solve error
+table of the stall entry (the card's `eigh` against the live block alone), then `time_scf.py` on `si16` and `si64` in the
 default memory mode with `nsys profile -t cuda`, then `kern_cats.py`. **Measure:** steps in the last two
 iterations at each factor, the share of kernel time in the elementwise chain and the dense solve (the
 A100 forecast in `PERFORMANCE.md` says those come first once float64 is fast), and whether the 13x
 `conv_thr` entry of `GPU.md` Phase 1 (V100) was this.
 
-## 2. The margin of `PARK_FACTOR` -- priority 2, small to medium
+## 2, 3 and 4. The margin, the test, and why the device `eigh` differs -- closed 2026-10-01 evening
 
-The parked eigenvalue is 4 times the largest diagonal element, which is the kinetic energy at the
-cutoff, so the matrix norm grows with `ecutwfc` (about 125 at 30 Ry, about 400 at 100). Measured:
-sixteen atoms with rebuilt projectors at 30, 60 and 90 Ry were clean (steps 2 to 4; the old factor 73,
-31 and 10). **Not measured:** a larger cell at a high cutoff, a hard or ultrasoft/PAW dataset at a high
-cutoff, a spinor cell. **Measure:** `time_scf.py` with `PARK_FACTOR` 1000 and 4 on `bi20-soc.in`,
-`pt-soc-paw` and an ultrasoft cell at their production cutoffs, steps equal or not.
+**2, the margin.** There is no factor left to have a margin. The parked rows sit one above a bound of the
+reduced live block, which follows the live spectrum (6 to 9 Ry on sixteen atoms) and not the kinetic
+energy at the cutoff, so the norm no longer grows with `ecutwfc`. Why any parked value above the
+starting block's largest Ritz value is safe, at any cutoff and on any dataset: the lowest `nbnd` Ritz
+values never rise during a call (nested subspaces; the refresh keeps their vectors). The canonical
+retry multiplied the old park by 1000 (a norm of 121001 on a Davidson-shaped pair) and parks at a bound
+of its kept block since `cc21ad4`.
 
-The alternative that does not depend on the cutoff: park at a Gershgorin bound of the *live block's*
-projected `H` (the largest row sum of `|hc|` over the active entries) plus 1, computed inside `solve`.
-Not tried. `subspace._canonical_route` (the retry when the Cholesky factor is not finite) still parks at
-1000 times the diagonal of the *reduced* matrix, which does not bound that matrix's spectrum as the
-plane-wave diagonal bounds `H`'s, so the Davidson factor cannot be copied there; it needs its own bound
-and a test (`test_subspace_robustness.py` exercises the route).
+**3, the test.** `test_solvers.py::test_the_subspace_solve_is_handed_a_matrix_of_the_order_of_the_diagonal`
+traces the eigenvalues each route returns inside a real cold Davidson solve and holds the parked value
+above every live root and under the largest diagonal element of `H` (7.5 against 11.2; the factor of 4
+gave 45.7, and the test fails at 1000). `test_subspace_robustness.py` covers interleaved and trailing
+parked rows on both routes and the retry's old compounding.
 
-## 3. A test that would have caught it -- priority 2, small
-
-The fix has a trivial unit test (`PARK_FACTOR` between 2 and 10) and the step counts in the log. A CPU
-cannot reproduce the device error, so a test cannot assert the steps. What it can assert: the norm of
-the matrix handed to `generalised_eigh` in a Davidson solve is within a stated multiple of the live
-block's norm (trace `solve.at(m)` on a small cell). Write it with the Gershgorin bound if item 2 takes
-that route.
-
-## 4. Why the device `eigh` is inaccurate on this matrix -- priority 3, medium
-
-Unknown: whether it is the tridiagonalisation, the divide-and-conquer or the back-transformation, and
-whether a formulation with a smaller norm (solving the live block separately under a static shape, for
-instance by sorting the parked directions last and slicing at the live width, which the width ladder
-already does for the narrow path) reaches the same accuracy as the host. The profile shows `sytrd4_cta`
-and `ormtr_*` doing the work. **Measure:** the `eigh_noise.py` comparison of the card against `scipy`
-on a matrix with the parked structure (live block plus a diagonal at 3e4), not on a random pair.
+**4, why.** Not fully: on this card the device `eigh`'s error reaches `eps` times the norm of what it is
+handed and LAPACK's does not, and that is what was measured. Where the parked rows sit matters only when
+they are interleaved (both platforms then follow the norm, and sorting them last cures it), and
+Davidson's are already trailing. Which stage of cuSOLVER (`sytrd`, the divide and conquer, `ormtr`)
+carries it was not taken apart, and with the norm at the live block's own it no longer matters here.
 
 ## 5. The A100-class profile -- priority 3, needs item 1
 
@@ -100,11 +96,14 @@ XLA command buffers (a null here: `--xla_gpu_enable_command_buffer` with `WHILE,
 * **The 157-atom slab's "12x too many steps"** (`OPEN.md`, the memory notes) is a separate question: its
   iteration 2 is in the loose-`ethr` regime, ten orders above any floor. The parked-direction factor may
   still matter there; run it with `davidson_steps` on Triton before believing either way.
-* **Old GPU readings without step counts.** Every card timing recorded before 2026-10-01 in
-  `PERFORMANCE.md` and `GPU.md` (Phase 0 and Phase 1 ratios, the `h200` and V100 entries, the
-  response-path timings) is unaudited against the stall. Four were wrong and are corrected; the rest
-  are marked by this paragraph and not by a re-read. A pass that reads each and either re-runs it or
-  marks it is cheap and worth doing before anyone quotes one.
+* **Old GPU readings without step counts.** Every section of `PERFORMANCE.md` before the stall entry
+  that holds a card time, and Phases 0, 1 and 5 of `GPU.md`, now open with a dated marking paragraph
+  (2026-10-01): a stall only adds steps, so such a time is an upper bound and a card-against-CPU ratio
+  a lower bound on the card's advantage, while a ratio between two card arms can be wrong either way.
+  The two A/B readings a default rests on are the GTX 1060's memory-against-speed table (the "1.6x the
+  time" of `GPU.md`'s opening) and the V100's `k=all, b=1` 2075 ms (`CLAUDE.md`'s reason that corner is
+  in neither preset); the first is re-measured on the A2000 in the stall entry, the second needs a
+  float64 card.
 * **The float32 tier** (`GPU-MEMORY-NEXT.md` item 26): the first blocker is named (setup arrays built
   from the radial tables ignore the precision policy, so `H|psi>` comes back complex128 into a
   complex64 basis). On the development cards it is the lever (a `4096^2` product 10.9 ms against 756);

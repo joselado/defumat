@@ -7048,14 +7048,16 @@ knowing because it looked like a floor problem. Davidson stops on the \emph{chan
 in each eigenvalue between two steps, and on a GPU one call at that floor could
 take between 3 and 100 steps from round-off alone: at \code{conv\_thr=1e-10} the
 64-atom SCF in the default memory mode took 132~s against 14.5~s. The cause was
-not the threshold. The subspace solve parks the directions it is not using at
-$1000\times$ the largest diagonal element of $H$ so that they never enter the
-lowest roots, which makes the matrix the dense eigensolver diagonalises have a
-norm of about $3\times10^4$ against a physical spectrum of 30, and an eigensolver
-is accurate to machine epsilon times that norm in every eigenvalue, which the
-card's \code{eigh} showed and a CPU's did not. The factor is 4 now
-(\code{solvers.davidson.PARK\_FACTOR}); every arm measured takes the CPU's step
-counts at \qe's floor, and the CPU's own numbers did not move.
+not the threshold. The subspace solve parked the directions it is not using at
+$1000\times$ the largest diagonal element of $H$ so that they never entered the
+lowest roots, which gave the matrix the dense eigensolver diagonalises a norm of
+about $3\times10^4$ against a live block of 6 to 9~Ry, and the card's \code{eigh}
+is accurate only to machine epsilon times that norm ($3.4\times10^{-12}$~Ry on the
+stalled call's own matrices), where a CPU's is not affected by it at all. They now
+sit one above a bound of the reduced live block's spectrum
+(\code{solvers.subspace.generalised\_eigh}'s \code{parked}), where the card's error
+is at its floor; every arm measured takes the same steps, sixteen atoms the CPU's
+in every iteration at \qe's floor, and the CPU's own numbers did not move.
 
 \begin{lstlisting}[language=Python]
 from defumat.batching import resolve_ethr_floor
@@ -7076,9 +7078,9 @@ uses the whole 100-step budget and leaves bands unsettled gives a
 \code{RuntimeWarning}, once per run}, naming the iteration, the threshold and the
 unsettled count; the steps each iteration paid are
 \code{history[i]["davidson\_iterations"]}, and a time on a card is read against them.
-\textbf{The margin depends on the cutoff}: the parking is 4 times the largest
-diagonal element, which is the kinetic energy at the cutoff, so the matrix norm
-grows with \code{ecutwfc}; sixteen atoms were clean at 30, 60 and 90~Ry, and nothing larger or with a hard pseudopotential was measured. And \textbf{the
+\textbf{The parking follows the live block}, not the kinetic energy at the
+cutoff, so its margin does not shrink as \code{ecutwfc} grows; sixteen atoms were
+measured at 30, 60 and 90~Ry. And \textbf{the
 card measurements are on a float32 part}: the component that differs is the device
 \code{eigh} on the Davidson matrix, and whether another card's has the same error
 on it was not measured.

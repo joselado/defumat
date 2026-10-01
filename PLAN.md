@@ -23278,7 +23278,7 @@ same code on one core.
   MB L2 and Milan's is 512 KB, which is the first thing to try against it.
 
 
-### P125 -- The endgame of an SCF on a card: one Davidson call can be most of the run, and the cause is how the subspace solve parks its unused directions. ✅ DONE for silicon at 16 and 64 atoms on a float32 card; other cutoffs, other cards and the old V100 entry are open.
+### P125 -- The endgame of an SCF on a card: one Davidson call can be most of the run, and the cause is how the subspace solve parks its unused directions. ✅ DONE for silicon at 16 and 64 atoms on a float32 card, at 30 to 90 Ry; other cards and the old V100 entry are open.
 
 **The number.** The 64-atom silicon SCF at `conv_thr = 1e-10` in the default memory mode on an
 RTX A2000 took **132 s and takes 14.5 s**, because two Davidson calls ran to the 100-step budget
@@ -23296,9 +23296,13 @@ replaying the call: the same call takes 6 steps on the card with the CPU's input
 with the card's, 3 on the card with the dense `eigh` on the host and everything else on the device,
 63 with only the Cholesky on the host. The solver parked every direction it was not using at
 `1000 max|diag H| + 1`, so the matrix the device `eigh` diagonalises had a norm of 3e4 against a
-spectrum of 30, and an eigensolver is accurate to `eps` times the norm in each eigenvalue (7e-12),
-against an `ethr` of 1e-13. The factor is now 4 (`solvers.davidson.PARK_FACTOR`); at QE's floor
-every arm takes the CPU's steps (ten arms at sixteen atoms, `band_batch` 1, 8 and 16 and the tight
+spectrum of 30, and a backward-stable eigensolver's error is bounded by `eps` times the norm (6.5e-12),
+which the card's reaches (3.4e-12 median on the stalled call's own matrices) and the host's LAPACK
+does not (2.9e-15), against an `ethr` of 1e-13. The factor was set to 4 the same day, and in the
+evening's review the parked rows went to one above the Gershgorin bound of the reduced live block
+(`subspace.generalised_eigh(..., parked=)`, `90e2f8f`), which put the card's error at its floor (1.4e-14
+at worst over 72 captured solves, against 1.6e-13 at the factor of 4); at QE's floor every arm takes
+the CPU's steps (ten arms at sixteen atoms, `band_batch` 1, 8 and 16 and the tight
 requests at `conv_thr` 1e-11 and 1e-12 among them, and three arms at 64 atoms, iteration 7 included).
 Ruled out on the way: the operator (`H|psi>` agrees to 2.7e-15 across platforms), the dense solve's
 accuracy on random pairs, the canonical-orthogonalisation retry. Tried and dropped: projecting the
@@ -23323,12 +23327,24 @@ elementwise chain and the subspace solve come first on an A100 is marked as one.
 `test_the_band_dial_reaches_the_spinor_h_psi` had gone stale when a `Calculation` began to resolve its
 band batch at construction and is fixed.
 
-**What is not done.** The old V100 and the A100 and H100 (a Triton job). The cutoff dependence of the
-margin: the parked eigenvalue is 4 times the kinetic energy at the cutoff, so the norm grows with it;
-sixteen atoms at 60 and 90 Ry were clean (30 Ry: 73 steps in one call before and 3 after; 60: 31 and
-2), and nothing larger or with a hard pseudopotential was measured; a Gershgorin bound on the live
-block would not depend on it and was not tried. The canonical retry still parks at 1000 times of the reduced matrix's diagonal, which does not bound its
-spectrum as the plane-wave diagonal bounds `H`'s, so the Davidson factor was not copied there and the
-route is rare and not measured. Whether another card's `eigh` has the same error on this matrix is not
-measured (on random pairs the card and the CPU were within 2x). Record: `PERFORMANCE.md`, "The endgame on a
+**The review (the evening of 2026-10-01).** The headline reproduces at the committed code, to the
+step. Three corrections. *Safety*: a parked direction only has to sit above the starting block's
+largest Ritz value, because the lowest `nbnd` Ritz values never rise during a call (nested subspaces;
+the refresh keeps their vectors), and that is 0.22 to 0.34 of the largest diagonal element on a cold
+start on four cells including SG15 nickel and HGH LiF; the earlier argument, `lambda_max(H)` well under
+three times that element, holds there (1.00 to 1.05) and is not the reason. *The retry*: the canonical
+route parked at 1000 times the reduced matrix's diagonal, which inside Davidson carried the solver's
+own park, a norm of 121001 on a Davidson-shaped pair; it parks at a bound of its kept block now
+(`cc21ad4`). *The norm*: the live block is 6 to 9 Ry where the factor of 4 parked at 118, so the park
+still set the norm; it follows the live block now (`90e2f8f`), which also ends the cutoff dependence,
+and the 64-atom arms, whose last iteration took 2, 3 or 4 steps by executable at the factor of 4, all
+take `[3, 1, 3, 3, 2, 3, 4, 3, 2]` (memory mode 14.0 s). Davidson's parked rows are trailing, so their
+position in the matrix does not matter; on an interleaved synthetic matrix it does, on both platforms.
+Two tests that would have failed before: the parked value inside a real Davidson solve, and the
+retry's compounding. One that passed for the wrong reason, the batched-guard test, whose `cond[` was
+`jnp.diagonal`'s `platform_index`. The pre-stall card timings of `PERFORMANCE.md` and `GPU.md` carry
+a dated marking paragraph each.
+
+**What is not done.** The old V100 and the A100 and H100 (a Triton job), and whether another card's
+`eigh` follows the norm as this one's does. Record: `PERFORMANCE.md`, "The endgame on a
 card is a stall"; guide: `docs/features.tex`, the batching section.
