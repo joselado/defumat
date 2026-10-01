@@ -8594,7 +8594,12 @@ iterations (sixteen atoms) and ms per iteration, before and after:
 | 64 atoms, memory default, `conv_thr` 1e-11 | `[..., 10, 100, 1, 1]`, 6982 (withdrawn rule) | `[..., 4, 3, 4]`, 1640 |
 
 Every arm takes the CPU's steps, iteration 7 of the 64-atom cell included, which had varied between
-4 and 18 steps with the executable above the floor. The CPU is unchanged to the printed digits (the
+4 and 18 steps with the executable above the floor. **At higher cutoffs** (sixteen atoms, rebuilt
+projectors, the card at the committed code, QE's floor; whole SCF, steps in the last iterations and
+wall) the old factor stalls at 30 and 60 Ry and is slow at 90, and the new one is not: 30 Ry
+`[..., 73, 2]` in 1.65 s against `[..., 3, 2]` in 0.64 s; 60 Ry `[..., 4, 31]` in 2.68 s against
+`[..., 4, 2]` in 1.53 s; 90 Ry `[..., 10, 2]` in 2.55 s against `[..., 4, 2]` in 2.32 s, the energies
+equal to the printed digits. The CPU is unchanged to the printed digits (the
 sixteen-atom energy -126.72076070097079 Ry and steps `[3, 1, 2, 2, 2, 2, 4, 3, 2]`).
 
 **The overlap's condition number grows during the stall, and whether that is cause or
@@ -8838,9 +8843,10 @@ is the device `eigh` on a matrix whose norm is set by the parking, which is not 
 float32 card, so the same stall is the forecast for every card that uses cuSOLVER, and it is a
 forecast. The dependence on the cutoff: the parked eigenvalue is 4 times the largest diagonal
 element, which is the kinetic energy at the cutoff, so the matrix norm and with it the `eigh`
-error grow with `ecutwfc` (a norm of about 125 at 30 Ry, about 400 at 100), and nothing above 30 Ry
-was measured; a bound that follows the live block's own spectrum (a Gershgorin row sum of the
-projected `H`) would not depend on the cutoff and was not tried. `subspace._canonical_route` (the
+error grow with `ecutwfc` (a norm of about 125 at 30 Ry, about 400 at 100); sixteen atoms at 60 and
+90 Ry were clean (above), and nothing larger or hard-pseudopotential was measured. A bound that
+follows the live block's own spectrum (a Gershgorin row sum of the projected `H`) would not depend
+on the cutoff and was not tried. `subspace._canonical_route` (the
 retry) still parks at 1000 times. `PARK_FACTOR` 3 was only replayed on the one call. A cell where
 the budget warning fires again, which it will say. The floor dial `DEFUMAT_ETHR_MIN` stays as a
 lever. **The 157-atom slab's "12x too many steps" (`OPEN.md`, the memory notes) is not this**, and

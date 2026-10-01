@@ -7078,7 +7078,7 @@ unsettled count; the steps each iteration paid are
 \code{history[i]["davidson\_iterations"]}, and a time on a card is read against them.
 \textbf{The margin depends on the cutoff}: the parking is 4 times the largest
 diagonal element, which is the kinetic energy at the cutoff, so the matrix norm
-grows with \code{ecutwfc}, and nothing above 30~Ry was measured. And \textbf{the
+grows with \code{ecutwfc}; sixteen atoms were clean at 30, 60 and 90~Ry, and nothing larger or with a hard pseudopotential was measured. And \textbf{the
 card measurements are on a float32 part}; the cause is not specific to one, but no
 other card was run.
 \end{refuses}

@@ -23324,7 +23324,8 @@ elementwise chain and the subspace solve come first on an A100 is marked as one.
 band batch at construction and is fixed.
 
 **What is not done.** The old V100 and the A100 and H100 (a Triton job). The cutoff dependence of the
-margin: the parked eigenvalue is 4 times the kinetic energy at the cutoff, so the norm grows with it, and
-nothing above 30 Ry was measured; a Gershgorin bound on the live block would not depend on it and was
-not tried. The canonical retry still parks at 1000 times. Record: `PERFORMANCE.md`, "The endgame on a
+margin: the parked eigenvalue is 4 times the kinetic energy at the cutoff, so the norm grows with it;
+sixteen atoms at 60 and 90 Ry were clean (30 Ry: 73 steps in one call before and 3 after; 60: 31 and
+2), and nothing larger or with a hard pseudopotential was measured; a Gershgorin bound on the live
+block would not depend on it and was not tried. The canonical retry still parks at 1000 times. Record: `PERFORMANCE.md`, "The endgame on a
 card is a stall"; guide: `docs/features.tex`, the batching section.
