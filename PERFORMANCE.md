@@ -9181,3 +9181,31 @@ The stick layout had been losing on a card partly to its own scatter loop; `stic
 every platform. **A forecast, not a measurement:** both fixes remove fixed costs per call, which a card
 with fast float64 pays in the same absolute amount and over less arithmetic, so their share there should
 be larger than on this card.
+
+## The radial transforms took minutes to compile on a card (RTX A2000, 2026-10-02)
+
+**The number to carry: the projector transform of bismuth's relativistic dataset compiled in 74.6 s at
+`l = 0` and 198 s at `l = 1` on the card, and compiles in 0.3 and 0.1 s once its integrand is kept out of
+the reduction, with the same numbers to the last bit and the same run time.** Found when an HLO dump of
+`bi20-soc.in` (20 atoms, spin-orbit, ultrasoft) on D22 did not reach its first Davidson call in 25
+minutes: XLA's slow-operation alarm named an `input_reduce_fusion` in `jit__beta_kernel` that took
+3 min 12 s once and 6 min 41 s another time, and the spin-orbit platinum cell's run raised the same alarm.
+
+Every radial transform here (`pseudo.formfactors`'s local potential, atomic charge, core charge,
+projectors and atomic orbitals, and `pseudo.augmentation`'s `Q_ij` table) is an elementwise integrand, a
+spherical Bessel function of `q r` times a tabulated function, reduced against the quadrature weights,
+and XLA's GPU backend fuses the whole integrand into that reduction. With `jax.lax.optimization_barrier`
+between them (`formfactors._radial_values`) the integrand is one elementwise kernel and the reduction a
+matrix-vector product. The kernel alone, 28572 values of `q` on a 995-point mesh, compile and run:
+
+| `l` | card, fused | card, barrier | CPU, fused | CPU, barrier |
+|---|---|---|---|---|
+| 0 | 74.6 s, 21.9 ms | 0.3 s, 21.1 ms | 0.2 s, 154 ms | 0.1 s, 142 ms |
+| 1 | 198 s, 37.5 ms | 0.1 s, 35.7 ms | 0.1 s, 255 ms | 0.2 s, 256 ms |
+
+The outputs are identical between the two forms on both platforms, and the CPU energies of
+`si8-us-1k`, `si8-paw-1k` and `si16-1k-ecut30` are the same to every printed digit (-91.01392588949805,
+-357.09973538232424, -126.72076070097079 Ry). The barrier is the identity and differentiates as one, and
+the stress tests, which differentiate through these transforms at a strain, pass. **What it buys is setup,
+paid once per new shape** when the persistent cache is on and every run when it is not: every new cell,
+cutoff or k-mesh compiles each projector channel's transform again.
