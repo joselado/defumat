@@ -6998,6 +6998,92 @@ their own, because they rotate the moments; they resolve the mode from
 \code{DEFUMAT\_MEMORY\_MODE} and the platform.
 \end{refuses}
 
+\textbf{A $k$-chunk sized to the card: \code{k\_batch='fit'}.} One $k$-point per
+call is \qe's loop and \code{'memory'}'s default, and on a card it pays a fixed
+cost per call --- one dispatch per kernel of a Davidson solve sized for one small
+$k$-point --- that a batch over $k$ amortises. \code{k\_batch='fit'} (or
+\code{DEFUMAT\_K\_BATCH=fit}) chooses the largest chunk whose estimated peak fits
+60\% of what the card has free, from the same estimate that sizes the band batch:
+the whole mesh whenever it fits, otherwise the fewest calls and then the least
+padding. On an RTX~A2000, eight-atom silicon at 20~Ry with \code{nosym}, Davidson
+steps equal, it takes memory mode from 555 to 282~ms per SCF iteration at 27
+$k$-points and from 1280 to 657 at 64, against 275 and 628 in \code{'speed'}, at
+speed mode's peak. On sixteen atoms at 30~Ry the call is bound by arithmetic
+rather than by its fixed cost, and the batch is a wash: 4476 against 4310~ms at
+22 $k$-points a call on a 64-point mesh, where \code{'speed'} would not fit at all.
+The width ladder of the Davidson solve, which sizes it by the live subspace, is
+kept inside a batch at the batch's widest rung, which is what made that a wash
+rather than a 28\% loss.
+
+\begin{lstlisting}[language=Python]
+from defumat import Calculator
+
+calc = Calculator.from_file("scf.in", k_batch="fit")
+print(calc.calculation.k_batch, calc.estimate().k_batch)
+\end{lstlisting}
+
+\begin{refuses}
+\textbf{It is opt-in}: \code{'memory'}'s default is still one $k$-point a call.
+\textbf{On a CPU it is the platform's default}, there being no card to fill and a
+batch over $k$ measured slower there. \textbf{A chunk is grown only from a whole
+band block}: a run whose band block had to be split to fit stays at one $k$-point.
+\textbf{It is sized for the SCF's $k$-set}; a band path or an NSCF set reuses the
+chunk. \textbf{A function that is handed a \code{k\_batch} without a system to size
+refuses \code{'fit'} by name} (an NSCF given one explicitly, for instance); the
+environment form is silent to it. \textbf{A batch over $k$ runs each Davidson step
+until its slowest $k$-point has converged}, which is a pure speed lever while the
+steps are equal across $k$-points, as they are on every cell measured.
+\end{refuses}
+
+\textbf{The band side in single precision: \code{band\_precision}.} \code{'single'}
+(or \code{DEFUMAT\_BAND\_PRECISION=single}) runs $H\psi$, the Davidson work arrays
+and the wavefunction store in float32, and keeps the density, the potential, the
+mixer and the energies in float64; the small subspace solves run in double
+whatever the bands do. It is a performance mode and no correctness claim is made
+in it. On an RTX~A2000, a float32 part, the 64-atom silicon SCF to
+\code{conv\_thr=1e-7} takes 2.5~s against 9.5~s in double, at half the device peak
+(1.65 against 3.15~GiB), and its energy is $2.8\times10^{-5}$~Ry from double's at
+the same threshold; on sixteen atoms it is 1.7x, and on a CPU an iteration is
+1.6--1.8x. \code{'mixed'} starts in single and switches the band side to double
+inside the same run, at the first iteration whose threshold single cannot deliver,
+keeping the mixer's history, so the state it converges to is a double one (within
+$10^{-10}$~Ry of a double run on every cell tried). It is measured \emph{not} to pay
+on most of them: 1.03--1.21x on sixteen-atom silicon, 0.72--0.75x on 64, because
+the $10^{-7}$ perturbation of single's first iterations costs the double phase the
+superlinear mixing step that a cell like that converges by.
+
+\begin{lstlisting}[language=Python]
+from defumat import Calculator
+
+calc = Calculator.from_file("scf.in", band_precision="mixed")
+result = calc.get_scf()
+print([entry["band_precision"] for entry in result.history])
+\end{lstlisting}
+
+\begin{shcode}
+DEFUMAT_BAND_PRECISION=single python3 run.py
+\end{shcode}
+
+\begin{refuses}
+\textbf{Single runs the SCF of a collinear norm-conserving calculation, one or two
+spin channels, and nothing else}: an ultrasoft or PAW dataset, a spinor, a spiral,
+DFT+U and a meta-GGA are refused by name. \textbf{Every derivative of the energy is
+refused} on a calculation whose band side is single --- forces, stress, the
+response stack --- because a gradient through a float32 $H\psi$ carries its
+round-off as a plausible force; converge in double for those, from the single
+result if you like (\code{run\_scf(..., starting\_from=result)}). A calculator built
+with \code{'mixed'} keeps its single-precision setup, so its derivatives are refused
+too. \textbf{\code{conv\_thr} below $10^{-7}$ is refused in single}: the energy does
+not follow it there ($10^{-6}$ to $8\times10^{-6}$~Ry off whatever is asked).
+\textbf{Davidson's threshold is floored at $4\,\epsilon_{32}\,E_{\rm cut}$}, where
+\qe's $10^{-13}$ would stall every call at the budget and let the run report itself
+converged with the energy wrong. \textbf{On an accelerator the float32 matrix
+products are pinned to full precision} against TF32's 10-bit mantissa, for the
+process. And \textbf{a mover that rebuilds the projector core} --- a new geometry,
+a band path --- builds it in double, so the moved calculation is double throughout
+rather than half single.
+\end{refuses}
+
 \textbf{The card's pool.} Importing \code{defumat} lets the device allocator take
 90\% of the card instead of JAX's own 75\% (on a 6~GB card, 5.45~GB rather than
 4.76), by setting \code{XLA\_CLIENT\_MEM\_FRACTION} before the backend starts.

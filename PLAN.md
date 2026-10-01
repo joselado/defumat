@@ -204,6 +204,9 @@ new phase is started. Each entry names the missing term rather than the missing 
 because that is what decides whether it is a session or a phase.
 
 - **Wyckoff input** (P6, the one part of that phase not done).
+- **A switch from single to double precision that pays** (P126): `'mixed'` converges to the double
+  state and loses the superlinear mixing step a bulk cell converges by, 0.72x on 64-atom silicon on
+  the card; and **whether `k_batch = 'fit'` becomes memory mode's default**, which is the user's.
 - **Relaxing the orientation of a magnetic texture under spin-orbit coupling** (P122,
   `ORIENTATION-NEXT.md`): step 1, the three-component torque on a collinear source, is in;
   a noncollinear source (the four-cell cobalt helix), the BFGS relaxation in the rotation,
@@ -23348,3 +23351,39 @@ a dated marking paragraph each.
 **What is not done.** The old V100 and the A100 and H100 (a Triton job), and whether another card's
 `eigh` follows the norm as this one's does. Record: `PERFORMANCE.md`, "The endgame on a
 card is a stall"; guide: `docs/features.tex`, the batching section.
+
+### P126 -- Speed on a card past the stall: a k-chunk sized to the card, the width ladder under a batch over k, and the band side in single precision. ✅ DONE on the RTX A2000 for norm-conserving silicon; whether `'fit'` becomes memory mode's default is the user's decision, and a precision switch that pays is not found.
+
+**The numbers.** On a k-mesh memory mode cost 1.81x at 27 k-points and 1.85x at 64 against speed mode
+on eight-atom silicon, steps equal, nearly all of it the one k-point per call (not the width ladder's
+round trips, which are worth having, and not something command buffers capture). `k_batch = 'fit'`
+(`sizing.choose_k_batch`, resolved in `Calculation.__init__` after the band batch) takes the largest
+chunk whose estimated peak fits 60 per cent of what the card has free, the estimate matching measured
+peaks to 3 per cent at one, 8 and 27 k-points a call: 555 to 282 ms per iteration at 27 points and 1280
+to 657 at 64, against speed mode's 275 and 628. On sixteen atoms at 30 Ry, where a call is bound by
+arithmetic, a 22-point chunk was **1.28x slower** than one at a time until the Davidson width ladder was
+kept under the batch (`_at_width`'s `lax.pmax` over a named `vmap` axis, `batching.whole_axis_vmap`):
+5513 to 4476 ms against 4310. `band_precision = 'single'` (`config.resolve_band_precision`; the projector
+core carries the band dtype, the subspace solves are `config.SUBSPACE_PRECISION`, double) runs the 64-atom
+SCF to `conv_thr = 1e-7` in 2.46 s against 9.5 s at 1.65 against 3.15 GiB, the energy 2.8e-5 Ry from
+double's.
+
+**What was found.** The float32 plan's review (a fable subagent, before any code) named the failures in
+the order the first SCF would hit them, and each was there: the stick density summed in the states'
+precision, the projectors' dtype fixed from the cell so that nothing ran in float32 in rebuild mode, and
+QE's `ethr` floor letting a float32 run report itself converged 5.5e-5 Ry wrong. Two more were found by
+running it: the eigenvalues have to leave the solve in double, or the weights and the box density
+accumulate in float32; and the structure-factor phase cannot be float32 (100 rad), so the core stays
+double and only its output is cast. **A switch to double does not pay where single is fast**: a restart
+from a converged single run took 12 to 14 iterations against 9 from scratch on 64 atoms, and a switch
+inside the run (`'mixed'`, `Calculation.at_band_precision`) lost the superlinear Broyden step 64-atom
+silicon converges by (3.96e-6 to 2.7e-8 in double, 4.24e-6 *up* to 1.9e-5 after the switch, at an input
+7 per cent different); three triggers gave 0.60x to 0.87x there, 1.03x to 1.21x on sixteen atoms, and
+nothing on a slab too small to be bound by arithmetic.
+
+**What is not done.** `'fit'` as memory mode's default, and speed mode falling back to the largest
+fitting chunk rather than to one k-point: both change a documented promise, and both are the user's to
+decide. A precision switch that does not perturb the mixer. Single on ultrasoft, PAW, spinors and DFT+U,
+and every derivative in it (refused). All of it on a float64 card, which `tools/gpu/stall-check.sbatch`
+measures and which needs a submission. Record: `PERFORMANCE.md`, "A k-chunk sized to the card" and
+"The band side in single precision"; guide: `docs/features.tex`, the batching section.

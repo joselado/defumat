@@ -38,8 +38,10 @@ The forecast, not a measurement: the one component that differs between the A200
 Davidson pair is the device `eigh`, the random-pair test had the two within 2x, and nothing says
 whether an A100's or an H100's `eigh` has the same error on a norm-3e4 matrix.
 
-**Needs first:** a submission the user approves (`sbatch` is never run here). One short GPU job on one
-card: `stall_stats.py` on `si16-1k-ecut30` at a commit with the old factor (`b418095^`, 1000) and at
+**Needs first:** a submission the user approves (`sbatch` is never run here). The job is written:
+`tools/gpu/stall-check.sbatch` (the captured-solve `eigh` table, the step ladder at the committed
+parking, the float32 tier, an `nsys` profile), with the submit line in its header. As first planned, one
+short GPU job on one card: `stall_stats.py` on `si16-1k-ecut30` at a commit with the old factor (`b418095^`, 1000) and at
 the current one, then `call_xplat.py` export, replay and `HOSTEIGH=eigh`, then the captured-solve error
 table of the stall entry (the card's `eigh` against the live block alone), then `time_scf.py` on `si16` and `si64` in the
 default memory mode with `nsys profile -t cuda`, then `kern_cats.py`. **Measure:** steps in the last two
@@ -68,6 +70,18 @@ handed and LAPACK's does not, and that is what was measured. Where the parked ro
 they are interleaved (both platforms then follow the norm, and sorting them last cures it), and
 Davidson's are already trailing. Which stage of cuSOLVER (`sytrd`, the divide and conquer, `ormtr`)
 carries it was not taken apart, and with the norm at the live block's own it no longer matters here.
+
+## 4a. Memory mode on a k-mesh, and a float32 band side -- done 2026-10-01 evening, two decisions left
+
+Memory mode cost 1.8x against speed mode on a k-mesh of a small cell, nearly all of it the one k-point
+per call; `k_batch = 'fit'` sizes the chunk from the card (1.97x faster at 27 k-points on eight-atom
+silicon) and the Davidson width ladder now works under a batch over k, which made a 22-point chunk on
+sixteen atoms a wash where it had been 1.28x slower. `band_precision = 'single'` is 3.9x to 4.2x on 64
+atoms on the A2000 to `conv_thr = 1e-7`; `'mixed'` does not pay. **The user's to decide:** whether
+memory mode's default becomes `'fit'`, and whether speed mode's fallback becomes the largest fitting
+chunk rather than one k-point. **Open:** a precision switch that keeps the mixer's superlinear step
+(`PLAN.md` P126, "What is not done"). Records: `PERFORMANCE.md`, "A k-chunk sized to the card" and "The
+band side in single precision".
 
 ## 5. The A100-class profile -- priority 3, needs item 1
 

@@ -810,6 +810,11 @@ record in `GPU.md` rather than to start.
 
 ### 26. A float32 tier would halve every device array -- priority 3, large
 
+**Done for the band side, 2026-10-01** (`PLAN.md` P126): `band_precision = 'single'` halves the
+band-sized arrays and with them the 64-atom silicon peak on the card (1.65 against 3.15 GiB); the grid
+side stays double by design, and ultrasoft, PAW, spinors and DFT+U are refused. The paragraphs below are
+the item as it stood.
+
 The arithmetic is exact (`zc` 16 -> 8), but no float32 SCF has ever run, so what blocks one
 is unknown (`GPU.md` §4 item 2 and Phase 3; `AUDIT-2026-09-18.md` names a Sternheimer carry
 mismatch and dtype-less constructions). Build the tier on this card -- eight-atom Si,

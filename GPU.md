@@ -511,6 +511,14 @@ within tolerance.
 
 ### Phase 3 — single precision as a performance mode
 
+**Built, 2026-10-01, as a band tier rather than end to end** (`PLAN.md` P126; `PERFORMANCE.md`, "The
+band side in single precision"): `band_precision = 'single'` runs `H|psi>`, the Davidson arrays and the
+store in float32 and the whole grid side in float64, with the subspace solves in double; on the
+RTX A2000 the 64-atom SCF to `conv_thr = 1e-7` is 3.9x to 4.2x faster at half the device peak, and
+`'mixed'`, which switches to double inside the run, does not pay on the cells tried. The rank this
+section asks for still waits on a float64 card's ratio (`tools/gpu/stall-check.sbatch`, not run). The
+paragraphs below are the plan as it stood before.
+
 **What.** `Precision(SINGLE)` end to end, with named reductions kept in float64.
 
 **The policy already exists and the tests do not.** `PLAN.md` §5 says single precision must
