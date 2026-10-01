@@ -8756,6 +8756,16 @@ A100. **That is a forecast from scaling peak rates, not a measurement**, and one
 dense solve 27 per cent (8396 launches of 29 us), elementwise 22 per cent (51,158 launches of
 3.9 us) and cuBLAS 13.5 per cent, which is the shape the small-cell regime has.
 
+**XLA's command buffers, a null on this card.** The launch count is what a faster card would feel,
+so the flags that capture more of a loop body into CUDA graphs were tried on the stall-free first
+seven iterations (one fresh compile cache each, three repeats, ms per iteration, steps equal in every
+arm): `--xla_gpu_enable_command_buffer=` (none) against the default against
+`FUSION,CUBLAS,CUBLASLT,CUSTOM_CALL,COLLECTIVES,CONDITIONAL,WHILE` against that with
+`--xla_gpu_graph_min_graph_size=1`. Eight atoms 33.0, 32.9, 33.5, 36.3; sixteen atoms 70.5, 70.7,
+71.6, 73.5. No gain, and a loss from the last, because a cell of this size on a card with float64 at
+1/70 of float32 is bound by arithmetic and not by launches. Whether they help where the launches are
+the cost is a question for a float64 card.
+
 **Not done, in order of what it would change.** A request tighter than 1e-10 on a card (above).
 The V100 and H100 step counts for the 13x entry (a Triton job, which needs a submission this
 session did not make). A stall guard that does not depend on a floor (the floor moves the
