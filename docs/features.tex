@@ -7198,8 +7198,11 @@ answer is unchanged bit for bit, not merely to round-off, because chunking the
 band axis reorders nothing: it is a map, not a sum.
 
 \textbf{Why the band default is per platform.} A GPU has no cache to fit in and
-inverts the conclusion: on a ten-atom metal, \code{k=1,b=1} costs \textbf{4.5x}
-what \code{k=all,b=all} does on the same card, sixteen-atom silicon runs at
+inverts the conclusion: on a ten-atom metal, \code{k=1,b=1} cost \textbf{4.5x}
+what \code{k=all,b=all} does on the same card (measured before the stick layout's
+fill of the box became a gather, a loop the card had paid once per band: on
+sixteen-atom silicon on an RTX~A2000 one band at a time is now 71.0 against
+64.0~ms an iteration, where it was 196.6), sixteen-atom silicon runs at
 \textbf{0.20x} --- an outright loss against four CPU cores --- and at
 thirty-two atoms \code{b=1} did not finish at all. So a run on a device batches
 its bands unless it says otherwise. The plausible half-measure

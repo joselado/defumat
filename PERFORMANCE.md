@@ -9229,3 +9229,13 @@ barrier does not touch. With the persistent cache on this is paid once per shape
 solve (`jit(_every_k)`) and 14 s the start's Rayleigh-Ritz (`jit(_rotate_all)`), against 2.8 and 0.7 s on
 `si16-1k-ecut30`. The spinor ultrasoft `H|psi>` is copied into the compiled solve once per rung of the
 band ladder and the width ladder, so its compile grows with both; not taken further.
+
+**The ladder again at the end of the night** (D22, every change of the night in: the bound parking,
+`syevd`, the stick gather, the rung count, the radial barrier; median of three on sixteen atoms and two
+on 64, ms per iteration): every arm takes exactly the steps and the energy of the bound ladder above.
+Sixteen atoms memory mode 69.5, speed 64.0, `band_batch` 1, 8 and 16 71.0, 64.4 and 63.9, box 69.6,
+rebuilt projectors 65.1, `conv_thr` 1e-11 70.2 and 1e-12 66.3; 60 and 90 Ry 182.0 and 273.0; 64 atoms
+memory mode 1535, speed 1439, `band_batch` 8 1292, memory at 1e-11 1548. **One band at a time is no
+longer dear on a card**: 71.0 against 64.0 ms on sixteen atoms, where it was 196.6 at the bound commit
+and 341.1 before the stall was fixed, since the stick fill's loop was paid once per band. The "4.3x for
+`band_batch = 1`" of the GTX 1060 entry ("Two memory modes") and of the guide was largely that loop.
