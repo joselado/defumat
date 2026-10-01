@@ -202,7 +202,10 @@ def _fill_columns(values: jnp.ndarray, columns, ncols: int) -> jnp.ndarray:
     takes the stick that lands there, or an extra zero stick, through the
     inverse of ``columns`` (distinct, padding included, so the inverse is
     well defined), and that is one kernel -- 0.043 and 1.37 ms there, the same
-    numbers to the last bit. **A CPU keeps the scatter**: there the gather made
+    numbers to the last bit. Of the three callers a card takes only
+    :func:`sticks_to_r` by default: :func:`sticks_local` and
+    :func:`sticks_density` are the plane-chunked paths, which a card reaches
+    only with ``DEFUMAT_PLANE_CHUNK`` set. **A CPU keeps the scatter**: there the gather made
     a sixteen-atom SCF 2.5 per cent slower (477.7 against 465.9 ms an
     iteration, three samples each, apart), and the bits are the same either way.
     """
