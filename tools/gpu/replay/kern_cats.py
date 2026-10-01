@@ -10,7 +10,9 @@ def load(path):
 def cat(name):
     n = name.lower()
     if re.search(r"fft|cufft|regular_fft|vector_fft|bluestein", n): return "FFT"
-    if re.search(r"sytrd|ormtr|syevd|stedc|steqr|heevd|hetrd|unmtr|potrf|trsm|trtri|getrf|getrs|orgtr|laswp|larf|syr|lauum|potrs|ungtr|zlarf", n): return "dense eigensolve / factor"
+    # syevbj, *_rotate_batch and batch_parallel_jacobi are cuSOLVER's Jacobi eigensolver, which jaxlib
+    # picks at 32 rows or fewer; they were filed under "other" until 2026-10-01 and hid 1.1 s there
+    if re.search(r"sytrd|ormtr|syevd|syevj|syevbj|jacobi|rotate_batch|stedc|steqr|heevd|hetrd|unmtr|potrf|trsm|trtri|getrf|getrs|orgtr|laswp|larf|syr|lauum|potrs|ungtr|zlarf", n): return "dense eigensolve / factor"
     if re.search(r"gemm|cutlass|ampere|gemv|cublas|dot|axpy|scal_kernel|nrm2|gerc|herk|syrk", n): return "matrix product / BLAS"
     if re.search(r"fusion|loop|reduce|scatter|gather|copy|transpose|concat|select|dynamic|slice", n): return "elementwise / data movement"
     return "other"
