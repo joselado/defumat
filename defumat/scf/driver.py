@@ -59,6 +59,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.basis.builder import Basis, build_basis
+from defumat.config import resolve_band_precision
 from defumat.basis.planewaves import build_plane_wave_basis
 from defumat.basis.interpolate import to_dense, to_smooth
 from defumat.basis.sticks import Sticks, build_sticks
@@ -1362,7 +1363,8 @@ def _starting_tau(rho, calculation) -> jnp.ndarray:
     return thomas_fermi_tau(rho, 1 if calculation.nspin_mag == 1 else 2)
 
 
-def next_ethr(ethr: float, accuracy: float, nelec: float, iteration: int) -> float:
+def next_ethr(ethr: float, accuracy: float, nelec: float, iteration: int,
+              floor: float = ETHR_MIN) -> float:
     """QE's diagonalisation-threshold schedule (``PW/src/electrons.f90``).
 
     The eigenvalues never need to be more accurate than the density they are
@@ -1375,14 +1377,16 @@ def next_ethr(ethr: float, accuracy: float, nelec: float, iteration: int) -> flo
     decrease (``MIN``), and it is floored at 1e-13 because an iterative
     diagonalisation asked for more than that becomes unstable rather than more
     accurate. ``DEFUMAT_ETHR_MIN`` moves it
-    (:func:`~defumat.batching.resolve_ethr_floor`).
+    (:func:`~defumat.batching.resolve_ethr_floor`), and ``floor`` is the
+    calculation's own (:attr:`Calculation.ethr_floor`), raised from QE's for a
+    band side in single precision.
     """
     if iteration <= 1:
         return ethr
     if iteration == 2:
         ethr = ETHR_INIT
     return max(min(ethr, 0.1 * accuracy / max(1.0, nelec)),
-               resolve_ethr_floor(ETHR_MIN))
+               resolve_ethr_floor(floor))
 
 
 def default_nbnd(
@@ -1916,7 +1920,15 @@ class Calculation:
         origin_tangent: bool = True,
         memory_mode: str | None = "default",
         band_batch: int | None | str = "default",
+        band_precision: str | None = "default",
     ):
+        #: The precision of the band side -- ``H|psi>``, the Davidson work
+        #: arrays, the wavefunction store -- as a :class:`~defumat.config.
+        #: Precision` (:func:`~defumat.config.resolve_band_precision`). The grid
+        #: side stays in the cell's precision whatever this is. Single is a
+        #: performance mode and no correctness claim is made in it; what it
+        #: supports and refuses is :meth:`_require_band_precision_supported`.
+        self.band_precision = resolve_band_precision(band_precision)
         #: ``"memory"`` or ``"speed"`` -- the preset the ``"default"`` dials
         #: below resolve from (:data:`~defumat.batching.MEMORY_MODES`). Decided
         #: before anything is allocated, because ``speed`` on an accelerator is
@@ -2128,7 +2140,7 @@ class Calculation:
         #: (:func:`~defumat.batching.resolve_plane_chunk`): a plane budget on a
         #: CPU, the whole box on an accelerator. Carried by every Hamiltonian.
         self.plane_chunk = resolve_plane_chunk(
-            smooth.grid, jnp.dtype(system.cell.precision.complex).itemsize,
+            smooth.grid, jnp.dtype(self.band_precision.complex).itemsize,
             fields=system.npol, potentials=self.nspin_mag if self.noncolin else 1)
 
         # The projectors are built in two halves -- the species-dependent
@@ -2142,6 +2154,18 @@ class Calculation:
             self.basis_kpoints, self.origin_tangent,
             chunked=self.memory_mode == "memory",
         )
+        # **The core is where the band side takes its dtype from**: every
+        # ``vkb`` it forms is cast to ``complex_dtype``, ``Hamiltonian.dtype`` is
+        # that, and :meth:`hamiltonian` casts the potential and ``|k+G|^2`` to
+        # its real counterpart. The core's own arrays stay in the cell's
+        # precision, because the structure-factor phase ``(k+G).tau`` reaches
+        # about 100 rad and in single precision would be wrong in its fifth
+        # digit. A mover that rebuilds the core (``at_positions``,
+        # ``at_kpoints``) rebuilds it in the cell's precision, so a moved
+        # calculation is consistently double rather than half single.
+        if self.band_precision.complex != self.projector_core.complex_dtype:
+            self.projector_core = dataclasses.replace(
+                self.projector_core, complex_dtype=self.band_precision.complex)
         # ``rebuild`` keeps the *core* and forms each k-point's ``(npwx, nkb)``
         # on demand, which is ``init_us_2`` inside ``c_bands.f90``'s ``k_loop``.
         # It is a **resident**-set dial, so unlike ``k_batch`` it sits under
@@ -2515,7 +2539,87 @@ class Calculation:
         # than here, because a nonmagnetic run never asks for them; shared with
         # the field's when there is one, so a constrained run builds one set.
         self._reporting_regions = None
+        #: The floor under the SCF's diagonalisation threshold, in Ry: QE's
+        #: 1e-13, and in single band precision what a single ``H|psi>`` can
+        #: resolve (:meth:`_require_band_precision_supported`).
+        self.ethr_floor = ETHR_MIN
+        #: The tightest ``conv_thr`` :func:`run_scf` accepts: none in the cell's
+        #: own precision, and what single delivers in it.
+        self.conv_thr_floor = 0.0
+        if self.band_precision.real != system.cell.precision.real:
+            self._require_band_precision_supported()
 
+
+    def _band_real(self):
+        """The real dtype of the band side, read off the projector core (see its note)."""
+        complex_dtype = self.projector_core.complex_dtype or self.system.cell.precision.complex
+        return jnp.zeros((), complex_dtype).real.dtype
+
+    #: The floor under ``ethr`` in single band precision, in units of the
+    #: precision's epsilon times ``ecutwfc``: a Davidson step resolves a change in
+    #: an eigenvalue no finer than the round-off of ``<psi|H|psi>`` over the
+    #: subspace, which reaches the kinetic energy at the cutoff.
+    SINGLE_ETHR_FACTOR = 4.0
+
+    #: The tightest ``conv_thr`` a single-precision band side accepts, in Ry.
+    #: Below it the SCF still converges in its own measure and the energy does
+    #: not follow: against a double run at 1e-13 it stays 1e-6 to 2e-6 Ry off on
+    #: eight-atom silicon at 12 Ry whatever ``conv_thr`` is below 1e-8, and 6e-6
+    #: to 8e-6 Ry off on sixteen atoms at 30 Ry from 1e-5 to 1e-7, the round-off
+    #: of a float32 ``H|psi>`` summed into a total of a hundred Ry.
+    SINGLE_CONV_THR_FLOOR = 1.0e-7
+
+    def _require_band_precision_supported(self) -> None:
+        """What a band side in another precision than the grid's supports, and its floor.
+
+        **Supported**: the SCF of a collinear norm-conserving calculation, one or
+        two spin channels. Refused by name, until each is checked: an ultrasoft
+        or PAW dataset (``becsum`` would be accumulated in the bands' precision
+        and the overlap's conditioning in single is untested), a spinor or a
+        spiral, DFT+U, a meta-GGA, and every derivative of the energy -- forces,
+        stress, the response stack -- which :func:`~defumat.forces.energy.
+        reject_potential_only` refuses for a single-precision band side, since a
+        gradient taken through a float32 ``H|psi>`` carries its round-off as a
+        plausible force.
+
+        **The floor.** Davidson stops on the change in each eigenvalue between
+        two steps, and in single precision that change is resolved no finer than
+        about ``eps x ecutwfc``; with QE's 1e-13 kept, the calls stall at the
+        budget and the SCF can report itself converged with the energy 5.5e-5 Ry
+        wrong (eight-atom silicon at 12 Ry, the plan review of 2026-10-01). So
+        ``ethr`` is floored at :data:`SINGLE_ETHR_FACTOR` ``x eps x ecutwfc``,
+        and :func:`run_scf` refuses a ``conv_thr`` that floor cannot deliver.
+
+        **On an accelerator a float32 matrix product may run on TF32**, a 10-bit
+        mantissa, unless the precision is pinned; it is pinned to ``highest``
+        here, for the process, which changes nothing for a float64 product.
+        """
+        system = self.system
+        refusals = []
+        if any(getattr(p, "is_ultrasoft", False) for p in self.pseudos):
+            refusals.append("an ultrasoft or PAW dataset")
+        if self.noncolin:
+            refusals.append("a spinor (noncolin) calculation")
+        if self.spiral:
+            refusals.append("a spin spiral")
+        if self.hubbard is not None:
+            refusals.append("DFT+U")
+        if self.functional.is_meta:
+            refusals.append(f"the meta-GGA {self.functional.name}")
+        if refusals:
+            raise NotImplementedError(
+                f"band_precision = {self.band_precision.name!r} runs the SCF of a "
+                f"collinear norm-conserving calculation only; this one has "
+                f"{', '.join(refusals)}, which is not checked in single precision. "
+                "Run it with band_precision='double'"
+            )
+        self.ethr_floor = max(
+            ETHR_MIN, self.SINGLE_ETHR_FACTOR * self.band_precision.eps * float(system.ecutwfc))
+        self.conv_thr_floor = self.SINGLE_CONV_THR_FLOOR
+        from defumat import batching
+
+        if batching._backend() != "cpu":
+            jax.config.update("jax_default_matmul_precision", "highest")
 
     def _require_meta_supported(self, system) -> None:
         """What a potential-only meta-GGA cannot be combined with, refused by name.
@@ -4674,8 +4778,9 @@ class Calculation:
             # *are* the beta functions and the two terms therefore share a
             # separable form. That projector set is refused here.
             potential = to_smooth(total[spin], self.basis.dense, self.basis.smooth)
+            potential = potential.astype(self._band_real())
             hamiltonians.append(Hamiltonian(
-                kinetic=self.kinetic,
+                kinetic=self.kinetic.astype(self._band_real()),
                 potential=potential,
                 # the same potential with its xy plane contiguous, which is the
                 # layout the stick transforms hold the field in
@@ -5183,6 +5288,8 @@ class Calculation:
                 extra = jnp.broadcast_to(extra[None], atomic.shape[:1] + extra.shape)
             atomic = jnp.concatenate([atomic, extra], axis=-2)
 
+        # Built in the cell's precision and rotated in the bands'.
+        atomic = atomic.astype(jnp.dtype(self.projector_core.complex_dtype or atomic.dtype))
         # One Rayleigh-Ritz per channel. A shared span -- the atomic orbitals,
         # or another regime's states -- seeds both channels with the same
         # vectors, and what splits them is the Hamiltonian they are diagonalised
@@ -5304,7 +5411,9 @@ class Calculation:
             for spin, hamiltonian in enumerate(hamiltonians)
         ]
         stacked = (
-            jnp.stack([one[0] for one in solved]),
+            # in the grid's precision: the occupations, the weights the density
+            # is accumulated with and the band energy are the grid side's
+            jnp.stack([one[0] for one in solved]).astype(self.system.cell.precision.real),
             jnp.stack([one[1] for one in solved]),
         )
         if not return_steps:
@@ -5595,7 +5704,8 @@ def _solve_residual(
       solution and should be left at zero when an unstable one is wanted.
     """
     solver = get_scf_solver(scf_solver)
-    ethr = options.pop("ethr", max(1.0e-3 * conv_thr, resolve_ethr_floor(ETHR_MIN)))
+    ethr = options.pop("ethr", max(1.0e-3 * conv_thr, resolve_ethr_floor(
+        getattr(calculation, "ethr_floor", ETHR_MIN))))
     warmup = int(options.pop("warmup", 0))
     precondition = options.pop("precondition", None)
     wavefunctions = None
@@ -6030,6 +6140,7 @@ def run_scf(
     wfc_store: str | None = "default",
     memory_mode: str | None = "default",
     band_batch: int | None | str = "default",
+    band_precision: str | None = "default",
     starting_density: jnp.ndarray | None = None,
     starting_becsum: tuple | None = None,
     starting_ns: jnp.ndarray | None = None,
@@ -6215,8 +6326,16 @@ def run_scf(
     calculation = calculation or Calculation(
         system, pseudos, diagonalization=diagonalization, k_batch=k_batch,
         david=david, projectors=projectors, memory_mode=memory_mode,
-        band_batch=band_batch,
+        band_batch=band_batch, band_precision=band_precision,
     )
+    # A threshold the band side cannot deliver is refused rather than chased: in
+    # single precision the SCF would stop at the floor and report convergence.
+    if conv_thr < getattr(calculation, "conv_thr_floor", 0.0):
+        raise ValueError(
+            f"conv_thr = {conv_thr:.1e} is below what band_precision = "
+            f"{calculation.band_precision.name!r} delivers on this calculation "
+            f"({calculation.conv_thr_floor:.1e}); run the last iterations in "
+            "double, run_scf(..., starting_from=result) with band_precision='double'")
     # The rows this pool holds, fixed for the run and computed before a resume
     # needs them: longest-first on each k-point's estimated cost, so that a pool
     # holding the Gamma point takes fewer others (``parallel.balance``).
@@ -6751,7 +6870,7 @@ def run_scf(
         # start of the ``ethr`` schedule would otherwise throw the hand-off away
         # on the very first diagonalisation.
         ethr = max(0.1 * solver_result.accuracy / max(1.0, calculation.nelec),
-                   resolve_ethr_floor(ETHR_MIN))
+                   resolve_ethr_floor(getattr(calculation, "ethr_floor", ETHR_MIN)))
 
     # ``potinit.f90``'s Thomas-Fermi guess. The first iteration has no states to
     # build ``tau`` from and the meta-GGA potential cannot be evaluated without
@@ -6877,7 +6996,8 @@ def run_scf(
         # rather than of this process. Passing the relative number re-fires the
         # reset on the second iteration after every resume, which throws away
         # the threshold the checkpoint was carrying it for.
-        ethr = next_ethr(ethr, accuracy, calculation.nelec, iteration)
+        ethr = next_ethr(ethr, accuracy, calculation.nelec, iteration,
+                         floor=getattr(calculation, "ethr_floor", ETHR_MIN))
 
         potential = calculation.potential(rho, field_scale, field, tau=tau_state)
         epaw, ddd_paw = calculation.onecenter(becsum_state, _meta_c(potential))
@@ -7141,7 +7261,7 @@ def run_scf(
             if iteration > 1 or attempt > 0 or accuracy >= floor:
                 break
             ethr = max(0.1 * accuracy / max(1.0, calculation.nelec),
-                       resolve_ethr_floor(ETHR_MIN))
+                       resolve_ethr_floor(getattr(calculation, "ethr_floor", ETHR_MIN)))
             if verbose:
                 print(f"  iteration {iteration:3d}   ethr was too large; "
                       f"diagonalising again at {ethr:.2e}")

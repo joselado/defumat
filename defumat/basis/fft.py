@@ -296,7 +296,10 @@ def sticks_density(states: jnp.ndarray, weights: jnp.ndarray, sticks, columns, i
     chunk = max(1, min(int(plane_chunk), n3))
     nchunks = -(-n3 // chunk)
     padded = nchunks * chunk
-    real = jnp.zeros((), states.dtype).real.dtype
+    # The accumulator is as wide as the states and the weights together: a band
+    # in single precision is summed into a double density, as the whole-box
+    # route does by promotion (``Calculation``'s ``band_precision``).
+    real = jnp.result_type(jnp.zeros((), states.dtype).real.dtype, weights.dtype)
     total = jnp.zeros((ncomp, padded, n1 * n2), real)
 
     def one_band(rho, pair):

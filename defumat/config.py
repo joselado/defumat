@@ -49,6 +49,38 @@ SINGLE = Precision(real=np.dtype(np.float32), complex=np.dtype(np.complex64), na
 #: Default for every calculation. Correctness claims are only ever made here.
 DEFAULT_PRECISION = DOUBLE
 
+#: The precision of every small dense solve in a subspace -- Davidson's projected
+#: problem and the Rayleigh-Ritz of the start -- whatever the bands run in. Those
+#: are ``m x m`` with ``m`` at most four times the band count, so double costs
+#: nothing there, and single would not do: the overlap floor below which the
+#: canonical route drops a direction (``solvers.subspace.OVERLAP_FLOOR``, 1e-12)
+#: is five orders under float32's epsilon.
+SUBSPACE_PRECISION = DOUBLE
+
+
+def resolve_band_precision(requested="default") -> Precision:
+    """The precision a calculation's band side runs in: the argument, ``DEFUMAT_BAND_PRECISION``, double.
+
+    The band side is ``H|psi>``, the Davidson work arrays and the wavefunction
+    store, where the cost and the memory of a run are; the grid side -- the
+    density, the potential, the mixer, the energies -- stays in the cell's
+    precision whatever this says (:class:`~defumat.scf.driver.Calculation`).
+    """
+    if isinstance(requested, Precision):
+        return requested
+    if requested is None or requested == "default":
+        from defumat._envcompat import environ_get
+
+        requested = (environ_get("DEFUMAT_BAND_PRECISION", "") or "").strip() or "double"
+    return precision_by_name(str(requested))
+
+
+def subspace_dtype(dtype):
+    """The dtype a subspace matrix of ``dtype`` is solved in: :data:`SUBSPACE_PRECISION`'s."""
+    if jnp.issubdtype(dtype, jnp.complexfloating):
+        return SUBSPACE_PRECISION.complex
+    return SUBSPACE_PRECISION.real
+
 
 def precision_by_name(name: str) -> Precision:
     """Look up a precision policy by the name used in input files."""

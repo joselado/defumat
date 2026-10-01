@@ -124,6 +124,7 @@ import numpy as np
 
 from defumat.basis.fft import force_real_g0, gamma_inner
 from defumat.batching import map_k, resolve_k_batch
+from defumat.config import subspace_dtype
 from defumat.hamiltonian.operator import Hamiltonian
 from defumat.solvers.subspace import generalised_eigh
 
@@ -540,9 +541,15 @@ def davidson_eigensolver(
                 # in a quantity that is real by construction, and leaving it in
                 # is what gives each eigenvector an arbitrary phase.
                 hc, sc = hc.real, sc.real
-            values, vectors = generalised_eigh(0.5 * (hc + hc.conj().T),
-                                               0.5 * (sc + sc.conj().T),
+            # In the subspace precision whatever the bands run in (config.py's
+            # SUBSPACE_PRECISION; a no-op in double), and back: the energies in
+            # the bands' real precision, since they enter the preconditioner
+            # and the residual, and the coefficients in theirs.
+            wide = subspace_dtype(hc.dtype)
+            values, vectors = generalised_eigh(0.5 * (hc + hc.conj().T).astype(wide),
+                                               0.5 * (sc + sc.conj().T).astype(wide),
                                                robust=robust, parked=inactive)
+            values = values.astype(diagonal.dtype)
             vectors = vectors.astype(psi.dtype)
             coefficients = vectors[:, :nbnd]
 

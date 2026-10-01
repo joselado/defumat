@@ -16,6 +16,7 @@ import jax
 import jax.numpy as jnp
 
 from defumat.basis.fft import force_real_g0
+from defumat.config import subspace_dtype
 from jax.scipy.linalg import solve_triangular
 
 __all__ = ["generalised_eigh", "rayleigh_ritz"]
@@ -247,7 +248,8 @@ def rayleigh_ritz(hamiltonian, ik, vectors, nbnd: int):
         s = s.astype(vectors.dtype)
     h = 0.5 * (h + h.conj().T)
     s = 0.5 * (s + s.conj().T)
-
-    values, coefficients = generalised_eigh(h, s)
+    # solved in the subspace precision, as Davidson's projected problem is
+    wide = subspace_dtype(h.dtype)
+    values, coefficients = generalised_eigh(h.astype(wide), s.astype(wide))
     rotated = coefficients[:, :nbnd].T.astype(vectors.dtype) @ vectors
     return values[:nbnd].real, force_real_g0(rotated, gamma_only)

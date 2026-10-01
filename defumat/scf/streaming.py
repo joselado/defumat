@@ -173,7 +173,8 @@ def stream_diagonalize(calculation, hamiltonians, nbnd: int, store: np.ndarray,
             )
             energies = np.asarray(energies)
             if eigenvalues is None:
-                eigenvalues = np.empty((nspin, nlocal, nbnd), energies.dtype)
+                eigenvalues = np.empty((nspin, nlocal, nbnd), np.promote_types(
+                    energies.dtype, calculation.system.cell.precision.real))
                 steps = np.empty((nspin, nlocal), np.asarray(taken).dtype)
                 unsettled = np.empty((nspin, nlocal), np.asarray(stuck).dtype)
             written = positions[:live]

@@ -329,6 +329,15 @@ def reject_potential_only(calculation) -> None:
     :func:`defumat.forces.compute_forces` was made to call this before
     dispatching. That is why the call is in three places and not one.
     """
+    band = getattr(calculation, "band_precision", None)
+    if band is not None and band.real != calculation.system.cell.precision.real:
+        raise NotImplementedError(
+            f"the band side of this calculation runs in {band.name} precision, and "
+            "a derivative of the energy taken through its H|psi> would carry that "
+            "round-off as a plausible force, stress or response. Converge the "
+            "state in double -- run_scf(..., starting_from=result, "
+            "band_precision='double') takes two or three iterations from it -- and "
+            "differentiate that")
     if getattr(calculation, "functional", None) is not None and calculation.functional.is_meta:
         raise NotImplementedError(
             f"the {calculation.functional.name} functional is a potential and "
