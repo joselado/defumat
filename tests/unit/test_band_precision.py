@@ -94,3 +94,24 @@ def test_what_it_has_not_been_checked_on_is_refused(pseudo_dir, silicon):
     with pytest.raises(NotImplementedError, match="single precision"):
         reject_potential_only(Calculation(system, pseudos, band_precision="single"))
     reject_potential_only(Calculation(system, pseudos))
+
+
+def test_mixed_switches_inside_the_run_and_converges_to_the_double_state(silicon):
+    """Single while the density is coarse, double for the last iterations, one mixer.
+
+    A double run restarted from a converged single one took 12 iterations to
+    1e-10 on 64 atoms against 9 from scratch, its mixer's history gone; the
+    switch inside the run keeps it, and the state it converges to is a double
+    one whatever ``conv_thr`` was asked for.
+    """
+    system, pseudos = silicon
+    exact = run_scf(system, pseudos, conv_thr=1e-11)
+    mixed = run_scf(system, pseudos, conv_thr=1e-11, band_precision="mixed")
+    precisions = [entry["band_precision"] for entry in mixed.history]
+    assert precisions[0] == "single" and precisions[-1] == "double"
+    assert precisions == sorted(precisions, key=("single", "double").index)
+    assert mixed.converged and mixed.wavefunctions.dtype == DOUBLE.complex
+    assert abs(mixed.total_energy - exact.total_energy) < 1e-10
+    # a loose request still finishes in double rather than stopping in single
+    loose = run_scf(system, pseudos, conv_thr=1e-5, band_precision="mixed")
+    assert loose.history[-1]["band_precision"] == "double"

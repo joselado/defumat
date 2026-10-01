@@ -59,7 +59,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.basis.builder import Basis, build_basis
-from defumat.config import resolve_band_precision
+from defumat.config import band_precision_is_mixed, resolve_band_precision
 from defumat.basis.planewaves import build_plane_wave_basis
 from defumat.basis.interpolate import to_dense, to_smooth
 from defumat.basis.sticks import Sticks, build_sticks
@@ -1929,6 +1929,11 @@ class Calculation:
         #: performance mode and no correctness claim is made in it; what it
         #: supports and refuses is :meth:`_require_band_precision_supported`.
         self.band_precision = resolve_band_precision(band_precision)
+        #: The precision the SCF switches the band side to when single can no
+        #: longer deliver its threshold, for ``band_precision = 'mixed'``;
+        #: ``None`` otherwise (:meth:`at_band_precision`, :func:`run_scf`).
+        self.switch_precision = (system.cell.precision
+                                 if band_precision_is_mixed(band_precision) else None)
         #: ``"memory"`` or ``"speed"`` -- the preset the ``"default"`` dials
         #: below resolve from (:data:`~defumat.batching.MEMORY_MODES`). Decided
         #: before anything is allocated, because ``speed`` on an accelerator is
@@ -3618,6 +3623,40 @@ class Calculation:
                      "_energy_gradient", "_chunked_gradient"):
             moved.__dict__.pop(name, None)
         moved.memory_mode, moved.k_batch, moved.band_batch = dials
+        return moved
+
+    def at_band_precision(self, precision) -> "Calculation":
+        """The same calculation with its band side in ``precision``, nothing else rebuilt.
+
+        A shallow copy with the projector core's ``complex_dtype`` moved, the
+        projectors formed again from it (a stored table is cast, a lazy set is
+        cast as it is built), the plane-chunk budget re-sized for the new box
+        bytes and the floors that follow the precision reset; every array of the
+        grid side and of the basis is shared. This is what the ``'mixed'`` SCF
+        switches with, so the switched calculation does not switch again.
+        """
+        precision = resolve_band_precision(precision)
+        if (precision.complex == self.projector_core.complex_dtype
+                and self.switch_precision is None):
+            return self
+        moved = copy.copy(self)
+        for name in ("_spiral_gradient", "_spiral_gradient_chunk",
+                     "_energy_gradient", "_chunked_gradient"):
+            moved.__dict__.pop(name, None)
+        moved.band_precision = precision
+        moved.switch_precision = None
+        moved.projector_core = dataclasses.replace(
+            self.projector_core, complex_dtype=precision.complex)
+        moved.projectors = moved.projector_core.at_positions(
+            self.system.structure.positions, qq=self.projectors.qq,
+            lazy=self.projector_storage == "rebuild", rows=self.projector_rows,
+        )
+        moved.plane_chunk = resolve_plane_chunk(
+            self.basis.smooth.grid, jnp.dtype(precision.complex).itemsize,
+            fields=self.system.npol, potentials=self.nspin_mag if self.noncolin else 1)
+        moved.ethr_floor, moved.conv_thr_floor = ETHR_MIN, 0.0
+        if precision.real != self.system.cell.precision.real:
+            moved._require_band_precision_supported()
         return moved
 
     def at_rows(self, rows) -> "Calculation":
@@ -6330,7 +6369,8 @@ def run_scf(
     )
     # A threshold the band side cannot deliver is refused rather than chased: in
     # single precision the SCF would stop at the floor and report convergence.
-    if conv_thr < getattr(calculation, "conv_thr_floor", 0.0):
+    switch_to = getattr(calculation, "switch_precision", None)
+    if switch_to is None and conv_thr < getattr(calculation, "conv_thr_floor", 0.0):
         raise ValueError(
             f"conv_thr = {conv_thr:.1e} is below what band_precision = "
             f"{calculation.band_precision.name!r} delivers on this calculation "
@@ -6998,6 +7038,28 @@ def run_scf(
         # the threshold the checkpoint was carrying it for.
         ethr = next_ethr(ethr, accuracy, calculation.nelec, iteration,
                          floor=getattr(calculation, "ethr_floor", ETHR_MIN))
+        # ``band_precision = 'mixed'``: the band side goes to double once the
+        # density has come down to what single delivers (its ``conv_thr``
+        # floor), or to ten times the ``conv_thr`` asked for if that is looser,
+        # in this loop, so the mixer's history and the threshold schedule carry
+        # across and the state converged to is a double one. Single drives the
+        # density there on its own (sixteen-atom silicon: 1e-7 in seven
+        # iterations); switching when the *schedule* first asks for more than
+        # single's ``ethr`` floor came at iteration 4 of 9 and bought nothing.
+        # The store is cast where it lives.
+        if (switch_to is not None and iteration > 1
+                and accuracy < max(10.0 * conv_thr, calculation.conv_thr_floor)):
+            calculation = calculation.at_band_precision(switch_to)
+            ethr = max(min(ethr, 0.1 * accuracy / max(1.0, calculation.nelec)),
+                       resolve_ethr_floor(calculation.ethr_floor))
+            if wavefunctions is not None:
+                wavefunctions = (np.asarray(wavefunctions, dtype=switch_to.complex)
+                                 if isinstance(wavefunctions, np.ndarray)
+                                 else jnp.asarray(wavefunctions, dtype=switch_to.complex))
+            switch_to = None
+            if verbose:
+                print(f"  iteration {iteration:3d}   band side to {calculation.band_precision.name} "
+                      f"precision at ethr = {ethr:.2e}")
 
         potential = calculation.potential(rho, field_scale, field, tau=tau_state)
         epaw, ddd_paw = calculation.onecenter(becsum_state, _meta_c(potential))
@@ -7347,6 +7409,10 @@ def run_scf(
             # reason this option exists: converged only when it has stopped
             # turning as well.
             converged = False
+        if converged and switch_to is not None:
+            # A 'mixed' run converges in double: a state that met ``conv_thr``
+            # before the band side switched takes the switch and goes on.
+            converged = False
         if pooled:
             converged = pools.broadcast_flag(converged)
         if converged:
@@ -7461,7 +7527,9 @@ def run_scf(
                  # the last attempt, so a stall shows as a large number beside
                  # a step count at the budget.
                  "davidson_iterations": davidson_steps,
-                 "davidson_unconverged": davidson_unconverged}
+                 "davidson_unconverged": davidson_unconverged,
+                 # which precision the band side ran in, since 'mixed' moves it
+                 "band_precision": calculation.band_precision.name}
         if tau_state is not None:
             # ``c`` is a cell average of the density, so it moves with the SCF
             # and settling is part of convergence: a run whose density has

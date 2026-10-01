@@ -66,13 +66,33 @@ def resolve_band_precision(requested="default") -> Precision:
     density, the potential, the mixer, the energies -- stays in the cell's
     precision whatever this says (:class:`~defumat.scf.driver.Calculation`).
     """
+    requested = _band_request(requested)
+    if isinstance(requested, Precision):
+        return requested
+    # 'mixed' starts in single; :func:`band_precision_is_mixed` says it switches
+    return precision_by_name("single" if requested == "mixed" else requested)
+
+
+def band_precision_is_mixed(requested="default") -> bool:
+    """Whether ``requested`` is ``'mixed'``: single to begin with, double to finish.
+
+    The SCF switches the band side to the cell's precision at the first
+    iteration whose diagonalisation threshold single cannot deliver
+    (:func:`~defumat.scf.driver.run_scf`), with the mixer's history and the
+    threshold schedule carried across, so the state it converges to is a
+    double one.
+    """
+    return _band_request(requested) == "mixed"
+
+
+def _band_request(requested):
     if isinstance(requested, Precision):
         return requested
     if requested is None or requested == "default":
         from defumat._envcompat import environ_get
 
         requested = (environ_get("DEFUMAT_BAND_PRECISION", "") or "").strip() or "double"
-    return precision_by_name(str(requested))
+    return str(requested).strip().lower()
 
 
 def subspace_dtype(dtype):
