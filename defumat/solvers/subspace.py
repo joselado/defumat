@@ -53,6 +53,21 @@ def _canonical_route(h, s):
     floor are *projected out* rather than inverted, by parking them at an energy
     above the spectrum so they cannot enter the lowest roots. Shapes stay static,
     which is why they are parked rather than dropped.
+
+    **Where they are parked sets the norm of the matrix ``eigh`` is handed, and
+    with it the absolute error of every eigenvalue.** They sit one above the
+    Gershgorin bound of the kept block, its largest absolute row sum, which no
+    eigenvalue of that block can exceed, so they sort last whatever the kept
+    spectrum is, and the norm stays of the order of the kept block's own. They
+    were at 1000 times the largest diagonal element of ``reduced``, and inside a
+    Davidson solve that diagonal already carries the solver's own parked
+    directions (``solvers.davidson.PARK_FACTOR`` times the largest diagonal
+    element of ``H``), so the retry handed ``eigh`` a matrix of norm 4000 times
+    that of ``H``'s diagonal: 1.2e5 at 30 Ry, four times the norm that made a
+    card's Davidson stall at the ``ethr`` floor (``PERFORMANCE.md``, "The
+    endgame on a card is a stall"). The kept block's eigenvalues do not depend on
+    the parked value, which is a device and not physics, hence the
+    ``stop_gradient``.
     """
     w, u = jnp.linalg.eigh(s)
     keep = w > OVERLAP_FLOOR * jnp.max(w)
@@ -61,12 +76,11 @@ def _canonical_route(h, s):
 
     reduced = x.conj().T @ h @ x
     reduced = 0.5 * (reduced + reduced.conj().T)
-    # Above anything physical, by the same argument the Davidson driver uses for
-    # its own inactive directions: the diagonal bounds the spectrum well enough.
-    shift = jnp.max(jnp.abs(jnp.diagonal(reduced).real)) * 1000.0 + 1.0
     pair = keep[:, None] & keep[None, :]
-    reduced = jnp.where(pair, reduced, 0.0) + jnp.diag(
-        jnp.where(keep, 0.0, shift).astype(reduced.dtype))
+    reduced = jnp.where(pair, reduced, 0.0)
+    bound = jnp.max(jnp.sum(jnp.abs(reduced), axis=1))
+    shift = jax.lax.stop_gradient(bound) + 1.0
+    reduced = reduced + jnp.diag(jnp.where(keep, 0.0, shift).astype(reduced.dtype))
 
     values, vectors = jnp.linalg.eigh(reduced)
     return values, x @ vectors

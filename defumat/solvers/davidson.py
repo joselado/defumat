@@ -167,11 +167,26 @@ __all__ = ["davidson_eigensolver", "davidson_eigensolver_all", "DAVID_NDIM",
 DAVID_NDIM = 4
 
 #: How far above the largest diagonal element of ``H`` the subspace solve parks the
-#: directions that are not in use, as a multiple of it. Four, because the lowest
-#: ``nbnd`` roots only need the parked ones above the live spectrum, which
-#: ``lambda_max(H)`` bounds by well under three times its largest diagonal element
-#: (the kinetic energy at the cutoff plus the potential), and because the matrix
-#: norm sets the eigensolver's absolute error. It was 1000.
+#: directions that are not in use, as a multiple of it. It was 1000.
+#:
+#: **A parked direction has to sit above the ``nbnd`` lowest live Ritz values,
+#: and those never rise during a call.** Only they are taken (``values[:nbnd]``);
+#: expanding the subspace can only lower each of them, the subspaces being nested
+#: (Cauchy interlacing); and the refresh keeps exactly the vectors they belong
+#: to. So their ceiling is the largest Ritz value of the starting block, a band
+#: energy for a seeded solve, and for QE's random start 0.22 to 0.34 of the
+#: largest diagonal element on the four cells measured (silicon at 12 and 30 Ry,
+#: SG15 nickel at 60, HGH LiF at 80). That holds on any dataset and at any
+#: cutoff, and it is why the factor needs no bound on ``lambda_max(H)`` (which
+#: on those cells is 1.00 to 1.05 of the largest diagonal element, the kinetic
+#: energy at the cutoff, since the projectors decay at large ``G``).
+#:
+#: **The factor also sets the norm of the matrix the dense eigensolver is handed,
+#: and its absolute error with it**, which is the reason it is small. Whenever a
+#: direction is parked it is the parked value that sets that norm: the live block
+#: is much smaller, since the preconditioned corrections stay at low ``G`` (on
+#: eight-atom silicon at 12 Ry, 2 to 4 Ry against a largest diagonal element of
+#: 11.2, so the solves with parked directions are handed 45.7).
 PARK_FACTOR = 4.0
 
 #: Total budget of Davidson steps, matching QE's.
@@ -483,13 +498,14 @@ def davidson_eigensolver(
     start = force_real_g0(start, gamma_only)
 
     # Inactive subspace directions are given this eigenvalue, which has to sit
-    # above the live part of the projected spectrum, so that they never enter the
-    # lowest ``nbnd`` roots: the diagonal of ``H`` bounds the spectrum from above
-    # well enough for that, and :data:`PARK_FACTOR` times it is a margin.
+    # above the ``nbnd`` lowest live Ritz values so that they never enter the
+    # roots taken; those values never rise during a call, so the starting
+    # block's largest bounds them, and that is well under the largest diagonal
+    # element of ``H`` (:data:`PARK_FACTOR` has the argument and the numbers).
     #
     # **It also sets the norm of the matrix the subspace solve diagonalises, and
-    # a backward-stable eigensolver is accurate to ``eps`` times that norm in
-    # every eigenvalue.** The factor was 1000, which makes the reduced matrix's
+    # the absolute error of a backward-stable eigensolver is proportional to that
+    # norm.** The factor was 1000, which makes the reduced matrix's
     # norm about 3e4 against a physical spectrum of 30, and on a card the device
     # ``eigh`` then returned Ritz values good to a few 1e-13 only: Davidson's test
     # is a change below ``ethr`` between two steps, and with ``ethr`` at its 1e-13

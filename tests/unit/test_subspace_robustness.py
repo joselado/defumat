@@ -121,9 +121,9 @@ def test_the_surviving_roots_solve_the_equation_that_is_solvable():
     kept = u[:, w > 1.0e-12 * w.max()]
     projector = kept @ kept.conj().T
 
-    physical = values < values.max() / 2.0
-    assert physical.sum() == kept.shape[1], "one direction should have been parked"
-    assert kept.shape[1] == n - 1
+    # the parked direction sorts last (the next test), so the physical roots are the rest
+    physical = np.arange(n) < kept.shape[1]
+    assert kept.shape[1] == n - 1, "one direction should have been parked"
 
     x = vectors[:, physical]
     residual = projector @ (matrix_h @ x - matrix_s @ x * values[physical])
@@ -134,10 +134,75 @@ def test_the_surviving_roots_solve_the_equation_that_is_solvable():
 
 
 def test_the_parked_direction_sorts_above_every_physical_root():
-    """Davidson takes ``values[:nbnd]``, so a dropped direction must not land there."""
+    """Davidson takes ``values[:nbnd]``, so a dropped direction must not land there.
+
+    Above, and no further than it has to be: it is parked one above the kept
+    block's Gershgorin bound, which every kept eigenvalue lies under, so the
+    margin is set by that bound rather than by a factor.
+    """
     h, s = _hermitian(12, 3), _indefinite(12, 7)
     values = np.asarray(generalised_eigh(h, s)[0])
-    assert values[-1] > 100.0 * np.abs(values[:-1]).max()
+    assert values[-1] > values[:-1].max() + 0.5
+    assert values[-1] < 10.0 * np.abs(values[:-1]).max()
+
+
+def _davidson_pair(n_live=24, n_park=8, top=30.0, park_factor=4.0, seed=3):
+    """A projected pair shaped like a Davidson solve's, with one dead direction.
+
+    The live block is a Ritz-like projected ``H`` (spectrum -0.5 to ``top``, as
+    on a cell whose largest diagonal element is ``top``) in a basis whose
+    overlap has one eigenvalue at -1e-15, the near-dependent correction vector
+    that makes the Cholesky route fail; the solver's own inactive directions sit
+    on the diagonal at ``park_factor * top + 1`` against a unit overlap, which is
+    what :func:`~defumat.solvers.davidson.davidson_eigensolver` hands
+    ``generalised_eigh``. Returns ``(hc, sc)`` and the live block's spectrum.
+    """
+    rng = np.random.default_rng(seed)
+    q, _ = np.linalg.qr(rng.standard_normal((n_live, n_live))
+                        + 1j * rng.standard_normal((n_live, n_live)))
+    spectrum = np.concatenate([np.linspace(-0.5, 2.0, n_live - 6),
+                               np.linspace(10.0, top, 6)])
+    v, _ = np.linalg.qr(rng.standard_normal((n_live, n_live))
+                        + 1j * rng.standard_normal((n_live, n_live)))
+    w = np.concatenate([np.linspace(1.0, 0.3, n_live - 1), [-1.0e-15]])
+    root = v @ np.diag(np.sqrt(np.abs(w))) @ v.conj().T
+    h_live = root.conj().T @ (q @ np.diag(spectrum) @ q.conj().T) @ root
+    s_live = v @ np.diag(w) @ v.conj().T
+    m = n_live + n_park
+    hc = np.zeros((m, m), complex)
+    sc = np.zeros((m, m), complex)
+    hc[:n_live, :n_live] = 0.5 * (h_live + h_live.conj().T)
+    sc[:n_live, :n_live] = 0.5 * (s_live + s_live.conj().T)
+    hc[n_live:, n_live:] = (park_factor * top + 1.0) * np.eye(n_park)
+    sc[n_live:, n_live:] = np.eye(n_park)
+    return jnp.asarray(hc), jnp.asarray(sc), spectrum
+
+
+def test_the_retry_does_not_multiply_the_solvers_own_parked_directions():
+    """The canonical route parks at a bound of the kept block, not at 1000 times its diagonal.
+
+    Inside a Davidson solve the kept block's diagonal already carries the
+    solver's inactive directions at ``PARK_FACTOR`` times the largest diagonal
+    element of ``H``, so the old rule, 1000 times the largest diagonal element of
+    the reduced matrix, handed ``eigh`` a matrix of norm 4000 times ``H``'s
+    diagonal: 121001 here, against the 3e4 that made a card's Davidson stall at
+    the ``ethr`` floor (``PERFORMANCE.md``, "The endgame on a card is a stall").
+    The largest eigenvalue in magnitude of what ``eigh`` returns is the norm of
+    what it was handed. The physical roots must not care where the dead direction
+    is parked, so they are held against the live block's exact spectrum.
+    """
+    from defumat.solvers.davidson import PARK_FACTOR
+
+    top = 30.0
+    hc, sc, spectrum = _davidson_pair(top=top, park_factor=PARK_FACTOR)
+    values = np.asarray(generalised_eigh(hc, sc, robust=True)[0])
+    assert np.abs(values).max() < 1.5 * (PARK_FACTOR * top + 1.0)
+
+    # the 23 live roots the overlap keeps: the projected pencil's spectrum,
+    # which is ``spectrum`` with its dead direction gone, interlaced
+    live = np.sort(values[values < top + 1.0])
+    assert live.size == spectrum.size - 1
+    assert live.min() >= spectrum.min() - 1e-10 and live.max() <= spectrum.max() + 1e-10
 
 
 # ------------------------------------------------------ the guard's own cost
@@ -178,10 +243,21 @@ def test_a_batched_guard_has_no_branch_to_take():
     h, s = _hermitian(12, 3), _positive(12, 5)
     stack = (jnp.broadcast_to(h, (3, 12, 12)), jnp.broadcast_to(s, (3, 12, 12)))
 
+    single = str(jax.make_jaxpr(generalised_eigh)(h, s))
     guarded = str(jax.make_jaxpr(jax.vmap(generalised_eigh))(*stack))
     fast = str(jax.make_jaxpr(jax.vmap(
         lambda a, b: generalised_eigh(a, b, robust=False)))(*stack))
 
-    assert "cond[" in guarded, "the guarded route should carry a conditional"
-    assert "select_n" in guarded, "which under vmap becomes a select over both branches"
+    # **Read the conditional off the unbatched graph and the dense solves off the
+    # batched one.** An earlier form asserted ``"cond[" in guarded`` and passed for
+    # a reason unrelated to the guard: under ``vmap`` the guard's ``cond`` is
+    # already a ``select_n``, and the ``cond[`` it found was a ``platform_index``
+    # conditional that ``jnp.diagonal`` brought into the canonical route.
+    assert "cond[" in single, "unbatched, the guard is a real branch"
+    assert "cond[" not in guarded and "select_n" in guarded, \
+        "batched, it is a select over the results of both branches"
+    # ... so both routes' dense solves are computed: Cholesky's one eigh and
+    # canonical orthogonalisation's two, against the fast route's one
+    assert guarded.count("name=eigh") == 3
+    assert fast.count("name=eigh") == 1
     assert "cond[" not in fast, "the fast route must have no conditional at all"
