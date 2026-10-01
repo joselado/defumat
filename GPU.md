@@ -33,8 +33,9 @@ carried uncommitted spiral work in a file this code also touches.
 built and measured: `'memory'` (one k-point in flight, projectors rebuilt, the wavefunction
 store streamed from host RAM) is the accelerator default and grows by about 0.2 MB per
 k-point on eight-atom silicon where `'speed'` grows by 33 (45 against 2080 MB at 64
-k-points, 1.6x the time), and `'speed'` falls back to `'memory'` when its estimate would
-not fit. `PERFORMANCE.md`'s "Two memory modes" entry has the tables; `GPU-MEMORY-NEXT.md` is
+k-points, 1.6x the time; 1.81x to 1.85x on the RTX A2000 with the Davidson steps equal, almost all
+of it the one k-point per call, `PERFORMANCE.md`, "Memory mode on a k-mesh"), and `'speed'` falls
+back to `'memory'` when its estimate would not fit. `PERFORMANCE.md`'s "Two memory modes" entry has the tables; `GPU-MEMORY-NEXT.md` is
 the list of what is left. §4a's regression set can now be rerun here, on this card, without
 a cluster job -- which also means the test gate must be run with `JAX_PLATFORMS=cpu` from
 that environment, since on the card the defaults differ.

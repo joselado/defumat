@@ -102,7 +102,8 @@ XLA command buffers (a null here: `--xla_gpu_enable_command_buffer` with `WHILE,
   a lower bound on the card's advantage, while a ratio between two card arms can be wrong either way.
   The two A/B readings a default rests on are the GTX 1060's memory-against-speed table (the "1.6x the
   time" of `GPU.md`'s opening) and the V100's `k=all, b=1` 2075 ms (`CLAUDE.md`'s reason that corner is
-  in neither preset); the first is re-measured on the A2000 in the stall entry, the second needs a
+  in neither preset); the first is re-measured on the A2000 in `PERFORMANCE.md`, "Memory mode on a
+  k-mesh, re-measured with the steps beside it" (1.81x and 1.85x, steps equal), the second needs a
   float64 card.
 * **The float32 tier** (`GPU-MEMORY-NEXT.md` item 26): the first blocker is named (setup arrays built
   from the radial tables ignore the precision policy, so `H|psi>` comes back complex128 into a

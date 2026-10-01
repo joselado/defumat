@@ -9002,7 +9002,10 @@ the same run is slower (692 against 566 ms per iteration at 27 k-points; 95.4 ag
 `si16-1k-ecut30`), and XLA's command buffers for loops and conditionals
 (`--xla_gpu_enable_command_buffer=FUSION,CUBLAS,CUBLASLT,CUSTOM_CALL,CONDITIONAL,WHILE`, a fresh cache)
 are slower too, 596, and 601 with `--xla_gpu_graph_min_graph_size=1`. What batching over k amortises is
-the fixed cost of a call, one dispatch per kernel of the solve for one small k-point.
+the fixed cost of a call, one dispatch per kernel of the solve for one small k-point. **A forecast, not a
+measurement:** that cost does not shrink with the card's float64 rate where the arithmetic does, so on
+a card with fast float64 the ratio between the modes on a k-mesh should be larger than this float32
+card shows, not smaller.
 
 **The size estimate is right at every k-batch measured**: `sizing.estimate_size` with the memory
 preset's other dials gives 0.033, 0.238 and 0.794 GiB at one, 8 and 27 k-points a call, against
