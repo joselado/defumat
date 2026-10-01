@@ -340,7 +340,7 @@ __all__ = ["DEFAULT_K_BATCH", "resolve_k_batch", "map_k", "sum_k",
            "WFC_STORES", "resolve_wfc_store", "park_wavefunctions",
            "fetch_wavefunctions",
            "MEMORY_MODES", "resolve_memory_mode", "memory_preset",
-           "k_chunks"]
+           "k_chunks", "K_BATCH_FIT", "k_batch_fit_requested"]
 
 
 _UNSET = object()
@@ -355,6 +355,10 @@ def _from_environment(name: str) -> int | None | object:
     """
     setting = (environ_get(name, "") or "").strip().lower()
     if not setting:
+        return _UNSET
+    if setting == K_BATCH_FIT and name == "DEFUMAT_K_BATCH":
+        # Chosen from the card by a Calculation (:func:`k_batch_fit_requested`);
+        # to a caller that has no system to size, nothing was said.
         return _UNSET
     if setting in ("all", "0", "off", "none"):
         return None
@@ -554,6 +558,21 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
+#: The ``k_batch`` that asks for the largest k-chunk the card holds, chosen by
+#: :func:`defumat.sizing.choose_k_batch` where a :class:`~defumat.scf.driver.
+#: Calculation` is built, which is the one place that has the system to size.
+K_BATCH_FIT = "fit"
+
+
+def k_batch_fit_requested(requested: int | None | str = "default") -> bool:
+    """Whether ``requested``, or ``DEFUMAT_K_BATCH`` behind a ``"default"``, is ``'fit'``."""
+    if isinstance(requested, str) and requested.strip().lower() == K_BATCH_FIT:
+        return True
+    if isinstance(requested, str) and requested == "default":
+        return (environ_get("DEFUMAT_K_BATCH", "") or "").strip().lower() == K_BATCH_FIT
+    return False
+
+
 def resolve_k_batch(requested: int | None | str = "default",
                     mode: str | None = "default") -> int | None:
     """Turn what a caller passed into a chunk size.
@@ -579,6 +598,12 @@ def resolve_k_batch(requested: int | None | str = "default",
 def _named(setting: str) -> int | None:
     if setting.strip().lower() in ("all", "0", "off", "none"):
         return None
+    if setting.strip().lower() == K_BATCH_FIT:
+        raise ValueError(
+            "k_batch='fit' is chosen from the card where a Calculation is built "
+            "(Calculation(..., k_batch='fit'), run_scf(..., k_batch='fit') or "
+            "DEFUMAT_K_BATCH=fit), since that is where the system is there to "
+            "size; this call takes a chunk size or None")
     return resolve_k_batch(int(setting))
 
 

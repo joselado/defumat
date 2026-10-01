@@ -1794,6 +1794,7 @@ def _resolve_memory_mode_for(memory_mode, system, pseudos, k_batch, projectors,
     dials_set = (
         k_batch != "default" or projectors not in (None, "default")
         or batching._from_environment("DEFUMAT_K_BATCH") is not batching._UNSET
+        or batching.k_batch_fit_requested(k_batch)
     )
     if dials_set:
         return mode
@@ -1844,7 +1845,10 @@ def resolve_band_batch_for(band_batch, mode, system, pseudos, k_batch="default",
 
     choice = choose_band_batch(
         system, pseudos, nbnd=nbnd or system.nbnd, davidson_basis=david,
-        k_batch=resolve_k_batch(k_batch, mode),
+        # a k-chunk to be fitted is grown from one k-point after this, and only
+        # if the whole block fits there (:func:`resolve_k_batch_for`)
+        k_batch=(1 if batching.k_batch_fit_requested(k_batch)
+                 else resolve_k_batch(k_batch, mode)),
         projectors=resolve_projectors(projectors, mode),
         wfc_store=resolve_wfc_store("default", mode),
     )
@@ -1860,6 +1864,36 @@ def resolve_band_batch_for(band_batch, mode, system, pseudos, k_batch="default",
             RuntimeWarning, stacklevel=3,
         )
     return choice.band_batch
+
+
+def resolve_k_batch_for(k_batch, mode, system, pseudos, projectors="default",
+                        david=None, band_batch=None, nbnd=None):
+    """The k-chunk a :class:`Calculation` runs at: ``'fit'`` sized from the card, else as asked.
+
+    Anything but ``'fit'`` -- an explicit chunk, ``None``, or ``"default"`` with
+    ``DEFUMAT_K_BATCH`` and the memory preset behind it -- is
+    :func:`~defumat.batching.resolve_k_batch`'s. ``'fit'`` (the argument, or
+    ``DEFUMAT_K_BATCH=fit``) is the largest chunk whose estimated peak fits the
+    card at the mode's other dials (:func:`~defumat.sizing.choose_k_batch`), the
+    whole mesh when it fits; on a CPU, which has no card to fill and where a
+    batch over k was measured slower, it is the platform's default. It is grown
+    only from a whole band block: ``band_batch`` is the one already resolved
+    for this run at one k-point, and a run whose block had to be split stays at
+    one k-point a call. The answer is the same to round-off at any chunk.
+    """
+    from defumat import batching
+
+    if not batching.k_batch_fit_requested(k_batch):
+        return resolve_k_batch(k_batch, mode)
+    if batching._backend() == "cpu" or band_batch is not None:
+        return resolve_k_batch("default", mode)
+    from defumat.sizing import choose_k_batch
+
+    return choose_k_batch(
+        system, pseudos, nbnd=nbnd or system.nbnd, davidson_basis=david,
+        band_batch=None, projectors=resolve_projectors(projectors, mode),
+        wfc_store=resolve_wfc_store("default", mode),
+    ).k_batch
 
 
 class Calculation:
@@ -1917,7 +1951,6 @@ class Calculation:
         # touches the k axis. One -- QE's ``k_loop`` -- unless asked otherwise;
         # ``None`` is a single ``vmap`` over all of them. See
         # :mod:`defumat.batching`.
-        self.k_batch = resolve_k_batch(k_batch, self.memory_mode)
         #: How many bands go through the grid at once in ``h_psi`` and in the
         #: density -- :func:`~defumat.batching.map_bands`'s dial, resolved once
         #: here and carried by every :class:`Hamiltonian` this calculation
@@ -1927,6 +1960,12 @@ class Calculation:
         self.band_batch = resolve_band_batch_for(
             band_batch, self.memory_mode, system, pseudos, k_batch,
             projectors, david,
+        )
+        # ... and the k-chunk after it, since ``k_batch = 'fit'`` grows the chunk
+        # only from a whole band block (:func:`resolve_k_batch_for`).
+        self.k_batch = resolve_k_batch_for(
+            k_batch, self.memory_mode, system, pseudos, projectors, david,
+            self.band_batch,
         )
         # What was asked for, before resolution: :meth:`for_bands` re-resolves
         # the same requests at another band count.
@@ -3460,10 +3499,13 @@ class Calculation:
             mode = _resolve_memory_mode_for(
                 memory_mode, self.system, self.pseudos, k_batch, projectors,
                 self.david, purpose=f"a solve at {nbnd} bands", nbnd=int(nbnd))
-        dials = (mode, resolve_k_batch(k_batch, mode),
-                 resolve_band_batch_for(band_batch, mode, self.system,
-                                        self.pseudos, k_batch, projectors,
-                                        self.david, nbnd=int(nbnd)))
+        bands = resolve_band_batch_for(band_batch, mode, self.system,
+                                       self.pseudos, k_batch, projectors,
+                                       self.david, nbnd=int(nbnd))
+        dials = (mode,
+                 resolve_k_batch_for(k_batch, mode, self.system, self.pseudos,
+                                     projectors, self.david, bands, nbnd=int(nbnd)),
+                 bands)
         if dials == (self.memory_mode, self.k_batch, self.band_batch):
             return self
         moved = copy.copy(self)

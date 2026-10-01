@@ -151,7 +151,7 @@ from defumat.basis.fftgrid import fft_grid_dimensions, gcut_from_ecut
 from defumat.system.builder import System
 
 __all__ = ["SizeEstimate", "estimate_size", "SpeedCheck", "speed_mode_fits",
-           "SPEED_HEADROOM"]
+           "SPEED_HEADROOM", "KBatchChoice", "choose_k_batch"]
 
 #: Bytes in one complex number at the precision a run will use.
 _COMPLEX_BYTES = {"double": 16, "single": 8}
@@ -1053,6 +1053,109 @@ class BandBatchChoice:
             return "no device memory statistics on this backend"
         return (f"estimated peak {self.estimate / 2**30:.2f} GiB against "
                 f"{self.headroom:.0%} of {self.available / 2**30:.2f} GiB free")
+
+
+@dataclass(frozen=True)
+class KBatchChoice:
+    """The k-chunk a ``k_batch = 'fit'`` run takes on this device, and why."""
+
+    #: ``None`` for the whole mesh in one call, else the chunk size; 1 when no
+    #: larger chunk fits.
+    k_batch: int | None
+    #: Whether the estimate at :attr:`k_batch` fits. ``False`` only when not even
+    #: one k-point a call does.
+    fits: bool
+    #: :attr:`SizeEstimate.peak_bytes` at :attr:`k_batch`, bytes.
+    estimate: int
+    #: ``bytes_limit - bytes_in_use``, bytes; ``None`` without device statistics
+    #: (the CPU client), where nothing is chosen.
+    available: int | None
+    headroom: float = SPEED_HEADROOM
+
+    def describe(self) -> str:
+        if self.available is None:
+            return "no device memory statistics on this backend"
+        return (f"estimated peak {self.estimate / 2**30:.2f} GiB against "
+                f"{self.headroom:.0%} of {self.available / 2**30:.2f} GiB free")
+
+
+def choose_k_batch(system, pseudos, nbnd: int | None = None,
+                   davidson_basis: int | None = None,
+                   band_batch: int | None = None, projectors: str = "rebuild",
+                   wfc_store: str = "stream",
+                   headroom: float = SPEED_HEADROOM,
+                   available: int | None = None) -> KBatchChoice:
+    """The largest k-chunk whose estimated peak fits the device.
+
+    **Why a chunk and not one k-point a call.** One k-point per call is QE's
+    ``k_loop`` and it is what memory mode does; on a card it pays a fixed cost
+    per call -- one dispatch per kernel of a Davidson solve sized for one small
+    k-point -- that batching over k amortises. Measured on an RTX A2000 on
+    eight-atom silicon at 20 Ry with 27 k-points, Davidson steps equal: 559 ms
+    per SCF iteration at one k-point a call, 414 at 8 and 323 at the whole mesh,
+    against 308 in speed mode; neither the width ladder's host round trips nor
+    XLA's command buffers were the cost (``PERFORMANCE.md``, "Memory mode on a
+    k-mesh"). So the chunk is as large as the card allows, sized from
+    :func:`estimate_size` at the run's other dials -- which matched the measured
+    peaks to 3 per cent at one, 8 and 27 k-points a call -- against
+    :data:`SPEED_HEADROOM` of what the allocator has left, as
+    :func:`choose_band_batch` sizes the band block.
+
+    **The whole mesh wins whenever it fits.** Otherwise the choice minimises the
+    number of calls and then the padding: :func:`~defumat.batching.k_chunks`
+    pads the last chunk with repeats that are solved and discarded, so 22 is
+    cheaper than 25 on a 64-point mesh (three calls each, 2 against 11 padded
+    solves). A chunk larger than one is a ``vmap`` over k, under which the
+    Davidson loop runs until its slowest k-point has converged; that is a pure
+    speed lever only while the steps are equal across k-points, which they are
+    on every cell measured since the subspace solve stopped setting its own
+    error (``PERFORMANCE.md``, "The endgame on a card is a stall").
+
+    ``band_batch`` is the band dial the chunk is sized at: the whole block
+    (``None``) is the only one a chunk is grown for, since a run whose block does
+    not fit at one k-point has nothing to spare. ``available`` replaces the
+    device query, for a test or a planned run on a card that is not this one.
+    """
+    if available is None:
+        import jax
+
+        stats = jax.local_devices()[0].memory_stats()
+        if not stats:
+            return KBatchChoice(k_batch=1, fits=True, estimate=0,
+                                available=None, headroom=headroom)
+        available = int(stats["bytes_limit"]) - int(stats["bytes_in_use"])
+    budget = headroom * available
+
+    def peak(chunk):
+        return estimate_size(
+            system, pseudos, nbnd=nbnd, k_batch=chunk, davidson_basis=davidson_basis,
+            band_batch=band_batch, projectors=projectors, wfc_store=wfc_store,
+        ).peak_bytes
+
+    whole = peak(None)
+    if whole <= budget:
+        return KBatchChoice(k_batch=None, fits=True, estimate=int(whole),
+                            available=int(available), headroom=headroom)
+    nk = estimate_size(system, pseudos, nbnd=nbnd, k_batch=1,
+                       davidson_basis=davidson_basis, band_batch=band_batch,
+                       projectors=projectors, wfc_store=wfc_store).nk
+    # The peak grows with the chunk, so the largest that fits is found by
+    # bisection, and among the chunks no larger that need the same number of
+    # calls the one with the least padding is ceil(nk / calls).
+    low, high = 1, max(1, nk - 1)
+    if peak(low) > budget:
+        return KBatchChoice(k_batch=1, fits=False, estimate=int(peak(1)),
+                            available=int(available), headroom=headroom)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if peak(middle) <= budget:
+            low = middle
+        else:
+            high = middle - 1
+    calls = -(-nk // low)
+    chunk = -(-nk // calls)
+    return KBatchChoice(k_batch=chunk, fits=True, estimate=int(peak(chunk)),
+                        available=int(available), headroom=headroom)
 
 
 def choose_band_batch(system, pseudos, nbnd: int | None = None,

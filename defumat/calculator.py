@@ -557,10 +557,8 @@ class Calculator:
         written for; it is the same mistake as sizing ``K_POINTS gamma`` as the
         request rather than as the substitution, one option along.
         """
-        from defumat.batching import (
-            resolve_k_batch, resolve_projectors, resolve_wfc_store,
-        )
-        from defumat.scf.driver import resolve_band_batch_for
+        from defumat.batching import resolve_projectors, resolve_wfc_store
+        from defumat.scf.driver import resolve_band_batch_for, resolve_k_batch_for
         from defumat.sizing import estimate_size
 
         options.setdefault("davidson_basis", self.defaults.get("david"))
@@ -585,8 +583,12 @@ class Calculator:
         options.setdefault("projectors", resolve_projectors(
             self.defaults.get("projectors", "default"), mode))
         if options.get("k_batch") is None:
-            options["k_batch"] = resolve_k_batch(
-                self.defaults.get("k_batch", "default"), mode
+            # ``'fit'`` included: the same resolver the run uses, at the band
+            # batch just resolved, so the report sizes the chunk it will take.
+            options["k_batch"] = resolve_k_batch_for(
+                self.defaults.get("k_batch", "default"), mode, self.system,
+                self.pseudos, self.defaults.get("projectors", "default"),
+                options.get("davidson_basis"), options["band_batch"],
             )
         return estimate_size(self.system, self.pseudos, **options)
 
