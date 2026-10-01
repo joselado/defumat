@@ -55,6 +55,7 @@ missing, are indexed at the head of `PLAN.md` §3.
 | what is left to do about continuing one run from another, sized | `CONTINUATION-NEXT.md` |
 | what still refuses an ultrasoft or PAW dataset, and what each piece needs first | `AUGMENTATION-NEXT.md` |
 | what is left to do about GPU memory after `memory_mode`, sized and ranked | `GPU-MEMORY-NEXT.md` |
+| what is left to do about GPU speed and the Davidson stall, sized, and the replay tools | `GPU-SPEED-NEXT.md` |
 
 **The claims in this project are numbers, not adjectives.** A phase is done when it has a
 concrete figure against `pw.x`, against Elk, or against an identity that shares no
