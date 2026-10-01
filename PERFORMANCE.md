@@ -8600,14 +8600,31 @@ more than the card's round-off allows gets the stall risk and not a quietly loos
 It is `batching.resolve_ethr_floor`, a CPU keeps 1e-13 (the same perturbations always took
 3 steps there and every number on record was taken with it), `DEFUMAT_ETHR_MIN` overrides it,
 and the four sites in `scf/driver.py` that clamped to `ETHR_MIN` read it. `nscf.py` and
-`topology.py` still clamp to 1e-13, which is a band path or a Berry phase and was not measured.
-On 64 atoms the default configuration:
+`topology.py` still clamp to 1e-13, which is a band path or a Berry phase, and their cold solves
+were measured stable (below). On 64 atoms the default configuration:
 
 | `conv_thr`, floor | steps per SCF iteration | wall | ms per iteration |
 |---|---|---|---|
 | 1e-10, 1e-13 | `[3, 1, 3, 3, 2, 3, 10, 100, 100]` | 132 s | 14700 |
 | 1e-10, 1e-12 | `[3, 1, 3, 3, 2, 3, 10, 100, 1]` | 60 s | 6695 |
 | 1e-10, 3e-12 | `[3, 1, 3, 3, 2, 3, 10, 1, 1]` | 14.6 s | 1622 |
+
+**Tighter requests are still in the range where the stopping rule is chaotic**, because the floor
+follows `conv_thr` down (the committed rule, defaults, memory mode, card): on sixteen atoms
+`conv_thr` 1e-8, 1e-10, 1e-11 and 1e-12 take 75.5, 69.5, 147.3 and 175.3 ms per iteration with
+iteration-8 steps 4 (seven iterations), 1, 46 and 73; on 64 atoms 1e-10 takes 1607 ms with
+`[..., 10, 1, 1]` and 1e-11 takes 6982 ms with `[..., 10, 100, 1, 1]`. A user who asks a card for
+1e-11 gets the stall and the energy they asked for, where a fixed 3e-12 would have given the
+speed and an energy error of 5e-12 Ry; the rule chooses the first, and the alternative is one
+line (`ETHR_FLOOR_FRACTION`) if a measurement says otherwise.
+
+The CPU does not stall on the 64-atom cell either (`[3, 1, 3, 3, 2, 3, 4, 3, 2]`, `ethr` 2e-13 and
+1e-13 in the last two iterations), which is what leaves its floor at QE's. The fixed-density
+solves of `nscf.py` and `topology.py`, which clamp to 1e-13 with no platform rule, start from the
+atomic orbitals and do real work: **17 steps at 1e-13, 17 at 3e-13, 16 at 1e-12, 15 at 3e-12 and
+12 at 1e-10, identical on the card and on the CPU for all four executables** (store and rebuild,
+`band_batch` all and 8, `si16-1k-ecut30`), so a cold solve is not in the chaotic range there and
+they are left alone.
 
 and at `band_batch = 8` over the store, the same cell: 80.7 s at 1e-13, 12.9 s at 1e-12, 11.3 s at
 3e-12, and 10.1 s for the 7 iterations of `conv_thr = 1e-8` at 1e-13 (1443 ms per iteration, no
@@ -8648,10 +8665,12 @@ workstation's CPU they are equal at 8 atoms (135 ms) and 9.5 per cent faster at 
 card holds at 8 atoms and fails at 16 and 64, and nothing here transfers to a float64 card. The
 default stays `sticks` on every platform.
 
-**Not done, in order of what it would change.** The V100 and H100 step counts for the 13x entry
+**Not done, in order of what it would change.** A request tighter than 1e-10 on a card (above).
+The V100 and H100 step counts for the 13x entry
 (a Triton job, which needs a submission this session did not make). The 157-atom slab, whose
 "12x too many steps" in `OPEN.md` and the memory notes may be this stall: its iteration 2 was at
 the 100-step budget on an H200. A stall guard that does not depend on a floor (the floor moves
 the threshold out of the range measured here and does not change the solver's stopping rule).
-The mechanism: the conditioning growth is real and its role is open. Whether `nscf.py` and
-`topology.py`, which clamp to 1e-13, stall on a card.
+The mechanism: the conditioning growth is real and its role is open. A cell where the cold
+solves of `nscf.py` and `topology.py` are chaotic at 1e-13 on a card: none was found on sixteen
+atoms.
