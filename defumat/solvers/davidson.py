@@ -355,8 +355,10 @@ def _at_width(live, widths: tuple[int, ...], make, narrow: bool,
         return make(widths[-1])
     if isinstance(live, int):                 # the first solve, known at trace time
         return make(next(m for m in widths if m >= live))
-    index = jnp.clip(jnp.searchsorted(jnp.asarray(widths), live),
-                     0, len(widths) - 1)
+    # the first rung that covers ``live``: the count of rungs below it. Written as
+    # a comparison rather than ``searchsorted``, whose default method is a short
+    # loop, a few more kernels a rung choice on a card, five choices a step.
+    index = jnp.clip(jnp.sum(jnp.asarray(widths) < live), 0, len(widths) - 1)
     if axis_name is not None:
         index = jax.lax.pmax(index, axis_name)
     return jax.lax.switch(index, [(lambda m: lambda: make(m))(m) for m in widths])
