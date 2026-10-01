@@ -104,6 +104,9 @@ SHARED_OPTIONS = frozenset({
     "nbnd",
     "conv_thr",
     "k_batch",
+    # 'single' or 'mixed' runs the band side of the SCF in float32
+    # (``Calculation``'s ``band_precision``); a setup option, as ``k_batch`` is.
+    "band_precision",
     # Where the wavefunction store lives between the points that read it, the
     # placement counterpart of ``k_batch``'s flight dial. Only ``run_scf`` names
     # it, so the forwarding reaches that and nothing else -- which is the whole
@@ -662,13 +665,14 @@ class Calculator:
                 origin_tangent=self.defaults.get("origin_tangent", True),
                 memory_mode=self.defaults.get("memory_mode", "default"),
                 band_batch=self.defaults.get("band_batch", "default"),
+                band_precision=self.defaults.get("band_precision", "default"),
             )
         return self._calculation
 
     #: The options that define a :class:`~defumat.scf.driver.Calculation`
     #: rather than one run over it. Given per call, they have to rebuild it.
     SETUP_OPTIONS = ("diagonalization", "k_batch", "david", "projectors",
-                     "origin_tangent", "memory_mode", "band_batch")
+                     "origin_tangent", "memory_mode", "band_batch", "band_precision")
 
     def _adopt(self, options) -> None:
         """Take a per-call setup option as this calculator's own.
@@ -682,7 +686,7 @@ class Calculator:
                    if name in options and options[name] != self.defaults.get(
                        name, "default"
                        if name in ("k_batch", "projectors", "memory_mode",
-                                   "band_batch")
+                                   "band_batch", "band_precision")
                        else None)}
         if changed:
             self.defaults.update(changed)
