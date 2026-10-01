@@ -9209,3 +9209,17 @@ The outputs are identical between the two forms on both platforms, and the CPU e
 the stress tests, which differentiate through these transforms at a strain, pass. **What it buys is setup,
 paid once per new shape** when the persistent cache is on and every run when it is not: every new cell,
 cutoff or k-mesh compiles each projector channel's transform again.
+
+**The setup a new cell pays on the card, with the compile cache off**, from nothing to the end of the
+first SCF iteration (`Calculation` built, then one iteration), memory mode, before and after the barrier:
+
+| cell | before | after |
+|---|---|---|
+| `si8-paw-1k` (PAW) | `Calculation` 195.3 s, total 210.8 s | 13.2 s, total 27.8 s |
+| `pt-so-1k` (spin-orbit, ultrasoft) | `Calculation` 334.7 s, total 344.3 s | 11.7 s, total 21.2 s |
+| `bi20-soc` (20 atoms, spin-orbit, ultrasoft) | first Davidson call not reached in 25 min | 19.8 s, total 156.4 s |
+
+So a new cell's setup is 7.6x and 16x faster on the two small cells, and no slow-operation alarm fires
+after the change. The first iteration's own time is the same before and after (15.5 against 14.6 s,
+9.6 against 9.5 s): it is the Davidson's and the potential's compilation and the arithmetic, which the
+barrier does not touch. With the persistent cache on this is paid once per shape.
