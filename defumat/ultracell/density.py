@@ -34,6 +34,9 @@ modulated. Dividing by ``Omega_u`` instead is wrong by ``N`` and is invisible at
 
 from __future__ import annotations
 
+from functools import partial
+
+import jax
 import jax.numpy as jnp
 
 from defumat.batching import sum_k
@@ -64,8 +67,17 @@ def ultracell_density(
         batch: ultracell states in flight at once; one by default, because each
             holds a whole ultracell box.
 
-    Returns ``(*grid)`` real.
+    Returns ``(*grid)`` real. Compiled once per shape, as
+    :func:`~defumat.ultracell.hamiltonian.ultracell_matrix` is and for its
+    reason: an eager ``sum_k`` over a fresh closure compiled again at every call.
     """
+    return _ultracell_density(coefficients, vectors, weights, box_index,
+                              tuple(int(n) for n in grid), volume, batch)
+
+
+@partial(jax.jit, static_argnames=("grid", "batch"))
+def _ultracell_density(coefficients, vectors, weights, box_index, grid, volume, batch):
+    """:func:`ultracell_density`, compiled; ``grid`` and ``batch`` are static."""
     cells, nbnd, _ = coefficients.shape
     points = int(grid[0]) * int(grid[1]) * int(grid[2])
     flat_index = box_index.reshape(-1)
@@ -127,8 +139,18 @@ def spinor_ultracell_density(
     degenerate with the right one wherever spin-orbit coupling is off, so
     nothing in an energy or a symmetry check can see it -- which is why the
     convention is taken from the one place that already has a ``pw.x`` number
-    behind it rather than rewritten.
+    behind it rather than rewritten. Compiled once per shape, as
+    :func:`ultracell_density` is.
     """
+    return _spinor_ultracell_density(coefficients, vectors, weights, box_index,
+                                     tuple(int(n) for n in grid), volume,
+                                     int(nspin_mag), batch)
+
+
+@partial(jax.jit, static_argnames=("grid", "nspin_mag", "batch"))
+def _spinor_ultracell_density(coefficients, vectors, weights, box_index, grid, volume,
+                              nspin_mag, batch):
+    """:func:`spinor_ultracell_density`, compiled; the shape arguments are static."""
     cells, nbnd, width = coefficients.shape
     npwx = width // 2
     points = int(grid[0]) * int(grid[1]) * int(grid[2])

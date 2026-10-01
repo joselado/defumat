@@ -56,6 +56,8 @@ of which a given electron count needs twice as many.
 
 from __future__ import annotations
 
+from functools import partial
+
 import jax
 import jax.numpy as jnp
 
@@ -76,6 +78,13 @@ def ultracell_matrix(
     augmentation: jnp.ndarray | None = None,
 ) -> jnp.ndarray:
     """The ``(N nbnd, N nbnd)`` matrix at one ``k0``.
+
+    **Compiled once per shape** (:func:`_ultracell_matrix`). Called as a plain
+    function, the loop over kets below was an eager ``lax.map`` whose body is a
+    new closure on every call, so JAX traced and compiled it again at every
+    ``k0`` of every ultracell iteration: on eight-atom silicon in four cells on
+    an RTX A2000, 48 such compilations in two three-iteration runs, and most of
+    a warm iteration's three seconds.
 
     Args:
         coefficients: ``(N, nbnd, npol npwx)`` frozen states at ``k0 + Q``,
@@ -112,6 +121,15 @@ def ultracell_matrix(
     :func:`~defumat.ultracell.density.ultracell_density` and
     :func:`~defumat.ultracell.density.spinor_ultracell_density` unpack.
     """
+    return _ultracell_matrix(coefficients, eigenvalues, box_index, delta_v,
+                             tuple(int(n) for n in grid), batch, int(npol),
+                             augmentation)
+
+
+@partial(jax.jit, static_argnames=("grid", "batch", "npol"))
+def _ultracell_matrix(coefficients, eigenvalues, box_index, delta_v, grid, batch,
+                      npol, augmentation):
+    """:func:`ultracell_matrix`, compiled; ``grid``, ``batch`` and ``npol`` are static."""
     cells, nbnd, width = coefficients.shape
     npwx = width // int(npol)
     points = int(grid[0]) * int(grid[1]) * int(grid[2])
