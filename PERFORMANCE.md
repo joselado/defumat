@@ -8706,6 +8706,56 @@ workstation's CPU they are equal at 8 atoms (135 ms) and 9.5 per cent faster at 
 card holds at 8 atoms and fails at 16 and 64, and nothing here transfers to a float64 card. The
 default stays `sticks` on every platform.
 
+**The band dial, the layout and the memory mode on 64 atoms, with the stall out of the way**
+(the first six iterations of `si64-1k-ecut30`, `conv_thr = 1e-10`, Davidson steps
+`[3, 1, 3, 3, 2, 3]` in every arm, median of two, ms per iteration, card):
+
+| `band_batch` | speed, store, sticks | speed, store, box | memory, rebuild, sticks |
+|---|---|---|---|
+| all | 1497 | 1454 | 1618 |
+| 64 | 1495 | | |
+| 32 | 1350 | | 1464 |
+| 16 | 1359 | 1444 | 1473 |
+| 8 | 1397 | 1446 | 1511 |
+| 4 | 1468 | | |
+| 2 | 1616 | | |
+
+The best band batch is 16 to 32, about 10 per cent under the whole block, and one band at a
+time costs 8 per cent more again than four; the whole-block default is within 10 per cent of the
+optimum here and is left alone (on sixteen atoms the whole block is the best, 64.1 against 77.8 ms
+at `band_batch = 8`, so a default that followed the cell size would be a third dial and the
+gain is small on a float32 card). Memory mode costs a steady 8 per cent over speed mode at every
+band batch (1618 against 1497, 1473 against 1359, 1511 against 1397), the projector rebuild, the
+streamed store and one k-point at a time together. The box layout is flat across band batches
+(1444 to 1454) where the sticks vary from 1350 to 1497, 3 per cent faster at the whole block and
+3 to 6 per cent slower at 8 and 16. **The chaotic range reaches above the floor on larger cells**:
+iteration 7 (`ethr` about 1e-11 here) still takes 4 to 18 steps depending on the executable
+(sticks, store: 7 at the whole block, 15 at 64, 6 at 32, 4 at 16 and 8, 18 at 4, 9 at 2), which
+is the 1692 and 1236 ms per iteration of the nine-iteration run's extremes, and the floor
+does not touch it.
+
+**Where the stall-free 64-atom run spends its kernel time on this card** (`nsys`, memory mode
+default, one cold and one warm SCF, 15.3 s of kernels in 77,370 launches):
+
+| kernels | time | share | launches | per launch |
+|---|---|---|---|---|
+| FFT | 7227 ms | 47.2% | 725 | 9968 us |
+| matrix products (cuBLAS) | 5137 ms | 33.5% | 4042 | 1271 us |
+| elementwise and data movement | 1906 ms | 12.4% | 61,528 | 31 us |
+| dense eigensolve and factorisation | 1046 ms | 6.8% | 9132 | 114.5 us |
+
+One kernel, the two-dimensional 36 x 36 transform (`composite_vector_2d_fft`), is 5498 ms in 112
+launches, 36 per cent of all kernel time, and `ampere_gzgemm_64x32_tn` is 3955 ms in 108. Both are
+float64 arithmetic on a card with float64 at 1/70 of float32, so this table is about this card:
+81 per cent of it is the two things that card is worst at. On a card with a real float64 rate
+those two shares shrink by roughly the ratio of the peak rates and the others do not, since the
+61,528 elementwise launches (31 us average) and the 9132 solver launches are latency- and
+bandwidth-bound, so the elementwise chain and the subspace solve are what to look at first on an
+A100. **That is a forecast from scaling peak rates, not a measurement**, and one Triton job with
+`nsys` would turn it into one. On the healthy sixteen-atom run the same split is FFT 32 per cent,
+dense solve 27 per cent (8396 launches of 29 us), elementwise 22 per cent (51,158 launches of
+3.9 us) and cuBLAS 13.5 per cent, which is the shape the small-cell regime has.
+
 **Not done, in order of what it would change.** A request tighter than 1e-10 on a card (above).
 The V100 and H100 step counts for the 13x entry (a Triton job, which needs a submission this
 session did not make). A stall guard that does not depend on a floor (the floor moves the
