@@ -87,6 +87,7 @@ def main() -> None:
         "resolved_band_batch": str(resolve_band_batch()),
         "memory_mode": resolve_memory_mode(),
         "calculation_band_batch": str(getattr(calculation, "band_batch", "n/a")),
+        "calculation_k_batch": str(getattr(calculation, "k_batch", "n/a")),
         "fft_layout": calculation.fft_layout,
         "projectors": calculation.projector_storage,
         "wfc_store": resolve_wfc_store(mode=calculation.memory_mode),
