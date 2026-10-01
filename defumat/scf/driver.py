@@ -7039,16 +7039,20 @@ def run_scf(
         ethr = next_ethr(ethr, accuracy, calculation.nelec, iteration,
                          floor=getattr(calculation, "ethr_floor", ETHR_MIN))
         # ``band_precision = 'mixed'``: the band side goes to double once the
-        # density has come down to what single delivers (its ``conv_thr``
-        # floor), or to ten times the ``conv_thr`` asked for if that is looser,
-        # in this loop, so the mixer's history and the threshold schedule carry
-        # across and the state converged to is a double one. Single drives the
-        # density there on its own (sixteen-atom silicon: 1e-7 in seven
-        # iterations); switching when the *schedule* first asks for more than
-        # single's ``ethr`` floor came at iteration 4 of 9 and bought nothing.
-        # The store is cast where it lives.
-        if (switch_to is not None and iteration > 1
-                and accuracy < max(10.0 * conv_thr, calculation.conv_thr_floor)):
+        # SCF's error estimate has come down to single's own energy floor,
+        # ``eps |E|`` -- below it the single run converges to the fixed point of
+        # its own, inexact map, and the mixer's history then describes the wrong
+        # one -- or to ten times the ``conv_thr`` asked for if that is looser.
+        # It happens in this loop, so the mixer's history and the threshold
+        # schedule carry across and the state converged to is a double one. Two
+        # triggers were measured and are not this: the schedule first asking for
+        # more than single's ``ethr`` floor came at iteration 4 of 9 on sixteen
+        # atoms and bought 1.01x on a CPU; single's ``conv_thr`` floor, 1e-7, came
+        # at iteration 10 on 64 atoms and the double phase then took 9 more,
+        # 0.87x on the card. The store is cast where it lives.
+        if (switch_to is not None and iteration > 1 and history
+                and accuracy < max(10.0 * conv_thr, calculation.band_precision.eps
+                                   * abs(float(history[-1]["total_energy"])))):
             calculation = calculation.at_band_precision(switch_to)
             ethr = max(min(ethr, 0.1 * accuracy / max(1.0, calculation.nelec)),
                        resolve_ethr_floor(calculation.ethr_floor))
