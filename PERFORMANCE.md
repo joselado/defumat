@@ -888,6 +888,25 @@ the magnetic si16 spinor on four pools 2643/2652 against 2805/2799 ms per
 iteration (5.6 per cent), si16 at 12 k-points on five pools 844/837 against
 846/839 (none).
 
+### What `h_psi` is of an iteration, and what splitting it alone is worth (2026-10-01)
+
+D22's performance cores, `tools/parallel/hpsi_share.py` (every `Hamiltonian.apply`
+counts its rows; the cost of a row is a bare `apply` of `nbnd` rows at the first
+k-point), warm SCF, one k-point for si64 and six for the spinor. Share of an
+iteration spent in `apply`:
+
+| cell | 1 core | 6 cores |
+|---|---|---|
+| si64, `nbnd = 128`, 459 to 488 rows an iteration | 0.42 | 0.52 to 0.53 |
+| `si16-spinor-us-6k.in`, `nbnd = 64`, 1117 to 1292 rows | 0.34 to 0.36 | 0.39 to 0.41 |
+
+With `apply` at the 6.8x that bands split over CPU devices reach and the rest
+keeping its threads, an iteration is 0.56 (si64) and 0.66 (spinor) of today's
+six-core one, 1.8x and 1.5x. The Milan thread table (job 20587245) puts threads at
+1.99x for si64 and 1.81x for bi20-soc at 16 cores, flat to 64. So inside one
+k-point needs the dense algebra distributed as well; `h_psi` alone does not pay.
+Per-row cost is a bare `apply`, so the shares carry that approximation.
+
 ### The same mask is a deadlock, and the suite pays 11% not to hit it (2026-09-13)
 
 **The fastest setting is the one that hangs.** XLA's CPU pool is sized from that
