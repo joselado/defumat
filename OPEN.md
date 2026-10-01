@@ -4071,6 +4071,20 @@ to `npwx` with a mask instead of using per-k shapes" -- and it is worth fixing
 on its own, since padding a mesh's strings to the mesh-wide maximum makes one
 executable serve all of them.
 
+**The cause, found 2026-10-02 and fixed in `7106cff`.** `PlaneWaveStates.overlaps`
+walked its pairs with a `map_k` over a closure built inside the method, an eager
+`lax.map` whose body is a new function at every call, so JAX traced and compiled
+the loop again for every string. With the persistent cache on, a recompile of an
+identical program is a cache *hit*, which takes about the 0.04 s the strings
+below took, and still loads a new copy of the executable into the process, which
+the in-memory cache then keeps for good because each call's closure is a new key.
+That is a per-string growth whatever the shapes. Measured on this workstation's
+CPU, `tests/data/qe/alas-berry.in`, `/proc/self/maps` across three polarization
+calls: **+256 and +256 mappings per call before the change, 0 and 0 after**, the
+polarization identical to the printed digits, and the second call 4.2 s against
+8.2 (`jax_log_compiles`: 16 `jit(scan)` compilations a call before, none after).
+Not yet re-run on a node; the two paragraphs below are the analysis as it stood.
+
 **It is not, however, what exhausts the mappings, and the measurement above
 says so.** Timing each string of the 16-string mesh beside its map count, the
 count grows by roughly 480 to 650 on *thirteen of sixteen* strings, including

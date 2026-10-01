@@ -9263,3 +9263,17 @@ The CPU's first run is slower because the whole construction is now one compiled
 where it had been its inner loop compiled again at every call. **A forecast, not a measurement:** a
 production ultracell (more k-points, tens of iterations, a larger program per compile) saved one
 compilation per `k0` per iteration, so the saving there is larger than here.
+
+## The Berry-phase string loop compiled its overlaps again for every string (CPU, 2026-10-02)
+
+`PlaneWaveStates.overlaps` (`topology/states.py`) had the ultracell's defect: an eager `lax.map` over a
+closure built at every call, so a polarization compiled the overlap loop once per k-string, every time.
+On zincblende AlAs (`tests/data/qe/alas-berry.in`, 16 strings) a second `get_polarization()` compiled 16
+`jit(scan)` modules and took 8.2 s on this workstation's CPU; after the change (`_pair_overlaps`, jitted
+once per shape) it compiles none and takes 4.2 s, and the first call 60.3 s against 66.4. **It was also
+the per-string growth in the process's mappings** that `OPEN.md` Part XIII item 2 traced on the cluster:
+with the persistent cache on, each recompile is a cache hit that loads a new copy of the executable,
+kept for good; `/proc/self/maps` grew by 256 per call before and by 0 after. The polarization prints
+identically. A warm second SCF, by contrast, compiles nothing on any of six kinds of cell tried (plain,
+ultrasoft, PAW, noncollinear, a magnetic metal, DFT+U), nor do a second band structure, force, stress or
+DOS call: `jax_log_compiles` on the `jax` logger, checked to see 133 compilations in the cold run.
