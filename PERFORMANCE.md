@@ -9047,7 +9047,11 @@ unchanged.
 **Where each regime sits.** On eight atoms at 20 Ry (about 1600 plane waves, 16 bands) one k-point a
 call is bound by its fixed cost per call, and the batch halves the time; on sixteen atoms at 30 Ry
 (about 5900 plane waves, 32 bands) the call is bound by arithmetic on this card and the batch is worth
-3 per cent at 27 points and -4 per cent at 22 a call. **A forecast, not a measurement:** on a card
+3 per cent at 27 points and -4 per cent at 22 a call. **Re-measured after the two launch fixes below**
+(`syevd` for the small subspace solve, the stick fill as a gather; same cells, median of two): sixteen
+atoms at 64 points 3885 ms one k-point a call against 3940 at 22 a call (-1.4 per cent), at 27 points
+1712 against 1600 in speed mode (+7 per cent); eight atoms at 27 points 372 against 167 (`'fit'`, the
+whole mesh), so the batch is still worth about 2.2x on the small cell and still a wash on the larger. **A forecast, not a measurement:** on a card
 with fast float64 the arithmetic shrinks and the fixed cost does not, so the crossover moves to larger
 cells and the batch is worth more there than here. `'fit'` is opt-in; memory mode's own default is
 still one k-point a call (`GPU-SPEED-NEXT.md`).
@@ -9080,6 +9084,11 @@ in float32).
 | si64, memory | 1e-7 | 6 it, 1588 ms/it | 9 it, 273 ms/it | 3.9x | 3.148, 1.652 GiB |
 | si64, speed | 1e-7 | 6 it, 1488 ms/it | 9 it, 233 ms/it | 4.2x | 3.286, 1.642 GiB |
 | si16, CPU (4 threads) | 1e-5 to 1e-7 | 473 ms/it | 266 to 305 ms/it | 1.6 to 1.8x an iteration | |
+
+**Re-measured at the end of the night** (after `syevd` and the stick gather, which do not favour either
+precision): 64 atoms to 1e-7, memory mode 6 iterations of 1579 ms in double against 9 of 251 ms in
+single, 9.47 against 2.26 s, 4.2x; speed mode 6 of 1458 against 9 of 212, 8.75 against 1.91 s, 4.6x; the
+peaks as above. The table is the earlier reading.
 
 The extra iterations in single are its floor: Davidson's threshold is floored at
 `4 eps32 ecutwfc` (1.4e-5 Ry at 30 Ry), where QE's 1e-13 kept would stall every call at the budget and
