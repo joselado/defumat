@@ -168,6 +168,7 @@ from defumat.xc.functional import resolve_functional
 from defumat.solvers import get_eigensolver
 from defumat.solvers.davidson import (
     ETHR_MIN,
+    MAX_ITERATIONS,
     empty_band_threshold,
     starting_vectors,
 )
@@ -6364,6 +6365,7 @@ def run_scf(
         starting_from = None
 
     started_at = time.time()
+    budget_warned = False
     mixer = get_mixer(mixing_mode, beta=mixing_beta, history=mixing_ndim)
     # Turned off for the rest of the run the first time a write is refused, so a
     # ``reducebf`` run says so once rather than once per cadence.
@@ -6953,6 +6955,21 @@ def run_scf(
             steps_here = float(np.mean(np.asarray(steps)))
             davidson_steps += steps_here
             davidson_unconverged = int(np.max(np.asarray(unsettled)))
+            if (not budget_warned and davidson_unconverged > 0
+                    and int(np.max(np.asarray(steps))) >= MAX_ITERATIONS):
+                # ``c_bands`` prints "eigenvalues not converged" here; a quiet run
+                # that spent most of its time in one call gave no sign of it.
+                budget_warned = True
+                warnings.warn(
+                    f"SCF iteration {iteration}: the eigensolver used its whole budget of "
+                    f"{MAX_ITERATIONS} steps and left up to {davidson_unconverged} of {nbnd} "
+                    f"bands unsettled at ethr = {ethr:.2e}. The step count is what the run paid "
+                    "for this iteration (history['davidson_iterations']). Below about 5e-13 "
+                    "the stopping test, a change in an eigenvalue between two steps, is "
+                    "decided by round-off, most often on an accelerator; "
+                    "DEFUMAT_ETHR_MIN raises the floor under the threshold.",
+                    RuntimeWarning, stacklevel=2,
+                )
             if verbose:
                 # **The unsettled count is printed and not only recorded.** A
                 # step count says how hard the solve worked; it does not say

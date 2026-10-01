@@ -510,3 +510,69 @@ def test_the_ethr_floor_follows_the_platform_the_request_and_the_environment(mon
     assert resolve_ethr_floor(ETHR_MIN, 1e-10) == 3e-13
     monkeypatch.setattr(batching, "_backend", lambda: "cpu")
     assert next_ethr(1e-2, 1e-20, 8.0, 5, 1e-10) == 3e-13
+
+
+def test_a_call_that_uses_the_whole_davidson_budget_is_reported(monkeypatch):
+    """``c_bands`` says "eigenvalues not converged"; a quiet run said nothing.
+
+    The solve is the real one and only its reported counters are replaced, in one
+    SCF iteration, by the budget and a nonzero unsettled count; the warning is
+    given once per run.
+    """
+    import tempfile
+    import warnings
+    from pathlib import Path
+
+    import numpy as np
+
+    from defumat.io.pwin import read_pw_input
+    from defumat.pseudo import read_upf
+    from defumat.scf.driver import Calculation, run_scf
+    from defumat.solvers.davidson import MAX_ITERATIONS
+    from defumat.system import build_system
+
+    text = """&control
+  calculation = 'scf'
+/
+&system
+  ibrav = 2, celldm(1) = 10.2, nat = 2, ntyp = 1, ecutwfc = 12.0
+/
+&electrons
+  conv_thr = 1.0d-9
+/
+ATOMIC_SPECIES
+ Si 28.086 Si.pz-vbc.UPF
+ATOMIC_POSITIONS alat
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS automatic
+ 2 2 2 0 0 0
+"""
+    root = Path(__file__).resolve().parents[1]
+    with tempfile.NamedTemporaryFile("w", suffix=".in", delete=False) as handle:
+        handle.write(text)
+    system = build_system(read_pw_input(Path(handle.name)))
+    pseudos = tuple(read_upf(root / "data" / "pseudo" / s.pseudo_file)
+                    for s in system.structure.species)
+    calculation = Calculation(system, pseudos)
+    real = calculation.diagonalize
+    calls = []
+
+    def diagonalize(*args, **kwargs):
+        out = real(*args, **kwargs)
+        calls.append(1)
+        if len(calls) == 3 and kwargs.get("return_steps"):
+            steps = np.full(np.asarray(out[2]).shape, MAX_ITERATIONS)
+            unsettled = np.full(np.asarray(out[3]).shape, 2)
+            return out[0], out[1], steps, unsettled
+        return out
+
+    monkeypatch.setattr(calculation, "diagonalize", diagonalize)
+    with pytest.warns(RuntimeWarning, match="whole budget of 100 steps"):
+        run_scf(system, pseudos, calculation=calculation, conv_thr=1e-9)
+
+    # and a healthy run is silent
+    monkeypatch.setattr(calculation, "diagonalize", real)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        run_scf(system, pseudos, calculation=calculation, conv_thr=1e-9)
