@@ -384,8 +384,8 @@ iterations suggest**, and any GPU speedup quoted here has to say which
 > unused directions at 1000 times the largest diagonal element of `H`, which gives the matrix the
 > device `eigh` diagonalises a norm of 3e4, and an eigensolver's absolute error is proportional to
 > the norm. With the factor at 4 the 64-atom SCF in the default memory mode goes from 132 s to
-> 14.5 s at QE's own floor. The V100 behind the 13x was not re-run, and the forecast is that it
-> showed the same thing. `PERFORMANCE.md`, "The endgame on a card is a stall".
+> 14.5 s at QE's own floor. The V100 behind the 13x was not re-run, and whether another card's
+> `eigh` has the same error on this matrix is not measured. `PERFORMANCE.md`, "The endgame on a card is a stall".
 
 **Thirty-two atoms changes the size of the answer, and softens the second
 finding.** On `si32-1k-ecut30` (11781 plane waves, 64 bands) at `band_batch =

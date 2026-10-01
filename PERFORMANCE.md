@@ -8838,16 +8838,21 @@ at 4** the same seven cells at QE's floor give the same steps and the same energ
 digits (37.6, 53.7, 50.1, 44.0, 69.6, 40.4 and 537 ms per iteration), so the fix is neutral on them.
 
 **Not done, in order of what it would change.** The A100 and H100 step counts, and the V100's, for
-the old 13x entry (a Triton job, which needs a submission this session did not make); the cause
-is the device `eigh` on a matrix whose norm is set by the parking, which is not specific to a
-float32 card, so the same stall is the forecast for every card that uses cuSOLVER, and it is a
-forecast. The dependence on the cutoff: the parked eigenvalue is 4 times the largest diagonal
+the old 13x entry (a Triton job, which needs a submission this session did not make); the one
+component that differs between the card and the CPU on the Davidson pair is the device `eigh`, on a
+matrix whose norm the parking sets; the random-pair table above has the two within a factor of two at
+every condition number, so it is this pair and not cuSOLVER in general, and whether another card's
+`eigh` has the same error on this matrix is not measured. The dependence on the cutoff: the parked eigenvalue is 4 times the largest diagonal
 element, which is the kinetic energy at the cutoff, so the matrix norm and with it the `eigh`
 error grow with `ecutwfc` (a norm of about 125 at 30 Ry, about 400 at 100); sixteen atoms at 60 and
 90 Ry were clean (above), and nothing larger or hard-pseudopotential was measured. A bound that
 follows the live block's own spectrum (a Gershgorin row sum of the projected `H`) would not depend
 on the cutoff and was not tried. `subspace._canonical_route` (the
-retry) still parks at 1000 times. `PARK_FACTOR` 3 was only replayed on the one call. A cell where
+retry, taken when the Cholesky factor is not finite) still parks at 1000 times, for a reason that
+was checked and not only assumed: it parks relative to the diagonal of the *reduced* matrix
+`X^H H X`, which does not bound that matrix's spectrum the way the plane-wave diagonal bounds `H`'s,
+so the Davidson factor cannot be copied there without a bound of its own; it is rare and was not
+measured. `PARK_FACTOR` 3 was only replayed on the one call. A cell where
 the budget warning fires again, which it will say. The floor dial `DEFUMAT_ETHR_MIN` stays as a
 lever. **The 157-atom slab's "12x too many steps" (`OPEN.md`, the memory notes) is not this**, and
 an earlier sentence here said it might be: its iteration 2 resets `ethr` to 1e-2 and takes

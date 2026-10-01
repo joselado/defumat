@@ -7079,8 +7079,9 @@ unsettled count; the steps each iteration paid are
 \textbf{The margin depends on the cutoff}: the parking is 4 times the largest
 diagonal element, which is the kinetic energy at the cutoff, so the matrix norm
 grows with \code{ecutwfc}; sixteen atoms were clean at 30, 60 and 90~Ry, and nothing larger or with a hard pseudopotential was measured. And \textbf{the
-card measurements are on a float32 part}; the cause is not specific to one, but no
-other card was run.
+card measurements are on a float32 part}: the component that differs is the device
+\code{eigh} on the Davidson matrix, and whether another card's has the same error
+on it was not measured.
 \end{refuses}
 
 \textbf{The wavefunction transforms have two layouts.} The default, on every

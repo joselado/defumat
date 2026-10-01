@@ -23327,5 +23327,8 @@ band batch at construction and is fixed.
 margin: the parked eigenvalue is 4 times the kinetic energy at the cutoff, so the norm grows with it;
 sixteen atoms at 60 and 90 Ry were clean (30 Ry: 73 steps in one call before and 3 after; 60: 31 and
 2), and nothing larger or with a hard pseudopotential was measured; a Gershgorin bound on the live
-block would not depend on it and was not tried. The canonical retry still parks at 1000 times. Record: `PERFORMANCE.md`, "The endgame on a
+block would not depend on it and was not tried. The canonical retry still parks at 1000 times of the reduced matrix's diagonal, which does not bound its
+spectrum as the plane-wave diagonal bounds `H`'s, so the Davidson factor was not copied there and the
+route is rare and not measured. Whether another card's `eigh` has the same error on this matrix is not
+measured (on random pairs the card and the CPU were within 2x). Record: `PERFORMANCE.md`, "The endgame on a
 card is a stall"; guide: `docs/features.tex`, the batching section.
