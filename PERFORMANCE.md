@@ -9223,3 +9223,9 @@ So a new cell's setup is 7.6x and 16x faster on the two small cells, and no slow
 after the change. The first iteration's own time is the same before and after (15.5 against 14.6 s,
 9.6 against 9.5 s): it is the Davidson's and the potential's compilation and the arithmetic, which the
 barrier does not touch. With the persistent cache on this is paid once per shape.
+
+**Where the rest of a new cell's compile goes** (`jax_log_compiles`, the cache off, after the barrier):
+`bi20-soc` spends about 121 s of its 154 s to the end of iteration 1 compiling, 79 s of it the Davidson
+solve (`jit(_every_k)`) and 14 s the start's Rayleigh-Ritz (`jit(_rotate_all)`), against 2.8 and 0.7 s on
+`si16-1k-ecut30`. The spinor ultrasoft `H|psi>` is copied into the compiled solve once per rung of the
+band ladder and the width ladder, so its compile grows with both; not taken further.
