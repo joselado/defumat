@@ -853,7 +853,7 @@ def resolve_ethr_floor(floor: float) -> float:
 
     ``DEFUMAT_ETHR_MIN`` is a lever and not a default. A floor of 3e-12 on an
     accelerator was the answer to a stall that turned out to have another cause
-    (the subspace solve's parked directions, ``solvers.davidson.PARK_FACTOR``), so
+    (where the subspace solve parked its idle directions, ``solvers.subspace``), so
     the default is QE's on every platform again. A run that meets one anyway has
     the warning ``run_scf`` gives when a call uses its whole Davidson budget, and
     this to raise the floor with; it costs accuracy (on a displaced sixteen-atom

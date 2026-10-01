@@ -21,6 +21,7 @@ the singular overlap directly instead of trying to reproduce a platform.
 import numpy as np
 import jax.numpy as jnp
 import pytest
+import scipy.linalg
 
 from jax.scipy.linalg import solve_triangular
 
@@ -178,12 +179,12 @@ def _davidson_pair(n_live=24, n_park=8, top=30.0, park_factor=4.0, seed=3):
     return jnp.asarray(hc), jnp.asarray(sc), spectrum
 
 
-def test_the_retry_does_not_multiply_the_solvers_own_parked_directions():
+def test_the_retry_does_not_multiply_a_callers_own_parked_directions():
     """The canonical route parks at a bound of the kept block, not at 1000 times its diagonal.
 
-    Inside a Davidson solve the kept block's diagonal already carries the
-    solver's inactive directions at ``PARK_FACTOR`` times the largest diagonal
-    element of ``H``, so the old rule, 1000 times the largest diagonal element of
+    A caller that parks its idle directions on the diagonal of ``H`` itself, as
+    Davidson did at 4 times the largest diagonal element of ``H``, puts them in
+    the kept block, so the old rule, 1000 times the largest diagonal element of
     the reduced matrix, handed ``eigh`` a matrix of norm 4000 times ``H``'s
     diagonal: 121001 here, against the 3e4 that made a card's Davidson stall at
     the ``ethr`` floor (``PERFORMANCE.md``, "The endgame on a card is a stall").
@@ -191,18 +192,53 @@ def test_the_retry_does_not_multiply_the_solvers_own_parked_directions():
     what it was handed. The physical roots must not care where the dead direction
     is parked, so they are held against the live block's exact spectrum.
     """
-    from defumat.solvers.davidson import PARK_FACTOR
-
-    top = 30.0
-    hc, sc, spectrum = _davidson_pair(top=top, park_factor=PARK_FACTOR)
+    top, factor = 30.0, 4.0
+    hc, sc, spectrum = _davidson_pair(top=top, park_factor=factor)
     values = np.asarray(generalised_eigh(hc, sc, robust=True)[0])
-    assert np.abs(values).max() < 1.5 * (PARK_FACTOR * top + 1.0)
+    assert np.abs(values).max() < 1.5 * (factor * top + 1.0)
 
     # the 23 live roots the overlap keeps: the projected pencil's spectrum,
     # which is ``spectrum`` with its dead direction gone, interlaced
     live = np.sort(values[values < top + 1.0])
     assert live.size == spectrum.size - 1
     assert live.min() >= spectrum.min() - 1e-10 and live.max() <= spectrum.max() + 1e-10
+
+
+@pytest.mark.parametrize("robust", [False, True])
+def test_parked_rows_sort_last_just_above_the_live_block_on_both_routes(robust):
+    """``parked`` rows come back on top, one above the live block's bound, and change no live root.
+
+    What Davidson hands over: its idle rows decoupled in both matrices against a
+    unit overlap, and nothing on their diagonal. On the fast route they are put
+    one above the Gershgorin bound of the *reduced* live block; on the retry they
+    are made null directions of the overlap and parked with the dropped ones. A
+    refreshed block's overlap is exactly the identity, degenerate with the
+    parked rows', which is the case where an ``eigh`` of the overlap could rotate
+    the two together, so the live block here starts with one.
+    """
+    rng = np.random.default_rng(11)
+    nbnd, n_live, n_park = 6, 14, 10
+    m = n_live + n_park
+    h_live = np.asarray(_hermitian(n_live, 5)) * 0.2
+    s_live = np.eye(n_live, dtype=complex)
+    b = rng.standard_normal((n_live - nbnd, n_live - nbnd)) * 0.1
+    s_live[nbnd:, nbnd:] += b @ b.T            # the corrections are not orthonormal
+    parked = np.zeros(m, bool)
+    parked[[3, 9, 15, 17, 18, 19, 20, 21, 22, 23]] = True   # interleaved and trailing
+    h = np.zeros((m, m), complex)
+    s = np.zeros((m, m), complex)
+    live = np.flatnonzero(~parked)
+    h[np.ix_(live, live)] = h_live
+    s[np.ix_(live, live)] = s_live
+    s[parked, parked] = 1.0
+
+    exact = scipy.linalg.eigh(h_live, s_live, eigvals_only=True)
+    values = np.asarray(generalised_eigh(jnp.asarray(h), jnp.asarray(s),
+                                         robust=robust, parked=jnp.asarray(parked))[0])
+    assert np.abs(values[:n_live] - exact).max() < 1e-12
+    top = values[n_live:]
+    assert np.ptp(top) < 1e-12 * top[0] and top[0] > exact.max()
+    assert top[0] < 3.0 * np.abs(exact).max() * np.sqrt(n_live) + 1.0
 
 
 # ------------------------------------------------------ the guard's own cost

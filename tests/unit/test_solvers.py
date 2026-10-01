@@ -239,28 +239,33 @@ def test_the_subspace_solve_is_handed_a_matrix_of_the_order_of_the_diagonal(sili
                                                                            monkeypatch):
     """The parked directions set the norm the dense solve sees, and its error with it.
 
-    Davidson parks the subspace directions it is not using at an eigenvalue above
-    the roots it takes, and that value is the norm of the matrix ``eigh`` is
-    handed whenever a direction is parked. At 1000 times the largest diagonal
-    element of ``H`` the norm was 3e4, the device ``eigh``'s error reached the
-    ``ethr`` floor and a card's Davidson took up to 100 steps from round-off
-    (``PERFORMANCE.md``, "The endgame on a card is a stall"). A CPU's LAPACK does
-    not show that, so the steps cannot be asserted here; the norm can. The
-    largest eigenvalue in magnitude a route returns is the norm of what it was
-    handed, read by a host callback in each route, on both routes. The lower
-    bound says some solve did have parked directions, so the check saw them.
+    Davidson hands the subspace directions it is not using to the subspace solve
+    as parked rows, and where they are put is the norm of the matrix ``eigh`` is
+    handed whenever there are any. At 1000 times the largest diagonal element of
+    ``H`` the norm was 3e4, the device ``eigh``'s error reached the ``ethr`` floor
+    and a card's Davidson took up to 100 steps from round-off; at 4 times it the
+    card was still over 1e-13 in 2 of 72 solves (``PERFORMANCE.md``, "The endgame
+    on a card is a stall"). A CPU's LAPACK does not show that, so the steps cannot
+    be asserted here; the norm can. The eigenvalues a route returns are read by a
+    host callback in each route, on both routes: the parked ones are the top
+    ``parked.sum()``, all at one value above every live root, and that value
+    stays under the largest diagonal element (7.5 against 11.2 here), where 4
+    times it was 45.7. The count says some solve did have parked rows, so the
+    check saw them.
     """
     import jax
 
     from defumat.solvers import subspace
 
     _, _, hamiltonian = silicon
-    norms = []
+    seen = []
 
     def spy(route):
-        def inner(h, s):
-            values, vectors = route(h, s)
-            jax.debug.callback(lambda v: norms.append(float(np.abs(v).max())), values)
+        def inner(h, s, parked=None):
+            values, vectors = (route(h, s) if parked is None
+                               else route(h, s, parked))
+            jax.debug.callback(lambda v, p: seen.append((np.asarray(v), np.asarray(p))),
+                               values, parked)
             return values, vectors
         return inner
 
@@ -268,12 +273,16 @@ def test_the_subspace_solve_is_handed_a_matrix_of_the_order_of_the_diagonal(sili
     monkeypatch.setattr(subspace, "_canonical_route", spy(subspace._canonical_route))
     largest = float(jnp.max(jnp.abs(hamiltonian.diagonal(0))))
     for robust in (False, True):
-        norms.clear()
+        seen.clear()
         jax.block_until_ready(davidson_eigensolver(
             hamiltonian, 0, NBND, None, ethr=1e-13, max_iterations=60, robust=robust))
-        assert len(norms) > 3, f"robust={robust}: too few solves to say anything"
-        assert max(norms) < 6.0 * largest, f"robust={robust}: {max(norms)} against {largest}"
-        assert max(norms) > 2.0 * largest, f"robust={robust}: no solve had parked directions"
+        with_parked = [(v, int(p.sum())) for v, p in seen if p.any()]
+        assert len(with_parked) > 3, f"robust={robust}: too few solves with parked rows"
+        for values, count in with_parked:
+            top, live = values[-count:], values[:-count]
+            assert np.ptp(top) < 1e-12 * top[0] and top[0] > live.max(), f"robust={robust}"
+            assert top[0] < largest, f"robust={robust}: parked at {top[0]} against {largest}"
+            assert top[0] < 3.0 * np.abs(live).max() + 1.0, f"robust={robust}"
 
 
 def test_the_band_ladder_covers_nbnd_and_never_exceeds_it():
@@ -325,8 +334,8 @@ def test_a_cholesky_that_returns_nan_is_rescued_outside_the_k_batch(silicon,
 
     real_route = subspace._cholesky_route
 
-    def nan_route(h, s):
-        values, vectors = real_route(h, s)
+    def nan_route(h, s, *parked):
+        values, vectors = real_route(h, s, *parked)
         return values * np.nan, vectors * np.nan
 
     monkeypatch.setattr(subspace, "_cholesky_route", nan_route)
@@ -367,7 +376,7 @@ def test_a_donated_start_is_consumed_and_rebuilt_for_the_retry(silicon,
 
     real_route = subspace._cholesky_route
     monkeypatch.setattr(subspace, "_cholesky_route",
-                        lambda h, s: tuple(x * np.nan for x in real_route(h, s)))
+                        lambda h, s, *parked: tuple(x * np.nan for x in real_route(h, s, *parked)))
     davidson.davidson_eigensolver_all.clear_cache()
     rebuilt = []
 

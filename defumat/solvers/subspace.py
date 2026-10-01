@@ -28,24 +28,45 @@ __all__ = ["generalised_eigh", "rayleigh_ritz"]
 OVERLAP_FLOOR = 1.0e-12
 
 
-def _cholesky_route(h, s):
+def _park_above(reduced, parked):
+    """``reduced`` with its ``parked`` rows decoupled and one above everything else.
+
+    The value is one above the Gershgorin bound of the rest, its largest absolute
+    row sum, which no eigenvalue of it can exceed, so the parked directions sort
+    last whatever the live spectrum is. It is a device and not physics, so it
+    carries no gradient.
+    """
+    live = jnp.logical_not(parked)
+    reduced = jnp.where(live[:, None] & live[None, :], reduced, 0.0)
+    bound = jax.lax.stop_gradient(jnp.max(jnp.sum(jnp.abs(reduced), axis=1)))
+    return reduced + jnp.diag(jnp.where(parked, bound + 1.0, 0.0).astype(reduced.dtype))
+
+
+def _cholesky_route(h, s, parked=None):
     """QE's ``cdiaghg``: reduce through the Cholesky factor of the overlap.
 
     Writing ``S = L L^H``, the substitution ``v = L^-H u`` gives
     ``(L^-1 H L^-H) u = e u``, which is Hermitian, and the eigenvectors come
     back with one triangular solve. This is the fast path and the one every
     number in this project was produced with.
+
+    ``parked`` marks rows the caller has decoupled in both matrices, with a unit
+    overlap, so that the factor is the identity there and the reduction leaves
+    them alone; they are put above the reduced live block here
+    (:func:`generalised_eigh` says why it is done after the reduction).
     """
     factor = jnp.linalg.cholesky(s)
     reduced = solve_triangular(factor, h, lower=True)
     reduced = solve_triangular(factor, reduced.conj().T, lower=True).conj().T
     reduced = 0.5 * (reduced + reduced.conj().T)
+    if parked is not None:
+        reduced = _park_above(reduced, parked)
 
     values, vectors = jnp.linalg.eigh(reduced)
     return values, solve_triangular(factor.conj().T, vectors, lower=False)
 
 
-def _canonical_route(h, s):
+def _canonical_route(h, s, parked=None):
     """Canonical orthogonalisation, for an overlap that is no longer positive.
 
     Diagonalise ``S = U w U^H`` and work in ``X = U w^-1/2``, which is the
@@ -59,16 +80,24 @@ def _canonical_route(h, s):
     Gershgorin bound of the kept block, its largest absolute row sum, which no
     eigenvalue of that block can exceed, so they sort last whatever the kept
     spectrum is, and the norm stays of the order of the kept block's own. They
-    were at 1000 times the largest diagonal element of ``reduced``, and inside a
-    Davidson solve that diagonal already carries the solver's own parked
-    directions (``solvers.davidson.PARK_FACTOR`` times the largest diagonal
-    element of ``H``), so the retry handed ``eigh`` a matrix of norm 4000 times
-    that of ``H``'s diagonal: 1.2e5 at 30 Ry, four times the norm that made a
-    card's Davidson stall at the ``ethr`` floor (``PERFORMANCE.md``, "The
-    endgame on a card is a stall"). The kept block's eigenvalues do not depend on
-    the parked value, which is a device and not physics, hence the
-    ``stop_gradient``.
+    were at 1000 times the largest diagonal element of ``reduced``, and while
+    Davidson parked its own idle directions on the diagonal of ``H`` (at 4 times
+    its largest element) that diagonal carried them, so the retry handed
+    ``eigh`` a matrix of norm 4000 times that of ``H``'s diagonal: 1.2e5 at
+    30 Ry, four times the norm that made a card's Davidson stall at the ``ethr``
+    floor (``PERFORMANCE.md``, "The endgame on a card is a stall"). The kept block's eigenvalues do not depend on
+    the parked value.
+
+    A caller's ``parked`` rows are made null directions of the overlap, so that
+    they are dropped and parked with the rest. Leaving them at a unit overlap
+    would not do: a refreshed Davidson block has an overlap of exactly the
+    identity, degenerate with theirs, and ``eigh(S)`` is free to rotate the two
+    together, after which no row of ``X`` is a parked one.
     """
+    if parked is not None:
+        live = jnp.logical_not(parked)
+        pair = live[:, None] & live[None, :]
+        h, s = jnp.where(pair, h, 0.0), jnp.where(pair, s, 0.0)
     w, u = jnp.linalg.eigh(s)
     keep = w > OVERLAP_FLOOR * jnp.max(w)
     safe = jnp.where(keep, w, 1.0)
@@ -76,18 +105,36 @@ def _canonical_route(h, s):
 
     reduced = x.conj().T @ h @ x
     reduced = 0.5 * (reduced + reduced.conj().T)
-    pair = keep[:, None] & keep[None, :]
-    reduced = jnp.where(pair, reduced, 0.0)
-    bound = jnp.max(jnp.sum(jnp.abs(reduced), axis=1))
-    shift = jax.lax.stop_gradient(bound) + 1.0
-    reduced = reduced + jnp.diag(jnp.where(keep, 0.0, shift).astype(reduced.dtype))
+    reduced = _park_above(reduced, jnp.logical_not(keep))
 
     values, vectors = jnp.linalg.eigh(reduced)
     return values, x @ vectors
 
 
-def generalised_eigh(h, s, robust: bool | None = None):
+def _route(route, h, s, parked):
+    """``route(h, s)``, with the parked rows when there are any."""
+    return route(h, s) if parked is None else route(h, s, parked)
+
+
+def generalised_eigh(h, s, robust: bool | None = None, parked=None):
     """Eigenpairs of ``H v = e S v`` for Hermitian ``H`` and positive ``S``.
+
+    **``parked`` marks rows that are not in the problem**, decoupled by the caller
+    in both matrices with a unit overlap: Davidson's subspace directions not in
+    use, under the one shape a ``while_loop`` allows. They come back as the top
+    eigenvalues, one above the Gershgorin bound of the reduced live block, and
+    the live eigenpairs are those of the live block alone. **Where they sit is
+    the norm of the matrix ``eigh`` is handed, and a device ``eigh``'s error
+    follows that norm** where LAPACK's does not: on the 72 captured solves of
+    sixteen-atom silicon at 30 Ry that had parked rows, a card's error in the
+    lowest 32 roots was 3.4e-12 Ry median with them at 1000 times the largest
+    diagonal element of ``H`` (norm 2.9e4), 5.2e-15 median and 1.6e-13 at worst
+    at 4 times it (norm 118), and 2.6e-15 median and 1.4e-14 at worst one above
+    the live block's bound (its norm 6 to 9 Ry), against 2.4e-15 and 9.3e-15 for
+    the live block alone and 2.9e-15 and 9.3e-15 for the host at any of them
+    (``PERFORMANCE.md``, "The endgame on a card is a stall"). The bound is taken
+    after the reduction, on the matrix ``eigh`` sees, because the live block of
+    ``H`` is not what bounds the spectrum when ``S`` is not the identity.
 
     **``S`` stops being positive, and when it does JAX does not say so.** As
     Davidson's subspace fills, the vectors it expands with are normalised
@@ -139,14 +186,14 @@ def generalised_eigh(h, s, robust: bool | None = None):
     * ``True`` is canonical orthogonalisation alone, which is the retry.
     """
     if robust is True:
-        return _canonical_route(h, s)
+        return _route(_canonical_route, h, s, parked)
     if robust is False:
-        return _cholesky_route(h, s)
+        return _route(_cholesky_route, h, s, parked)
     factor = jnp.linalg.cholesky(s)
     return jax.lax.cond(
         jnp.all(jnp.isfinite(factor)),
-        lambda: _cholesky_route(h, s),
-        lambda: _canonical_route(h, s),
+        lambda: _route(_cholesky_route, h, s, parked),
+        lambda: _route(_canonical_route, h, s, parked),
     )
 
 

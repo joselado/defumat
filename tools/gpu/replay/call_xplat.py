@@ -24,7 +24,7 @@ if os.environ.get("HOSTEIGH") in ("chol", "eigh"):
     from defumat.solvers import subspace as _sub
     from jax.scipy.linalg import solve_triangular as _st
     which = os.environ["HOSTEIGH"]
-    def _route(h, s):
+    def _route(h, s, parked=None):
         m = h.shape[0]
         if which == "chol":
             factor = jax.pure_callback(lambda a: np.linalg.cholesky(np.asarray(a)).astype(np.complex128),
@@ -34,6 +34,8 @@ if os.environ.get("HOSTEIGH") in ("chol", "eigh"):
         reduced = _st(factor, h, lower=True)
         reduced = _st(factor, reduced.conj().T, lower=True).conj().T
         reduced = 0.5 * (reduced + reduced.conj().T)
+        if parked is not None:
+            reduced = _sub._park_above(reduced, parked)
         if which == "eigh":
             def cb(a):
                 w, v = np.linalg.eigh(np.asarray(a))
@@ -49,8 +51,15 @@ if os.environ.get("HOSTEIGH") in ("chol", "eigh"):
 elif os.environ.get("HOSTEIGH"):
     import scipy.linalg as sl
     from defumat.solvers import davidson as _dav
-    def _host(h, s, robust=None):
+    def _host(h, s, robust=None, parked=None):
         m = h.shape[0]
+        if parked is not None:
+            # SciPy's generalised solve takes the pair, not the reduced matrix, so the
+            # parked rows go on the diagonal of h, well above anything live; LAPACK's
+            # accuracy does not depend on where they sit (PERFORMANCE.md)
+            live = jnp.logical_not(parked)
+            scale = jnp.max(jnp.abs(jnp.where(live[:, None] & live[None, :], h, 0.0)).sum(axis=1))
+            h = h + jnp.diag(jnp.where(parked, 10.0 * scale + 1.0, 0.0).astype(h.dtype))
         def cb(hh, ss):
             w, v = sl.eigh(np.asarray(hh), np.asarray(ss), driver="gvd")
             return w.astype(np.float64), v.astype(np.complex128)

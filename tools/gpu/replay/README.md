@@ -18,12 +18,11 @@ configuration, with `DEFUMAT_THREADS=off OMP_NUM_THREADS=1 MKL_NUM_THREADS=1` an
 * `kern_cats.py`: groups an `nsys stats -r cuda_gpu_kern_sum -f csv` table into FFT, matrix products,
   dense solve and elementwise.
 
-To reproduce the behaviour that was fixed, set the old factor before anything is traced:
-
-```python
-import defumat.solvers.davidson as d
-d.PARK_FACTOR = 1000.0      # the committed value is 4.0
-```
+To reproduce the behaviour that was fixed, check out a commit before it: `b418095^` parks the idle
+directions at 1000 times the largest diagonal element of `H`, and `b418095` to `cc21ad4` at 4 times it
+(`solvers.davidson.PARK_FACTOR`, which can be set before anything is traced at those commits). Since
+then the subspace solve parks them one above a bound of the reduced live block
+(`solvers.subspace.generalised_eigh`'s `parked`), and there is no factor.
 
 The tools take norm-conserving cells (`benchmarks/si16-1k-ecut30.in`, `si64-1k-ecut30.in`);
 `call_xplat.py` rebuilds the Hamiltonian from a saved potential and does not carry a `D_ij`.

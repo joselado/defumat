@@ -472,7 +472,7 @@ def test_the_ethr_floor_is_qes_on_every_platform_and_the_environment_moves_it(mo
     """QE's 1e-13 whatever the platform; ``DEFUMAT_ETHR_MIN`` is the only lever.
 
     An accelerator floor of 3e-12 was tried for a stall whose cause was the parked
-    directions of the subspace solve; with that fixed (``PARK_FACTOR``) the card
+    directions of the subspace solve; with that fixed (``subspace.generalised_eigh``) the card
     takes the CPU's steps at 1e-13, so the platform no longer matters.
     """
     from defumat.batching import resolve_ethr_floor
@@ -490,19 +490,6 @@ def test_the_ethr_floor_is_qes_on_every_platform_and_the_environment_moves_it(mo
     monkeypatch.setenv("DEFUMAT_ETHR_MIN", "3e-12")
     assert resolve_ethr_floor(ETHR_MIN) == 3e-12
     assert next_ethr(1e-2, 1e-20, 8.0, 5) == 3e-12
-
-
-def test_the_parked_directions_sit_above_the_live_spectrum_and_not_far_above_it():
-    """``PARK_FACTOR`` is what the device ``eigh`` error scales with, and it must stay a margin.
-
-    The subspace solve parks unused directions at ``PARK_FACTOR`` times the largest
-    diagonal element of ``H``. They have to sit above the live spectrum, whose top
-    is ``lambda_max(H)``; the matrix norm, which an eigensolver's absolute error is
-    proportional to, grows with the factor, and it was 1000.
-    """
-    from defumat.solvers.davidson import PARK_FACTOR
-
-    assert 2.0 <= PARK_FACTOR <= 10.0
 
 
 def test_a_call_that_uses_the_whole_davidson_budget_is_reported(monkeypatch):

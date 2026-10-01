@@ -19,9 +19,9 @@ that shapes inside ``jit`` are static:
 
 * **The subspace is masked, not resized.** The work arrays are always
   ``(nvecx, npwx)``; which of their rows are in play is a boolean mask, and the
-  masked-out part of the projected problem is set to ``shift * I`` against an
-  identity overlap, which puts its eigenvalues far above the physical spectrum
-  instead of leaving a singular block.
+  masked-out part of the projected problem is decoupled against an identity
+  overlap and the subspace solve puts its eigenvalues one above a bound of the
+  live spectrum, instead of leaving a singular block.
 * **Unconverged roots are compacted by sorting, not by resizing.** ``cegterg``
   moves them to the front so that the block it works on shrinks; the same
   reordering here is a stable ``argsort`` on the convergence flags, which is a
@@ -165,29 +165,6 @@ __all__ = ["davidson_eigensolver", "davidson_eigensolver_all", "DAVID_NDIM",
 #: run-to-run spread of each other on both cells. The saving had been in the
 #: cache, not in the flop count, and the band loop had already collected it.
 DAVID_NDIM = 4
-
-#: How far above the largest diagonal element of ``H`` the subspace solve parks the
-#: directions that are not in use, as a multiple of it. It was 1000.
-#:
-#: **A parked direction has to sit above the ``nbnd`` lowest live Ritz values,
-#: and those never rise during a call.** Only they are taken (``values[:nbnd]``);
-#: expanding the subspace can only lower each of them, the subspaces being nested
-#: (Cauchy interlacing); and the refresh keeps exactly the vectors they belong
-#: to. So their ceiling is the largest Ritz value of the starting block, a band
-#: energy for a seeded solve, and for QE's random start 0.22 to 0.34 of the
-#: largest diagonal element on the four cells measured (silicon at 12 and 30 Ry,
-#: SG15 nickel at 60, HGH LiF at 80). That holds on any dataset and at any
-#: cutoff, and it is why the factor needs no bound on ``lambda_max(H)`` (which
-#: on those cells is 1.00 to 1.05 of the largest diagonal element, the kinetic
-#: energy at the cutoff, since the projectors decay at large ``G``).
-#:
-#: **The factor also sets the norm of the matrix the dense eigensolver is handed,
-#: and its absolute error with it**, which is the reason it is small. Whenever a
-#: direction is parked it is the parked value that sets that norm: the live block
-#: is much smaller, since the preconditioned corrections stay at low ``G`` (on
-#: eight-atom silicon at 12 Ry, 2 to 4 Ry against a largest diagonal element of
-#: 11.2, so the solves with parked directions are handed 45.7).
-PARK_FACTOR = 4.0
 
 #: Total budget of Davidson steps, matching QE's.
 #:
@@ -497,25 +474,7 @@ def davidson_eigensolver(
     # ``G = 0`` and it makes the rebuilt field complex.
     start = force_real_g0(start, gamma_only)
 
-    # Inactive subspace directions are given this eigenvalue, which has to sit
-    # above the ``nbnd`` lowest live Ritz values so that they never enter the
-    # roots taken; those values never rise during a call, so the starting
-    # block's largest bounds them, and that is well under the largest diagonal
-    # element of ``H`` (:data:`PARK_FACTOR` has the argument and the numbers).
-    #
-    # **It also sets the norm of the matrix the subspace solve diagonalises, and
-    # the absolute error of a backward-stable eigensolver is proportional to that
-    # norm.** The factor was 1000, which makes the reduced matrix's
-    # norm about 3e4 against a physical spectrum of 30, and on a card the device
-    # ``eigh`` then returned Ritz values good to a few 1e-13 only: Davidson's test
-    # is a change below ``ethr`` between two steps, and with ``ethr`` at its 1e-13
-    # floor one call took between 3 and 100 steps from round-off alone. The same
-    # call took 3 steps with only that ``eigh`` on the host, 73 with it on the
-    # device, and 3 on the device with a factor of 100, 10 or 3 (``PERFORMANCE.md``,
-    # "The endgame on a card is a stall").
-    shift = jnp.max(jnp.abs(diagonal)) * PARK_FACTOR + 1.0
-
-    psi = jnp.zeros((nvecx, ndim), dtype).at[:nbnd].set(start)
+    psi =jnp.zeros((nvecx, ndim), dtype).at[:nbnd].set(start)
     hpsi = jnp.zeros((nvecx, ndim), dtype).at[:nbnd].set(hamiltonian.apply(start, ik))
     becp0, becq0 = project(start)
     nkb = becp0.shape[1]
@@ -559,10 +518,21 @@ def davidson_eigensolver(
         :func:`ritz` forms those. See :func:`_at_width`.
         """
         def at(m):
+            # The directions not in use are decoupled against a unit overlap and
+            # handed over as ``parked`` rows, which the subspace solve puts one
+            # above a bound of the reduced live block's spectrum, so they never
+            # enter the roots taken. **Where they sit is the norm of the matrix
+            # the dense ``eigh`` sees, and on a card its error follows that
+            # norm.** They were at 1000 times the largest diagonal element of
+            # ``H``, a norm of 3e4 where the live block's is 6 to 9 Ry, and with
+            # ``ethr`` at its 1e-13 floor one call took between 3 and 100 steps
+            # from round-off alone; then at 4 times it, which cleared the stalls
+            # measured and still left the card's error over 1e-13 in 2 of 72
+            # solves. ``generalised_eigh`` has the numbers.
             pair = active[:m, None] & active[None, :m]
-            inactive = jnp.where(active[:m], 0.0, 1.0).astype(dtype)
-            hc = jnp.where(pair, hc_raw[:m, :m], 0.0) + jnp.diag(shift * inactive)
-            sc = jnp.where(pair, sc_raw[:m, :m], 0.0) + jnp.diag(inactive)
+            inactive = jnp.logical_not(active[:m])
+            hc = jnp.where(pair, hc_raw[:m, :m], 0.0)
+            sc = jnp.where(pair, sc_raw[:m, :m], 0.0) + jnp.diag(inactive.astype(dtype))
 
             if gamma_only:
                 # Real symmetric, as ``regterg``'s ``hr``/``sr`` are. Taking the
@@ -572,7 +542,7 @@ def davidson_eigensolver(
                 hc, sc = hc.real, sc.real
             values, vectors = generalised_eigh(0.5 * (hc + hc.conj().T),
                                                0.5 * (sc + sc.conj().T),
-                                               robust=robust)
+                                               robust=robust, parked=inactive)
             vectors = vectors.astype(psi.dtype)
             coefficients = vectors[:, :nbnd]
 
