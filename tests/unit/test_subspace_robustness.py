@@ -294,6 +294,25 @@ def test_a_batched_guard_has_no_branch_to_take():
         "batched, it is a select over the results of both branches"
     # ... so both routes' dense solves are computed: Cholesky's one eigh and
     # canonical orthogonalisation's two, against the fast route's one
-    assert guarded.count("name=eigh") == 3
-    assert fast.count("name=eigh") == 1
+    assert guarded.count("eigh[") == 3
+    assert fast.count("eigh[") == 1
     assert "cond[" not in fast, "the fast route must have no conditional at all"
+
+
+def test_the_subspace_solves_ask_for_syevd_by_name():
+    """jaxlib would take cuSOLVER's Jacobi solver at 32 rows or fewer, 6 to 10x slower there.
+
+    The route is an argument of the ``eigh`` primitive, so it is read off the
+    graph: every ``eigh`` in both routes names the QR route (``syevd``), and on a
+    CPU, where every route is LAPACK's ``heevd``, the values are the old ones.
+    """
+    import jax
+
+    h, s = _hermitian(12, 3), _indefinite(12, 7)
+    for robust in (False, True):
+        graph = str(jax.make_jaxpr(lambda a, b: generalised_eigh(a, b, robust=robust))(h, s))
+        assert graph.count("eigh[") >= 1
+        assert graph.count("eigh[") == graph.count("algorithm=EighImplementation.QR")
+    values = np.asarray(generalised_eigh(h, _positive(12, 5), robust=False)[0])
+    reference = scipy.linalg.eigh(np.asarray(h), np.asarray(_positive(12, 5)), eigvals_only=True)
+    assert np.abs(values - reference).max() < 1e-12

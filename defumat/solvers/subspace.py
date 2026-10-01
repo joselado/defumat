@@ -17,6 +17,7 @@ import jax.numpy as jnp
 
 from defumat.basis.fft import force_real_g0
 from defumat.config import subspace_dtype
+from jax.lax.linalg import EighImplementation, eigh as _lax_eigh
 from jax.scipy.linalg import solve_triangular
 
 __all__ = ["generalised_eigh", "rayleigh_ritz"]
@@ -27,6 +28,23 @@ __all__ = ["generalised_eigh", "rayleigh_ritz"]
 #: is not marginal-looking: the eigenvalue measured there was **-4.3e-16**
 #: against a largest of 1.0 -- zero to round-off, and negative.
 OVERLAP_FLOOR = 1.0e-12
+
+
+def _eigh(x):
+    """``jnp.linalg.eigh`` with cuSOLVER's ``syevd`` asked for by name.
+
+    Left to choose, jaxlib takes cuSOLVER's Jacobi solver for a matrix of 32 or
+    fewer rows and ``syevd`` above, and at Davidson's first rungs the Jacobi one
+    is the slow and the inaccurate one. One complex128 matrix on an RTX A2000:
+    6.00 ms against 0.63 for ``syevd`` at ``m = 16``, 6.94 against 1.11 at 32,
+    with an eigenvalue error of 2e-13 against 2e-14 there; above 32 the two are
+    the same call. Profiled on a 27-k-point eight-atom SCF in memory mode, one
+    k-point a call, the subspace solve was 1.9 s of 3.2 s of kernel time, most
+    of it the Jacobi kernels. On a CPU every route is LAPACK's ``heevd``, so
+    nothing there changes.
+    """
+    vectors, values = _lax_eigh(x, implementation=EighImplementation.QR)
+    return values, vectors
 
 
 def _park_above(reduced, parked):
@@ -63,7 +81,7 @@ def _cholesky_route(h, s, parked=None):
     if parked is not None:
         reduced = _park_above(reduced, parked)
 
-    values, vectors = jnp.linalg.eigh(reduced)
+    values, vectors = _eigh(reduced)
     return values, solve_triangular(factor.conj().T, vectors, lower=False)
 
 
@@ -99,7 +117,7 @@ def _canonical_route(h, s, parked=None):
         live = jnp.logical_not(parked)
         pair = live[:, None] & live[None, :]
         h, s = jnp.where(pair, h, 0.0), jnp.where(pair, s, 0.0)
-    w, u = jnp.linalg.eigh(s)
+    w, u = _eigh(s)
     keep = w > OVERLAP_FLOOR * jnp.max(w)
     safe = jnp.where(keep, w, 1.0)
     x = u / jnp.sqrt(safe)[None, :]
@@ -108,7 +126,7 @@ def _canonical_route(h, s, parked=None):
     reduced = 0.5 * (reduced + reduced.conj().T)
     reduced = _park_above(reduced, jnp.logical_not(keep))
 
-    values, vectors = jnp.linalg.eigh(reduced)
+    values, vectors = _eigh(reduced)
     return values, x @ vectors
 
 
