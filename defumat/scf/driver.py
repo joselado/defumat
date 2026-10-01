@@ -7038,21 +7038,23 @@ def run_scf(
         # the threshold the checkpoint was carrying it for.
         ethr = next_ethr(ethr, accuracy, calculation.nelec, iteration,
                          floor=getattr(calculation, "ethr_floor", ETHR_MIN))
-        # ``band_precision = 'mixed'``: the band side goes to double once the
-        # SCF's error estimate has come down to single's own energy floor,
-        # ``eps |E|`` -- below it the single run converges to the fixed point of
-        # its own, inexact map, and the mixer's history then describes the wrong
-        # one -- or to ten times the ``conv_thr`` asked for if that is looser.
-        # It happens in this loop, so the mixer's history and the threshold
-        # schedule carry across and the state converged to is a double one. Two
-        # triggers were measured and are not this: the schedule first asking for
-        # more than single's ``ethr`` floor came at iteration 4 of 9 on sixteen
-        # atoms and bought 1.01x on a CPU; single's ``conv_thr`` floor, 1e-7, came
-        # at iteration 10 on 64 atoms and the double phase then took 9 more,
-        # 0.87x on the card. The store is cast where it lives.
-        if (switch_to is not None and iteration > 1 and history
-                and accuracy < max(10.0 * conv_thr, calculation.band_precision.eps
-                                   * abs(float(history[-1]["total_energy"])))):
+        # ``band_precision = 'mixed'``: the band side goes to double at the first
+        # iteration whose threshold single cannot deliver -- the schedule's
+        # ``0.1 accuracy / nelec`` under single's ``ethr`` floor -- or once the
+        # error is within ten times the ``conv_thr`` asked for, in this loop, so
+        # the mixer's history and the schedule carry across and the state
+        # converged to is a double one. **Up to there a single iteration is a
+        # double one**: on 64-atom silicon the first three agree with double's
+        # in every printed digit of the error estimate and take the same
+        # Davidson steps. Past it a single Davidson stops at the floor, one step
+        # where double takes three, and the run converges to the fixed point of
+        # an inexact map; switched later, the double phase pays for that (at
+        # the energy floor ``eps |E|``: 5 single iterations and 14 double, 0.60x
+        # on the card; at single's ``conv_thr`` floor of 1e-7: 9 and 9, 0.87x).
+        # The store is cast where it lives.
+        if (switch_to is not None and iteration > 1
+                and (0.1 * accuracy / max(1.0, calculation.nelec) < calculation.ethr_floor
+                     or accuracy < 10.0 * conv_thr)):
             calculation = calculation.at_band_precision(switch_to)
             ethr = max(min(ethr, 0.1 * accuracy / max(1.0, calculation.nelec)),
                        resolve_ethr_floor(calculation.ethr_floor))
