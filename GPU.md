@@ -380,11 +380,12 @@ iterations suggest**, and any GPU speedup quoted here has to say which
 > count was recorded in this measurement. On an RTX A2000 the same cell at `conv_thr = 1e-10`
 > shows the same shape as **one call, SCF iteration 8 at `ethr = 2e-13`, running 73 steps where
 > an identical-physics executable runs 3**, and `conv_thr` 1e-6 to 1e-9 never stalls there. The
-> stall is a property of the stopping test (a change in an eigenvalue per step against a threshold
-> of the same size) and not of small dense algebra, and a floor of `min(3e-12, 0.03 conv_thr)`
-> on an accelerator removes it: the 64-atom SCF in the default memory mode goes from 132 s to
-> 14.6 s. The V100 behind the 13x was not
-> re-run. `PERFORMANCE.md`, "The endgame on a card is a stall".
+> cause is not small dense algebra as such and not the stopping test: the subspace solve parks its
+> unused directions at 1000 times the largest diagonal element of `H`, which gives the matrix the
+> device `eigh` diagonalises a norm of 3e4, and an eigensolver's absolute error is proportional to
+> the norm. With the factor at 4 the 64-atom SCF in the default memory mode goes from 132 s to
+> 14.5 s at QE's own floor. The V100 behind the 13x was not re-run, and the forecast is that it
+> showed the same thing. `PERFORMANCE.md`, "The endgame on a card is a stall".
 
 **Thirty-two atoms changes the size of the answer, and softens the second
 finding.** On `si32-1k-ecut30` (11781 plane waves, 64 bands) at `band_batch =

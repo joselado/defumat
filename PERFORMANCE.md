@@ -8444,19 +8444,23 @@ single-precision run -- and casting `vltot` alone does not get past the same lin
 is one cast of the setup leaves to the policy wherever a `Calculation` is built or moved,
 with the deliberate float64 exceptions `GPU-MEMORY-NEXT.md` names; not started.
 
-## The endgame on a card is a stall, and an accelerator floor of 3e-12 removes it (RTX A2000, 2026-10-01)
+## The endgame on a card is a stall, and its cause is the subspace solve's parked directions (RTX A2000, 2026-10-01)
 
-**The number to carry: the default configuration on the card (memory mode) takes 132 s for
-the 64-atom SCF at `conv_thr = 1e-10`, because two Davidson calls run to the 100-step budget,
-and 14.6 s with the `ethr` floor at 3e-12**, a factor of 9, with the energy within 1e-11 Ry
-(`si64-1k-ecut30`, `DEFUMAT_MEMORY_MODE` at its accelerator default). Steps per SCF
-iteration were `[3, 1, 3, 3, 2, 3, 10, 100, 100]` against `[3, 1, 3, 3, 2, 3, 10, 1, 1]`.
-Everything below is the road to that sentence, and it overturns four readings recorded
-earlier in this file and in `GPU.md`, listed at the end.
-Card: RTX A2000 12 GB on `D22-0161`, host pinned to four performance cores, jax 0.11.0,
-`DEFUMAT_THREADS=off`, one process per entry, warm. This card is a float32 device (float64
-at 1/70 of float32), so none of the **times** is a claim about an A100 or an H200. The
-**step counts** are claims about the solver and are reported beside every time.
+**The number to carry: the default configuration on the card (memory mode) took 132 s for
+the 64-atom SCF at `conv_thr = 1e-10`, because two Davidson calls ran to the 100-step budget,
+and takes 14.5 s once the subspace solve parks the directions it is not using at 4 times the
+largest diagonal element of `H` instead of 1000 times it**, a factor of 9, at QE's own `ethr`
+floor and with the energy unchanged (`si64-1k-ecut30`). Steps per SCF iteration were
+`[3, 1, 3, 3, 2, 3, 10, 100, 100]` and are `[3, 1, 3, 3, 2, 3, 4, 3, 4]`. The route there went
+through an accelerator floor of 3e-12 under `ethr`, which cut the same run to 14.6 s at a cost in
+force accuracy and left tighter requests stalling, and which was **withdrawn the same day** when
+a replay of one call on both platforms located the cause; its tables stay below, marked, because
+they are what the investigation measured. The entry overturns four readings recorded earlier in
+this file and in `GPU.md`, listed near the end. Card: RTX A2000 12 GB on `D22-0161`, host pinned
+to four performance cores, jax 0.11.0, `DEFUMAT_THREADS=off`, one process per entry, warm. This
+card is a float32 device (float64 at 1/70 of float32), so none of the **times** is a claim about an
+A100 or an H200. The **step counts** are claims about the solver and are reported beside every
+time.
 
 **How it was found.** The one-k-point cell `si16-1k-ecut30` runs at 70.4 ms per iteration
 in `speed` mode and 187 ms in the default `memory` mode, and with one k-point the k and band
@@ -8501,23 +8505,21 @@ eigensolve of the **store** arm against 621 ms in the rebuild one, the reverse o
 (step counts were not printed in that run), which fits a stall that belongs to the
 executable and the environment and not to either projector route.
 
-**The stall is a property of the threshold, and a CPU does not show it.** The stalled call
-was captured and replayed (73 steps both times, so it is deterministic per executable and
-environment). `H|psi>` is bit-reproducible on the card (same jitted function twice; jit
-against eager differ by 4.7e-16 on a maximum of 0.24), the canonical-orthogonalisation retry
-did not fire (no warning, finite throughout), and the residual norms of the roots that stay
-unsettled hardly move: 9.6e-7 after one step, 2.9e-7 after three, 1.55e-7 after 73, with the
-eigenvalues already within 5e-11 of their final values after one step. So the long run buys
-a residual twice as small, which the SCF cannot use. The per-step change of the two unsettled
-roots, a pair that moves together (bands 16 and 17), is a steady 3.0 to 3.1e-13 over steps 3 to 5
-against `ethr = 2.13e-13`, a slow drift just above the threshold and not noise, and bands
-that had counted as settled later move by 1e-11 when a new direction enters the subspace.
-`ethr` here is a test on the *change* in an eigenvalue, and a root that is not being
-expanded does not change, so the settled flags at this threshold are partly false, and
-which roots pass in the first three steps is decided by round-off. That is measured by
-perturbing the captured call's starting states by 1e-13 relative noise (20 seeds on the card,
-12 on the CPU) and counting steps, for the two executables that differ only in the projector
-route:
+**It is deterministic per executable, a CPU does not show it, and the operator is not the cause.**
+The stalled call was captured and replayed (73 steps both times). `H|psi>` is bit-reproducible on
+the card, and for the same states and the same potential it agrees with the CPU's to 2.7e-15
+relative (the Rayleigh quotients `<psi|H|psi>` to 1.1e-15 Ry, a hundred times under the threshold);
+the canonical-orthogonalisation retry did not fire; the residual norms of the roots that stay
+unsettled hardly move (9.6e-7 after one step, 2.9e-7 after three, 1.55e-7 after 73); and the two
+roots that stay unsettled, a pair that moves together (bands 16 and 17), change by a steady 3.0 to
+3.1e-13 per step over steps 3 to 5 against `ethr = 2.13e-13`, where on the CPU the same call has
+bands 16 to 21 changing by 4.6e-13 from step 1 to 2 and everything under 5.8e-14 from step 2 to 3.
+**An earlier version of this entry read that steady change as real slow convergence, and the
+three-step solves as false convergence on stagnation. The replay in the next paragraph shows the
+opposite: the steady change is the device `eigh`'s error, and the three-step solves are right.**
+Perturbing the captured call's starting states by 1e-13 relative noise (20 seeds on the card, 12 on
+the CPU) and counting steps, for the two executables that differ only in the projector route,
+gives the table below, at the original parked-direction factor of 1000:
 
 | `ethr` | card, rebuild: median, max, over 20 steps | card, store: median, max, over 20 steps | CPU (both): steps |
 |---|---|---|---|
@@ -8545,9 +8547,55 @@ perturbations of the input in brackets:
 
 Within a factor of two everywhere, so cuSOLVER is not what makes a card different. What this
 table does say is that at the overlap's condition number at step 3 of the stalled call (12 to 20)
-the Ritz values of either platform carry an error of 1e-13 to 2e-13, which is the threshold, so
-the test sits on the noise of the subspace solve on both and the CPU's three-step passes in all
-12 seeds are the part that needs explaining.
+the Ritz values of either platform carry an error of 1e-13 to 2e-13, which is the threshold. The
+pairs of this table are random ones, and the Davidson pair is not (next paragraph).
+
+**The cause: the parked directions.** The same call exported from each machine and replayed on
+the other (the inputs of SCF iteration 8, which took 3 steps on the CPU and 73 on the card): the card
+takes 6 steps on the CPU's inputs and the CPU 3 on the card's, so the inputs are not it. With the
+subspace solve done on the host by SciPy's generalised `eigh` and everything else on the card
+(operator, transforms, matrix products), the card's own call takes **3 steps**; with only the
+Cholesky factorisation on the host it takes 63; with only the symmetric `eigh` of the reduced
+matrix on the host it takes **3**. The device `eigh` is the one piece. The matrix it is given is not
+a random one: the solver parks every direction of the subspace that it is not using at an
+eigenvalue of `1000 max|diag H| + 1` (about 3e4 against a physical spectrum of 30), so that they
+never enter the lowest roots, which makes the reduced matrix's norm 3e4, and a backward-stable
+eigensolver is accurate to `eps` times that norm in every eigenvalue: 7e-12 here, against a
+threshold of 2e-13. Replaying the card's own call with the factor at 1000, 100, 10 and 3: 73, 3, 3
+and 3 steps. The parked directions need only sit above the live spectrum, which `lambda_max(H)`
+bounds by well under three times the largest diagonal element, so the factor is now 4
+(`solvers.davidson.PARK_FACTOR`).
+
+**The fix at QE's own floor of 1e-13** (the perturbation experiment as above, 20 seeds, card;
+median, maximum, share over 20 steps):
+
+| `ethr` | factor 1000, rebuild | factor 10, rebuild | factor 4, rebuild | factor 1000, store | factor 10, store | factor 4, store |
+|---|---|---|---|---|---|---|
+| 1e-13 | 53, 100, 80% | 21, 46, 60% | 6, 14, 0% | 12, 60, 15% | 24, 55, 50% | 4, 5, 0% |
+| 2.1e-13 | 35.5, 100, 60% | 6.5, 19, 0% | 3, 4, 0% | 3.5, 23, 5% | 8, 18, 0% | 3, 3, 0% |
+
+and over a whole SCF at `conv_thr = 1e-10` unless stated, QE's floor, steps in the last two
+iterations (sixteen atoms) and ms per iteration, before and after:
+
+| arm | before (factor 1000) | after (factor 4) |
+|---|---|---|
+| 16 atoms, store, sticks, whole block | `[..., 3, 2]`, 70.4 | `[..., 3, 2]`, 70.0 |
+| 16 atoms, store, box | | `[..., 3, 2]`, 70.5 |
+| 16 atoms, rebuild | `[..., 73, 2]`, 181.7 | `[..., 3, 2]`, 70.6 |
+| 16 atoms, `band_batch = 16` | `[..., 24, 2]`, 111.1 | `[..., 3, 2]`, 74.8 |
+| 16 atoms, `band_batch = 8` | `[..., 39, 2]`, 150.3 | `[..., 3, 2]`, 85.9 |
+| 16 atoms, `band_batch = 1` | `[..., 41, 2]`, 341.1 | `[..., 3, 2]`, 216.9 |
+| 16 atoms, memory mode default | `[..., 73, 2]`, 192.1 | `[..., 3, 2]`, 75.1 |
+| 16 atoms, memory default, `conv_thr` 1e-11 | `[..., 46, 2]`, 147.3 (under the withdrawn rule) | `[..., 3, 2]`, 75.2 |
+| 16 atoms, memory default, `conv_thr` 1e-12 | `[..., 73, 2, 1]`, 175.3 (same) | `[..., 3, 2, 1]`, 72.3 |
+| 64 atoms, memory mode default | `[..., 10, 100, 100]`, 14700 | `[..., 4, 3, 4]`, 1613 |
+| 64 atoms, store, `band_batch = 8` | `[..., 4, 100, 1]`, 8967 | `[..., 4, 3, 3]`, 1389 |
+| 64 atoms, store, whole block | `[..., 7, 100, 100]`, 14329 | `[..., 4, 3, 3]`, 1489 |
+| 64 atoms, memory default, `conv_thr` 1e-11 | `[..., 10, 100, 1, 1]`, 6982 (withdrawn rule) | `[..., 4, 3, 4]`, 1640 |
+
+Every arm takes the CPU's steps, iteration 7 of the 64-atom cell included, which had varied between
+4 and 18 steps with the executable above the floor. The CPU is unchanged to the printed digits (the
+sixteen-atom energy -126.72076070097079 Ry and steps `[3, 1, 2, 2, 2, 2, 4, 3, 2]`).
 
 **The overlap's condition number grows during the stall, and whether that is cause or
 consequence is not established.** Traced inside the replay (74 subspace solves), the smallest
@@ -8558,10 +8606,12 @@ pair against `scipy.linalg.eigh`: 1.9e-14 at cond 1, 4.9e-13 at 1e2, 7.2e-12 at 
 1e6, 6.9e-8 at 1e8). But restarting the subspace every 4 steps, which resets the overlap to the
 identity (`EXACT` refresh, below), does not remove the stalls with rebuilt projectors, so the
 growth is at most part of the mechanism. Injecting 1e-13 relative noise into the projected
-pair on the CPU does not reproduce the card either.
+pair on the CPU does not reproduce the card either. With the cause found above the growth was a
+symptom or a bystander, and it was not tested further.
 
-**Tried and not kept** (all on the replayed call, 20 seeds, card; flags were in
-`solvers/davidson.py` for the experiment and are removed):
+**Tried and not kept** (all on the replayed call, 20 seeds, card, before the cause was found;
+flags were in `solvers/davidson.py` for the experiment and are removed; each changes the executable
+and so rolls the same dice again):
 
 * projecting each correction block out of the span of the current Ritz vectors (Jacobi-Davidson
   style, after the preconditioner): rebuild improves (median 3 steps at 2.1e-13, maximum 14)
@@ -8574,12 +8624,14 @@ pair on the CPU does not reproduce the card either.
   projectors medians of 33.5, 24.5 and 59.5 steps at 2.1e-13 against 35.5 unrestarted, with
   stored ones 10.5, 11 and 8 against 3.5. No cure, and it costs the lucky executable.
 * the Ritz values recomputed as Rayleigh quotients of the vectors the subspace solve returned
-  (`v^H H v / v^H S v`, second order in the vectors' error, so free of the solve's noise): with
-  rebuilt projectors **worse**, at least 33, 30, 24 and 18 steps in every seed at 1e-13, 2.1e-13,
+  (`v^H H v / v^H S v`, second order in the vectors' error, so free of the solve's noise; the
+  parked directions' 3e4 diagonal sits inside that quotient's numerator, which is why it did not
+  help): with rebuilt projectors **worse**, at least 33, 30, 24 and 18 steps in every seed at 1e-13, 2.1e-13,
   5e-13 and 1e-12 (median 51, 40.5, 33.5 and 26), with stored ones about the same as before
   (median 4, 12.5, 4, 2). The CPU is unchanged (same steps, energy to 14 digits).
 
-**What the floor does.** QE floors `ethr` at 1e-13. Whether a floor clears the stall depends on
+**What the floor did (withdrawn: the section is the history of the workaround, and the default floor
+is QE's on every platform again).** QE floors `ethr` at 1e-13. Whether a floor clears the stall depends on
 the executable, because the round-off that decides it is the executable's. Iteration-8 steps and
 ms per iteration on `si16-1k-ecut30` at `conv_thr = 1e-10`, one process per cell:
 
@@ -8776,25 +8828,23 @@ over 13 iterations (43.7, 43.2), DFT+U `ni-ldau-1k` (69.7, 69.0), the metal slab
 iterations (41.8, 41.3) and the spin-polarised hydrogen chain `h20-chain-lsda` over 32 (535, 538):
 no call above 17 steps in any of them at either floor, and energies identical to the printed digits.
 The floor does not bind in most of these (their last iterations are not at it), so this says that the
-stall was not found on those physics, and not that they are immune.
+stall was not found on those physics, and not that they are immune. **With the parked-direction factor
+at 4** the same seven cells at QE's floor give the same steps and the same energies to the printed
+digits (37.6, 53.7, 50.1, 44.0, 69.6, 40.4 and 537 ms per iteration), so the fix is neutral on them.
 
-**Not done, in order of what it would change.** A request tighter than 1e-10 on a card (above).
-The V100 and H100 step counts for the 13x entry (a Triton job, which needs a submission this
-session did not make). A stall guard that does not depend on a floor (the floor moves the
-threshold out of the range measured here and does not change the solver's stopping rule).
-The mechanism, of which three things are ruled out and the picture that is left is a slow
-genuine drift: the dense eigensolver's accuracy is the same on the card and on a CPU (above),
-`H|psi>` is bit-reproducible, and Ritz values made noise-free (the Rayleigh quotients above)
-give longer stalls, not shorter. What that leaves is that the long runs are real convergence of
-roots whose eigenvalues creep by 3e-13 to 1e-11 per step with a residual that hardly moves, and that the
-three-step solves are the false ones: after one to six steps the eigenvalues are still up to
-5e-11 from their 73-step values, 250 times the threshold the call claims to have met, and the
-test stops them because the *change* per step happened to fall under it. The floor therefore
-costs no real accuracy, which is what the table against the converged reference shows, and
-what it removes is a solver stopping on stagnation at one executable and not at another. A
-cell where the cold solves of `nscf.py` and `topology.py` are chaotic at 1e-13 on a card: none
-was found on sixteen atoms. **The 157-atom slab's "12x too many steps" (`OPEN.md`, the memory
-notes) is not this stall**, and an earlier sentence here said it might be: its iteration 2
-resets `ethr` to 1e-2 and takes `0.1 dr2 / nelec`, about 1e-3 at its `dr2 = 24.79` and a thousand
-electrons, ten orders above any floor, so the 100-step call there is in the loose regime, where
-`diago_david_ndim = 2` took 9 to 20 steps per call on sixteen atoms.
+**Not done, in order of what it would change.** The A100 and H100 step counts, and the V100's, for
+the old 13x entry (a Triton job, which needs a submission this session did not make); the cause
+is the device `eigh` on a matrix whose norm is set by the parking, which is not specific to a
+float32 card, so the same stall is the forecast for every card that uses cuSOLVER, and it is a
+forecast. The dependence on the cutoff: the parked eigenvalue is 4 times the largest diagonal
+element, which is the kinetic energy at the cutoff, so the matrix norm and with it the `eigh`
+error grow with `ecutwfc` (a norm of about 125 at 30 Ry, about 400 at 100), and nothing above 30 Ry
+was measured; a bound that follows the live block's own spectrum (a Gershgorin row sum of the
+projected `H`) would not depend on the cutoff and was not tried. `subspace._canonical_route` (the
+retry) still parks at 1000 times. `PARK_FACTOR` 3 was only replayed on the one call. A cell where
+the budget warning fires again, which it will say. The floor dial `DEFUMAT_ETHR_MIN` stays as a
+lever. **The 157-atom slab's "12x too many steps" (`OPEN.md`, the memory notes) is not this**, and
+an earlier sentence here said it might be: its iteration 2 resets `ethr` to 1e-2 and takes
+`0.1 dr2 / nelec`, about 1e-3 at its `dr2 = 24.79` and a thousand electrons, ten orders above any
+floor, so the 100-step call there is in the loose regime, where `diago_david_ndim = 2` took 9 to
+20 steps per call on sixteen atoms; the parked-direction factor may still matter there.

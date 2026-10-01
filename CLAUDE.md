@@ -705,12 +705,20 @@ plausible wrong answer rather than an error. `PLAN.md` has the phase that found 
   projector route, the FFT layout, the memory mode) looks like a speed effect. Four recorded
   readings were this and were wrong: a 13x "`conv_thr` tax" on sixteen atoms, a 2.7x gap between
   the memory modes, a factor 2 for `band_batch = 8` at 64 atoms and a 12 per cent loss for the
-  fused box layout. The 64-atom memory-mode SCF took 132 s and takes 14.6 s with the floor at
-  3e-12, the energy within 1e-11 Ry. `tools/parallel/time_scf.py` prints `davidson_steps`; compare
-  the arms over the iterations where they are equal (the first seven at `conv_thr = 1e-10`) or
-  not at all, and run nothing else on the card meanwhile. The CPU does not show it (the same
-  perturbations took exactly 3 steps there), which is why it went unseen. (`PERFORMANCE.md`,
-  "The endgame on a card is a stall", 2026-10-01.)
+  fused box layout. The 64-atom memory-mode SCF took 132 s and takes 14.5 s. **The cause was in the
+  solver and not in the threshold**: the subspace solve parked its unused directions at 1000 times
+  the diagonal, which gave the device `eigh` a matrix of norm 3e4 and an absolute error of a few
+  1e-13 against an `ethr` of 1e-13; the factor is 4 (`solvers.davidson.PARK_FACTOR`). A floor under
+  `ethr` of 3e-12 was adopted first, cut the run to 14.6 s, doubled a force error and was withdrawn
+  the same day when a replay of one call on both platforms (the inputs of each machine on the
+  other, then the subspace solve moved to the host piece by piece) located it. **The lesson is the
+  method**: when one machine takes 3 steps and another 73 on the same call, replay the same inputs
+  on both and swap one component at a time; a workaround that fits the symptom, and a "mechanism"
+  that fits the numbers (here, slow genuine convergence and false convergence on stagnation), were
+  both wrong. `tools/parallel/time_scf.py` prints `davidson_steps`; compare the arms over the
+  iterations where they are equal, and run nothing else on the card meanwhile. The CPU does not
+  show it, which is why it went unseen. (`PERFORMANCE.md`, "The endgame on a card is a stall",
+  2026-10-01.)
 
 ## Non-negotiable conventions
 

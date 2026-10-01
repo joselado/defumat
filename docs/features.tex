@@ -7040,53 +7040,47 @@ DEFUMAT_K_BATCH=all DEFUMAT_BAND_BATCH=all python3 run.py
 or per call, \code{run\_scf(..., k\_batch=...)}. The chunk size changes the order
 contributions are summed in and nothing else --- round-off, $\sim$1e-15 Ry.
 
-\textbf{On a GPU the SCF's diagonalisation threshold has a higher floor.} The
-SCF tightens Davidson's threshold \code{ethr} with its own error, as
-\code{electrons.f90} does, and floors it at $10^{-13}$~Ry. On an accelerator the
-floor is $\min(3\times10^{-12},\,0.03\,\code{conv\_thr})$ and never below
-$10^{-13}$. Davidson stops on the \emph{change} in each eigenvalue between two
-steps, and at $10^{-13}$ to $5\times10^{-13}$ which roots pass in the first
-steps is decided by round-off: on a card one call took between 3 and 100 steps
-from perturbations of $10^{-13}$ in the starting states, where a CPU took 3
-every time, and at \code{conv\_thr=1e-10} the 64-atom SCF in the default memory
-mode took 132~s against 14.6~s with the floor. At that threshold the floor costs
-little and not nothing: against a run converged to $10^{-14}$ the energy of
-silicon is within $5\times10^{-12}$~Ry and its largest band energy within
-$4\times10^{-8}$~Ry whatever the floor, and on a displaced sixteen-atom cell the
-force error goes from $3.4\times10^{-6}$ to $6.5\times10^{-6}$~Ry/bohr and the
-energy error from $1.8\times10^{-11}$ to $7.6\times10^{-11}$~Ry, both under what
-the threshold asked for. A CPU keeps $10^{-13}$, which is what every validated number here
-was measured with, and \code{DEFUMAT\_ETHR\_MIN} sets the floor for a whole
-process on either:
+\textbf{The floor under Davidson's threshold.} The SCF tightens the threshold
+\code{ethr} with its own error, as \code{electrons.f90} does, and floors it at
+$10^{-13}$~Ry on every platform; \code{DEFUMAT\_ETHR\_MIN} sets the floor for a
+whole process. That is a lever and not a default, and the history of why is worth
+knowing because it looked like a floor problem. Davidson stops on the \emph{change}
+in each eigenvalue between two steps, and on a GPU one call at that floor could
+take between 3 and 100 steps from round-off alone: at \code{conv\_thr=1e-10} the
+64-atom SCF in the default memory mode took 132~s against 14.5~s. The cause was
+not the threshold. The subspace solve parks the directions it is not using at
+$1000\times$ the largest diagonal element of $H$ so that they never enter the
+lowest roots, which makes the matrix the dense eigensolver diagonalises have a
+norm of about $3\times10^4$ against a physical spectrum of 30, and an eigensolver
+is accurate to machine epsilon times that norm in every eigenvalue, which the
+card's \code{eigh} showed and a CPU's did not. The factor is 4 now
+(\code{solvers.davidson.PARK\_FACTOR}); every arm measured takes the CPU's step
+counts at \qe's floor, and the CPU's own numbers did not move.
 
 \begin{lstlisting}[language=Python]
 from defumat.batching import resolve_ethr_floor
 
-# QE's floor and the request; 1e-13 on a CPU, 3e-12 on a card
-print(resolve_ethr_floor(1e-13, 1e-10))
+print(resolve_ethr_floor(1e-13))   # QE's floor, on every platform
 \end{lstlisting}
 
 \begin{shcode}
-DEFUMAT_ETHR_MIN=1e-13 python3 run.py
+DEFUMAT_ETHR_MIN=3e-12 python3 run.py
 \end{shcode}
 
 \begin{refuses}
-Nothing is refused; what the floor does not reach is worth knowing.
-\textbf{A request tighter than $10^{-10}$ follows \code{conv\_thr} down}
-($3\times10^{-13}$ at $10^{-11}$, \qe's $10^{-13}$ from $3\times10^{-12}$), so
-that the floor never limits what was asked for, and that is the range where the
-stall is still possible: 46 steps on sixteen atoms and 100 on 64 at
-\code{conv\_thr=1e-11}. \textbf{The fixed-density solves keep \qe's floor}, the
-band path and the Berry-phase strings, whose cold solves took 15 to 17 steps at every
-threshold from $10^{-13}$ to $3\times10^{-12}$ on sixteen atoms, on a card and on
-a CPU alike. And \textbf{the floor moves the threshold out of the range where the
-stall was measured and does not change Davidson's stopping rule}, so it is a
-measured workaround and not a proof that no cell stalls. \textbf{A call that
+Nothing is refused; what is worth knowing. \textbf{Raising the floor costs accuracy}:
+on a displaced sixteen-atom cell at \code{conv\_thr=1e-10}, a floor of $3\times10^{-12}$
+doubled the force error ($3.4\times10^{-6}$ to $6.5\times10^{-6}$~Ry/bohr) and took the
+energy error from $1.8\times10^{-11}$ to $7.6\times10^{-11}$~Ry. \textbf{A call that
 uses the whole 100-step budget and leaves bands unsettled gives a
-\code{RuntimeWarning}, once per run}, naming the iteration, the threshold and
-the unsettled count; the steps each iteration paid are
-\code{history[i]["davidson\_iterations"]}, and a time on a card is read against
-them.
+\code{RuntimeWarning}, once per run}, naming the iteration, the threshold and the
+unsettled count; the steps each iteration paid are
+\code{history[i]["davidson\_iterations"]}, and a time on a card is read against them.
+\textbf{The margin depends on the cutoff}: the parking is 4 times the largest
+diagonal element, which is the kinetic energy at the cutoff, so the matrix norm
+grows with \code{ecutwfc}, and nothing above 30~Ry was measured. And \textbf{the
+card measurements are on a float32 part}; the cause is not specific to one, but no
+other card was run.
 \end{refuses}
 
 \textbf{The wavefunction transforms have two layouts.} The default, on every
