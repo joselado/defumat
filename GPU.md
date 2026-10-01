@@ -381,8 +381,9 @@ iterations suggest**, and any GPU speedup quoted here has to say which
 > shows the same shape as **one call, SCF iteration 8 at `ethr = 2e-13`, running 73 steps where
 > an identical-physics executable runs 3**, and `conv_thr` 1e-6 to 1e-9 never stalls there. The
 > stall is a property of the stopping test (a change in an eigenvalue per step against a threshold
-> of the same size) and not of small dense algebra, and a floor of 1e-12 on an accelerator
-> removes it: 64 atoms, 80.7 s to 12.9 s for the whole SCF. The V100 behind the 13x was not
+> of the same size) and not of small dense algebra, and a floor of `min(3e-12, 0.03 conv_thr)`
+> on an accelerator removes it: the 64-atom SCF in the default memory mode goes from 132 s to
+> 14.6 s. The V100 behind the 13x was not
 > re-run. `PERFORMANCE.md`, "The endgame on a card is a stall".
 
 **Thirty-two atoms changes the size of the answer, and softens the second

@@ -8444,14 +8444,15 @@ single-precision run -- and casting `vltot` alone does not get past the same lin
 is one cast of the setup leaves to the policy wherever a `Calculation` is built or moved,
 with the deliberate float64 exceptions `GPU-MEMORY-NEXT.md` names; not started.
 
-## The endgame on a card is a stall, and an accelerator floor of 1e-12 removes it (RTX A2000, 2026-10-01)
+## The endgame on a card is a stall, and an accelerator floor of 3e-12 removes it (RTX A2000, 2026-10-01)
 
-**The number to carry: one Davidson call at the 100-step budget made the 64-atom SCF on
-the card take 80.7 s where it takes 12.9 s with the `ethr` floor at 1e-12**, the same
-energy to 1e-10 Ry (`si64-1k-ecut30`, speed mode, `band_batch = 8`, `conv_thr = 1e-10`).
-Steps per SCF iteration were `[3, 1, 3, 3, 2, 3, 4, 100, 1]` against
-`[3, 1, 3, 3, 2, 3, 4, 7, 1]`. Everything below is the road to that sentence, and it
-overturns four readings recorded earlier in this file and in `GPU.md`, listed at the end.
+**The number to carry: the default configuration on the card (memory mode) takes 132 s for
+the 64-atom SCF at `conv_thr = 1e-10`, because two Davidson calls run to the 100-step budget,
+and 14.6 s with the `ethr` floor at 3e-12**, a factor of 9, with the energy within 1e-11 Ry
+(`si64-1k-ecut30`, `DEFUMAT_MEMORY_MODE` at its accelerator default). Steps per SCF
+iteration were `[3, 1, 3, 3, 2, 3, 10, 100, 100]` against `[3, 1, 3, 3, 2, 3, 10, 1, 1]`.
+Everything below is the road to that sentence, and it overturns four readings recorded
+earlier in this file and in `GPU.md`, listed at the end.
 Card: RTX A2000 12 GB on `D22-0161`, host pinned to four performance cores, jax 0.11.0,
 `DEFUMAT_THREADS=off`, one process per entry, warm. This card is a float32 device (float64
 at 1/70 of float32), so none of the **times** is a claim about an A100 or an H200. The
@@ -8551,38 +8552,68 @@ pair on the CPU does not reproduce the card either.
   projectors medians of 33.5, 24.5 and 59.5 steps at 2.1e-13 against 35.5 unrestarted, with
   stored ones 10.5, 11 and 8 against 3.5. No cure, and it costs the lucky executable.
 
-**What the floor does.** QE floors `ethr` at 1e-13. Scanning the floor on `si16-1k-ecut30` at
-`conv_thr = 1e-10` (the energy against the CPU's 1e-13 run, -126.720760700971 Ry):
+**What the floor does.** QE floors `ethr` at 1e-13. Whether a floor clears the stall depends on
+the executable, because the round-off that decides it is the executable's. Iteration-8 steps and
+ms per iteration on `si16-1k-ecut30` at `conv_thr = 1e-10`, one process per cell:
 
-| floor | card, rebuild: steps, ms/it | card, store: steps, ms/it | energy shift (Ry) | final residual max: CPU, card rebuild, card store |
+| executable | floor 1e-13 | floor 1e-12 | floor 3e-12 | floor 1e-11 |
 |---|---|---|---|---|
-| 1e-13 | `[..., 73, 2]`, 181.7 | `[..., 3, 2]`, 70.4 | 0 | 3.2e-7 / 3.6e-7, 9.8e-7 |
-| 5e-13 | `[..., 2, 6]`, 75.1 | `[..., 4, 2]`, 71.3 | -1e-12 | 3.3e-7 / 3.9e-7, 8.2e-7 |
-| 1e-12 | `[..., 2, 1]`, 66.7 | `[..., 2, 1]`, 65.7 | -3e-12 | 5.1e-7 / 5.1e-7, 5.7e-7 |
-| 3e-12 | `[..., 1, 1]`, 64.3 | `[..., 1, 1]`, 64.1 | -4e-12 | 5.5e-7 / 5.5e-7, 5.6e-7 |
+| sticks, store, `band_batch = all` | 3, 70.4 | 2, 65.7 | 1, 64.1 | 1, 64.0 |
+| sticks, rebuild, all | 73, 181.7 | 2, 66.7 | 1, 64.3 | not run |
+| sticks, store, `band_batch = 16` | 24, 111.1 | 11, 85.1 | 1, 68.7 | 1, 69.1 |
+| sticks, store, `band_batch = 8` | 39, 150.3 | 26, 122.8 | 1, 77.8 | 1, 78.0 |
+| sticks, store, `band_batch = 1` | 41, 341.1 | 28, 285.0 | 1, 184.0 | 1, 185.0 |
+| memory mode, default | 73, 192.1 | 2, 71.1 | 1, 69.7 | 1, 70.0 |
+| 64 atoms, memory mode, default | `[..., 100, 100]`, 14700 | `[..., 100, 1]`, 6695 | `[..., 1, 1]`, 1622 | `[..., 1, 1]`, 1628 |
+| 64 atoms, store, `band_batch = 8` | `[..., 100, 1]`, 8967 | `[..., 7, 1]`, 1443 | `[..., 1, 1]`, 1269 | `[..., 1, 1]`, 1277 |
+| 64 atoms, store, all | `[..., 100, 100]`, 14329 | `[..., 5, 1]`, 1559 | not run | not run |
 
-The energy moves by at most 4e-12 Ry over a factor of 100 in the floor, and the final residuals
-stay within the spread the 1e-13 floor already has between executables (3.6e-7 to 9.8e-7). The
-visible price is the final band energies: with one step in each of the last two iterations
-(floor 3e-12) the sum over 32 bands moves by 1.2e-6 Ry, at 1e-12 by 1.4e-7 Ry (4e-9 per band).
-The floor is therefore 1e-12 on an accelerator and QE's 1e-13 on a CPU, where the same
-perturbations always took 3 steps and every number on record was taken
-(`batching.resolve_ethr_floor`, `DEFUMAT_ETHR_MIN` overrides it, and the four sites in
-`scf/driver.py` that clamped to `ETHR_MIN` read it; `nscf.py` and `topology.py` still clamp
-to 1e-13, which is a band path or a Berry phase and was not measured). On 64 atoms:
+1e-12 clears the executable that was measured first and not the others (four of the ten still
+take 11 to 100 steps in one call), and 3e-12 gives one step in each of the last two iterations
+on all ten arms that were run at it, 1e-11 the same. The band dial's cost on sixteen atoms is
+what the 3e-12 column says once the stall is out: 64.1, 68.7, 77.8 and 184.0 ms at the whole
+block, 16, 8 and 1 bands.
+
+**What it costs in accuracy** (this workstation's CPU, `si16-1k-ecut30`, against a run at
+`conv_thr = 1e-14` with the 1e-13 floor, E = -126.7207607009716 Ry, whose steps per call are 3
+whatever the floor so the CPU run is the cleaner reference):
+
+| `conv_thr` | floor | energy error (Ry) | largest band-energy error (Ry) | sum over bands | iterations |
+|---|---|---|---|---|---|
+| 1e-10 | 1e-13 | +7.8e-13 | 8.4e-8 | +2.3e-6 | 9 |
+| 1e-10 | 1e-12 | +3.6e-12 | 7.9e-8 | +2.1e-6 | 9 |
+| 1e-10 | 3e-12 | +4.7e-12 | 3.8e-8 | +1.0e-6 | 9 |
+| 1e-10 | 1e-11 | +4.7e-12 | 3.8e-8 | +1.0e-6 | 9 |
+| 1e-12 | 1e-13 | +7.1e-14 | 3.0e-8 | +8.3e-7 | 10 |
+| 1e-12 | 3e-12 | +4.7e-12 | 4.0e-8 | +1.1e-6 | 9 |
+| 1e-13 | 1e-13 | +2.8e-14 | 1.5e-8 | +3.9e-7 | 11 |
+| 1e-13 | 3e-12 | +4.7e-13 | 1.6e-8 | +4.5e-7 | 11 |
+| 1e-8 | any of the four | +7.0e-11 | 3.0e-7 | -7.8e-6 | 7 |
+
+At `conv_thr = 1e-10` the floor is not visible: the band energies are as good as the SCF's own
+convergence, 4e-8 to 8e-8, whatever it is, and the energy is within 5e-12 Ry. It would be
+visible against a tighter request, where a fixed 3e-12 stops the SCF early at an energy error
+five times `conv_thr` (4.7e-12 at 1e-12, 4.7e-13 at 1e-13). That is why the floor is
+`min(3e-12, 0.03 conv_thr)` and never below QE's: 3e-12 at the 1e-10 where the stalls were
+measured, 3e-13 at 1e-11, and QE's 1e-13 from `conv_thr = 3e-12` down, where a user asking for
+more than the card's round-off allows gets the stall risk and not a quietly looser answer.
+It is `batching.resolve_ethr_floor`, a CPU keeps 1e-13 (the same perturbations always took
+3 steps there and every number on record was taken with it), `DEFUMAT_ETHR_MIN` overrides it,
+and the four sites in `scf/driver.py` that clamped to `ETHR_MIN` read it. `nscf.py` and
+`topology.py` still clamp to 1e-13, which is a band path or a Berry phase and was not measured.
+On 64 atoms the default configuration:
 
 | `conv_thr`, floor | steps per SCF iteration | wall | ms per iteration |
 |---|---|---|---|
-| 1e-10, 1e-13 | `[3, 1, 3, 3, 2, 3, 4, 100, 1]` | 80.7 s | 8967 |
-| 1e-10, 1e-12 | `[3, 1, 3, 3, 2, 3, 4, 7, 1]` | 12.9 s | 1435 |
-| 1e-10, 3e-12 | `[3, 1, 3, 3, 2, 3, 4, 1, 1]` | 11.3 s | 1255 |
-| 1e-8, 1e-13 | `[3, 1, 3, 3, 2, 3, 4]` | 10.1 s | 1443 |
-| 1e-10, 1e-13, `band_batch = all` | `[3, 1, 3, 3, 2, 3, 7, 100, 100]` | 129 s | 14329 |
+| 1e-10, 1e-13 | `[3, 1, 3, 3, 2, 3, 10, 100, 100]` | 132 s | 14700 |
+| 1e-10, 1e-12 | `[3, 1, 3, 3, 2, 3, 10, 100, 1]` | 60 s | 6695 |
+| 1e-10, 3e-12 | `[3, 1, 3, 3, 2, 3, 10, 1, 1]` | 14.6 s | 1622 |
 
-The three floors were run in one process and compare as follows: energies -507.166061664059
-(1e-13), -507.166061664056 (1e-12) and -507.166061664052 (3e-12) Ry, final residual maxima 3.3e-7,
-4.2e-7 and 8.7e-7, and the sum of the 128 band energies 10.708613096, 10.708613634 and
-10.708614999 (5.4e-7 and 1.9e-6 from the 1e-13 value, 4e-9 and 1.5e-8 per band).
+and at `band_batch = 8` over the store, the same cell: 80.7 s at 1e-13, 12.9 s at 1e-12, 11.3 s at
+3e-12, and 10.1 s for the 7 iterations of `conv_thr = 1e-8` at 1e-13 (1443 ms per iteration, no
+stall because the threshold never gets that low). Energies in that process: -507.166061664059,
+-507.166061664056 and -507.166061664052 Ry for the three floors, final residual maxima 3.3e-7,
+4.2e-7 and 8.7e-7.
 
 **Four earlier readings this overturns or qualifies.** (1) `GPU.md` Phase 1: "tightening
 `conv_thr` from 1e-8 to 1e-10 costs the GPU 13x (36 to 459 ms)" on `si16-1k-ecut30` on a V100

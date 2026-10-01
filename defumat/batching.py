@@ -848,43 +848,54 @@ def resolve_fft_layout(requested: str = "default") -> str:
     return layout
 
 
-#: The floor under the SCF's diagonalisation threshold on an accelerator, in Ry.
+#: The most the floor under the SCF's diagonalisation threshold is raised to on an
+#: accelerator, in Ry, and the fraction of ``conv_thr`` it follows below that.
 #: See :func:`resolve_ethr_floor`.
-ETHR_FLOOR_ACCELERATOR = 1.0e-12
+ETHR_FLOOR_ACCELERATOR = 3.0e-12
+ETHR_FLOOR_FRACTION = 0.03
 
 
-def resolve_ethr_floor(floor: float) -> float:
+def resolve_ethr_floor(floor: float, conv_thr: float | None = None) -> float:
     """The floor the SCF clamps ``ethr`` to: ``DEFUMAT_ETHR_MIN``, then the platform.
 
     ``floor`` is QE's 1e-13 (``electrons.f90``), and a CPU keeps it. On an
-    accelerator the floor is :data:`ETHR_FLOOR_ACCELERATOR`, because Davidson's
-    test is the *change* in each eigenvalue between two steps, a band that is not
-    being expanded does not change, and at 2e-13 the roots of a near-degenerate
-    cluster drift by about that much per step. Which of them pass in the first
-    three steps is decided by round-off and nothing else: on the sixteen-atom
-    cell, starting states perturbed by 1e-13 relative took between 3 and 100
-    steps on the card, more than 20 of them in 60 per cent of the seeds with one
-    executable and 5 per cent with another, where the same perturbations on the
-    CPU took exactly 3 every time. A run at ``conv_thr = 1e-10`` reaches that
-    floor in its last two iterations, and on 64 atoms one call at the 100-step
-    budget made the SCF take 80.7 s where the floor at 1e-12 takes 12.9 s
-    (``PERFORMANCE.md``, "The endgame on a card is a stall"). The total
-    energy moves by at most 4e-12 Ry across floors of 1e-13 to 1e-11 and the
-    final residuals stay within the spread the lowest floor already has, so what
-    the floor trades is the last digits of the band energies of the final
-    iteration (1.4e-7 Ry in the sum over 32 bands at 1e-12).
+    accelerator the floor is ``min(3e-12, 0.03 conv_thr)``, never below QE's.
+    Davidson's test is the *change* in each eigenvalue between two steps, a band
+    that is not being expanded does not change, and at 1e-13 to 5e-13 the roots of
+    a near-degenerate cluster drift by about that much per step. Which of them
+    pass in the first steps is then decided by round-off and nothing else: on the
+    sixteen-atom cell, starting states perturbed by 1e-13 relative took between 3
+    and 100 steps on the card, more than 20 of them in 60 per cent of the seeds
+    with one executable and 5 per cent with another, where the same perturbations
+    on the CPU took exactly 3 every time. A run at ``conv_thr = 1e-10`` reaches
+    that floor in its last two iterations.
+
+    **Why 3e-12 and why it follows ``conv_thr``.** 1e-12 clears the executable
+    that was measured first and not the others: iteration 8 still took 28, 26 and
+    11 steps at ``band_batch`` 1, 8 and 16, and 100 steps on the 64-atom run in
+    memory mode. 3e-12 gave one step in the last two iterations on all ten arms
+    tried (four on sixteen atoms, two on 64, at 3e-12 and at 1e-11 alike). Against
+    a run converged to 1e-14 the floor costs nothing visible at ``conv_thr =
+    1e-10``: the energy is within 5e-12 Ry and the largest band energy within
+    4e-8 Ry whatever the floor, since the band energies are only as good as the
+    SCF's own convergence. A floor that does not follow ``conv_thr`` would
+    instead limit a tighter request (5e-12 Ry of energy error at ``conv_thr =
+    1e-12``), so it is 3 per cent of it below 1e-10 and QE's where that is lower.
 
     A floor is not a claim about every cell: a solver that stops on a change in
-    the eigenvalue can stall at any threshold where the change per step is of
-    the order of the threshold, and this only moves the threshold out of the
-    range where that was measured.
+    the eigenvalue can stall at any threshold where the change per step is of the
+    order of the threshold, and this moves the threshold out of the range where
+    that was measured. ``PERFORMANCE.md``, "The endgame on a card is a stall".
     """
     setting = (environ_get("DEFUMAT_ETHR_MIN", "") or "").strip()
     if setting:
         return float(setting)
     if _backend() == "cpu":
         return floor
-    return max(floor, ETHR_FLOOR_ACCELERATOR)
+    target = ETHR_FLOOR_ACCELERATOR
+    if conv_thr is not None:
+        target = min(target, ETHR_FLOOR_FRACTION * float(conv_thr))
+    return max(floor, target)
 
 
 #: The band dial's resolver under a public name, mirroring

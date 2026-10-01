@@ -240,19 +240,22 @@ def test_the_band_dial_reaches_the_spinor_h_psi(pseudo_dir, monkeypatch,
     system = build_system(read_pw_input(case))
     pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file)
                     for s in system.structure.species)
-    calculation = Calculation(system, pseudos)
-    potential = v_of_rho(calculation.starting_density(),
-                         calculation.basis.dense, system.cell)
-    hamiltonian = calculation.hamiltonian(potential.v_scf)[0]
-    assert hamiltonian.npol == 2
-
-    nbnd, ndim = 24, hamiltonian.ndim
+    nbnd = 24
     generator = np.random.default_rng(0)
-    psi = jnp.asarray(generator.normal(size=(nbnd, ndim))
-                      + 1j * generator.normal(size=(nbnd, ndim)))
 
     def applied(band_batch):
+        # A ``Calculation`` resolves its band batch once, when it is built, and
+        # its Hamiltonians carry it, so the variable is set before building one
+        # -- which is how a run sets it.
         monkeypatch.setenv("DEFUMAT_BAND_BATCH", band_batch)
+        calculation = Calculation(system, pseudos)
+        potential = v_of_rho(calculation.starting_density(),
+                             calculation.basis.dense, system.cell)
+        hamiltonian = calculation.hamiltonian(potential.v_scf)[0]
+        assert hamiltonian.npol == 2
+        ndim = hamiltonian.ndim
+        psi = jnp.asarray(np.random.default_rng(0).normal(size=(nbnd, ndim))
+                          + 1j * np.random.default_rng(1).normal(size=(nbnd, ndim)))
         compiled = jax.jit(lambda p, _tag=band_batch: hamiltonian.apply(p, 0))
         return compiled.lower(psi).as_text(), np.asarray(compiled(psi))
 
@@ -465,31 +468,45 @@ def test_the_pair_axis_has_a_budget_on_a_card_and_the_band_dial_on_a_cpu(
     assert batching.resolve_pair_batch(box_bytes=box, npairs=1000) == 4
 
 
-def test_the_ethr_floor_follows_the_platform_and_the_environment(monkeypatch):
-    """QE's 1e-13 on a CPU, 1e-12 on an accelerator, ``DEFUMAT_ETHR_MIN`` over both.
+def test_the_ethr_floor_follows_the_platform_the_request_and_the_environment(monkeypatch):
+    """QE's 1e-13 on a CPU; ``min(3e-12, 0.03 conv_thr)``, never below QE's, on an accelerator.
 
     The accelerator floor exists because Davidson's test is the change in an
-    eigenvalue, and at 2e-13 the step count there is decided by round-off
-    (3 to 100 steps from 1e-13 perturbations on the card, 3 every time on a CPU).
+    eigenvalue, and at 1e-13 to 5e-13 the step count there is decided by
+    round-off (3 to 100 steps from 1e-13 perturbations on the card, 3 every time
+    on a CPU). It follows ``conv_thr`` so that a tighter request is not limited
+    by it. ``DEFUMAT_ETHR_MIN`` overrides both.
     """
-    from defumat.batching import ETHR_FLOOR_ACCELERATOR, resolve_ethr_floor
+    from defumat.batching import (ETHR_FLOOR_ACCELERATOR, ETHR_FLOOR_FRACTION,
+                                  resolve_ethr_floor)
     from defumat.scf.driver import next_ethr
     from defumat.solvers.davidson import ETHR_MIN
 
+    assert (ETHR_FLOOR_ACCELERATOR, ETHR_FLOOR_FRACTION) == (3e-12, 0.03)
     monkeypatch.delenv("DEFUMAT_ETHR_MIN", raising=False)
+
+    # a CPU keeps QE's floor whatever was asked for
     monkeypatch.setattr(batching, "_backend", lambda: "cpu")
     assert resolve_ethr_floor(ETHR_MIN) == ETHR_MIN == 1e-13
-    assert next_ethr(1e-2, 1e-20, 8.0, 5) == 1e-13
+    assert resolve_ethr_floor(ETHR_MIN, 1e-10) == 1e-13
+    assert next_ethr(1e-2, 1e-20, 8.0, 5, 1e-10) == 1e-13
 
     monkeypatch.setattr(batching, "_backend", lambda: "gpu")
-    assert resolve_ethr_floor(ETHR_MIN) == ETHR_FLOOR_ACCELERATOR == 1e-12
+    # no request named: the cap
+    assert resolve_ethr_floor(ETHR_MIN) == 3e-12
+    # a loose request: the cap; a tighter one follows it down; the tightest keeps QE's
+    assert resolve_ethr_floor(ETHR_MIN, 1e-6) == 3e-12
+    assert resolve_ethr_floor(ETHR_MIN, 1e-10) == pytest.approx(3e-12)
+    assert resolve_ethr_floor(ETHR_MIN, 1e-11) == pytest.approx(3e-13)
+    assert resolve_ethr_floor(ETHR_MIN, 1e-13) == 1e-13
     # a caller whose own floor is already higher keeps it
-    assert resolve_ethr_floor(5e-12) == 5e-12
-    assert next_ethr(1e-2, 1e-20, 8.0, 5) == 1e-12
+    assert resolve_ethr_floor(5e-12, 1e-10) == 5e-12
+    assert next_ethr(1e-2, 1e-20, 8.0, 5, 1e-10) == pytest.approx(3e-12)
+    assert next_ethr(1e-2, 1e-20, 8.0, 5, 1e-13) == 1e-13
     # above the floor the schedule is QE's and the platform does not matter
-    assert next_ethr(1e-2, 8e-3, 8.0, 5) == pytest.approx(0.1 * 8e-3 / 8.0)
+    assert next_ethr(1e-2, 8e-3, 8.0, 5, 1e-10) == pytest.approx(0.1 * 8e-3 / 8.0)
 
     monkeypatch.setenv("DEFUMAT_ETHR_MIN", "3e-13")
-    assert resolve_ethr_floor(ETHR_MIN) == 3e-13
+    assert resolve_ethr_floor(ETHR_MIN, 1e-10) == 3e-13
     monkeypatch.setattr(batching, "_backend", lambda: "cpu")
-    assert next_ethr(1e-2, 1e-20, 8.0, 5) == 3e-13
+    assert next_ethr(1e-2, 1e-20, 8.0, 5, 1e-10) == 3e-13
