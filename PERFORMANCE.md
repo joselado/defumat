@@ -9011,3 +9011,43 @@ card shows, not smaller.
 preset's other dials gives 0.033, 0.238 and 0.794 GiB at one, 8 and 27 k-points a call, against
 0.034, 0.246 and 0.817 measured, so a k-batch chosen to fit the card from it would be as safe as the
 band batch memory mode already chooses that way.
+
+## A k-chunk sized to the card, and the width ladder kept under a batch over k (RTX A2000, 2026-10-01)
+
+**The number to carry: `k_batch = 'fit'` takes memory mode on a k-mesh of a small cell from 1.76x to
+1.05x of speed mode's time at speed mode's peak, and since the Davidson width ladder works under a
+batch over k, batching costs at most 4 per cent on a larger cell where it used to cost 28.** Both are
+D22, one process per arm, median of two, `conv_thr = 1e-10`, Davidson steps equal between the arms of
+each cell (means over the k-points), ms per SCF iteration; the meshes are `si8-1k.in` at 20 Ry and
+`si16-1k-ecut30.in`, both with `nosym` and `K_POINTS automatic n n n 0 0 0`.
+
+| cell, k-points | `memory`, one a call | `'fit'` (chunk) | `speed` | `'fit'` after the ladder | `speed` after the ladder |
+|---|---|---|---|---|---|
+| si8 20 Ry, 27 | 555 | 315 (27) | 299 | 282 | 275 |
+| si8 20 Ry, 64 | 1280 | 724 (64) | 691 | 657 | 628 |
+| si16 30 Ry, 27 | 1841 | | | | 1793 |
+| si16 30 Ry, 64 | 4310 | 5513 (22) | falls back to `memory` | 4476 (22) | |
+
+The peaks are what `sizing.estimate_size` predicts at the chunk (0.817, 1.939 and 4.402 GiB measured
+against 0.794, 1.88 and 4.51 estimated), and on the sixteen-atom 64-point mesh, where the whole set
+would need 13.1 GiB against 60 per cent of 10.44 free, the chooser took 22 k-points a call, three
+calls with two padded solves.
+
+**Why batching had cost 28 per cent on sixteen atoms.** The width ladder sizes the subspace solve, the
+two Ritz rotations, the correction block's `h_psi` and the projection by the live basis, through a
+`lax.switch`, and it was off for every batched solve because a switch with a batched index evaluates
+every branch. At one k-point it is worth 75 against 95 ms per iteration on `si16-1k-ecut30`, and a
+cell whose per-k-point solve is large enough to bound the call by arithmetic gains nothing from the
+batch to set against that. On the whole-axis `vmap` (speed mode, a streamed chunk) the axis is named
+and the rung is `lax.pmax` of the batch's rungs, one scalar, so the switch runs one branch for every
+k-point; a rung above a k-point's own is exact for it. That took the 22-point chunk from 5513 to 4476
+ms and speed mode on eight atoms from 299 to 275 and from 691 to 628, with the steps and the energies
+unchanged.
+
+**Where each regime sits.** On eight atoms at 20 Ry (about 1600 plane waves, 16 bands) one k-point a
+call is bound by its fixed cost per call, and the batch halves the time; on sixteen atoms at 30 Ry
+(about 5900 plane waves, 32 bands) the call is bound by arithmetic on this card and the batch is worth
+3 per cent at 27 points and -4 per cent at 22 a call. **A forecast, not a measurement:** on a card
+with fast float64 the arithmetic shrinks and the fixed cost does not, so the crossover moves to larger
+cells and the batch is worth more there than here. `'fit'` is opt-in; memory mode's own default is
+still one k-point a call (`GPU-SPEED-NEXT.md`).
