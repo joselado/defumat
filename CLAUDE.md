@@ -722,6 +722,18 @@ plausible wrong answer rather than an error. `PLAN.md` has the phase that found 
   show it, which is why it went unseen. (`PERFORMANCE.md`, "The endgame on a card is a stall",
   2026-10-01.)
 
+- **A loop over a closure, called outside any `jit`, compiles again at every call.** `map_k`,
+  `sum_k`, `lax.map` and `lax.scan` called eagerly with a function defined inside the caller trace
+  that function anew each time, so a driver that calls such a helper once per k-point and per
+  iteration compiles the loop every time, and with the persistent cache on each recompile is a cache
+  hit that still loads a new executable the process keeps for good. Two sites, the same night: the
+  ultracell's matrix and densities (2x on three iterations of a small cell) and the Berry-phase
+  string loop, whose growth in `/proc/self/maps`, +256 a polarization call, was the cluster's
+  "Failed to materialize symbols" (`OPEN.md` Part XIII item 2). Jit the helper with its shapes
+  static and its arrays as arguments. **The check is a second call that compiles nothing**:
+  `jax_log_compiles` with a handler on the `jax` logger, which sees them where `jax._src.dispatch`
+  does not, validated on a cold run first. (`PERFORMANCE.md`, 2026-10-02.)
+
 ## Non-negotiable conventions
 
 - Pure Python. JAX for anything numerical that runs inside the SCF/diagonalization loop;
