@@ -848,56 +848,20 @@ def resolve_fft_layout(requested: str = "default") -> str:
     return layout
 
 
-#: The most the floor under the SCF's diagonalisation threshold is raised to on an
-#: accelerator, in Ry, and the fraction of ``conv_thr`` it follows below that.
-#: See :func:`resolve_ethr_floor`.
-ETHR_FLOOR_ACCELERATOR = 3.0e-12
-ETHR_FLOOR_FRACTION = 0.03
+def resolve_ethr_floor(floor: float) -> float:
+    """The floor the SCF clamps ``ethr`` to: ``DEFUMAT_ETHR_MIN``, else ``floor``, QE's 1e-13.
 
-
-def resolve_ethr_floor(floor: float, conv_thr: float | None = None) -> float:
-    """The floor the SCF clamps ``ethr`` to: ``DEFUMAT_ETHR_MIN``, then the platform.
-
-    ``floor`` is QE's 1e-13 (``electrons.f90``), and a CPU keeps it. On an
-    accelerator the floor is ``min(3e-12, 0.03 conv_thr)``, never below QE's.
-    Davidson's test is the *change* in each eigenvalue between two steps, a band
-    that is not being expanded does not change, and at 1e-13 to 5e-13 the roots of
-    a near-degenerate cluster drift by about that much per step. Which of them
-    pass in the first steps is then decided by round-off and nothing else: on the
-    sixteen-atom cell, starting states perturbed by 1e-13 relative took between 3
-    and 100 steps on the card, more than 20 of them in 60 per cent of the seeds
-    with one executable and 5 per cent with another, where the same perturbations
-    on the CPU took exactly 3 every time. A run at ``conv_thr = 1e-10`` reaches
-    that floor in its last two iterations.
-
-    **Why 3e-12 and why it follows ``conv_thr``.** 1e-12 clears the executable
-    that was measured first and not the others: iteration 8 still took 28, 26 and
-    11 steps at ``band_batch`` 1, 8 and 16, and 100 steps on the 64-atom run in
-    memory mode. 3e-12 gave one step in the last two iterations on all ten arms
-    tried (four on sixteen atoms, two on 64, at 3e-12 and at 1e-11 alike). Against
-    a run converged to 1e-14 its price at ``conv_thr = 1e-10`` is small and not
-    zero: on the symmetric cell the energy is within 5e-12 Ry and the largest
-    band energy within 4e-8 Ry whatever the floor, and on a displaced sixteen-atom
-    cell 3e-12 doubles the force error (3.4e-6 to 6.5e-6 Ry/bohr) and takes the
-    energy error from 1.8e-11 to 7.6e-11 Ry. A floor that does not follow
-    ``conv_thr`` would instead limit a tighter request (5e-12 Ry of energy error at
-    ``conv_thr = 1e-12``), so it is 3 per cent of it below 1e-10 and QE's where
-    that is lower.
-
-    A floor is not a claim about every cell: a solver that stops on a change in
-    the eigenvalue can stall at any threshold where the change per step is of the
-    order of the threshold, and this moves the threshold out of the range where
-    that was measured. ``PERFORMANCE.md``, "The endgame on a card is a stall".
+    ``DEFUMAT_ETHR_MIN`` is a lever and not a default. A floor of 3e-12 on an
+    accelerator was the answer to a stall that turned out to have another cause
+    (the subspace solve's parked directions, ``solvers.davidson.PARK_FACTOR``), so
+    the default is QE's on every platform again. A run that meets one anyway has
+    the warning ``run_scf`` gives when a call uses its whole Davidson budget, and
+    this to raise the floor with; it costs accuracy (on a displaced sixteen-atom
+    cell at ``conv_thr = 1e-10`` the force error doubled at 3e-12).
+    ``PERFORMANCE.md``, "The endgame on a card is a stall".
     """
     setting = (environ_get("DEFUMAT_ETHR_MIN", "") or "").strip()
-    if setting:
-        return float(setting)
-    if _backend() == "cpu":
-        return floor
-    target = ETHR_FLOOR_ACCELERATOR
-    if conv_thr is not None:
-        target = min(target, ETHR_FLOOR_FRACTION * float(conv_thr))
-    return max(floor, target)
+    return float(setting) if setting else floor
 
 
 #: The band dial's resolver under a public name, mirroring

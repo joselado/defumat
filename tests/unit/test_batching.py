@@ -468,48 +468,41 @@ def test_the_pair_axis_has_a_budget_on_a_card_and_the_band_dial_on_a_cpu(
     assert batching.resolve_pair_batch(box_bytes=box, npairs=1000) == 4
 
 
-def test_the_ethr_floor_follows_the_platform_the_request_and_the_environment(monkeypatch):
-    """QE's 1e-13 on a CPU; ``min(3e-12, 0.03 conv_thr)``, never below QE's, on an accelerator.
+def test_the_ethr_floor_is_qes_on_every_platform_and_the_environment_moves_it(monkeypatch):
+    """QE's 1e-13 whatever the platform; ``DEFUMAT_ETHR_MIN`` is the only lever.
 
-    The accelerator floor exists because Davidson's test is the change in an
-    eigenvalue, and at 1e-13 to 5e-13 the step count there is decided by
-    round-off (3 to 100 steps from 1e-13 perturbations on the card, 3 every time
-    on a CPU). It follows ``conv_thr`` so that a tighter request is not limited
-    by it. ``DEFUMAT_ETHR_MIN`` overrides both.
+    An accelerator floor of 3e-12 was tried for a stall whose cause was the parked
+    directions of the subspace solve; with that fixed (``PARK_FACTOR``) the card
+    takes the CPU's steps at 1e-13, so the platform no longer matters.
     """
-    from defumat.batching import (ETHR_FLOOR_ACCELERATOR, ETHR_FLOOR_FRACTION,
-                                  resolve_ethr_floor)
+    from defumat.batching import resolve_ethr_floor
     from defumat.scf.driver import next_ethr
     from defumat.solvers.davidson import ETHR_MIN
 
-    assert (ETHR_FLOOR_ACCELERATOR, ETHR_FLOOR_FRACTION) == (3e-12, 0.03)
     monkeypatch.delenv("DEFUMAT_ETHR_MIN", raising=False)
+    for platform in ("cpu", "gpu"):
+        monkeypatch.setattr(batching, "_backend", lambda platform=platform: platform)
+        assert resolve_ethr_floor(ETHR_MIN) == ETHR_MIN == 1e-13
+        assert next_ethr(1e-2, 1e-20, 8.0, 5) == 1e-13
+        # above the floor the schedule is QE's
+        assert next_ethr(1e-2, 8e-3, 8.0, 5) == pytest.approx(0.1 * 8e-3 / 8.0)
 
-    # a CPU keeps QE's floor whatever was asked for
-    monkeypatch.setattr(batching, "_backend", lambda: "cpu")
-    assert resolve_ethr_floor(ETHR_MIN) == ETHR_MIN == 1e-13
-    assert resolve_ethr_floor(ETHR_MIN, 1e-10) == 1e-13
-    assert next_ethr(1e-2, 1e-20, 8.0, 5, 1e-10) == 1e-13
-
-    monkeypatch.setattr(batching, "_backend", lambda: "gpu")
-    # no request named: the cap
+    monkeypatch.setenv("DEFUMAT_ETHR_MIN", "3e-12")
     assert resolve_ethr_floor(ETHR_MIN) == 3e-12
-    # a loose request: the cap; a tighter one follows it down; the tightest keeps QE's
-    assert resolve_ethr_floor(ETHR_MIN, 1e-6) == 3e-12
-    assert resolve_ethr_floor(ETHR_MIN, 1e-10) == pytest.approx(3e-12)
-    assert resolve_ethr_floor(ETHR_MIN, 1e-11) == pytest.approx(3e-13)
-    assert resolve_ethr_floor(ETHR_MIN, 1e-13) == 1e-13
-    # a caller whose own floor is already higher keeps it
-    assert resolve_ethr_floor(5e-12, 1e-10) == 5e-12
-    assert next_ethr(1e-2, 1e-20, 8.0, 5, 1e-10) == pytest.approx(3e-12)
-    assert next_ethr(1e-2, 1e-20, 8.0, 5, 1e-13) == 1e-13
-    # above the floor the schedule is QE's and the platform does not matter
-    assert next_ethr(1e-2, 8e-3, 8.0, 5, 1e-10) == pytest.approx(0.1 * 8e-3 / 8.0)
+    assert next_ethr(1e-2, 1e-20, 8.0, 5) == 3e-12
 
-    monkeypatch.setenv("DEFUMAT_ETHR_MIN", "3e-13")
-    assert resolve_ethr_floor(ETHR_MIN, 1e-10) == 3e-13
-    monkeypatch.setattr(batching, "_backend", lambda: "cpu")
-    assert next_ethr(1e-2, 1e-20, 8.0, 5, 1e-10) == 3e-13
+
+def test_the_parked_directions_sit_above_the_live_spectrum_and_not_far_above_it():
+    """``PARK_FACTOR`` is what the device ``eigh`` error scales with, and it must stay a margin.
+
+    The subspace solve parks unused directions at ``PARK_FACTOR`` times the largest
+    diagonal element of ``H``. They have to sit above the live spectrum, whose top
+    is ``lambda_max(H)``; the matrix norm, which an eigensolver's absolute error is
+    proportional to, grows with the factor, and it was 1000.
+    """
+    from defumat.solvers.davidson import PARK_FACTOR
+
+    assert 2.0 <= PARK_FACTOR <= 10.0
 
 
 def test_a_call_that_uses_the_whole_davidson_budget_is_reported(monkeypatch):

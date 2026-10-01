@@ -166,6 +166,14 @@ __all__ = ["davidson_eigensolver", "davidson_eigensolver_all", "DAVID_NDIM",
 #: cache, not in the flop count, and the band loop had already collected it.
 DAVID_NDIM = 4
 
+#: How far above the largest diagonal element of ``H`` the subspace solve parks the
+#: directions that are not in use, as a multiple of it. Four, because the lowest
+#: ``nbnd`` roots only need the parked ones above the live spectrum, which
+#: ``lambda_max(H)`` bounds by well under three times its largest diagonal element
+#: (the kinetic energy at the cutoff plus the potential), and because the matrix
+#: norm sets the eigensolver's absolute error. It was 1000.
+PARK_FACTOR = 4.0
+
 #: Total budget of Davidson steps, matching QE's.
 #:
 #: ``cegterg``'s own ``maxter`` is 20, but ``c_bands.f90`` re-enters it up to
@@ -475,9 +483,21 @@ def davidson_eigensolver(
     start = force_real_g0(start, gamma_only)
 
     # Inactive subspace directions are given this eigenvalue, which has to sit
-    # above anything physical: the diagonal bounds the spectrum from above well
-    # enough for that.
-    shift = jnp.max(jnp.abs(diagonal)) * 1000.0 + 1.0
+    # above the live part of the projected spectrum, so that they never enter the
+    # lowest ``nbnd`` roots: the diagonal of ``H`` bounds the spectrum from above
+    # well enough for that, and :data:`PARK_FACTOR` times it is a margin.
+    #
+    # **It also sets the norm of the matrix the subspace solve diagonalises, and
+    # a backward-stable eigensolver is accurate to ``eps`` times that norm in
+    # every eigenvalue.** The factor was 1000, which makes the reduced matrix's
+    # norm about 3e4 against a physical spectrum of 30, and on a card the device
+    # ``eigh`` then returned Ritz values good to a few 1e-13 only: Davidson's test
+    # is a change below ``ethr`` between two steps, and with ``ethr`` at its 1e-13
+    # floor one call took between 3 and 100 steps from round-off alone. The same
+    # call took 3 steps with only that ``eigh`` on the host, 73 with it on the
+    # device, and 3 on the device with a factor of 100, 10 or 3 (``PERFORMANCE.md``,
+    # "The endgame on a card is a stall").
+    shift = jnp.max(jnp.abs(diagonal)) * PARK_FACTOR + 1.0
 
     psi = jnp.zeros((nvecx, ndim), dtype).at[:nbnd].set(start)
     hpsi = jnp.zeros((nvecx, ndim), dtype).at[:nbnd].set(hamiltonian.apply(start, ik))

@@ -1362,8 +1362,7 @@ def _starting_tau(rho, calculation) -> jnp.ndarray:
     return thomas_fermi_tau(rho, 1 if calculation.nspin_mag == 1 else 2)
 
 
-def next_ethr(ethr: float, accuracy: float, nelec: float, iteration: int,
-              conv_thr: float | None = None) -> float:
+def next_ethr(ethr: float, accuracy: float, nelec: float, iteration: int) -> float:
     """QE's diagonalisation-threshold schedule (``PW/src/electrons.f90``).
 
     The eigenvalues never need to be more accurate than the density they are
@@ -1375,16 +1374,15 @@ def next_ethr(ethr: float, accuracy: float, nelec: float, iteration: int,
     second iteration rather than carried over from the first, it can only ever
     decrease (``MIN``), and it is floored at 1e-13 because an iterative
     diagonalisation asked for more than that becomes unstable rather than more
-    accurate. On an accelerator the floor is ``min(3e-12, 0.03 conv_thr)``
-    (:func:`~defumat.batching.resolve_ethr_floor`), which is where the solver's
-    step count stops depending on round-off there.
+    accurate. ``DEFUMAT_ETHR_MIN`` moves it
+    (:func:`~defumat.batching.resolve_ethr_floor`).
     """
     if iteration <= 1:
         return ethr
     if iteration == 2:
         ethr = ETHR_INIT
     return max(min(ethr, 0.1 * accuracy / max(1.0, nelec)),
-               resolve_ethr_floor(ETHR_MIN, conv_thr))
+               resolve_ethr_floor(ETHR_MIN))
 
 
 def default_nbnd(
@@ -5555,7 +5553,7 @@ def _solve_residual(
       solution and should be left at zero when an unstable one is wanted.
     """
     solver = get_scf_solver(scf_solver)
-    ethr = options.pop("ethr", max(1.0e-3 * conv_thr, resolve_ethr_floor(ETHR_MIN, conv_thr)))
+    ethr = options.pop("ethr", max(1.0e-3 * conv_thr, resolve_ethr_floor(ETHR_MIN)))
     warmup = int(options.pop("warmup", 0))
     precondition = options.pop("precondition", None)
     wavefunctions = None
@@ -6711,7 +6709,7 @@ def run_scf(
         # start of the ``ethr`` schedule would otherwise throw the hand-off away
         # on the very first diagonalisation.
         ethr = max(0.1 * solver_result.accuracy / max(1.0, calculation.nelec),
-                   resolve_ethr_floor(ETHR_MIN, conv_thr))
+                   resolve_ethr_floor(ETHR_MIN))
 
     # ``potinit.f90``'s Thomas-Fermi guess. The first iteration has no states to
     # build ``tau`` from and the meta-GGA potential cannot be evaluated without
@@ -6837,7 +6835,7 @@ def run_scf(
         # rather than of this process. Passing the relative number re-fires the
         # reset on the second iteration after every resume, which throws away
         # the threshold the checkpoint was carrying it for.
-        ethr = next_ethr(ethr, accuracy, calculation.nelec, iteration, conv_thr)
+        ethr = next_ethr(ethr, accuracy, calculation.nelec, iteration)
 
         potential = calculation.potential(rho, field_scale, field, tau=tau_state)
         epaw, ddd_paw = calculation.onecenter(becsum_state, _meta_c(potential))
@@ -6964,10 +6962,10 @@ def run_scf(
                     f"SCF iteration {iteration}: the eigensolver used its whole budget of "
                     f"{MAX_ITERATIONS} steps and left up to {davidson_unconverged} of {nbnd} "
                     f"bands unsettled at ethr = {ethr:.2e}. The step count is what the run paid "
-                    "for this iteration (history['davidson_iterations']). Below about 5e-13 "
-                    "the stopping test, a change in an eigenvalue between two steps, is "
-                    "decided by round-off, most often on an accelerator; "
-                    "DEFUMAT_ETHR_MIN raises the floor under the threshold.",
+                    "for this iteration (history['davidson_iterations']). At a threshold this "
+                    "tight the stopping test, a change in an eigenvalue between two steps, "
+                    "can be decided by round-off; DEFUMAT_ETHR_MIN raises the floor under "
+                    "the threshold at some cost in accuracy.",
                     RuntimeWarning, stacklevel=2,
                 )
             if verbose:
@@ -7101,7 +7099,7 @@ def run_scf(
             if iteration > 1 or attempt > 0 or accuracy >= floor:
                 break
             ethr = max(0.1 * accuracy / max(1.0, calculation.nelec),
-                       resolve_ethr_floor(ETHR_MIN, conv_thr))
+                       resolve_ethr_floor(ETHR_MIN))
             if verbose:
                 print(f"  iteration {iteration:3d}   ethr was too large; "
                       f"diagonalising again at {ethr:.2e}")
