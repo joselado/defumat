@@ -8573,6 +8573,11 @@ pair on the CPU does not reproduce the card either.
   fresh `cegterg` call does) together with a hard restart every 20, 8 and 4 steps: with rebuilt
   projectors medians of 33.5, 24.5 and 59.5 steps at 2.1e-13 against 35.5 unrestarted, with
   stored ones 10.5, 11 and 8 against 3.5. No cure, and it costs the lucky executable.
+* the Ritz values recomputed as Rayleigh quotients of the vectors the subspace solve returned
+  (`v^H H v / v^H S v`, second order in the vectors' error, so free of the solve's noise): with
+  rebuilt projectors **worse**, at least 33, 30, 24 and 18 steps in every seed at 1e-13, 2.1e-13,
+  5e-13 and 1e-12 (median 51, 40.5, 33.5 and 26), with stored ones about the same as before
+  (median 4, 12.5, 4, 2). The CPU is unchanged (same steps, energy to 14 digits).
 
 **What the floor does.** QE floors `ethr` at 1e-13. Whether a floor clears the stall depends on
 the executable, because the round-off that decides it is the executable's. Iteration-8 steps and
@@ -8691,8 +8696,16 @@ default stays `sticks` on every platform.
 The V100 and H100 step counts for the 13x entry (a Triton job, which needs a submission this
 session did not make). A stall guard that does not depend on a floor (the floor moves the
 threshold out of the range measured here and does not change the solver's stopping rule).
-The mechanism, of which two things are ruled out and none is found: the dense eigensolver's
-accuracy is the same on the card and on a CPU (below), and `H|psi>` is bit-reproducible. A
+The mechanism, of which three things are ruled out and the picture that is left is a slow
+genuine drift: the dense eigensolver's accuracy is the same on the card and on a CPU (above),
+`H|psi>` is bit-reproducible, and Ritz values made noise-free (the Rayleigh quotients above)
+give longer stalls, not shorter. What that leaves is that the long runs are real convergence of
+roots whose eigenvalues creep by 3e-13 to 1e-11 per step with a residual that hardly moves, and that the
+three-step solves are the false ones: after one to six steps the eigenvalues are still up to
+5e-11 from their 73-step values, 250 times the threshold the call claims to have met, and the
+test stops them because the *change* per step happened to fall under it. The floor therefore
+costs no real accuracy, which is what the table against the converged reference shows, and
+what it removes is a solver stopping on stagnation at one executable and not at another. A
 cell where the cold solves of `nscf.py` and `topology.py` are chaotic at 1e-13 on a card: none
 was found on sixteen atoms. **The 157-atom slab's "12x too many steps" (`OPEN.md`, the memory
 notes) is not this stall**, and an earlier sentence here said it might be: its iteration 2
