@@ -685,3 +685,41 @@ def test_the_subspace_is_capped_at_the_smallest_k_point_and_not_at_npwx():
     # and with no sphere counts the bound falls back to ndim, which is QE's own
     _Spheres.npw = None
     assert Hamiltonian.space.fget(_Spheres()) == 192
+
+
+def test_a_batch_of_k_points_keeps_the_width_ladder_and_its_answer(pseudo_dir):
+    """The ladder under a whole-axis ``vmap``: the batch's widest rung, one branch.
+
+    ``lax.switch`` with a batched index evaluates every branch, so a batched
+    solve used to run every step at the full ``nvecx`` width, and that is the
+    measured cost on a card: on sixteen atoms the ladder is worth 75 against 95
+    ms per SCF iteration at one k-point, and a batch of 22 k-points ran 1.28x
+    slower than one at a time (``PERFORMANCE.md``, "Memory mode on a k-mesh").
+    Naming the ``vmap`` axis lets the rung be ``lax.pmax`` over the batch, one
+    scalar, and a rung above a k-point's own is exact for it. So the batched
+    answer is the one-at-a-time answer, and the batched graph reduces the rung.
+    """
+    import jax
+
+    from defumat.solvers import davidson
+
+    text = (BENCHMARK.read_text().split("K_POINTS")[0]
+            .replace("ecutwfc", "nosym = .true., ecutwfc")
+            + "K_POINTS automatic\n 2 2 2 1 1 1\n")
+    from defumat.io.pwin import parse_pw_input
+
+    system = build_system(parse_pw_input(text))
+    pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species)
+    calculation = Calculation(system, pseudos)
+    potential = v_of_rho(calculation.starting_density(), calculation.basis.dense, system.cell)
+    hamiltonian = calculation.hamiltonian(potential.v_scf)[0]
+    assert hamiltonian.nk == 8
+
+    one, _ = davidson_eigensolver_all(hamiltonian, NBND, None, ethr=1e-12, k_batch=1)
+    whole, _ = davidson_eigensolver_all(hamiltonian, NBND, None, ethr=1e-12, k_batch=None)
+    assert np.abs(np.asarray(one) - np.asarray(whole)).max() < 1e-10
+
+    ethr = jnp.full((hamiltonian.nk, NBND), 1e-12)
+    graph = str(jax.make_jaxpr(lambda h: davidson._every_k.__wrapped__(
+        h, NBND, None, ethr, None, DAVID_NDIM, 60, None, False))(hamiltonian))
+    assert "pmax" in graph, "the whole-axis solve should reduce its rung over the batch"

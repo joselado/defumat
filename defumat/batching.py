@@ -340,7 +340,7 @@ __all__ = ["DEFAULT_K_BATCH", "resolve_k_batch", "map_k", "sum_k",
            "WFC_STORES", "resolve_wfc_store", "park_wavefunctions",
            "fetch_wavefunctions",
            "MEMORY_MODES", "resolve_memory_mode", "memory_preset",
-           "k_chunks", "K_BATCH_FIT", "k_batch_fit_requested"]
+           "k_chunks", "K_BATCH_FIT", "k_batch_fit_requested", "whole_axis_vmap"]
 
 
 _UNSET = object()
@@ -614,7 +614,18 @@ def _leading(xs) -> int:
     return int(leaves[0].shape[0])
 
 
-def map_axis(fn, xs, *, batch: int | None):
+def whole_axis_vmap(n: int, batch: int | None) -> bool:
+    """Whether :func:`map_axis` maps ``n`` entries at ``batch`` as one ``vmap``.
+
+    That is the one route on which a named axis exists for ``fn`` to reduce
+    over (``map_axis``'s ``axis_name``): a single entry is mapped with no batch
+    axis, ``batch = 1`` as a scan, and a chunk smaller than the axis by
+    ``lax.map``, whose own ``vmap`` has no name.
+    """
+    return n > 1 and batch != 1 and (batch is None or batch >= n)
+
+
+def map_axis(fn, xs, *, batch: int | None, axis_name: str | None = None):
     """``fn`` at every entry of a leading axis, results stacked back onto it.
 
     The chunking itself, with no opinion about what the axis *is*. ``map_k`` is
@@ -627,8 +638,17 @@ def map_axis(fn, xs, *, batch: int | None):
     at a time, and a leading axis of length one is done without a batch
     dimension at all -- see the module docstring's "A batch of one is not a
     batch".
+
+    ``axis_name`` names the batch axis on the whole-axis route, so that ``fn``
+    can take a collective over it (``lax.pmax``); a caller that passes one
+    must take that route (:func:`whole_axis_vmap`), and it is refused on any
+    other, where a collective would have no axis to reduce over.
     """
     n = _leading(xs)
+    if axis_name is not None and not whole_axis_vmap(n, batch):
+        raise ValueError(
+            f"axis_name={axis_name!r} needs the whole-axis vmap, and {n} entries "
+            f"at batch={batch!r} are not mapped that way")
     if n == 1:
         # A single entry is not a batch. Calling ``fn`` on the squeezed pytree
         # and putting the axis back is the same computation without the
@@ -638,7 +658,7 @@ def map_axis(fn, xs, *, batch: int | None):
     if batch == 1:
         return lax.map(fn, xs)  # a plain scan: one entry, no batch axis
     if batch is None or batch >= n:
-        return jax.vmap(fn)(xs)
+        return jax.vmap(fn, axis_name=axis_name)(xs)
     return lax.map(fn, xs, batch_size=batch)
 
 
@@ -682,14 +702,14 @@ def map_windows(fn, xs, *, batch: int | None):
     return out
 
 
-def map_k(fn, xs, *, batch: int | None):
+def map_k(fn, xs, *, batch: int | None, axis_name: str | None = None):
     """``fn`` at every k-point, results stacked on a leading k axis.
 
     ``xs`` is a pytree whose leaves all have ``nk`` as their leading axis, and
     ``fn`` takes one k-point's slice of it. This is :func:`map_axis` with the k
     axis named, which is the axis every caller of it walks.
     """
-    return map_axis(fn, xs, batch=batch)
+    return map_axis(fn, xs, batch=batch, axis_name=axis_name)
 
 
 def sum_k(fn, xs, *, batch: int | None):

@@ -123,7 +123,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.basis.fft import force_real_g0, gamma_inner
-from defumat.batching import map_k, resolve_k_batch
+from defumat.batching import map_k, resolve_k_batch, whole_axis_vmap
 from defumat.config import subspace_dtype
 from defumat.hamiltonian.operator import Hamiltonian
 from defumat.solvers.subspace import generalised_eigh
@@ -338,13 +338,18 @@ def _band_ladder(nbnd: int, rungs: int = BAND_RUNGS) -> tuple[int, ...]:
     return tuple(sorted({min(step * i, nbnd) for i in range(1, rungs + 1)}))
 
 
-def _at_width(live, widths: tuple[int, ...], make, narrow: bool):
+def _at_width(live, widths: tuple[int, ...], make, narrow: bool,
+              axis_name: str | None = None):
     """``make(m)`` at the smallest ladder width ``m`` that still covers ``live``.
 
-    ``narrow = False`` takes the full width unconditionally. That is what the
-    batched path needs: ``lax.switch`` is ``lax.cond``'s twin under ``vmap`` and
-    evaluates *every* branch, so narrowing there would cost the ladder's whole
-    height instead of saving anything.
+    ``narrow = False`` takes the full width unconditionally. ``lax.switch`` is
+    ``lax.cond``'s twin under ``vmap``: with a batched index it evaluates
+    *every* branch, so narrowing a batched solve would cost the ladder's whole
+    height instead of saving anything. **Unless the index is not batched**, which
+    ``axis_name`` arranges: under a ``vmap`` with that name the rung is the
+    largest any k-point of the batch needs (``lax.pmax``), one scalar, so the
+    ``switch`` runs one branch for all of them. A width above a k-point's own is
+    exact for it, every buffer being zero past its live subspace.
     """
     if not narrow or len(widths) == 1:
         return make(widths[-1])
@@ -352,6 +357,8 @@ def _at_width(live, widths: tuple[int, ...], make, narrow: bool):
         return make(next(m for m in widths if m >= live))
     index = jnp.clip(jnp.searchsorted(jnp.asarray(widths), live),
                      0, len(widths) - 1)
+    if axis_name is not None:
+        index = jax.lax.pmax(index, axis_name)
     return jax.lax.switch(index, [(lambda m: lambda: make(m))(m) for m in widths])
 
 
@@ -384,6 +391,7 @@ def davidson_eigensolver(
     robust: bool = False,
     narrow: bool = True,
     band_rungs: int = BAND_RUNGS,
+    axis_name: str | None = None,
     return_steps: bool = False,
     return_finite: bool = False,
 ):
@@ -411,8 +419,9 @@ def davidson_eigensolver(
             (:func:`_at_width`), and the answer is unchanged to the last bit
             because every buffer is exactly zero past the live subspace. It
             must be ``False`` wherever this is called under a ``vmap`` -- a
-            ``switch`` there evaluates every branch -- which is what
-            :func:`_every_k` decides from the k-batch.
+            ``switch`` there evaluates every branch -- unless ``axis_name``
+            names that ``vmap``'s axis, which makes the rung the batch's widest
+            and one scalar; :func:`_every_k` decides both from the k-batch.
         return_steps: also return how many Davidson steps the solve took and
             how many bands were still unsettled when it stopped. Both are
             already computed inside the loop -- they are its trip counter and
@@ -508,7 +517,7 @@ def davidson_eigensolver(
             c = coefficients[:m].T
             return (c @ psi[:m], c @ hpsi[:m] if with_h else None)
 
-        return _at_width(live, widths, at, narrow)
+        return _at_width(live, widths, at, narrow, axis_name)
 
     def solve(psi, hpsi, becq, active, hc_raw, sc_raw, previous, live):
         """Diagonalise in the current subspace and measure what is left.
@@ -561,7 +570,7 @@ def davidson_eigensolver(
                     jnp.zeros((nvecx, nbnd), psi.dtype).at[:m].set(coefficients),
                     coefficients.T @ becq[:m])
 
-        energies, coefficients, sbec = _at_width(live, widths, at, narrow)
+        energies, coefficients, sbec = _at_width(live, widths, at, narrow, axis_name)
 
         settled = jnp.abs(energies - previous) < ethr
         if residual_threshold is not None:
@@ -753,7 +762,7 @@ def davidson_eigensolver(
                     jnp.zeros((nbnd, bq.shape[1]), bq.dtype).at[:m].set(bq))
 
         hcorr, new_becp, new_becq = _at_width(notcnv, band_widths, live_block,
-                                              narrow)
+                                              narrow, axis_name)
         hpsi = jax.lax.dynamic_update_slice(hpsi, hcorr, (nbase, 0))
         becp = jax.lax.dynamic_update_slice(becp, new_becp, (nbase, 0))
         becq = jax.lax.dynamic_update_slice(becq, new_becq, (nbase, 0))
@@ -762,7 +771,7 @@ def davidson_eigensolver(
             nbase + nbnd, widths,
             lambda m: _extend_projection(hc_raw, sc_raw, psi, hpsi, becp, becq,
                                          nbase, nbnd, gamma_only, width=m),
-            narrow,
+            narrow, axis_name,
         )
         nbase = nbase + notcnv
 
@@ -866,6 +875,12 @@ def _every_k(
     if indices is None:
         indices = jnp.arange(hamiltonian.nk)
     narrow = indices.shape[0] == 1 or batch == 1
+    # ... and on the whole-axis ``vmap``, by naming its axis: the rung is then
+    # the batch's widest, one scalar, and the ``switch`` takes one branch for all
+    # of them (:func:`_at_width`). Only ``lax.map``'s chunks, whose ``vmap`` has
+    # no name, still run at the full width.
+    axis_name = "k" if whole_axis_vmap(indices.shape[0], batch) else None
+    narrow = narrow or axis_name is not None
 
     def solve(ik, start):
         # The threshold rides the traced ``ethr`` slot as an ``(nk, nbnd)``
@@ -880,12 +895,15 @@ def _every_k(
             hamiltonian, ik, nbnd, start, ethr=row,
             residual_threshold=residual_threshold, david=david,
             max_iterations=max_iterations, robust=robust, narrow=narrow,
+            axis_name=axis_name,
             return_steps=return_steps, return_finite=return_finite,
         )
 
     if psi0 is None:
-        return map_k(lambda ik: solve(ik, None), indices, batch=batch)
-    return map_k(lambda pair: solve(*pair), (indices, psi0), batch=batch)
+        return map_k(lambda ik: solve(ik, None), indices, batch=batch,
+                     axis_name=axis_name)
+    return map_k(lambda pair: solve(*pair), (indices, psi0), batch=batch,
+                 axis_name=axis_name)
 
 
 #: :func:`_every_k` with the starting block **donated**, so the solve may write
