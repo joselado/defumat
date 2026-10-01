@@ -105,8 +105,8 @@ from defumat.pseudo.spinorbit import (
 )
 from defumat.batching import (
     fetch_wavefunctions, k_chunks, map_k, park_wavefunctions, resolve_band_batch,
-    resolve_fft_layout, resolve_k_batch, resolve_memory_mode, resolve_plane_chunk,
-    resolve_projectors, resolve_wfc_store,
+    resolve_ethr_floor, resolve_fft_layout, resolve_k_batch, resolve_memory_mode,
+    resolve_plane_chunk, resolve_projectors, resolve_wfc_store,
 )
 from defumat.scf.continuation import (
     ContinuedState, continued_state, depolarize_tau,
@@ -1373,13 +1373,15 @@ def next_ethr(ethr: float, accuracy: float, nelec: float, iteration: int) -> flo
     second iteration rather than carried over from the first, it can only ever
     decrease (``MIN``), and it is floored at 1e-13 because an iterative
     diagonalisation asked for more than that becomes unstable rather than more
-    accurate.
+    accurate. On an accelerator the floor is 1e-12
+    (:func:`~defumat.batching.resolve_ethr_floor`), which is where the solver's
+    step count stops depending on round-off there.
     """
     if iteration <= 1:
         return ethr
     if iteration == 2:
         ethr = ETHR_INIT
-    return max(min(ethr, 0.1 * accuracy / max(1.0, nelec)), ETHR_MIN)
+    return max(min(ethr, 0.1 * accuracy / max(1.0, nelec)), resolve_ethr_floor(ETHR_MIN))
 
 
 def default_nbnd(
@@ -5550,7 +5552,7 @@ def _solve_residual(
       solution and should be left at zero when an unstable one is wanted.
     """
     solver = get_scf_solver(scf_solver)
-    ethr = options.pop("ethr", max(1.0e-3 * conv_thr, ETHR_MIN))
+    ethr = options.pop("ethr", max(1.0e-3 * conv_thr, resolve_ethr_floor(ETHR_MIN)))
     warmup = int(options.pop("warmup", 0))
     precondition = options.pop("precondition", None)
     wavefunctions = None
@@ -6704,7 +6706,8 @@ def run_scf(
         # The density is converged, so the eigenvalues must be too: the loose
         # start of the ``ethr`` schedule would otherwise throw the hand-off away
         # on the very first diagonalisation.
-        ethr = max(0.1 * solver_result.accuracy / max(1.0, calculation.nelec), ETHR_MIN)
+        ethr = max(0.1 * solver_result.accuracy / max(1.0, calculation.nelec),
+                   resolve_ethr_floor(ETHR_MIN))
 
     # ``potinit.f90``'s Thomas-Fermi guess. The first iteration has no states to
     # build ``tau`` from and the meta-GGA potential cannot be evaluated without
@@ -7078,7 +7081,8 @@ def run_scf(
 
             if iteration > 1 or attempt > 0 or accuracy >= floor:
                 break
-            ethr = max(0.1 * accuracy / max(1.0, calculation.nelec), ETHR_MIN)
+            ethr = max(0.1 * accuracy / max(1.0, calculation.nelec),
+                       resolve_ethr_floor(ETHR_MIN))
             if verbose:
                 print(f"  iteration {iteration:3d}   ethr was too large; "
                       f"diagonalising again at {ethr:.2e}")

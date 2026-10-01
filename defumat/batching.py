@@ -848,6 +848,45 @@ def resolve_fft_layout(requested: str = "default") -> str:
     return layout
 
 
+#: The floor under the SCF's diagonalisation threshold on an accelerator, in Ry.
+#: See :func:`resolve_ethr_floor`.
+ETHR_FLOOR_ACCELERATOR = 1.0e-12
+
+
+def resolve_ethr_floor(floor: float) -> float:
+    """The floor the SCF clamps ``ethr`` to: ``DEFUMAT_ETHR_MIN``, then the platform.
+
+    ``floor`` is QE's 1e-13 (``electrons.f90``), and a CPU keeps it. On an
+    accelerator the floor is :data:`ETHR_FLOOR_ACCELERATOR`, because Davidson's
+    test is the *change* in each eigenvalue between two steps, a band that is not
+    being expanded does not change, and at 2e-13 the roots of a near-degenerate
+    cluster drift by about that much per step. Which of them pass in the first
+    three steps is decided by round-off and nothing else: on the sixteen-atom
+    cell, starting states perturbed by 1e-13 relative took between 3 and 100
+    steps on the card, more than 20 of them in 60 per cent of the seeds with one
+    executable and 5 per cent with another, where the same perturbations on the
+    CPU took exactly 3 every time. A run at ``conv_thr = 1e-10`` reaches that
+    floor in its last two iterations, and on 64 atoms one call at the 100-step
+    budget made the SCF take 80.7 s where the floor at 1e-12 takes 12.9 s
+    (``PERFORMANCE.md``, "The endgame on a card is a stall"). The total
+    energy moves by at most 4e-12 Ry across floors of 1e-13 to 1e-11 and the
+    final residuals stay within the spread the lowest floor already has, so what
+    the floor trades is the last digits of the band energies of the final
+    iteration (1.4e-7 Ry in the sum over 32 bands at 1e-12).
+
+    A floor is not a claim about every cell: a solver that stops on a change in
+    the eigenvalue can stall at any threshold where the change per step is of
+    the order of the threshold, and this only moves the threshold out of the
+    range where that was measured.
+    """
+    setting = (environ_get("DEFUMAT_ETHR_MIN", "") or "").strip()
+    if setting:
+        return float(setting)
+    if _backend() == "cpu":
+        return floor
+    return max(floor, ETHR_FLOOR_ACCELERATOR)
+
+
 #: The band dial's resolver under a public name, mirroring
 #: :func:`resolve_k_batch`. The two dials are read the same way and one of them
 #: had no public spelling, which meant a caller outside this module -- e.g.

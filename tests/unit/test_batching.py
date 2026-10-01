@@ -463,3 +463,33 @@ def test_the_pair_axis_has_a_budget_on_a_card_and_the_band_dial_on_a_cpu(
     assert batching.resolve_pair_batch(8, box_bytes=box, npairs=1000) == 8
     monkeypatch.setenv("DEFUMAT_BAND_BATCH", "4")
     assert batching.resolve_pair_batch(box_bytes=box, npairs=1000) == 4
+
+
+def test_the_ethr_floor_follows_the_platform_and_the_environment(monkeypatch):
+    """QE's 1e-13 on a CPU, 1e-12 on an accelerator, ``DEFUMAT_ETHR_MIN`` over both.
+
+    The accelerator floor exists because Davidson's test is the change in an
+    eigenvalue, and at 2e-13 the step count there is decided by round-off
+    (3 to 100 steps from 1e-13 perturbations on the card, 3 every time on a CPU).
+    """
+    from defumat.batching import ETHR_FLOOR_ACCELERATOR, resolve_ethr_floor
+    from defumat.scf.driver import next_ethr
+    from defumat.solvers.davidson import ETHR_MIN
+
+    monkeypatch.delenv("DEFUMAT_ETHR_MIN", raising=False)
+    monkeypatch.setattr(batching, "_backend", lambda: "cpu")
+    assert resolve_ethr_floor(ETHR_MIN) == ETHR_MIN == 1e-13
+    assert next_ethr(1e-2, 1e-20, 8.0, 5) == 1e-13
+
+    monkeypatch.setattr(batching, "_backend", lambda: "gpu")
+    assert resolve_ethr_floor(ETHR_MIN) == ETHR_FLOOR_ACCELERATOR == 1e-12
+    # a caller whose own floor is already higher keeps it
+    assert resolve_ethr_floor(5e-12) == 5e-12
+    assert next_ethr(1e-2, 1e-20, 8.0, 5) == 1e-12
+    # above the floor the schedule is QE's and the platform does not matter
+    assert next_ethr(1e-2, 8e-3, 8.0, 5) == pytest.approx(0.1 * 8e-3 / 8.0)
+
+    monkeypatch.setenv("DEFUMAT_ETHR_MIN", "3e-13")
+    assert resolve_ethr_floor(ETHR_MIN) == 3e-13
+    monkeypatch.setattr(batching, "_backend", lambda: "cpu")
+    assert next_ethr(1e-2, 1e-20, 8.0, 5) == 3e-13

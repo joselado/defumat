@@ -37,7 +37,7 @@ from pathlib import Path
 
 import jax
 
-from defumat.batching import resolve_band_batch, resolve_memory_mode
+from defumat.batching import resolve_band_batch, resolve_memory_mode, resolve_wfc_store
 from defumat.io.pwin import read_pw_input
 from defumat.pseudo import read_upf
 from defumat.scf.driver import Calculation, run_scf
@@ -88,11 +88,16 @@ def main() -> None:
         "memory_mode": resolve_memory_mode(),
         "calculation_band_batch": str(getattr(calculation, "band_batch", "n/a")),
         "fft_layout": calculation.fft_layout,
+        "projectors": calculation.projector_storage,
+        "wfc_store": resolve_wfc_store(mode=calculation.memory_mode),
         "backend": jax.default_backend(),
         "cold_s": round(cold, 3),
         "ms_per_iter_median": round(1e3 * statistics.median(per_iteration), 2),
         "ms_per_iter_all": [round(1e3 * t, 2) for t in per_iteration],
         "iterations": iterations,
+        # the last run's Davidson steps per SCF iteration: a timing is read against
+        # these, since one call that runs to the iteration budget is most of a run
+        "davidson_steps": [round(h["davidson_iterations"], 1) for h in result.history],
         "energy_ry": float(result.total_energy),
         "max_iterations": args.max_iterations,
         "device_peak_gib": (round(stats["peak_bytes_in_use"] / 2**30, 3)

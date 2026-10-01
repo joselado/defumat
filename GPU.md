@@ -123,8 +123,13 @@ FFT** (`basis/sticks.py`): transforming only the sphere's columns along `z` and 
 a contiguous 2D `xy` pass is QE's layout and beats a fused 3D transform **1.13x on the
 eight-atom silicon cell and 1.02x on sixteen atoms** — that module's own docstring. Those
 margins are thin, and what buys them is a gather/scatter into the box, which is exactly the
-access pattern a GPU punishes and a batched `cuFFT` plan makes unnecessary. **That is a
-hypothesis, not a finding**, and §3's Phase 2 is where it gets measured.
+access pattern a GPU punishes and a batched `cuFFT` plan makes unnecessary. **That was a
+hypothesis, and it is now measured on one card (2026-10-01, RTX A2000, a float32 part):** with the
+solver's step counts equal in every arm, the fused box is 11 per cent faster at 8 atoms, equal at
+16 atoms at `band_batch = all` and 14 per cent faster at `band_batch = 8`, and 4 per cent slower at
+64 atoms; on a CPU the sticks are equal at 8 atoms and 9.5 per cent faster at 16. It is the
+`DEFUMAT_FFT_LAYOUT` dial (`sticks`, the default, or `box`), and no platform default follows it
+until a float64 card has been measured. `PERFORMANCE.md`, "The endgame on a card is a stall".
 
 **2.3 The metric changes, and reusing the CPU one would flatter the result by a factor
 nobody earned.** `CLAUDE.md`'s measurement is *single-core* defumat against *single-core*
@@ -371,6 +376,15 @@ FFTs took their 6.8x and the subspace solve took nothing. The consequence:
 iterations suggest**, and any GPU speedup quoted here has to say which
 `conv_thr` produced it.
 
+> **Re-read 2026-10-01, and the attribution above is probably wrong.** No Davidson step
+> count was recorded in this measurement. On an RTX A2000 the same cell at `conv_thr = 1e-10`
+> shows the same shape as **one call, SCF iteration 8 at `ethr = 2e-13`, running 73 steps where
+> an identical-physics executable runs 3**, and `conv_thr` 1e-6 to 1e-9 never stalls there. The
+> stall is a property of the stopping test (a change in an eigenvalue per step against a threshold
+> of the same size) and not of small dense algebra, and a floor of 1e-12 on an accelerator
+> removes it: 64 atoms, 80.7 s to 12.9 s for the whole SCF. The V100 behind the 13x was not
+> re-run. `PERFORMANCE.md`, "The endgame on a card is a stall".
+
 **Thirty-two atoms changes the size of the answer, and softens the second
 finding.** On `si32-1k-ecut30` (11781 plane waves, 64 bands) at `band_batch =
 all`: `h_psi` **17.9x**, Davidson **13.5x**, `v_of_rho` **1.3x** — the
@@ -418,7 +432,12 @@ and not submitted. What it returned:
   10 → 0 in the *seeded* regime and never fall at all from a cold start).
   **`lax.switch` is the same trap as `lax.cond`** — every branch runs under
   `vmap` — so both are unbatched-path changes, which is where the large single-k
-  cells are;
+  cells are. **Both were implemented on 2026-09-16** (`fe2e04d`, `07a4332`:
+  `_width_ladder` and `_band_ladder` in `solvers/davidson.py`), and the narrowing is
+  taken exactly where `_every_k` is unbatched, that is for one k-point or
+  `k_batch = 1`, which is what memory mode, the accelerator default, uses. This
+  paragraph and the log section it comes from were not updated when they landed, so
+  the code, and not this text, is the record of what is open;
 * **the profile itself is the deliverable that outlives the numbers**: the CPU
   half can be re-run on this workstation whenever a solver change lands, and the
   GPU half is one job.

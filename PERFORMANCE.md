@@ -8443,3 +8443,184 @@ arrays built from the pseudopotentials' radial tables do not read the precision 
 single-precision run -- and casting `vltot` alone does not get past the same line. The fix
 is one cast of the setup leaves to the policy wherever a `Calculation` is built or moved,
 with the deliberate float64 exceptions `GPU-MEMORY-NEXT.md` names; not started.
+
+## The endgame on a card is a stall, and an accelerator floor of 1e-12 removes it (RTX A2000, 2026-10-01)
+
+**The number to carry: one Davidson call at the 100-step budget made the 64-atom SCF on
+the card take 80.7 s where it takes 12.9 s with the `ethr` floor at 1e-12**, the same
+energy to 1e-10 Ry (`si64-1k-ecut30`, speed mode, `band_batch = 8`, `conv_thr = 1e-10`).
+Steps per SCF iteration were `[3, 1, 3, 3, 2, 3, 4, 100, 1]` against
+`[3, 1, 3, 3, 2, 3, 4, 7, 1]`. Everything below is the road to that sentence, and it
+overturns four readings recorded earlier in this file and in `GPU.md`, listed at the end.
+Card: RTX A2000 12 GB on `D22-0161`, host pinned to four performance cores, jax 0.11.0,
+`DEFUMAT_THREADS=off`, one process per entry, warm. This card is a float32 device (float64
+at 1/70 of float32), so none of the **times** is a claim about an A100 or an H200. The
+**step counts** are claims about the solver and are reported beside every time.
+
+**How it was found.** The one-k-point cell `si16-1k-ecut30` runs at 70.4 ms per iteration
+in `speed` mode and 187 ms in the default `memory` mode, and with one k-point the k and band
+dials coincide, so the 2.7x had to come from the other two components of the preset. A ladder
+over them, one process each (`tools/parallel/time_scf.py`, which now prints the resolved
+projector storage, wavefunction store, FFT layout and **Davidson steps per SCF iteration**):
+
+| mode | projectors | wavefunction store | ms per iteration | steps in iteration 8 |
+|---|---|---|---|---|
+| speed | store | device | 70.4 | 3 |
+| speed | rebuild | device | 183.2 | 73 |
+| speed | store | stream | 75.2 | not recorded |
+| memory | store | device | 70.4 | not recorded |
+| memory (default) | rebuild | stream | 187.2 | 73 |
+
+The step counts exist for the rows where a later run printed them; the ladder itself
+(`time_scf.py` before it carried the field) recorded only the times.
+
+The projector rebuild costs 0.05 ms per call on the card (`at_k` alone) and an `H|psi>` of 32
+bands is no slower with it (7.7 against 9.2 ms), so it is not the cost. The difference is
+**one call, SCF iteration 8 at `ethr = 2e-13`, running 73 steps where the other executable
+runs 3**, and every other iteration has identical step counts. The streamed store is the
+real price of `memory` mode on this cell, 5 ms of 70 (7 per cent).
+
+**It is not the projector route.** The same iteration, changing only dials that change
+round-off, `si16-1k-ecut30`, `conv_thr = 1e-10`, card:
+
+| arm | steps in iteration 8 | ms per iteration |
+|---|---|---|
+| sticks, store, `band_batch = all` | 3 | 70.2 |
+| box, store | 9 | 78.9 |
+| sticks, rebuild | 73 | 182.5 |
+| box, rebuild | 5 | 74.0 |
+| sticks, store, `band_batch = 1` | 41 | 341.1 |
+| sticks, store, `band_batch = 8` | 39 | 150.3 |
+| sticks, store, `band_batch = 16` | 24 | 111.1 |
+| memory (default) | 73 | 188.8 |
+
+Every ms-per-iteration difference in the table is the step count of one call. The first
+`wrap_bench` of the session, with the threading environment unset, spent 1009 ms in the
+eigensolve of the **store** arm against 621 ms in the rebuild one, the reverse of the scan
+(step counts were not printed in that run), which fits a stall that belongs to the
+executable and the environment and not to either projector route.
+
+**The stall is a property of the threshold, and a CPU does not show it.** The stalled call
+was captured and replayed (73 steps both times, so it is deterministic per executable and
+environment). `H|psi>` is bit-reproducible on the card (same jitted function twice; jit
+against eager differ by 4.7e-16 on a maximum of 0.24), the canonical-orthogonalisation retry
+did not fire (no warning, finite throughout), and the residual norms of the roots that stay
+unsettled hardly move: 9.6e-7 after one step, 2.9e-7 after three, 1.55e-7 after 73, with the
+eigenvalues already within 5e-11 of their final values after one step. So the long run buys
+a residual twice as small, which the SCF cannot use. The per-step change of the two unsettled
+roots, a pair that moves together (bands 16 and 17), is a steady 3.0 to 3.1e-13 over steps 3 to 5
+against `ethr = 2.13e-13`, a slow drift just above the threshold and not noise, and bands
+that had counted as settled later move by 1e-11 when a new direction enters the subspace.
+`ethr` here is a test on the *change* in an eigenvalue, and a root that is not being
+expanded does not change, so the settled flags at this threshold are partly false, and
+which roots pass in the first three steps is decided by round-off. That is measured by
+perturbing the captured call's starting states by 1e-13 relative noise (20 seeds on the card,
+12 on the CPU) and counting steps, for the two executables that differ only in the projector
+route:
+
+| `ethr` | card, rebuild: median, max, over 20 steps | card, store: median, max, over 20 steps | CPU (both): steps |
+|---|---|---|---|
+| 1e-13 | 53, 100, 80% | 12, 60, 15% | 3, every seed |
+| 2.1e-13 | 35.5, 100, 60% | 3.5, 23, 5% | 3, every seed |
+| 5e-13 | 2, 48, 5% | 3, 4, 0% | 2, every seed |
+| 1e-12 | 2, 20, 0% | 2, 2, 0% | 2, every seed |
+| 3e-12 and up | 1, 1, 0% | 1, 1, 0% | 1 (only the noise-injected CPU runs went this high) |
+
+**The overlap's condition number grows during the stall, and whether that is cause or
+consequence is not established.** Traced inside the replay (74 subspace solves), the smallest
+eigenvalue of the projected overlap goes 1, 0.38, 0.21, then 5.5e-3 at the 18th solve, 1.8e-4
+at the 24th, 2.8e-6 at the 30th and 5.0e-9 at the 54th, a condition number of 1.5e9, and 53 of
+the 74 solves are below 1e-2. The Cholesky route's eigenvalue error grows with it (a 128 x 128
+pair against `scipy.linalg.eigh`: 1.9e-14 at cond 1, 4.9e-13 at 1e2, 7.2e-12 at 1e4, 5.7e-10 at
+1e6, 6.9e-8 at 1e8). But restarting the subspace every 4 steps, which resets the overlap to the
+identity (`EXACT` refresh, below), does not remove the stalls with rebuilt projectors, so the
+growth is at most part of the mechanism. Injecting 1e-13 relative noise into the projected
+pair on the CPU does not reproduce the card either.
+
+**Tried and not kept** (all on the replayed call, 20 seeds, card; flags were in
+`solvers/davidson.py` for the experiment and are removed):
+
+* projecting each correction block out of the span of the current Ritz vectors (Jacobi-Davidson
+  style, after the preconditioner): rebuild improves (median 3 steps at 2.1e-13, maximum 14)
+  and store gets worse (median 28.5, the iteration-8 call goes from 3 to 31 steps), so it is a
+  change of executable and not a cure. The unit tests pass with it.
+* `diago_david_ndim = 2` and `3`: no 100-step calls, but 9 to 20 steps per call where the
+  default takes 3 (median 17 and 24.5 at 2.1e-13 with rebuild at `david = 2` and 3).
+* an exact refresh (the retained projected matrices measured from the retained vectors, as a
+  fresh `cegterg` call does) together with a hard restart every 20, 8 and 4 steps: with rebuilt
+  projectors medians of 33.5, 24.5 and 59.5 steps at 2.1e-13 against 35.5 unrestarted, with
+  stored ones 10.5, 11 and 8 against 3.5. No cure, and it costs the lucky executable.
+
+**What the floor does.** QE floors `ethr` at 1e-13. Scanning the floor on `si16-1k-ecut30` at
+`conv_thr = 1e-10` (the energy against the CPU's 1e-13 run, -126.720760700971 Ry):
+
+| floor | card, rebuild: steps, ms/it | card, store: steps, ms/it | energy shift (Ry) | final residual max: CPU, card rebuild, card store |
+|---|---|---|---|---|
+| 1e-13 | `[..., 73, 2]`, 181.7 | `[..., 3, 2]`, 70.4 | 0 | 3.2e-7 / 3.6e-7, 9.8e-7 |
+| 5e-13 | `[..., 2, 6]`, 75.1 | `[..., 4, 2]`, 71.3 | -1e-12 | 3.3e-7 / 3.9e-7, 8.2e-7 |
+| 1e-12 | `[..., 2, 1]`, 66.7 | `[..., 2, 1]`, 65.7 | -3e-12 | 5.1e-7 / 5.1e-7, 5.7e-7 |
+| 3e-12 | `[..., 1, 1]`, 64.3 | `[..., 1, 1]`, 64.1 | -4e-12 | 5.5e-7 / 5.5e-7, 5.6e-7 |
+
+The energy moves by at most 4e-12 Ry over a factor of 100 in the floor, and the final residuals
+stay within the spread the 1e-13 floor already has between executables (3.6e-7 to 9.8e-7). The
+visible price is the final band energies: with one step in each of the last two iterations
+(floor 3e-12) the sum over 32 bands moves by 1.2e-6 Ry, at 1e-12 by 1.4e-7 Ry (4e-9 per band).
+The floor is therefore 1e-12 on an accelerator and QE's 1e-13 on a CPU, where the same
+perturbations always took 3 steps and every number on record was taken
+(`batching.resolve_ethr_floor`, `DEFUMAT_ETHR_MIN` overrides it, and the four sites in
+`scf/driver.py` that clamped to `ETHR_MIN` read it; `nscf.py` and `topology.py` still clamp
+to 1e-13, which is a band path or a Berry phase and was not measured). On 64 atoms:
+
+| `conv_thr`, floor | steps per SCF iteration | wall | ms per iteration |
+|---|---|---|---|
+| 1e-10, 1e-13 | `[3, 1, 3, 3, 2, 3, 4, 100, 1]` | 80.7 s | 8967 |
+| 1e-10, 1e-12 | `[3, 1, 3, 3, 2, 3, 4, 7, 1]` | 12.9 s | 1435 |
+| 1e-10, 3e-12 | `[3, 1, 3, 3, 2, 3, 4, 1, 1]` | 11.3 s | 1255 |
+| 1e-8, 1e-13 | `[3, 1, 3, 3, 2, 3, 4]` | 10.1 s | 1443 |
+| 1e-10, 1e-13, `band_batch = all` | `[3, 1, 3, 3, 2, 3, 7, 100, 100]` | 129 s | 14329 |
+
+The three floors were run in one process and compare as follows: energies -507.166061664059
+(1e-13), -507.166061664056 (1e-12) and -507.166061664052 (3e-12) Ry, final residual maxima 3.3e-7,
+4.2e-7 and 8.7e-7, and the sum of the 128 band energies 10.708613096, 10.708613634 and
+10.708614999 (5.4e-7 and 1.9e-6 from the 1e-13 value, 4e-9 and 1.5e-8 per band).
+
+**Four earlier readings this overturns or qualifies.** (1) `GPU.md` Phase 1: "tightening
+`conv_thr` from 1e-8 to 1e-10 costs the GPU 13x (36 to 459 ms)" on `si16-1k-ecut30` on a V100
+was attributed to small dense algebra inside a `while_loop`; no step count was recorded there,
+the same cell on the A2000 shows the same shape as one 73-step call, and `conv_thr` 1e-6 to
+1e-9 never stalls there, so the attribution is unproved and probably wrong (the V100 was not
+re-run). (2) `PARALLEL-NEXT.local.md`: "the default `memory` mode is 2.7x slower than `speed` on
+si16" is one call, the streamed store costs 7 per cent. (3) The same file: "on si64 a band batch
+of 8 is twice as fast as the whole block (7094 against 14800 ms)" is one more stalled call,
+`[..., 100, 1]` against `[..., 100, 100]` in the table above. (4) The first layout A/B of the
+day (box 12 per cent slower than sticks on `si16-1k-ecut30`) is six extra steps in one call,
+9 against 3.
+
+**With the stall out of the comparison** (the first seven iterations of `si16-1k-ecut30`,
+identical steps `[3, 1, 2, 2, 2, 2, 4]` in every arm, median of three, two alternations),
+`DEFUMAT_FFT_LAYOUT` and the band dial are real effects on this card and smaller than the
+stalled runs said:
+
+| arm | ms per iteration |
+|---|---|
+| sticks, `band_batch = all` | 70.2, 70.4 |
+| box, `band_batch = all` | 70.9, 70.9 |
+| sticks, `band_batch = 8` | 84.2, 84.7 |
+| box, `band_batch = 8` | 72.3, 73.0 |
+| sticks, `band_batch = 1` | 199.7, 200.7 |
+
+At 8 atoms, where the steps are equal and nothing stalls, the box layout is 11 per cent faster
+(28.9 and 28.8 ms against 32.4 and 33.6); at 64 atoms and `band_batch = 8` over the first four
+iterations the sticks are 4 per cent faster (1412 and 1434 ms against 1471 and 1489); on this
+workstation's CPU they are equal at 8 atoms (135 ms) and 9.5 per cent faster at 16 (466.3 against
+510.5 ms, 15 samples each). `GPU.md` section 2.2's hypothesis that a fused box transform wins on a
+card holds at 8 atoms and fails at 16 and 64, and nothing here transfers to a float64 card. The
+default stays `sticks` on every platform.
+
+**Not done, in order of what it would change.** The V100 and H100 step counts for the 13x entry
+(a Triton job, which needs a submission this session did not make). The 157-atom slab, whose
+"12x too many steps" in `OPEN.md` and the memory notes may be this stall: its iteration 2 was at
+the 100-step budget on an H200. A stall guard that does not depend on a floor (the floor moves
+the threshold out of the range measured here and does not change the solver's stopping rule).
+The mechanism: the conditioning growth is real and its role is open. Whether `nscf.py` and
+`topology.py`, which clamp to 1e-13, stall on a card.
