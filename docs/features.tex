@@ -7081,7 +7081,12 @@ band path and the Berry-phase strings, whose cold solves took 17 steps at every
 threshold from $10^{-13}$ to $3\times10^{-12}$ on sixteen atoms, on a card and on
 a CPU alike. And \textbf{the floor moves the threshold out of the range where the
 stall was measured and does not change Davidson's stopping rule}, so it is a
-measured workaround and not a proof that no cell stalls.
+measured workaround and not a proof that no cell stalls. \textbf{A call that
+uses the whole 100-step budget and leaves bands unsettled gives a
+\code{RuntimeWarning}, once per run}, naming the iteration, the threshold and
+the unsettled count; the steps each iteration paid are
+\code{history[i]["davidson\_iterations"]}, and a time on a card is read against
+them.
 \end{refuses}
 
 \textbf{The wavefunction transforms have two layouts.} The default, on every

@@ -8766,6 +8766,16 @@ arm): `--xla_gpu_enable_command_buffer=` (none) against the default against
 1/70 of float32 is bound by arithmetic and not by launches. Whether they help where the launches are
 the cost is a question for a float64 card.
 
+**Other physics on the card, at QE's floor and at the default** (memory mode, the benchmark inputs'
+own `conv_thr`, one process each, steps per SCF iteration): ultrasoft `si8-us-1k` `[3, 1, 3, 2, 2,
+3, 3, 2, 2]` at 1e-13 and the same ending `2, 1` at the default (39.1 and 38.8 ms per iteration),
+PAW `si8-paw-1k` (53.7, 53.6), noncollinear `si8-nc-1k` (50.3, 50.1), the magnetic metal `fe-mag-1k`
+over 13 iterations (43.7, 43.2), DFT+U `ni-ldau-1k` (69.7, 69.0), the metal slab `al-slab` over 28
+iterations (41.8, 41.3) and the spin-polarised hydrogen chain `h20-chain-lsda` over 32 (535, 538):
+no call above 17 steps in any of them at either floor, and energies identical to the printed digits.
+The floor does not bind in most of these (their last iterations are not at it), so this says that the
+stall was not found on those physics, and not that they are immune.
+
 **Not done, in order of what it would change.** A request tighter than 1e-10 on a card (above).
 The V100 and H100 step counts for the 13x entry (a Triton job, which needs a submission this
 session did not make). A stall guard that does not depend on a floor (the floor moves the
