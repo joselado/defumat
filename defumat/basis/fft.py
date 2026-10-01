@@ -188,6 +188,36 @@ def force_real_g0(coefficients, gamma_only: bool):
 # above all, has to be stored in the same order.
 
 
+def _fill_columns(values: jnp.ndarray, columns, ncols: int) -> jnp.ndarray:
+    """``zeros(..., ncols).at[..., columns].set(values)``, as a gather.
+
+    Each stick lands in one ``xy`` column of the box, and the obvious way to
+    write that, a scatter along the last axis, is one that XLA's GPU backend
+    does not emit as a kernel: it expands it into a ``while`` loop over the
+    sticks, a dynamic slice, an add and a dynamic update per stick. On an RTX
+    A2000 one such fill took 0.858 ms at eight-atom silicon's 98 sticks and
+    17.3 ms at 1200, and in a warm 27-k-point SCF the loop's four kernels were
+    about 110,000 launches each, a second of the host's time in
+    ``cuLaunchKernel``. Read the other way round it is a gather: each column
+    takes the stick that lands there, or an extra zero stick, through the
+    inverse of ``columns`` (distinct, padding included, so the inverse is
+    well defined), and that is one kernel -- 0.043 and 1.37 ms there, the same
+    numbers to the last bit. **A CPU keeps the scatter**: there the gather made
+    a sixteen-atom SCF 2.5 per cent slower (477.7 against 465.9 ms an
+    iteration, three samples each, apart), and the bits are the same either way.
+    """
+    from defumat.batching import _backend
+
+    if _backend() == "cpu":
+        return jnp.zeros(values.shape[:-1] + (ncols,), values.dtype).at[..., columns].set(values)
+    nsticks = columns.shape[-1]
+    slot = jnp.full((ncols,), nsticks, dtype=columns.dtype).at[columns].set(
+        jnp.arange(nsticks, dtype=columns.dtype))
+    padded = jnp.concatenate(
+        [values, jnp.zeros(values.shape[:-1] + (1,), values.dtype)], axis=-1)
+    return jnp.take(padded, slot, axis=-1)
+
+
 def sticks_to_r(coefficients: jnp.ndarray, sticks, columns, index) -> jnp.ndarray:
     """Sphere coefficients -> the field on the grid, as ``(..., n3, n1, n2)``.
 
@@ -200,8 +230,7 @@ def sticks_to_r(coefficients: jnp.ndarray, sticks, columns, index) -> jnp.ndarra
     compact = compact.at[..., index].add(coefficients)
     compact = jnp.fft.ifft(compact.reshape(lead + (sticks.nsticks, n3)), axis=-1) * n3
 
-    box = jnp.zeros(lead + (n3, n1 * n2), coefficients.dtype)
-    box = box.at[..., columns].set(jnp.moveaxis(compact, -1, -2))
+    box = _fill_columns(jnp.moveaxis(compact, -1, -2), columns, n1 * n2)
     return jnp.fft.ifftn(box.reshape(lead + (n3, n1, n2)), axes=(-2, -1)) * (n1 * n2)
 
 
@@ -258,8 +287,7 @@ def sticks_local(coefficients: jnp.ndarray, sticks, columns, index, apply,
 
     def one_chunk(pair):
         sticks_here, v_here = pair
-        box = jnp.zeros(lead + (chunk, n1 * n2), coefficients.dtype)
-        box = box.at[..., columns].set(sticks_here)
+        box = _fill_columns(sticks_here, columns, n1 * n2)
         field = jnp.fft.ifftn(box.reshape(lead + (chunk, n1, n2)), axes=(-2, -1)) * (n1 * n2)
         back = jnp.fft.fftn(apply(field, v_here), axes=(-2, -1)) / (n1 * n2)
         return back.reshape(lead + (chunk, n1 * n2))[..., columns]
@@ -312,7 +340,7 @@ def sticks_density(states: jnp.ndarray, weights: jnp.ndarray, sticks, columns, i
         def one_chunk(j, rho):
             start = j * chunk
             here = jax.lax.dynamic_slice_in_dim(planes, start, chunk, axis=-2)
-            box = jnp.zeros(lead + (chunk, n1 * n2), states.dtype).at[..., columns].set(here)
+            box = _fill_columns(here, columns, n1 * n2)
             field = jnp.fft.ifftn(box.reshape(lead + (chunk, n1, n2)), axes=(-2, -1)) * (n1 * n2)
             add = weight * combine(field).reshape(ncomp, chunk, n1 * n2)
             now = jax.lax.dynamic_slice_in_dim(rho, start, chunk, axis=1)

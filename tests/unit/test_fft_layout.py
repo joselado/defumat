@@ -154,3 +154,29 @@ def test_the_chunked_force_runs_on_the_box_layout(monkeypatch):
     assert np.max(np.abs(chunked)) > 1e-2, "the geometry must carry a force"
     np.testing.assert_allclose(
         chunked, compute_forces(calculation, on_device).unsymmetrized, atol=1e-12)
+
+
+def test_the_card_fills_the_box_by_a_gather_and_gets_the_scatters_bits(monkeypatch):
+    """On a card the stick fill is a gather through the inverse column map.
+
+    XLA's GPU backend expands a scatter along the box's last axis into a loop
+    over the sticks, four tiny kernels a stick (``basis.fft._fill_columns``);
+    the gather is one kernel. They must be the same map: distinct columns,
+    padding included, each stick in exactly one column and every other column
+    zero, so the gather is checked against the scatter here, bit for bit, by
+    pretending to be on a card.
+    """
+    import numpy as np
+    import jax.numpy as jnp
+
+    from defumat import batching
+    from defumat.basis.fft import _fill_columns
+
+    rng = np.random.default_rng(4)
+    columns = jnp.asarray(rng.permutation(50)[:13])
+    values = jnp.asarray(rng.standard_normal((3, 5, 13)) + 1j * rng.standard_normal((3, 5, 13)))
+    scattered = _fill_columns(values, columns, 50)
+    monkeypatch.setattr(batching, "_backend", lambda: "gpu")
+    gathered = _fill_columns(values, columns, 50)
+    assert np.array_equal(np.asarray(gathered), np.asarray(scattered))
+    assert np.array_equal(np.asarray(gathered)[..., np.asarray(columns)], np.asarray(values))
