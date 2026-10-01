@@ -8527,6 +8527,28 @@ route:
 | 1e-12 | 2, 20, 0% | 2, 2, 0% | 2, every seed |
 | 3e-12 and up | 1, 1, 0% | 1, 1, 0% | 1 (only the noise-injected CPU runs went this high) |
 
+**The dense solve is as accurate on the card as on the CPU.** The same 128 x 128 generalised
+problem, the Cholesky route that the Davidson step takes, against `scipy.linalg.eigh`, largest
+error in the lowest 32 eigenvalues, card / CPU, with the spread of the result under 1e-16
+perturbations of the input in brackets:
+
+| cond(S) | card (Ry) | CPU (Ry) |
+|---|---|---|
+| 1 | 1.7e-14 (1.0e-14) | 1.9e-14 (1.5e-14) |
+| 10 | 1.9e-13 (3.7e-14) | 7.0e-14 (4.6e-14) |
+| 20 | 1.2e-13 (7.8e-14) | 1.5e-13 (7.8e-14) |
+| 50 | 1.5e-13 (2.3e-13) | 2.3e-13 (2.3e-13) |
+| 100 | 4.2e-13 (4.8e-13) | 8.4e-13 (1.1e-12) |
+| 1e3 | 1.1e-12 (1.1e-12) | 1.3e-12 (2.5e-12) |
+| 1e4 | 9.2e-12 (1.4e-11) | 8.6e-12 (1.0e-11) |
+| 1e6 | 9.7e-10 (1.8e-9) | 8.4e-10 (9.5e-10) |
+
+Within a factor of two everywhere, so cuSOLVER is not what makes a card different. What this
+table does say is that at the overlap's condition number at step 3 of the stalled call (12 to 20)
+the Ritz values of either platform carry an error of 1e-13 to 2e-13, which is the threshold, so
+the test sits on the noise of the subspace solve on both and the CPU's three-step passes in all
+12 seeds are the part that needs explaining.
+
 **The overlap's condition number grows during the stall, and whether that is cause or
 consequence is not established.** Traced inside the replay (74 subspace solves), the smallest
 eigenvalue of the projected overlap goes 1, 0.38, 0.21, then 5.5e-3 at the 18th solve, 1.8e-4
@@ -8666,11 +8688,14 @@ card holds at 8 atoms and fails at 16 and 64, and nothing here transfers to a fl
 default stays `sticks` on every platform.
 
 **Not done, in order of what it would change.** A request tighter than 1e-10 on a card (above).
-The V100 and H100 step counts for the 13x entry
-(a Triton job, which needs a submission this session did not make). The 157-atom slab, whose
-"12x too many steps" in `OPEN.md` and the memory notes may be this stall: its iteration 2 was at
-the 100-step budget on an H200. A stall guard that does not depend on a floor (the floor moves
-the threshold out of the range measured here and does not change the solver's stopping rule).
-The mechanism: the conditioning growth is real and its role is open. A cell where the cold
-solves of `nscf.py` and `topology.py` are chaotic at 1e-13 on a card: none was found on sixteen
-atoms.
+The V100 and H100 step counts for the 13x entry (a Triton job, which needs a submission this
+session did not make). A stall guard that does not depend on a floor (the floor moves the
+threshold out of the range measured here and does not change the solver's stopping rule).
+The mechanism, of which two things are ruled out and none is found: the dense eigensolver's
+accuracy is the same on the card and on a CPU (below), and `H|psi>` is bit-reproducible. A
+cell where the cold solves of `nscf.py` and `topology.py` are chaotic at 1e-13 on a card: none
+was found on sixteen atoms. **The 157-atom slab's "12x too many steps" (`OPEN.md`, the memory
+notes) is not this stall**, and an earlier sentence here said it might be: its iteration 2
+resets `ethr` to 1e-2 and takes `0.1 dr2 / nelec`, about 1e-3 at its `dr2 = 24.79` and a thousand
+electrons, ten orders above any floor, so the 100-step call there is in the loose regime, where
+`diago_david_ndim = 2` took 9 to 20 steps per call on sixteen atoms.

@@ -699,6 +699,19 @@ plausible wrong answer rather than an error. `PLAN.md` has the phase that found 
   truth, and on a sentence someone spends a day of cluster time against, over-caution
   costs exactly what over-claiming does.
 
+- **A time on a card is not a measurement until the Davidson step count beside it is equal across
+  the arms.** One call at the 100-step budget can be most of an SCF, and which executable lands
+  there is decided by round-off, so every dial that changes only rounding (the band batch, the
+  projector route, the FFT layout, the memory mode) looks like a speed effect. Four recorded
+  readings were this and were wrong: a 13x "`conv_thr` tax" on sixteen atoms, a 2.7x gap between
+  the memory modes, a factor 2 for `band_batch = 8` at 64 atoms and a 12 per cent loss for the
+  fused box layout. The 64-atom memory-mode SCF took 132 s and takes 14.6 s with the floor at
+  3e-12, the energy within 1e-11 Ry. `tools/parallel/time_scf.py` prints `davidson_steps`; compare
+  the arms over the iterations where they are equal (the first seven at `conv_thr = 1e-10`) or
+  not at all, and run nothing else on the card meanwhile. The CPU does not show it (the same
+  perturbations took exactly 3 steps there), which is why it went unseen. (`PERFORMANCE.md`,
+  "The endgame on a card is a stall", 2026-10-01.)
+
 ## Non-negotiable conventions
 
 - Pure Python. JAX for anything numerical that runs inside the SCF/diagonalization loop;

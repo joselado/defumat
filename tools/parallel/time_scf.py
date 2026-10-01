@@ -97,7 +97,7 @@ def main() -> None:
         "iterations": iterations,
         # the last run's Davidson steps per SCF iteration: a timing is read against
         # these, since one call that runs to the iteration budget is most of a run
-        "davidson_steps": [round(h["davidson_iterations"], 1) for h in result.history],
+        "davidson_steps": [round(h.get("davidson_iterations", float("nan")), 1) for h in result.history],
         "energy_ry": float(result.total_energy),
         "max_iterations": args.max_iterations,
         "device_peak_gib": (round(stats["peak_bytes_in_use"] / 2**30, 3)

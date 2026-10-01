@@ -7040,6 +7040,61 @@ DEFUMAT_K_BATCH=all DEFUMAT_BAND_BATCH=all python3 run.py
 or per call, \code{run\_scf(..., k\_batch=...)}. The chunk size changes the order
 contributions are summed in and nothing else --- round-off, $\sim$1e-15 Ry.
 
+\textbf{On a GPU the SCF's diagonalisation threshold has a higher floor.} The
+SCF tightens Davidson's threshold \code{ethr} with its own error, as
+\code{electrons.f90} does, and floors it at $10^{-13}$~Ry. On an accelerator the
+floor is $\min(3\times10^{-12},\,0.03\,\code{conv\_thr})$ and never below
+$10^{-13}$. Davidson stops on the \emph{change} in each eigenvalue between two
+steps, and at $10^{-13}$ to $5\times10^{-13}$ which roots pass in the first
+steps is decided by round-off: on a card one call took between 3 and 100 steps
+from perturbations of $10^{-13}$ in the starting states, where a CPU took 3
+every time, and at \code{conv\_thr=1e-10} the 64-atom SCF in the default memory
+mode took 132~s against 14.6~s with the floor. At that threshold the floor is
+not visible in the answer: against a run converged to $10^{-14}$ the energy is
+within $5\times10^{-12}$~Ry and the largest band energy within $4\times10^{-8}$~Ry
+whatever the floor, since the band energies are only as good as the SCF's own
+convergence. A CPU keeps $10^{-13}$, which is what every validated number here
+was measured with, and \code{DEFUMAT\_ETHR\_MIN} sets the floor for a whole
+process on either:
+
+\begin{lstlisting}[language=Python]
+from defumat.batching import resolve_ethr_floor
+
+# QE's floor and the request; 1e-13 on a CPU, 3e-12 on a card
+print(resolve_ethr_floor(1e-13, 1e-10))
+\end{lstlisting}
+
+\begin{shcode}
+DEFUMAT_ETHR_MIN=1e-13 python3 run.py
+\end{shcode}
+
+\begin{refuses}
+Nothing is refused; what the floor does not reach is worth knowing.
+\textbf{A request tighter than $10^{-10}$ follows \code{conv\_thr} down}
+($3\times10^{-13}$ at $10^{-11}$, \qe's $10^{-13}$ from $3\times10^{-12}$), so
+that the floor never limits what was asked for, and that is the range where the
+stall is still possible: 46 steps on sixteen atoms and 100 on 64 at
+\code{conv\_thr=1e-11}. \textbf{The fixed-density solves keep \qe's floor}, the
+band path and the Berry-phase strings, whose cold solves took 17 steps at every
+threshold from $10^{-13}$ to $3\times10^{-12}$ on sixteen atoms, on a card and on
+a CPU alike. And \textbf{the floor moves the threshold out of the range where the
+stall was measured and does not change Davidson's stopping rule}, so it is a
+measured workaround and not a proof that no cell stalls.
+\end{refuses}
+
+\textbf{The wavefunction transforms have two layouts.} The default, on every
+platform, is \qe's: the $z$ transform over only the columns the wavefunction
+sphere occupies, then one contiguous $xy$ pass.
+\code{DEFUMAT\_FFT\_LAYOUT=box} takes the sphere through the whole box with one
+fused three-dimensional transform instead. They are the same transform summed in
+a different order, so $H\psi$ agrees to $10^{-16}$ relative and an SCF reaches the
+same energy in the same number of iterations. Which is faster depends on the cell
+and the card: on an RTX A2000, a float32 part, with Davidson's steps equal in
+every arm, the box is 11 per cent faster at eight atoms, equal at sixteen and 4
+per cent slower at 64, and on a CPU the sticks are equal at eight atoms and
+9.5 per cent faster at sixteen. No default follows the platform until a
+float64 card has been measured.
+
 \textbf{The band dial is worth twice as much in a spinor run}, because a band
 in flight is then \emph{two} real-space boxes rather than one: a noncollinear
 calculation with 403 bands on a $240\times54\times200$ grid puts
