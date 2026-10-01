@@ -9051,3 +9051,69 @@ call is bound by its fixed cost per call, and the batch halves the time; on sixt
 with fast float64 the arithmetic shrinks and the fixed cost does not, so the crossover moves to larger
 cells and the batch is worth more there than here. `'fit'` is opt-in; memory mode's own default is
 still one k-point a call (`GPU-SPEED-NEXT.md`).
+
+## The band side in single precision, and a switch to double inside the run (RTX A2000 and CPU, 2026-10-01)
+
+**The number to carry: `band_precision = 'single'` runs the 64-atom SCF to `conv_thr = 1e-7` in 2.46 s
+against 9.5 s in double on the A2000 (3.9x in memory mode, 4.2x in speed mode) at half the device peak
+(1.65 against 3.15 GiB), with the energy 2.8e-5 Ry from double's at the same threshold; and
+`band_precision = 'mixed'`, which switches to double inside the run, does not pay on the cells tried
+except sixteen-atom silicon.** The A2000 is a float32 part (float64 at 1/70), so the ratios are this
+card's; GPU.md's Phase 3 ranks the tier by the same number on a data-centre card, which
+`tools/gpu/stall-check.sbatch` measures and nobody has run. D22, one process per arm, median of two, the
+Davidson steps beside every time.
+
+**What runs in which precision.** `H|psi>`, the Davidson work arrays and the wavefunction store in
+float32; the density, the potential, the XC, the mixer and the energies in float64; the subspace solves
+(`m x m`, `m <= 4 nbnd`) in double whatever the bands are (`config.SUBSPACE_PRECISION`), since the
+canonical route's overlap floor of 1e-12 is five orders under float32's epsilon. The projector core
+carries the band dtype and keeps its own arrays in double, because the structure-factor phase reaches
+about 100 rad. The eigenvalues leave the solve in double, so the weights and the density accumulate in
+double (the stick-layout density had taken its accumulator from the states alone and would have summed
+in float32).
+
+**Per iteration and per run, at the same `conv_thr`:**
+
+| cell, mode | `conv_thr` | double | single | ratio | device peak, double and single |
+|---|---|---|---|---|---|
+| si16, memory | 1e-7 | 6 it, 73.7 ms/it | 7 it, 36.5 ms/it | 1.7x the run | 0.211, 0.118 GiB |
+| si64, memory | 1e-7 | 6 it, 1588 ms/it | 9 it, 273 ms/it | 3.9x | 3.148, 1.652 GiB |
+| si64, speed | 1e-7 | 6 it, 1488 ms/it | 9 it, 233 ms/it | 4.2x | 3.286, 1.642 GiB |
+| si16, CPU (4 threads) | 1e-5 to 1e-7 | 473 ms/it | 266 to 305 ms/it | 1.6 to 1.8x an iteration | |
+
+The extra iterations in single are its floor: Davidson's threshold is floored at
+`4 eps32 ecutwfc` (1.4e-5 Ry at 30 Ry), where QE's 1e-13 kept would stall every call at the budget and
+let the SCF report itself converged with the energy 5.5e-5 Ry wrong (the plan review, eight atoms at 12
+Ry), so from the fourth iteration a single Davidson call takes one step where double takes three.
+**The energy does not follow `conv_thr` below about 1e-7**: against a double run at 1e-13 it stays 1e-6
+to 2e-6 Ry off on eight atoms at 12 Ry whatever is asked below 1e-8 (+1.1e-6 at 1e-10, 11 iterations)
+and 6e-6 to 8e-6 off on sixteen atoms at 30 Ry from 1e-5 to 1e-7, so `run_scf` refuses a `conv_thr`
+under 1e-7 in single.
+
+**Single then double.** A double run restarted from a converged single one lands on the double energy
+(to 3e-13 Ry on sixteen atoms) and does not pay: on the CPU 0.86x to 0.90x of double alone on sixteen
+atoms, on the card 1.00x on sixteen and 0.55x to 0.68x on 64, where the restart took 12 to 14 iterations
+to 1e-10 against 9 from scratch, its mixer's history gone. Switching inside the run keeps the mixer and
+the schedule (`'mixed'`, `Calculation.at_band_precision`), and three triggers were measured on 64 atoms
+on the card, memory mode, against double's 9 iterations and 14.0 s:
+
+| switch when | single + double iterations | wall | against double |
+|---|---|---|---|
+| the error reaches single's `conv_thr` floor, 1e-7 | 9 + 9 | 16.3 s | 0.87x |
+| the error reaches single's energy floor, `eps32 |E|` (6e-5 Ry) | 5 + 14 | 23.4 s | 0.60x |
+| the schedule first asks for an `ethr` single cannot deliver (committed) | 3 + 12 | 19.4 s | 0.72x |
+
+**Why none pays here, and it is not the arithmetic.** Traced iteration by iteration, single matches
+double in every printed digit of the error estimate up to iteration 3, and with the committed trigger
+the first double iterations match too: 2.43e-4 in both at iteration 4, 4.24e-6 against 3.96e-6 at 5.
+At iteration 6 double's Broyden step takes the error from 3.96e-6 to 2.7e-8, a factor of 150, and the
+mixed run's takes it from 4.24e-6 *up* to 1.9e-5; it then needs nine more. Resetting the mixer at the
+switch is worse (18 iterations). So the 1e-7 perturbation single leaves in the first three iterations is
+enough to lose the one superlinear step that 64-atom silicon converges by, which is the worst case for
+any switch of precision. Elsewhere, at the committed trigger: sixteen atoms 1.03x in memory mode and
+0.93x in speed mode (1.21x and 1.15x with the error-reaches-1e-7 trigger, 1.16x and 1.07x with
+`eps32 |E|`); the 28-iteration aluminium slab 28 iterations either way and 0.96x, because a cell that
+small is not bound by arithmetic and single buys nothing per iteration there; the spin-polarised hydrogen
+chain 36 against 32 iterations, 0.99x; `si32` 13 against 8, 0.76x. Every mixed run's energy is within
+1e-10 Ry of double's. **`'mixed'` stays as the measured opt-in it is; what would make it pay is a switch
+that does not perturb the mixer's history, and that is not found.**
