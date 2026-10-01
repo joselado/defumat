@@ -105,8 +105,8 @@ from defumat.pseudo.spinorbit import (
 )
 from defumat.batching import (
     fetch_wavefunctions, k_chunks, map_k, park_wavefunctions, resolve_band_batch,
-    resolve_k_batch, resolve_memory_mode, resolve_plane_chunk, resolve_projectors,
-    resolve_wfc_store,
+    resolve_fft_layout, resolve_k_batch, resolve_memory_mode, resolve_plane_chunk,
+    resolve_projectors, resolve_wfc_store,
 )
 from defumat.scf.continuation import (
     ContinuedState, continued_state, depolarize_tau,
@@ -2074,8 +2074,13 @@ class Calculation:
             if self.functional.is_meta else None
         )
 
-        # QE's FFT layout for the wavefunction transforms; see basis/sticks.py.
-        self.sticks = build_sticks(self.fft_index, planewaves.mask, smooth.grid)
+        #: ``'sticks'``, QE's layout for the wavefunction transforms
+        #: (basis/sticks.py), or ``'box'``, one fused 3D transform of the whole
+        #: box (:func:`~defumat.batching.resolve_fft_layout`). The box layout is
+        #: ``sticks = None`` everywhere downstream, which every Hamiltonian and
+        #: the density already read as the whole-box route.
+        self.fft_layout = resolve_fft_layout()
+        self.sticks = self._build_sticks(self.fft_index, planewaves.mask, smooth.grid)
         #: How many ``z`` planes of that layout ``h_psi``'s local term takes
         #: through its transforms at once, or ``None`` for the whole box
         #: (:func:`~defumat.batching.resolve_plane_chunk`): a plane budget on a
@@ -3367,8 +3372,8 @@ class Calculation:
         )
         moved.kinetic = planewaves.kinetic(smooth, kpoints, cell)
         moved.fft_index = planewaves.fft_index(smooth)
-        moved.sticks = build_sticks(moved.fft_index, planewaves.mask, smooth.grid,
-                                    nsticks=nsticks)
+        moved.sticks = moved._build_sticks(moved.fft_index, planewaves.mask,
+                                           smooth.grid, nsticks=nsticks)
         _adopt_rebuilt_sphere(moved, self, planewaves, smooth, kpoints, cell)
 
         # The projectors are rebuilt whole: their radial half is tabulated
@@ -3512,7 +3517,7 @@ class Calculation:
             moved.fft_index_minus = self.fft_index_minus[rows]
         if self.kplusg is not None:
             moved.kplusg = self.kplusg[rows]
-        moved.sticks = eqx.tree_at(
+        moved.sticks = None if self.sticks is None else eqx.tree_at(
             lambda sticks: (sticks.columns, sticks.index), self.sticks,
             (self.sticks.columns[rows], self.sticks.index[rows]))
         moved.projector_core = self.projector_core.rows(rows)
@@ -3768,7 +3773,7 @@ class Calculation:
         )
         moved.kinetic = planewaves.kinetic(smooth, moved.basis_kpoints, cell)
         moved.fft_index = planewaves.fft_index(smooth)
-        moved.sticks = build_sticks(moved.fft_index, planewaves.mask, smooth.grid)
+        moved.sticks = moved._build_sticks(moved.fft_index, planewaves.mask, smooth.grid)
         _adopt_rebuilt_sphere(
             moved, self, planewaves, smooth, moved.basis_kpoints, cell
         )
@@ -3900,6 +3905,17 @@ class Calculation:
         if self._becsum_symmetry is not None:
             values = self._becsum_symmetry.apply(values)
         return values
+
+    def _build_sticks(self, fft_index, mask, grid, nsticks: int | None = None):
+        """The stick layout of a basis, or ``None`` where the layout is the box.
+
+        The one place that reads :attr:`fft_layout`, so every mover that
+        rebuilds the sphere (``at_kpoints``, ``at_spiral_q``) keeps the layout
+        the calculation was built with.
+        """
+        if self.fft_layout == "box":
+            return None
+        return build_sticks(fft_index, mask, grid, nsticks=nsticks)
 
     def basis_rows(self, rows) -> np.ndarray:
         """The rows of the *basis* list a chunk of states ``rows`` reads.

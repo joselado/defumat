@@ -87,6 +87,7 @@ def main() -> None:
         "resolved_band_batch": str(resolve_band_batch()),
         "memory_mode": resolve_memory_mode(),
         "calculation_band_batch": str(getattr(calculation, "band_batch", "n/a")),
+        "fft_layout": calculation.fft_layout,
         "backend": jax.default_backend(),
         "cold_s": round(cold, 3),
         "ms_per_iter_median": round(1e3 * statistics.median(per_iteration), 2),

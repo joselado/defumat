@@ -463,7 +463,8 @@ def _per_k_table_bytes(calculation) -> float:
     arrays = [
         calculation.basis.planewaves.indices, calculation.basis.planewaves.mask,
         calculation.kinetic, calculation.fft_index,
-        calculation.sticks.columns, calculation.sticks.index,
+        None if calculation.sticks is None else calculation.sticks.columns,
+        None if calculation.sticks is None else calculation.sticks.index,
         calculation.projector_core.columns, calculation.projector_core.kg,
         calculation.fft_index_minus, calculation.kplusg,
         getattr(calculation, "wfcU", None) if calculation.is_hubbard else None,

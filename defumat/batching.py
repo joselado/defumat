@@ -821,6 +821,33 @@ def resolve_plane_chunk(grid, itemsize: int,
     return min(value, n3)
 
 
+#: The two layouts :func:`resolve_fft_layout` chooses between.
+FFT_LAYOUTS = ("sticks", "box")
+
+
+def resolve_fft_layout(requested: str = "default") -> str:
+    """The layout of the wavefunction transforms: an argument, then ``DEFUMAT_FFT_LAYOUT``, then ``sticks``.
+
+    ``sticks`` is QE's: the ``z`` transform over only the columns the sphere
+    occupies, then one contiguous ``xy`` pass (:mod:`defumat.basis.sticks`).
+    ``box`` scatters the sphere into the whole box and takes one fused 3D
+    transform, the call a batched ``cuFFT`` plan is built for, at the price of
+    transforming columns the sphere does not touch. The default is ``sticks`` on
+    every platform: the margin on a CPU is thin (1.13x on eight atoms of
+    silicon, 1.02x on sixteen) and the comparison on a card has not been taken
+    (``GPU.md`` section 2.2, Phase 2), so nothing follows the platform until it
+    is. The two are the same transform summed in a different order, so a result
+    moves by round-off and no more.
+    """
+    if isinstance(requested, str) and requested == "default":
+        requested = (environ_get("DEFUMAT_FFT_LAYOUT", "") or "").strip().lower() or "sticks"
+    layout = str(requested).strip().lower()
+    if layout not in FFT_LAYOUTS:
+        raise ValueError(
+            f"fft layout must be one of {FFT_LAYOUTS}, got {requested!r}")
+    return layout
+
+
 #: The band dial's resolver under a public name, mirroring
 #: :func:`resolve_k_batch`. The two dials are read the same way and one of them
 #: had no public spelling, which meant a caller outside this module -- e.g.
