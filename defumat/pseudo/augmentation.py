@@ -605,7 +605,10 @@ def _qrad_kernel(q, r, weights, functions, prefactor, l):
 def _qrad_block(q, r, weights, functions, l):
     """:func:`_qrad_kernel` without its prefactor, on one block of ``q``."""
     argument = q[:, None] * r[None, :]
-    bessel = spherical_bessel(l, argument)  # (nq, mesh)
+    # kept out of the contraction, as every radial transform's integrand is:
+    # fused into it, XLA's GPU backend takes minutes to compile the result
+    # (``formfactors._radial_values``)
+    bessel = jax.lax.optimization_barrier(spherical_bessel(l, argument))  # (nq, mesh)
     return jnp.einsum("fm,qm,m->fq", functions, bessel, weights)
 
 

@@ -54,6 +54,26 @@ CHUNK = 4096
 # would be a new callable each time and so a new compilation each time.
 
 
+def _radial_values(values: jnp.ndarray) -> jnp.ndarray:
+    """``values``, kept out of the reduction that consumes them.
+
+    Every radial transform here is an elementwise integrand -- a spherical
+    Bessel function of ``q r`` times a tabulated function -- reduced against the
+    quadrature weights, and XLA's GPU backend fuses the whole integrand into the
+    reduction as one ``input_reduce_fusion``, which it then takes minutes to
+    compile. On an RTX A2000, bismuth's relativistic dataset at 28572 values of
+    ``q`` on a 995-point mesh: the projector transform compiled in 74.6 s at
+    ``l = 0`` and 198 s at ``l = 1``, and a 20-atom spin-orbit cell spent over ten
+    minutes of its setup there. Through an ``optimization_barrier`` the integrand
+    is one elementwise kernel and the reduction a matrix-vector product: 0.3 and
+    0.1 s to compile, 21.1 against 21.9 and 35.7 against 37.5 ms to run, the same
+    numbers to the last bit; on a CPU, where both compile in a fraction of a
+    second, the same bits and the same time. The barrier is the identity and
+    differentiates as one.
+    """
+    return jax.lax.optimization_barrier(values)
+
+
 def _scan_rows(block, q: jnp.ndarray) -> jnp.ndarray:
     """``block(q)`` in pieces of :data:`CHUNK` values, walked by a rematted scan.
 
@@ -146,7 +166,7 @@ def _vloc_block(qq, r, weights, short, at_zero, z, omega):
     safe = jnp.where(qq < 1e-8, 1.0, qq)
     integrand = jnp.where(small[:, None], at_zero[None, :],
                           short[None, :] * jnp.sin(safe * r[None, :]) / safe)
-    value = integrand @ weights * FPI / omega
+    value = _radial_values(integrand) @ weights * FPI / omega
 
     analytic = FPI / omega * z * E2 * jnp.exp(-safe[:, 0] ** 2 * 0.25) / safe[:, 0] ** 2
     return jnp.where(small, value, value - analytic)
@@ -180,7 +200,7 @@ def _rhoat_block(qq, r, weights, rho, omega):
     integrand = jnp.where(
         small[:, None], rho[None, :], rho[None, :] * spherical_bessel(0, argument)
     )
-    return integrand @ weights / omega
+    return _radial_values(integrand) @ weights / omega
 
 
 def core_charge_of_g(pseudo: Pseudopotential, q, omega: float) -> jnp.ndarray:
@@ -206,7 +226,7 @@ def _rhocore_kernel(q, r, weights, rho, omega):
 def _rhocore_block(qq, r, weights, rho, omega):
     argument = qq[:, None] * r[None, :]
     integrand = FPI * r[None, :] ** 2 * rho[None, :] * spherical_bessel(0, argument)
-    return integrand @ weights / omega
+    return _radial_values(integrand) @ weights / omega
 
 
 def projector_form_factors(pseudo: Pseudopotential, q, omega: float) -> jnp.ndarray:
@@ -376,4 +396,4 @@ def _beta_kernel(q, r, weights, beta, prefactor, l):
 def _beta_block(qq, r, weights, beta, prefactor, l):
     argument = qq[:, None] * r[None, :]
     integrand = beta[None, :] * spherical_bessel(l, argument) * r[None, :]
-    return integrand @ weights * prefactor
+    return _radial_values(integrand) @ weights * prefactor
