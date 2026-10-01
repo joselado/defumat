@@ -108,8 +108,16 @@ XLA command buffers (a null here: `--xla_gpu_enable_command_buffer` with `WHILE,
 ## 7. Other items that came up -- priority 4
 
 * **The 157-atom slab's "12x too many steps"** (`OPEN.md`, the memory notes) is a separate question: its
-  iteration 2 is in the loose-`ethr` regime, ten orders above any floor. The parked-direction factor may
-  still matter there; run it with `davidson_steps` on Triton before believing either way.
+  iteration 2 is in the loose-`ethr` regime, ten orders above any floor. **It does not reproduce on small
+  cells** (2026-10-01 evening, this workstation's CPU, `diago_david_ndim = 2`, the same input through
+  both codes): the aluminium slab takes 2.2 Davidson steps per diagonalisation against `pw.x`'s 2.8, the
+  spin-polarised hydrogen chain 3.7 against 4.4. The slab's number was taken at `f2be49f`, before the
+  per-band thresholds, the band ladder and both parking fixes, and has not been re-measured; its first
+  three iterations with `davidson_steps` on an H200 would settle it, which needs a submission.
+* **A subspace `eigh` of the lowest `nbnd` only** would cut the back-transformation by about four on a
+  large cell, where the full complex128 solve on the A2000 is 1.1 s at `m = 2048` and 7.4 s at 4096 per
+  Davidson step; `lax.linalg.eigh(..., subset_by_index=)` raises `NotImplementedError` on CPU and GPU in
+  jax 0.11, so it needs a custom call to `cusolver`'s `syevdx`.
 * **Old GPU readings without step counts.** Every section of `PERFORMANCE.md` before the stall entry
   that holds a card time, and Phases 0, 1 and 5 of `GPU.md`, now open with a dated marking paragraph
   (2026-10-01): a stall only adds steps, so such a time is an upper bound and a card-against-CPU ratio
