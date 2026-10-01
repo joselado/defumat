@@ -8703,7 +8703,9 @@ At 8 atoms, where the steps are equal and nothing stalls, the box layout is 11 p
 iterations the sticks are 4 per cent faster (1412 and 1434 ms against 1471 and 1489); on this
 workstation's CPU they are equal at 8 atoms (135 ms) and 9.5 per cent faster at 16 (466.3 against
 510.5 ms, 15 samples each). `GPU.md` section 2.2's hypothesis that a fused box transform wins on a
-card holds at 8 atoms and fails at 16 and 64, and nothing here transfers to a float64 card. The
+card holds at 8 atoms and is within a few per cent either way at 16 and 64 (3 per cent faster at the
+whole block on 64 atoms, 3 to 6 per cent slower at `band_batch` 8 and 16), and nothing here transfers to a
+float64 card. The
 default stays `sticks` on every platform.
 
 **The band dial, the layout and the memory mode on 64 atoms, with the stall out of the way**

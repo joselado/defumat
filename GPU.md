@@ -126,8 +126,8 @@ margins are thin, and what buys them is a gather/scatter into the box, which is 
 access pattern a GPU punishes and a batched `cuFFT` plan makes unnecessary. **That was a
 hypothesis, and it is now measured on one card (2026-10-01, RTX A2000, a float32 part):** with the
 solver's step counts equal in every arm, the fused box is 11 per cent faster at 8 atoms, equal at
-16 atoms at `band_batch = all` and 14 per cent faster at `band_batch = 8`, and 4 per cent slower at
-64 atoms; on a CPU the sticks are equal at 8 atoms and 9.5 per cent faster at 16. It is the
+16 atoms at `band_batch = all` and 14 per cent faster at `band_batch = 8`, and at 64 atoms 3 per cent faster
+at the whole block and 3 to 6 per cent slower at `band_batch` 8 and 16; on a CPU the sticks are equal at 8 atoms and 9.5 per cent faster at 16. It is the
 `DEFUMAT_FFT_LAYOUT` dial (`sticks`, the default, or `box`), and no platform default follows it
 until a float64 card has been measured. `PERFORMANCE.md`, "The endgame on a card is a stall".
 

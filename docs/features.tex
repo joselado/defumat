@@ -7077,7 +7077,7 @@ Nothing is refused; what the floor does not reach is worth knowing.
 that the floor never limits what was asked for, and that is the range where the
 stall is still possible: 46 steps on sixteen atoms and 100 on 64 at
 \code{conv\_thr=1e-11}. \textbf{The fixed-density solves keep \qe's floor}, the
-band path and the Berry-phase strings, whose cold solves took 17 steps at every
+band path and the Berry-phase strings, whose cold solves took 15 to 17 steps at every
 threshold from $10^{-13}$ to $3\times10^{-12}$ on sixteen atoms, on a card and on
 a CPU alike. And \textbf{the floor moves the threshold out of the range where the
 stall was measured and does not change Davidson's stopping rule}, so it is a
@@ -7097,8 +7097,9 @@ fused three-dimensional transform instead. They are the same transform summed in
 a different order, so $H\psi$ agrees to $10^{-16}$ relative and an SCF reaches the
 same energy in the same number of iterations. Which is faster depends on the cell
 and the card: on an RTX A2000, a float32 part, with Davidson's steps equal in
-every arm, the box is 11 per cent faster at eight atoms, equal at sixteen and 4
-per cent slower at 64, and on a CPU the sticks are equal at eight atoms and
+every arm, the box is 11 per cent faster at eight atoms, equal at sixteen and, at 64,
+3 per cent faster at the whole block and 3 to 6 per cent slower at band batches of
+8 and 16, and on a CPU the sticks are equal at eight atoms and
 9.5 per cent faster at sixteen. No default follows the platform until a
 float64 card has been measured.
 

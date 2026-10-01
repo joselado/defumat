@@ -23311,7 +23311,8 @@ error 1.8e-11 to 7.6e-11 Ry.
 
 **Also in this phase.** `DEFUMAT_FFT_LAYOUT` (`sticks`, the default, or the fused `box`; `GPU.md`
 Phase 2): equal to round-off, and which is faster is the cell and the card (box 11 per cent faster at 8
-atoms, equal at 16, sticks 4 to 6 per cent faster at 64 on the A2000; sticks 9.5 per cent faster at 16
+atoms, equal at 16, at 64 box 3 per cent faster at the whole block and sticks 3 to 6 per cent faster at
+`band_batch` 8 and 16, all on the A2000; sticks 9.5 per cent faster at 16
 on a CPU), so no default follows the platform. `tools/parallel/time_scf.py` prints the Davidson steps
 per iteration, and a time on a card is read against them. The stall-free 64-atom band dial: best at
 `band_batch` 16 to 32, 10 per cent under the whole block, left alone. A kernel profile on the float32
