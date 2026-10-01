@@ -107,7 +107,8 @@ moments turned inside the SCF, seeds and checkpoints; a checkpoint written by po
 at any pool count, and a SIGTERM stops every pool at the same iteration with one written.
 Everything else refuses by name under pools. On six identical
 desktop cores six pools reach 80 to 91 per cent of `pw.x -nk 6`'s speedup on scalar cells
-and 65 per cent on a magnetic spinor one. The user guide's performance section has the
+and 65 per cent on a magnetic spinor one; on a 128-core server node a 40-atom cell at 27
+k-points runs 20.3x faster on 54 cores, 76 per cent of `pw.x -nk 27`'s speedup. The user guide's performance section has the
 launch on one machine, the measurements and what is refused.
 
 ## What you can compute

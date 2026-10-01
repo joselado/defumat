@@ -263,8 +263,10 @@ because that is what decides whether it is a session or a phase.
 - **k-point pools beyond the ground state, forces, stress and relaxations** (P124). Refused
   by name under `DEFUMAT_POOLS > 1`: a residual `scf_solver`, the analytic force and
   stress, and every `Calculator.get_*` outside `get_scf`, `get_forces`, `get_stress`,
-  `get_relax`. Not measured: a server node (three exclusive Milan jobs queued), and the
-  40-site, 50-core cell (Si40, `tools/parallel/inputs/si40-27k.in`). Not done: splitting a
+  `get_relax`. Measured on Milan: Si40 at 54 cores 20.3x against `pw.x -nk 27`'s 26.8x (76
+  per cent), threads stopping at about 2x even on bi20-soc, and a packed node halving a
+  one-core pool's speed (the memory system; the plane-chunk budget is tuned for D22's L2).
+  Not done: splitting a
   k-point's `(spin, k)` pairs across pools, sharing the k-independent work every pool
   repeats, and the parallelism inside one k-point, which needs the Davidson's dense algebra
   distributed and not only `h_psi` (measured: `h_psi` alone split makes a whole SCF
@@ -23239,3 +23241,38 @@ at a fixed iteration count unless it says converged, and every pooled test is in
   well, which is a phase of its own, and waits for the Milan thread table.
 - *Not measured yet*: everything on Milan (the three exclusive jobs are queued), the ib0
   interface's speed, and the balance's gain, which needs more k-points than pools.
+
+**The Milan measurement (2026-09-30, jobs 20587245-7, `tools/cluster/parallel_milan.sbatch`).**
+On shared `batch-milan` nodes, not `--exclusive`: an exclusive job was estimated a day out
+while three nodes had 122 to 126 cores idle, and those nodes' neighbours had reserved 405 of
+their 510 GB, so each block ran on 64 or 120 cores at 80 to 100 GB beside a two- to six-core
+neighbour (`CPULoad` 2.3 to 5.1 at the start, recorded in each job's `topology.txt`). Every
+process and `pw.x` rank was pinned to its own core; ms per iteration, warm, speedup over the
+same code on one core.
+
+- *The target cell*, Si40 without symmetry at 27 k-points (`tools/parallel/inputs/si40-27k.in`):
+  one core of this code 58499 ms against `pw.x`'s 27358 (2.14x). 27 pools of one core 13.97x
+  against `pw.x -nk 27` on 27 ranks 16.47x, **85 per cent**; 27 pools of two cores, 54 cores,
+  20.31x against `-nk 27` on 54 ranks 26.82x, **76 per cent**, 2881 ms against 1020 in
+  absolute time; 25 pools of two, 50 cores, 14.51x against `-nk 25` on 50 ranks 15.25x, both
+  paying for two pools with two k-points; 9 pools of six, 54 cores, 9.84x against `-nk 9`'s
+  24.21x, **41 per cent**, which is QE's plane-wave distribution inside a pool against this
+  code's threads. So the 50-core layout here is 27 x 2 on 54 cores, and a pool wider than two
+  cores is where `pw.x` pulls away.
+- *Six pools on the D22 cells*: si16 at 12 k-points 3.67x against 5.13x (72 per cent), si32 at
+  6 4.25x against 5.06x (84), the magnetic si16 spinor at 6 3.48x against 4.94x (70); twelve
+  pools on si16 4.63x against 7.92x (59). One core of this code is 1.66 to 2.14 times one rank
+  of `pw.x` on these cells.
+- *Threads on one k-point* (speedup at 2, 4, 8, 16, 32 and 64 cores): si16 1.16, 1.22, 1.08,
+  1.08, 1.05, 0.85; si64 1.47, 1.86, 1.90, 1.99, 1.98, 1.63; bi20-soc, the production-sized
+  box, 1.37, 1.58, 1.72, 1.81, 1.79, 1.18, and 2.01 at 16 cores with `band_batch = 16`. The
+  allocation held 32 cores of each socket, so 64 spans both. **Threads stop at about 2x even
+  on a production box**, which is the 0b number the pool width was waiting for: one or two
+  cores a pool, and phase 4 has to come from somewhere other than XLA's threads.
+- *Independent copies* (single-k, no communication), each copy against the same copy alone:
+  96 si32 copies of one core 2.07x slower each, 60 of two 1.60x, 30 of four 1.40x; 30 si64
+  copies of four 1.58x, 15 of eight 1.33x. Per node, si32 k-points finished per second are
+  36.0, 38.0 and 25.5 at one, two and four cores a copy. **A packed node halves a one-core
+  pool's speed**, which is the memory system and not the pools, and it caps what any pool
+  layout can do there; the plane-chunk budget (`PLANE_CHUNK_BYTES`) was tuned on D22's 1.25
+  MB L2 and Milan's is 512 KB, which is the first thing to try against it.

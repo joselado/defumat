@@ -823,6 +823,28 @@ against 595 and 648, the last with one sample at 697 ms. That machine has interm
 interference (Microsoft Defender's scanner is the only other process that shows), so a
 single run's outlier there is not a regression until an A/B says so.
 
+### k-point pools on a Milan node, against `pw.x -nk` (2026-09-30)
+
+Shared `batch-milan` nodes (64 or 120 cores of 128, beside a two- to six-core
+neighbour, recorded per job), every process and rank pinned to its own core,
+ms per iteration, speedup over the same code on one core. `PLAN.md` P124 has
+the full set; the headline:
+
+| cell | cores | this code | `pw.x` | share of `pw.x`'s speedup |
+|---|---|---|---|---|
+| Si40, 27 k | 27 (27 pools x 1, `-nk 27`) | 13.97x | 16.47x | 85 per cent |
+| Si40, 27 k | 54 (27 x 2, `-nk 27` on 54 ranks) | 20.31x | 26.82x | 76 per cent |
+| Si40, 27 k | 54 (9 x 6, `-nk 9` on 54 ranks) | 9.84x | 24.21x | 41 per cent |
+| si32, 6 k | 6 | 4.25x | 5.06x | 84 per cent |
+| si16 spinor, 6 k | 6 | 3.48x | 4.94x | 70 per cent |
+
+One core of this code is 2.14x one rank of `pw.x` on Si40 (58499 against
+27358 ms), so at 54 cores the absolute gap is 2.82x. Threads on one k-point stop
+at about 2x on every box measured, bi20-soc included (1.81x at 16 cores, 2.01x
+with `band_batch = 16`), and 96 independent one-core copies on one node run 2.07x
+slower each than one alone, so a packed node is memory-bound before any pool
+layer is involved.
+
 ### What a pool holds, what rebuilding the projectors costs, and one k-point on several devices (2026-09-30)
 
 **Every pool held every k-point's projectors, and that was most of what it

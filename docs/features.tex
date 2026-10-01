@@ -7318,7 +7318,13 @@ si16 magnetic spinor, 6 & 1.33x & 3.19x & 4.92x & 65\% \\
 \end{tabular}
 \end{center}
 
-\noindent What the pool layer itself costs is 5--7\% of an iteration (the
+\noindent On a server node (AMD EPYC 7713, Triton's \code{batch-milan}) the
+40-atom silicon cell without symmetry, 27 $k$-points, runs 20.3x faster on 54
+cores as 27 pools of two cores, against \code{pw.x -nk 27}'s 26.8x on 54 ranks,
+and 14.0x on 27 one-core pools against 16.5x. Pools wider than two cores lose
+to \qe's plane-wave distribution (9 pools of six cores: 9.8x against 24.2x),
+because threads on one $k$-point stop at about 2x even on a production-sized
+box. What the pool layer itself costs is 5--7\% of an iteration (the
 collectives about 1\%, the rest waiting for the slowest pool); the spinor is held
 back by its $\Gamma$ point needing twice the Davidson steps of the other
 $k$-points --- \code{pw.x} shows the same, run alone --- and by the
