@@ -23381,6 +23381,16 @@ silicon converges by (3.96e-6 to 2.7e-8 in double, 4.24e-6 *up* to 1.9e-5 after 
 7 per cent different); three triggers gave 0.60x to 0.87x there, 1.03x to 1.21x on sixteen atoms, and
 nothing on a slab too small to be bound by arithmetic.
 
+**Two kernels that were loops on a card, found the same night by `nsys` over one warm SCF.** jaxlib
+picks cuSOLVER's Jacobi `eigh` at 32 rows or fewer, 6 to 10 times slower than `syevd` there and ten
+times less accurate, and Davidson's first rungs are that size: `subspace._eigh` asks for `syevd` by name.
+And the stick layout filled the box with a scatter along its last axis, which XLA's GPU backend expands
+into a loop over sticks (four kernels a stick, 110,000 launches each in a 27-k-point SCF, a second of
+host time in `cuLaunchKernel`); `basis.fft._fill_columns` reads it as a gather on a card and keeps the
+scatter on a CPU, where the gather was 2.5 per cent slower. Together: speed mode on eight-atom silicon at
+27 k-points 263 to 153 ms per iteration, memory mode 555 to 372, `'fit'` 282 to 167, sixteen atoms 74.1
+to 69.1 and 64 atoms 1552 to 1512 in memory mode, the steps and energies unchanged and the CPU's bits too.
+
 **What is not done.** `'fit'` as memory mode's default, and speed mode falling back to the largest
 fitting chunk rather than to one k-point: both change a documented promise, and both are the user's to
 decide. A precision switch that does not perturb the mixer. Single on ultrasoft, PAW, spinors and DFT+U,
