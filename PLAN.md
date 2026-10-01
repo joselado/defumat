@@ -23397,6 +23397,11 @@ channels; a 20-atom spin-orbit cell did not reach its first Davidson call in 25 
 `formfactors._radial_values`, an `optimization_barrier` before the reduction, makes it 0.3 and 0.1 s, the
 same bits on both platforms.
 
+**And the ultracell driver recompiled its loops at every call.** Its matrix and densities were eager
+`lax.map`/scan loops over a fresh closure, compiled again at every `k0` of every iteration (96 modules in
+two three-iteration runs of a small silicon ultracell); jitted once per shape, three iterations take 2.32
+against 4.65 s on the card and 2.05 against 4.00 on a CPU, the energy unchanged to every digit.
+
 **What is not done.** `'fit'` as memory mode's default, and speed mode falling back to the largest
 fitting chunk rather than to one k-point: both change a documented promise, and both are the user's to
 decide. A precision switch that does not perturb the mixer. Single on ultrasoft, PAW, spinors and DFT+U,

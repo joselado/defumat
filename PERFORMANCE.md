@@ -9239,3 +9239,27 @@ memory mode 1535, speed 1439, `band_batch` 8 1292, memory at 1e-11 1548. **One b
 longer dear on a card**: 71.0 against 64.0 ms on sixteen atoms, where it was 196.6 at the bound commit
 and 341.1 before the stall was fixed, since the stick fill's loop was paid once per band. The "4.3x for
 `band_batch = 1`" of the GTX 1060 entry ("Two memory modes") and of the guide was largely that loop.
+
+## The ultracell compiled its loops again at every k-point of every iteration (RTX A2000 and CPU, 2026-10-02)
+
+**The number to carry: three ultracell iterations of eight-atom silicon in four cells take 2.32 s on the
+card where they took 4.65 (2.0x), and 2.05 s on this workstation's CPU where they took 4.00, with the
+energy the same to every digit (-15.713597939254631 Ry).** A card HLO dump of that run
+(`tests/data/qe/si-ultracell.in`, supercell `(4, 1, 1)`, folded grid `(2, 2, 2)`, `nbnd = 8`) held 96
+modules named `jit(scan)`, a 32-trip loop each, over two runs. `ultracell_matrix`, `ultracell_density`
+and `spinor_ultracell_density` were plain functions whose loop over states is `map_k` or `sum_k` at batch
+1, an eager `lax.map` or scan, and the body is a new closure on every call, so JAX traced and compiled the
+loop again at every `k0` of every iteration. Each is now a wrapper over a jitted function with the box
+shape, the batch and the spin layout static.
+
+| | first run | second | third |
+|---|---|---|---|
+| card, before | 13.36 s | 4.67 | 4.63 |
+| card, after | 4.60 | 2.32 | 2.32 |
+| CPU, before | 7.24 | 4.03 | 4.00 |
+| CPU, after | 10.97 | 2.08 | 2.05 |
+
+The CPU's first run is slower because the whole construction is now one compiled program, compiled once,
+where it had been its inner loop compiled again at every call. **A forecast, not a measurement:** a
+production ultracell (more k-points, tens of iterations, a larger program per compile) saved one
+compilation per `k0` per iteration, so the saving there is larger than here.
