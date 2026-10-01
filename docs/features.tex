@@ -6940,7 +6940,10 @@ wavefunctions' $2n_{\rm bnd}n_{\rm pol}n_{\rm pwx}$. At 216 $k$-points the
 91~MB is the setup's own peak, building that core; the SCF stays below it. The price is time, 1.3--1.6x here, and it
 is the per-$k$-point Davidson solve rather than the transfers (0.23~s of the
 12.3): a larger chunk buys most of it back, \code{k\_batch=4} giving 9.7~s at
-141~MB.
+141~MB. On an RTX~A2000, with the Davidson steps equal and after the small
+subspace solve and the stick fill stopped being loops on the card, the same cell
+at 27 $k$-points takes 372~ms an iteration in \code{'memory'} against 153 in
+\code{'speed'}, 2.4x, and 167 with \code{k\_batch='fit'} below.
 
 \textbf{The defaults.} On a GPU the default is \code{'memory'}. \code{'speed'}
 is \emph{checked} before it runs: the peak is estimated from the input
