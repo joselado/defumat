@@ -7179,12 +7179,14 @@ sphere occupies, then one contiguous $xy$ pass.
 fused three-dimensional transform instead. They are the same transform summed in
 a different order, so $H\psi$ agrees to $10^{-16}$ relative and an SCF reaches the
 same energy in the same number of iterations. Which is faster depends on the cell
-and the card: on an RTX A2000, a float32 part, with Davidson's steps equal in
-every arm, the box is 11 per cent faster at eight atoms, equal at sixteen and, at 64,
-3 per cent faster at the whole block and 3 to 6 per cent slower at band batches of
-8 and 16, and on a CPU the sticks are equal at eight atoms and
-9.5 per cent faster at sixteen. No default follows the platform until a
-float64 card has been measured.
+and the card. On an RTX A2000, a float32 part, with Davidson's steps equal in every
+arm, the sticks are faster at sixteen atoms (63.9 against 70.3~ms an iteration) and
+on a 27-point mesh of eight atoms (153 against 173), equal at 64 atoms and slower at
+eight atoms with one $k$-point (17.7 against 16.6); on a CPU they are equal at eight
+atoms and 9.5 per cent faster at sixteen. The sticks had been losing on a card to
+their own fill of the box, a scatter the card ran as a loop over sticks, which is
+now a gather. No default follows the platform until a float64 card has been
+measured.
 
 \textbf{The band dial is worth twice as much in a spinor run}, because a band
 in flight is then \emph{two} real-space boxes rather than one: a noncollinear

@@ -94,10 +94,20 @@ XLA command buffers (a null here: `--xla_gpu_enable_command_buffer` with `WHILE,
 
 ## 6. The dials that depend on the card -- priority 3, needs a float64 card
 
-* `DEFUMAT_FFT_LAYOUT` (`sticks` default, `box`): equal to round-off. On the A2000 box is 11 per cent
-  faster at 8 atoms, equal at 16, and at 64 atoms 3 per cent faster at the whole block and 3 to 6 per
-  cent slower at `band_batch` 8 and 16; sticks 9.5 per cent faster at 16 atoms on a CPU. No default
-  follows the platform. Decide on a float64 card.
+* `DEFUMAT_FFT_LAYOUT` (`sticks` default, `box`): equal to round-off. **Re-measured 2026-10-01 evening,
+  after the stick fill became a gather** (it had been a scatter the card ran as a loop over sticks): on
+  the A2000 in speed mode sticks 63.9 against box 70.3 ms at 16 atoms, 153 against 173 on a 27-point
+  mesh of 8 atoms, 1424 against 1423 at 64, and 17.7 against 16.6 at 8 atoms with one k-point; sticks
+  9.5 per cent faster at 16 atoms on a CPU. The default stays `sticks`. Decide on a float64 card.
+* **The subspace `eigh` by the host's LAPACK, for small matrices on a card** -- a decision, not done. The
+  device `syevd` is 0.63, 1.11, 3.56 and 6.65 ms a call at 16, 32, 64 and 128 rows on the A2000 against
+  0.23, 0.32, 0.71 and 2.21 for LAPACK through `jax.pure_callback`, crossing at about 256; after the two
+  fixes of that evening it is 71 per cent of the kernel time of eight-atom silicon at one k-point and 61
+  per cent of a 27-point mesh in memory mode, so the host route would be worth about 1.35x to 1.45x
+  there. It puts a host round trip inside the Davidson loop, which `CLAUDE.md`'s JAX rules forbid, and
+  on a batched solve (speed mode) the device's batched kernels win. jax 0.11 does write an executable
+  with host callbacks to the persistent cache (`compiler.compile_or_get_cached`), so that is not the
+  objection. A production card's device `syevd` at these sizes is unmeasured.
 * The accelerator band-dial default is the whole block. Stall-free at 64 atoms the best is 16 to 32,
   10 per cent under it (1350 to 1359 against 1497 ms), and at 16 atoms the whole block is best. A
   default that follows the cell size would be a third dial; the gain is small on this card.
