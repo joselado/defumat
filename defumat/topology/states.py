@@ -69,6 +69,7 @@ the occupied count and not the diagonalised one.
 from __future__ import annotations
 
 import weakref
+from functools import partial
 
 import equinox as eqx
 import jax
@@ -541,23 +542,9 @@ class PlaneWaveStates(StateSet):
         becp = self.becp
         ket_becp = becp if other is None else other.becp
 
-        def body(entry):
-            ci = jnp.take(coefficients, entry["i"], axis=0)
-            cj = jnp.take(kets, entry["j"], axis=0)
-            matrix = _aligned_overlap(ci, cj, entry["gather"], entry["found"], npol)
-            if factors is None:
-                return matrix
-            return matrix + _augmentation_term(
-                jnp.take(becp, entry["i"], axis=0),
-                jnp.take(ket_becp, entry["j"], axis=0),
-                factors,
-            )
-
-        return map_k(
-            body,
-            {"i": index_i, "j": index_j, "gather": gather, "found": found},
-            batch=resolve_k_batch(k_batch),
-        )
+        return _pair_overlaps(coefficients, kets, becp, ket_becp, factors, index_i,
+                              index_j, gather, found, int(npol),
+                              resolve_k_batch(k_batch))
 
     def transport_plan(self, pairs, other=None):
         """The Miller-index gather of :meth:`_alignment`, on the full state vector.
@@ -694,6 +681,37 @@ class PlaneWaveStates(StateSet):
 #: calculation would pin every one of them and turn a 200 MB working set into
 #: fourteen gigabytes, with nothing in any answer to show for it.
 _AUGMENTATION_CACHE: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+
+
+@partial(jax.jit, static_argnames=("npol", "batch"))
+def _pair_overlaps(coefficients, kets, becp, ket_becp, factors, index_i, index_j,
+                   gather, found, npol: int, batch):
+    """:meth:`PlaneWaveStates.overlaps`'s loop over pairs, compiled once per shape.
+
+    It was a ``map_k`` over a closure built inside the method, an eager
+    ``lax.map`` whose body was a new function at every call, so JAX traced and
+    compiled the loop again for every k-string: 16 compilations in each
+    Berry-phase polarization of zincblende AlAs, the whole of a second call's
+    8.2 s on this workstation's CPU, and one compiled module more per string in
+    the process's address space. The states are arguments here and the scan body
+    takes one pair's rows at a time, as it took them from the closure.
+    """
+    from defumat.batching import map_k
+
+    def body(entry):
+        ci = jnp.take(coefficients, entry["i"], axis=0)
+        cj = jnp.take(kets, entry["j"], axis=0)
+        matrix = _aligned_overlap(ci, cj, entry["gather"], entry["found"], npol)
+        if factors is None:
+            return matrix
+        return matrix + _augmentation_term(
+            jnp.take(becp, entry["i"], axis=0),
+            jnp.take(ket_becp, entry["j"], axis=0),
+            factors,
+        )
+
+    return map_k(body, {"i": index_i, "j": index_j, "gather": gather, "found": found},
+                 batch=batch)
 
 
 def _cached_augmentation(calculation, qcart):
