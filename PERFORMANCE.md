@@ -8617,10 +8617,24 @@ whatever the floor so the CPU run is the cleaner reference):
 | 1e-13 | 3e-12 | +4.7e-13 | 1.6e-8 | +4.5e-7 | 11 |
 | 1e-8 | any of the four | +7.0e-11 | 3.0e-7 | -7.8e-6 | 7 |
 
-At `conv_thr = 1e-10` the floor is not visible: the band energies are as good as the SCF's own
-convergence, 4e-8 to 8e-8, whatever it is, and the energy is within 5e-12 Ry. It would be
-visible against a tighter request, where a fixed 3e-12 stops the SCF early at an energy error
-five times `conv_thr` (4.7e-12 at 1e-12, 4.7e-13 at 1e-13). That is why the floor is
+At `conv_thr = 1e-10` the floor is below the SCF's own error on the symmetric cell: the band
+energies are as good as the SCF's convergence, 4e-8 to 8e-8, whatever it is, and the energy is
+within 5e-12 Ry. **It is not free on a displaced cell, where the last iteration's one step
+instead of two shows**: `si16-1k-ecut30` with one atom displaced by (0.010, 0.005, 0) in crystal
+coordinates, 13 iterations, against a run at `conv_thr = 1e-14` (E = -126.7189741493466 Ry):
+
+| floor | energy error (Ry) | largest force error (Ry/bohr) | steps in the last iteration |
+|---|---|---|---|
+| 1e-13 | +1.8e-11 | 3.4e-6 | 2 |
+| 1e-12 | +2.0e-11 | 3.5e-6 | 2 |
+| 3e-12 | +7.6e-11 | 6.5e-6 | 1 |
+| 1e-11 | +7.8e-11 | 6.6e-6 | 1 |
+
+So 3e-12 doubles the force error and quadruples the energy error at `conv_thr = 1e-10` (the energy
+stays under `conv_thr`, the force stays four orders under `forc_conv_thr`'s default); a displaced
+eight-atom cell, where the floor never binds, gave 1.8e-6 Ry/bohr at 1e-13, 1e-12 and 3e-12 alike.
+The floor would be more visible against a tighter request, where a fixed 3e-12 stops the SCF early
+at an energy error five times `conv_thr` (4.7e-12 at 1e-12, 4.7e-13 at 1e-13). That is why the floor is
 `min(3e-12, 0.03 conv_thr)` and never below QE's: 3e-12 at the 1e-10 where the stalls were
 measured, 3e-13 at 1e-11, and QE's 1e-13 from `conv_thr = 3e-12` down, where a user asking for
 more than the card's round-off allows gets the stall risk and not a quietly looser answer.

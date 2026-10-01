@@ -875,12 +875,14 @@ def resolve_ethr_floor(floor: float, conv_thr: float | None = None) -> float:
     11 steps at ``band_batch`` 1, 8 and 16, and 100 steps on the 64-atom run in
     memory mode. 3e-12 gave one step in the last two iterations on all ten arms
     tried (four on sixteen atoms, two on 64, at 3e-12 and at 1e-11 alike). Against
-    a run converged to 1e-14 the floor costs nothing visible at ``conv_thr =
-    1e-10``: the energy is within 5e-12 Ry and the largest band energy within
-    4e-8 Ry whatever the floor, since the band energies are only as good as the
-    SCF's own convergence. A floor that does not follow ``conv_thr`` would
-    instead limit a tighter request (5e-12 Ry of energy error at ``conv_thr =
-    1e-12``), so it is 3 per cent of it below 1e-10 and QE's where that is lower.
+    a run converged to 1e-14 its price at ``conv_thr = 1e-10`` is small and not
+    zero: on the symmetric cell the energy is within 5e-12 Ry and the largest
+    band energy within 4e-8 Ry whatever the floor, and on a displaced sixteen-atom
+    cell 3e-12 doubles the force error (3.4e-6 to 6.5e-6 Ry/bohr) and takes the
+    energy error from 1.8e-11 to 7.6e-11 Ry. A floor that does not follow
+    ``conv_thr`` would instead limit a tighter request (5e-12 Ry of energy error at
+    ``conv_thr = 1e-12``), so it is 3 per cent of it below 1e-10 and QE's where
+    that is lower.
 
     A floor is not a claim about every cell: a solver that stops on a change in
     the eigenvalue can stall at any threshold where the change per step is of the

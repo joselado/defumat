@@ -7049,11 +7049,13 @@ steps, and at $10^{-13}$ to $5\times10^{-13}$ which roots pass in the first
 steps is decided by round-off: on a card one call took between 3 and 100 steps
 from perturbations of $10^{-13}$ in the starting states, where a CPU took 3
 every time, and at \code{conv\_thr=1e-10} the 64-atom SCF in the default memory
-mode took 132~s against 14.6~s with the floor. At that threshold the floor is
-not visible in the answer: against a run converged to $10^{-14}$ the energy is
-within $5\times10^{-12}$~Ry and the largest band energy within $4\times10^{-8}$~Ry
-whatever the floor, since the band energies are only as good as the SCF's own
-convergence. A CPU keeps $10^{-13}$, which is what every validated number here
+mode took 132~s against 14.6~s with the floor. At that threshold the floor costs
+little and not nothing: against a run converged to $10^{-14}$ the energy of
+silicon is within $5\times10^{-12}$~Ry and its largest band energy within
+$4\times10^{-8}$~Ry whatever the floor, and on a displaced sixteen-atom cell the
+force error goes from $3.4\times10^{-6}$ to $6.5\times10^{-6}$~Ry/bohr and the
+energy error from $1.8\times10^{-11}$ to $7.6\times10^{-11}$~Ry, both under what
+the threshold asked for. A CPU keeps $10^{-13}$, which is what every validated number here
 was measured with, and \code{DEFUMAT\_ETHR\_MIN} sets the floor for a whole
 process on either:
 
