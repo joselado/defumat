@@ -147,7 +147,11 @@ XLA command buffers (a null here: `--xla_gpu_enable_command_buffer` with `WHILE,
   warm call finds 1.51 s of kernels in 390,184 launches and 24,239 `cuStreamSynchronize` (2.88 s), the
   Sternheimer loops' conditions read back once a step. Speed mode makes the call 6.1 s and
   `k_batch='fit'` 6.5 against memory mode's 7.2, and XLA command buffers with `WHILE,CONDITIONAL`
-  change nothing in either (7.2, 6.1), so the loop conditions still come back to the host.
+  change nothing in either (7.2, 6.1), so the loop conditions still come back to the host. **The
+  cheaper of the two next steps** is to solve the three field directions (and a phonon's three
+  Cartesian displacements) as one batched Sternheimer solve, a `vmap` over the perturbation inside the
+  per-k loop, which divides the launches, the syncs and the tracing by three at once; QE solves them one
+  after another, so it is a departure to state, and the convergence mask becomes per direction.
 
 * **The 157-atom slab's "12x too many steps"** (`OPEN.md`, the memory notes) is a separate question: its
   iteration 2 is in the loose-`ethr` regime, ten orders above any floor. **It does not reproduce on small
