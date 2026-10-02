@@ -9369,6 +9369,23 @@ rather than the work; the way past it is a perturbation that is a function of ex
 a module-level `jit` can key on it without tracing, and that is a refactor of the response stack's
 perturbation objects (`GPU-SPEED-NEXT.md`).
 
+**What the slow set caught afterwards, and the three corrections it led to** (`5ba610b`).
+`test_nonlinear.py`'s two moving-overlap Raman cases (ultrasoft and PAW) raised
+`TracerArrayConversionError` in `augmentation_dipole`, which reads `np.asarray(simpson_weights(...))` on
+the pseudopotential's tables: a top-level `jvp` evaluated that arithmetic on constants eagerly, and
+`make_jaxpr` stages it. When the plain trace needs such a value, `compiled` traces a second time under
+`jax.ensure_compile_time_eval`, so the arithmetic is evaluated and hoisted as it was, and a body that
+reads a value depending on its arguments falls back to the plain call. Not the first try, which the slow
+`tests/unit/test_eager.py` showed: it also evaluates a heavy constant subcomputation eagerly, here the
+density from frozen states inside the Born assembly's `jvp` in `becsum`, and that compiled its loop three
+times a call again. The torque's band energy had kept its Python loop over k inside the traced program, one
+Hamiltonian application per k-point, and is a `sum_k` now (a second `get_torque` on the cobalt pair 16.70
+s and one compile against 20.54 s and 19, the torque the same to 4.4e-16 on 3.05, the low-power cores).
+And the whole response set run in one AlAs process (dielectric, Born, phonons, Raman, vibrational
+spectrum, piezoelectric, electrostriction, absorption, shift current) keeps 35 programs, past the first
+bound of 32, which would have recompiled at every call with nothing to say so; the bound is 128 and the
+first eviction warns.
+
 ## The host's LAPACK for the small subspace solves (RTX A2000, 2026-10-02)
 
 **The number to carry: with the Davidson subspace `eigh` on the host for matrices of at most 128 rows,

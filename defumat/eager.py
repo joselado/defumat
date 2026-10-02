@@ -44,9 +44,9 @@ Two calls whose closures differ only in the arrays they hold share one program.
 * Not when ``fn`` needs the *value* of something that depends on its arguments
   (``float`` of it, ``np.asarray`` of it, a branch on it): an eager call allowed
   that, ``map_axis`` with a single entry calling its body on concrete values, and
-  a trace cannot, so such a call is ``fn(*args)`` as before. Arithmetic on
-  constants alone is evaluated while tracing (``jax.ensure_compile_time_eval``),
-  as it was eagerly.
+  a trace cannot, so such a call is ``fn(*args)`` as before. Where only
+  arithmetic on constants needs a value, a second trace evaluates it
+  (``jax.ensure_compile_time_eval``), as it was evaluated eagerly.
 
 The cache is the one piece of module-level mutable state in the package that
 outlives a call. It holds the open jaxpr and its compiled program, never the
@@ -89,17 +89,23 @@ def compiled(fn, *args):
     if not _core.trace_state_clean():
         return fn(*args)
     try:
-        # Arithmetic on constants is evaluated while tracing and hoisted, as it
-        # was when ``fn`` ran eagerly: a setup step such as
-        # ``augmentation_dipole``'s ``np.asarray(simpson_weights(...))`` needs a
-        # concrete value, and ``make_jaxpr`` alone stages even that.
-        with jax.ensure_compile_time_eval():
-            closed, shape = jax.make_jaxpr(fn, return_shape=True)(*args)
+        closed, shape = jax.make_jaxpr(fn, return_shape=True)(*args)
     except _NEEDS_VALUES:
-        # ``fn`` reads a value that depends on its arguments, which an eager call
-        # allows and a trace does not: ``map_axis`` with one entry calls its body
-        # on concrete values.
-        return fn(*args)
+        try:
+            # A setup step such as ``augmentation_dipole``'s
+            # ``np.asarray(simpson_weights(...))`` needs the value of arithmetic
+            # on constants, which ``make_jaxpr`` stages; evaluated while tracing it
+            # is hoisted, as it was when ``fn`` ran eagerly. Not the first try,
+            # because it also evaluates a heavy constant subcomputation eagerly
+            # (a density from frozen states under a ``jvp`` in ``becsum``), and
+            # that compiles its own loops again at every call.
+            with jax.ensure_compile_time_eval():
+                closed, shape = jax.make_jaxpr(fn, return_shape=True)(*args)
+        except _NEEDS_VALUES:
+            # ``fn`` reads a value that depends on its arguments, which an eager
+            # call allows and a trace does not: ``map_axis`` with one entry calls
+            # its body on concrete values.
+            return fn(*args)
     flat, _ = jax.tree_util.tree_flatten(args)
     out_tree = jax.tree_util.tree_structure(shape)
     jaxpr, consts = closed.jaxpr, list(closed.consts)
