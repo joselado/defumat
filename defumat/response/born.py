@@ -561,13 +561,15 @@ def _augmentation_expectation(calculation, psi, weights, vkb, dvkb, qq, dipole):
     return total
 
 
-def _position_operator(calculation, projector_velocities):
+def _position_operator(calculation, projector_velocities, dipole=None):
     """The pieces :func:`frozen_polarization` contracts, or ``None`` if there are none.
 
     ``d(vkb)/dk`` about each atom's own centre costs one ``jvp`` of the
     projectors per direction; :mod:`defumat.response.efield` has already paid
     for it building ``adddvepsi_us``' position operator, so it is handed in
-    rather than recomputed.
+    rather than recomputed. So may ``dipole``, ``(3, nkb, nkb)``: it is built on
+    the host from the radial tables, which a compiled caller cannot do
+    (:mod:`defumat.response.chunked`).
     """
     from defumat.response.efield import _augmentation_dipole
 
@@ -581,7 +583,8 @@ def _position_operator(calculation, projector_velocities):
         )
     projectors = calculation.projectors
     vkb = projectors.vkb
-    dipole = _augmentation_dipole(calculation)
+    if dipole is None:
+        dipole = _augmentation_dipole(calculation)
     return (
         jnp.asarray(calculation.projector_core.kg),
         jnp.asarray(np.asarray(list(projectors.atom_of_channel))),
@@ -685,44 +688,10 @@ def constraint_position_term(calculation, positions, solver, weights, commutator
         return np.zeros((natoms, 3))
     occupied = solver.psi
     nocc = solver.nocc
-    batch = calculation.k_batch
-
-    noncolin = bool(calculation.noncolin)
 
     def sandwich(pos):
-        moved = calculation.at_positions(pos)
-        vkb = moved.projectors.vkb
-        npwx = vkb.shape[1]
-        # ``S`` is the metric, so a spinor takes ``qq_so`` here for the reason
-        # it takes it everywhere else: the off-diagonal spin blocks are what a
-        # fully-relativistic dataset's overlap consists of, and dropping them
-        # leaves the ``j``-averaged operator.
-        qq = jnp.asarray(
-            moved.qq_so if noncolin else moved.projectors.qq
-        ).astype(vkb.dtype)
-        total = jnp.zeros((), dtype=vkb.dtype)
-        for spin in range(occupied.shape[0]):
-            def one_k(ik, spin=spin):
-                if noncolin:
-                    shape = occupied[spin][ik].shape[:-1] + (2, npwx)
-                    left = jnp.einsum(
-                        "gc,nag->nac", vkb[ik].conj(),
-                        occupied[spin][ik].reshape(shape),
-                    )
-                    right = jnp.einsum(
-                        "gc,nag->nac", vkb[ik].conj(),
-                        commutator[spin][ik].reshape(shape),
-                    )
-                    return jnp.einsum(
-                        "nai,abij,nbj->n", left.conj(), qq, right
-                    )
-                left = jnp.einsum("gc,ng->nc", vkb[ik].conj(), occupied[spin][ik])
-                right = jnp.einsum("gc,ng->nc", vkb[ik].conj(), commutator[spin][ik])
-                return jnp.einsum("ni,ij,nj->n", left.conj(), qq, right)
-
-            values = map_k(one_k, jnp.arange(occupied.shape[1]), batch=batch)
-            total = total + jnp.sum(weights[spin][:, :nocc] * values)
-        return total
+        return _constraint_sandwich(calculation, pos, occupied,
+                                    weights[:, :, :nocc], commutator)
 
     out = np.zeros((natoms, 3), dtype=complex)
     for atom in range(natoms):
@@ -731,3 +700,49 @@ def constraint_position_term(calculation, positions, solver, weights, commutator
             _, derivative = jax.jvp(sandwich, (positions,), (tangent,))
             out[atom, cart] = complex(derivative)
     return out
+
+
+def _constraint_sandwich(calculation, positions, occupied, weights, commutator):
+    """``sum_kn w_n <psi_n| S(u) |P_c r psi_n>`` at displaced atoms, a complex scalar.
+
+    What :func:`constraint_position_term` differentiates once per displaced
+    coordinate; ``weights`` is the occupied block's, ``(nspin, nk, nocc)``. A
+    plain sum over the k-points ``occupied`` holds, so a response walked a
+    k-chunk at a time adds the chunks' derivatives
+    (:mod:`defumat.response.chunked`).
+    """
+    batch = calculation.k_batch
+    noncolin = bool(calculation.noncolin)
+    moved = calculation.at_positions(positions)
+    vkb = moved.projectors.vkb
+    npwx = vkb.shape[1]
+    # ``S`` is the metric, so a spinor takes ``qq_so`` here for the reason
+    # it takes it everywhere else: the off-diagonal spin blocks are what a
+    # fully-relativistic dataset's overlap consists of, and dropping them
+    # leaves the ``j``-averaged operator.
+    qq = jnp.asarray(
+        moved.qq_so if noncolin else moved.projectors.qq
+    ).astype(vkb.dtype)
+    total = jnp.zeros((), dtype=vkb.dtype)
+    for spin in range(occupied.shape[0]):
+        def one_k(ik, spin=spin):
+            if noncolin:
+                shape = occupied[spin][ik].shape[:-1] + (2, npwx)
+                left = jnp.einsum(
+                    "gc,nag->nac", vkb[ik].conj(),
+                    occupied[spin][ik].reshape(shape),
+                )
+                right = jnp.einsum(
+                    "gc,nag->nac", vkb[ik].conj(),
+                    commutator[spin][ik].reshape(shape),
+                )
+                return jnp.einsum(
+                    "nai,abij,nbj->n", left.conj(), qq, right
+                )
+            left = jnp.einsum("gc,ng->nc", vkb[ik].conj(), occupied[spin][ik])
+            right = jnp.einsum("gc,ng->nc", vkb[ik].conj(), commutator[spin][ik])
+            return jnp.einsum("ni,ij,nj->n", left.conj(), qq, right)
+
+        values = map_k(one_k, jnp.arange(occupied.shape[1]), batch=batch)
+        total = total + jnp.sum(weights[spin] * values)
+    return total

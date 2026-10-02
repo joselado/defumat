@@ -21,8 +21,13 @@ The three cells each add something the others do not reach:
   potential is built from and which is symmetrised as a polar vector on the
   whole sum.
 
-The Born charges take the whole-k route either way at this stage (the stores are
-uploaded), so they agree because ``dpsi`` does.
+The Born charges are walked too: the force's split
+(:mod:`defumat.forces.chunked`) with one ``jvp`` through each pass. **AlAs is the
+cell that discriminates there**, being polar and ultrasoft: the term coupling a
+chunk's projector occupations to the whole-cell energy, ``g_b . db_c/dx``, is
+zero for a norm-conserving dataset and only a symmetric residue on silicon, and
+dropping it from the pull-back moves AlAs's ``Z*`` by 39 where the two routes
+agree to 3.5e-13.
 """
 
 import logging
@@ -47,8 +52,8 @@ CASES = [
 ]
 
 #: Measured on the three cells: the dielectric constant 5e-14, 2.7e-15 and
-#: 5.3e-15 apart; the Born charges 1.4e-13, 0 and 1.3e-14; the induced density
-#: 8e-15, 0 and 1.2e-15.
+#: 5.3e-15 apart; the Born charges 3.5e-13, 8.8e-15 and 4.4e-15; the induced
+#: density 8e-15, 0 and 1.2e-15.
 TOLERANCE = 1e-11
 
 
@@ -97,6 +102,9 @@ def test_the_streamed_response_is_the_whole_k_response(case, k_batch):
 def test_a_second_streamed_call_compiles_nothing():
     """The walks are compiled once per structure, not once per chunk or call.
 
+    Both halves, the dielectric loop and the Born charges' split: measured, 108
+    programs on the first call and none on the second.
+
     ``CLAUDE.md``'s check for the eager-closure trap: a second call, counted on
     the ``jax`` logger. Building each chunk's solve afresh through
     :func:`~defumat.eager.compiled` traced it every time instead -- 0.11 s per
@@ -104,7 +112,7 @@ def test_a_second_streamed_call_compiles_nothing():
     """
     calculation, result = _converged(*CASES[0])
     store = np.asarray(result.wavefunctions)
-    _response(calculation, result, store, born_charges=False)
+    _response(calculation, result, store)
 
     compiles = []
 
@@ -120,7 +128,7 @@ def test_a_second_streamed_call_compiles_nothing():
     logger.setLevel(logging.WARNING)
     try:
         with jax.log_compiles(True):
-            _response(calculation, result, store, born_charges=False)
+            _response(calculation, result, store)
     finally:
         logger.removeHandler(handler)
         logger.setLevel(level)

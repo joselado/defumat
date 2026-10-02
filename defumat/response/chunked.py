@@ -50,27 +50,36 @@ afresh per chunk through :func:`~defumat.eager.compiled` traced it each time:
 0.11 s of tracing against 0.04 s of work per k-point on ultrasoft silicon, which
 on a 216-point mesh is a quarter of an hour.
 
-**What still goes whole, by name.** The Born charges
-(:mod:`defumat.response.born`) are a ``jvp`` of the whole-k force gradient, so
-:meth:`StreamedField.born_charges` uploads the stores and runs that route as it
-stands: the default call's peak is unchanged until it is split the way the force
-is. A caller asking for the internals (the third derivatives, which read
-``bare``, ``dpsi`` and the solver as device arrays), a calculation carrying a
-strained ``_kcart``, and a k-point pool's store take the whole-k route or are
-refused before this is reached.
+**The Born charges are walked the same way** (:meth:`StreamedField.
+born_charges`, :func:`_born_passes`). They are a ``jvp`` of the force along the
+field's response (:mod:`defumat.response.born`), and the force is already split
+into a sum over chunks and a function of the whole sums
+(:mod:`defumat.forces.chunked`); the split carries one ``jvp`` through each of
+its passes. Against the whole-k route: 3.5e-13 on ultrasoft AlAs, the polar cell
+where the coupling of a chunk's projector occupations to the whole-cell energy
+matters -- dropping it moves ``Z*`` by 39 -- and 8.8e-15 and 4.4e-15 on
+norm-conserving and PAW silicon.
+
+**What still goes whole, by name.** A caller asking for the internals (the
+third derivatives, which read ``bare``, ``dpsi`` and the solver as device
+arrays), a calculation carrying a strained ``_kcart``, and a k-point pool's
+store take the whole-k route or are refused before this is reached.
 """
 
 from __future__ import annotations
-
-import copy
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
+from defumat.basis.interpolate import to_dense
 from defumat.batching import k_chunks
 from defumat.forces.chunked import _rows_of, row_leaves, with_rows
-from defumat.forces.energy import hoisted, with_hoisted
+from defumat.forces.energy import (
+    _constraint_energy, _kinetic_energy, _projector_energies,
+    _spinor_constraint_energy, _spinor_projector_energies, hoisted, with_hoisted,
+)
+from defumat.scf.potential import total_charge
 from defumat.response.sternheimer import SternheimerSolver, local_perturbation
 from defumat.response.velocity import VelocityOperator
 
@@ -269,35 +278,318 @@ class StreamedField:
 
     def born_charges(self, dvscf, onecentre, wavefunctions, eigenvalues, weights,
                      density, becsum):
-        """The Born charges by the whole-k route, from the stores uploaded.
+        """``Z*`` as :func:`~defumat.response.born.born_effective_charges` builds
+        it, with the k axis walked rather than taped: see :func:`_born_passes`.
 
-        :func:`~defumat.response.born.born_effective_charges` differentiates
-        the whole-k force gradient, so it needs the solver's states, the three
-        ``dpsi``, the three perturbations and the commutators on the device; the
-        projectors' ``d(vkb)/dk`` is rebuilt whole. The peak of this stage is
-        the one the whole-k route has.
+        ``wavefunctions`` is the whole store, every band, in host memory;
+        ``weights`` and ``eigenvalues`` every band too, as the frozen-state
+        functional wants them. Two walks over the chunks and one step between
+        them:
+
+        1. per chunk: the multipliers' response ``dLambda`` and the transcribed
+           ``add_for_charges`` term per direction, the frozen polarization's
+           derivative once, and the forward ``jvp`` of the two raw sums over k
+           the mixed state is built from;
+        2. on the whole sums: the offsets that make the raw state the converged
+           one, the full-zone correction of the field's response
+           (``_full_zone_field_response``), and the ``jvp`` of the global terms'
+           gradient;
+        3. per chunk: the ``jvp`` of each chunk's pull-back, with the states, the
+           multipliers and the global cotangent all moving.
         """
-        from defumat.response.born import born_effective_charges
-        from defumat.response.efield import _bare_plus_induced
+        from defumat.response.born import (
+            _full_zone_becsum_response, frozen_polarization,
+        )
 
-        solver = copy.copy(self.solver)
-        solver.psi = jnp.asarray(self.solver.psi)
-        bare = [jnp.asarray(self.bare[axis]) for axis in range(3)]
-        dpsi = [jnp.asarray(self.dpsi[axis]) for axis in range(3)]
-        commutators = (bare if self.commutators is None
-                       else [jnp.asarray(self.commutators[axis]) for axis in range(3)])
-        projector_velocities = None
-        if self.dipole is not None:
-            velocity = VelocityOperator(self.calculation, self.v_scf, self.ddd_paw)
-            projector_velocities = [velocity.projectors(direction)
-                                    for direction in np.eye(3)]
-        perturbations = [
-            _bare_plus_induced(solver, bare[axis], dvscf[axis],
-                               None if onecentre is None else onecentre[axis], True)
+        calculation = self.calculation
+        solver = self.solver
+        positions = jnp.asarray(calculation.system.structure.positions)
+        natoms = positions.shape[0]
+        weights = np.asarray(weights)
+        eigenvalues = np.asarray(eigenvalues)
+        if eigenvalues.ndim == 2:
+            eigenvalues = eigenvalues[None]
+        passes = _born_passes(calculation, (solver.nocc, solver.occupied_counts,
+                                            solver.smearing))
+        ultrasoft = calculation.is_ultrasoft
+        fields, coefficients = [], []
+        for axis in range(3):
+            dddd = None if onecentre is None else onecentre[axis]
+            fields.append(dvscf[axis])
+            coefficients.append(solver.perturbed_coefficients(dvscf[axis], dddd)
+                                if ultrasoft else None)
+
+        def chunk_states(rows, live):
+            psi = _rows_of(wavefunctions, rows)
+            w = np.array(weights[:, rows])
+            w[:, live:] = 0.0
+            return psi, jnp.asarray(w), jnp.asarray(eigenvalues[:, rows])
+
+        # 1. The first walk.
+        frozen = np.asarray(jax.jacfwd(
+            lambda pos: frozen_polarization(calculation, pos, None, None, None)
+        )(positions))
+        constraint = np.zeros((3, natoms, 3), dtype=complex)
+        multipliers = {}
+        raw = tangents = None
+        for rows, live in self.chunks:
+            arguments = self._arguments(rows, live)
+            psi, w, eps = chunk_states(rows, live)
+            if self.dipole is not None:
+                frozen = frozen + np.asarray(passes["frozen"](
+                    arguments[0], arguments[1], positions, psi, w,
+                    jnp.asarray(self.kcart[rows]), self.v_scf, self.ddd_paw,
+                    self.dipole))
+            chunk_tangents = []
+            for axis in range(3):
+                dlambda, sandwich = passes["extras"](
+                    *arguments, positions, w, _rows_of(self.bare[axis], rows),
+                    fields[axis], coefficients[axis],
+                    _rows_of(self.commutators[axis] if self.commutators is not None
+                             else self.bare[axis], rows),
+                )
+                multipliers[(rows[0], axis)] = dlambda
+                constraint[axis] += np.asarray(sandwich)
+                sums, derivative = passes["forward"](
+                    arguments[0], arguments[1], positions, psi, w,
+                    _rows_of(self.dpsi[axis], rows))
+                if axis == 0:
+                    raw = _add(raw, sums)
+                chunk_tangents.append(derivative)
+            tangents = (chunk_tangents if tangents is None
+                        else [_add(a, b) for a, b in zip(tangents, chunk_tangents)])
+
+        # 2. The whole sums. The offsets make the raw, unsymmetrised mixed state
+        #    the converged, symmetrised one in *value* (``_raw_mixed_state``); the
+        #    shifts make the field's response the full-zone one in *tangent*
+        #    (``_full_zone_field_response``), with the augmentation charge's
+        #    share of the ``becsum`` shift taken out of the density's because the
+        #    density is built from ``becsum`` -- ``augmented`` is linear in it,
+        #    so that share is ``augmented(0, shift)`` and needs no states.
+        raw_becsum, raw_smooth = raw
+        becsum_offset = tuple(
+            None if value is None else jnp.asarray(value) - part
+            for value, part in zip(becsum, raw_becsum))
+        parts = tuple(None if part is None else part + offset
+                      for part, offset in zip(raw_becsum, becsum_offset))
+        smooth, dense = calculation.basis.smooth, calculation.basis.dense
+        density_offset = jnp.asarray(density) - calculation.augmented(
+            to_dense(raw_smooth, smooth, dense), parts)
+        responses = jnp.stack([
+            calculation.augmented(to_dense(d_smooth, smooth, dense), d_becsum)
+            for d_becsum, d_smooth in tangents])
+        becsum_shifts = _full_zone_becsum_response(
+            calculation, [d_becsum for d_becsum, _ in tangents])
+        through_becsum = jnp.stack([
+            calculation.augmented(jnp.zeros_like(responses[0]), shifts)
+            for shifts in becsum_shifts])
+        shifts = (calculation.symmetrize_directional(responses) - responses
+                  - through_becsum)
+        rowset = row_leaves(calculation, self.chunks[0][0])
+        globals_ = [
+            passes["global"](self.big, rowset, positions, raw_becsum, raw_smooth,
+                             becsum_offset, density_offset, tangents[axis][0],
+                             tangents[axis][1], shifts[axis], becsum_shifts[axis])
             for axis in range(3)
         ]
-        return born_effective_charges(
-            self.calculation, solver, jnp.asarray(wavefunctions), eigenvalues,
-            jnp.asarray(weights), jnp.asarray(density), becsum, dpsi,
-            perturbations, commutators, projector_velocities=projector_velocities,
+
+        # 3. The second walk: each chunk's pull-back, differentiated.
+        columns = [np.asarray(slope) for (_, (slope, _, _)) in globals_]
+        for rows, live in self.chunks:
+            psi, w, eps = chunk_states(rows, live)
+            rowset = row_leaves(calculation, rows)
+            for axis in range(3):
+                (_, g_b, g_rho), (_, dg_b, dg_rho) = globals_[axis]
+                columns[axis] = columns[axis] + np.asarray(passes["pull"](
+                    self.big, rowset, positions, psi, w, eps, g_b, g_rho,
+                    _rows_of(self.dpsi[axis], rows), multipliers[(rows[0], axis)],
+                    dg_b, dg_rho))
+
+        charges = np.zeros((natoms, 3, 3))
+        for axis in range(3):
+            charges[:, axis, :] = (frozen[axis] - columns[axis]
+                                   - np.real(constraint[axis]))
+        return calculation.symmetrize_atom_tensor(charges)
+
+
+def _born_passes(calculation, key) -> dict:
+    """The Born charges' compiled passes: ``forces/chunked.py``'s split, one ``jvp`` up.
+
+    ``Z*[:, i, :]`` is, besides two transcribed terms, the ``jvp`` of the force
+    -- ``grad`` of the frozen-state energy in the positions ``x`` -- along the
+    field's response: the states move by ``dpsi_i``, the multipliers by
+    ``dLambda_i``, and the mixed state by the full-zone shifts
+    (:func:`~defumat.response.born.born_effective_charges`). The force is split
+    as the chunked force splits it,
+
+        E(x) = sum_c E_c(x, psi_c, Lambda_c) + E_glob(x, b, rho_s; shift, bshift)
+        dE/dx = g_x + sum_c d/dx [E_c + g_b . b_c(x) + g_rho . rho_c],
+
+    with ``b`` and ``rho_s`` the raw sums over k and ``(g_x, g_b, g_rho)`` the
+    gradient of ``E_glob`` at them, and its ``jvp`` along the response is then
+    term by term:
+
+    * **forward**: per chunk, ``(b_c, rho_c)`` and their tangents along
+      ``dpsi_c``, added over chunks;
+    * **global**: the ``jvp`` of ``grad E_glob`` at the whole sums, along
+      ``(0, db, drho, shift, bshift)`` -- the shifts carry only a tangent, their
+      value is zero;
+    * **pull**: per chunk, the ``jvp`` of ``d/dx [E_c + g_b . b_c + g_rho .
+      rho_c]`` along ``(dpsi_c, dLambda_c, dg_b, dg_rho)``.
+
+    The column is ``dg_x + sum_c d(pull_c)``. ``E_c`` differs from the chunked
+    force's separable part in one term: with a *matrix* multiplier the
+    constraint is ``Tr[Lambda (<psi|S|psi> - 1)]`` and replaces both the overlap
+    and the norm terms (``energy_at``). ``E_glob`` differs in having no
+    symmetrisation: the raw sums plus the constant offsets that make their value
+    the converged state's, plus the two shifts. The ``g_b . db_c/dx`` cross term
+    is the ultrasoft ``int dvscf drho_us`` piece -- zero for a norm-conserving
+    dataset and on silicon's symmetric residue, so the polar ultrasoft cell is
+    the one that would see it dropped.
+    """
+    cached = calculation.__dict__.get("_streamed_response")
+    if cached is None or cached[0] is not calculation:
+        cached = (calculation, {})
+        calculation._streamed_response = cached
+    key = ("born",) + tuple(key)
+    if key in cached[1]:
+        return cached[1][key]
+    from defumat.response.born import (
+        _constraint_sandwich, _ground_state_multipliers, _multiplier_response,
+        _position_operator, frozen_polarization,
+    )
+
+    nocc, counts, smearing = key[1:]
+
+    def local(big, rowset):
+        return with_rows(with_hoisted(calculation, big), rowset)
+
+    def sums(moved, psi, weights):
+        rows = jnp.arange(psi.shape[1])
+        return (moved.becsum(psi, weights, rows=rows, symmetrize=False),
+                moved.smooth_density(psi, weights, rows=rows))
+
+    def separable(moved, psi, weights, eigenvalues, multipliers):
+        rows = jnp.arange(psi.shape[1])
+        vkb = moved.projectors_at(rows)
+        if moved.noncolin:
+            kinetic = _kinetic_energy(psi, moved.state_kinetic[rows], weights)
+            nonlocal_, _ = _spinor_projector_energies(
+                psi, vkb, moved.dvan_so, moved.qq_so, weights, eigenvalues)
+            norm = _spinor_constraint_energy(psi, vkb, moved.qq_so, multipliers)
+        else:
+            kinetic = _kinetic_energy(psi, moved.kinetic[rows], weights)
+            nonlocal_, _ = _projector_energies(
+                psi, vkb, moved.projectors.dij, moved.projectors.qq, weights,
+                eigenvalues)
+            norm = _constraint_energy(psi, vkb, moved.projectors.qq, multipliers)
+        return kinetic + nonlocal_ - norm
+
+    def embed(psi, dpsi):
+        return jnp.zeros_like(psi).at[:, :, :nocc].set(dpsi)
+
+    def forward(big, rowset, x, psi, weights, dpsi):
+        """``((b_c, rho_c), (db_c, drho_c))`` along the field's response."""
+        moved = local(big, rowset).at_positions(x)
+        return jax.jvp(lambda states: sums(moved, states, weights), (psi,),
+                       (embed(psi, dpsi),))
+
+    def extras(big, rowset, hamiltonians, psi, arrays, scalars, v_scf, ddd_paw,
+               x, weights, bare_c, dv, coefficients, commutator):
+        """``dLambda`` and the transcribed ``add_for_charges`` term on one chunk."""
+        sub = local(big, rowset)
+        solver = SternheimerSolver.on_chunk(
+            sub, sub.restricted_hamiltonians(hamiltonians), psi, arrays, scalars,
+            nocc=nocc, occupied_counts=counts, smearing=smearing, v_scf=v_scf,
+            ddd_paw=ddd_paw)
+        induced = local_perturbation(sub, dv, v_scf, ddd_paw,
+                                     coefficients=coefficients)
+
+        def perturbation(states, ik, spin):
+            return bare_c[spin][ik] + induced(states, ik, spin)
+
+        # ``nbnd`` is every band's, the width the multipliers have in the
+        # frozen-state functional; ``weights`` carries every band.
+        dlambda = _multiplier_response(solver, perturbation, weights,
+                                       weights.shape[-1], nocc)
+        if not sub.is_ultrasoft:
+            return dlambda, jnp.zeros(x.shape, dtype=psi.dtype)
+        return dlambda, _complex_jacobian(
+            lambda pos: _constraint_sandwich(sub, pos, solver.psi,
+                                             weights[:, :, :nocc], commutator), x)
+
+    def frozen(big, rowset, x, psi, weights, kcart, v_scf, ddd_paw, dipole):
+        """``d(Omega P)/du`` of one chunk's augmentation charge, ``(3, nat, 3)``."""
+        sub = local(big, rowset)
+        velocity = VelocityOperator(sub, v_scf, ddd_paw, kcart=kcart)
+        derivatives = [velocity.projectors(direction) for direction in jnp.eye(3)]
+        operator = _position_operator(sub, derivatives, dipole)
+        return jax.jacfwd(
+            lambda pos: frozen_polarization(sub, pos, psi, weights, operator)
+            - frozen_polarization(sub, pos, psi, weights, None)
+        )(x)
+
+    def global_(big, rowset, x, becsum_, rho_smooth, becsum_offset,
+                density_offset, d_becsum, d_smooth, shift, becsum_shift):
+        """``(grad, d grad)`` of the terms that are a function of the whole sums."""
+        def whole(x, b, rho_s, s, bs):
+            moved = local(big, rowset).at_positions(x)
+            parts = tuple(
+                None if part is None else part + offset + extra
+                for part, offset, extra in zip(b, becsum_offset, bs))
+            smooth, dense = moved.basis.smooth, moved.basis.dense
+            rho = (moved.augmented(to_dense(rho_s, smooth, dense), parts)
+                   + density_offset + s)
+            potential = moved.potential(rho)
+            epaw, _ = moved.onecenter(parts)
+            volume = moved.system.cell.volume
+            local_ = volume / rho[0].size * jnp.sum(
+                moved.vltot * total_charge(rho))
+            return (local_ + potential.ehart + potential.etxc + epaw
+                    + moved.ewald + moved.dispersion)
+
+        gradient = jax.grad(whole, argnums=(0, 1, 2))
+        zero_bs = jax.tree_util.tree_map(jnp.zeros_like, becsum_shift)
+        return jax.jvp(
+            lambda b, rho_s, s, bs: gradient(x, b, rho_s, s, bs),
+            (becsum_, rho_smooth, jnp.zeros_like(shift), zero_bs),
+            (d_becsum, d_smooth, shift, becsum_shift),
         )
+
+    def pull(big, rowset, x, psi, weights, eigenvalues, g_b, g_rho, dpsi,
+             dlambda, dg_b, dg_rho):
+        """The ``jvp`` of one chunk's pull-back ``d/dx [E_c + g . sums_c]``."""
+        ground = _ground_state_multipliers(weights, eigenvalues, psi.dtype)
+
+        def slope(states, multipliers, g_b, g_rho):
+            def energy(position):
+                moved = local(big, rowset).at_positions(position)
+                b, rho = sums(moved, states, weights)
+                coupled = jnp.sum(g_rho * rho) + sum(
+                    jnp.sum(g * part) for g, part in zip(g_b, b)
+                    if part is not None)
+                return separable(moved, states, weights, eigenvalues,
+                                 multipliers) + coupled
+            return jax.grad(energy)(x)
+
+        _, derivative = jax.jvp(slope, (psi, ground, g_b, g_rho),
+                                (embed(psi, dpsi), dlambda, dg_b, dg_rho))
+        return derivative
+
+    passes = {name: jax.jit(fn) for name, fn in (
+        ("forward", forward), ("extras", extras), ("frozen", frozen),
+        ("global", global_), ("pull", pull))}
+    cached[1][key] = passes
+    return passes
+
+
+def _complex_jacobian(function, x):
+    """``d f/dx`` of a complex scalar ``f`` of real ``x``, shaped like ``x``.
+
+    ``jax.jacfwd`` of a complex output from a real input is the derivative of
+    the real and imaginary parts together; it is written out here so the
+    ``(nat, 3)`` result is unambiguous.
+    """
+    real = jax.jacfwd(lambda y: jnp.real(function(y)))(x)
+    imaginary = jax.jacfwd(lambda y: jnp.imag(function(y)))(x)
+    return real + 1j * imaginary
