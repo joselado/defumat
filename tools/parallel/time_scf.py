@@ -37,7 +37,7 @@ from pathlib import Path
 
 import jax
 
-from defumat.batching import resolve_band_batch, resolve_memory_mode, resolve_wfc_store
+from defumat.batching import resolve_band_batch, resolve_memory_mode, resolve_scf_wfc_store
 from defumat.io.pwin import read_pw_input
 from defumat.pseudo import read_upf
 from defumat.scf.driver import Calculation, run_scf
@@ -90,7 +90,10 @@ def main() -> None:
         "calculation_k_batch": str(getattr(calculation, "k_batch", "n/a")),
         "fft_layout": calculation.fft_layout,
         "projectors": calculation.projector_storage,
-        "wfc_store": resolve_wfc_store(mode=calculation.memory_mode),
+        # The SCF's own rule, which streams only where the chunk is smaller than
+        # the mesh, so the line names the store the timed run used.
+        "wfc_store": resolve_scf_wfc_store("default", calculation.memory_mode,
+                                           calculation.k_batch, system.kpoints.nk),
         "backend": jax.default_backend(),
         "cold_s": round(cold, 3),
         "ms_per_iter_median": round(1e3 * statistics.median(per_iteration), 2),
