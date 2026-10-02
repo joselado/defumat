@@ -11,8 +11,9 @@
 #   2. Do the SCF step counts stay equal across the dials at the committed parking (one above a
 #      bound of the reduced live block)? time_scf.py prints davidson_steps beside every time.
 #   3. What is a float32 band side worth per iteration on a card whose float64 is fast? The
-#      A2000 gave 4.2x to 4.6x on 64 atoms at conv_thr 1e-7 (PERFORMANCE.md, "The band side in
-#      single precision"); GPU.md Phase 3 ranks the tier by this number.
+#      A2000 ran a whole 64-atom SCF to conv_thr 1e-7 4.2x to 4.6x faster, 6.3x to 6.9x an
+#      iteration over 9 iterations against 6 (PERFORMANCE.md, "The band side in single
+#      precision"); GPU.md Phase 3 ranks the tier by this number.
 #
 # Not submitted by any tool here (CLAUDE.local.md): submit it by hand, from the checkout the
 # job should run, after `sbatch --test-only` has accepted the partition and the limits.
