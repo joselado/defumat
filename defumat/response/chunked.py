@@ -518,7 +518,7 @@ def _born_passes(calculation, key) -> dict:
                                        weights.shape[-1], nocc)
         if not sub.is_ultrasoft:
             return dlambda, jnp.zeros(x.shape, dtype=psi.dtype)
-        return dlambda, _complex_jacobian(
+        return dlambda, _jacobian_by_columns(
             lambda pos: _constraint_sandwich(sub, pos, solver.psi,
                                              weights[:, :, :nocc], commutator), x)
 
@@ -528,10 +528,9 @@ def _born_passes(calculation, key) -> dict:
         velocity = VelocityOperator(sub, v_scf, ddd_paw, kcart=kcart)
         derivatives = [velocity.projectors(direction) for direction in jnp.eye(3)]
         operator = _position_operator(sub, derivatives, dipole)
-        return jax.jacfwd(
+        return _jacobian_by_columns(
             lambda pos: frozen_polarization(sub, pos, psi, weights, operator)
-            - frozen_polarization(sub, pos, psi, weights, None)
-        )(x)
+            - frozen_polarization(sub, pos, psi, weights, None), x)
 
     def global_(big, rowset, x, becsum_, rho_smooth, becsum_offset,
                 density_offset, d_becsum, d_smooth, shift, becsum_shift):
@@ -587,13 +586,19 @@ def _born_passes(calculation, key) -> dict:
     return passes
 
 
-def _complex_jacobian(function, x):
-    """``d f/dx`` of a complex scalar ``f`` of real ``x``, shaped like ``x``.
+def _jacobian_by_columns(function, x):
+    """``d f/dx`` one coordinate at a time, shaped ``f.shape + x.shape``.
 
-    ``jax.jacfwd`` of a complex output from a real input is the derivative of
-    the real and imaginary parts together; it is written out here so the
-    ``(nat, 3)`` result is unambiguous.
+    ``jax.jacfwd`` is a ``vmap`` of ``jvp`` over every coordinate at once, so
+    for a derivative in the ``3 nat`` atomic positions it holds ``3 nat``
+    tangent copies of everything the function builds -- here the chunk's moved
+    projectors. Measured on the card, ultrasoft eight-atom silicon, a chunk of 27
+    k-points: the frozen polarization's pass 3289 MB of temporaries and the
+    ``add_for_charges`` pass 2185, against 925 MB for the whole SCF. Walking the
+    unit tangents under ``lax.map`` holds one at a time; the columns are the
+    same ``jvp`` either way. A complex ``f`` of a real ``x`` comes out complex.
     """
-    real = jax.jacfwd(lambda y: jnp.real(function(y)))(x)
-    imaginary = jax.jacfwd(lambda y: jnp.imag(function(y)))(x)
-    return real + 1j * imaginary
+    basis = jnp.eye(x.size, dtype=x.dtype).reshape((x.size,) + x.shape)
+    columns = jax.lax.map(lambda tangent: jax.jvp(function, (x,), (tangent,))[1],
+                          basis)
+    return jnp.moveaxis(columns, 0, -1).reshape(columns.shape[1:] + x.shape)

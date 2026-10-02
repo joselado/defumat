@@ -447,7 +447,20 @@ def _streams(calculation, wavefunctions, keep_internals: bool) -> bool:
             "pool-aware, and this walks the whole store. Run it in one process")
     if keep_internals or getattr(calculation, "_kcart", None) is not None:
         return False
-    return walks_chunks(calculation, wavefunctions)
+    if walks_chunks(calculation, wavefunctions):
+        return True
+    # **And in memory mode on a card whatever the chunk**, the whole mesh in
+    # one chunk included. ``k_batch = 'fit'`` sizes the chunk for the SCF, and
+    # the whole-k route's working set is not the SCF's: on ultrasoft eight-atom
+    # silicon at 27 k-points, where ``'fit'`` took the whole mesh and the SCF
+    # peaked at 925.2 MB on the RTX A2000, the Born charges took the card to
+    # 6825.4 MB. Walked as one chunk with the stores in host memory, every pass
+    # is the chunk's, and no larger than the SCF's at the same chunk
+    # (``PERFORMANCE.md``, "The dielectric tensor and the Born charges a
+    # k-chunk at a time").
+    from defumat.batching import _backend
+
+    return calculation.memory_mode == "memory" and _backend() != "cpu"
 
 
 class _WholeField:
