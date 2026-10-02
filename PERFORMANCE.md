@@ -9397,3 +9397,45 @@ So the gain is where Davidson solves one k-point's small subspace at a time, whi
 `k_batch = 1`; under a batch over k the device's batched solve already wins, and at 64 atoms the
 subspace is above the 128 rows. It brings memory mode on the mesh from 2.44x speed mode's iteration to
 1.78x. A float64 card's device `syevd` at these sizes is unmeasured, and so is whether this holds there.
+
+## A card's compile is its autotuning, and the persistent cache already keeps it (RTX A2000, 2026-10-02)
+
+**The number to carry: of the 79 s `bi20-soc`'s Davidson solve takes to compile on the card with the
+cache off, 76 s is XLA choosing algorithms for its matrix products, and a new program whose products the
+cache has seen compiles in 2.8 s.** `--xla_gpu_autotune_level=0` makes the compile 3.2 s and the next
+three iterations 75.9 s against 74.9, the same steps and energy. JAX keeps XLA's per-fusion autotuning
+results in the persistent cache (`jax_persistent_cache_enable_xla_caches` is
+`xla_gpu_per_fusion_autotune_cache_dir` by default, a directory inside `DEFUMAT_CACHE_DIR`), so in a fresh
+cache, four rungs then two then one then four again (`DEFUMAT_BAND_RUNGS`, one process each):
+
+| run | `jit(_every_k)` compile | three warm iterations | autotuning entries after |
+|---|---|---|---|
+| 4 rungs, empty cache | 80.0 s | 75.1 s | 630 |
+| 2 rungs | 2.8 s | 76.4 s | 632 |
+| 1 rung | 2.7 s | 77.3 s | 641 |
+| 4 rungs again | 0.2 s (the executable itself is a hit) | 75.5 s | 641 |
+
+against 68.8 and 60.9 s for two and one rungs with the cache off ("The radial transforms took minutes
+to compile on a card", the rung paragraph, whose 18 s trade is therefore a cold-cache figure only). So
+the autotuning is paid once per matrix-product shape and not once per program, and what turns it into a
+per-job cost is a cache directory that does not persist between jobs. **Turning it off is not the
+default it looks like**: warm iterations with the autotuning off, cache off, one SCF to compile and the
+next ones timed (`tools/parallel/time_scf.py`):
+
+| cell | mode | cold SCF, default / off | ms per iteration, default / off | |
+|---|---|---|---|---|
+| `si16-1k-ecut30` | memory | 7.4 / 6.2 s | 69.52 / 71.78 | +3.3% |
+| `si8-ecut20-nosym-k3` | memory | 10.0 / 9.1 s | 373.53 / 389.18 | +4.2% |
+| `si8-ecut20-nosym-k3` | speed | 8.6 / 7.3 s | 154.31 / 156.96 | +1.7% |
+| `si8-paw-1k` | memory | 15.1 / 10.0 s | 45.59 / 46.74 | +2.5% |
+| `si64-1k-ecut30` | memory | 29.1 / 20.1 s | 1532.37 / 1598.80 | +4.3% |
+| `si64-1k-ecut30` | speed | 26.9 / 18.7 s | 1425.82 / 1502.88 | +5.4% |
+
+Steps and energies are identical across each pair. The middle settings buy nothing: autotuning without
+its correctness checks (`--xla_gpu_autotune_level=1`) compiles `bi20-soc` in 79.5 s and runs as the
+default does, and autotuning without XLA's Triton matrix-product search
+(`--xla_gpu_enable_triton_gemm=false`) compiles in 91.9 s and runs si64 3 per cent slower. **What follows
+for the cluster**: a card job should point `DEFUMAT_CACHE_DIR` at a directory that outlives the job, as
+`tools/gpu/stall-check.sbatch` does, and only the first job of a new cell pays the autotuning.
+`--xla_gpu_autotune_level=0` is the right call for a one-off run on a cell no cache has seen, at 2 to 5
+per cent of every iteration.

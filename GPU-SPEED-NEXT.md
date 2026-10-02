@@ -124,7 +124,13 @@ XLA command buffers (a null here: `--xla_gpu_enable_command_buffer` with `WHILE,
 * `DEFUMAT_BAND_RUNGS` on a large spinor cell (2026-10-02, `bi20-soc`, the cache off): 4, 2 and 1 rungs
   compile the Davidson solve in 78.9, 68.8 and 60.9 s and run three iterations in 74.7, 76.3 and 77.2 s,
   equal steps and energy, so the three extra rungs pay their 18 s back after about 22 iterations. The
-  default stays four; a card that compiles faster or a run that never reuses its cache moves the line.
+  default stays four. **That is a cold-cache figure**: the compile is XLA's autotuning, which the
+  persistent cache keeps per matrix-product shape, so with a warm cache two and one rungs compile in 2.8
+  and 2.7 s (`PERFORMANCE.md`, "A card's compile is its autotuning").
+* **A card job's cache directory should outlive the job** (2026-10-02): 76 of `bi20-soc`'s 79 s of
+  Davidson compile is autotuning, kept in `DEFUMAT_CACHE_DIR`'s `xla_gpu_per_fusion_autotune_cache_dir`.
+  `--xla_gpu_autotune_level=0` removes it at 1.3 to 5.4 per cent of every iteration, so it is a one-off
+  run's setting and not a default.
 * Memory mode costs a steady 8 per cent over speed mode at 64 atoms (the rebuild, the streamed store
   and one k-point at a time together) and 7 per cent at 16 atoms (the streamed store alone). The
   user chose memory as the default; this is the price to quote.
