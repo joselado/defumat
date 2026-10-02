@@ -156,6 +156,7 @@ from defumat.scf.density import (
 from defumat.scf.occupations import smearing_order, w0gauss, wgauss
 from defumat.forces.energy import reject_potential_only
 from defumat.scf.potential import as_potential_components
+from defumat.scf.streaming import is_host_store
 
 __all__ = [
     "Smearing",
@@ -209,6 +210,11 @@ THRESHOLD = 1.0e-11
 #: than a contrived cell. An unpolarized *scalar* insulator's fillings have been
 #: validated for many phases and are left bit-for-bit alone.
 DEGENERATE_CUT_RY = 1.0e-5
+
+
+#: :func:`local_perturbation`'s "build ``int3`` yourself", since ``None`` there
+#: already means "a norm-conserving dataset, nothing moves ``D_ij``".
+_COMPUTE = object()
 
 
 #: ``setup_nbnd_occ``/``setup_alpha_pv``'s cutoff on the smeared occupation: a
@@ -315,7 +321,11 @@ class SternheimerSolver:
         counts = _normalized_counts(nocc, psi.shape[0])
         self.occupied_counts = counts
         keep = psi.shape[2] if smearing is not None else max(counts)
-        self.psi = jnp.asarray(psi)[:, :, :keep]
+        # A streamed store (a numpy array in host memory) stays there: the
+        # solver is then walked a chunk at a time through :meth:`for_rows`, and
+        # ``jnp.asarray`` here would put the whole set on the device.
+        self.psi = (psi[:, :, :keep] if is_host_store(psi)
+                    else jnp.asarray(psi)[:, :, :keep])
         self.eigenvalues = jnp.asarray(eigenvalues)[:, :, :keep]
         self.weights = jnp.asarray(weights)[:, :, :keep]
         self.nocc = int(keep)
@@ -348,6 +358,80 @@ class SternheimerSolver:
             self.density_weights = jnp.broadcast_to(
                 jnp.asarray(kpoint_weights)[None, :, None], self.weights.shape
             )
+
+    def chunk_arrays(self, rows, live: int) -> dict:
+        """One k-chunk's share of every k-indexed array but the states.
+
+        For a response walked a k-chunk at a time (:mod:`defumat.response.
+        chunked`). ``rows`` are the chunk's global k indices from
+        :func:`~defumat.batching.k_chunks` and ``live`` how many of them are
+        real. The padded rows carry **zero weight**, in the occupation and in
+        the density weight both, so a sum over the chunk is its share of the
+        whole sum and the padding adds nothing. Sliced here, on the host side of
+        the compiled passes, so that the passes take them as arguments and one
+        program serves every chunk; :meth:`on_chunk` puts them back together.
+        """
+        rows = np.asarray(rows)
+        padding = jnp.asarray(np.arange(len(rows)) >= live)[None, :, None]
+        return {
+            "eigenvalues": self.eigenvalues[:, rows],
+            "weights": jnp.where(padding, 0.0, self.weights[:, rows]),
+            "density_weights": jnp.where(padding, 0.0,
+                                         self.density_weights[:, rows]),
+            "projector_mask": self.projector_mask[:, rows],
+        }
+
+    def scalars(self) -> dict:
+        """The solver's three numbers, as arrays a compiled pass takes as arguments.
+
+        **The level shift is the whole set's.** ``alpha_pv`` is set by the
+        lowest eigenvalue and the highest occupied one over every k-point
+        (``setup_alpha_pv``), and a chunk computing its own would hand each
+        chunk a different operator -- the same solution in exact arithmetic,
+        and a different CG path and round-off in practice. The gap check at the
+        cut is likewise the whole set's, made once in ``__init__``. Passed as
+        arrays rather than closed over so that a second call with another
+        ``threshold`` reuses the program instead of running the first one's.
+        """
+        return {
+            "alpha_pv": jnp.asarray(self.alpha_pv),
+            "threshold": jnp.asarray(self.threshold),
+            "max_iterations": jnp.asarray(self.max_iterations),
+        }
+
+    @classmethod
+    def on_chunk(cls, calculation, hamiltonians, psi, arrays, scalars, *,
+                 nocc, occupied_counts, smearing, v_scf=None, ddd_paw=None):
+        """A solver for one k-chunk, assembled from parts -- traceable.
+
+        ``calculation`` is the whole set's :meth:`~defumat.scf.driver.
+        Calculation.at_rows` (or its traced counterpart), ``hamiltonians`` its
+        :meth:`~defumat.scf.driver.Calculation.restricted_hamiltonians`,
+        ``psi`` the chunk's occupied block on the device, and ``arrays`` and
+        ``scalars`` what :meth:`chunk_arrays` and :meth:`scalars` returned.
+        Nothing here reads a value back to the host, which is what
+        ``__init__``'s ``alpha_pv`` and gap check do, so this can run inside a
+        compiled pass; everything with a k index is the chunk's, indexed
+        locally.
+        """
+        chunk = cls.__new__(cls)
+        chunk.calculation = calculation
+        chunk.hamiltonians = tuple(hamiltonians)
+        chunk.v_scf = v_scf
+        chunk.becsum = ()
+        chunk.ddd_paw = ddd_paw
+        chunk.smearing = smearing
+        chunk.occupied_counts = tuple(occupied_counts)
+        chunk.psi = psi[:, :, :nocc]
+        chunk.nocc = int(nocc)
+        chunk.eigenvalues = arrays["eigenvalues"]
+        chunk.weights = arrays["weights"]
+        chunk.density_weights = arrays["density_weights"]
+        chunk.projector_mask = arrays["projector_mask"]
+        chunk.alpha_pv = scalars["alpha_pv"]
+        chunk.threshold = scalars["threshold"]
+        chunk.max_iterations = scalars["max_iterations"]
+        return chunk
 
     @property
     def nspin(self) -> int:
@@ -641,6 +725,31 @@ class SternheimerSolver:
             residual=max(residuals),
         )
 
+    def solve_arrays(self, perturbation):
+        """:meth:`solve` for a caller that is itself being traced.
+
+        Returns ``(dpsi, iterations, residual)`` as arrays -- the worst band's
+        iteration count and residual per spin channel -- where :meth:`solve`
+        reads them back to the host, which a trace cannot do. Used inside the
+        compiled passes of a response walked a k-chunk at a time
+        (:mod:`defumat.response.chunked`), where the whole chunk is one program.
+        """
+        batch = self.calculation.k_batch
+        blocks, iterations, residuals = [], [], []
+        for spin in range(self.nspin):
+            def one_k(ik, spin=spin):
+                rhs = self.project(
+                    perturbation(self.psi[spin][ik], ik, spin), ik, spin
+                )
+                return self.solve_at(rhs, ik, spin)
+
+            dpsi, steps, residual = map_k(
+                one_k, jnp.arange(self.psi.shape[1]), batch=batch)
+            blocks.append(dpsi)
+            iterations.append(jnp.max(steps))
+            residuals.append(jnp.max(residual))
+        return jnp.stack(blocks), jnp.stack(iterations), jnp.stack(residuals)
+
     # -- the density it produces -------------------------------------------
 
     def density_at(self, states, weights=None) -> jnp.ndarray:
@@ -653,8 +762,18 @@ class SternheimerSolver:
         including ``becsum`` and the augmentation charge, which is what makes
         the derivative below carry them.
         """
+        return self.finish_density(*self.density_parts(states, weights))
+
+    def density_parts(self, states, weights=None) -> tuple:
+        """``(rho_smooth, becsum)``: the two sums over k :meth:`density_at` finishes.
+
+        Both are plain sums over the k-points ``states`` hold, so a response
+        walked a k-chunk at a time adds the chunks' parts (or their tangents)
+        and finishes the total once with :meth:`finish_density`, which is
+        linear.
+        """
         calculation = self.calculation
-        smooth, dense = calculation.basis.smooth, calculation.basis.dense
+        smooth = calculation.basis.smooth
         weights = self.density_weights if weights is None else weights
         becsum_ = self._raw_becsum(states, weights)
         if calculation.noncolin:
@@ -673,7 +792,16 @@ class SternheimerSolver:
                 calculation.system.cell, calculation.k_batch,
                 fft_index_minus=calculation.fft_index_minus,
             )
-        return calculation.augmented(to_dense(rho, smooth, dense), becsum_)
+        return rho, becsum_
+
+    def finish_density(self, rho_smooth, becsum_) -> jnp.ndarray:
+        """Lift :meth:`density_parts`' smooth density to the dense grid and augment it.
+
+        No symmetrisation, for :meth:`density_at`'s reason; linear in both.
+        """
+        calculation = self.calculation
+        smooth, dense = calculation.basis.smooth, calculation.basis.dense
+        return calculation.augmented(to_dense(rho_smooth, smooth, dense), becsum_)
 
     def response_density(self, dpsi) -> jnp.ndarray:
         """``drho``: the first-order density, as one ``jvp`` of :meth:`density_at`.
@@ -824,10 +952,17 @@ class SternheimerSolver:
         delta = w0gauss(x, smearing.ngauss) / smearing.degauss
         return dpsi + 0.5 * shift * delta[..., None] * self.psi
 
-    def perturbation(self, dv, dddd_paw=None):
+    def perturbation(self, dv, dddd_paw=None, coefficients=_COMPUTE):
         """``dH|psi>`` for a change ``dv`` in the potential -- see
         :func:`local_perturbation`, with this solver's ground state filled in."""
         return local_perturbation(
+            self.calculation, dv, self.v_scf, self.ddd_paw, dddd_paw,
+            coefficients=coefficients,
+        )
+
+    def perturbed_coefficients(self, dv, dddd_paw=None):
+        """``int3 + d(ddd_paw)`` for ``dv``: :func:`perturbed_coefficients` here."""
+        return perturbed_coefficients(
             self.calculation, dv, self.v_scf, self.ddd_paw, dddd_paw
         )
 
@@ -846,7 +981,8 @@ class SternheimerSolver:
         return self.response_density(self.solve(self.perturbation(dv)).dpsi)
 
 
-def local_perturbation(calculation, dv, v_scf=None, ddd_paw=None, dddd_paw=None):
+def local_perturbation(calculation, dv, v_scf=None, ddd_paw=None, dddd_paw=None,
+                       coefficients=_COMPUTE):
     """``dH|psi>`` for a change ``dv`` in the self-consistent potential.
 
     For a norm-conserving dataset this is ``dV(r)|psi>`` and nothing else. For an
@@ -872,6 +1008,11 @@ def local_perturbation(calculation, dv, v_scf=None, ddd_paw=None, dddd_paw=None)
     exactly as ``Calculation.hamiltonian`` interpolates the self-consistent
     potential: the wavefunctions live there, and applying a dense-grid field to
     them would be applying a different operator.
+
+    ``coefficients`` is ``int3 + d(ddd_paw)`` when the caller already has it
+    (:func:`perturbed_coefficients`): it is k-independent, so a response walked
+    a k-chunk at a time computes it once per perturbation rather than once per
+    chunk.
     """
     dense, smooth = calculation.basis.dense, calculation.basis.smooth
     grid = smooth.grid
@@ -883,9 +1024,10 @@ def local_perturbation(calculation, dv, v_scf=None, ddd_paw=None, dddd_paw=None)
     fields = jnp.stack([
         to_smooth(dv[spin], dense, smooth) for spin in range(dv.shape[0])
     ])
-    coefficients = _perturbed_coefficients(
-        calculation, dv, v_scf, ddd_paw, dddd_paw
-    )
+    if coefficients is _COMPUTE:
+        coefficients = perturbed_coefficients(
+            calculation, dv, v_scf, ddd_paw, dddd_paw
+        )
     # Read one k-point's projectors where they are used, never the whole-k
     # ``vkb``: on a norm-conserving dataset they are not used at all, and on a
     # lazy set the property would build the ``(nk, npwx, nkb)`` array for every
@@ -928,7 +1070,7 @@ def local_perturbation(calculation, dv, v_scf=None, ddd_paw=None, dddd_paw=None)
             if coefficients is not None:
                 # ``set_int3_nc``: ``int3`` carries a spin pair here, and it is
                 # **not** assembled a second time. The ``jvp`` in
-                # :func:`_perturbed_coefficients` runs through
+                # :func:`perturbed_coefficients` runs through
                 # ``_noncollinear_coefficients``, whose recombination and
                 # ``fcoef`` sandwich are linear in the integrals, so the tangent
                 # comes out already dressed -- which is what makes
@@ -989,7 +1131,7 @@ def local_perturbation(calculation, dv, v_scf=None, ddd_paw=None, dddd_paw=None)
     return apply
 
 
-def _perturbed_coefficients(calculation, dv, v_scf, ddd_paw, dddd_paw):
+def perturbed_coefficients(calculation, dv, v_scf, ddd_paw, dddd_paw):
     """``int3 + d(ddd_paw)``: how ``D_ij`` moves when the potential does.
 
     ``None`` for a norm-conserving dataset, where ``D_ij`` is the file's and

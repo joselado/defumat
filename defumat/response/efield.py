@@ -294,9 +294,17 @@ def dielectric_tensor(
         )
     # After the refusals: they are checked on the *calculation* and must not
     # need a state, so that a caller can ask "is this supported?" cheaply.
-    wavefunctions = jnp.asarray(wavefunctions)
-    if wavefunctions.ndim == 3:
-        wavefunctions = wavefunctions[None]
+    #
+    # **The route is decided before anything converts the states**, because the
+    # conversion is what it is about: a streamed store (a numpy array in host
+    # memory, memory mode on a card) walked a k-chunk at a time stays where it
+    # is (:mod:`defumat.response.chunked`), and ``jnp.asarray`` of it is the
+    # whole set back on the device.
+    streamed = _streams(calculation, wavefunctions, keep_internals)
+    if not streamed:
+        wavefunctions = jnp.asarray(wavefunctions)
+        if wavefunctions.ndim == 3:
+            wavefunctions = wavefunctions[None]
     weights, _ = calculation.occupations(eigenvalues)
     nocc = occupied_counts(calculation)
     potential = calculation.potential(density)
@@ -311,53 +319,22 @@ def dielectric_tensor(
     )
 
     # 1. The bare perturbation, once: ``P_c r_a |psi>`` for the three cartesian
-    #    directions. The commutator is computed for the whole k axis in three
-    #    ``jvp`` calls and *stored*; taking it inside the per-k callback would
-    #    differentiate every k-point's projectors to use one of them.
-    velocity = VelocityOperator(calculation, potential.v_scf, solver.ddd_paw)
-    occupied = solver.psi
-    occupied_eigenvalues = solver.eigenvalues
-    dipole = _augmentation_dipole(calculation)
-    # ``bare`` drives the loop below and is always kept. The other two are read
-    # *after* it and by nothing inside it, so retaining them unconditionally
-    # carries them through every iteration of the most expensive loop in the
-    # routine for nothing. ``commutators`` is free for a norm-conserving run --
-    # ``position`` is never rebound, so its entries are ``bare``'s own objects
-    # -- and a separate ``(nspin, nk, nocc, npwx)`` block each once the
-    # augmentation dipole splits them. ``projector_velocities`` is
-    # ``3 (nk, npwx, nkb)``, which on an ultrasoft or PAW dataset is the larger
-    # of the two by a factor ``nkb / (2 nocc nspin)``.
+    #    directions -- see :meth:`_WholeField.prepare`.
     #
-    # Both are read by every dataset now that PAW is no longer refused; what
-    # decides whether they are kept is the caller asking for ``Z*`` at all.
+    # ``commutators`` and the projectors' velocities are read *after* the loop
+    # and by nothing inside it, so they are kept only when the caller asks for
+    # ``Z*`` (or for the internals): see :class:`_WholeField`.
+    dipole = _augmentation_dipole(calculation)
     keep_commutators = bool(born_charges or keep_internals)
-    bare, commutators, projector_velocities = [], [], []
-    for axis, direction in enumerate(np.eye(3)):
-        # ``[H - eps S, r_a] = -i (dH/dk_a - eps dS/dk_a)``, both tangents from
-        # one ``jvp`` -- the projector rebuild they share is the whole cost.
-        derivative, overlap = velocity.both(occupied, direction)
-        commutator = -1j * (
-            derivative - occupied_eigenvalues[..., None] * overlap
-        )
-        position = _solve_stored(solver, commutator)
-        # ``iucom``: ``P_c r|psi>`` *before* ``S`` and before the augmentation
-        # dipole. QE stores it separately because the Born charges need it
-        # (``add_for_charges``), and so does
-        # :func:`defumat.response.born.constraint_position_term`.
-        if keep_commutators:
-            commutators.append(position)
-        if dipole is not None:
-            derivative = velocity.projectors(direction)
-            if born_charges:
-                projector_velocities.append(derivative)
-            position = _ultrasoft_position(
-                solver, velocity, position, direction, dipole[axis], derivative
-            )
-        bare.append(position)
-    # The loop's own names outlive it, and three of them are band- or
-    # projector-sized: the last axis's ``derivative`` is a whole
-    # ``(nk, npwx, nkb)`` block on its own. Nothing below reads them.
-    commutator = derivative = overlap = position = None
+    if streamed:
+        from defumat.response.chunked import StreamedField
+
+        field = StreamedField(calculation, solver, potential.v_scf, dipole,
+                              keep_commutators)
+    else:
+        field = _WholeField(calculation, solver, potential.v_scf, dipole,
+                            keep_commutators, born_charges)
+    field.prepare()
 
     # 2. The self-consistent loop. Only the induced term changes between
     #    iterations; the bare one above is what the whole loop is driven by.
@@ -371,28 +348,13 @@ def dielectric_tensor(
     onecentre = None if solver.ddd_paw is None else jnp.zeros(
         (3,) + solver.ddd_paw.shape
     )
-    history, total_iterations, solves = [], 0, 0
-    dpsi = [None, None, None]
+    history = []
     converged = False
 
     screen = _screening_kernel(calculation, density, screening)
     mixer = ResponseMixer(mixing_mode, beta=alpha_mix)
     for iteration in range(max_iterations):
-        response, becsum_response = [], []
-        for axis in range(3):
-            perturbation = _bare_plus_induced(
-                solver, bare[axis], dvscf[axis],
-                None if onecentre is None else onecentre[axis],
-                iteration > 0,
-            )
-            solution = solver.solve(perturbation)
-            dpsi[axis] = solution.dpsi
-            total_iterations += solution.iterations
-            solves += 1
-            response.append(solver.response_density(solution.dpsi))
-            if onecentre is not None:
-                becsum_response.append(solver.response_becsum(solution.dpsi))
-
+        response, becsum_response = field.respond(dvscf, onecentre, iteration > 0)
 
         # ``psymdvscf(drhop)``: the three responses are symmetrised *together*,
         # after the loop over directions and before the kernel, because a
@@ -432,31 +394,21 @@ def dielectric_tensor(
             converged = True
             break
 
-    epsilon = _assemble(calculation, solver, bare, dpsi)
+    epsilon = _assemble_overlaps(calculation, field.overlaps())
     charges = None
     if born_charges:
         # ``dLambda`` is a matrix element of the *same* perturbation the last
-        # solve was driven by, rebuilt here at the converged ``dV_scf``.
-        perturbations = [
-            _bare_plus_induced(
-                solver, bare[axis], dvscf[axis],
-                None if onecentre is None else onecentre[axis], True,
-            )
-            for axis in range(3)
-        ]
-        charges = born_effective_charges(
-            calculation, solver, jnp.asarray(wavefunctions), eigenvalues,
-            jnp.asarray(weights), jnp.asarray(density), becsum, dpsi,
-            perturbations, commutators,
-            projector_velocities=projector_velocities or None,
+        # solve was driven by, rebuilt there at the converged ``dV_scf``.
+        charges = field.born_charges(
+            dvscf, onecentre, wavefunctions, eigenvalues, weights, density, becsum,
         )
     internals = None
     if keep_internals:
         internals = {
-            "calculation": calculation, "solver": solver, "bare": bare, "dpsi": dpsi,
-            "dvscf": dvscf, "v_scf": potential.v_scf,
+            "calculation": calculation, "solver": solver, "bare": field.bare,
+            "dpsi": field.dpsi, "dvscf": dvscf, "v_scf": potential.v_scf,
             "onecentre": onecentre, "weights": weights, "nocc": nocc,
-            "commutators": commutators,
+            "commutators": field.commutators,
         }
     return DielectricTensor(
         epsilon=epsilon,
@@ -464,9 +416,156 @@ def dielectric_tensor(
         internals=internals,
         induced_density=np.asarray(drho),
         history=history,
-        average_iterations=total_iterations / max(solves, 1),
+        average_iterations=field.iterations / max(field.solves, 1),
         converged=converged,
     )
+
+
+def _streams(calculation, wavefunctions, keep_internals: bool) -> bool:
+    """Whether the field response walks the k axis a chunk at a time.
+
+    :func:`~defumat.forces.chunked.walks_chunks`' rule -- a streamed store, or
+    memory mode with a chunk smaller than the mesh -- so the force, the stress
+    and this response agree about when the store is too large to take whole.
+    Three cases take the whole-k route instead, each for a reason:
+
+    * ``keep_internals``: the third derivatives read ``bare``, ``dpsi`` and the
+      solver as device arrays (:mod:`defumat.response.electrostriction`,
+      :mod:`defumat.response.nonlinear`);
+    * a calculation carrying ``_kcart``, which ``at_strain`` records because
+      its ``KPoints`` do not move with the cell: a chunk's velocity operator
+      would be built at the unstrained k-points;
+    * a k-point pool's store is refused, as every non-pooled ``get_*`` is.
+    """
+    from defumat.forces.chunked import walks_chunks
+    from defumat.parallel import PoolStore
+
+    if isinstance(wavefunctions, PoolStore):
+        raise NotImplementedError(
+            "the dielectric response under k-point pools (DEFUMAT_POOLS) is "
+            "not implemented: the SCF, forces, stress and relaxations are "
+            "pool-aware, and this walks the whole store. Run it in one process")
+    if keep_internals or getattr(calculation, "_kcart", None) is not None:
+        return False
+    return walks_chunks(calculation, wavefunctions)
+
+
+class _WholeField:
+    """The field response with every k-point in one array: the route as it was.
+
+    :class:`~defumat.response.chunked.StreamedField` is the other one, with
+    the same four steps; the self-consistent loop in :func:`dielectric_tensor`
+    drives either.
+    """
+
+    def __init__(self, calculation, solver, v_scf, dipole, keep_commutators,
+                 born_charges):
+        self.calculation = calculation
+        self.solver = solver
+        self.v_scf = v_scf
+        self.dipole = dipole
+        self.keep_commutators = keep_commutators
+        self.keep_projector_velocities = born_charges
+        self.bare, self.commutators, self.projector_velocities = [], [], []
+        self.dpsi = [None, None, None]
+        self.iterations = 0
+        self.solves = 0
+
+    def prepare(self) -> None:
+        """``P_c^+ r_a|psi>`` for the three directions.
+
+        The commutator is computed for the whole k axis in three ``jvp`` calls
+        and *stored*; taking it inside the per-k callback would differentiate
+        every k-point's projectors to use one of them.
+
+        ``bare`` drives the loop and is always kept. ``commutators`` is free for
+        a norm-conserving run -- ``position`` is never rebound, so its entries
+        are ``bare``'s own objects -- and a separate ``(nspin, nk, nocc, npwx)``
+        block each once the augmentation dipole splits them.
+        ``projector_velocities`` is ``3 (nk, npwx, nkb)``, which on an ultrasoft
+        or PAW dataset is the larger of the two by a factor
+        ``nkb / (2 nocc nspin)``; both are kept only for ``Z*``.
+        """
+        solver = self.solver
+        velocity = VelocityOperator(self.calculation, self.v_scf, solver.ddd_paw)
+        occupied = solver.psi
+        occupied_eigenvalues = solver.eigenvalues
+        for axis, direction in enumerate(np.eye(3)):
+            # ``[H - eps S, r_a] = -i (dH/dk_a - eps dS/dk_a)``, both tangents
+            # from one ``jvp`` -- the projector rebuild they share is the whole
+            # cost.
+            derivative, overlap = velocity.both(occupied, direction)
+            commutator = -1j * (
+                derivative - occupied_eigenvalues[..., None] * overlap
+            )
+            position = _solve_stored(solver, commutator)
+            # ``iucom``: ``P_c r|psi>`` *before* ``S`` and before the
+            # augmentation dipole. QE stores it separately because the Born
+            # charges need it (``add_for_charges``), and so does
+            # :func:`defumat.response.born.constraint_position_term`.
+            if self.keep_commutators:
+                self.commutators.append(position)
+            if self.dipole is not None:
+                derivative = velocity.projectors(direction)
+                if self.keep_projector_velocities:
+                    self.projector_velocities.append(derivative)
+                position = _ultrasoft_position(
+                    solver, velocity, position, direction, self.dipole[axis],
+                    derivative,
+                )
+            self.bare.append(position)
+        # The loop's own names outlive it, and three of them are band- or
+        # projector-sized: the last axis's ``derivative`` is a whole
+        # ``(nk, npwx, nkb)`` block on its own. Nothing below reads them.
+        commutator = derivative = overlap = position = None
+
+    def respond(self, dvscf, onecentre, include_induced: bool):
+        """One iteration's three solves: ``(drho, dbecsum)`` per direction."""
+        solver = self.solver
+        response, becsum_response = [], []
+        for axis in range(3):
+            perturbation = _bare_plus_induced(
+                solver, self.bare[axis], dvscf[axis],
+                None if onecentre is None else onecentre[axis],
+                include_induced,
+            )
+            solution = solver.solve(perturbation)
+            self.dpsi[axis] = solution.dpsi
+            self.iterations += solution.iterations
+            self.solves += 1
+            response.append(solver.response_density(solution.dpsi))
+            if onecentre is not None:
+                becsum_response.append(solver.response_becsum(solution.dpsi))
+        return response, becsum_response
+
+    def overlaps(self) -> np.ndarray:
+        """``sum_kn w Re <P_c r_i psi|dpsi_j>``, ``(3, 3)``."""
+        weights = self.solver.weights  # (nspin, nk, nocc)
+        totals = np.zeros((3, 3))
+        for i in range(3):
+            for j in range(3):
+                overlap = jnp.einsum(
+                    "skng,skng->skn", jnp.conj(self.bare[i]), self.dpsi[j]
+                )
+                totals[i, j] = float(jnp.sum(weights * jnp.real(overlap)))
+        return totals
+
+    def born_charges(self, dvscf, onecentre, wavefunctions, eigenvalues, weights,
+                     density, becsum):
+        solver = self.solver
+        perturbations = [
+            _bare_plus_induced(
+                solver, self.bare[axis], dvscf[axis],
+                None if onecentre is None else onecentre[axis], True,
+            )
+            for axis in range(3)
+        ]
+        return born_effective_charges(
+            self.calculation, solver, jnp.asarray(wavefunctions), eigenvalues,
+            jnp.asarray(weights), jnp.asarray(density), becsum, self.dpsi,
+            perturbations, self.commutators,
+            projector_velocities=self.projector_velocities or None,
+        )
 
 
 def _require_a_finite_kernel(calculation, induced, density) -> None:
@@ -796,25 +895,20 @@ def _bare_plus_induced(solver, bare_axis, dv, dddd_paw, include_induced: bool):
     return perturbation
 
 
-def _assemble(calculation, solver, bare, dpsi) -> np.ndarray:
+def _assemble_overlaps(calculation, overlaps) -> np.ndarray:
     """``dielec.f90``: the tensor from the bare and self-consistent responses.
 
         eps_ij = delta_ij - 4 (4 pi w_k / Omega) sum_n Re <P_c r_i psi | dpsi_j>
 
-    The weights are the ground state's own ``wg``, which carries the spin
-    degeneracy exactly as QE's ``wk`` does, so no factor of two appears here
-    that is not in ``sum_band``.
+    ``overlaps`` is the ``(3, 3)`` sum ``sum_kn w Re <P_c r_i psi | dpsi_j>``,
+    which each route contracts over its own stores (``_WholeField.overlaps``,
+    :meth:`~defumat.response.chunked.StreamedField.overlaps`). The weights are
+    the ground state's own ``wg``, which carries the spin degeneracy exactly as
+    QE's ``wk`` does, so no factor of two appears here that is not in
+    ``sum_band``.
     """
     volume = calculation.system.cell.volume
-    weights = solver.weights  # (nspin, nk, nocc)
-    epsilon = np.eye(3)
-    for i in range(3):
-        for j in range(3):
-            overlap = jnp.einsum(
-                "skng,skng->skn", jnp.conj(bare[i]), dpsi[j]
-            )
-            total = jnp.sum(weights * jnp.real(overlap))
-            epsilon[i, j] -= 4.0 * FPI * float(total) / volume
+    epsilon = np.eye(3) - 4.0 * FPI * np.asarray(overlaps) / volume
     # ``dielec.f90`` ends with ``symmatrix``: a Brillouin-zone sum over the
     # wedge is exact for a scalar and not for a rank-2 tensor, so the components
     # the crystal's symmetry forbids are a residue of the reduction. On cubic

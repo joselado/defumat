@@ -3729,6 +3729,39 @@ class Calculation:
             moved.wfcU = self.wfcU[rows]
         return moved
 
+    def restricted_hamiltonians(self, hamiltonians) -> tuple:
+        """The whole set's Hamiltonians at this row subset's k-points.
+
+        ``self`` is a calculation from :meth:`at_rows`; ``hamiltonians`` are what
+        the whole set's :meth:`hamiltonian` returned. Every k-indexed field is
+        replaced by this calculation's slice -- ``|k+G|^2``, the FFT and stick
+        indices, the mask and the projectors -- and everything else is shared,
+        above all ``deeq``, so ``newd`` is not redone per chunk. ``npw`` stays
+        the whole set's: only the eigensolver's cap reads it, and a per-chunk
+        value would compile per chunk. The result applies at local index ``i``
+        what the whole set's applies at ``rows[i]``.
+
+        Refused for DFT+U, whose ``wfcU`` term is a separate operator with a k
+        index of its own; nothing that calls this runs with a Hubbard ``U``.
+        """
+        restricted = []
+        for hamiltonian in hamiltonians:
+            if hamiltonian.hubbard is not None:
+                raise NotImplementedError(
+                    "a row-subset Hamiltonian with a Hubbard term is not "
+                    "implemented: its wfcU carries a k index of its own")
+            fields = {
+                "kinetic": self.kinetic.astype(hamiltonian.kinetic.dtype),
+                "fft_index": self.fft_index,
+                "mask": self.basis.planewaves.mask,
+                "projectors": self.projectors,
+                "sticks": self.sticks,
+            }
+            if not isinstance(hamiltonian, SpinorHamiltonian):
+                fields["fft_index_minus"] = self.fft_index_minus
+            restricted.append(dataclasses.replace(hamiltonian, **fields))
+        return tuple(restricted)
+
     def at_kcart(self, kcart) -> "Calculation":
         """The same calculation with the k-points moved, at a **frozen sphere**.
 

@@ -55,10 +55,20 @@ def test_a_row_subset_is_the_whole_set_at_those_k_points():
                                   np.asarray(energies)[:, ROWS])
 
     part_hamiltonian = part.hamiltonian(potential.v_scf)[0]
+    # The whole set's Hamiltonian with its k-indexed fields sliced, which is
+    # what a response walked a chunk at a time uses so that ``newd`` is not
+    # redone per chunk: the same operator, bit for bit.
+    restricted = part.restricted_hamiltonians(hamiltonians)[0]
     for position, ik in enumerate(ROWS):
         np.testing.assert_array_equal(
             np.asarray(part_hamiltonian.apply(psi[0, ik], position)),
             np.asarray(hamiltonians[0].apply(psi[0, ik], ik)))
+        np.testing.assert_array_equal(
+            np.asarray(restricted.apply(psi[0, ik], position)),
+            np.asarray(hamiltonians[0].apply(psi[0, ik], ik)))
+        np.testing.assert_array_equal(
+            np.asarray(restricted.apply_s(psi[0, ik], position)),
+            np.asarray(hamiltonians[0].apply_s(psi[0, ik], ik)))
 
     weights = jnp.ones((1, len(ROWS), 6))
     chunk = psi[:, ROWS]

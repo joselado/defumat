@@ -69,7 +69,7 @@ from defumat.scf.potential import total_charge
 from defumat.parallel import PoolStore, current_pools
 from defumat.scf.streaming import is_host_store
 
-__all__ = ["chunked_gradient", "wants_chunks"]
+__all__ = ["chunked_gradient", "walks_chunks", "wants_chunks"]
 
 
 def wants_chunks(calculation, state: FrozenState) -> bool:
@@ -79,8 +79,19 @@ def wants_chunks(calculation, state: FrozenState) -> bool:
     mode wherever the chunk is smaller than the k-set. Speed mode, the CPU
     default every validated number was taken in, keeps the single pass.
     """
+    return walks_chunks(calculation, state.wavefunctions)
+
+
+def walks_chunks(calculation, wavefunctions) -> bool:
+    """:func:`wants_chunks` for a consumer holding the states rather than a :class:`FrozenState`.
+
+    The one rule for every derivative or response that can walk the k axis a
+    chunk at a time (:mod:`defumat.response.chunked` reads it too), so the
+    force, the stress and the field response cannot disagree about when the
+    store is too large to take whole.
+    """
     nk = calculation.system.kpoints.nk
-    if is_host_store(state.wavefunctions) or isinstance(state.wavefunctions, PoolStore):
+    if is_host_store(wavefunctions) or isinstance(wavefunctions, PoolStore):
         # A k-point pool's share is walked as the pool's own rows.
         return True
     batch = calculation.k_batch
