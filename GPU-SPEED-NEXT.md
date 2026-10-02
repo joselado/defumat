@@ -131,6 +131,14 @@ XLA command buffers (a null here: `--xla_gpu_enable_command_buffer` with `WHILE,
 
 ## 7. Other items that came up -- priority 4
 
+* **A warm response call on a card is 40 per cent key** (2026-10-02): after `defumat/eager.py` a second
+  AlAs dielectric tensor on the A2000 is 7.1 s, of which 2.1 s is tracing the closures and 0.8 s
+  printing their jaxprs to hash them. The fix is a perturbation written as a function of explicit
+  arrays (a pytree with a static kind), so that `SternheimerSolver.solve` and the response density can be
+  module-level `jit`s keyed without a trace; it touches every perturbation the response stack builds
+  (`efield`, `phonon`, `phononq`, `strain`, `electrostriction`, `piezo`). Worth doing once the
+  response stack runs on cards in production.
+
 * **The 157-atom slab's "12x too many steps"** (`OPEN.md`, the memory notes) is a separate question: its
   iteration 2 is in the loose-`ethr` regime, ten orders above any floor. **It does not reproduce on small
   cells** (2026-10-01 evening, this workstation's CPU, `diago_david_ndim = 2`, the same input through

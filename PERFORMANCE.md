@@ -9361,7 +9361,11 @@ electrostriction 3.1e-14, Raman 3.7e-12 (on a translational residue of 0.0019), 
 8.5e-17, velocities and effective masses identical; the Gamma phonon eigenvectors differ inside the two
 degenerate pairs, where any rotation is as right as another. **What `compiled` costs**: on a warm
 second AlAs dielectric call 85 calls trace for 5.2 s and print for 1.2 s, of 17.5; the loops it replaces
-traced their bodies at every call as well.
+traced their bodies at every call as well. On the A2000 the same call is 127 calls, 2.1 s of tracing and
+about 0.8 s of printing in 7.1 s, so about 40 per cent of a warm response call on a card is now the key
+rather than the work; the way past it is a perturbation that is a function of explicit arrays, so that
+a module-level `jit` can key on it without tracing, and that is a refactor of the response stack's
+perturbation objects (`GPU-SPEED-NEXT.md`).
 
 ## The host's LAPACK for the small subspace solves (RTX A2000, 2026-10-02)
 
