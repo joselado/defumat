@@ -207,7 +207,7 @@ because that is what decides whether it is a session or a phase.
 - **A switch from single to double precision that pays** (P126): `'mixed'` converges to the double
   state and loses the superlinear mixing step a bulk cell converges by, 0.72x on 64-atom silicon on
   the card; and **`k_batch = 'fit'` as memory mode's default on a card**, which the user decided on
-2026-10-02 and which is not yet implemented (`GPU-SPEED-NEXT.md` item 4).
+2026-10-02 and which is not yet implemented (`GPU-SPEED-NEXT.md` section 4a).
 - **Relaxing the orientation of a magnetic texture under spin-orbit coupling** (P122,
   `ORIENTATION-NEXT.md`): step 1, the three-component torque on a collinear source, is in;
   a noncollinear source (the four-cell cobalt helix), the BFGS relaxation in the rotation,

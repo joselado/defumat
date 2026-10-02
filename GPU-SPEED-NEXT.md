@@ -71,7 +71,7 @@ they are interleaved (both platforms then follow the norm, and sorting them last
 Davidson's are already trailing. Which stage of cuSOLVER (`sytrd`, the divide and conquer, `ormtr`)
 carries it was not taken apart, and with the norm at the live block's own it no longer matters here.
 
-## 4a. Memory mode on a k-mesh, and a float32 band side -- done 2026-10-01 evening, two decisions left
+## 4a. Memory mode on a k-mesh, and a float32 band side -- done 2026-10-01 evening, decided 2026-10-02, the default change to implement
 
 Memory mode cost 1.8x against speed mode on a k-mesh of a small cell, nearly all of it the one k-point
 per call; `k_batch = 'fit'` sizes the chunk from the card (1.97x faster at 27 k-points on eight-atom
