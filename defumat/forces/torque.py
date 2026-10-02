@@ -69,6 +69,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.scf.continuation import _axis, _collinear_axis
+from defumat.batching import sum_k
 from defumat.eager import compiled
 
 __all__ = [
@@ -184,17 +185,18 @@ def _band_energy(calculation, states, weights, density, becsum=()):
     psi = jnp.asarray(states)[0]
     occupation = jnp.asarray(weights)[0]
 
-    def summed(psi, occupation):
-        total = 0.0
-        for ik in range(psi.shape[0]):
-            applied = hamiltonian.apply(psi[ik], ik)
-            bands = jnp.real(jnp.sum(jnp.conj(psi[ik]) * applied, axis=-1))
-            total = total + jnp.sum(occupation[ik] * bands)
-        return total
+    def one(ik):
+        applied = hamiltonian.apply(psi[ik], ik)
+        bands = jnp.real(jnp.sum(jnp.conj(psi[ik]) * applied, axis=-1))
+        return jnp.sum(occupation[ik] * bands)
 
     # Called outside any trace once per angle, with a new Hamiltonian each
-    # time, so compiled by its structure (:mod:`defumat.eager`).
-    return compiled(summed, psi, occupation)
+    # time, so compiled by its structure (:mod:`defumat.eager`); the k axis is
+    # a ``sum_k`` rather than a Python loop, which would unroll one Hamiltonian
+    # application per k-point into the kept program.
+    return compiled(
+        lambda indices: sum_k(one, indices, batch=calculation.k_batch),
+        jnp.arange(psi.shape[0]))
 
 
 def _chunked_energy_and_slope(calculation, states, weights, density, plane,

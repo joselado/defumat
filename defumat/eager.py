@@ -9,7 +9,7 @@ again at every call -- and with the persistent cache on, every one of those is a
 cache hit that maps a new executable into the process. Measured on zincblende
 AlAs (``tests/data/qe/alas-berry.in``) a second ``get_dielectric_tensor()``
 compiled 94 programs, one Sternheimer loop and one response density per field
-direction per iteration, and took 23.4 s with the cache on and 66.4 s with it
+direction per iteration, and took 23.2 s with the cache on and 67.8 s with it
 off (``PERFORMANCE.md``, "The response stack compiled its k loops again at
 every iteration").
 
@@ -41,6 +41,12 @@ Two calls whose closures differ only in the arrays they hold share one program.
   is evaluated as it was before.
 * Not when a callback primitive is present, whose host function is named in the
   printed form and not shown.
+* Not when ``fn`` needs the *value* of something that depends on its arguments
+  (``float`` of it, ``np.asarray`` of it, a branch on it): an eager call allowed
+  that, ``map_axis`` with a single entry calling its body on concrete values, and
+  a trace cannot, so such a call is ``fn(*args)`` as before. Arithmetic on
+  constants alone is evaluated while tracing (``jax.ensure_compile_time_eval``),
+  as it was eagerly.
 
 The cache is the one piece of module-level mutable state in the package that
 outlives a call. It holds the open jaxpr and its compiled program, never the
@@ -52,20 +58,24 @@ from __future__ import annotations
 
 import collections
 import hashlib
+import warnings
 
 import jax
 import numpy as np
 from jax._src import core as _core  # trace_state_clean has no public spelling
 
-#: Programs kept; the oldest is dropped past it. A dielectric tensor needs about
-#: six (two forms of the perturbation, the response density, the velocity), a
-#: phonon at ``q`` about as many again.
-CACHE_SIZE = 32
+#: Programs kept; the least recently used is dropped past it, with one warning,
+#: because a process cycling through more structures than this would compile at
+#: every call again with nothing else to say so. An entry is an executable handle.
+CACHE_SIZE = 128
 
 #: Bytes of nested constants hashed into a key before the call is refused.
 NESTED_LIMIT = 1 << 24
 
 _PROGRAMS: collections.OrderedDict = collections.OrderedDict()
+
+_NEEDS_VALUES = (jax.errors.ConcretizationTypeError, jax.errors.TracerArrayConversionError,
+                 jax.errors.TracerBoolConversionError, jax.errors.TracerIntegerConversionError)
 
 
 def compiled(fn, *args):
@@ -78,7 +88,18 @@ def compiled(fn, *args):
     """
     if not _core.trace_state_clean():
         return fn(*args)
-    closed, shape = jax.make_jaxpr(fn, return_shape=True)(*args)
+    try:
+        # Arithmetic on constants is evaluated while tracing and hoisted, as it
+        # was when ``fn`` ran eagerly: a setup step such as
+        # ``augmentation_dipole``'s ``np.asarray(simpson_weights(...))`` needs a
+        # concrete value, and ``make_jaxpr`` alone stages even that.
+        with jax.ensure_compile_time_eval():
+            closed, shape = jax.make_jaxpr(fn, return_shape=True)(*args)
+    except _NEEDS_VALUES:
+        # ``fn`` reads a value that depends on its arguments, which an eager call
+        # allows and a trace does not: ``map_axis`` with one entry calls its body
+        # on concrete values.
+        return fn(*args)
     flat, _ = jax.tree_util.tree_flatten(args)
     out_tree = jax.tree_util.tree_structure(shape)
     jaxpr, consts = closed.jaxpr, list(closed.consts)
@@ -96,6 +117,7 @@ def compiled(fn, *args):
         _PROGRAMS[key] = program
         while len(_PROGRAMS) > CACHE_SIZE:
             _PROGRAMS.popitem(last=False)
+            _warn_evicted()
     else:
         _PROGRAMS.move_to_end(key)
     return jax.tree_util.tree_unflatten(out_tree, program(consts, flat))
@@ -111,6 +133,20 @@ def compiled_jvp(fun, primals, tangents):
     for.
     """
     return compiled(lambda p, t: jax.jvp(fun, p, t), tuple(primals), tuple(tangents))
+
+
+_EVICTED = []
+
+
+def _warn_evicted() -> None:
+    if not _EVICTED:
+        _EVICTED.append(True)
+        warnings.warn(
+            f"defumat.eager kept {CACHE_SIZE} compiled programs and dropped the "
+            "oldest: a closure whose program was dropped compiles again on its "
+            "next call, so a loop over more structures than this pays a compile "
+            "at every call (raise defumat.eager.CACHE_SIZE)",
+            RuntimeWarning, stacklevel=3)
 
 
 def _program(jaxpr):
@@ -168,3 +204,4 @@ def _jaxprs(value):
 def clear() -> None:
     """Drop every kept program (a test's isolation; ``jax.clear_caches`` frees them)."""
     _PROGRAMS.clear()
+    _EVICTED.clear()

@@ -155,3 +155,40 @@ def test_a_second_dielectric_tensor_call_compiles_nothing(silicon):
         second = silicon.get_dielectric_tensor()
     assert names == []
     np.testing.assert_allclose(second.epsilon, first.epsilon, rtol=0, atol=1e-12)
+
+
+def test_a_full_cache_says_so_once(monkeypatch):
+    monkeypatch.setattr(eager, "CACHE_SIZE", 1)
+    _loop(jnp.arange(4.0))
+    with pytest.warns(RuntimeWarning, match="dropped the oldest"):
+        compiled(lambda xs: lax.map(lambda x: x + 1.0, xs), jnp.arange(4.0))
+    assert len(eager._PROGRAMS) == 1
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        compiled(lambda xs: lax.map(lambda x: x - 1.0, xs), jnp.arange(4.0))
+
+
+def test_host_arithmetic_on_constants_is_evaluated_while_tracing():
+    """``augmentation_dipole`` reads ``np.asarray`` of a ``jnp`` result on constants."""
+    table = np.arange(4.0)
+
+    def fn(x):
+        weights = np.asarray(jnp.cumsum(jnp.asarray(table)))
+        return x * float(weights.sum())
+
+    got = compiled(fn, jnp.asarray(2.0))
+    assert len(eager._PROGRAMS) == 1
+    np.testing.assert_allclose(got, 2.0 * 10.0)
+
+
+def test_a_value_read_off_an_argument_falls_back_to_the_plain_call():
+    """``map_axis`` with one entry calls its body on concrete values, which a trace cannot."""
+    from defumat.batching import map_k
+
+    def body(x):
+        return x * 2.0 if float(x) > 0 else x
+
+    got = compiled(lambda xs: map_k(body, xs, batch=1), jnp.ones(1))
+    assert len(eager._PROGRAMS) == 0
+    np.testing.assert_allclose(got, [2.0])
