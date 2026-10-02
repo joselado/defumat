@@ -9500,3 +9500,24 @@ Single converges in nine iterations against six, at its floor, to -507.166033420
 iterations take the whole of the per-iteration gain in speed mode, so the tier is worth its half peak and
 not its time there; `GPU.md` Phase 3 ranked it by this number. `nsys` is not on the GPU nodes, so the
 fourth stage, the kernel profile, was skipped.
+
+**Which half of memory mode's cost it is: the streamed store** (job 20644333, an H100, `gpu46`,
+`tools/gpu/memory-mode-split.sbatch` at `2e46303`, 3 min 24 s; the dials swapped one at a time from
+memory mode, ms per iteration, median of two warm SCFs, conv_thr 1e-10, every arm the same steps and
+energy):
+
+| cell | memory | projectors stored | store on the card | both | speed |
+|---|---|---|---|---|---|
+| `si64-1k-ecut30` | 124.02 | 118.05 | 65.31 | 63.05 | 63.53 |
+| device peak, GiB | 3.151 | 3.237 | 3.192 | 3.282 | 3.286 |
+| `si16-1k-ecut30` | 23.92 | 21.25 | 19.41 | 16.90 | 17.17 |
+
+On the 27-point mesh (`benchmarks/si8-ecut20-nosym-k3.in`) memory mode at one k-point is 184.79 ms,
+`k_batch = 'fit'` 31.37 (the whole mesh fitted, so the chunk resolved to the whole axis) and speed mode
+20.55, at peaks of 0.118, 0.853 and 0.863 GiB. **So on a fast card memory mode's cost is the
+wavefunction store streamed through host memory**, 1.9x at 64 atoms and 1.5x on the mesh at `'fit'`;
+the projector rebuild is 4 to 10 per cent. And the stream saves almost nothing in either case, 0.04 GiB
+with one k-point and 0.01 GiB with the whole mesh in one batch, because the k-points being solved must be
+on the card either way: the store saves memory only when the chunk is smaller than the mesh, and only
+the part not in flight. On the A2000 the same stream was 7 per cent of a 64-atom iteration (section 6 of
+`GPU-SPEED-NEXT.md`), which the float32 card's slow arithmetic hid.

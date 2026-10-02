@@ -103,7 +103,12 @@ data-centre card"): the device `eigh` follows the norm there as on the A2000 (th
 per cent less device memory), against 8 per cent on the A2000. With one k-point that is the projector
 rebuild or the streamed store; the next job is the same cell with `projectors` and `wfc_store` swapped one
 at a time, `time_scf.py` per arm, and an `nsys` the GPU nodes do not have (module or a container to find
-first). Until it is known, memory mode is the wrong default on a fast card for a cell that fits.
+first). **Answered the same morning** (job 20644333, an H100): it is the streamed store, 124.0 against
+65.3 ms with the store kept on the card at 64 atoms, the projector rebuild 4 to 10 per cent, and the
+stream saves 0.04 GiB with one k-point and 0.01 GiB when `'fit'` batches the whole mesh, since what is
+being solved is on the card either way. So the stream earns its time only when the chunk is smaller
+than the mesh; a store that streams only then is the change this points to, and it is the user's,
+beside implementing `'fit'` (section 4a).
 
 ## 5. The A100-class profile -- priority 3, needs item 1
 
