@@ -106,7 +106,10 @@ XLA command buffers (a null here: `--xla_gpu_enable_command_buffer` with `WHILE,
   the A2000 in speed mode sticks 63.9 against box 70.3 ms at 16 atoms, 153 against 173 on a 27-point
   mesh of 8 atoms, 1424 against 1423 at 64, and 17.7 against 16.6 at 8 atoms with one k-point; sticks
   9.5 per cent faster at 16 atoms on a CPU. The default stays `sticks`. Decide on a float64 card.
-* **The subspace `eigh` by the host's LAPACK, for small matrices on a card** -- a decision, not done. The
+* **The subspace `eigh` by the host's LAPACK, for small matrices on a card** -- now an opt-in dial,
+  `DEFUMAT_HOST_EIGH_ROWS` (2026-10-02, measured on whole SCFs: 1.36x on a 27-point mesh in memory mode,
+  1.14x at one k-point, 1.00x at 64 atoms, 0.98x in speed mode; `PERFORMANCE.md`, "The host's LAPACK for
+  the small subspace solves"); whether it becomes memory mode's default on a card is the user's. The
   device `syevd` is 0.63, 1.11, 3.56 and 6.65 ms a call at 16, 32, 64 and 128 rows on the A2000 against
   0.23, 0.32, 0.71 and 2.21 for LAPACK through `jax.pure_callback`, crossing at about 256; after the two
   fixes of that evening it is 71 per cent of the kernel time of eight-atom silicon at one k-point and 61

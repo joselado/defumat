@@ -316,3 +316,36 @@ def test_the_subspace_solves_ask_for_syevd_by_name():
     values = np.asarray(generalised_eigh(h, _positive(12, 5), robust=False)[0])
     reference = scipy.linalg.eigh(np.asarray(h), np.asarray(_positive(12, 5)), eigvals_only=True)
     assert np.abs(values - reference).max() < 1e-12
+
+
+def test_the_host_route_is_opt_in_and_solves_what_the_device_route_does(monkeypatch):
+    """``DEFUMAT_HOST_EIGH_ROWS``: LAPACK through a callback, only on an accelerator, only when small.
+
+    The platform is faked, since the route is chosen at trace time from
+    ``jax.default_backend()``; on a CPU both routes are LAPACK, so the eigenvalues
+    agree to round-off and the graph is what says which one was taken.
+    """
+    import jax
+
+    from defumat.solvers import subspace
+
+    h, s = _hermitian(12, 3), _positive(12, 5)
+    device = np.asarray(generalised_eigh(h, s, robust=False)[0])
+    monkeypatch.setattr(subspace.jax, "default_backend", lambda: "gpu")
+    assert subspace.HOST_EIGH_ROWS == 0
+    graph = str(jax.make_jaxpr(lambda a, b: generalised_eigh(a, b, robust=False))(h, s))
+    assert "pure_callback" not in graph
+
+    monkeypatch.setattr(subspace, "HOST_EIGH_ROWS", 12)
+    for robust in (False, True):
+        graph = str(jax.make_jaxpr(lambda a, b: generalised_eigh(a, b, robust=robust))(h, s))
+        assert "pure_callback" in graph and "eigh[" not in graph
+    host = np.asarray(jax.jit(lambda a, b: generalised_eigh(a, b, robust=False))(h, s)[0])
+    assert np.abs(host - device).max() < 1e-12
+    batched = jax.vmap(lambda a, b: generalised_eigh(a, b, robust=False)[0])(
+        jnp.stack([h, h]), jnp.stack([s, s]))
+    assert np.abs(np.asarray(batched) - device[None]).max() < 1e-12
+
+    monkeypatch.setattr(subspace, "HOST_EIGH_ROWS", 11)
+    graph = str(jax.make_jaxpr(lambda a, b: generalised_eigh(a, b, robust=False))(h, s))
+    assert "pure_callback" not in graph

@@ -14,7 +14,9 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
+from defumat._envcompat import environ_get
 from defumat.basis.fft import force_real_g0
 from defumat.config import subspace_dtype
 from jax.lax.linalg import EighImplementation, eigh as _lax_eigh
@@ -30,6 +32,17 @@ __all__ = ["generalised_eigh", "rayleigh_ritz"]
 OVERLAP_FLOOR = 1.0e-12
 
 
+#: The largest subspace solved by the host's LAPACK on an accelerator, read once
+#: from ``DEFUMAT_HOST_EIGH_ROWS`` at import; 0, the default, keeps every solve on
+#: the device. An experiment's dial and not a default, because it puts a host
+#: round trip inside the Davidson loop, which ``CLAUDE.md``'s JAX rules forbid:
+#: one complex128 solve on an RTX A2000 is 0.63, 1.11, 3.56 and 6.65 ms on the
+#: device at 16, 32, 64 and 128 rows against 0.23, 0.32, 0.71 and 2.21 through
+#: ``jax.pure_callback`` (``PERFORMANCE.md``, "The host's LAPACK for the small
+#: subspace solves"). On a CPU every route is LAPACK already and this does nothing.
+HOST_EIGH_ROWS = int(environ_get("DEFUMAT_HOST_EIGH_ROWS", "0") or "0")
+
+
 def _eigh(x):
     """``jnp.linalg.eigh`` with cuSOLVER's ``syevd`` asked for by name.
 
@@ -43,8 +56,26 @@ def _eigh(x):
     of it the Jacobi kernels. On a CPU every route is LAPACK's ``heevd``, so
     nothing there changes.
     """
+    if 0 < x.shape[-1] <= HOST_EIGH_ROWS and jax.default_backend() != "cpu":
+        return _host_eigh(x)
     vectors, values = _lax_eigh(x, implementation=EighImplementation.QR)
     return values, vectors
+
+
+def _host_eigh(x):
+    """``(values, vectors)`` of ``x`` from NumPy's LAPACK, batched axes and all.
+
+    No derivative: it serves the Davidson subspace, which nothing differentiates.
+    """
+    real = jnp.finfo(x.dtype).dtype
+
+    def call(a):
+        values, vectors = np.linalg.eigh(np.asarray(a))
+        return values.astype(real), vectors.astype(a.dtype)
+
+    shapes = (jax.ShapeDtypeStruct(x.shape[:-1], real),
+              jax.ShapeDtypeStruct(x.shape, x.dtype))
+    return jax.pure_callback(call, shapes, x, vmap_method="broadcast_all")
 
 
 def _park_above(reduced, parked):

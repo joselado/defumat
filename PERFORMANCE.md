@@ -9304,7 +9304,15 @@ around each call, nothing else running:
 | before, cache off | 72.21 s, 248, +11,624 | 67.79 s, 94, +10,771 | 65.73 s, 94, +10,771 |
 | after, cache off | 25.70 s, 84, +1,459 | 16.42 s, 0, +0 | 16.29 s, 0, +0 |
 
-`eps_xx` is 19.900101704229 in all twelve calls. **The mechanism is the ultracell's and the Berry
+`eps_xx` is 19.900101704229 in all twelve calls. **On D22's RTX A2000** (the same script and input,
+cores 0 to 3, the card's backend), the second call takes 7.29 s against 17.04 with the cache on and 7.25
+against 45.57 with it off (6.3x), the first 13.51 against 26.62 and 15.44 against 52.97, and **the
+mappings do not grow on the card in either code** (0 to 7 a call before, 0 to 162 after), since a GPU
+executable's code lives on the device: the exhaustion is the CPU backend's, which is what a Triton CPU
+node runs. **The peak resident set falls as well**, 2.35 GB to 0.87 GB for the three-call AlAs run on
+this workstation (`/usr/bin/time`, cache on), because the old code kept every recompiled executable.
+
+**The mechanism is the ultracell's and the Berry
 loop's**, one level out: `SternheimerSolver.solve` walks k with a `map_k` over a closure built around
 the perturbation at every call, called outside any `jit`, so JAX traces the loop, binds a `scan` with a
 new body jaxpr and compiles it, and does the same for the response density, which is a `jax.jvp` of
@@ -9354,3 +9362,32 @@ electrostriction 3.1e-14, Raman 3.7e-12 (on a translational residue of 0.0019), 
 degenerate pairs, where any rotation is as right as another. **What `compiled` costs**: on a warm
 second AlAs dielectric call 85 calls trace for 5.2 s and print for 1.2 s, of 17.5; the loops it replaces
 traced their bodies at every call as well.
+
+## The host's LAPACK for the small subspace solves (RTX A2000, 2026-10-02)
+
+**The number to carry: with the Davidson subspace `eigh` on the host for matrices of at most 128 rows,
+a memory-mode SCF iteration on a 27-point mesh of eight-atom silicon takes 269 ms where it took 368
+(1.36x), with every Davidson step and the energy the same; at 64 atoms nothing moves, and in speed mode
+it loses 2 per cent.** `DEFUMAT_HOST_EIGH_ROWS` (`solvers.subspace.HOST_EIGH_ROWS`, read once at import,
+0 by default) sends a solve of that many rows or fewer to NumPy's LAPACK through `jax.pure_callback`, on
+an accelerator only. It is an opt-in dial and not a default because it is a host round trip inside the
+Davidson loop, which `CLAUDE.md`'s JAX rules forbid; the one-matrix figures behind it are 0.63, 1.11,
+3.56 and 6.65 ms on the device at 16, 32, 64 and 128 rows against 0.23, 0.32, 0.71 and 2.21 on the host.
+
+D22, `tools/parallel/time_scf.py`, cores 0 to 3, `conv_thr = 1e-10`, two alternating passes of each
+arm, ms per iteration, the median of three warm SCFs per pass (two at 64 atoms):
+
+| cell | mode | device | host at 128 rows | |
+|---|---|---|---|---|
+| `si8-1k` | memory | 18.13, 18.76 | 16.03, 16.40 | 1.14x |
+| `si8-ecut20-nosym-k3` (27 k-points) | memory | 368.22, 369.61 | 269.29, 273.73 | 1.36x |
+| `si8-ecut20-nosym-k3` | speed | 150.96, 153.44 | 154.74, 156.12 | 0.98x |
+| `si16-1k-ecut30` | memory | 68.91, 69.03 | 60.15, 60.63 | 1.14x |
+| `si64-1k-ecut30` | memory | 1529.22 | 1530.94 | 1.00x |
+
+The Davidson steps per iteration are identical between the arms in every row and the energies agree
+to every printed digit (-63.177989061455, -63.381897137515, -126.720760700971 and -507.166061664058 Ry).
+So the gain is where Davidson solves one k-point's small subspace at a time, which is memory mode's
+`k_batch = 1`; under a batch over k the device's batched solve already wins, and at 64 atoms the
+subspace is above the 128 rows. It brings memory mode on the mesh from 2.44x speed mode's iteration to
+1.78x. A float64 card's device `syevd` at these sizes is unmeasured, and so is whether this holds there.
