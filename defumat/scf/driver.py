@@ -107,7 +107,7 @@ from defumat.pseudo.spinorbit import (
 from defumat.batching import (
     fetch_wavefunctions, k_chunks, map_k, park_wavefunctions, resolve_band_batch,
     resolve_ethr_floor, resolve_fft_layout, resolve_k_batch, resolve_memory_mode,
-    resolve_plane_chunk, resolve_projectors, resolve_wfc_store,
+    resolve_plane_chunk, resolve_projectors, resolve_scf_wfc_store, resolve_wfc_store,
 )
 from defumat.eager import compiled
 from defumat.scf.continuation import (
@@ -1812,10 +1812,10 @@ def _resolve_memory_mode_for(memory_mode, system, pseudos, k_batch, projectors,
     warnings.warn(
         f"memory_mode='speed' does not fit this device"
         f"{' for ' + purpose if purpose else ''} ({check.describe()}); "
-        "running in memory_mode='memory' instead -- one k-point at a time, "
-        "projectors rebuilt per k-point and the wavefunctions streamed from "
-        "host memory. Same physics and the same numbers to round-off; pass an "
-        "explicit k_batch to override",
+        "running in memory_mode='memory' instead -- the largest k-chunk that "
+        "fits, projectors rebuilt per k-point, and the wavefunctions streamed "
+        "from host memory when the chunk is smaller than the mesh. Same physics "
+        "and the same numbers to round-off; pass an explicit k_batch to override",
         RuntimeWarning, stacklevel=3,
     )
     return "memory"
@@ -1875,8 +1875,7 @@ def resolve_k_batch_for(k_batch, mode, system, pseudos, projectors="default",
                         david=None, band_batch=None, nbnd=None):
     """The k-chunk a :class:`Calculation` runs at: ``'fit'`` sized from the card, else as asked.
 
-    Anything but ``'fit'`` -- an explicit chunk, ``None``, or ``"default"`` with
-    ``DEFUMAT_K_BATCH`` and the memory preset behind it -- is
+    An explicit chunk, ``None``, or ``DEFUMAT_K_BATCH`` set to one is
     :func:`~defumat.batching.resolve_k_batch`'s. ``'fit'`` (the argument, or
     ``DEFUMAT_K_BATCH=fit``) is the largest chunk whose estimated peak fits the
     card at the mode's other dials (:func:`~defumat.sizing.choose_k_batch`), the
@@ -1885,10 +1884,21 @@ def resolve_k_batch_for(k_batch, mode, system, pseudos, projectors="default",
     only from a whole band block: ``band_batch`` is the one already resolved
     for this run at one k-point, and a run whose block had to be split stays at
     one k-point a call. The answer is the same to round-off at any chunk.
+
+    **``"default"`` in memory mode on a card is ``'fit'``** (the user's decision
+    of 2026-10-02): one k-point a call took 184.8 ms an iteration on a 27-point
+    mesh of eight-atom silicon on an H100 where ``'fit'`` took 31.4, and 372
+    against 167 on the RTX A2000, the same steps (``PERFORMANCE.md``, "The
+    stall check on a data-centre card", "A k-chunk sized to the card"). A
+    speed-mode run that does not fit falls back to memory mode and so to the
+    largest chunk that does.
     """
     from defumat import batching
 
-    if not batching.k_batch_fit_requested(k_batch):
+    by_default = (k_batch == "default" and mode == "memory"
+                  and batching._backend() != "cpu"
+                  and batching._from_environment("DEFUMAT_K_BATCH") is batching._UNSET)
+    if not (by_default or batching.k_batch_fit_requested(k_batch)):
         return resolve_k_batch(k_batch, mode)
     if batching._backend() == "cpu" or band_batch is not None:
         return resolve_k_batch("default", mode)
@@ -6840,8 +6850,11 @@ def run_scf(
     #
     # ``stream`` -- the memory mode's default on an accelerator -- keeps the
     # store in host memory for the whole run and moves one k-chunk at a time
-    # through every pass that reads it (:mod:`defumat.scf.streaming`).
-    wfc_store = resolve_wfc_store(wfc_store, calculation.memory_mode)
+    # through every pass that reads it (:mod:`defumat.scf.streaming`), and only
+    # where the chunk is smaller than the mesh: with every k-point in flight it
+    # saves nothing and costs 1.9x on a fast card (``resolve_scf_wfc_store``).
+    wfc_store = resolve_scf_wfc_store(wfc_store, calculation.memory_mode,
+                                      calculation.k_batch, calculation.system.kpoints.nk)
     if pooled:
         _refuse_under_pools(
             pools, calculation, checkpointing=checkpointing,

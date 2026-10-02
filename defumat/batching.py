@@ -337,7 +337,7 @@ __all__ = ["DEFAULT_K_BATCH", "resolve_k_batch", "map_k", "sum_k",
            "map_bands",
            "sum_bands", "map_axis", "map_windows",
            "PROJECTOR_STORES", "resolve_projectors",
-           "WFC_STORES", "resolve_wfc_store", "park_wavefunctions",
+           "WFC_STORES", "resolve_wfc_store", "resolve_scf_wfc_store", "park_wavefunctions",
            "fetch_wavefunctions",
            "MEMORY_MODES", "resolve_memory_mode", "memory_preset",
            "k_chunks", "K_BATCH_FIT", "k_batch_fit_requested", "whole_axis_vmap"]
@@ -1107,6 +1107,28 @@ def resolve_wfc_store(requested: str | None = "default",
             f"{requested!r}"
         )
     return value
+
+
+def resolve_scf_wfc_store(requested: str | None, mode: str | None, k_batch,
+                          nk: int) -> str:
+    """The store an SCF on ``nk`` k-points runs with, ``k_batch`` at a time.
+
+    :func:`resolve_wfc_store`, except that memory mode's ``stream``, when it
+    comes from the preset rather than from the caller or ``DEFUMAT_WFC_STORE``,
+    is kept only where the chunk is smaller than the mesh. Where every k-point
+    is in flight at once, one k-point or a chunk of the whole mesh, the states
+    being solved are on the card either way and the stream saves nothing: on an
+    H100, 64-atom silicon with one k-point, 124.0 ms an iteration streamed
+    against 65.3 with the store on the card, for 0.04 GiB of peak, and on a
+    27-point mesh batched whole 0.01 GiB (``PERFORMANCE.md``, "The stall check
+    on a data-centre card"). The user's decision of 2026-10-02.
+    """
+    store = resolve_wfc_store(requested, mode)
+    said = (requested not in (None, "default")
+            or (environ_get("DEFUMAT_WFC_STORE", "") or "").strip().lower() in WFC_STORES)
+    if store == "stream" and not said and (k_batch is None or int(k_batch) >= nk):
+        return "device"
+    return store
 
 
 @functools.cache

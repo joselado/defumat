@@ -888,10 +888,13 @@ None of these is incidental to the algorithm:
   k-point's whatever `nks` is, and the parallelism over k comes from MPI pools. Batching
   the whole k axis with `vmap` is this code's deliberate deviation — it is what a GPU wants
   — so it is a **dial** (`defumat/batching.py`), set by `memory_mode`: QE's end of it on a
-  CPU and in `'memory'`, the accelerator default, which also streams the wavefunction store
-  through the card from host RAM (`wfc_store = 'stream'`); the batch in `'speed'`, which is
-  checked against the card and falls back to `'memory'` when it would not fit. Rule R6
-  (k leading) is what keeps both available.
+  CPU; in `'memory'`, the accelerator default, the largest k-chunk the card holds
+  (`k_batch = 'fit'`) and the wavefunction store streamed through the card from host RAM
+  (`wfc_store = 'stream'`) **only when that chunk is smaller than the mesh**, since with
+  every k-point in flight the stream saves nothing and cost 1.9x on an H100 (the user's
+  decisions of 2026-10-02); the whole batch in `'speed'`, which is checked against the card
+  and falls back to `'memory'` when it would not fit. Rule R6 (k leading) is what keeps
+  both available.
 - **The sphere, not the box.** Wavefunctions live on the G-vectors inside the cutoff and
   are expanded into the FFT box only for the transform, and only over the sticks the
   sphere occupies (`basis/sticks.py`).
@@ -1023,8 +1026,10 @@ whether a new test belongs in the gate, the cgroup cap and the RSS watchdog.
   stays on device.
 - **How many k-points are in flight is `defumat/batching.py`'s dial, and its default
   follows `memory_mode`** — QE's loop, one k-point at a time as `c_bands.f90` and
-  `sum_band.f90` do it, on a CPU and in `'memory'` (the accelerator default since
-  2026-09-28, the user's decision), and the whole axis at once in `'speed'`. The band dial
+  `sum_band.f90` do it, on a CPU; in `'memory'` (the accelerator default since
+  2026-09-28, the user's decision) the largest chunk the card holds, `'fit'`, since
+  2026-10-02, also the user's (184.8 against 31.4 ms an iteration on an H100's 27-point
+  mesh); and the whole axis at once in `'speed'`. The band dial
   follows the platform — one band on a CPU, the whole block on an accelerator — in both
   modes, **except** that a `'memory'`-mode `Calculation` on an accelerator whose whole
   block would not fit chooses the largest batch that does, from the card

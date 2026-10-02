@@ -560,7 +560,7 @@ class Calculator:
         written for; it is the same mistake as sizing ``K_POINTS gamma`` as the
         request rather than as the substitution, one option along.
         """
-        from defumat.batching import resolve_projectors, resolve_wfc_store
+        from defumat.batching import resolve_projectors, resolve_scf_wfc_store
         from defumat.scf.driver import resolve_band_batch_for, resolve_k_batch_for
         from defumat.sizing import estimate_size
 
@@ -581,8 +581,6 @@ class Calculator:
                 self.defaults.get("projectors", "default"),
                 options.get("davidson_basis"),
             )
-        options.setdefault("wfc_store", resolve_wfc_store(
-            self.defaults.get("wfc_store", "default"), mode))
         options.setdefault("projectors", resolve_projectors(
             self.defaults.get("projectors", "default"), mode))
         if options.get("k_batch") is None:
@@ -593,6 +591,11 @@ class Calculator:
                 self.pseudos, self.defaults.get("projectors", "default"),
                 options.get("davidson_basis"), options["band_batch"],
             )
+        # ... and the store after it, by the SCF's own rule, which streams only
+        # where that chunk is smaller than the mesh.
+        options.setdefault("wfc_store", resolve_scf_wfc_store(
+            self.defaults.get("wfc_store", "default"), mode, options["k_batch"],
+            self.system.kpoints.nk))
         return estimate_size(self.system, self.pseudos, **options)
 
     @classmethod

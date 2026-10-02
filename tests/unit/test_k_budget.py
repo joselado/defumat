@@ -131,8 +131,8 @@ def test_a_card_takes_the_chooser_and_only_from_a_whole_band_block(pseudo_dir, m
     _a_card_that_holds(5, monkeypatch)
     assert resolve_k_batch_for("fit", "memory", system, pseudos) == 5
     assert resolve_k_batch_for("fit", "memory", system, pseudos, band_batch=2) == 1
-    # anything but 'fit' is the dial as it was
-    assert resolve_k_batch_for("default", "memory", system, pseudos) == 1
+    # an explicit chunk is the dial as it was; "default" in memory mode is 'fit'
+    assert resolve_k_batch_for("default", "memory", system, pseudos) == 5
     assert resolve_k_batch_for(3, "memory", system, pseudos) == 3
     calculation = Calculation(system, pseudos, memory_mode="memory", k_batch="fit")
     assert (calculation.k_batch, calculation.band_batch) == (5, None)
@@ -162,3 +162,64 @@ def test_speed_mode_with_fit_keeps_its_own_dials(pseudo_dir, monkeypatch):
 def test_the_size_report_takes_the_chunk_the_run_takes(pseudo_dir):
     calculator = _calculator(pseudo_dir, k_batch="fit")
     assert calculator.estimate().k_batch == calculator.calculation.k_batch
+
+
+def test_memory_mode_on_a_card_takes_fit_by_default(pseudo_dir, monkeypatch):
+    """The user's decision of 2026-10-02: 184.8 against 31.4 ms an iteration on an H100's mesh."""
+    calculator = _calculator(pseudo_dir)
+    system, pseudos = calculator.system, calculator.pseudos
+    _a_card_that_holds(5, monkeypatch)
+    assert Calculation(system, pseudos, memory_mode="memory").k_batch == 5
+    # a chunk the caller or the environment names is kept
+    assert Calculation(system, pseudos, memory_mode="memory", k_batch=1).k_batch == 1
+    monkeypatch.setenv("DEFUMAT_K_BATCH", "1")
+    assert Calculation(system, pseudos, memory_mode="memory").k_batch == 1
+
+
+def test_a_cpu_keeps_one_k_point_by_default(pseudo_dir):
+    calculator = _calculator(pseudo_dir)
+    calculation = Calculation(calculator.system, calculator.pseudos, memory_mode="memory")
+    assert calculation.k_batch == 1
+
+
+def test_speed_mode_that_does_not_fit_falls_back_to_the_largest_chunk(pseudo_dir, monkeypatch):
+    calculator = _calculator(pseudo_dir)
+    _a_card_that_holds(5, monkeypatch)
+
+    class Short:
+        fits = False
+
+        def describe(self):
+            return "estimated 20 GiB against 10"
+
+    monkeypatch.setattr("defumat.sizing.speed_mode_fits", lambda *a, **k: Short())
+    with pytest.warns(RuntimeWarning, match="largest k-chunk that fits"):
+        calculation = Calculation(calculator.system, calculator.pseudos, memory_mode="speed")
+    assert (calculation.memory_mode, calculation.k_batch) == ("memory", 5)
+
+
+def test_the_store_streams_only_when_the_chunk_is_smaller_than_the_mesh(monkeypatch):
+    """With every k-point in flight the stream saved 0.01 to 0.04 GiB and cost 1.9x on an H100."""
+    monkeypatch.setattr(batching, "_backend", lambda: "gpu")
+    monkeypatch.delenv("DEFUMAT_WFC_STORE", raising=False)
+    store = batching.resolve_scf_wfc_store
+    assert store("default", "memory", 5, 64) == "stream"
+    assert store("default", "memory", None, 64) == "device"
+    assert store("default", "memory", 64, 64) == "device"
+    assert store("default", "memory", 1, 1) == "device"
+    assert store("default", "speed", None, 64) == "device"
+    # what the caller or the environment says is kept
+    assert store("stream", "memory", None, 64) == "stream"
+    assert store("host", "memory", 5, 64) == "host"
+    monkeypatch.setenv("DEFUMAT_WFC_STORE", "stream")
+    assert store("default", "memory", 1, 1) == "stream"
+    monkeypatch.setattr(batching, "_backend", lambda: "cpu")
+    monkeypatch.delenv("DEFUMAT_WFC_STORE")
+    assert store("default", "memory", 1, 64) == "device"
+
+
+def test_the_size_report_takes_the_store_the_run_takes(pseudo_dir, monkeypatch):
+    for chunk, expected in ((None, "device"), (5, "stream")):
+        _a_card_that_holds(chunk, monkeypatch)
+        calculator = _calculator(pseudo_dir, memory_mode="memory")
+        assert calculator.estimate().wfc_store == expected
