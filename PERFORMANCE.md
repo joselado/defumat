@@ -9660,3 +9660,74 @@ shift `alpha_pv` and the CG threshold as arguments, so one program serves every 
 
 **Still whole**: the phonons (`dynamical_matrix`, `dynamical_matrix_at_q`), the strain response, the
 third derivatives and anything asking for `keep_internals`, and a strained calculation (`_kcart`).
+
+## The Gamma phonon a k-chunk at a time (RTX A2000, 2026-10-03)
+
+**The number to carry: in memory mode on a card the dynamical matrix at `Gamma` now runs where the
+store streams, where it died before, and adds nothing to the SCF's peak on norm-conserving silicon and
+49.6 MB on ultrasoft; with the whole mesh in one chunk it reads the SCF's own peak, where all eight
+atoms took norm-conserving silicon from 872.9 to 1119.0 MB and ultrasoft from 925.2 to 1780.0.**
+`GPU-MEMORY-NEXT.md` item 2, its second piece (`af246f1`, `defumat/response/chunked_phonon.py`). The
+phonon held, per perturbation, a bare perturbation, a first-order state and (ultrasoft or PAW) the
+occupied block `ort`, each `(nspin, nk, nocc, npwx)`, whole-k on the card, and assembled each column
+with the whole k axis on one tape; on a streamed store it did not start, because the solver keeps the
+store in host memory and the whole-k helpers index it with a traced k index
+(`TracerArrayConversionError` at `phonon.py:873` and in `velocity.over_kpoints`, both cells). Now the
+two stores are in host memory, `ort` is rebuilt per chunk from the `(nocc, nocc)` overlap derivative
+instead of stored, and each column is the chunked force's split differentiated once more with the
+coordinate moving.
+
+Eight-atom Si at 20 Ry, `nosym`, unshifted 3x3x3 (and 4x4x4) grids, `conv_thr = 1e-10`, memory mode,
+warm cache, the second of two fresh processes per point, D22 (`tools/gpu/response_memory.py`, its new
+`phonon` stage); before at `2ce0134`, after at `af246f1`. Peaks are `peak_bytes_in_use` at the end of
+the process; the time is the phonon call alone; "one atom" is `atoms=(0,)`, three perturbations, and
+"all" is the eight atoms, 24:
+
+| cell, k-points, `k_batch` | SCF alone | phonon, before | after | time, before | after |
+|---|---|---|---|---|---|
+| norm-conserving, 27, 1, one atom | 35.1 MB | dies | 35.1 MB | -- | 52.9 s |
+| norm-conserving, 64, 1, one atom | 39.6 | dies | 39.6 | -- | 121.2 |
+| ultrasoft, 27, 1, one atom | 66.9 | dies | 116.5 | -- | 88.1 |
+| norm-conserving, 27, `'fit'`, one atom | 872.9 | 872.9 | 872.9 | 48.4 | 46.5 |
+| ultrasoft, 27, `'fit'`, one atom | 925.2 | 967.8 | 925.2 | 86.3 | 71.6 |
+| norm-conserving, 27, `'fit'`, all | 872.9 | 1119.0 | 872.9 | 416.1 | 391.2 |
+| ultrasoft, 27, `'fit'`, all | 925.2 | 1780.0 | 925.2 | 762.2 | 625.9 |
+
+with `D_xx(0,0)` the same to the ten printed digits and the CG's mean iteration count the same (35.071,
+38.067, 35.067, 38.059) in every row where both routes ran. `'fit'` takes the whole 27-point mesh in one
+chunk, so the SCF store stays on the card; the phonon walks it as one chunk anyway, the field
+response's rule (`efield._streams`). **The ultrasoft cell's 49.6 MB at one k-point a chunk** is flat in
+the sense the Born charges' 153 MB was, a pass's temporaries rather than a store. The compiler's `memory_analysis()` of each pass at that chunk puts it in the global step, the `jvp` of the whole-cell terms' gradient on the dense grid with the coordinate moving (the augmentation charge's second derivative in the positions is in it): **69.8 MB of temporaries and 24.5 MB of arguments**, against 33.9 MB for the bare walk, 21.2 for the solves and 20 or less for every other pass; the run reads 116.5. It has no k index, so it is the same at any mesh. On the norm-conserving cell no pass passes 20.0 MB (the solves), and the run reads the SCF's 35.1.
+
+**Against the whole-k route on the CPU**, one converged state through both (`tests/regression/
+test_streamed_phonons.py`, chunks that do not divide the k-set, 7 tests in 10 min 17 s at a 2.2 GB
+peak): the matrix agrees to 5.1e-15 on norm-conserving silicon's wedge (force constants of 0.28),
+4.3e-15 on two-atom aluminium, a metal (0.048), 1.3e-14 and 1.9e-14 on ultrasoft and PAW silicon's
+wedges, 1.0e-13 on ultrasoft AlAs (0.22) and 2.2e-16 under half-sphere storage, with the induced
+densities at 1e-14 or below and the history, the iteration count and the order `on_row` fires in all
+identical. The whole route is bit-identical to the code before the self-consistent loop was shared
+between the two (`phonon.screening_loop`), on all four regimes. On the CPU the chunked route was also
+the faster of the two in every comparison (21.0 against 50.0 s on silicon's wedge, 103.5 against
+178.8 s on AlAs), which says nothing about the work: each pair ran the whole route first, so it paid
+the compilations the two share.
+
+**The bug the padding found.** The first ultrasoft comparison was 1.3e-2 apart on force constants of
+0.22 with the induced densities equal to 1e-14, so the walk and the loop were right and the assembly
+was not; with the whole mesh in one chunk it was 6.4e-16, so the formula was right and the chunking was
+not. A short chunk is padded with a repeat of a real k-point at zero weight, and every term that carries
+the occupation weight vanishes there -- except the orthonormality constraint `Tr[Lambda (<psi|S|psi> -
+1)]`, which is weighted by the multipliers themselves. Read back from the host store by row index, the
+padded repeat got its original's `dLambda` and counted twice. The Born charges never met it because they
+kept each chunk's own multipliers, zeros included. The check that would have caught it at design time is
+the one to keep asking: **which terms in a chunk's energy are weighted by something other than the
+occupation**.
+
+**Also found on the way, and fixed separately** (`54654f5`, `PLAN.md` P39): on a PAW wedge the whole
+route counted the becsum symmetrisation twice in the assembly, 4.0e-4 Ry/bohr^2 between a wedge and the
+same sample whole. It was found by asking which number the chunked route should reproduce.
+
+**Still whole**: the phonon at `q`, the strain response, the third derivatives and a response handed in
+through `response=` (Raman's). **What this does not change**: the `3 nat` dense-grid fields the
+self-consistent loop carries (`dvscf`, the induced potential, the symmetrised response, `drhous`, the
+core term), about `5 P nspin_mag n_grid x 8 B` on the card, which grows with the number of atoms
+displaced and is the next lever for a subset of a large cell.
