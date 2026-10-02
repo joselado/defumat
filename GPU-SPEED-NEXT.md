@@ -71,14 +71,14 @@ they are interleaved (both platforms then follow the norm, and sorting them last
 Davidson's are already trailing. Which stage of cuSOLVER (`sytrd`, the divide and conquer, `ormtr`)
 carries it was not taken apart, and with the norm at the live block's own it no longer matters here.
 
-## 4a. Memory mode on a k-mesh, and a float32 band side -- done 2026-10-01 evening, decided 2026-10-02, the default change to implement
+## 4a. Memory mode on a k-mesh, and a float32 band side -- done 2026-10-01 evening, decided and implemented 2026-10-02
 
 Memory mode cost 1.8x against speed mode on a k-mesh of a small cell, nearly all of it the one k-point
 per call; `k_batch = 'fit'` sizes the chunk from the card (1.97x faster at 27 k-points on eight-atom
 silicon) and the Davidson width ladder now works under a batch over k, which made a 22-point chunk on
 sixteen atoms a wash where it had been 1.28x slower. `band_precision = 'single'` is 3.9x to 4.2x on 64
 atoms on the A2000 to `conv_thr = 1e-7`; `'mixed'` does not pay. **Decided by the user on
-2026-10-02, not yet implemented:** memory mode's default on a card becomes `'fit'`, and speed mode's
+2026-10-02 and implemented in `170f2b6`:** memory mode's default on a card becomes `'fit'`, and speed mode's
 fallback becomes the largest fitting chunk rather than one k-point. Speed mode falls back to memory mode,
 so the first carries the second: `resolve_k_batch_for` treats `"default"` as `'fit'` for memory mode on
 an accelerator, with a test that fakes the platform, the guide's batching section, `CLAUDE.md`'s JAX
@@ -108,7 +108,8 @@ first). **Answered the same morning** (job 20644333, an H100): it is the streame
 stream saves 0.04 GiB with one k-point and 0.01 GiB when `'fit'` batches the whole mesh, since what is
 being solved is on the card either way. So the stream earns its time only when the chunk is smaller
 than the mesh; a store that streams only then is the change this points to, and it is the user's,
-beside implementing `'fit'` (section 4a).
+beside implementing `'fit'` (section 4a); the user chose it and both are in `170f2b6`, with the A2000
+confirming them (`PERFORMANCE.md`, "The defaults that follow").
 
 ## 5. The A100-class profile -- priority 3, needs item 1
 

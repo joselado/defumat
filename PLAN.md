@@ -207,7 +207,7 @@ because that is what decides whether it is a session or a phase.
 - **A switch from single to double precision that pays** (P126): `'mixed'` converges to the double
   state and loses the superlinear mixing step a bulk cell converges by, 0.72x on 64-atom silicon on
   the card; and **`k_batch = 'fit'` as memory mode's default on a card**, which the user decided on
-2026-10-02 and which is not yet implemented (`GPU-SPEED-NEXT.md` section 4a).
+2026-10-02 and which is implemented (`170f2b6`, `GPU-SPEED-NEXT.md` section 4a).
 - **Relaxing the orientation of a magnetic texture under spin-orbit coupling** (P122,
   `ORIENTATION-NEXT.md`): step 1, the three-component torque on a collinear source, is in;
   a noncollinear source (the four-cell cobalt helix), the BFGS relaxation in the rotation,
@@ -23412,7 +23412,8 @@ loops again at every iteration").
 
 **What is not done.** `'fit'` as memory mode's default on a card, and speed mode falling back to the
 largest fitting chunk rather than to one k-point: both change a documented promise, and the user decided
-both on 2026-10-02 (the host `eigh` stays opt-in); not yet implemented. A precision switch that does not perturb the mixer. Single on ultrasoft, PAW, spinors and DFT+U,
+both on 2026-10-02 (the host `eigh` stays opt-in), and they are implemented in `170f2b6` together with
+the third, a store that streams only when the chunk is smaller than the mesh. A precision switch that does not perturb the mixer. Single on ultrasoft, PAW, spinors and DFT+U,
 and every derivative in it (refused). **The float64 card is measured** (an H200, 2026-10-02): equal steps
 in every arm, the bound's `eigh` error at its floor, 26.6x the A2000 at 64 atoms, the float32 tier 0.99x
 to 1.20x a run, and memory mode 1.97x speed mode at 64 atoms, which is the new open item (`PERFORMANCE.md`,

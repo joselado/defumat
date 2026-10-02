@@ -9521,3 +9521,20 @@ with one k-point and 0.01 GiB with the whole mesh in one batch, because the k-po
 on the card either way: the store saves memory only when the chunk is smaller than the mesh, and only
 the part not in flight. On the A2000 the same stream was 7 per cent of a 64-atom iteration (section 6 of
 `GPU-SPEED-NEXT.md`), which the float32 card's slow arithmetic hid.
+
+**The defaults that follow, implemented the same morning** (`170f2b6`, the user's decisions): in
+`'memory'` on a card `k_batch` resolves to `'fit'`, and the SCF streams its store only where that chunk
+is smaller than the mesh (`batching.resolve_scf_wfc_store`). On D22's RTX A2000, two alternating passes,
+ms per iteration (median of three warm SCFs, two at 64 atoms), steps and energy equal in every arm:
+
+| cell | memory, now | memory, before (`k_batch = 1`, streamed) | speed |
+|---|---|---|---|
+| `si8-ecut20-nosym-k3` (27 k) | 152.08, 152.29 (the whole mesh, store on the card) | 372.83, 368.57 | 150.37, 152.03 |
+| device peak | 0.864 GiB | 0.036 GiB | 0.863 GiB |
+| `si64-1k-ecut30` (1 k) | 1437.90, 1469.71 | 1525.74, 1545.28 | 1428.20, 1438.91 |
+| device peak | 3.189 to 3.196 GiB | 3.151 GiB | 3.286 GiB |
+
+So memory mode on a card is now speed mode's time wherever speed mode's peak fits the card's budget,
+and **it is speed mode's peak there too**: the mesh's 0.036 GiB is now 0.864, since `'fit'` spends what
+the card has (60 per cent of it) rather than what one k-point needs. `k_batch = 1` with
+`wfc_store = 'stream'` still asks for the smallest card footprint.
