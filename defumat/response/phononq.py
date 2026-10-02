@@ -256,7 +256,6 @@ class TwoSphereSolver(SternheimerSolver):
         On the **dense** grid, like every other density here, and with the
         ``(nspin_mag, ...)`` leading axis every consumer of one expects.
         """
-        from defumat.basis.interpolate import to_dense
         from defumat.batching import sum_bands, sum_k
 
         calculation, kq = self.calculation, self.calculation_kq
@@ -296,7 +295,45 @@ class TwoSphereSolver(SternheimerSolver):
         # compiled by its structure (:mod:`defumat.eager`).
         total = compiled(summed, self.psi, dpsi)
         smooth, dense = calculation.basis.smooth, calculation.basis.dense
-        return to_dense(2.0 * total / volume, smooth, dense)[None]
+        return complex_to_dense(2.0 * total / volume, smooth, dense)[None]
+
+
+def _one_grid(smooth, dense) -> bool:
+    """The interpolation helpers' own test for a field that needs no resampling."""
+    return smooth is dense or (smooth.grid == dense.grid and smooth.ngm == dense.ngm)
+
+
+def complex_to_dense(field, smooth, dense):
+    """:func:`~defumat.basis.interpolate.to_dense` for a **complex** field.
+
+    The interpolation helpers are written for a real field and end in
+    ``jnp.real``, which is right for every density and potential at ``Gamma``
+    and silently wrong for the ``+q`` component here, whose imaginary part is
+    half of it. On a cell whose two grids coincide the helpers return their
+    argument untouched, which is why the one-grid validation could not see it;
+    with ``ecutrho = 8 ecutwfc`` on two-atom silicon at ``q = (1/2, 0, 0)`` every
+    mode came out imaginary, -1899 to -120 cm^-1 against -94 to 482 on one grid.
+    The resampling is linear, so the two parts go through it apart.
+    """
+    from defumat.basis.interpolate import to_dense
+
+    field = jnp.asarray(field)
+    if not jnp.iscomplexobj(field) or _one_grid(smooth, dense):
+        return to_dense(field, smooth, dense)
+    return (to_dense(jnp.real(field), smooth, dense)
+            + 1j * to_dense(jnp.imag(field), smooth, dense))
+
+
+def complex_to_smooth(field, dense, smooth):
+    """:func:`~defumat.basis.interpolate.to_smooth` for a complex field; see
+    :func:`complex_to_dense`."""
+    from defumat.basis.interpolate import to_smooth
+
+    field = jnp.asarray(field)
+    if not jnp.iscomplexobj(field) or _one_grid(smooth, dense):
+        return to_smooth(field, dense, smooth)
+    return (to_smooth(jnp.real(field), dense, smooth)
+            + 1j * to_smooth(jnp.imag(field), dense, smooth))
 
 
 # ---------------------------------------------------------------------------
@@ -490,13 +527,13 @@ def induced_perturbation_at_q(calculation, calculation_kq, dv):
     :func:`~defumat.response.sternheimer.local_perturbation`.
     """
     from defumat.basis.fft import gather_from_box
-    from defumat.basis.interpolate import to_smooth
     from defumat.batching import map_bands
 
     smooth, dense = calculation.basis.smooth, calculation.basis.dense
     grid = smooth.grid
     points = grid[0] * grid[1] * grid[2]
-    field = jnp.stack([to_smooth(component, dense, smooth) for component in dv])
+    field = jnp.stack([complex_to_smooth(component, dense, smooth)
+                       for component in dv])
     index_k, index_kq = calculation.fft_index, calculation_kq.fft_index
     mask = calculation_kq.basis.planewaves.mask
 

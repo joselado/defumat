@@ -377,3 +377,61 @@ def test_a_reduced_k_set_is_refused_by_name():
     calculation, _ = _ground_state("si-epsilon-unshifted")
     with pytest.raises(NotImplementedError, match="small group of q"):
         require_a_two_sphere_regime(calculation, np.array([0.25, 0.25, 0.0]))
+
+
+#: Two-atom silicon at ``ecutwfc = 12`` on the whole unshifted 2x2x2 grid, with
+#: ``ecutrho`` left open: at 48 the smooth and dense grids coincide, at 96 they
+#: do not.
+_TWO_GRIDS = """&control
+  calculation = 'scf'
+/
+&system
+  ibrav = 2, celldm(1) = 10.20, nat = 2, ntyp = 1, ecutwfc = 12.0,
+  ecutrho = {ecutrho}, nosym = .true.
+/
+&electrons
+  conv_thr = 1.0d-12
+/
+ATOMIC_SPECIES
+ Si 28.086 Si.pz-vbc.UPF
+ATOMIC_POSITIONS alat
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS automatic
+ 2 2 2 0 0 0
+"""
+
+
+def test_two_grids_keep_the_imaginary_part():
+    """The ``+q`` response is complex, and the grid interpolation is written for real fields.
+
+    :func:`~defumat.basis.interpolate.to_dense` and ``to_smooth`` end in
+    ``jnp.real``, and on a cell whose two grids coincide they return their
+    argument untouched -- so every case above, all on one grid, passed through
+    a resampling that never ran. With ``ecutrho = 8 ecutwfc`` the response
+    density lost its imaginary part on the way to the dense grid and the induced
+    potential on the way back, and every mode at ``q = (1/2, 0, 0)`` came out
+    imaginary: -1899 to -120 cm^-1, against -94 to 482 on one grid. Taken
+    through the interpolation in two parts the two grids agree to **8.7e-5**
+    Ry/bohr^2 on force constants of 0.27, which is the finer density grid's own
+    effect on the exchange-correlation integral.
+    """
+    import warnings
+
+    from defumat import Calculator
+
+    def phonons(ecutrho):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            calculator = Calculator.from_text(
+                _TWO_GRIDS.format(ecutrho=ecutrho), str(PSEUDO), announce=False)
+            return calculator, calculator.get_phonons_at_q(q=(0.5, 0.0, 0.0))
+
+    one_calculator, one = phonons(48.0)
+    two_calculator, two = phonons(96.0)
+    basis = two_calculator.calculation.basis
+    assert one_calculator.calculation.basis.smooth.grid == \
+        one_calculator.calculation.basis.dense.grid
+    assert basis.smooth.grid != basis.dense.grid
+    assert np.abs(two.matrix - one.matrix).max() < 5e-4
+    assert np.abs(two.frequencies - one.frequencies).max() < 1.0

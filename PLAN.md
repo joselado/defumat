@@ -13703,6 +13703,20 @@ correction** — which is the one refusal that is a statement about `q` rather t
 dataset, since `dynmatcc.f90:105` calls `set_drhoc(xq, drc)`: two atoms' core charges
 overlap inside a nonlinear `E_xc` and that second derivative is not diagonal in the atom.
 
+**Two grids dropped the response's imaginary part (found 2026-10-03, fixed the same day).**
+The `+q` response density and the induced potential are complex, and they cross between
+the smooth and dense grids through `basis.interpolate.to_dense`/`to_smooth`, which are
+written for a real field and end in `jnp.real`. On a cell whose two grids coincide those
+helpers return their argument untouched, and every case above is on one grid, so the
+resampling never ran. A norm-conserving run with `ecutrho > 4 ecutwfc` is admitted, and on
+two-atom silicon at `ecutrho = 8 ecutwfc`, `q = (1/2, 0, 0)`, every mode came out imaginary:
+**-1899 to -120 cm⁻¹**, against -94 to 482 on one grid. Interpolated in two parts
+(`phononq.complex_to_dense`, `complex_to_smooth`), the two grids agree to **8.7e-5
+Ry/bohr²** on force constants of 0.27, the finer grid's own effect on the
+exchange-correlation integral, and the one-grid route is bit-identical
+(`test_two_grids_keep_the_imaginary_part`). Found by the review of the k-chunked phonon
+at `q`'s plan, which read the interpolation the chunked route would finish with.
+
 
 ### P72 — Reading an Elk ground state, and measuring that it buys nothing. ✅ DONE, hydrogen and unpolarized.
 
