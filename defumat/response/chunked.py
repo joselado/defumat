@@ -348,7 +348,10 @@ class StreamedField:
                     _rows_of(self.commutators[axis] if self.commutators is not None
                              else self.bare[axis], rows),
                 )
-                multipliers[(rows[0], axis)] = dlambda
+                # In host memory between the walks: ``nbnd^2`` per k-point and
+                # direction, which grows with the mesh (2.65 MB on the card at
+                # 216 k-points of eight-atom silicon, measured above the SCF's).
+                multipliers[(rows[0], axis)] = np.asarray(dlambda)
                 constraint[axis] += np.asarray(sandwich)
                 sums, derivative = passes["forward"](
                     arguments[0], arguments[1], positions, psi, w,
@@ -402,7 +405,8 @@ class StreamedField:
                 (_, g_b, g_rho), (_, dg_b, dg_rho) = globals_[axis]
                 columns[axis] = columns[axis] + np.asarray(passes["pull"](
                     self.big, rowset, positions, psi, w, eps, g_b, g_rho,
-                    _rows_of(self.dpsi[axis], rows), multipliers[(rows[0], axis)],
+                    _rows_of(self.dpsi[axis], rows),
+                    jax.device_put(multipliers[(rows[0], axis)]),
                     dg_b, dg_rho))
 
         charges = np.zeros((natoms, 3, 3))
