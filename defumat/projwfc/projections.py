@@ -53,6 +53,7 @@ import numpy as np
 from defumat.basis.gvectors import refuse_gamma_storage
 
 from defumat.batching import k_chunks, map_k
+from defumat.eager import compiled
 from defumat.hubbard.projectors import build_atomic_projectors
 from defumat.paw.symmetry import harmonic_rotations
 from defumat.projwfc.channels import AtomicChannel, projection_channels
@@ -376,9 +377,11 @@ def atomic_projections(
         for spin, states in enumerate(wavefunctions):
             # The k axis walked by the calculation's own batching dial inside
             # the block -- the same shape ``sum_band`` has (rule R6).
-            chunk = np.asarray(map_k(
-                one_kpoint, (projectors, upload(states, rows, whole)),
-                batch=calculation.k_batch))
+            # Outside any trace, with a new closure at every call, so compiled
+            # by its structure (:mod:`defumat.eager`).
+            chunk = np.asarray(compiled(
+                lambda xs: map_k(one_kpoint, xs, batch=calculation.k_batch),
+                (projectors, upload(states, rows, whole))))
             if out is None:
                 out = np.empty((nspin, nk) + chunk.shape[1:], chunk.dtype)
             out[spin, rows[:live]] = chunk[:live]

@@ -9349,12 +9349,14 @@ are like for like):
 | `get_spiral_scan` | `h-chain-spiral.in` | 2 | 0 |
 | `get_torque`, `get_orientation_torque` | `co-tetragonal-anisotropy-sr.in` | 19, 19 | 1, 1 |
 | a fresh calculator's `get_scf`, `nbnd` above the atomic orbitals, `nk > 1` | `h-sheet.in` | 1 | 0 |
+| `get_pdos` | `si2-nosym.in` | 1 | 0, same cores |
 
 The last row corrects the Berry section's sentence that a warm second SCF compiles nothing: the six
 cells tried there never topped up with random vectors, and `starting_wavefunctions`' top-up was an eager
 `map_k` too. **Left as they are**: the torque's and the spiral gradient's `jax.jit(jax.value_and_grad(
 chunk))`, built once per call and reused across the call's chunks (one compile a call; through
-`compiled` it would trace once per chunk instead), and `get_pdos`'s one. **Values**, old code against
+`compiled` it would trace once per chunk instead). `get_pdos`'s one went through `compiled` afterwards,
+with the projections identical. **Values**, old code against
 new on the same inputs: the dielectric tensor to 3.6e-15 relative, Born charges 9.3e-15, the phonon
 matrix at Gamma 2.0e-14 and at L 8.3e-12 on 502, piezoelectric 4.5e-14, strain 1.8e-14, elastic 2.6e-14,
 electrostriction 3.1e-14, Raman 3.7e-12 (on a translational residue of 0.0019), the shift current
