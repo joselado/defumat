@@ -1,0 +1,32 @@
+! The PAW silicon of si-epsilon-paw.in on an unshifted 2x2x2 grid, reduced to its wedge.
+!
+! Half of a pair; the other half is si-epsilon-paw-unshifted-nosym.in, the same
+! k-sample whole with no symmetry. An unshifted grid is closed under the point
+! group, so the two routes are the same calculation and must give the same
+! dynamical matrix to round-off. For a norm-conserving dataset that check is
+! si-epsilon-unshifted.in; a PAW dataset adds what that pair cannot reach, the
+! one-centre energy as a second functional of `becsum`, whose response on a wedge
+! is symmetrised apart from the density's.
+!
+! `ecutrho` is 180 rather than si-epsilon-paw.in's 160 for one reason: at 160 the
+! wedge's dense grid is 32^3 (diamond's quarter translations make it a multiple of
+! four) and the whole grid's is 30^3, which is a difference of basis rather than of
+! symmetrisation. At 180 both are 32^3, and both smooth grids 24^3.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.20, nat = 2, ntyp = 1,
+    ecutwfc = 20.0, ecutrho = 180.0
+ /
+ &electrons
+    conv_thr = 1.0d-12
+    mixing_beta = 0.7
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-n-kjpaw_psl.0.1.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS (automatic)
+ 2 2 2 0 0 0

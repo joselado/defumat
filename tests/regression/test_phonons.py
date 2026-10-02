@@ -473,6 +473,31 @@ def test_the_wedge_and_the_whole_grid_give_the_same_matrix():
     assert np.abs(wedge.frequencies - whole.frequencies).max() < 1e-3
 
 
+def test_a_paw_wedge_and_the_whole_grid_give_the_same_matrix():
+    """The same check with a PAW dataset, which a norm-conserving pair cannot make.
+
+    PAW's one-centre energy is a second functional of ``becsum``, so on a wedge
+    the becsum response is symmetrised apart from the density's
+    (``PAW_dusymmetrize``) and the assembly carries the difference as a tangent
+    of its own. The density is built from ``becsum`` too, and the assembly used
+    to count that difference a second time through the augmentation charge:
+    **4.0e-4 Ry/bohr^2** between this wedge and the same sample whole, on force
+    constants of 0.365 (the optical mode 585.58 against 585.90 cm^-1), with the
+    induced densities equal to 1.5e-14 -- so the loop was right and the
+    assembly was not. Taking it out (``born.py``'s ``through_becsum``, one order
+    up) leaves 5.4e-14. Nothing else could see it: the acoustic sum rule is an
+    atom sum, and a rigid translation's becsum response averages to itself.
+
+    ``ecutrho = 180`` is chosen so the two runs share one FFT grid; at 160 the
+    wedge's is 32^3 and the whole grid's 30^3, which differs by a basis rather
+    than by a symmetrisation.
+    """
+    _, _, wedge = _phonons("si-epsilon-paw-unshifted")
+    _, _, whole = _phonons("si-epsilon-paw-unshifted-nosym")
+    assert np.abs(wedge.induced_density - whole.induced_density).max() < 1e-12
+    assert np.abs(wedge.matrix - whole.matrix).max() < WEDGE_TOLERANCE
+
+
 #: What the **vendored** ``ph.x`` prints for the same silicon with an ultrasoft
 #: and with a PAW dataset -- ``reference.out.ph-si-epsilon-us`` and
 #: ``reference.out.ph-si-epsilon-paw``. Both are ``core_correction="T"``, which

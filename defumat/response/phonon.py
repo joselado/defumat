@@ -1400,7 +1400,6 @@ def _force_constants(
             # rule is what says so. An ultrasoft *metal* is refused for exactly
             # this reason (:func:`_require_a_moving_overlap_regime`).
             raw = compiled_jvp(raw_mixed, (positions, psi), (tangent, states))[1]
-            correction = drho[row, cart] - raw[0]
             parts = (
                 tuple(None if b is None else jnp.zeros_like(b) for b in becsum)
                 if dbecsum is None else
@@ -1409,6 +1408,20 @@ def _force_constants(
                     for a, b in zip(dbecsum[row, cart], raw[1])
                 )
             )
+            # **The augmentation charge's share of ``parts`` is taken out of the
+            # density's correction**, because the density is built *from*
+            # ``becsum``: ``parts`` reaches the density through ``augmented`` as
+            # well as the one-centre energy, and ``drho`` is already the
+            # symmetrised total, augmentation included. Without this the
+            # density's tangent is ``Sym(raw) + A(Sym_b db - db)`` and the
+            # second term counts the becsum average twice -- zero on a closed
+            # ``nosym`` grid and on an ultrasoft dataset (``parts = 0``), so
+            # only a PAW wedge sees it: 4.0e-4 Ry/bohr^2 between
+            # ``si-epsilon-paw-unshifted`` and the same sample whole, 5.4e-14
+            # with it. It is :func:`~defumat.response.born.
+            # _full_zone_field_response`'s ``through_becsum``, one order up.
+            correction = (drho[row, cart] - raw[0]
+                          - calculation.augmented(jnp.zeros_like(raw[0]), parts))
             _, whole = compiled_jvp(
                 energy_gradient,
                 (positions, psi, zero_density, zero_becsum, ground),

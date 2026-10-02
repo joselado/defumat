@@ -1,0 +1,23 @@
+! The same PAW silicon on the whole unshifted 2x2x2 grid, with no symmetry at all.
+!
+! The other half of the pair whose first half is si-epsilon-paw-unshifted.in, and
+! the file that says why `ecutrho` is 180: it is the cutoff at which this run and
+! the wedge share one FFT grid.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.20, nat = 2, ntyp = 1,
+    ecutwfc = 20.0, ecutrho = 180.0, nosym = .true.
+ /
+ &electrons
+    conv_thr = 1.0d-12
+    mixing_beta = 0.7
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-n-kjpaw_psl.0.1.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS (automatic)
+ 2 2 2 0 0 0

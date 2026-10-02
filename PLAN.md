@@ -6823,8 +6823,9 @@ workflow did *not* receive passes for the wrong reason. The spies carry the real
 
 **What.** P25's norm-conserving restriction is lifted: `dynamical_matrix` runs on
 ultrasoft and PAW datasets. Two-atom silicon's optical mode comes out at **513.2947**
-(ultrasoft) and **513.3776** (PAW) cm⁻¹ against the vendored `ph.x`'s 513.275287 and
-513.404419 — **0.019** and **0.027** cm⁻¹, tighter than the norm-conserving case's 0.05,
+(ultrasoft) and **513.4210** (PAW) cm⁻¹ against the vendored `ph.x`'s 513.275287 and
+513.404419 — **0.019** and **0.017** cm⁻¹ (PAW read 513.3776, 0.027, until the wedge
+double count below was found on 2026-10-03), tighter than the norm-conserving case's 0.05,
 which is not a claim about the physics: both are the same `dq = 0.01` radial-table floor
 landing on different sides of it. The acoustic residue is 6.1 and 6.2 cm⁻¹ against the
 norm-conserving 4.1, and the raw force-constant sum is below 2e-4 Ry/bohr².
@@ -6909,6 +6910,27 @@ the moved cell inside the traced function -- `moved.potential(density).v_scf`, w
 differentiated there, in the one place the phonon path had frozen it
 (`_bare_displacements` takes `v_scf` as an argument and holds it). Same omission, two
 coordinates, and only one of them had it.
+
+**A PAW wedge counted the becsum average twice (found 2026-10-03, fixed the same day).**
+The assembly hands `frozen_energy` two corrections from the wedge sum to the symmetrised
+response, `correction = drho - raw` for the density and `parts = dbecsum - db` for
+`becsum`, and the density is built *from* `becsum`, so `parts` reached it a second time
+through the augmentation charge: the density's tangent was `Sym(raw) + A(Sym_b db - db)`.
+It is zero on a closed `nosym` grid and on an ultrasoft dataset (`parts` is zero there), and
+the acoustic sum rule cannot see it, since a rigid translation's becsum response averages
+to itself; `symmetrize_atom_pair_tensor` does not remove it either, because a group average
+of a product is not the product of the averages. **Measured** on PAW silicon on an unshifted
+2x2x2 sample, reduced to its wedge and run whole with `nosym` on the same 32^3 grid
+(`si-epsilon-paw-unshifted.in` and `-nosym.in`, `ecutrho = 180` so the grids coincide):
+**4.0e-4 Ry/bohr²** apart on force constants of 0.365, the optical mode 585.58 against
+585.90 cm⁻¹, with the induced densities equal to 1.5e-14; with the augmentation's share of
+`parts` taken out of the density's correction, **5.4e-14**. It is
+`born._full_zone_field_response`'s `through_becsum`, which the Born charges had and this
+assembly did not. On the committed shifted wedge it moved the optical mode from 513.3776 to
+513.4210, against `ph.x`'s 513.4044: inside the radial-table floor either way, so `ph.x`
+could not have caught it, and the wedge against the whole grid is now a test
+(`test_a_paw_wedge_and_the_whole_grid_give_the_same_matrix`). Found by asking, while
+planning the k-chunked phonon, which number the chunked route should reproduce.
 
 **Refused:** an ultrasoft or PAW **metal**, by name. The strain response, the elastic
 constants, electrostriction and the Raman tensor still refuse ultrasoft and PAW through
