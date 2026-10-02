@@ -9228,7 +9228,14 @@ barrier does not touch. With the persistent cache on this is paid once per shape
 `bi20-soc` spends about 121 s of its 154 s to the end of iteration 1 compiling, 79 s of it the Davidson
 solve (`jit(_every_k)`) and 14 s the start's Rayleigh-Ritz (`jit(_rotate_all)`), against 2.8 and 0.7 s on
 `si16-1k-ecut30`. The spinor ultrasoft `H|psi>` is copied into the compiled solve once per rung of the
-band ladder and the width ladder, so its compile grows with both; not taken further.
+band ladder and the width ladder, so its compile grows with both. Against the band ladder's rung count
+(`DEFUMAT_BAND_RUNGS`, the cache off, one process per arm): 4, 2 and 1 rungs compile `jit(_every_k)` in
+78.9, 68.8 and 60.9 s, and the next three iterations take 74.7, 76.3 and 77.2 s, with the same Davidson
+steps (3, 2, 2) and the same energy to every digit (-2930.5696276401 Ry). So the three rungs past the
+first cost 18 s of compile, paid once per shape with the cache on, and buy 0.8 s an iteration, about 3
+per cent, which pays the compile back after about 22 iterations. These are a run's first iterations,
+where most of the block is still live and the ladder has the least to do; the late iterations were not
+measured. The default stays at four.
 
 **The ladder again at the end of the night** (D22, every change of the night in: the bound parking,
 `syevd`, the stick gather, the rung count, the radial barrier; median of three on sixteen atoms and two

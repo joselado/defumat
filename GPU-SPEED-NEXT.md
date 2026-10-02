@@ -118,6 +118,10 @@ XLA command buffers (a null here: `--xla_gpu_enable_command_buffer` with `WHILE,
 * The accelerator band-dial default is the whole block. Stall-free at 64 atoms the best is 16 to 32,
   10 per cent under it (1350 to 1359 against 1497 ms), and at 16 atoms the whole block is best. A
   default that follows the cell size would be a third dial; the gain is small on this card.
+* `DEFUMAT_BAND_RUNGS` on a large spinor cell (2026-10-02, `bi20-soc`, the cache off): 4, 2 and 1 rungs
+  compile the Davidson solve in 78.9, 68.8 and 60.9 s and run three iterations in 74.7, 76.3 and 77.2 s,
+  equal steps and energy, so the three extra rungs pay their 18 s back after about 22 iterations. The
+  default stays four; a card that compiles faster or a run that never reuses its cache moves the line.
 * Memory mode costs a steady 8 per cent over speed mode at 64 atoms (the rebuild, the streamed store
   and one k-point at a time together) and 7 per cent at 16 atoms (the streamed store alone). The
   user chose memory as the default; this is the price to quote.
