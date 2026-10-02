@@ -6987,8 +6987,12 @@ the density and projector occupations, a projected DOS, an STM image, the
 structure factors, the site moments, the Berry curvature and the orbital
 magnetization. \textbf{So do the dielectric tensor and the Born charges}: the
 bare perturbations, the first-order states and the Sternheimer solves go a block
-of $k$-points at a time with the first-order states in host memory, and on a
-streamed run they add nothing to the SCF's peak. \textbf{What still moves them
+of $k$-points at a time with the first-order states in host memory, in
+\code{'memory'} on a card always, even when \code{k\_batch='fit'} takes the
+whole mesh in one block. What they add then does not grow with the mesh: nothing
+on norm-conserving silicon, and on ultrasoft silicon a fixed 153--155~MB at one
+$k$-point a block and nothing with the whole mesh in one, where the old route's
+Born charges had reached 7.4 times the SCF's peak. \textbf{What still moves them
 to the card whole} is the rest of the linear-response stack --- phonons, Raman,
 the strain response --- and the sum-over-states spectra. \textbf{The host
 must hold the set} ($n_{\rm spin} n_k n_{\rm bnd} n_{\rm pwx} n_{\rm pol}$

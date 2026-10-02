@@ -9583,15 +9583,37 @@ two arms took the same steps; the SCF is the same executable in both (26.6 again
 k-points), and on the CPU the two routes report the same `average_iterations` on all three test cells,
 which the regression asserts.
 
-**What this configuration is, and the gap it leaves.** Since `170f2b6` memory mode's card default is
-`k_batch = 'fit'`, and the store streams only where that chunk is smaller than the mesh; the rows above
-force `k_batch = 1` to stand for a mesh too large for the card. Where `'fit'` takes the whole mesh, the
-response takes the whole-k route with the store on the card, and **nothing checks that route against
-the card before it starts**: `'fit'` sized the chunk for the SCF's Davidson subspace, and the whole-k
-response puts on top of the store six more arrays of its size (nine on an ultrasoft dataset, with the
-Born charges' commutators) and the CG's four band blocks over every k-point, which this table says
-is 5.3 to 7.6 MB per k-point of eight-atom silicon against the SCF's streamed 0.11. Whether that total
-fits where the SCF did is not measured, and the cure is a sizing one (`GPU-MEMORY-NEXT.md` item 2).
+**What this configuration is, and the gap it left, closed the same day** (`d4be84c`). Since
+`170f2b6` memory mode's card default is `k_batch = 'fit'`, and the store streams only where that
+chunk is smaller than the mesh; the rows above force `k_batch = 1` to stand for a mesh too large for
+the card. Where `'fit'` took the whole mesh, the response took the whole-k route, and nothing had sized
+that route against the card: `'fit'` sizes the chunk for the SCF's Davidson subspace. Measured on the
+same card at `'fit'`, which took the whole mesh in every row here:
+
+| cell, 27 k-points unless said | SCF | `epsilon` + `Z*`, whole-k route | walked as one chunk (`jacfwd`) | as one chunk, by columns (now) |
+|---|---|---|---|---|
+| eight-atom Si, norm-conserving | 872.9 MB | 872.9 MB, 29.9 s | 873.3 MB, 27.7 s | 872.9 MB, 28.3 s |
+| the same at 125 k-points | 4034.5 | 4034.5, 128.4 s | 4043.3, 128.4 s | 4034.5, 128.5 s |
+| eight-atom Si, ultrasoft (`si8-us-1k` with `nosym`) | 925.2 | **6825.4**, 72.4 s | 3368.6, 57.5 s | **925.2**, 58.4 s |
+
+with the CG's mean iteration count equal in every arm of a row (27.889, 28.963 and 33.917), and blocks
+of 9 and 3 on the norm-conserving cell reading the SCF's own 294.4 and 99.1 MB. So on a norm-conserving
+dataset the SCF's eigensolver over the mesh is the larger working set and the whole-k response fitted
+under it; on an ultrasoft one with Born charges it was 7.4 times the SCF's. **Walking it as one chunk
+was not enough**, and the compiler's `memory_analysis()` of each pass at the 27-point chunk said why: two
+Born passes, the frozen polarization's derivative at 3289 MB of temporaries and `add_for_charges`'s at
+2185, took their derivative in the `3 nat` positions with `jacfwd`, a `vmap` that holds `3 nat` tangent
+copies of the chunk's moved projectors. Walking the unit tangents under `lax.map` instead takes them to
+529 and 410 MB, below the dielectric passes' 564 and 584 and the SCF's 925.2, with `Z*` unchanged at
+3.5e-13 from the whole-k route on AlAs. **The rule is now**: in memory mode on a card the response walks
+chunks at the calculation's chunk whatever it is, the whole mesh included
+(`efield._streams`, `tests/unit/test_response_route.py`, which fails on the old rule). Speed mode keeps
+the whole-k route it asked for, and its check against the card (`speed_mode_fits`) sizes the SCF, not the
+response. **At one k-point a chunk the ultrasoft cell is not at the SCF's peak**: 219.5 MB against 66.9
+at 27 k-points and 230.1 against 75.2 at 64, so the response adds 152.6 and 154.9 MB, flat in the mesh
+and so not a store; which pass holds it was not measured after the column change (before it, at one
+k-point a chunk, the frozen polarization's pass read 315 MB of temporaries and the bare walk's 83). At
+the whole mesh in one chunk it sits under the eigensolver's.
 
 **Against the whole-k route on the CPU**, one converged state through both (`tests/regression/
 test_streamed_response.py`, chunks that do not divide the k-set): ultrasoft AlAs on its `nosym` grid,

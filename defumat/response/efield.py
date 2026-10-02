@@ -426,8 +426,11 @@ def _streams(calculation, wavefunctions, keep_internals: bool) -> bool:
 
     :func:`~defumat.forces.chunked.walks_chunks`' rule -- a streamed store, or
     memory mode with a chunk smaller than the mesh -- so the force, the stress
-    and this response agree about when the store is too large to take whole.
-    Three cases take the whole-k route instead, each for a reason:
+    and this response agree about when the store is too large to take whole;
+    and on a card in memory mode always, the whole mesh as one chunk included,
+    because the chunk was sized for the SCF and the whole-k route's working set
+    is not the SCF's (see the comment below). Three cases take the whole-k route
+    instead, each for a reason:
 
     * ``keep_internals``: the third derivatives read ``bare``, ``dpsi`` and the
       solver as device arrays (:mod:`defumat.response.electrostriction`,
@@ -455,9 +458,11 @@ def _streams(calculation, wavefunctions, keep_internals: bool) -> bool:
     # silicon at 27 k-points, where ``'fit'`` took the whole mesh and the SCF
     # peaked at 925.2 MB on the RTX A2000, the Born charges took the card to
     # 6825.4 MB. Walked as one chunk with the stores in host memory, every pass
-    # is the chunk's, and no larger than the SCF's at the same chunk
-    # (``PERFORMANCE.md``, "The dielectric tensor and the Born charges a
-    # k-chunk at a time").
+    # is the chunk's, and on the two cells measured no pass's temporaries pass
+    # the SCF's peak at the same chunk: 584 MB at most against 925.2 there, the
+    # run reading 925.2, and the norm-conserving cell its SCF's own at 27 and
+    # 125 k-points (``PERFORMANCE.md``, "The dielectric tensor and the Born
+    # charges a k-chunk at a time").
     from defumat.batching import _backend
 
     return calculation.memory_mode == "memory" and _backend() != "cpu"

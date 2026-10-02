@@ -293,12 +293,14 @@ below:
   the SCF's own, for 12 to 14 per cent more time (`PERFORMANCE.md`, "The dielectric tensor and the
   Born charges a k-chunk at a time"). The regression is `tests/regression/test_streamed_response.py`
   (slow set, 6 min). Taken whole still: the phonons, the strain response, the third derivatives and
-  anything asking for `keep_internals`, and a strained calculation (`_kcart`). **Open, a sizing gap**:
-  where `k_batch = 'fit'` takes the whole mesh the store is on the card and the response takes the
-  whole-k route, adding six store-sized arrays (nine with ultrasoft Born charges) and the CG's band
-  blocks over every k-point to what `'fit'` sized for the SCF, and nothing checks that total before
-  the solve starts. Either the response walks chunks whenever its own estimate would not fit, or
-  `sizing.py` gains the response's lines (item 24).
+  anything asking for `keep_internals`, and a strained calculation (`_kcart`). **The sizing gap this
+  first left is closed** (`d4be84c`): where `k_batch = 'fit'` took the whole mesh the response took
+  the whole-k route unsized, and on ultrasoft eight-atom silicon at 27 k-points its Born charges read
+  6825.4 MB where the SCF read 925.2. In memory mode on a card the response now always walks chunks,
+  the whole mesh as one included, and the two Born passes that differentiated in the positions with
+  `jacfwd` (3289 and 2185 MB of temporaries at that chunk) walk the tangents one at a time: the run
+  reads 925.2 MB, the SCF's own, in 58.4 s against the whole-k route's 72.4. **Not covered**: speed
+  mode, whose check against the card sizes the SCF and not the response.
 
 ## Suggested order
 

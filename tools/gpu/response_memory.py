@@ -42,7 +42,8 @@ def main() -> int:
     parser.add_argument("--pseudo-dir", default="tests/data/pseudo")
     parser.add_argument("--grids", type=int, nargs="+", default=[3])
     parser.add_argument("--stages", nargs="+", default=list(STAGES), choices=STAGES)
-    parser.add_argument("--k-batch", type=int, default=1)
+    parser.add_argument("--k-batch", default="1",
+                        help="a chunk size, 'fit' (sized to the card) or 'default'")
     parser.add_argument("--memory-mode", default="memory")
     parser.add_argument("--wfc-store", default="default",
                         help="'stream' forces the host store on a CPU, where "
@@ -83,6 +84,10 @@ def main() -> int:
     return 0
 
 
+def _k_batch(value: str):
+    return value if value in ("fit", "default") else int(value)
+
+
 def _measure(args, grid: int, stage: str) -> dict:
     import warnings
 
@@ -99,7 +104,7 @@ def _measure(args, grid: int, stage: str) -> dict:
         warnings.simplefilter("ignore")
         calculator = Calculator.from_text(
             text, args.pseudo_dir, announce=False, memory_mode=args.memory_mode,
-            k_batch=args.k_batch, wfc_store=args.wfc_store)
+            k_batch=_k_batch(args.k_batch), wfc_store=args.wfc_store)
         start = time.perf_counter()
         result = calculator.get_scf()
         scf_seconds = time.perf_counter() - start
@@ -118,6 +123,7 @@ def _measure(args, grid: int, stage: str) -> dict:
             tensor = calculator.get_dielectric_tensor(born_charges=(stage == "born"))
             row["response_s"] = round(time.perf_counter() - start, 2)
             row["epsilon"] = round(float(tensor.isotropic), 9)
+            row["cg_average"] = round(float(tensor.average_iterations), 3)
             if tensor.born_charges is not None:
                 row["zstar_0_xx"] = round(float(tensor.born_charges[0, 0, 0]), 9)
     stats = jax.devices()[0].memory_stats() or {}
