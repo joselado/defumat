@@ -32,7 +32,7 @@ import subprocess
 import sys
 import time
 
-STAGES = ("scf", "epsilon", "born")
+STAGES = ("scf", "epsilon", "born", "phonon")
 
 
 def main() -> int:
@@ -50,6 +50,8 @@ def main() -> int:
                              "memory mode keeps it on the device")
     parser.add_argument("--repeats", type=int, default=2,
                         help="fresh processes per point; the last is reported")
+    parser.add_argument("--phonon-atoms", type=int, nargs="+", default=[0],
+                        help="the atoms whose displacements the phonon stage solves")
     parser.add_argument("--json", default=None)
     parser.add_argument("--point", default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -69,7 +71,8 @@ def main() -> int:
                      "--pseudo-dir", args.pseudo_dir,
                      "--k-batch", str(args.k_batch),
                      "--memory-mode", args.memory_mode,
-                     "--wfc-store", args.wfc_store],
+                     "--wfc-store", args.wfc_store,
+                     "--phonon-atoms", *map(str, args.phonon_atoms)],
                     capture_output=True, text=True,
                 )
                 line = [l for l in out.stdout.splitlines() if l.startswith("__POINT__")]
@@ -118,7 +121,14 @@ def _measure(args, grid: int, stage: str) -> dict:
             "scf_s": round(scf_seconds, 2),
             "energy": float(result.total_energy),
         }
-        if stage != "scf":
+        if stage == "phonon":
+            start = time.perf_counter()
+            phonons = calculator.get_phonons(atoms=tuple(args.phonon_atoms))
+            row["response_s"] = round(time.perf_counter() - start, 2)
+            row["frequencies"] = [round(float(f), 6) for f in phonons.frequencies]
+            row["d00_xx"] = round(float(phonons.matrix[0, 0, 0, 0]), 10)
+            row["average_iterations"] = round(float(phonons.average_iterations), 3)
+        elif stage != "scf":
             start = time.perf_counter()
             tensor = calculator.get_dielectric_tensor(born_charges=(stage == "born"))
             row["response_s"] = round(time.perf_counter() - start, 2)
