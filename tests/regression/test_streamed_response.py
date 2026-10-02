@@ -103,7 +103,9 @@ def test_a_second_streamed_call_compiles_nothing():
     """The walks are compiled once per structure, not once per chunk or call.
 
     Both halves, the dielectric loop and the Born charges' split: measured, 108
-    programs on the first call and none on the second.
+    programs on a fresh process's first call and none on the second, and 137 on
+    the second when ``jax.clear_caches()`` comes between, which is the check that
+    this counter fires.
 
     ``CLAUDE.md``'s check for the eager-closure trap: a second call, counted on
     the ``jax`` logger. Building each chunk's solve afresh through

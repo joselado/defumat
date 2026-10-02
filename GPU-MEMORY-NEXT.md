@@ -275,6 +275,31 @@ below:
   16's forward-mode stress is not needed on any cell here (see each item). Item 26's first
   blocker is named: setup arrays built from the radial tables ignore the precision policy.
 
+* **Item 2, the field half** (2026-10-02, `0a9f317`, `bf821e7`, `6485073`): where the store
+  streams, or memory mode's chunk is smaller than the mesh (`forces.chunked.walks_chunks`, the
+  force's own rule), `dielectric_tensor` walks `k_chunks` with the states, the three bare
+  perturbations and the three `dpsi` in host memory (`defumat/response/chunked.py`). Every index is
+  the chunk's own, on `at_rows`; the whole set's Hamiltonians are sliced rather than rebuilt
+  (`Calculation.restricted_hamiltonians`, bit-identical), `int3` is made once per direction and
+  iteration, and the level shift `alpha_pv` is the whole set's. The Born charges are item 3's split
+  one `jvp` up: a forward walk for the raw sums and their tangents, the `jvp` of the global terms'
+  gradient with the full-zone shifts as tangent only, and a pull-back walk whose `jvp` carries the
+  states, the matrix multipliers and the global cotangent. Against the whole-k route
+  (`tests/regression/test_streamed_response.py`): ultrasoft AlAs 5e-14 in `epsilon` and 3.5e-13 in
+  `Z*`, where dropping the `g_b . db_c/dx` cross term moves `Z*` by 39; norm-conserving and PAW
+  silicon wedges at 1e-14 or below. A second call compiles nothing. **On the card** (RTX A2000,
+  eight-atom Si at 20 Ry, `nosym`, memory mode at `k_batch = 1`): the default call's peak 225.9 /
+  510.6 / 976.0 / 1695.2 -> 35.1 / 39.6 / 47.5 / 58.8 MB at 27 / 64 / 125 / 216 k-points,
+  the SCF's own, for 12 to 14 per cent more time (`PERFORMANCE.md`, "The dielectric tensor and the
+  Born charges a k-chunk at a time"). The regression is `tests/regression/test_streamed_response.py`
+  (slow set, 6 min). Taken whole still: the phonons, the strain response, the third derivatives and
+  anything asking for `keep_internals`, and a strained calculation (`_kcart`). **Open, a sizing gap**:
+  where `k_batch = 'fit'` takes the whole mesh the store is on the card and the response takes the
+  whole-k route, adding six store-sized arrays (nine with ultrasoft Born charges) and the CG's band
+  blocks over every k-point to what `'fit'` sized for the SCF, and nothing checks that total before
+  the solve starts. Either the response walks chunks whenever its own estimate would not fit, or
+  `sizing.py` gains the response's lines (item 24).
+
 ## Suggested order
 
 Cheap and certain first, then the two that decide whether the large cells run in the
@@ -298,10 +323,14 @@ but 24 and 25 have been measured on the card, two as nulls. What is left, in ord
 1. ~~**Measure the day's changes on the card**~~ -- done, including the nulls.
 2. ~~**A `Calculation` restricted to a row subset of k**~~ -- done (`at_rows`), and the
    chunked force and stress already run on it.
-3. **Stream the linear-response stack** (item 2) on top of it. The dielectric loop chunks
-   directly with `at_rows` (solve, response density and `becsum` are sums over k); what
-   blocks the default path is the Born charges, a `jvp` of the force gradient over the
-   whole k axis, which needs item 3's split one derivative up.
+3. **Stream the linear-response stack** (item 2) on top of it. **The dielectric tensor and
+   the Born charges are done** (2026-10-02, see "Done since"): the Born charges were item 3's
+   split one derivative up, as forecast. Next in this item is the `Gamma` phonon
+   (`dynamical_matrix`), which is the same split with *both* legs of the second derivative
+   moving `S` (P39's four terms: the overlap derivatives, `ort`, the mixed state's own change
+   and the multiplier response), `3 nat` perturbations rather than three, and a metal's
+   Fermi shift; then the `q` phonon and the `keep_internals` consumers (Raman,
+   electrostriction, the strain response).
 4. The small tail: a dense NSCF/DOS/PDOS mesh a block at a time (item 6's third bullet;
    the band path is done), item 14's per-`l` transform (time only), and the float32 tier's
    setup cast (item 26, its first blocker named). Items 7, 16 and 22 are closed by verdict.
@@ -336,7 +365,13 @@ an 800-point path; the difference should go from ~0.6 MB per k-point to flat.
 
 ### 2. Linear response holds its state whole-k and cannot stream -- priority 1, large
 
-**Open; its prerequisite (`Calculation.at_rows`) landed 2026-09-29.** The solve itself chunks cleanly, but the
+**The dielectric tensor and the Born charges are done (2026-10-02, `0a9f317`, `bf821e7`;
+see "Done since"); the phonons, the strain response and the third derivatives are open.**
+The text below is the item as it stood, and its per-k-point estimate was low: measured on the
+card, the field response grew 5.3 MB per k-point and with the Born charges 7.6, against the
+3.7 forecast below.
+
+Its prerequisite (`Calculation.at_rows`) landed 2026-09-29. The solve itself chunks cleanly, but the
 bare perturbation does not: `VelocityOperator` takes one `jvp` of `at_kcart` over the
 *whole* k axis, so a chunked `bare` would rebuild every k-point's core once per chunk
 (`nk / k_batch` full rebuilds). What it needs first is a `Calculation` restricted to a

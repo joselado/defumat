@@ -6985,9 +6985,12 @@ force and the stress (each chunk's share of the gradient pulled back through the
 whole-cell terms, so the force adds nothing to the SCF's peak), $dE/d\mathbf q$,
 the density and projector occupations, a projected DOS, an STM image, the
 structure factors, the site moments, the Berry curvature and the orbital
-magnetization. \textbf{What still moves them to the card whole} is the
-linear-response stack --- the dielectric tensor, Born charges, phonons, Raman ---
-and the sum-over-states spectra. \textbf{The host
+magnetization. \textbf{So do the dielectric tensor and the Born charges}: the
+bare perturbations, the first-order states and the Sternheimer solves go a block
+of $k$-points at a time with the first-order states in host memory, and on a
+streamed run they add nothing to the SCF's peak. \textbf{What still moves them
+to the card whole} is the rest of the linear-response stack --- phonons, Raman,
+the strain response --- and the sum-over-states spectra. \textbf{The host
 must hold the set} ($n_{\rm spin} n_k n_{\rm bnd} n_{\rm pwx} n_{\rm pol}$
 complex), which is the point but is not free. And \textbf{the fall-back from
 \code{'speed'} fires only where the preset is what would run}: with a

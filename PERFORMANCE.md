@@ -9538,3 +9538,77 @@ So memory mode on a card is now speed mode's time wherever speed mode's peak fit
 and **it is speed mode's peak there too**: the mesh's 0.036 GiB is now 0.864, since `'fit'` spends what
 the card has (60 per cent of it) rather than what one k-point needs. `k_batch = 1` with
 `wfc_store = 'stream'` still asks for the smallest card footprint.
+
+## The dielectric tensor and the Born charges a k-chunk at a time (RTX A2000, 2026-10-02)
+
+**The number to carry: on a streamed SCF the dielectric tensor and the Born charges now add nothing to
+the card's peak -- eight-atom silicon stays at the SCF's own 35.1 to 58.8 MB from 27 to 216 k-points,
+where the default call read 225.9 to 1695.2 MB -- for 12 to 14 per cent more time.**
+`GPU-MEMORY-NEXT.md` item 2, its field half (`0a9f317`, `bf821e7`, `defumat/response/chunked.py`).
+The field response held the occupied block, three bare perturbations `P_c r_a|psi>` and three
+first-order states `dpsi_a` on the card for the whole self-consistent loop, `(1 + 6) nspin nk nocc npwx`
+complex numbers plus the CG over the whole k axis, and it put a streamed store back on the card whole
+to get them; the Born charges then differentiated the whole-k force gradient on top. Now the six arrays
+live in host memory and both stages walk `k_chunks`: the response density is the sum of each chunk's
+`jvp` of the two raw sums over k it is built from (the smooth density and the unsymmetrised `becsum`),
+finished once, and the Born charges are the chunked force's split (`forces/chunked.py`) with one `jvp`
+through each of its three passes.
+
+Eight-atom Si at 20 Ry, `nosym`, unshifted `n n n` grids (`benchmarks/si8-ecut20-nosym-k3.in` with its
+`K_POINTS` replaced), `conv_thr = 1e-10`, memory mode at `k_batch = 1` so the store streams, warm cache,
+the second of two fresh processes per point, D22 (`tools/gpu/response_memory.py`); before at `56ba13e`,
+after at `bf821e7`. Peaks are `peak_bytes_in_use` at the end of the process; the time is the response
+call alone:
+
+| k-points | SCF alone | + `epsilon`, before | after | + `epsilon` and `Z*`, before | after | response, before | after |
+|---|---|---|---|---|---|---|---|
+| 27 | 35.1 MB | 149.5 MB | 35.1 MB | 225.9 MB | 35.1 MB | 27.6 s | 31.0 s |
+| 64 | 39.6 | 357.5 | 39.6 | 510.6 | 39.6 | 63.5 | 72.6 |
+| 125 | 47.5 | 683.2 | 47.5 | 976.0 | 47.5 | 128.5 | 146.5 |
+| 216 | 58.8 | 1191.3 | 58.8 | 1695.2 | 58.8 | 220.6 | 251.6 |
+
+(the times are the `epsilon` arm's; the Born charges add 1.6 to 3.0 s before and 2.0 to 8.4 s after, the
+split's two extra walks). **The 216-point Born arm first read 60.6 MB**, 1.8 above the SCF's: the
+multipliers' response, `nbnd^2` per k-point and direction, was held on the card for every chunk until
+the pull-back walk read it, 2.65 MB at this mesh; kept in host memory since `6485073` it reads 58.8
+with `Z*` bit-identical. Before,
+the dielectric response grew **5.3 MB per k-point** and with the Born charges **7.6**, against the 3.7
+the handoff forecast from shapes; after, the peak is the SCF's own, whose 0.11 MB per k-point is the
+resident per-k tables (item 6). The dielectric constant and `Z*` printed by the script are the same to
+all nine digits in every row. **The 14 per cent is the walk's per-chunk cost**: two compiled passes
+called `3 (iterations + 1)` times per chunk, one chunk per k-point here, each with its `at_rows`
+slicing (11 ms a chunk on the CPU); a larger `k_batch` should buy it back as it does for the SCF, which
+was not measured. **The CG iteration counts were not read on the card**, so the 14 per cent assumes the
+two arms took the same steps; the SCF is the same executable in both (26.6 against 26.8 s at 216
+k-points), and on the CPU the two routes report the same `average_iterations` on all three test cells,
+which the regression asserts.
+
+**What this configuration is, and the gap it leaves.** Since `170f2b6` memory mode's card default is
+`k_batch = 'fit'`, and the store streams only where that chunk is smaller than the mesh; the rows above
+force `k_batch = 1` to stand for a mesh too large for the card. Where `'fit'` takes the whole mesh, the
+response takes the whole-k route with the store on the card, and **nothing checks that route against
+the card before it starts**: `'fit'` sized the chunk for the SCF's Davidson subspace, and the whole-k
+response puts on top of the store six more arrays of its size (nine on an ultrasoft dataset, with the
+Born charges' commutators) and the CG's four band blocks over every k-point, which this table says
+is 5.3 to 7.6 MB per k-point of eight-atom silicon against the SCF's streamed 0.11. Whether that total
+fits where the SCF did is not measured, and the cure is a sizing one (`GPU-MEMORY-NEXT.md` item 2).
+
+**Against the whole-k route on the CPU**, one converged state through both (`tests/regression/
+test_streamed_response.py`, chunks that do not divide the k-set): ultrasoft AlAs on its `nosym` grid,
+`epsilon` 5e-14 and `Z*` 3.5e-13 apart on charges of 0.26 and -8.63; norm-conserving and PAW silicon on
+their wedges 2.7e-15 and 5.3e-15 in `epsilon` and 8.8e-15 and 4.4e-15 in `Z*`. The whole-k route is
+bit-identical to the code before. Dropping the term that couples a chunk's projector occupations to the
+whole-cell energy, `g_b . db_c/dx`, moves AlAs's `Z*` by 39, so that cell does see the one cross term
+the split could lose; silicon's `Z*` is a symmetric residue and could not. A second call compiles
+nothing: with the Born charges on, 108 programs on a fresh process's first call (the SCF's own are
+already compiled by then) and none on the second, and 137 when the compiled code is dropped with
+`jax.clear_caches()` before the second, which is the check that the counter fires.
+
+**The one design choice that was measured rather than argued.** Building each chunk's solve through
+`defumat.eager.compiled`, which traces at every call to find its program, cost 0.11 s of tracing per
+chunk against 0.04 s of work on ultrasoft silicon, a quarter of an hour on 216 k-points; the walks are
+module-level `jit`s cached on the calculation instead, taking the chunk's arrays, the whole set's level
+shift `alpha_pv` and the CG threshold as arguments, so one program serves every chunk and every call.
+
+**Still whole**: the phonons (`dynamical_matrix`, `dynamical_matrix_at_q`), the strain response, the
+third derivatives and anything asking for `keep_internals`, and a strained calculation (`_kcart`).
