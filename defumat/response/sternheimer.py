@@ -904,7 +904,7 @@ class SternheimerSolver:
         x = (smearing.ef - self.eigenvalues) / smearing.degauss
         return self.density_weights * w0gauss(x, smearing.ngauss) / smearing.degauss
 
-    def fermi_level_shift(self, drho):
+    def fermi_level_shift(self, drho, levels=None):
         """``ef_shift``: the Fermi level moves, and the response density with it.
 
         ``PW/src`` has no counterpart; this is ``LR_Modules/efermi_shift.f90``.
@@ -925,8 +925,14 @@ class SternheimerSolver:
 
         ``drho`` is ``(..., nspin_mag, n1, n2, n3)`` with any number of leading
         perturbation axes; the shift is computed per perturbation.
+
+        ``levels`` is ``(ldos, dos_ef)`` when the caller already has them -- a
+        response walked a k-chunk at a time builds them once by walking the
+        chunks (:mod:`defumat.response.chunked_phonon`), where
+        :meth:`local_density_of_states` would read the whole set.
         """
-        ldos, dos_ef = self.local_density_of_states()
+        ldos, dos_ef = (self.local_density_of_states() if levels is None
+                        else levels)
         calculation = self.calculation
         cell = calculation.system.cell
         element = cell.volume / int(np.prod(ldos.shape[1:]))

@@ -421,7 +421,8 @@ def dielectric_tensor(
     )
 
 
-def _streams(calculation, wavefunctions, keep_internals: bool) -> bool:
+def _streams(calculation, wavefunctions, keep_internals: bool,
+             what: str = "the dielectric response") -> bool:
     """Whether the field response walks the k axis a chunk at a time.
 
     :func:`~defumat.forces.chunked.walks_chunks`' rule -- a streamed store, or
@@ -439,13 +440,17 @@ def _streams(calculation, wavefunctions, keep_internals: bool) -> bool:
       its ``KPoints`` do not move with the cell: a chunk's velocity operator
       would be built at the unstrained k-points;
     * a k-point pool's store is refused, as every non-pooled ``get_*`` is.
+
+    :func:`~defumat.response.phonon.dynamical_matrix` asks the same question
+    (``what`` names it in the refusal), so the two responses agree about when
+    to walk.
     """
     from defumat.forces.chunked import walks_chunks
     from defumat.parallel import PoolStore
 
     if isinstance(wavefunctions, PoolStore):
         raise NotImplementedError(
-            "the dielectric response under k-point pools (DEFUMAT_POOLS) is "
+            f"{what} under k-point pools (DEFUMAT_POOLS) is "
             "not implemented: the SCF, forces, stress and relaxations are "
             "pool-aware, and this walks the whole store. Run it in one process")
     if keep_internals or getattr(calculation, "_kcart", None) is not None:

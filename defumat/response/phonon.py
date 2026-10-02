@@ -131,7 +131,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.forces.energy import FrozenState, frozen_energy
-from defumat.response.efield import require_a_symmetrisable_response
+from defumat.response.efield import _streams, require_a_symmetrisable_response
 from defumat.response.mixing import DEFAULT_RESPONSE_MIXING, ResponseMixer
 from defumat.response.sternheimer import (
     SternheimerSolver,
@@ -147,7 +147,7 @@ from defumat.units import AMU_TO_RY, RY_TO_CMM1, RY_TO_THZ
 from defumat.eager import compiled_jvp
 
 __all__ = ["Phonons", "DisplacementResponse", "dynamical_matrix",
-           "self_consistent_response",
+           "self_consistent_response", "screening_loop",
            "orthogonality_states", "non_variational_response",
            "multiplier_response", "overlap_derivatives",
            "symmetrize_becsum_modes"]
@@ -355,12 +355,26 @@ def dynamical_matrix(
             "translations, which are physical"
         )
 
+    # **The route is decided before anything converts the states**, by the
+    # field response's rule (:func:`~defumat.response.efield._streams`): a
+    # streamed store, memory mode with a chunk smaller than the mesh, or memory
+    # mode on a card, walk the k axis a chunk at a time with every
+    # per-perturbation array in host memory (:mod:`defumat.response.
+    # chunked_phonon`). A response handed in was solved whole and is assembled
+    # whole. Before this route existed, a streamed store did not run at all:
+    # the solver keeps it in host memory and the whole-k helpers below index it
+    # with a traced k index.
+    streamed = response is None and _streams(
+        calculation, wavefunctions, keep_internals=False,
+        what="the dynamical matrix")
     weights, _ = calculation.occupations(eigenvalues)
     weights = jnp.asarray(weights)
     nocc = occupied_counts(calculation)
     potential = calculation.potential(density)
     _, ddd_paw = calculation.onecenter(becsum)
     hamiltonians = calculation.hamiltonian(potential.v_scf, ddd_paw)
+    if not streamed:
+        wavefunctions = jnp.asarray(wavefunctions)
     solver = SternheimerSolver(
         calculation, hamiltonians, wavefunctions, eigenvalues, weights,
         nocc, threshold, v_scf=potential.v_scf, becsum=becsum,
@@ -368,6 +382,80 @@ def dynamical_matrix(
         kpoint_weights=calculation.system.kpoints.weights,
     )
 
+    if streamed:
+        from defumat.response.chunked_phonon import StreamedDisplacements
+
+        displacements = StreamedDisplacements(
+            calculation, solver, potential.v_scf, positions,
+            tuple(range(structure.nat)) if chosen is None else chosen,
+            wavefunctions, eigenvalues, weights, density, becsum,
+        )
+        # Steps 0 and 1 below, a chunk at a time.
+        displacements.prepare()
+        dpsi, drho, history, average_iterations, converged, extras = (
+            screening_loop(
+                calculation, displacements, density, positions=positions,
+                alpha_mix=alpha_mix, tr2=tr2, max_iterations=max_iterations,
+                becsumort=displacements.becsumort, drhous=displacements.drhous,
+                atoms=chosen, verbose=verbose,
+            )
+        )
+        # Steps 2b and 3.
+        matrix = displacements.force_constants(drho, extras, on_row=on_row)
+    else:
+        matrix, drho, history, average_iterations, converged = _whole_k(
+            calculation, solver, positions, wavefunctions, eigenvalues, weights,
+            density, becsum, potential, chosen, response, alpha_mix, tr2,
+            max_iterations, verbose, on_row,
+        )
+
+    # ``symdynph_gq`` first and the hermitisation second, which is the order
+    # that makes the second one a *measurement*. A column of the raw matrix is a
+    # sum over the irreducible wedge, and such a sum is not symmetric in
+    # ``(a i) <-> (b j)`` until the group has put back what the reduction left
+    # out -- on the ten-point wedge of ``si-epsilon.in`` the raw asymmetry is
+    # 5.1e-2 against force constants of 0.28, and essentially all of it is that.
+    # After the average it is 2e-16 on every case here, shifted wedge included,
+    # so the hermitisation has nothing left to do and what it would have removed
+    # is a report on the linear solves. Whether the average *must* leave a
+    # symmetric matrix is not claimed -- it is measured.
+    if chosen is None:
+        matrix = calculation.symmetrize_atom_pair_tensor(matrix)
+        masses = structure.masses
+    else:
+        # **The subset's own block, and it is square by construction.** A row is
+        # the gradient against every atom, so the columns outside the subset are
+        # computed and then dropped: they are the force the molecule's
+        # displacement exerts on the frozen substrate, which is a real quantity
+        # and not one a frozen-substrate mode can respond to. Nothing is
+        # symmetrised -- the guard above established the run is ``nosym``, where
+        # ``symmetrize_atom_pair_tensor`` is the identity anyway.
+        matrix = matrix[:, :, list(chosen), :]
+        masses = np.asarray(structure.masses)[list(chosen)]
+    asymmetry = float(np.abs(matrix - matrix.transpose(2, 3, 0, 1)).max())
+    matrix = 0.5 * (matrix + matrix.transpose(2, 3, 0, 1))
+    if acoustic_sum_rule:
+        matrix = _impose_acoustic_sum_rule(matrix)
+
+    frequencies, vectors = _diagonalize(matrix, masses)
+    return Phonons(
+        matrix=np.asarray(matrix),
+        frequencies=frequencies,
+        eigenvectors=vectors,
+        induced_density=np.asarray(drho),
+        asymmetry=asymmetry,
+        history=history,
+        average_iterations=average_iterations,
+        converged=converged,
+        atoms=chosen,
+    )
+
+
+def _whole_k(calculation, solver, positions, wavefunctions, eigenvalues,
+             weights, density, becsum, potential, chosen, response, alpha_mix,
+             tr2, max_iterations, verbose, on_row):
+    """Steps 0 to 3 of :func:`dynamical_matrix` with every k-point in one array."""
+    nbnd = wavefunctions.shape[2]
     # 0. What ``S`` moving with the atoms adds, and all of it is zero for a
     #    norm-conserving dataset: the occupied block of the first-order state,
     #    and the mixed state's own change at frozen states (``drho.f90``).
@@ -381,9 +469,9 @@ def dynamical_matrix(
     # ``nbnd == nocc``, so the pad is a no-op there and the mismatch only
     # appears once a run asks for empty bands or fills its two channels to
     # different depths.
-    ort = _pad_to_bands(ort, jnp.asarray(wavefunctions).shape[2])
+    ort = _pad_to_bands(ort, nbnd)
     (rho_moved, bec_moved), (rho_ort, bec_ort) = non_variational_response(
-        calculation, positions, jnp.asarray(wavefunctions), weights,
+        calculation, positions, wavefunctions, weights,
         jnp.asarray(density), becsum, ort, chosen,
     )
     drhous_stacked = moved_stacked = becsumort = bec_moved_sym = None
@@ -427,8 +515,7 @@ def dynamical_matrix(
     multipliers = dbecsum = None
     if calculation.is_ultrasoft and bare is not None:
         multipliers = multiplier_response(
-            calculation, solver, bare, extras, weights,
-            jnp.asarray(wavefunctions).shape[2], derivatives,
+            calculation, solver, bare, extras, weights, nbnd, derivatives,
         )
         # The assembly rebuilds the raw mixed-state response itself, so what
         # it is handed is the *symmetrised* total; the difference between the
@@ -438,51 +525,12 @@ def dynamical_matrix(
     # 3. The second derivative, two jvp of the force's own gradient per mode:
     #    the frozen Hessian at ``wg`` and the electronic response at ``wk``.
     matrix = _force_constants(
-        calculation, positions, jnp.asarray(wavefunctions), weights,
+        calculation, positions, wavefunctions, weights,
         _state_weights(solver, weights), eigenvalues, jnp.asarray(density),
         dpsi, drho, solver.nocc, becsum=becsum, dbecsum=dbecsum,
         multipliers=multipliers, ort=ort, atoms=chosen, on_row=on_row,
     )
-    # ``symdynph_gq`` first and the hermitisation second, which is the order
-    # that makes the second one a *measurement*. A column of the raw matrix is a
-    # sum over the irreducible wedge, and such a sum is not symmetric in
-    # ``(a i) <-> (b j)`` until the group has put back what the reduction left
-    # out -- on the ten-point wedge of ``si-epsilon.in`` the raw asymmetry is
-    # 5.1e-2 against force constants of 0.28, and essentially all of it is that.
-    # After the average it is 2e-16 on every case here, shifted wedge included,
-    # so the hermitisation has nothing left to do and what it would have removed
-    # is a report on the linear solves. Whether the average *must* leave a
-    # symmetric matrix is not claimed -- it is measured.
-    if chosen is None:
-        matrix = calculation.symmetrize_atom_pair_tensor(matrix)
-        masses = structure.masses
-    else:
-        # **The subset's own block, and it is square by construction.** A row is
-        # the gradient against every atom, so the columns outside the subset are
-        # computed and then dropped: they are the force the molecule's
-        # displacement exerts on the frozen substrate, which is a real quantity
-        # and not one a frozen-substrate mode can respond to. Nothing is
-        # symmetrised -- the guard above established the run is ``nosym``, where
-        # ``symmetrize_atom_pair_tensor`` is the identity anyway.
-        matrix = matrix[:, :, list(chosen), :]
-        masses = np.asarray(structure.masses)[list(chosen)]
-    asymmetry = float(np.abs(matrix - matrix.transpose(2, 3, 0, 1)).max())
-    matrix = 0.5 * (matrix + matrix.transpose(2, 3, 0, 1))
-    if acoustic_sum_rule:
-        matrix = _impose_acoustic_sum_rule(matrix)
-
-    frequencies, vectors = _diagonalize(matrix, masses)
-    return Phonons(
-        matrix=np.asarray(matrix),
-        frequencies=frequencies,
-        eigenvectors=vectors,
-        induced_density=np.asarray(drho),
-        asymmetry=asymmetry,
-        history=history,
-        average_iterations=average_iterations,
-        converged=converged,
-        atoms=chosen,
-    )
+    return matrix, drho, history, average_iterations, converged
 
 
 class _Levels:
@@ -553,6 +601,91 @@ def self_consistent_response(
     ``dpsi`` an object array of shape ``(nat, 3)``.
     """
     nat = calculation.system.structure.nat
+    chosen = tuple(range(nat)) if atoms is None else tuple(atoms)
+    return screening_loop(
+        calculation, _WholeDisplacements(solver, bare, len(chosen)), density,
+        positions=positions, alpha_mix=alpha_mix, tr2=tr2,
+        max_iterations=max_iterations, mixing_mode=mixing_mode,
+        becsumort=becsumort, drhous=drhous, atoms=atoms, verbose=verbose,
+    )
+
+
+class _WholeDisplacements:
+    """The ``3 nat`` solves with every k-point in one array: the route as it was.
+
+    :class:`~defumat.response.chunked_phonon.StreamedDisplacements` is the other
+    one, with the same four methods; :func:`screening_loop` drives either, so the
+    self-consistent loop around the solves is one loop for both routes.
+    """
+
+    def __init__(self, solver, bare, rows: int):
+        self.solver = solver
+        self.bare = bare
+        self.rows = rows
+        self.dpsi = np.empty((rows, 3), dtype=object)
+        self.iterations = 0
+        self.solves = 0
+
+    def respond(self, dvscf, onecentre, include_induced: bool):
+        """One iteration's solves: the response density per mode, and for PAW
+        the raw ``becsum`` response the one-centre potential is built from."""
+        solver = self.solver
+        response, becsum_response = [], []
+        for row in range(self.rows):
+            for cart in range(3):
+                perturbation = _bare_plus_induced(
+                    solver, self.bare[row, cart], dvscf[row, cart],
+                    include_induced,
+                    None if onecentre is None else onecentre[row, cart],
+                )
+                solution = solver.solve(perturbation)
+                self.dpsi[row, cart] = solution.dpsi
+                self.iterations += solution.iterations
+                self.solves += 1
+                response.append(solver.response_density(solution.dpsi))
+                if onecentre is not None:
+                    becsum_response.append(solver.response_becsum(solution.dpsi))
+        return response, becsum_response
+
+    def fermi_level_shift(self, drho):
+        return self.solver.fermi_level_shift(drho)
+
+    def shift_states(self, shifts) -> None:
+        """``ef_shift_wfc`` on every mode's ``dpsi``, ``shifts`` in mode order."""
+        for index, (row, cart) in enumerate(
+            (r, c) for r in range(self.rows) for c in range(3)
+        ):
+            self.dpsi[row, cart] = self.solver.fermi_level_shift_states(
+                self.dpsi[row, cart], shifts[index]
+            )
+
+
+def screening_loop(
+    calculation,
+    displacements,
+    density,
+    positions=None,
+    alpha_mix: float = ALPHA_MIX,
+    tr2: float = TR2,
+    max_iterations: int = MAX_ITERATIONS,
+    mixing_mode: str = DEFAULT_RESPONSE_MIXING,
+    becsumort=None,
+    drhous=None,
+    atoms=None,
+    verbose: bool = False,
+):
+    """:func:`self_consistent_response`'s loop around a set of displacement solves.
+
+    ``displacements`` holds the bare perturbations and does the solves --
+    :class:`_WholeDisplacements` with every k-point in one array, or
+    :class:`~defumat.response.chunked_phonon.StreamedDisplacements` a k-chunk at
+    a time -- and everything here acts on whole-grid objects with no k index:
+    the Fermi level's shift, the symmetrisation, the screening kernel and the
+    mixing. Returns :func:`self_consistent_response`'s tuple, with ``dpsi`` the
+    object's own store.
+    """
+    solver = displacements.solver
+    nat = calculation.system.structure.nat
     # ``rows`` is how many perturbations are being solved and ``chosen`` which
     # atoms they belong to. They are the same thing only for a whole-cell run;
     # a subset is refused unless the symmetrisation below is inert, because an
@@ -563,8 +696,7 @@ def self_consistent_response(
     grid_shape = jnp.asarray(density).shape
     core = _core_charge_response(calculation, density, positions, chosen)
     dvscf = jnp.zeros((rows, 3) + grid_shape)
-    history, total_iterations, solves = [], 0, 0
-    dpsi = np.empty((rows, 3), dtype=object)
+    history = []
     symmetrised = jnp.zeros_like(dvscf)
     converged = False
     # PAW's one-centre coefficients respond too, and they are *not* a function
@@ -577,20 +709,9 @@ def self_consistent_response(
 
     mixer = ResponseMixer(mixing_mode, beta=alpha_mix)
     for iteration in range(max_iterations):
-        response, becsum_response = [], []
-        for row in range(rows):
-            for cart in range(3):
-                perturbation = _bare_plus_induced(
-                    solver, bare[row, cart], dvscf[row, cart], iteration > 0,
-                    None if onecentre is None else onecentre[row, cart],
-                )
-                solution = solver.solve(perturbation)
-                dpsi[row, cart] = solution.dpsi
-                total_iterations += solution.iterations
-                solves += 1
-                response.append(solver.response_density(solution.dpsi))
-                if onecentre is not None:
-                    becsum_response.append(solver.response_becsum(solution.dpsi))
+        response, becsum_response = displacements.respond(
+            dvscf, onecentre, iteration > 0
+        )
 
         # ``ef_shift``: a displacement at ``q = 0`` moves charge in and out of
         # the cell, so a metal's Fermi level moves with it and the response
@@ -601,7 +722,7 @@ def self_consistent_response(
         # displacement-labelled vector field is ``sym_def`` by another route.
         shifts = None
         if solver.smearing is not None:
-            corrected = [solver.fermi_level_shift(r) for r in response]
+            corrected = [displacements.fermi_level_shift(r) for r in response]
             response = [r for r, _ in corrected]
             shifts = [float(d) for _, d in corrected]
 
@@ -692,20 +813,16 @@ def self_consistent_response(
         # wrong row silently. It is the only place in this module that got the
         # two confused, and it is a **metals-only** path, which is why an
         # insulating validation could not see it.
-        for index, (row, cart) in enumerate(
-            (r, c) for r in range(rows) for c in range(3)
-        ):
-            dpsi[row, cart] = solver.fermi_level_shift_states(
-                dpsi[row, cart], shifts[index]
-            )
+        displacements.shift_states(shifts)
 
     extras = {
         "dvscf": dvscf,
         "onecentre": onecentre,
         "dbecsum": None if onecentre is None else per_mode,
     }
-    return (dpsi, symmetrised, history,
-            total_iterations / max(solves, 1), converged, extras)
+    return (displacements.dpsi, symmetrised, history,
+            displacements.iterations / max(displacements.solves, 1), converged,
+            extras)
 
 
 def _core_charge_response(calculation, density, positions, atoms=None):
