@@ -143,7 +143,11 @@ XLA command buffers (a null here: `--xla_gpu_enable_command_buffer` with `WHILE,
   arrays (a pytree with a static kind), so that `SternheimerSolver.solve` and the response density can be
   module-level `jit`s keyed without a trace; it touches every perturbation the response stack builds
   (`efield`, `phonon`, `phononq`, `strain`, `electrostriction`, `piezo`). Worth doing once the
-  response stack runs on cards in production.
+  response stack runs on cards in production. **The card is idle for most of that call**: `nsys` over the
+  warm call finds 1.51 s of kernels in 390,184 launches and 24,239 `cuStreamSynchronize` (2.88 s), the
+  Sternheimer loops' conditions read back once a step. Speed mode makes the call 6.1 s and
+  `k_batch='fit'` 6.5 against memory mode's 7.2, and XLA command buffers with `WHILE,CONDITIONAL`
+  change nothing in either (7.2, 6.1), so the loop conditions still come back to the host.
 
 * **The 157-atom slab's "12x too many steps"** (`OPEN.md`, the memory notes) is a separate question: its
   iteration 2 is in the loose-`ethr` regime, ten orders above any floor. **It does not reproduce on small
