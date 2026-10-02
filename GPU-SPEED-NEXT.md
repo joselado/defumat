@@ -77,9 +77,12 @@ Memory mode cost 1.8x against speed mode on a k-mesh of a small cell, nearly all
 per call; `k_batch = 'fit'` sizes the chunk from the card (1.97x faster at 27 k-points on eight-atom
 silicon) and the Davidson width ladder now works under a batch over k, which made a 22-point chunk on
 sixteen atoms a wash where it had been 1.28x slower. `band_precision = 'single'` is 3.9x to 4.2x on 64
-atoms on the A2000 to `conv_thr = 1e-7`; `'mixed'` does not pay. **The user's to decide:** whether
-memory mode's default becomes `'fit'`, and whether speed mode's fallback becomes the largest fitting
-chunk rather than one k-point. **Open:** a precision switch that keeps the mixer's superlinear step
+atoms on the A2000 to `conv_thr = 1e-7`; `'mixed'` does not pay. **Decided by the user on
+2026-10-02, not yet implemented:** memory mode's default on a card becomes `'fit'`, and speed mode's
+fallback becomes the largest fitting chunk rather than one k-point. Speed mode falls back to memory mode,
+so the first carries the second: `resolve_k_batch_for` treats `"default"` as `'fit'` for memory mode on
+an accelerator, with a test that fakes the platform, the guide's batching section, `CLAUDE.md`'s JAX
+rules paragraph ("its default follows `memory_mode`"), and a re-measurement of the 27-point mesh. **Open:** a precision switch that keeps the mixer's superlinear step
 (`PLAN.md` P126, "What is not done"). Records: `PERFORMANCE.md`, "A k-chunk sized to the card" and "The
 band side in single precision".
 
@@ -109,7 +112,7 @@ XLA command buffers (a null here: `--xla_gpu_enable_command_buffer` with `WHILE,
 * **The subspace `eigh` by the host's LAPACK, for small matrices on a card** -- now an opt-in dial,
   `DEFUMAT_HOST_EIGH_ROWS` (2026-10-02, measured on whole SCFs: 1.36x on a 27-point mesh in memory mode,
   1.14x at one k-point, 1.00x at 64 atoms, 0.98x in speed mode; `PERFORMANCE.md`, "The host's LAPACK for
-  the small subspace solves"); whether it becomes memory mode's default on a card is the user's. The
+  the small subspace solves"); the user decided on 2026-10-02 to keep it opt-in until a float64 card is measured. The
   device `syevd` is 0.63, 1.11, 3.56 and 6.65 ms a call at 16, 32, 64 and 128 rows on the A2000 against
   0.23, 0.32, 0.71 and 2.21 for LAPACK through `jax.pure_callback`, crossing at about 256; after the two
   fixes of that evening it is 71 per cent of the kernel time of eight-atom silicon at one k-point and 61

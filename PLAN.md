@@ -206,7 +206,8 @@ because that is what decides whether it is a session or a phase.
 - **Wyckoff input** (P6, the one part of that phase not done).
 - **A switch from single to double precision that pays** (P126): `'mixed'` converges to the double
   state and loses the superlinear mixing step a bulk cell converges by, 0.72x on 64-atom silicon on
-  the card; and **whether `k_batch = 'fit'` becomes memory mode's default**, which is the user's.
+  the card; and **`k_batch = 'fit'` as memory mode's default on a card**, which the user decided on
+2026-10-02 and which is not yet implemented (`GPU-SPEED-NEXT.md` item 4).
 - **Relaxing the orientation of a magnetic texture under spin-orbit coupling** (P122,
   `ORIENTATION-NEXT.md`): step 1, the three-component torque on a collinear source, is in;
   a noncollinear source (the four-cell cobalt helix), the BFGS relaxation in the rotation,
@@ -23409,9 +23410,9 @@ none; a second call 23.2 s against 16.1 with the cache on and 67.8 against 16.4 
 response quantity the same to 1e-14 or better (`PERFORMANCE.md`, "The response stack compiled its k
 loops again at every iteration").
 
-**What is not done.** `'fit'` as memory mode's default, and speed mode falling back to the largest
-fitting chunk rather than to one k-point: both change a documented promise, and both are the user's to
-decide. A precision switch that does not perturb the mixer. Single on ultrasoft, PAW, spinors and DFT+U,
+**What is not done.** `'fit'` as memory mode's default on a card, and speed mode falling back to the
+largest fitting chunk rather than to one k-point: both change a documented promise, and the user decided
+both on 2026-10-02 (the host `eigh` stays opt-in); not yet implemented. A precision switch that does not perturb the mixer. Single on ultrasoft, PAW, spinors and DFT+U,
 and every derivative in it (refused). All of it on a float64 card, which `tools/gpu/stall-check.sbatch`
 measures and which needs a submission. Record: `PERFORMANCE.md`, "A k-chunk sized to the card" and
 "The band side in single precision"; guide: `docs/features.tex`, the batching section.
