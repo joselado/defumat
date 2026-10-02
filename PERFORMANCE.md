@@ -9568,7 +9568,9 @@ call alone:
 | 216 | 58.8 | 1191.3 | 58.8 | 1695.2 | 58.8 | 220.6 | 251.6 |
 
 (the times are the `epsilon` arm's; the Born charges add 1.6 to 3.0 s before and 2.0 to 8.4 s after, the
-split's two extra walks). **The 216-point Born arm first read 60.6 MB**, 1.8 above the SCF's: the
+split's two extra walks). The "after" column was taken at `6485073`, before the Born passes' position
+derivatives were taken by columns (`d4be84c`, below); on this norm-conserving cell neither of those two
+passes takes a derivative, so the change does not reach these rows. **The 216-point Born arm first read 60.6 MB**, 1.8 above the SCF's: the
 multipliers' response, `nbnd^2` per k-point and direction, was held on the card for every chunk until
 the pull-back walk read it, 2.65 MB at this mesh; kept in host memory since `6485073` it reads 58.8
 with `Z*` bit-identical. Before,
@@ -9611,9 +9613,12 @@ chunks at the calculation's chunk whatever it is, the whole mesh included
 the whole-k route it asked for, and its check against the card (`speed_mode_fits`) sizes the SCF, not the
 response. **At one k-point a chunk the ultrasoft cell is not at the SCF's peak**: 219.5 MB against 66.9
 at 27 k-points and 230.1 against 75.2 at 64, so the response adds 152.6 and 154.9 MB, flat in the mesh
-and so not a store; which pass holds it was not measured after the column change (before it, at one
-k-point a chunk, the frozen polarization's pass read 315 MB of temporaries and the bare walk's 83). At
-the whole mesh in one chunk it sits under the eigensolver's.
+and so not a store. **It is the frozen polarization's pass**: at one k-point a chunk its compiled
+temporaries are 165.9 MB (315.4 before the column change), the bare walk's 83.0, the global step's
+44.3 and every other pass's 21 MB or less, the run reading 221.3. What inside that pass holds the
+166 MB -- it builds the projectors' k-derivative in three directions at once and contracts them with
+the moved projectors -- was not measured. At the whole mesh in one chunk it sits under the
+eigensolver's.
 
 **Against the whole-k route on the CPU**, one converged state through both (`tests/regression/
 test_streamed_response.py`, chunks that do not divide the k-set): ultrasoft AlAs on its `nosym` grid,

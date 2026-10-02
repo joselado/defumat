@@ -300,7 +300,10 @@ below:
   the whole mesh as one included, and the two Born passes that differentiated in the positions with
   `jacfwd` (3289 and 2185 MB of temporaries at that chunk) walk the tangents one at a time: the run
   reads 925.2 MB, the SCF's own, in 58.4 s against the whole-k route's 72.4. **Not covered**: speed
-  mode, whose check against the card sizes the SCF and not the response.
+  mode, whose check against the card sizes the SCF and not the response; and at one k-point a chunk
+  the ultrasoft cell's Born charges add a fixed 153 to 155 MB to a 67 to 75 MB SCF, at 27 and 64
+  k-points, which is the frozen polarization's pass (166 MB of temporaries; what inside it, not
+  measured).
 
 ## Suggested order
 
