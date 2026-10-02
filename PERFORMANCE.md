@@ -9456,3 +9456,47 @@ for the cluster**: a card job should point `DEFUMAT_CACHE_DIR` at a directory th
 `tools/gpu/stall-check.sbatch` does, and only the first job of a new cell pays the autotuning.
 `--xla_gpu_autotune_level=0` is the right call for a one-off run on a cell no cache has seen, at 2 to 5
 per cent of every iteration.
+
+## The stall check on a data-centre card: an H200 on Triton (2026-10-02)
+
+**The number to carry: on an NVIDIA H200 every arm takes the same Davidson steps and the same energy as
+the CPU, a 64-atom silicon iteration is 54.1 ms in speed mode against 1439 on the RTX A2000 (26.6x), and
+the float32 band side is worth nothing at the run level there (0.99x in speed mode, 1.20x in memory
+mode) where the A2000 gave 4.2x to 4.6x.** `tools/gpu/stall-check.sbatch`, job 20644012, `gpu57`
+(`gpu-h200-141g-short`, driver 580.173.02, jax 0.11.1), the worktree at `dfb1ab3`, 2 min 25 s in all;
+`DEFUMAT_CACHE_DIR` on scratch and empty, so every first SCF paid its compile (the `cold` figures).
+
+**1. The device `eigh` follows its input's norm on the H200 as it does on the A2000.** On the A2000's 72
+captured Davidson solves (`tools/gpu/replay/eigh_bound.py`), error of the lowest roots against the live
+block's: parked at four times the diagonal, median 4.7e-15, worst 1.65e-13, two solves over 1e-13 (the
+A2000's own figures, to the digit); parked one above the Gershgorin bound of the reduced live block, as
+committed, median 2.5e-15, worst 1.49e-14; the live block alone, worst 8.3e-15. So the bound is the
+right fix on a production card too, and the factor would have stalled there as well.
+
+**2. Steps and times, `conv_thr = 1e-10`, double**, ms per iteration (median of two warm SCFs):
+
+| cell | memory mode | speed mode | memory / speed | A2000, memory and speed |
+|---|---|---|---|---|
+| `si16-1k-ecut30` | 18.18 | 14.18 | 1.28x | 69.5, 64.0 |
+| `si64-1k-ecut30` | 106.34 | 54.10 | 1.97x | 1535, 1439 |
+
+Nine iterations in every arm, steps `3 1 2 2 2 2 4 3 2` (sixteen atoms) and `3 1 3 3 2 3 4 3 2` (64), the
+same in both modes and the same as the A2000's, and the energies -126.720760700971 and -507.166061664058
+Ry in every arm, the CPU's to every printed digit. **Memory mode costs twice speed mode at 64 atoms on the
+H200**, where it cost 8 per cent on the A2000, for a device peak of 3.147 against 3.282 GiB: with one
+k-point the batch over k is not what differs, so it is the projectors rebuilt at every application
+against stored ones, or the streamed store, which the arithmetic hid on the float32 card and does not hide
+here. Which of the two is not measured.
+
+**3. The float32 band side at `conv_thr = 1e-7`**, 64 atoms:
+
+| mode | double | single | per iteration | per run | device peak, double and single |
+|---|---|---|---|---|---|
+| memory | 6 it, 108.50 ms | 9 it, 60.12 ms | 1.80x | 1.20x | 3.148, 1.606 GiB |
+| speed | 6 it, 52.69 ms | 9 it, 35.47 ms | 1.49x | 0.99x | 3.283, 1.641 GiB |
+
+Single converges in nine iterations against six, at its floor, to -507.166033420111 Ry against
+-507.166061645064 (2.8e-5 Ry, as on the A2000). On a card with a real float64 rate the three extra
+iterations take the whole of the per-iteration gain in speed mode, so the tier is worth its half peak and
+not its time there; `GPU.md` Phase 3 ranked it by this number. `nsys` is not on the GPU nodes, so the
+fourth stage, the kernel profile, was skipped.

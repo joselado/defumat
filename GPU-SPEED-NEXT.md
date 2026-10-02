@@ -93,6 +93,18 @@ at setup, PAW's one-centre loop over atoms, `newd`'s noncollinear integrals in 5
 iteration, and the smeared Fermi level's fixed bisection of 100 and 200 trips (QE's `efermig`, left as
 it is: a few hundred small launches an iteration, which matters only for a small metal on a card).
 
+## 4b. The H200 answered the stall check -- 2026-10-02, and the new first item
+
+`tools/gpu/stall-check.sbatch` ran on an H200 (job 20644012, `PERFORMANCE.md`, "The stall check on a
+data-centre card"): the device `eigh` follows the norm there as on the A2000 (the factor-4 park worst
+1.65e-13, the committed bound 1.49e-14); every arm takes the A2000's steps and the CPU's energy; a
+64-atom iteration is 54.1 ms in speed mode (26.6x the A2000); the float32 tier is 0.99x to 1.20x a run.
+**What it opened: memory mode costs 1.97x speed mode at 64 atoms there** (106.3 against 54.1 ms, for 4
+per cent less device memory), against 8 per cent on the A2000. With one k-point that is the projector
+rebuild or the streamed store; the next job is the same cell with `projectors` and `wfc_store` swapped one
+at a time, `time_scf.py` per arm, and an `nsys` the GPU nodes do not have (module or a container to find
+first). Until it is known, memory mode is the wrong default on a fast card for a cell that fits.
+
 ## 5. The A100-class profile -- priority 3, needs item 1
 
 On the float32 card the stall-free 64-atom kernel time is 47 per cent FFT, 33 per cent cuBLAS, 12 per

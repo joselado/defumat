@@ -516,8 +516,10 @@ band side in single precision"): `band_precision = 'single'` runs `H|psi>`, the 
 store in float32 and the whole grid side in float64, with the subspace solves in double; on the
 RTX A2000 the 64-atom SCF to `conv_thr = 1e-7` is 3.9x to 4.2x faster at half the device peak, and
 `'mixed'`, which switches to double inside the run, does not pay on the cells tried. The rank this
-section asks for still waits on a float64 card's ratio (`tools/gpu/stall-check.sbatch`, not run). The
-paragraphs below are the plan as it stood before.
+section asks for is **now measured on an H200** (2026-10-02, `PERFORMANCE.md`, "The stall check on a
+data-centre card"): 1.49x to 1.80x an iteration and **0.99x to 1.20x a run**, since single needs nine
+iterations to double's six at 1e-7, so on a card with a real float64 rate the tier buys its half peak
+and not its time, and it ranks last. The paragraphs below are the plan as it stood before.
 
 **What.** `Precision(SINGLE)` end to end, with named reductions kept in float64.
 

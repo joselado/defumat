@@ -23413,6 +23413,9 @@ loops again at every iteration").
 **What is not done.** `'fit'` as memory mode's default on a card, and speed mode falling back to the
 largest fitting chunk rather than to one k-point: both change a documented promise, and the user decided
 both on 2026-10-02 (the host `eigh` stays opt-in); not yet implemented. A precision switch that does not perturb the mixer. Single on ultrasoft, PAW, spinors and DFT+U,
-and every derivative in it (refused). All of it on a float64 card, which `tools/gpu/stall-check.sbatch`
+and every derivative in it (refused). **The float64 card is measured** (an H200, 2026-10-02): equal steps
+in every arm, the bound's `eigh` error at its floor, 26.6x the A2000 at 64 atoms, the float32 tier 0.99x
+to 1.20x a run, and memory mode 1.97x speed mode at 64 atoms, which is the new open item (`PERFORMANCE.md`,
+"The stall check on a data-centre card"). Before that, all of it on a float64 card, which `tools/gpu/stall-check.sbatch`
 measures and which needs a submission. Record: `PERFORMANCE.md`, "A k-chunk sized to the card" and
 "The band side in single precision"; guide: `docs/features.tex`, the batching section.
