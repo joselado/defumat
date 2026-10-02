@@ -112,6 +112,7 @@ import numpy as np
 
 from defumat.basis.interpolate import to_dense
 from defumat.batching import map_k
+from defumat.eager import compiled
 from defumat.forces.energy import FrozenState, frozen_energy
 from defumat.scf.density import becsum as becsum_of, spinor_sum_band, sum_band
 from defumat.system.symmetry import cartesian_rotations
@@ -246,8 +247,11 @@ def born_effective_charges(
         multipliers = _multiplier_response(
             solver, perturbations[axis], weights, psi.shape[2], nocc
         )
-        _, column = jax.jvp(
-            gradient, (positions, psi, ground, unshifted, no_becsum_shift),
+        # One program for the three field directions (:mod:`defumat.eager`):
+        # the derivative is compiled whole and only ever evaluated.
+        column = compiled(
+            lambda primals, tangents: jax.jvp(gradient, primals, tangents)[1],
+            (positions, psi, ground, unshifted, no_becsum_shift),
             (jnp.zeros_like(positions), states, multipliers, shifts[axis],
              becsum_shifts[axis]),
         )
@@ -314,7 +318,12 @@ def _full_zone_field_response(calculation, positions, psi, weights,
         parts = becsum_of_(here, states, weights)
         return density_of(here, states, weights, parts), parts
 
-    tangents = [jax.jvp(mixed, (psi,), (states,))[1] for states in states_by_axis]
+    # Each ``jvp`` is compiled whole, one program for the three directions
+    # (:mod:`defumat.eager`), since ``mixed`` is a new closure at every call.
+    tangents = [
+        compiled(lambda s, ds: jax.jvp(mixed, (s,), (ds,))[1], psi, states)
+        for states in states_by_axis
+    ]
     raw = jnp.stack([density for density, _ in tangents])
     becsum_shifts = _full_zone_becsum_response(
         calculation, [parts for _, parts in tangents]
@@ -327,8 +336,10 @@ def _full_zone_field_response(calculation, positions, psi, weights,
     # so that path is one more tangent of the same builder.
     parts_here = becsum_of_(here, psi, weights)
     through_becsum = jnp.stack([
-        jax.jvp(lambda parts: density_of(here, psi, weights, parts),
-                (parts_here,), (offsets,))[1]
+        compiled(
+            lambda p, dp: jax.jvp(
+                lambda parts: density_of(here, psi, weights, parts), (p,), (dp,))[1],
+            parts_here, offsets)
         for offsets in becsum_shifts
     ])
     shift = calculation.symmetrize_directional(raw) - raw - through_becsum
@@ -448,8 +459,10 @@ def _raw_mixed_state(calculation, positions, psi, weights, density, becsum):
                                    becsum_offset)
         )
 
-    offset = jnp.asarray(density) - raw_density(
-        here, psi, weights, becsum_builder(here, psi, weights)
+    offset = jnp.asarray(density) - compiled(
+        lambda states, occupations: raw_density(
+            here, states, occupations, becsum_builder(here, states, occupations)),
+        psi, weights,
     )
 
     def density_builder(moved, states, occupations, parts):
@@ -610,8 +623,10 @@ def _multiplier_response(solver, perturbation, weights, nbnd, nocc):
             applied = perturbation(occupied[spin][ik], ik, spin)
             return jnp.einsum("mg,ng->mn", jnp.conj(occupied[spin][ik]), applied)
 
-        blocks.append(map_k(
-            one_k, jnp.arange(occupied.shape[1]), batch=solver.calculation.k_batch
+        blocks.append(compiled(
+            lambda indices, one_k=one_k: map_k(
+                one_k, indices, batch=solver.calculation.k_batch),
+            jnp.arange(occupied.shape[1]),
         ))
     # **The weight masks the column and the row needs a mask of its own**, and
     # for ``nspin = 2`` those are not the same cut. The solver keeps

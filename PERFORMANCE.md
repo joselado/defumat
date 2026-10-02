@@ -9284,3 +9284,73 @@ kept for good; `/proc/self/maps` grew by 256 per call before and by 0 after. The
 identically. A warm second SCF, by contrast, compiles nothing on any of six kinds of cell tried (plain,
 ultrasoft, PAW, noncollinear, a magnetic metal, DFT+U), nor do a second band structure, force, stress or
 DOS call: `jax_log_compiles` on the `jax` logger, checked to see 133 compilations in the cold run.
+
+## The response stack compiled its k loops again at every iteration (CPU, 2026-10-02)
+
+**The number to carry: a dielectric tensor of zincblende AlAs (`tests/data/qe/alas-berry.in`) added
+10,770 memory mappings to the process at every call, and now adds none after the first; a second call
+takes 16.1 s where it took 23.2 with the persistent cache on, and 16.4 s where it took 67.8 with the
+cache off.** A Triton node's `vm.max_map_count` is 65,530 (this workstation's and D22's are 1,048,576),
+so about six dielectric calls in one process reach it there, which is the cluster's "Failed to
+materialize symbols" in another place than the Berry-phase loop above (`OPEN.md` Part XIII item 2); no
+response run on a node has been measured. This workstation's CPU, cores 0 to 3, three calls
+in one process after one SCF, `jax_log_compiles` on the `jax` logger and `/proc/self/maps` counted
+around each call, nothing else running:
+
+| | first call | second | third |
+|---|---|---|---|
+| before, cache on | 25.49 s, 248 compiles, +11,623 maps | 23.16 s, 94, +10,770 | 24.06 s, 94, +10,771 |
+| after, cache on | 18.29 s, 84, +1,459 | 16.09 s, 0, +0 | 16.17 s, 0, +0 |
+| before, cache off | 72.21 s, 248, +11,624 | 67.79 s, 94, +10,771 | 65.73 s, 94, +10,771 |
+| after, cache off | 25.70 s, 84, +1,459 | 16.42 s, 0, +0 | 16.29 s, 0, +0 |
+
+`eps_xx` is 19.900101704229 in all twelve calls. **The mechanism is the ultracell's and the Berry
+loop's**, one level out: `SternheimerSolver.solve` walks k with a `map_k` over a closure built around
+the perturbation at every call, called outside any `jit`, so JAX traces the loop, binds a `scan` with a
+new body jaxpr and compiles it, and does the same for the response density, which is a `jax.jvp` of
+`density_at` taken at the top level. The 94 a call on AlAs are 36 Sternheimer loops and 36 response
+densities (three directions, twelve iterations), the rest the Born-charge assembly and the velocity.
+Each compile maps a new executable whether the cache supplied it or not, which is why the mappings
+grow by the same amount with the cache off.
+
+**The cure is `defumat/eager.py`**, because these closures carry a callable and so have no static
+argument for a module-level `jit` to key on. `compiled(fn, *args)` traces `fn` to a jaxpr with every
+array it closes over hoisted, hashes the printed jaxpr together with the bytes of any constant a nested
+`jit` holds (the printer shows a nested constant's type and not its value, and
+`pseudo.projectors._with_origin_tangent` builds one from its static argument), and keeps one `jit` per
+hash. It engages only at the top level, refuses a callback, and is a plain call under any
+transformation; `compiled_jvp` wraps a whole top-level `jax.jvp`, so the kept program is the derivative
+and is only evaluated. `tests/unit/test_eager.py` feeds each guard a case that must trip it.
+
+**Every getter the sweep found recompiling**, compiles on a second call before and after (CPU; the
+before column was taken on the efficiency cores, the after on the performance cores, so only the counts
+are like for like):
+
+| getter | input | before | after |
+|---|---|---|---|
+| `get_dielectric_tensor` | `si-1k.in` | 127 (9.73 s) | 0 (4.60 s), same cores |
+| `get_dielectric_tensor`, `get_born_charges` | `alas-berry.in` | 94, 94 | 0, 0 |
+| `get_phonons` (Gamma) | `alas-berry.in` | 138 | 0 |
+| `get_phonons_at_q` (L) | `si2-nosym.in` | 150 (75.0 s) | 0 (61.7 s), same cores |
+| `get_raman_tensors`, `get_vibrational_spectrum` | `alas-berry.in` | 6, 6, with every other fix in | 0, not re-run |
+| `get_strain_response`, `get_electrostriction` | `si-electrostriction.in` | 18, 156, with the Sternheimer fix in | 0, 0 |
+| `get_absorption` | `alas-berry.in` | 97 | 0 |
+| `get_shg`, `get_shift_current`, `get_optical_conductivity` | `alas-berry.in` | 8, 11, 7 | 0, 0, 0 |
+| `get_band_velocities`, `get_effective_mass` | `si-1k.in`, `si2-nosym.in` | 3, 6 | 0, 0 |
+| `get_spin_susceptibility`, `get_magnon_dispersion` | `h-fcc-magnon.in` | 1, 2 | 0, 0 |
+| `get_spiral_scan` | `h-chain-spiral.in` | 2 | 0 |
+| `get_torque`, `get_orientation_torque` | `co-tetragonal-anisotropy-sr.in` | 19, 19 | 1, 1 |
+| a fresh calculator's `get_scf`, `nbnd` above the atomic orbitals, `nk > 1` | `h-sheet.in` | 1 | 0 |
+
+The last row corrects the Berry section's sentence that a warm second SCF compiles nothing: the six
+cells tried there never topped up with random vectors, and `starting_wavefunctions`' top-up was an eager
+`map_k` too. **Left as they are**: the torque's and the spiral gradient's `jax.jit(jax.value_and_grad(
+chunk))`, built once per call and reused across the call's chunks (one compile a call; through
+`compiled` it would trace once per chunk instead), and `get_pdos`'s one. **Values**, old code against
+new on the same inputs: the dielectric tensor to 3.6e-15 relative, Born charges 9.3e-15, the phonon
+matrix at Gamma 2.0e-14 and at L 8.3e-12 on 502, piezoelectric 4.5e-14, strain 1.8e-14, elastic 2.6e-14,
+electrostriction 3.1e-14, Raman 3.7e-12 (on a translational residue of 0.0019), the shift current
+8.5e-17, velocities and effective masses identical; the Gamma phonon eigenvectors differ inside the two
+degenerate pairs, where any rotation is as right as another. **What `compiled` costs**: on a warm
+second AlAs dielectric call 85 calls trace for 5.2 s and print for 1.2 s, of 17.5; the loops it replaces
+traced their bodies at every call as well.

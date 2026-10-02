@@ -157,6 +157,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.batching import resolve_k_batch, sum_k
+from defumat.eager import compiled
 from defumat.response.velocity import VelocityOperator
 from defumat.scf.occupations import smearing_order, w0gauss
 from defumat.solvers.davidson import EMPTY_ETHR_FLOOR
@@ -583,7 +584,8 @@ def optical_conductivity(
 
     # ``sum_k`` tree-maps its accumulator, so the pair count adds over k the
     # same way the tensor does.
-    inter, dropped = sum_k(one_k, (elements, shifted[0], wg, filling), batch=batch)
+    inter, dropped = compiled(lambda a: sum_k(one_k, a, batch=batch),
+                              (elements, shifted[0], wg, filling))
     inter = np.asarray(inter) * (1.0 / volume)
     dropped = int(np.asarray(dropped))
 

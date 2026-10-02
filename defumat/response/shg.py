@@ -84,6 +84,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.batching import resolve_k_batch, sum_k
+from defumat.eager import compiled
 from defumat.response.photocurrent import (
     DEGENERACY_TOL,
     _kpoints_are_reduced,
@@ -608,7 +609,8 @@ def second_harmonic(
             )
 
         arrays = (shifted, bare, jnp.moveaxis(v, 0, 1), filling, wk)
-        return np.asarray(sum_k(one_k, arrays, batch=batch)) * scale
+        return np.asarray(compiled(
+            lambda a: sum_k(one_k, a, batch=batch), arrays)) * scale
 
     parts = total(nbnd)
     chi_au = parts.sum(axis=0)

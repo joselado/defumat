@@ -54,6 +54,7 @@ from defumat.forces.energy import FrozenState, energy_at
 
 from defumat.response.strain import StrainResponse, strain_tangent
 from defumat.units import RY_TO_KBAR
+from defumat.eager import compiled_jvp
 
 __all__ = ["ElasticConstants", "elastic_constants",
            "require_a_measured_elastic_regime", "VOIGT"]
@@ -200,7 +201,7 @@ def elastic_constants(
         states = jnp.zeros_like(psi).at[:, :, :nocc].set(
             jnp.asarray(response.dpsi[k, l])
         )
-        _, column = jax.jvp(
+        _, column = compiled_jvp(
             gradient, (zero, psi), (strain_tangent(k, l), states)
         )
         column = np.asarray(column) / volume

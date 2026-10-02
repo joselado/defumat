@@ -131,6 +131,7 @@ import numpy as np
 
 from defumat.basis.fft import g_to_r, r_to_g
 from defumat.batching import map_k
+from defumat.eager import compiled, compiled_jvp
 from defumat.pseudo.augmentation import augmentation_dipole
 from defumat.response.born import born_effective_charges, require_born_charges
 from defumat.response.mixing import DEFAULT_RESPONSE_MIXING, ResponseMixer
@@ -576,7 +577,7 @@ def _screening_kernel(calculation, density, screening: str):
     density = jnp.asarray(density)
     if screening == "full":
         def screen(drho):
-            _, dv = jax.jvp(
+            _, dv = compiled_jvp(
                 lambda r: calculation.potential(r).v_scf, (density,), (drho,)
             )
             return dv
@@ -620,7 +621,10 @@ def _solve_stored(solver, rhs):
             projected = -solver.project(rhs[spin][ik], ik, spin)
             return solver.solve_at(projected, ik, spin)[0]
 
-        blocks.append(map_k(one_k, jnp.arange(rhs.shape[1]), batch=batch))
+        blocks.append(compiled(
+            lambda indices, one_k=one_k: map_k(one_k, indices, batch=batch),
+            jnp.arange(rhs.shape[1]),
+        ))
     return jnp.stack(blocks)
 
 
@@ -883,7 +887,7 @@ def born_charges_zstar_eu(calculation, solver, v_scf, dpsi) -> np.ndarray:
     for atom in range(natoms):
         for cart in range(3):
             tangent = jnp.zeros_like(positions).at[atom, cart].set(1.0)
-            _, bare = jax.jvp(h_psi, (positions,), (tangent,))
+            _, bare = compiled_jvp(h_psi, (positions,), (tangent,))
             for direction in range(3):
                 overlap = jnp.einsum(
                     "skng,skng->skn", jnp.conj(dpsi[direction]), bare

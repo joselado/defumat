@@ -85,6 +85,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.batching import map_k
+from defumat.eager import compiled
 
 __all__ = ["VelocityOperator", "BandVelocities", "band_velocities",
            "over_kpoints"]
@@ -270,12 +271,14 @@ class VelocityOperator:
         tangent = jnp.broadcast_to(
             jnp.asarray(direction, dtype=self.kcart.dtype), self.kcart.shape
         )
-        _, out = jax.jvp(
-            lambda kc: self._operator(psi, kc, overlap, contract),
-            (self.kcart,),
-            (jnp.asarray(tangent),),
+        # The whole ``jvp`` is compiled by its structure (:mod:`defumat.eager`),
+        # since the closure is new at every direction and every call.
+        return compiled(
+            lambda states, kc, dk: jax.jvp(
+                lambda k: self._operator(states, k, overlap, contract), (kc,), (dk,)
+            )[1],
+            psi, self.kcart, jnp.asarray(tangent),
         )
-        return out
 
     def _operator(self, psi, kcart, overlap, contract=False):
         """``H|psi>``, ``S|psi>``, or both, at every k-point, as a function of ``kcart``.
@@ -446,17 +449,19 @@ class VelocityOperator:
                 jnp.asarray(direction, dtype=self.kcart.dtype), self.kcart.shape
             )
 
-        first, second = broadcast(first), broadcast(second)
+        def nested(states, kcart, first, second):
+            def inner(k):
+                _, out = jax.jvp(
+                    lambda kc: self._operator(states, kc, False, contract),
+                    (k,), (second,),
+                )
+                return out
 
-        def inner(kcart):
-            _, out = jax.jvp(
-                lambda kc: self._operator(psi, kc, False, contract),
-                (kcart,), (second,),
-            )
-            return out
+            return jax.jvp(inner, (kcart,), (first,))[1]
 
-        _, out = jax.jvp(inner, (self.kcart,), (first,))
-        return out
+        # Compiled whole, as :meth:`_tangent` is (:mod:`defumat.eager`).
+        return compiled(nested, jnp.asarray(psi), self.kcart, broadcast(first),
+                        broadcast(second))
 
     def second_matrix_elements(self, psi: jnp.ndarray) -> jnp.ndarray:
         """``w^ab_nm = <psi_m| d^2H/dk_a dk_b |psi_n>``, ``(3, 3, nspin, nk, nbnd, nbnd)``.
@@ -517,7 +522,9 @@ def over_kpoints(hamiltonian, states, batch, overlap: bool = False):
     """
     apply = hamiltonian.apply_s if overlap else hamiltonian.apply
     indices = jnp.arange(states.shape[0])
-    return map_k(lambda ik: apply(states[ik], ik), indices, batch=batch)
+    return compiled(
+        lambda idx: map_k(lambda ik: apply(states[ik], ik), idx, batch=batch),
+        indices)
 
 
 def _elements_over_kpoints(hamiltonian, states, batch, overlap: bool = False):
@@ -537,7 +544,7 @@ def _elements_over_kpoints(hamiltonian, states, batch, overlap: bool = False):
         return jnp.einsum("mg,ng->mn", block.conj(), apply(block, ik))
 
     indices = jnp.arange(states.shape[0])
-    return map_k(one, indices, batch=batch)
+    return compiled(lambda idx: map_k(one, idx, batch=batch), indices)
 
 
 def band_velocities(calculation, result, kpoints=None, nbnd=None,

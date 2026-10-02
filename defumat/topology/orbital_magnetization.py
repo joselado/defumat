@@ -98,6 +98,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.batching import map_k, resolve_k_batch
+from defumat.eager import compiled
 
 __all__ = [
     "OrbitalMagnetization",
@@ -289,8 +290,9 @@ def _zone_terms(vectors, matvec, neighbours, live, flat, k_batch="default"):
     # nothing and keeps the smallest determinant a *minimum* -- an accumulator
     # can only sum, and a mesh is bad because of its worst overlap rather than
     # because of its average one.
-    return map_k(body, jnp.arange(vectors.shape[0]),
-                 batch=resolve_k_batch(k_batch))
+    batch = resolve_k_batch(k_batch)
+    return compiled(lambda idx: map_k(body, idx, batch=batch),
+                    jnp.arange(vectors.shape[0]))
 
 
 def streamed_orbital_magnetization_sums(source, mesh, *,

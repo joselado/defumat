@@ -58,6 +58,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.basis.fft import g_to_r, r_to_g
+from defumat.eager import compiled
 from defumat.response.sternheimer import SternheimerSolver
 from defumat.system.cell import Cell
 from defumat.system.kpoints import KPoints
@@ -280,14 +281,20 @@ class TwoSphereSolver(SternheimerSolver):
 
             return sum_bands(one_band, (states, tangent, weight))
 
-        total = jnp.zeros(grid, dtype=self.psi.dtype)
-        for spin in range(self.nspin):
-            total = total + sum_k(
-                one_k,
-                (self.psi[spin], dpsi[spin], index_k, index_kq,
-                 self.density_weights[spin]),
-                batch=calculation.k_batch,
-            )
+        def summed(psi, dpsi):
+            total = jnp.zeros(grid, dtype=psi.dtype)
+            for spin in range(self.nspin):
+                total = total + sum_k(
+                    one_k,
+                    (psi[spin], dpsi[spin], index_k, index_kq,
+                     self.density_weights[spin]),
+                    batch=calculation.k_batch,
+                )
+            return total
+
+        # Called once per displacement per iteration with new closures, so it is
+        # compiled by its structure (:mod:`defumat.eager`).
+        total = compiled(summed, self.psi, dpsi)
         smooth, dense = calculation.basis.smooth, calculation.basis.dense
         return to_dense(2.0 * total / volume, smooth, dense)[None]
 
@@ -393,7 +400,8 @@ def bare_displacements_at_q(calculation, calculation_kq, solver, q_cart, positio
     for row, atom in enumerate(chosen):
         for cart in range(3):
             tangent = jnp.zeros_like(positions).at[atom, cart].set(1.0)
-            bare[row, cart] = jax.jvp(applied, (positions,), (tangent,))[1]
+            bare[row, cart] = compiled(
+                lambda u, du: jax.jvp(applied, (u,), (du,))[1], positions, tangent)
     return bare
 
 

@@ -730,7 +730,12 @@ plausible wrong answer rather than an error. `PLAN.md` has the phase that found 
   ultracell's matrix and densities (2x on three iterations of a small cell) and the Berry-phase
   string loop, whose growth in `/proc/self/maps`, +256 a polarization call, was the cluster's
   "Failed to materialize symbols" (`OPEN.md` Part XIII item 2). Jit the helper with its shapes
-  static and its arrays as arguments. **The check is a second call that compiles nothing**:
+  static and its arrays as arguments. **The third site was the whole response stack**, whose
+  closures carry a callable (a perturbation) and so have no static argument to key on: a second
+  dielectric tensor on one-k-point silicon compiled 127 programs. Such a site goes through
+  `defumat.eager.compiled`, which keys on the traced structure with the arrays hoisted, and a
+  `jax.jvp` at the top level is wrapped whole so the kept program is the derivative itself.
+  **The check is a second call that compiles nothing**:
   `jax_log_compiles` with a handler on the `jax` logger, which sees them where `jax._src.dispatch`
   does not, validated on a cold run first. (`PERFORMANCE.md`, 2026-10-02.)
 

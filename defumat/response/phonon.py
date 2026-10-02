@@ -144,6 +144,7 @@ from defumat.response.velocity import over_kpoints
 from defumat.batching import map_k
 from defumat.system.symmetry import atom_mapping, cartesian_rotations
 from defumat.units import AMU_TO_RY, RY_TO_CMM1, RY_TO_THZ
+from defumat.eager import compiled_jvp
 
 __all__ = ["Phonons", "DisplacementResponse", "dynamical_matrix",
            "self_consistent_response",
@@ -619,7 +620,7 @@ def self_consistent_response(
 
         # ``dv_of_drho``: one jvp of the potential this code already writes.
         induced = jnp.stack([
-            jax.jvp(
+            compiled_jvp(
                 lambda r: calculation.potential(r).v_scf,
                 (jnp.asarray(density),),
                 (symmetrised[row, cart],),
@@ -758,7 +759,7 @@ def _core_charge_response(calculation, density, positions, atoms=None):
     for atom in chosen:
         for cart in range(3):
             tangent = jnp.zeros_like(positions).at[atom, cart].set(1.0)
-            fields.append(jax.jvp(potential_at, (positions,), (tangent,))[1])
+            fields.append(compiled_jvp(potential_at, (positions,), (tangent,))[1])
     return jnp.stack(fields).reshape((len(chosen), 3) + rho.shape)
 
 
@@ -819,7 +820,7 @@ def _bare_displacements(calculation, solver, v_scf, positions, atoms=None) -> np
     for row, atom in enumerate(chosen):
         for cart in range(3):
             tangent = jnp.zeros_like(positions).at[atom, cart].set(1.0)
-            bare[row, cart] = jax.jvp(h_psi, (positions,), (tangent,))[1]
+            bare[row, cart] = compiled_jvp(h_psi, (positions,), (tangent,))[1]
     return bare
 
 
@@ -880,7 +881,7 @@ def overlap_derivatives(calculation, solver, positions, atoms=None) -> np.ndarra
     for row, atom in enumerate(chosen):
         for cart in range(3):
             tangent = jnp.zeros_like(positions).at[atom, cart].set(1.0)
-            out[row, cart] = jax.jvp(overlap_matrix, (positions,), (tangent,))[1]
+            out[row, cart] = compiled_jvp(overlap_matrix, (positions,), (tangent,))[1]
     return out
 
 
@@ -974,7 +975,7 @@ def non_variational_response(calculation, positions, psi, weights, density,
             tangent = jnp.zeros_like(positions).at[atom, cart].set(1.0)
             for name, pair in (("moved", (tangent, zero_s)),
                                ("ort", (zero_p, ort[row, cart]))):
-                _, (rho, parts) = jax.jvp(mixed, (positions, psi), pair)
+                _, (rho, parts) = compiled_jvp(mixed, (positions, psi), pair)
                 halves[name][0][row, cart] = rho
                 halves[name][1][row, cart] = parts
     return halves["moved"], halves["ort"]
@@ -1376,10 +1377,10 @@ def _force_constants(
                 # occupied part is fixed by the constraint rather than free.
                 states = states + ort[row, cart]
             if not ultrasoft:
-                _, hessian = jax.jvp(
+                _, hessian = compiled_jvp(
                     frozen, (positions, density), (tangent, drho[row, cart])
                 )
-                _, response = jax.jvp(electronic, (psi,), (states,))
+                _, response = compiled_jvp(electronic, (psi,), (states,))
                 matrix[row, cart] = np.asarray(hessian + response)
                 if on_row is not None:
                     # Streamed as it is solved, so a job that is killed keeps
@@ -1398,7 +1399,7 @@ def _force_constants(
             # silicon against force constants of 0.37, and the acoustic sum
             # rule is what says so. An ultrasoft *metal* is refused for exactly
             # this reason (:func:`_require_a_moving_overlap_regime`).
-            raw = jax.jvp(raw_mixed, (positions, psi), (tangent, states))[1]
+            raw = compiled_jvp(raw_mixed, (positions, psi), (tangent, states))[1]
             correction = drho[row, cart] - raw[0]
             parts = (
                 tuple(None if b is None else jnp.zeros_like(b) for b in becsum)
@@ -1408,7 +1409,7 @@ def _force_constants(
                     for a, b in zip(dbecsum[row, cart], raw[1])
                 )
             )
-            _, whole = jax.jvp(
+            _, whole = compiled_jvp(
                 energy_gradient,
                 (positions, psi, zero_density, zero_becsum, ground),
                 (tangent, states, correction, parts,

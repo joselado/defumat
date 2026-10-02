@@ -109,6 +109,7 @@ from defumat.batching import (
     resolve_ethr_floor, resolve_fft_layout, resolve_k_batch, resolve_memory_mode,
     resolve_plane_chunk, resolve_projectors, resolve_wfc_store,
 )
+from defumat.eager import compiled
 from defumat.scf.continuation import (
     ContinuedState, continued_state, depolarize_tau,
 )
@@ -5316,12 +5317,17 @@ class Calculation:
             )
             if rows is not None:
                 kinetic, mask = kinetic[rows], mask[rows]
-            extra = map_k(
-                lambda arrays: starting_vectors(
-                    None, missing, ndim, arrays[0], arrays[1], atomic.dtype
+            # Called once per SCF outside any trace, so compiled by its
+            # structure rather than once per run (:mod:`defumat.eager`).
+            extra = compiled(
+                lambda arrays: map_k(
+                    lambda one: starting_vectors(
+                        None, missing, ndim, one[0], one[1], atomic.dtype
+                    ),
+                    arrays,
+                    batch=self.k_batch,
                 ),
                 (kinetic, mask),
-                batch=self.k_batch,
             )
             if per_channel:
                 extra = jnp.broadcast_to(extra[None], atomic.shape[:1] + extra.shape)

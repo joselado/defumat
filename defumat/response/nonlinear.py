@@ -139,6 +139,7 @@ from defumat.response.phonon import (
 )
 from defumat.response.sternheimer import require_a_sternheimer_regime
 from defumat.units import BOHR_TO_ANGSTROM, FPI
+from defumat.eager import compiled_jvp
 
 __all__ = [
     "RamanTensors",
@@ -284,7 +285,7 @@ def susceptibility_displacement_derivative(
                 stored=stored,
             )
             carried = tangent if geometry_tangent else jnp.zeros_like(tangent)
-            _, column = jax.jvp(
+            _, column = compiled_jvp(
                 epsilon, (positions, psi, rho, b),
                 (carried, mode_psi, mode_rho, db),
             )
@@ -343,7 +344,7 @@ def susceptibility_field_derivative(
             # a whole cell rebuild inside the trace to differentiate nothing.
             moved_at=lambda _frozen: calculation, geometry=jnp.zeros(()),
         )
-        _, column = jax.jvp(
+        _, column = compiled_jvp(
             epsilon, (psi, rho, b), (u[axis], drho[axis], db)
         )
         out[:, :, axis] = np.asarray(column)

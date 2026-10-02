@@ -4084,6 +4084,13 @@ calls: **+256 and +256 mappings per call before the change, 0 and 0 after**, the
 polarization identical to the printed digits, and the second call 4.2 s against
 8.2 (`jax_log_compiles`: 16 `jit(scan)` compilations a call before, none after).
 Not yet re-run on a node; the two paragraphs below are the analysis as it stood.
+**The response stack had the same defect at a larger rate** (fixed the same night,
+`defumat/eager.py`): a dielectric tensor of AlAs added 10,770 mappings a call on this
+workstation, with the cache on or off, so about six calls in one process reach the
+65,530 `vm.max_map_count` of the Triton nodes (this workstation's is 1,048,576, which is
+why it never showed here), and now a repeat call adds none
+(`PERFORMANCE.md`, "The response stack compiled its k loops again at every
+iteration"). A response run on a node has not been measured either.
 
 **It is not, however, what exhausts the mappings, and the measurement above
 says so.** Timing each string of the 16-string mesh beside its map count, the

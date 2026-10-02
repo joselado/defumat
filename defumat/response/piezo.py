@@ -133,6 +133,7 @@ from defumat.response.electrostriction import (
 from defumat.response.sternheimer import require_a_sternheimer_regime
 from defumat.stress.energy import require_a_differentiable_cell
 from defumat.units import E_BOHR2_TO_C_M2
+from defumat.eager import compiled_jvp
 
 __all__ = [
     "PiezoelectricTensor",
@@ -746,7 +747,7 @@ def _field_column(gradient, coordinate, psi, dpsi, nocc):
     is not four now.
     """
     states = jnp.zeros_like(psi).at[:, :, :nocc].set(dpsi)
-    _, column = jax.jvp(
+    _, column = compiled_jvp(
         gradient, (coordinate, psi), (jnp.zeros_like(coordinate), states)
     )
     return np.asarray(column)
@@ -818,7 +819,7 @@ def constraint_strain_term(calculation, solver, weights, commutator) -> np.ndarr
     out = np.zeros((3, 3), dtype=complex)
     for a in range(3):
         for b in range(a, 3):
-            _, derivative = jax.jvp(sandwich, (zero,), (strain_tangent(a, b),))
+            _, derivative = compiled_jvp(sandwich, (zero,), (strain_tangent(a, b),))
             out[a, b] = out[b, a] = complex(derivative)
     return out
 
@@ -963,7 +964,7 @@ def clamped_ion_piezoelectric(
         multipliers = _multiplier_response(
             solver, field_perturbations[axis], weights, psi.shape[2], nocc
         )
-        _, column = jax.jvp(
+        _, column = compiled_jvp(
             gradient, (zero, psi, ground, unshifted, no_becsum_shift),
             (jnp.zeros_like(zero), states_by_axis[axis], multipliers,
              shifts[axis], becsum_shifts[axis]),

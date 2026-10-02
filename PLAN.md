@@ -23400,7 +23400,14 @@ same bits on both platforms.
 **And the ultracell driver recompiled its loops at every call.** Its matrix and densities were eager
 `lax.map`/scan loops over a fresh closure, compiled again at every `k0` of every iteration (96 modules in
 two three-iteration runs of a small silicon ultracell); jitted once per shape, three iterations take 2.32
-against 4.65 s on the card and 2.05 against 4.00 on a CPU, the energy unchanged to every digit.
+against 4.65 s on the card and 2.05 against 4.00 on a CPU, the energy unchanged to every digit. **So
+did the Berry-phase string loop and the whole response stack**, whose closures carry a perturbation
+and so have no static argument to key on: `defumat/eager.py` compiles such a closure once per traced
+structure, with the arrays hoisted and any nested `jit`'s constants hashed into the key, and wraps a
+top-level `jax.jvp` whole. A dielectric tensor of AlAs added 10,770 memory mappings a call and now adds
+none; a second call 23.2 s against 16.1 with the cache on and 67.8 against 16.4 with it off, every
+response quantity the same to 1e-14 or better (`PERFORMANCE.md`, "The response stack compiled its k
+loops again at every iteration").
 
 **What is not done.** `'fit'` as memory mode's default, and speed mode falling back to the largest
 fitting chunk rather than to one k-point: both change a documented promise, and both are the user's to

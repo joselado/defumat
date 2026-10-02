@@ -79,6 +79,7 @@ import numpy as np
 from defumat.basis.fft import g_to_r, r_to_g
 from defumat.basis.gvectors import refuse_gamma_storage
 from defumat.batching import map_k, resolve_k_batch, sum_bands, sum_k
+from defumat.eager import compiled
 from defumat.scf.occupations import smearing_order, w0gauss
 from defumat.system.kpoints import is_reduced
 
@@ -519,8 +520,9 @@ def transverse_response(
             gather, grid, volume, zomega, factors, augmented,
         )
 
-    x = sum_k(
-        one_k,
+    batch = resolve_k_batch(k_batch)
+    x = compiled(
+        lambda a: sum_k(one_k, a, batch=batch),
         (
             wavefunctions[majority], fft_index, mask,
             eigenvalues[majority], weights[majority], slope[majority], becp_up,
@@ -528,7 +530,6 @@ def transverse_response(
             eigenvalues[minority][index], weights[minority][index], becp_dn,
             flat,
         ),
-        batch=resolve_k_batch(k_batch),
     )
     return SpinChiZero(
         x=2.0 * x,

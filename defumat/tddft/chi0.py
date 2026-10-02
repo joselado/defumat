@@ -126,6 +126,7 @@ from defumat.batching import (
     map_axis, map_windows, resolve_k_batch, resolve_pair_batch,
     resolve_w_batch, sum_k,
 )
+from defumat.eager import compiled
 from defumat.response.velocity import VelocityOperator
 from defumat.units import E2, FPI
 from defumat.system.kpoints import is_reduced
@@ -506,11 +507,10 @@ def independent_response(
         # contracted away. This is the whole frequency cost of the phase.
         return _assemble(scalars, vectors, chunk)
 
-    x = sum_k(
-        one_k,
+    x = compiled(
+        lambda a: sum_k(one_k, a, batch=batch),
         (wavefunctions[0], calculation.fft_index, mask,
          shifted[0], weights, elements),
-        batch=batch,
     )
     return ChiZero(
         x=x,

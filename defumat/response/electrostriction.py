@@ -169,6 +169,7 @@ from defumat.response.strain import (
 from defumat.response.velocity import VelocityOperator, over_kpoints
 from defumat.scf.density import sum_band
 from defumat.units import EPSILON0_SI, FPI
+from defumat.eager import compiled, compiled_jvp
 
 __all__ = [
     "Electrostriction",
@@ -429,7 +430,7 @@ def _second_order_energy_at(moved, psi, rho, b, u, weights, reference=None):
     onecentre = None
     if moved.paw is not None:
         dbecsum = [
-            jax.jvp(lambda states: mixed_becsum(moved, states, weights),
+            compiled_jvp(lambda states: mixed_becsum(moved, states, weights),
                     (psi,), (pcu[axis],))[1]
             for axis in range(3)
         ]
@@ -456,7 +457,7 @@ def _second_order_energy_at(moved, psi, rho, b, u, weights, reference=None):
                                mixed_becsum(moved, states, weights))
 
     drho = jnp.stack([
-        jax.jvp(raw_density, (psi,), (pcu[axis],))[1] for axis in range(3)
+        compiled_jvp(raw_density, (psi,), (pcu[axis],))[1] for axis in range(3)
     ])
     # **The screening term is the one place a wedge sum cannot be repaired
     # afterwards, and this is where it is repaired instead.** Every other term
@@ -488,7 +489,7 @@ def _second_order_energy_at(moved, psi, rho, b, u, weights, reference=None):
     # ``4 pi / G^2`` moves with it and ``f_xc`` moves with ``rho``, so both
     # belong inside the derivative rather than in a table computed once.
     kernel = jnp.stack([
-        jax.jvp(lambda r: moved.potential(r).v_scf, (rho,), (drho[axis],))[1]
+        compiled_jvp(lambda r: moved.potential(r).v_scf, (rho,), (drho[axis],))[1]
         for axis in range(3)
     ])
     rho = jnp.asarray(rho)
@@ -720,7 +721,7 @@ def _position_response(calculation, solver, rho, b, tangent, dpsi, drho,
             out.append(projected - applied)
         return jnp.stack(out)
 
-    _, rhs = jax.jvp(
+    _, rhs = compiled_jvp(
         residual, (geometry, psi, rho), (tangent, dpsi, drho)
     )
     # One solve per cartesian direction: ``_solve_stored`` takes a right-hand
@@ -742,7 +743,7 @@ def _position_response(calculation, solver, rho, b, tangent, dpsi, drho,
             for axis in range(3)
         ])
 
-    _, out = jax.jvp(
+    _, out = compiled_jvp(
         tail, (geometry, psi, rho, frozen_b),
         (tangent, dpsi, drho, solution),
     )
@@ -812,7 +813,7 @@ def susceptibility_strain_derivative(
         db = _position_response(
             calculation, solver, rho, b, tangent, dpsi, drho, stored=stored,
         )
-        _, column = jax.jvp(
+        _, column = compiled_jvp(
             epsilon, (zero, psi, rho, b), (tangent, dpsi, drho, db)
         )
         out[:, :, k, l] = out[:, :, l, k] = np.asarray(column)
@@ -1056,9 +1057,11 @@ def _apply_overlap(block, hamiltonians, batch="default"):
     out = []
     for one in flat:
         out.append(jnp.stack([
-            map_k(lambda ik, spin=spin, one=one: hamiltonians[spin].apply_s(
-                one[spin][ik], ik
-            ), jnp.arange(one.shape[1]), batch=batch)
+            compiled(
+                lambda indices, spin=spin, one=one: map_k(
+                    lambda ik: hamiltonians[spin].apply_s(one[spin][ik], ik),
+                    indices, batch=batch),
+                jnp.arange(one.shape[1]))
             for spin in range(one.shape[0])
         ]))
     stacked = jnp.stack(out)

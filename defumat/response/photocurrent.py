@@ -131,6 +131,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.batching import resolve_k_batch, sum_k
+from defumat.eager import compiled
 from defumat.response.velocity import VelocityOperator
 from defumat.scf.occupations import w0gauss
 from defumat.system.kpoints import is_reduced
@@ -562,7 +563,8 @@ def shift_current(
             filling,
             wk,
         )
-        return np.asarray(sum_k(one_k, arrays, batch=batch)) * (SIGMA_SI / volume)
+        return np.asarray(compiled(
+            lambda a: sum_k(one_k, a, batch=batch), arrays)) * (SIGMA_SI / volume)
 
     sigma = total(nbnd)
     scale = float(np.max(np.abs(sigma)))

@@ -145,6 +145,7 @@ import jax
 from defumat.basis.fft import force_real_g0, g_to_r, g_to_r_gamma
 from defumat.basis.interpolate import to_dense, to_smooth
 from defumat.batching import map_bands, map_k
+from defumat.eager import compiled
 from defumat.hamiltonian.noncollinear import SpinorHamiltonian, spin_multiply
 from defumat.scf.density import (
     becsum as becsum_of,
@@ -624,8 +625,12 @@ class SternheimerSolver:
                 )
                 return self.solve_at(rhs, ik, spin)
 
-            dpsi, steps, residual = map_k(
-                one_k, jnp.arange(self.psi.shape[1]), batch=batch
+            # ``one_k`` is a new closure at every call, around a new
+            # ``perturbation``, so the loop is compiled by its structure
+            # (:mod:`defumat.eager`) rather than once per call.
+            dpsi, steps, residual = compiled(
+                lambda indices, one_k=one_k: map_k(one_k, indices, batch=batch),
+                jnp.arange(self.psi.shape[1]),
             )
             blocks.append(dpsi)
             iterations.append(int(jnp.max(steps)))
@@ -694,8 +699,12 @@ class SternheimerSolver:
 
         On the **dense** grid, like every other density here.
         """
-        _, drho = jax.jvp(self.density_at, (self.psi,), (jnp.asarray(dpsi),))
-        return drho
+        # The whole ``jvp`` is what is compiled, so the kept program is the
+        # derivative itself and is only ever evaluated (:mod:`defumat.eager`).
+        return compiled(
+            lambda psi, tangent: jax.jvp(self.density_at, (psi,), (tangent,))[1],
+            self.psi, jnp.asarray(dpsi),
+        )
 
     def response_becsum(self, dpsi) -> tuple:
         """``dbecsum``: the projector occupations' response, on its own.
@@ -706,10 +715,10 @@ class SternheimerSolver:
         the density** and there is nowhere else to get them from
         (``PAW_dpotential``).
         """
-        _, dbecsum = jax.jvp(
-            self._raw_becsum, (self.psi,), (jnp.asarray(dpsi),)
+        return compiled(
+            lambda psi, tangent: jax.jvp(self._raw_becsum, (psi,), (tangent,))[1],
+            self.psi, jnp.asarray(dpsi),
         )
-        return dbecsum
 
     def _raw_becsum(self, states, weights=None) -> tuple:
         """``becsum`` **without** the symmetrisation :meth:`Calculation.becsum` applies.

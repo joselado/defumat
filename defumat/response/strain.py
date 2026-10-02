@@ -103,6 +103,7 @@ from defumat.response.velocity import over_kpoints
 from defumat.scf.density import becsum as becsum_of
 from defumat.system.symmetry import cartesian_rotations
 from defumat.scf.density import sum_band
+from defumat.eager import compiled, compiled_jvp
 
 __all__ = ["StrainResponse", "strain_response", "strain_tangent",
            "density_of_strained_states"]
@@ -341,7 +342,7 @@ def _bare_strains(calculation, solver, density) -> np.ndarray:
     bare = np.empty((3, 3), dtype=object)
     for a in range(3):
         for b in range(a, 3):
-            value = jax.jvp(h_psi, (zero,), (strain_tangent(a, b),))[1]
+            value = compiled_jvp(h_psi, (zero,), (strain_tangent(a, b),))[1]
             bare[a, b] = bare[b, a] = value
     return bare
 
@@ -374,7 +375,7 @@ def overlap_derivatives(calculation, solver) -> np.ndarray | None:
     out = np.empty((3, 3), dtype=object)
     for a in range(3):
         for b in range(a, 3):
-            out[a, b] = out[b, a] = jax.jvp(
+            out[a, b] = out[b, a] = compiled_jvp(
                 overlap_matrix, (zero,), (strain_tangent(a, b),)
             )[1]
     return out
@@ -449,11 +450,11 @@ def _frozen_density_response(calculation, solver, weights, ort=None):
             pair = (min(a, b), max(a, b))
             if pair not in computed:
                 tangent = strain_tangent(*pair)
-                rho_m, bec_m = jax.jvp(mixed, (zero, psi), (tangent, zero_states))[1]
+                rho_m, bec_m = compiled_jvp(mixed, (zero, psi), (tangent, zero_states))[1]
                 if ort is None:
                     rho_t, bec_t = rho_m, bec_m
                 else:
-                    rho_o, bec_o = jax.jvp(
+                    rho_o, bec_o = compiled_jvp(
                         mixed, (zero, psi), (jnp.zeros((3, 3)), ort[pair[0], pair[1]])
                     )[1]
                     rho_t = rho_m + rho_o
@@ -526,7 +527,7 @@ def _self_consistent_response(
 
         induced = jnp.stack([
             jnp.stack([
-                jax.jvp(
+                compiled_jvp(
                     lambda r: calculation.potential(r).v_scf,
                     (jnp.asarray(density),), (symmetrised[a, b],),
                 )[1]
@@ -635,9 +636,10 @@ def _eigenvalue_response(solver, bare, dvscf) -> np.ndarray:
                         jnp.einsum("ng,ng->n", jnp.conj(states), total)
                     )
 
-                blocks.append(
-                    map_k(one_k, jnp.arange(psi.shape[1]), batch=batch)
-                )
+                blocks.append(compiled(
+                    lambda indices, one_k=one_k: map_k(one_k, indices, batch=batch),
+                    jnp.arange(psi.shape[1]),
+                ))
             value = np.asarray(jnp.stack(blocks))
             out[a, b] = out[b, a] = value
     return out
