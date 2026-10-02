@@ -302,8 +302,13 @@ below:
   reads 925.2 MB, the SCF's own, in 58.4 s against the whole-k route's 72.4. **Not covered**: speed
   mode, whose check against the card sizes the SCF and not the response; and at one k-point a chunk
   the ultrasoft cell's Born charges add a fixed 153 to 155 MB to a 67 to 75 MB SCF, at 27 and 64
-  k-points, which is the frozen polarization's pass (166 MB of temporaries; what inside it, not
-  measured).
+  k-points, which is the frozen polarization's pass (166 MB of temporaries). **What inside it is the
+  projectors' radial transforms at fewer than `CHUNK = 4096` values**, which `_scan_rows` takes in one
+  piece, where XLA keeps every radial function's `(nq, kkbeta)` integrand live at once: 41.5 MB for
+  one k-point's 1614 values of this dataset's four functions, against 26.9 MB for 8192 values walked in
+  two pieces. The frozen pass holds four such evaluations (its value and three directions), the bare
+  walk two (`PERFORMANCE.md`, the same entry). It is item 14's transform, and (a) there, one transform
+  per `(dataset, l)`, is one of the ways to it.
 
 ## Suggested order
 

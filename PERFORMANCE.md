@@ -9615,10 +9615,31 @@ response. **At one k-point a chunk the ultrasoft cell is not at the SCF's peak**
 at 27 k-points and 230.1 against 75.2 at 64, so the response adds 152.6 and 154.9 MB, flat in the mesh
 and so not a store. **It is the frozen polarization's pass**: at one k-point a chunk its compiled
 temporaries are 165.9 MB (315.4 before the column change), the bare walk's 83.0, the global step's
-44.3 and every other pass's 21 MB or less, the run reading 221.3. What inside that pass holds the
-166 MB -- it builds the projectors' k-derivative in three directions at once and contracts them with
-the moved projectors -- was not measured. At the whole mesh in one chunk it sits under the
-eigensolver's.
+44.3 and every other pass's 21 MB or less, the run reading 221.3. At the whole mesh in one chunk it
+sits under the eigensolver's.
+
+**What inside it: the projectors' radial transforms, taken in one piece because one k-point has fewer
+plane waves than a chunk.** Both passes rebuild the projectors at a moved k-point and differentiate
+them in k (`VelocityOperator.projectors`), and the rebuild is the radial Bessel transform of every
+projector over the chunk's `|k+G|` (`formfactors.projector_form_factors`); the angular part is 0.3 MB.
+`_scan_rows` walks that transform in pieces of `CHUNK = 4096` values, and below it calls the block
+directly -- and then XLA keeps the `(nq, kkbeta)` integrand of **every radial function** live at once.
+Measured on the card, this dataset's four radial functions on its 841-point mesh, `peak_bytes_in_use`
+in fresh processes (the compiler's analysis agreed to 0.3 MB):
+
+| values of `q` | 1614 (one k-point) | 4096 | 8192 | 65536 |
+|---|---|---|---|---|
+| the transform, its value or its k-derivative | 41.5 MB | 105.3 MB | 26.9 MB | 30.8 MB |
+
+So one k-point's 1614 values cost 4 x 1614 x 841 x 8 B = 41.4 MB, and 8192 values, walked in two
+pieces with one radial function at a time, cost one 4096-row array. The two passes are whole numbers of
+that: the bare walk, the value and one direction, 83.0 MB (two); the frozen pass, the value and three
+directions, 165.9 MB (four). The ratio is the attribution; the number of radial functions was not
+varied to confirm it. On the CPU the k-derivative costs twice the value (62.1 against 31.1 MB at 1614)
+where on the card the two are equal, and walking the three directions one at a time under `lax.map`
+was worse there (170.7 against 157.7 MB). A single-step scan of the small case changes nothing,
+because XLA removes a one-trip loop.
+
 
 **Against the whole-k route on the CPU**, one converged state through both (`tests/regression/
 test_streamed_response.py`, chunks that do not divide the k-set): ultrasoft AlAs on its `nosym` grid,
