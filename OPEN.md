@@ -6548,6 +6548,8 @@ of `get_electrostriction` at 8 and 27 k-points on D22's card, the three passes t
 
 ### 7. A vc-relax compiles both the force and the stress gradients again at every ionic step
 
+**Done 2026-10-03, `a7668a7`.** The geometry's arrays (the system, the projectors, `vloc_species`, `rho_core_species`, `rho_core_g`, `rho_atomic_species`, the Ewald and dispersion sums, `wfcU`, the field, the cross augmentation) are arguments of both gradients, and the compiled function is cached under a key of everything else it closes over, so a missing field costs a recompile and never a stale constant; `at_strain` no longer drops the caches and `at_cell` pads the Ewald and dispersion lists to the length they had. On `vc-relax4` (10 steps, cache off): steps 2 to 10 compiled one force and one stress `jit(energy)` each in speed mode and 3 + 3 chunked passes in memory mode, and compile none now. **Not bit-identical**: a cell passed as an argument compiles slightly differently from one folded in as a constant, 1.8e-16 Ry/bohr on a force of 0.13 and 4.9e-17 on a stress of 5.2e-3 per call on identical inputs, which BFGS carries to 2.1e-9 to 3.6e-9 bohr in the positions and 2.9e-10 to 4.5e-10 Ry in the energy along the trajectory; the three `vc-relax4` comparisons against `pw.x` pass. The padding absorbs a falling image count only: under compression the count rises (141, 153, 165, 177 on As below 0.90) and each new count compiles once more. Test: `test_geometry_compiled.py`.
+
 Sites: `scf/driver.py:3226`, `:3332-3337`; `forces/autodiff.py:43-60`; `stress/autodiff.py:84-103`;
 `forces/energy.py:121-122`; `workflows/vc_relax.py:306-307`, `:439`; `forces/chunked.py:166`.
 
@@ -6797,6 +6799,8 @@ set up as `tools/compare_orientation.py` does: `get_anisotropy(directions='xyz')
 time per one-shot; band energies and torques bit-identical.
 
 ### 15. In memory mode a vc-relax runs every step's SCF on the exact scanned augmentation, recomputing the Bessel transforms of `Q_ij` twice an iteration
+
+**Done 2026-10-03, `a411147`.** `at_cell` builds the augmentation and the projector core as the constructor does (`at_strain(..., _moving=True)`), and the stress keeps the scanned table inside its trace. On `si8-us-1k` in memory mode, a step-2 SCF at a cell compressed by 1 per cent evaluated the radial kernel 171 times over 9 iterations and evaluates it 0 times (3 at the move, the stored table's build); the energy 1.4e-14 Ry apart, 9 iterations both; speed mode bit-identical. The moved calculation holds one stored `(nh, nh, ngm)` table, 18.6 MB on that cell by arithmetic. Found while doing it, **a defect**: `at_cell` does not update `basis_kpoints`, so a DFT+U vc-relax rebuilds `wfcU` at the starting cell's Cartesian k-points (1.8e-2 on 0.94 at a 3 per cent change on `ni-ldau-stress.in`) while the stress uses the moved ones; put to a fable subagent with the one-line fix.
 
 Sites: `scf/driver.py:3226`, `:3369-3378`, `:3383-3399`; `pseudo/augmentation.py:504-514`,
 `:772-825`, `:1231-1235`; `workflows/vc_relax.py:300-305`, `:439`.
