@@ -48,7 +48,10 @@ Every chunk is padded to the same shape with a repeat of one of its own rows at
 compilation and the padding contributes nothing: every piece is linear in the
 weights. The compiled functions take the calculation's large fields as
 arguments (:data:`~defumat.forces.energy.HOISTED_FIELDS`), as the single-pass
-gradients do, so no per-k table becomes a constant of the executable.
+gradients do, so no per-k table becomes a constant of the executable, and the
+arrays the geometry moves as well (:data:`~defumat.forces.energy.
+GEOMETRY_FIELDS`), so a relaxation's later steps reuse them, the variable-cell
+one included.
 """
 
 from __future__ import annotations
@@ -61,8 +64,8 @@ import numpy as np
 from defumat.batching import k_chunks
 from defumat.forces.energy import (
     FrozenState, _kinetic_energy, _norms, _projector_energies,
-    _spinor_projector_energies, hoisted, reject_potential_only,
-    reject_spinor_spiral, with_hoisted,
+    _spinor_projector_energies, geometry_compiled, hoisted, reject_potential_only,
+    reject_spinor_spiral,
 )
 from defumat.hubbard.energy import hubbard_energy
 from defumat.scf.potential import total_charge
@@ -156,14 +159,15 @@ def _rows_of(array, rows):
     return jnp.asarray(array)[:, jnp.asarray(rows)]
 
 
-def _chunk(state: FrozenState, rows, live, positions=None):
+def _chunk(state: FrozenState, rows, live, positions=None, weights=None):
     """``psi``, the weights with the padding zeroed, and the eigenvalues of one chunk.
 
     ``rows`` are global k indices; ``positions``, for a k-point pool's
     :class:`~defumat.parallel.PoolStore`, are where those rows sit in the
-    pool's own store.
+    pool's own store. ``weights`` is ``state.weights`` already on the host,
+    which a walk converts once rather than once per chunk.
     """
-    weights = np.array(state.weights[:, rows])
+    weights = np.array((state.weights if weights is None else weights)[:, rows])
     weights[:, live:] = 0.0
     store = state.wavefunctions
     psi = (_rows_of(store.array, positions) if isinstance(store, PoolStore)
@@ -176,44 +180,41 @@ def _add(total, part):
     return part if total is None else jax.tree_util.tree_map(jnp.add, total, part)
 
 
-def _compiled(calculation, kind: str) -> dict:
-    """The three compiled passes for ``calculation``, built once and cached on it.
+def _compiled(calculation, kind: str) -> tuple:
+    """``(passes, geometry)``: the three compiled passes for ``calculation``, and their geometry.
 
-    **The force's passes are inherited, the stress's are not**, which is the
-    single-pass gradients' own rule. The force depends on the geometry only
-    through ``x`` -- everything position-dependent is rebuilt inside, and
-    :func:`~defumat.forces.energy.with_hoisted` brings the moved calculation's
-    large arrays -- so a calculation moved by ``at_positions``, which copies
-    the instance dict, reuses the compiled passes at every step of a
-    relaxation instead of retracing them. The movers that change what the
-    passes close over (``at_strain``, ``at_kcart``, ``at_kpoints``) drop the
-    entry. The stress's passes strain the cell they closed over, so they are
-    keyed on the calculation itself.
+    **Built once a run and inherited by every geometry**, the single-pass
+    gradients' rule (:func:`~defumat.forces.energy.geometry_compiled`). The
+    passes take the coordinate ``x``, the large fields
+    (:data:`~defumat.forces.energy.HOISTED_FIELDS`), the arrays every geometry
+    carries (:data:`~defumat.forces.energy.GEOMETRY_FIELDS`) and one chunk's
+    rows as arguments, so a calculation moved by ``at_positions`` or
+    ``at_cell`` reuses them whenever the key of what they still close over
+    matches. The force's passes used to be inherited only through
+    ``at_positions`` and the stress's keyed on the calculation itself, so a
+    variable-cell relaxation compiled both again at every step.
     """
-    cached = calculation.__dict__.get("_chunked_gradient")
-    entries = {} if cached is None else {
-        name: passes for name, passes in cached[1].items()
-        if name == "positions" or cached[0] is calculation}
-    if kind in entries:
-        return entries[kind]
-    cached = (calculation, entries)
-    calculation._chunked_gradient = cached
+    store, geometry = geometry_compiled(calculation, "_chunked_gradient",
+                                        lambda key: {"key": key})
+    if kind in store:
+        return store[kind], geometry
+    key = store["key"]
 
-    def local(big, rowset):
+    def local(big, geometry, rowset):
         """The calculation on one chunk's k-points, from traced leaves."""
-        return with_rows(with_hoisted(calculation, big), rowset)
+        return with_rows(key.rebuild(geometry, big), rowset)
 
-    def sums(x, big, rowset, psi, weights, eigenvalues):
-        moved = _move(local(big, rowset), kind, x)
+    def sums(x, big, geometry, rowset, psi, weights, eigenvalues):
+        moved = _move(local(big, geometry, rowset), kind, x)
         return _separable(moved, psi, weights, eigenvalues, _all(psi))[1:]
 
-    def whole(x, big, rowset, becsum_, rho, ns):
-        moved = _move(local(big, rowset), kind, x)
+    def whole(x, big, geometry, rowset, becsum_, rho, ns):
+        moved = _move(local(big, geometry, rowset), kind, x)
         return _global(moved, becsum_, rho, ns)
 
-    def pull(x, big, rowset, psi, weights, eigenvalues, cotangent):
+    def pull(x, big, geometry, rowset, psi, weights, eigenvalues, cotangent):
         (energy, *parts), back = jax.vjp(
-            lambda x: _separable(_move(local(big, rowset), kind, x),
+            lambda x: _separable(_move(local(big, geometry, rowset), kind, x),
                                  psi, weights, eigenvalues, _all(psi)),
             x,
         )
@@ -222,11 +223,11 @@ def _compiled(calculation, kind: str) -> dict:
 
     passes = {
         "sums": jax.jit(sums),
-        "global": jax.jit(jax.value_and_grad(whole, argnums=(0, 3, 4, 5))),
+        "global": jax.jit(jax.value_and_grad(whole, argnums=(0, 4, 5, 6))),
         "pull": jax.jit(pull),
     }
-    cached[1][kind] = passes
-    return passes
+    store[kind] = passes
+    return passes, geometry
 
 
 def chunked_gradient(calculation, state: FrozenState, kind: str, x,
@@ -252,7 +253,7 @@ def chunked_gradient(calculation, state: FrozenState, kind: str, x,
     reject_potential_only(calculation)
     if calculation.noncolin:
         reject_spinor_spiral(calculation)
-    passes = _compiled(calculation, kind)
+    passes, geometry = _compiled(calculation, kind)
     big = hoisted(calculation)
     nk = calculation.system.kpoints.nk
     batch = (calculation.k_batch if k_batch is None else k_batch) or nk
@@ -264,11 +265,14 @@ def chunked_gradient(calculation, state: FrozenState, kind: str, x,
                   for positions, live in k_chunks(len(store.rows), batch)]
     else:
         chunks = [(rows, live, None) for rows, live in k_chunks(nk, batch)]
+    # On the host once for both walks, where each chunk used to fetch its own.
+    host_weights = np.asarray(state.weights)
 
     becsum_ = rho = ns = None
     for rows, live, positions in chunks:
-        psi, weights, eigenvalues = _chunk(state, rows, live, positions)
-        part = passes["sums"](x, big, row_leaves(calculation, rows), psi,
+        psi, weights, eigenvalues = _chunk(state, rows, live, positions,
+                                           host_weights)
+        part = passes["sums"](x, big, geometry, row_leaves(calculation, rows), psi,
                               weights, eigenvalues)
         becsum_, rho, ns = (_add(becsum_, part[0]), _add(rho, part[1]),
                             _add(ns, part[2]))
@@ -278,12 +282,13 @@ def chunked_gradient(calculation, state: FrozenState, kind: str, x,
     # The global terms read nothing with a k index; any one chunk's rows stand
     # in, so that the moved calculation's per-k rebuilds are one chunk's.
     e_glob, (g_x, g_b, g_rho, g_ns) = passes["global"](
-        x, big, row_leaves(calculation, chunks[0][0]), becsum_, rho, ns)
+        x, big, geometry, row_leaves(calculation, chunks[0][0]), becsum_, rho, ns)
     separable = 0.0
     pulled = jnp.zeros_like(g_x)
     for rows, live, positions in chunks:
-        psi, weights, eigenvalues = _chunk(state, rows, live, positions)
-        value, slope = passes["pull"](x, big, row_leaves(calculation, rows),
+        psi, weights, eigenvalues = _chunk(state, rows, live, positions,
+                                           host_weights)
+        value, slope = passes["pull"](x, big, geometry, row_leaves(calculation, rows),
                                       psi, weights, eigenvalues,
                                       (g_b, g_rho, g_ns))
         separable = separable + value
@@ -293,40 +298,41 @@ def chunked_gradient(calculation, state: FrozenState, kind: str, x,
     return e_glob + state.entropy + separable, g_x + pulled
 
 
-def _tangent_compiled(calculation, kind: str) -> dict:
-    """The three passes of :func:`chunked_gradient_tangent`, cached beside
-    :func:`_compiled`'s under the same rule (keyed on the calculation for a
-    strain)."""
+def _tangent_compiled(calculation, kind: str) -> tuple:
+    """``(passes, geometry)`` of :func:`chunked_gradient_tangent`, cached beside
+    :func:`_compiled`'s under the same key."""
     _compiled(calculation, kind)
-    cached = calculation._chunked_gradient
+    store, geometry = geometry_compiled(calculation, "_chunked_gradient",
+                                        lambda key: {"key": key})
     name = "tangent-" + kind
-    if name in cached[1]:
-        return cached[1][name]
+    if name in store:
+        return store[name], geometry
+    key = store["key"]
 
-    def local(big, rowset):
-        return with_rows(with_hoisted(calculation, big), rowset)
+    def local(big, geometry, rowset):
+        return with_rows(key.rebuild(geometry, big), rowset)
 
     def embed(psi, dpsi):
         """A tangent over the first bands, widened to every band with zeros."""
         return jnp.zeros_like(psi).at[:, :, :dpsi.shape[2]].set(dpsi)
 
-    def forward(x, dx, big, rowset, psi, weights, eigenvalues, dpsi):
+    def forward(x, dx, big, geometry, rowset, psi, weights, eigenvalues, dpsi):
         """The chunk's raw sums and their tangent along ``(dx, dpsi)``."""
         return jax.jvp(
-            lambda y, states: _separable(_move(local(big, rowset), kind, y),
+            lambda y, states: _separable(_move(local(big, geometry, rowset), kind, y),
                                          states, weights, eigenvalues,
                                          _all(states))[1:],
             (x, psi), (dx, embed(psi, dpsi)))
 
-    def global_(x, dx, big, rowset, sums, dsums):
+    def global_(x, dx, big, geometry, rowset, sums, dsums):
         """``(grad, d grad)`` of the whole-cell terms in ``(x, b, rho, ns)``."""
         gradient = jax.grad(
-            lambda y, b, rho, ns: _global(_move(local(big, rowset), kind, y),
+            lambda y, b, rho, ns: _global(_move(local(big, geometry, rowset), kind, y),
                                           b, rho, ns),
             argnums=(0, 1, 2, 3))
         return jax.jvp(gradient, (x,) + tuple(sums), (dx,) + tuple(dsums))
 
-    def pull(x, dx, big, rowset, psi, weights, eigenvalues, dpsi, cotangent,
+    def pull(x, dx, big, geometry, rowset, psi, weights, eigenvalues, dpsi, cotangent,
              dcotangent):
         """The ``jvp`` of the chunk's pull-back ``d/dx [E_c + g . sums_c]``
         along ``(dx, dpsi, dg)``."""
@@ -335,7 +341,7 @@ def _tangent_compiled(calculation, kind: str) -> dict:
 
             def energy(z):
                 value, b, rho, ns = _separable(
-                    _move(local(big, rowset), kind, z), states, weights,
+                    _move(local(big, geometry, rowset), kind, z), states, weights,
                     eigenvalues, _all(states))
                 coupled = jnp.sum(g_rho * rho) + sum(
                     jnp.sum(gb * part) for gb, part in zip(g_b, b)
@@ -350,8 +356,8 @@ def _tangent_compiled(calculation, kind: str) -> dict:
 
     passes = {"forward": jax.jit(forward), "global": jax.jit(global_),
               "pull": jax.jit(pull)}
-    cached[1][name] = passes
-    return passes
+    store[name] = passes
+    return passes, geometry
 
 
 def chunked_gradient_tangent(calculation, state: FrozenState, kind: str, x, dx,
@@ -370,26 +376,28 @@ def chunked_gradient_tangent(calculation, state: FrozenState, kind: str, x, dx,
     (a host store or a device array); the rest of the bands have none.
     """
     reject_potential_only(calculation)
-    passes = _tangent_compiled(calculation, kind)
+    passes, geometry = _tangent_compiled(calculation, kind)
     big = hoisted(calculation)
     nk = calculation.system.kpoints.nk
     batch = (calculation.k_batch if k_batch is None else k_batch) or nk
     chunks = list(k_chunks(nk, batch))
+    host_weights = np.asarray(state.weights)
     sums = dsums = None
     for rows, live in chunks:
-        psi, weights, eigenvalues = _chunk(state, rows, live)
+        psi, weights, eigenvalues = _chunk(state, rows, live, weights=host_weights)
         value, tangent = passes["forward"](
-            x, dx, big, row_leaves(calculation, rows), psi, weights, eigenvalues,
-            _rows_of(dstates, rows))
+            x, dx, big, geometry, row_leaves(calculation, rows), psi, weights,
+            eigenvalues, _rows_of(dstates, rows))
         sums, dsums = _add(sums, value), _add(dsums, tangent)
     gradient, dgradient = passes["global"](
-        x, dx, big, row_leaves(calculation, chunks[0][0]), sums, dsums)
+        x, dx, big, geometry, row_leaves(calculation, chunks[0][0]), sums, dsums)
     column = dgradient[0]
     for rows, live in chunks:
-        psi, weights, eigenvalues = _chunk(state, rows, live)
+        psi, weights, eigenvalues = _chunk(state, rows, live, weights=host_weights)
         column = column + passes["pull"](
-            x, dx, big, row_leaves(calculation, rows), psi, weights, eigenvalues,
-            _rows_of(dstates, rows), tuple(gradient[1:]), tuple(dgradient[1:]))
+            x, dx, big, geometry, row_leaves(calculation, rows), psi, weights,
+            eigenvalues, _rows_of(dstates, rows), tuple(gradient[1:]),
+            tuple(dgradient[1:]))
     return column
 
 

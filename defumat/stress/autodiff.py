@@ -25,7 +25,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
-from defumat.forces.energy import FrozenState, hoisted, with_hoisted
+from defumat.forces.energy import FrozenState, geometry_compiled, hoisted
 from defumat.forces.chunked import chunked_gradient, wants_chunks
 from defumat.stress.energy import (
     require_a_differentiable_cell, strained_energy, strained_energy_terms,
@@ -56,9 +56,8 @@ def autodiff_stress(calculation, state: FrozenState) -> jnp.ndarray:
         require_a_differentiable_cell(calculation)
         gradient = chunked_gradient(calculation, state, "strain", _zero())[1]
     else:
-        gradient = _energy_gradient(calculation)(
-            _zero(), state, hoisted(calculation)
-        )
+        compiled, geometry = _energy_gradient(calculation)
+        gradient = compiled(_zero(), state, hoisted(calculation), geometry)
     return -gradient / calculation.system.cell.volume
 
 
@@ -69,9 +68,8 @@ def autodiff_stress_terms(calculation, state: FrozenState) -> dict:
     :func:`~defumat.stress.energy.strained_energy_terms`, each already divided
     by the volume and negated, so that they sum to :func:`autodiff_stress`.
     """
-    gradients = _term_gradients(calculation)(
-        _zero(), state, hoisted(calculation)
-    )
+    compiled, geometry = _term_gradients(calculation)
+    gradients = compiled(_zero(), state, hoisted(calculation), geometry)
     volume = calculation.system.cell.volume
     return {name: -value / volume for name, value in gradients.items()}
 
@@ -82,38 +80,36 @@ def _zero() -> jnp.ndarray:
 
 
 def _energy_gradient(calculation):
-    """``grad`` of the strained energy, compiled once per calculation.
+    """``(grad of the strained energy, its geometry arguments)``, compiled once per run.
 
     Cached on the calculation the way the force's gradient is, and **keyed on
-    the calculation it closed over**. The strain is an argument, but the cell it
-    strains and the positions it moves are the captured calculation's, so an
-    entry inherited through :meth:`~defumat.scf.driver.Calculation.at_strain`
-    or :meth:`~defumat.scf.driver.Calculation.at_positions` -- both of which
-    copy the instance dict -- would answer at the geometry it was compiled at
-    and say nothing. Rebuilt when the entry does not belong to this calculation.
+    what it closes over** (:class:`~defumat.forces.energy.GeometryKey`). The
+    strain is an argument, and so are the cell it strains, the positions it
+    moves and every other array a geometry carries
+    (:data:`~defumat.forces.energy.GEOMETRY_FIELDS`), so an entry inherited
+    through :meth:`~defumat.scf.driver.Calculation.at_cell` or
+    :meth:`~defumat.scf.driver.Calculation.at_positions` -- both of which copy
+    the instance dict -- answers at the new geometry. It used to be keyed on the
+    calculation's identity instead, which made every step of a variable-cell
+    relaxation compile it again (`OPEN.md` Part XXIII item 7).
     """
-    cached = calculation.__dict__.get("_strain_gradient")
-    if cached is None or cached[0] is not calculation:
-        def energy(eps, state, big):
-            here = with_hoisted(calculation, big)
+    def build(key):
+        def energy(eps, state, big, geometry):
+            here = key.rebuild(geometry, big)
             return strained_energy(here, eps, state, spinors=True)
 
-        cached = (calculation, jax.jit(jax.grad(energy)))
-        calculation._strain_gradient = cached
-    return cached[1]
+        return jax.jit(jax.grad(energy))
+
+    return geometry_compiled(calculation, "_strain_gradient", build)
 
 
 def _term_gradients(calculation):
-    """``jacfwd`` of the term dict, compiled once per calculation.
-
-    Keyed on that calculation for the reason :func:`_energy_gradient` gives.
-    """
-    cached = calculation.__dict__.get("_strain_term_gradients")
-    if cached is None or cached[0] is not calculation:
-        def terms(eps, state, big):
-            here = with_hoisted(calculation, big)
+    """``jacfwd`` of the term dict and its geometry arguments, keyed as :func:`_energy_gradient` is."""
+    def build(key):
+        def terms(eps, state, big, geometry):
+            here = key.rebuild(geometry, big)
             return strained_energy_terms(here, eps, state, spinors=True)
 
-        cached = (calculation, jax.jit(jax.jacfwd(terms)))
-        calculation._strain_term_gradients = cached
-    return cached[1]
+        return jax.jit(jax.jacfwd(terms))
+
+    return geometry_compiled(calculation, "_strain_term_gradients", build)

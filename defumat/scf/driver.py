@@ -176,6 +176,7 @@ from defumat.solvers.davidson import (
 )
 from defumat.solvers.subspace import rayleigh_ritz
 from defumat.system.builder import System
+from defumat.system.cell import fold_radius, pair_separation_bound
 from defumat.system.kpoints import KPoints
 from defumat.system.spiral import spiral_cartesian, spiral_kcart, spiral_kpoints
 from defumat.system.symmetry import (
@@ -909,6 +910,47 @@ def _projector_core(pseudos, structure, cell, smooth, planewaves, kpoints,
         lambda core: (core.columns, core.kg, core.mask),
         piece, (jax.device_put(columns), jax.device_put(kg), planewaves.mask),
     )
+
+
+def _padded_translations(neighbours, count: int, cell, structure):
+    """``neighbours`` (an Ewald or dispersion sum) with its translation list padded to ``count`` rows.
+
+    **What a variable-cell step needs and the starting cell does not.** The
+    compiled force and stress take the list as an argument, so its length is a
+    shape, and :meth:`Calculation.at_cell` rebuilds it at every step: an image
+    count that changes from one step to the next would compile both gradients
+    again. Padding to the count of the calculation ``at_cell`` was called on --
+    the starting one, throughout :func:`~defumat.workflows.vc_relax.run_vc_relax`
+    -- removes that wherever the count fell. Where it grew, the list is longer
+    and that one shape compiles once.
+
+    The rows added are one lattice vector, a multiple of the longest lattice
+    vector at least twice ``cutoff + separation`` long, so every pair it forms
+    lies past the kernels' ``rmax`` or ``rcut`` mask and adds an exact zero --
+    and, being a lattice vector, it deforms under a strain as the real rows
+    do. They go at the end, after the real rows in their own order, so what
+    changes is only the length the kernel reduces over, which moves its sum at
+    round-off when the sum has live pairs at all: on QE's ``vc-relax4`` cell
+    with ``alpha`` lowered to 0.1, so that it does, 4.4e-16 Ry on 2.2 Ry, 7.8e-17
+    in the position derivative and 7.7e-16 in the strain derivative. At the
+    ``alpha`` a run takes, that cell and two-atom silicon have no pair inside
+    ``rmax`` and the padding changes nothing.
+    """
+    translations = getattr(neighbours, "translations", None)
+    if translations is None or translations.shape[0] >= count:
+        return neighbours
+    at = np.asarray(cell.at)
+    tau = np.asarray(structure.positions)
+    cutoff = float(getattr(neighbours, "rmax", None) or getattr(neighbours, "rcut"))
+    separation = max(pair_separation_bound(at, tau), fold_radius(at))
+    longest = at[int(np.argmax(np.linalg.norm(at, axis=1)))]
+    multiple = int(np.ceil(2.0 * (cutoff + separation) / np.linalg.norm(longest))) + 1
+    filler = jnp.asarray(multiple * longest, dtype=translations.dtype)
+    padded = jnp.concatenate([
+        translations,
+        jnp.broadcast_to(filler, (count - translations.shape[0], 3)),
+    ])
+    return eqx.tree_at(lambda n: n.translations, neighbours, padded)
 
 
 def _kpoints_rows(kpoints, rows):
@@ -3132,11 +3174,12 @@ class Calculation:
         # The spiral gradient's compiled kernel closes over *this* calculation --
         # its local potential, its Ewald sum, its projector positions -- so it
         # cannot follow the atoms, and would otherwise be evaluated in silence at
-        # the geometry it was built at. The analytic force's and the stress's
-        # kernels close over the calculation the same way; they do not need a pop
-        # here because they are keyed on the calculation they captured and the
-        # copy below is a different object, which is the invalidation this one
-        # gets by name.
+        # the geometry it was built at. The analytic force's kernel closes over
+        # the calculation the same way; it needs no pop here because it is keyed
+        # on the calculation it captured and the copy below is a different
+        # object. The autodiff force's and stress's take the geometry as
+        # arguments and are keyed on what they still close over
+        # (:class:`~defumat.forces.energy.GeometryKey`), so they follow the move.
         moved.__dict__.pop("_spiral_gradient", None)
         moved.__dict__.pop("_spiral_gradient_chunk", None)
         moved.system = eqx.tree_at(
@@ -3227,14 +3270,23 @@ class Calculation:
 
         cell, structure = moved.system.cell, moved.system.structure
         dense = moved.basis.dense
-        moved.ewald_sum = build_ewald(cell, structure, dense, moved.charges)
+        # Both lists are padded to at least the length this calculation's own
+        # had, so that a step whose count of images fell does not hand the
+        # compiled force and stress a new shape (:func:`_padded_translations`).
+        moved.ewald_sum = _padded_translations(
+            build_ewald(cell, structure, dense, moved.charges),
+            self.ewald_sum.translations.shape[0], cell, structure,
+        )
         moved.ewald = float(
             moved.ewald_sum.energy(cell, structure.positions, dense)
         )
         if moved.dispersion_sum is not None:
-            moved.dispersion_sum = build_vdw_correction(
-                moved.system.vdw_corr, cell, structure,
-                **vdw_options(moved.system),
+            moved.dispersion_sum = _padded_translations(
+                build_vdw_correction(
+                    moved.system.vdw_corr, cell, structure,
+                    **vdw_options(moved.system),
+                ),
+                self.dispersion_sum.translations.shape[0], cell, structure,
             )
             moved.dispersion = float(
                 moved.dispersion_sum.energy(structure.positions)
@@ -3328,11 +3380,14 @@ class Calculation:
 
         strained = copy.copy(self)
         # As in ``at_positions`` and ``at_spiral_q``: any compiled kernel that
-        # closed over *this* cell cannot follow one that has been deformed.
+        # closed over *this* cell cannot follow one that has been deformed. The
+        # force's and the stress's gradients are not among them: they take the
+        # geometry as arguments and are keyed on what they still close over
+        # (:class:`~defumat.forces.energy.GeometryKey`), so a moved cell reuses
+        # them, which is what keeps a variable-cell relaxation from compiling
+        # both again at every step (`OPEN.md` Part XXIII item 7).
         strained.__dict__.pop("_spiral_gradient", None)
         strained.__dict__.pop("_spiral_gradient_chunk", None)
-        strained.__dict__.pop("_energy_gradient", None)
-        strained.__dict__.pop("_chunked_gradient", None)
         strained.__dict__.pop("_analytic_terms", None)
         strained.__dict__.pop("_tetrahedra", None)
 
