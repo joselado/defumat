@@ -6265,6 +6265,7 @@ def run_scf(
     rotation_freeze_phase: bool = True,
     rotation_flat_curvature: float | None = None,
     pools=None,
+    diago_thr_init: float | None = None,
 ) -> SCFResult:
     """Run the self-consistent field loop to convergence.
 
@@ -6316,6 +6317,21 @@ def run_scf(
     than a set of wavefunctions -- see
     :meth:`Calculation.starting_wavefunctions`. It replaces the pseudo-atomic
     orbitals, and it is ignored by a residual solver, which starts its own.
+
+    ``diago_thr_init`` is ``pw.x``'s variable of the same name, the eigenvalue
+    threshold ``ethr`` of the first iteration, and ``None`` is ``ETHR_INIT``
+    (1e-2), the value for a start from atomic orbitals. The second iteration
+    resets it to 1e-2 and tightens it from ``dr2`` as always (``next_ethr``),
+    and the first iteration's redo test reads it, so a first diagonalisation
+    whose density turns out better than ``diago_thr_init * nelec`` is redone at
+    ``0.1 dr2 / nelec``, which is ``tr2_min`` in ``electrons.f90:677``,
+    ``:898-906``. It is floored at the band side's ``ethr`` floor. What it is
+    for is a start from states that are already nearly converged: a relaxation
+    passes 1e-6 with the previous ionic step's wavefunctions, which is what
+    ``run_pwscf.f90:331-334`` sets for every step after the first. It is **not**
+    read from an input file's ``&electrons``, and two things override it: a
+    residual solver, which sets the threshold from its own converged ``dr2``,
+    and a checkpoint resume, which restores the one it left with.
 
     ``starting_from`` is all four at once, taken from another run's
     :class:`SCFResult` **and promoted into this run's spin regime**: a converged
@@ -6864,8 +6880,12 @@ def run_scf(
     # ``wg`` either -- the occupations are rebuilt from the first
     # diagonalisation, as ``scf/continuation.py`` says. The deviation is one
     # iteration of extra accuracy on the empty bands of a seeded run, which is
-    # the conservative direction and is bounded because such a run starts at
-    # ``ETHR_INIT``.
+    # the conservative direction, and its size is set by the first threshold:
+    # at ``ETHR_INIT`` the empty bands are held to 1e-2 where ``max(5 ethr,
+    # 1e-5)`` would be 5e-2, which is loose either way, and at the 1e-6 a
+    # relaxation's later steps pass as ``diago_thr_init`` they are held to 1e-6
+    # where ``pw.x``, with the previous geometry's ``btype``, holds them to
+    # 1e-5, for that one iteration.
     #
     # **A checkpoint resume overwrites this below**, where the rest of the loop
     # state comes back: it re-enters with a converged ``ethr``, where a flat
@@ -6876,6 +6896,11 @@ def run_scf(
     converged = False
     wavefunctions = None
     ethr, accuracy = ETHR_INIT, None
+    if diago_thr_init is not None:
+        # Set before the residual solver's and the resume's assignments below,
+        # so that both still win (see the docstring).
+        ethr = max(float(diago_thr_init),
+                   resolve_ethr_floor(getattr(calculation, "ethr_floor", ETHR_MIN)))
     # The two halves of ``accuracy``, set together with it inside the loop. Named
     # here so a resumed run that never reaches the retry block still has them.
     charge_accuracy = magnetic_accuracy = 0.0

@@ -25,6 +25,31 @@ atom moves a hundredth of a bohr. It is worth several iterations a step and it
 is exact in the limit that matters -- at convergence the starting guess is
 irrelevant to the answer.
 
+The previous step's **wavefunctions** cross too, and that is not an
+extrapolation. ``update_pot`` extrapolates them only when ``wfc_order > 0``
+(``update_pot.f90:293``), whose default is 0 (``input.f90:1043``), so ``pw.x``
+starts every later step from the previous geometry's converged states as they
+are, and ``run_pwscf.f90:331-334`` diagonalises the first iteration of each such
+step at ``ethr = 1e-6`` rather than at the 1e-2 a start from atomic orbitals
+gets. Here the states are the span of the first Rayleigh-Ritz of the next
+step's SCF and :data:`LATER_STEP_ETHR` is its ``diago_thr_init``. It is sound
+because the cell is fixed: :meth:`~defumat.scf.driver.Calculation.at_positions`
+keeps the plane-wave sphere, so a coefficient means the same plane wave at both
+geometries.
+
+Two differences from ``pw.x`` are deliberate. The states are first rotated in
+the new Hamiltonian, the Rayleigh-Ritz every start goes through, where
+``c_bands`` passes ``lrot = (iter == 1)`` to ``cegterg``, which then skips its
+first subspace diagonalisation and takes the old states' diagonal as their
+energies (``cegterg.f90:266``). And they cross with ``pw.x``'s
+``atomic+random`` factor on every coefficient (:func:`_randomized`), because a
+converged state keeps the symmetry of the geometry it came from and a step
+that moves a state of another symmetry into the occupied manifold otherwise
+leaves the next SCF in the wrong one, which was measured here and is the
+reason for the factor. The states are not carried into a resumed step, which
+starts from the checkpoint's density alone as before, nor under k-point pools,
+nor into a residual solver, which starts its own.
+
 **3. The SCF threshold follows the relaxation.** ``move_ions.f90`` tightens
 ``conv_thr`` as the forces get small (``upscale``), because a force is a
 derivative and needs a better-converged density than an energy does, but only
@@ -51,6 +76,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -71,6 +97,125 @@ __all__ = ["RelaxResult", "run_relax", "site_magnetization", "site_moment_report
 #: ``upscale`` in ``Modules/read_namelists.f90``: how much tighter than the
 #: input ``conv_thr`` the SCF is allowed to become as the relaxation converges.
 UPSCALE = 100.0
+
+#: ``ethr = 1.0D-6`` in ``run_pwscf.f90:331-334``: the first iteration's
+#: diagonalisation threshold for every ionic step after the first, which starts
+#: from the previous step's states rather than from atomic orbitals.
+LATER_STEP_ETHR = 1.0e-6
+
+#: ``0.05_DP`` in ``init_wfc``'s ``atomic+random`` (``wfcinit.f90:356``): the
+#: size of the random factor on each coefficient of a carried state, and
+#: :func:`_randomized` says why it is there and why it is not smaller.
+CARRIED_NOISE = 0.05
+
+#: The key the factor is drawn from. Any fixed value: what matters is that the
+#: same run draws the same numbers. It is folded with each block's index and
+#: never split the way ``starting_vectors``' own ``PRNGKey(0)`` is, so the two
+#: draw different numbers although both start from 0.
+CARRIED_SEED = 0
+
+
+def _carries_states(scf_options: dict, pools) -> bool:
+    """Whether a step's converged states can start the next step's SCF.
+
+    Only the mixing loop reads ``starting_wavefunctions``: a residual solver
+    starts its own, and the span would sit unread under its whole run. Under
+    k-point pools the states are each pool's share of the set, which
+    :meth:`~defumat.scf.driver.Calculation.starting_wavefunctions` can address
+    but no relaxation here has been checked with, so a pooled relaxation starts
+    each step from atomic orbitals as before.
+    """
+    from defumat.scf.solvers import get_scf_solver
+
+    return (pools.size == 1
+            and get_scf_solver(scf_options.get("scf_solver", "mixing")) is None)
+
+
+def _perturb_block(states, index):
+    """One ``(nbnd, ndim)`` block times ``1 + a rr1 exp(2 pi i rr2)``, keyed by its index."""
+    first, second = jax.random.split(
+        jax.random.fold_in(jax.random.PRNGKey(CARRIED_SEED), index))
+    real = jnp.finfo(states.dtype).dtype
+    size = jax.random.uniform(first, states.shape, dtype=real)
+    angle = (2.0 * jnp.pi) * jax.random.uniform(second, states.shape, dtype=real)
+    return states * (1.0 + CARRIED_NOISE * size
+                     * jax.lax.complex(jnp.cos(angle), jnp.sin(angle)))
+
+
+_perturb_one = jax.jit(_perturb_block)
+
+
+@jax.jit
+def _perturb_all(states):
+    """Every block of a whole store at once, reshaped inside the trace, so free."""
+    shape = states.shape
+    blocks = int(np.prod(shape[:-2], dtype=int))
+    flat = states.reshape((blocks,) + shape[-2:])
+    return jax.vmap(_perturb_block)(flat, jnp.arange(blocks)).reshape(shape)
+
+
+def _randomized(states):
+    """The carried states with ``init_wfc``'s ``atomic+random`` factor on every coefficient.
+
+    **Why the carried states are perturbed at all.** A converged state has the
+    symmetry of the Hamiltonian it came from, exactly, whether or not the run
+    uses that symmetry, and the Davidson iteration keeps it: every correction
+    it adds is a preconditioned residual of one of the ``nbnd`` vectors it
+    holds, in the same symmetry sector. So when an ionic step moves a state of
+    one sector below a state of another across the Fermi level, a start from
+    the old states cannot reach it, and the SCF converges, quietly, to the
+    wrong occupied manifold. Measured on two-atom silicon with ``nosym`` and a
+    ``2 2 2`` grid (``tests/unit/test_checkpoint.py``'s relaxation, ``nbnd = 4``,
+    whose Hamiltonian keeps symmetries the run does not use: two atoms always
+    have an inversion centre between them, and this displacement also keeps a
+    mirror): at the second geometry the bare carried start converged to
+    -15.5689 Ry with the fourth band at Gamma at 0.6345 Ry, where the atomic
+    start gives -15.5954 Ry and 0.5353 and ``pw.x`` the same energy, and the
+    relaxation then took 14 ionic steps instead of ``pw.x``'s 6. ``pw.x`` keeps
+    ``evc`` bare and still reached the right state there, in 9.4 Davidson
+    steps at that iteration; what lets it escape is not established, and this
+    does not rely on it.
+
+    The remedy is ``pw.x``'s own for the same loss in a start from atomic
+    orbitals (``INPUT_PW.txt``, ``startingwfc``: "Prevents the 'loss' of states"):
+    multiply every coefficient by ``1 + 0.05 rr1 exp(2 pi i rr2)`` with ``rr1``
+    and ``rr2`` uniform on ``[0, 1)`` (``wfcinit.f90:353-356``). It gives every
+    vector a component in every sector, and costs Davidson steps in the first
+    iteration, since the states are no longer converged. At 0.01 the probe
+    above found the missing state only at the fourth SCF iteration, in 11
+    iterations against 4, and at 0.001 not at all, so the amplitude is
+    ``pw.x``'s and is not tuned below it.
+
+    The random numbers come from a fixed key folded with the block's index
+    (channel and k-point), so a run is reproducible and a store held on the host
+    gets the same numbers, block by block, as one on the device. The perturbed
+    copy is made while the original is still held, the brief second set the
+    hand-over costs; the original is released when this returns.
+    """
+    if isinstance(states, np.ndarray):
+        # A store parked on the host: perturbed a block at a time, so the whole
+        # set never crosses to the device, which is what parking it was for.
+        shape = states.shape
+        blocks = int(np.prod(shape[:-2], dtype=int))
+        perturbed = np.empty_like(states)
+        source = states.reshape((blocks,) + shape[-2:])
+        target = perturbed.reshape((blocks,) + shape[-2:])
+        for index in range(blocks):
+            target[index] = np.asarray(_perturb_one(jnp.asarray(source[index]), index))
+        return perturbed
+    return _perturb_all(states)
+
+
+def _next_step_options(scf_options: dict, carried: list) -> dict:
+    """The inner SCF's options for a step, with ``diago_thr_init`` when states cross.
+
+    ``run_pwscf.f90`` sets the threshold for every later step whatever
+    ``diago_thr_init`` the input gave the first, so this one replaces a
+    caller's.
+    """
+    if not carried:
+        return scf_options
+    return {**scf_options, "diago_thr_init": LATER_STEP_ETHR}
 
 
 @dataclass
@@ -366,6 +511,10 @@ def run_relax(
         density, becsum = resumed_state.density, resumed_state.becsum
         threshold = threshold_resume
 
+    # The previous step's converged states, as the one entry of a list, or
+    # empty: the first step (and a resumed one) starts from atomic orbitals.
+    carried = []
+    carry = _carries_states(scf_options, pools)
     for index in range(first_step, nstep + 1):
         # **The previous step's mixed state must not be live under this one's
         # SCF.** ``result`` holds the wavefunctions, and rebinding it on the
@@ -377,6 +526,18 @@ def run_relax(
         # (`MEMORY-AUDIT.md` A2). Dropping it costs nothing -- the body rebinds
         # it immediately, ``RelaxStep`` keeps no reference to it, and the
         # post-loop ``RelaxResult`` reads whatever the last iteration left.
+        #
+        # **The carried states are the exception, and only until they are
+        # read.** They are popped into the call, so that ``run_scf``'s
+        # parameter is the one reference left, and ``run_scf`` drops that after
+        # the first Rayleigh-Ritz, before its first Davidson call. So the
+        # previous step's set is alive from here through the first potential to
+        # the end of that Rayleigh-Ritz, where it stands in for the atomic
+        # orbitals, a set at least as large (``natomwfc`` vectors topped up to
+        # ``nbnd``), and the Davidson peak is not raised. The perturbed copy
+        # :func:`_randomized` makes is the one moment two sets are alive, and
+        # it is over before ``run_scf`` is entered.
+        options = _next_step_options(scf_options, carried)
         result = None
         result = run_scf(
             calculation.system,
@@ -388,8 +549,9 @@ def run_relax(
             mixing_beta=mixing_beta,
             starting_density=density,
             starting_becsum=becsum,
+            starting_wavefunctions=_randomized(carried.pop()) if carried else None,
             verbose=verbose,
-            **scf_options,
+            **options,
         )
         if pools.size > 1 and stop_latched():
             # A SIGTERM reached the pools during this step's SCF, which stopped
@@ -501,6 +663,8 @@ def run_relax(
         density, becsum = _extrapolate(
             previous, calculation, result, density_extrapolation
         )
+        if carry and result.wavefunctions is not None:
+            carried = [result.wavefunctions]
         # **After** the extrapolation and not before: that call is the last
         # reader of the old ``Calculation``, through ``starting_density()`` and
         # ``becsum(...)``. What it returns is bare arrays closing over nothing,

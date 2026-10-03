@@ -39,9 +39,12 @@ a third convergence threshold joins ``etot_conv_thr`` and ``forc_conv_thr``:
 all three have to be satisfied at once, as in ``bfgs_module.f90``.
 
 Everything else is :mod:`defumat.workflows.relax`'s and is shared with it --
-the density extrapolation between geometries, the SCF threshold that tightens
-as the relaxation converges, and ``if_pos`` zeroing the force on a frozen
-coordinate. The one addition is that the symmetry check grows a second half:
+the density extrapolation between geometries, the previous step's states as the
+start of the next step's SCF at a first threshold of 1e-6, with ``pw.x``'s
+``atomic+random`` factor on them (in the frozen basis only, since a rebuilt
+sphere has other Miller indices), the SCF threshold that tightens as the
+relaxation converges, and ``if_pos`` zeroing the force on a frozen coordinate.
+The one addition is that the symmetry check grows a second half:
 :func:`~defumat.system.symmetry.check_symmetry` is blind to a deformation of
 the cell because it works in crystal coordinates, so
 :func:`~defumat.system.symmetry.check_lattice_symmetry` checks the metric.
@@ -70,8 +73,10 @@ from defumat.stress import compute_stress
 from defumat.system.builder import System
 from defumat.system.symmetry import check_lattice_symmetry, check_symmetry
 from defumat.units import BOHR_TO_ANGSTROM, RY_TO_KBAR
-from defumat.workflows.relax import (RelaxStep, _extrapolate, _scf_loop_options,
-                                     site_magnetization, site_moment_report)
+from defumat.workflows.relax import (RelaxStep, _carries_states, _extrapolate,
+                                     _next_step_options, _randomized,
+                                     _scf_loop_options, site_magnetization,
+                                     site_moment_report)
 
 __all__ = ["VCRelaxResult", "VCRelaxStep", "run_vc_relax"]
 
@@ -291,17 +296,29 @@ def run_vc_relax(
     steps: list[VCRelaxStep] = []
     density = becsum = None
     converged = False
+    # The previous step's states start the next step's SCF in the frozen basis,
+    # where ``at_cell`` keeps every Miller index of the sphere, as ``run_relax``
+    # does at a fixed cell; a basis rebuilt per step has a different sphere and
+    # carries nothing, as ``reset_gvectors`` carries nothing.
+    carried = []
+    carry = not treinit_gvectors and _carries_states(scf_options, pools)
 
     for index in range(1, nstep + 1):
         # The last step's result holds its wavefunctions and must not be live
         # under this step's SCF, force and stress: ``run_relax``'s line, for the
-        # reason given there (`MEMORY-AUDIT.md` A2).
+        # reason given there (`MEMORY-AUDIT.md` A2). The carried states are
+        # popped into the call with ``pw.x``'s ``atomic+random`` factor on them
+        # and released by ``run_scf`` after its first Rayleigh-Ritz, also as
+        # there, where :func:`~defumat.workflows.relax._randomized` says why
+        # the factor is needed.
+        options = _next_step_options(scf_options, carried)
         result = None
         result = run_scf(
             current.system, pseudos, nbnd=nbnd, conv_thr=threshold,
             calculation=current, mixing_mode=mixing_mode, mixing_beta=mixing_beta,
-            starting_density=density, starting_becsum=becsum, verbose=verbose,
-            **scf_options,
+            starting_density=density, starting_becsum=becsum,
+            starting_wavefunctions=_randomized(carried.pop()) if carried else None,
+            verbose=verbose, **options,
         )
         forces = compute_forces(current, result, method=force_method)
         stress = compute_stress(current, result, method=stress_method)
@@ -364,6 +381,8 @@ def run_vc_relax(
             pseudos, treinit_gvectors, density_extrapolation,
             diagonalization, k_batch,
         )
+        if carry and result.wavefunctions is not None:
+            carried = [result.wavefunctions]
         # ``_advance`` was the last reader of the old geometry's Calculation.
         # Under a stress ``at_cell`` goes through ``at_strain``, so it carries
         # its own augmentation table and core; left bound it would sit beside
@@ -386,6 +405,10 @@ def run_vc_relax(
     # AttributeError on the ``reset_gvectors`` path and nowhere else, which is a
     # branch a quick check does not take.
     base = previous = current = None
+    # A run stopped by ``nstep`` leaves the last step's states here; they are
+    # ``relaxation_scf``'s own, so this frees nothing, and it says that the
+    # final SCF below, in a basis of its own, is not handed them.
+    carried.clear()
     if final_scf and not treinit_gvectors:
         # ``reset_gvectors``: a whole new run at the relaxed geometry, with
         # nothing carried over -- not the density, not the wavefunctions, not
