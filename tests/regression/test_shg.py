@@ -155,6 +155,15 @@ def test_silicon_has_no_second_harmonic_at_all():
     eigensolver's arbitrary rotation made it (rule D4). With the multiplet's
     block average they fall to 0.10 and 0.055.
 
+    **That level is the FFT grid and not a floor of the assembly.** This cell
+    is ``nosym``, which chooses its 15^3 grid without the factor of 4 that
+    diamond's quarter-lattice translation needs, so the potential breaks
+    inversion at the grid's sampling error and the run warns. Measured again on
+    this call, ``max|chi|`` is 3.2e-2 pm/V as committed and 3.0e-5 with
+    symmetry kept for the SCF (a commensurate 16^3 grid) and the same mesh
+    passed as ``kpoints=``. The cut at 14 bands is a real gap, 5.7e-2 Ry, so
+    none of it is a multiplet cut.
+
     A number that is small has to be shown to be small *for the right reason*,
     which is what running the opposite symmetry through the same machinery is
     for: AlAs and silicon differ by one species and are otherwise the same
@@ -425,10 +434,16 @@ def test_an_augmented_second_harmonic_is_still_exactly_zincblende():
     **3.5e-6** of it and the largest forbidden one is **6.6e-4** of it.
 
     **Three orders looser than the norm-conserving cell above**, whose own
-    spread is 2.3e-9, and that gap is the augmentation's floor rather than a
-    defect of the assembly: the same order shows in every quantity here that
-    has to interpolate a radial table, and the symmetry is imposed by nothing
-    on either cell.
+    spread is 2.3e-9, and the gap is **not** the augmentation's floor, which
+    is what this paragraph used to say. It is the band count: 24 bands cut a
+    doublet or a triplet at 7 of the 64 k-points (``band_cut_gap`` 5.3e-15 Ry),
+    so which members are kept is the eigensolver's arbitrary choice and the run
+    warns. Measured on this call: at 23 and at 27 bands, both clean cuts
+    (1.57e-2 and 1.91e-2 Ry), the forbidden components fall to **3.0e-8** of
+    the allowed ones and the allowed spread to **7.4e-10**; at 24 bands they
+    were 6.6e-4 and, from a 29-band solve rather than this one's 25, 2.0e-5
+    rather than 3.5e-6, and rotating the cut multiplets before cutting moves
+    the tensor by 6.8e-4 and 1.05e-3 of its peak in two draws.
     """
     chi = np.asarray(spectrum("alas-us.in", 4, 24, **SHG_OPTIONS).chi)
     peak = {(a, b, c): float(np.max(np.abs(chi[:, a, b, c])))
@@ -439,9 +454,9 @@ def test_an_augmented_second_harmonic_is_still_exactly_zincblende():
     assert min(allowed) > 100.0
     assert max(allowed) - min(allowed) < 1.0e-4 * max(allowed)   # 3.5e-6
     # Looser than the norm-conserving cell's 1e-3 above, and the margin is
-    # thin: the measured 6.6e-4 is what an augmented run's radial
-    # interpolation leaves, so this bound is about a factor of five and not
-    # about an order of magnitude.
+    # thin: the measured 6.6e-4 is the multiplet the 24-band cut splits (3.0e-8
+    # at a clean 23 or 27), so this bound is about a factor of five above a
+    # number the eigensolver's rotation inside that multiplet decides.
     assert max(forbidden) < 3.0e-3 * max(allowed)
 
 

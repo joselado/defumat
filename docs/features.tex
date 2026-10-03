@@ -3835,6 +3835,16 @@ static $\chi^{(2)}$ are still refused for the same missing term.
 current and for the same reason: the sum over the intermediate state is an
 identity only over a complete basis. \code{truncation} is the in-run estimate,
 taken over the top quarter of the bands.
+
+\textbf{Two warnings, here and in the shift current, mark a part of the tensor
+the crystal does not have}: a \code{nosym} run whose dense FFT grid is not a
+multiple of the factors the fractional translations need breaks the dropped
+operations at the grid's sampling error (0.72~pm/V on two-atom silicon, where
+inversion forbids every component, against 0.00074 with symmetry kept for the
+SCF and the whole unshifted mesh passed as \code{kpoints}), and a
+\code{band\_cut\_gap} below $10^{-8}$~Ry means the band set was cut inside a
+degenerate multiplet, so which of its members were kept is the eigensolver's
+arbitrary choice.
 \end{refuses}
 
 % =====================================================================

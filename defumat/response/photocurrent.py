@@ -124,6 +124,7 @@ for its own missing term, in :func:`require_a_shift_current_regime`.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 import jax
@@ -135,6 +136,7 @@ from defumat.eager import compiled
 from defumat.response.velocity import VelocityOperator
 from defumat.scf.occupations import w0gauss
 from defumat.system.kpoints import is_reduced
+from defumat.system.symmetry import find_symmetries
 
 __all__ = [
     "ShiftCurrent",
@@ -214,6 +216,25 @@ DEGENERACY_TOL = 1.0e-8
 #: comparison above is against the first convention.
 SIGMA_SI = 1.4049e-5
 
+#: What :func:`_warn_about_the_grid` quotes for this tensor: the residue on
+#: two-atom silicon, where inversion forbids every component, against the two
+#: ways out.
+_GRID_RESIDUE_SHIFT = (
+    "on two-atom silicon, whose inversion carries a quarter-lattice "
+    "translation, sigma^abc on the whole unshifted 2x2x2 mesh at 8 bands reads "
+    "1.2e-8 A/V^2 on the 15^3 grid ecutwfc = 12 gives under nosym, where "
+    "inversion requires zero, against 1.1e-11 on the commensurate 20^3 grid of "
+    "ecutwfc = 16 and 5.3e-12 with symmetry kept for the SCF"
+)
+
+#: What :func:`_warn_about_the_cut` quotes for this tensor: how far it moves
+#: when the multiplet straddling the cut is rotated before the cut is made.
+_CUT_RESIDUE_SHIFT = (
+    "on AlAs (alas-raman.in, the whole 6x6x6 mesh), cut at 22 bands through "
+    "doublets at 13 of the 216 k-points, rotating each doublet before the cut "
+    "moves sigma^abc by 1.6e-8 A/V^2, 1.4e-4 of its peak"
+)
+
 
 def _safe_ratio(numerator, denominator, tol: float):
     """``numerator / denominator`` where the denominator is resolvable, else 0."""
@@ -260,11 +281,22 @@ def band_velocity_difference(energies, velocity, tol: float):
     the bare diagonal the two ``Delta`` terms -- Eqs. (B12a) and (B16b), the
     only two places ``Delta`` appears -- come out at **1499** and **238** on a
     4x4x4 mesh where the other three sit at 0.09, and with the multiplet
-    average they fall to **0.10** and **0.055**, which is the same floor. The
-    high-symmetry points of the mesh are what does it: at ``Gamma`` silicon's
-    valence top is threefold degenerate, its block trace of ``v`` is zero by
-    symmetry, and an arbitrary basis inside it gives three nonzero diagonal
-    entries that cancel only in that sum.
+    average they fall to **0.10** and **0.055**, the level of the other three.
+    The high-symmetry points of the mesh are what does it: at ``Gamma``
+    silicon's valence top is threefold degenerate, its block trace of ``v`` is
+    zero by symmetry, and an arbitrary basis inside it gives three nonzero
+    diagonal entries that cancel only in that sum.
+
+    **That level is the FFT grid, not a floor of the assembly.** The silicon
+    cell is ``si2-nosym.in``, and ``nosym`` chooses its 15^3 grid without the
+    factor of 4 that diamond's quarter-lattice translation needs, so the
+    potential breaks inversion at the grid's sampling error and every term of
+    the tensor carries it. Measured again on the same call (the whole 4x4x4
+    mesh, 14 bands, broadening 0.005): ``max|chi|`` is **3.2e-2** pm/V as
+    committed, its three parts 3.5e-2, 4.2e-2 and 2.1e-2, and **3.0e-5** with
+    symmetry kept for the SCF (a commensurate 16^3 grid) and the same mesh
+    passed as ``kpoints=``. :func:`~defumat.response.shg.second_harmonic` warns
+    in the first case.
 
     Elk does not need this at 42x42x42 with a shifted mesh that misses the
     symmetry points, which is why ``nonlinopt.f90`` has no counterpart to it
@@ -415,7 +447,8 @@ class ShiftCurrent:
             diagonalised one extra band to measure it, else ``nan``. The same
             warning :class:`~defumat.response.conductivity.
             OpticalConductivity` carries: cutting inside a degenerate multiplet
-            keeps some members and drops others.
+            keeps some members and drops others. Below :data:`DEGENERACY_TOL`
+            :func:`shift_current` warns.
     """
 
     frequencies: np.ndarray
@@ -508,8 +541,21 @@ def shift_current(
 
     The frequency axis carries ``hbar omega`` in Ry, so a visible-light photon
     is around 0.15-0.25.
+
+    **Warns**, rather than refuses, in two cases where the tensor carries a
+    part the crystal does not have: the run is ``nosym`` on a dense FFT grid
+    the crystal's fractional translations do not map onto itself
+    (:func:`_incommensurate_grid`), and ``band_cut_gap`` is below
+    :data:`DEGENERACY_TOL`, a band set cut inside a degenerate multiplet
+    (:func:`_warn_about_the_cut`).
     """
     require_a_shift_current_regime(calculation)
+    _warn_about_the_grid(
+        calculation, "the shift-current tensor sigma^abc", _GRID_RESIDUE_SHIFT
+    )
+    _warn_about_the_cut(
+        band_cut_gap, "the shift-current tensor sigma^abc", _CUT_RESIDUE_SHIFT
+    )
 
     eigenvalues = jnp.asarray(eigenvalues)
     wavefunctions = upload(wavefunctions)
@@ -643,9 +689,17 @@ def require_a_velocity_sum_regime(calculation) -> None:
             "the cell's until it is averaged over the point group, which this "
             "assembly does not do (defumat.system.symmetry."
             "symmetrize_cartesian_tensor would, and lifting this is a "
-            "separate piece of work). Run with nosym = .true. and "
-            "noinv = .true. on an *unshifted* grid, which is closed under the "
-            "point group where a shifted one is not"
+            "separate piece of work). Keep symmetry for the SCF and pass the "
+            "whole unshifted grid as kpoints= (KPoints.automatic((n, n, n), "
+            "(0, 0, 0), cell) with no rotations), which is closed under the "
+            "point group where a shifted one is not. Running the SCF with "
+            "nosym = .true. instead is not the same escape: a nosym run's FFT "
+            "grid is chosen without the factors the fractional translations "
+            "need, so on a crystal whose operations carry one (diamond, not "
+            "zincblende) the potential breaks them at the grid's sampling "
+            "error, and two-atom silicon's tensor, which inversion forbids, "
+            "then comes out three to four orders of magnitude larger than "
+            "with symmetry kept"
         )
     if calculation.is_hubbard:
         raise NotImplementedError(
@@ -682,3 +736,113 @@ def _kpoints_are_reduced(calculation) -> bool:
     group acts freely on it, which is what a shift arranges.
     """
     return is_reduced(calculation.system.kpoints)
+
+
+# -- the warnings --------------------------------------------------------------
+
+
+def _incommensurate_grid(calculation):
+    """``(grid, factors)`` when a ``nosym`` grid misses a translation, else ``None``.
+
+    ``factors`` are what :meth:`~defumat.system.symmetry.Symmetries.
+    fft_factors` asks of the dense FFT grid for the crystal's fractional
+    translations to map it onto itself, and a run that keeps its symmetry is
+    given a grid that is a multiple of them. A ``nosym`` run is not:
+    ``build_basis`` follows ``pw.x`` there (``setup.f90`` sets ``fft_fact = 1``
+    under ``nosym``), which is right for a run that wants no symmetry and
+    leaves the operations it dropped broken by the grid itself. The
+    exchange-correlation potential is evaluated pointwise on that grid, so it
+    breaks them at the grid's sampling error, and the density follows it
+    self-consistently.
+
+    That is invisible in a total energy and visible in a second-order tensor,
+    which inversion forbids outright and which is a cancellation of large
+    terms. Diamond's inversion carries a quarter-lattice translation, so
+    two-atom silicon at ``ecutwfc = 12`` (15^3 against a factor of 4) is the
+    case: ``get_shg(nbnd=8)`` on the whole unshifted 2x2x2 mesh reads
+    **0.7157 pm/V** where inversion requires zero, **0.0018** at
+    ``ecutwfc = 16`` (20^3, commensurate) and **0.00074** with symmetry kept for
+    the SCF and the same mesh passed as ``kpoints=``; the shift current on the
+    same three runs reads **1.2e-8**, 1.1e-11 and 5.3e-12 A/V^2. A symmorphic
+    crystal (zincblende AlAs, whose factors are all 1) is not affected whatever
+    its grid.
+    """
+    system = calculation.system
+    if not system.nosym:
+        return None
+    grid = tuple(int(g) for g in calculation.basis.dense.grid)
+    factors = tuple(find_symmetries(system.cell, system.structure).fft_factors())
+    if not any(g % f for g, f in zip(grid, factors)):
+        return None
+    return grid, factors
+
+
+def _warn_about_the_grid(calculation, quantity: str, measured: str) -> None:
+    """Say so when :func:`_incommensurate_grid` finds the case it describes.
+
+    A warning and not a refusal, because the residue is the size of the
+    grid's sampling error and is harmless wherever the tensor is not being
+    read for a component a dropped operation forbids. ``quantity`` names the
+    tensor and ``measured`` is the measurement on it that says how large the
+    residue is.
+    """
+    found = _incommensurate_grid(calculation)
+    if found is None:
+        return
+    grid, factors = found
+    warnings.warn(
+        f"the dense FFT grid of this nosym run, {grid}, is not a multiple of "
+        f"{factors}, which the crystal's fractional translations need, so "
+        f"{quantity} carries a residue the crystal does not have. The "
+        "operations nosym dropped do not map this grid onto itself, the "
+        "exchange-correlation potential evaluated pointwise on it breaks them "
+        "at the grid's sampling error, and a second-order tensor picks that up "
+        f"in every component one of those operations forbids: {measured}. "
+        "Keep symmetry for the SCF and pass the whole unshifted mesh as "
+        "kpoints= (KPoints.automatic((n, n, n), (0, 0, 0), cell), given no "
+        "rotations, is the complete grid), or choose a cutoff whose dense grid "
+        f"is a multiple of {factors}",
+        RuntimeWarning,
+        stacklevel=3,
+    )
+
+
+def _warn_about_the_cut(band_cut_gap: float, quantity: str, measured: str) -> None:
+    """Say so when the band set was cut inside a degenerate multiplet.
+
+    ``band_cut_gap`` is ``min_k (e_(nbnd+1) - e_nbnd)``, which the workflows
+    measure by diagonalising one band more than the sum uses. Below
+    :data:`DEGENERACY_TOL` the last band kept and the first one dropped are one
+    level, and which members of it the eigensolver put below the cut is
+    arbitrary, since any rotation inside a multiplet is an equally good set of
+    eigenvectors. Every quantity built from the kept bands then depends on that
+    rotation, the intermediate sums of both tensors among them, and no
+    multiplet average inside the assembly can repair it, because the members
+    it would average with are not in the set.
+
+    **The threshold is the floor and not the broadening**:
+    :data:`DEGENERACY_TOL`, where the sums use the broadening for their own
+    denominators. The broadening is where a spectrum stops
+    resolving a splitting, not where the eigenvectors stop being determined:
+    AlAs's cut at 14 bands on the whole 6x6x6 mesh is 9.66e-3 Ry wide, below
+    the shift current's default broadening of 0.01, and it is a real gap. A cut
+    inside a multiplet comes out at round-off instead: 3.1e-15 Ry for
+    ``alas-raman.in`` at 22 bands on 6x6x6, exactly 0 for ``alas-shg.in`` at 22
+    on 6x6x6 and 5.3e-15 for ``alas-us.in`` at 24 on 4x4x4.
+
+    ``nan``, which is what the assembly carries when nobody measured the cut,
+    compares false and says nothing.
+    """
+    if not band_cut_gap < DEGENERACY_TOL:
+        return
+    warnings.warn(
+        f"the band set is cut inside a degenerate multiplet: band_cut_gap = "
+        f"{band_cut_gap:.2e} Ry, below DEGENERACY_TOL = {DEGENERACY_TOL:g} Ry, "
+        "the splitting under which two bands are one level. Which members of "
+        "the multiplet fall below the cut is arbitrary, since any rotation "
+        "inside it is an equally good set of eigenvectors, so "
+        f"{quantity} carries a part that is not a property of the crystal: "
+        f"{measured}. Choose an nbnd at which band_cut_gap is a real gap",
+        RuntimeWarning,
+        stacklevel=3,
+    )
