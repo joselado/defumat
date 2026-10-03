@@ -945,7 +945,16 @@ def electrostriction(
         # ``C_ijkl`` does not.
         require_a_measured_elastic_regime(calculation)
 
-    eigenvalues, psi = refined_states(calculation, result)
+    # **The route is decided before the states are touched**, by the field
+    # response's rule (:func:`~defumat.response.efield._streams`): where it walks
+    # the k axis a chunk at a time, the re-diagonalised states, the field's
+    # stores, the strain response and the third derivative's passes all stay
+    # in host memory a chunk at a time (:mod:`defumat.response.chunked_third`).
+    from defumat.response.efield import _streams
+
+    walked = _streams(calculation, result.wavefunctions, False,
+                      what="the electrostriction")
+    eigenvalues, psi = refined_states(calculation, result, stream=walked)
     density = jnp.asarray(result.density)
 
     # ``becsum`` reaches both responses, and it is not optional for an
@@ -955,9 +964,13 @@ def electrostriction(
     field = dielectric_tensor(
         calculation, psi, eigenvalues, density, becsum,
         born_charges=False, keep_internals=True, verbose=verbose,
-        **response_options,
+        streamed_internals=walked, **response_options,
     )
-    field, solver, _, b, u, stored = field_blocks(field)
+    streamed = field.internals.get("field")
+    if streamed is not None:
+        field = replace(field, internals=None)
+    else:
+        field, solver, _, b, u, stored = field_blocks(field)
     # **Projected onto the conduction manifold before anything else.** Both are
     # orthogonal to the occupied states *by definition* -- the Sternheimer
     # right-hand side is projected and the operator preserves the split -- but
@@ -981,10 +994,25 @@ def electrostriction(
     if not allow_unconverged:
         require_converged_responses(field, strain)
 
-    depsilon = susceptibility_strain_derivative(
-        calculation, solver, density, b, u, strain, verbose=verbose,
-        stored=stored,
-    )
+    if streamed is not None:
+        from defumat.response.chunked_third import walked_susceptibility_derivative
+
+        tangents = [
+            (strain_tangent(k, l), strain.dpsi[k, l],
+             None if strain.ort is None else strain.ort[k, l], strain.drho[k, l])
+            for (k, l) in VOIGT
+        ]
+        columns = walked_susceptibility_derivative(
+            calculation, streamed, density, "strain", jnp.zeros((3, 3)), tangents,
+            verbose=verbose)
+        depsilon = np.zeros((3, 3, 3, 3))
+        for (k, l), column in zip(VOIGT, columns):
+            depsilon[:, :, k, l] = depsilon[:, :, l, k] = column
+    else:
+        depsilon = susceptibility_strain_derivative(
+            calculation, solver, density, b, u, strain, verbose=verbose,
+            stored=stored,
+        )
     # ``symmatrix3`` one rank further up: two field labels and two strain
     # labels. A no-op on a ``nosym`` run, which is what every case this phase
     # was validated on is.

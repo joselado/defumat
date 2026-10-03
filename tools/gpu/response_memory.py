@@ -24,7 +24,10 @@ measured (``allow_a_coarse_mesh``, ``kmesh_warning``); it needs a nonpolar cryst
 and an input the strain derivative admits (``alas-piezo.in``). ``strain``
 adds ``get_strain_response()``, the six strains' self-consistent response, and
 ``elastic`` adds ``get_elastic_constants()`` on top of it, which admits a
-norm-conserving dataset without symmetry only.
+norm-conserving dataset without symmetry only. ``electrostriction`` adds
+``get_electrostriction()`` (with the elastic constants on a norm-conserving
+dataset, without them otherwise) and ``raman`` adds ``get_raman_tensors()``, the
+two third derivatives.
 
     python3 tools/gpu/response_memory.py benchmarks/si8-ecut20-nosym-k3.in \\
         --grids 3 4 --stages scf epsilon born --k-batch 1 --json out.json
@@ -45,7 +48,7 @@ import sys
 import time
 
 STAGES = ("scf", "epsilon", "born", "phonon", "phonon_q", "piezo", "strain",
-          "elastic")
+          "elastic", "electrostriction", "raman")
 
 
 def main() -> int:
@@ -137,7 +140,18 @@ def _measure(args, grid: int, stage: str) -> dict:
             "scf_s": round(scf_seconds, 2),
             "energy": float(result.total_energy),
         }
-        if stage in ("strain", "elastic"):
+        if stage == "electrostriction":
+            start = time.perf_counter()
+            tensors = calculator.get_electrostriction(
+                elastic=not calculator.calculation.is_ultrasoft)
+            row["response_s"] = round(time.perf_counter() - start, 2)
+            row["deps_max"] = round(float(np.abs(tensors.depsilon_dstrain).max()), 10)
+        elif stage == "raman":
+            start = time.perf_counter()
+            tensors = calculator.get_raman_tensors()
+            row["response_s"] = round(time.perf_counter() - start, 2)
+            row["raman_max"] = round(float(np.abs(tensors.raman).max()), 10)
+        elif stage in ("strain", "elastic"):
             start = time.perf_counter()
             response = calculator.get_strain_response()
             row["response_s"] = round(time.perf_counter() - start, 2)

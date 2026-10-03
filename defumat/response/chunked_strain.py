@@ -29,8 +29,12 @@ modes:
   on whole-grid objects only and is shared with the whole route;
 * **the eigenvalue response**, after the loop, per chunk.
 
-Against the whole-k route on the same converged state
-(``tests/regression/test_streamed_strain.py``): see that file.
+Against the whole-k route on the same re-diagonalised states
+(``tests/regression/test_streamed_strain.py``): the response density to 1.0e-14
+or better on densities of 0.10, the first-order states to 4.7e-13, on
+norm-conserving silicon (closed grid and wedge), ultrasoft and PAW silicon, with
+the history and the mean CG count equal. Before it, a streamed store did not run
+at all: ``_bare_strains`` indexes the store with a traced k.
 
 **What it does not change**: the ``(3, 3)`` dense-grid fields the loop carries
 (``dvscf``, the response, the induced potential, the frozen-state response),

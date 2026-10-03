@@ -108,7 +108,7 @@ wrong is worth 2.5% here and no symmetry check sees it.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field as _field
+from dataclasses import dataclass, field as _field, replace
 
 import jax
 import jax.numpy as jnp
@@ -452,14 +452,47 @@ def raman_tensors(
     # reference was a single step. It is two steps and an extrapolation now.
     _require_a_moving_overlap_regime(calculation)
 
-    eigenvalues, psi = refined_states(calculation, result)
+    # **The route is decided before the states are touched**, by the field
+    # response's rule (:func:`~defumat.response.efield._streams`): where it walks
+    # the k axis a chunk at a time, so do the displacement response
+    # (:mod:`defumat.response.chunked_phonon`) and the third derivative
+    # (:mod:`defumat.response.chunked_third`), with every store in host memory.
+    # ``keep_internals`` keeps the whole route: the displacement response it
+    # hands back is assembled whole by :func:`~defumat.response.phonon.
+    # dynamical_matrix`, which a host store would reach through ``_whole_k``.
+    from defumat.response.efield import _streams
+
+    walked = not keep_internals and _streams(
+        calculation, result.wavefunctions, False, what="the Raman tensors")
+    eigenvalues, psi = refined_states(calculation, result, stream=walked)
     density = jnp.asarray(result.density)
 
     field = dielectric_tensor(
         calculation, psi, eigenvalues, density, result.becsum,
         born_charges=born_charges, keep_internals=True, verbose=verbose,
-        **response_options,
+        streamed_internals=walked, **response_options,
     )
+    streamed = field.internals.get("field")
+    if streamed is not None:
+        if not (field.converged or allow_unconverged):
+            raise ValueError(
+                "the electric-field response did not converge, and a third "
+                "derivative of a diverged first-order solution is wrong at "
+                "first order rather than at second: raise max_iterations, lower "
+                "alpha_mix, or pass allow_unconverged=True for a diagnostic run"
+            )
+        v_scf = field.internals["v_scf"]
+        field = replace(field, internals=None)
+        tensors, history, phonon_converged = _walked_raman(
+            calculation, streamed, v_scf, psi, eigenvalues, density,
+            result.becsum, verbose, response_options)
+        if not (phonon_converged or allow_unconverged):
+            raise ValueError(
+                "the displacement response did not converge; see the electric "
+                "field's message above for why that is fatal here"
+            )
+        return _raman_result(calculation, tensors, field, None, history,
+                             phonon_converged)
     field, solver, v_scf, b, u, stored = field_blocks(field)
     # **Handed over unprojected.** ``F`` projects both itself, and with the
     # *right* projector for each: a state takes ``1 - sum |psi><psi| S`` and a
@@ -511,6 +544,17 @@ def raman_tensors(
     # validated on -- :meth:`~defumat.scf.driver.Calculation.symmetrize_atom_cartesian_tensor`
     # returns its argument when the run set ``nosym``. On a wedge it is what
     # completes the sum (module docstring).
+    return _raman_result(
+        calculation, tensors, field,
+        None if not keep_internals else DisplacementResponse(
+            dpsi=dpsi, drho=drho, history=history, converged=phonon_converged,
+        ),
+        history, phonon_converged)
+
+
+def _raman_result(calculation, tensors, field, displacement, history,
+                  phonon_converged) -> RamanTensors:
+    """The assembled tensors averaged and wrapped, for either route."""
     tensors = calculation.symmetrize_atom_cartesian_tensor(tensors)
     volume = float(calculation.system.cell.volume)
     return RamanTensors(
@@ -519,9 +563,55 @@ def raman_tensors(
         epsilon=np.asarray(field.epsilon),
         translational_residue=translational_residue(tensors),
         field=field,
-        displacement=None if not keep_internals else DisplacementResponse(
-            dpsi=dpsi, drho=drho, history=history, converged=phonon_converged,
-        ),
+        displacement=displacement,
         phonon_history=history,
         converged=bool(field.converged and phonon_converged),
     )
+
+
+def _walked_raman(calculation, streamed, v_scf, psi, eigenvalues, density,
+                  becsum, verbose, response_options):
+    """``(tensors, history, converged)`` with the k axis walked.
+
+    The displacement response is the Gamma phonon's walked stages
+    (:class:`~defumat.response.chunked_phonon.StreamedDisplacements`, every
+    atom, and :func:`~defumat.response.phonon.screening_loop`) without its
+    assembly, on the field response's solver; ``ort`` is rebuilt from the
+    overlap derivatives it keeps; and each column is
+    :func:`~defumat.response.chunked_third.walked_susceptibility_derivative`
+    along the displacement, with ``P_c`` applied to ``dpsi`` before ``ort`` is
+    added, as :func:`susceptibility_displacement_derivative` does.
+    """
+    from defumat.response.chunked_phonon import StreamedDisplacements
+    from defumat.response.chunked_third import walked_susceptibility_derivative
+    from defumat.response.phonon import screening_loop
+
+    solver = streamed.solver
+    positions = jnp.asarray(calculation.system.structure.positions)
+    nat = int(positions.shape[0])
+    weights, _ = calculation.occupations(eigenvalues)
+    displacements = StreamedDisplacements(
+        calculation, solver, v_scf, positions, tuple(range(nat)), psi,
+        eigenvalues, jnp.asarray(weights), density, becsum)
+    displacements.prepare()
+    dpsi, drho, history, _, converged, _ = screening_loop(
+        calculation, displacements, density, positions=positions,
+        becsumort=displacements.becsumort, drhous=displacements.drhous,
+        verbose=verbose, **response_options)
+    occupied = np.asarray(solver.psi)
+    tangents = []
+    for atom in range(nat):
+        for cart in range(3):
+            ort = None
+            if displacements.overlaps is not None:
+                ort = -0.5 * np.einsum("skmg,skmn->skng", occupied,
+                                       displacements.overlaps[atom, cart])
+            dx = np.zeros(positions.shape)
+            dx[atom, cart] = 1.0
+            tangents.append((jnp.asarray(dx, dtype=positions.dtype),
+                             dpsi[atom, cart], ort, drho[atom, cart]))
+    columns = walked_susceptibility_derivative(
+        calculation, streamed, density, "positions", positions, tangents,
+        project=True, verbose=verbose)
+    tensors = np.stack(columns).reshape((nat, 3, 3, 3))
+    return tensors, history, converged
