@@ -44,7 +44,9 @@ from defumat.basis.fft import (
     g_to_r, gather_from_box, r_to_sticks, sticks_local, sticks_to_r,
 )
 from defumat.batching import map_bands
-from defumat.hamiltonian.operator import conjugated_contraction, smallest_sphere
+from defumat.hamiltonian.operator import (
+    block_diagonal_form, conjugated_contraction, smallest_sphere,
+)
 from defumat.pseudo.projectors import Projectors
 
 __all__ = ["SpinorHamiltonian", "spin_multiply"]
@@ -474,9 +476,11 @@ class SpinorHamiltonian(eqx.Module):
             for spin, row in enumerate(rows):
                 vkb = self.projectors.at_k(row)
                 d = self.deeq[spin, spin].astype(self.dtype)
-                blocks[spin] = blocks[spin] + jnp.real(
-                    jnp.einsum("gi,ij,gj->g", vkb, d, vkb.conj())
-                )
+                # ``vkb D conj(vkb)``, the conjugate on the right as
+                # ``usnldiag_nc`` has it: for a complex Hermitian ``D`` its
+                # real part is not the left-conjugated form's.
+                blocks[spin] = blocks[spin] + jnp.real(block_diagonal_form(
+                    vkb, d, vkb.conj(), self.projectors.atom_of_channel))
         return jnp.concatenate(
             [jnp.where(self.mask[row], b, 0.0) for row, b in zip(rows, blocks)]
         )
@@ -489,7 +493,8 @@ class SpinorHamiltonian(eqx.Module):
         for spin, row in enumerate(self._rows(ik)):
             vkb = self.projectors.at_k(row)
             q = self.qq[spin, spin].astype(self.dtype)
-            value = 1.0 + jnp.real(jnp.einsum("gi,ij,gj->g", vkb, q, vkb.conj()))
+            value = 1.0 + jnp.real(block_diagonal_form(
+                vkb, q, vkb.conj(), self.projectors.atom_of_channel))
             blocks.append(jnp.where(self.mask[row], value, 0.0))
         return jnp.concatenate(blocks)
 

@@ -32,6 +32,7 @@ when there is not.
 
 from __future__ import annotations
 
+import functools
 import math
 
 import equinox as eqx
@@ -84,6 +85,68 @@ def conjugated_contraction(projectors, states, subscripts: str) -> jnp.ndarray:
     if math.prod(states.shape) < math.prod(projectors.shape):
         return jnp.einsum(subscripts, projectors, states.conj()).conj()
     return jnp.einsum(subscripts, projectors.conj(), states)
+
+
+@functools.lru_cache(maxsize=64)
+def atom_blocks(atom_of_channel: tuple[int, ...]) -> tuple[np.ndarray, ...]:
+    """The projector channels grouped by atom: one ``(n_atoms, nh)`` index array per ``nh``.
+
+    Row ``a`` of a group lists the channels of one atom, in order, and the
+    atoms of one group are those with the same number of channels, so each
+    group is one batched block of a matrix that is block-diagonal over atoms.
+    Host arithmetic on the static ``atom_of_channel``, cached on it.
+    """
+    channels: dict[int, list[int]] = {}
+    for channel, atom in enumerate(atom_of_channel):
+        channels.setdefault(atom, []).append(channel)
+    groups: dict[int, list[list[int]]] = {}
+    for indices in channels.values():
+        groups.setdefault(len(indices), []).append(indices)
+    return tuple(np.asarray(group, dtype=np.int64) for group in groups.values())
+
+
+def block_diagonal_form(left, matrix, right, atom_of_channel) -> jnp.ndarray:
+    """``sum_ij left_gi M_ij right_gj`` for an ``M`` that is block-diagonal over atoms.
+
+    ``left`` and ``right`` are ``(..., nkb)``, one column per projector channel,
+    and the result is ``(...)``: the diagonal ``<k+G|sum |beta> M <beta||k+G>``
+    a preconditioner is built from (``usnldiag``), with the side that carries
+    the conjugate left to the caller, since the spinor operator's is the other
+    one.
+
+    **Contracted block by block over atoms** (``OPEN.md`` Part III M5). As a
+    dense ``(nkb, nkb)`` contraction, ``einsum("gi,ij,gj->g")`` multiplies
+    ``nat`` times more zeros than entries and materialises an ``(npwx, nkb)``
+    intermediate before it reduces; here every atom's channels meet only that
+    atom's block, ``npwx nkb nh`` products against ``npwx nkb^2``, and the
+    products are written as one broadcast and one sum so that XLA fuses them
+    into a single reduction with no intermediate at all. A batched
+    ``einsum("gai,aij,gaj->g")`` would save the flops and keep the buffer, since
+    a dot is never fused on a CPU: the compiled Davidson of ``si8-us-1k`` holds
+    8,373,024 temp bytes with the dense form, 8,010,784 with that one and
+    6,490,656 with this. The order of the sum is not the dense form's, so the
+    result moves at round-off: 6e-14 Ry in the total energy at most on
+    ``si8-us-1k``, ``si8-paw-1k``, ``si16-1k-ecut30`` and ``pt-so-1k``, with
+    every per-k Davidson step count unchanged.
+    """
+    total = None
+    for index in atom_blocks(tuple(atom_of_channel)):
+        n_atoms, nh = index.shape
+        flat = index.reshape(-1)
+        start = int(flat[0])
+        if np.array_equal(flat, np.arange(start, start + flat.size)):
+            columns_left = left[..., start:start + flat.size]
+            columns_right = right[..., start:start + flat.size]
+        else:
+            columns_left = jnp.take(left, flat, axis=-1)
+            columns_right = jnp.take(right, flat, axis=-1)
+        columns_left = columns_left.reshape(left.shape[:-1] + (n_atoms, nh))
+        columns_right = columns_right.reshape(right.shape[:-1] + (n_atoms, nh))
+        blocks = matrix[index[:, :, None], index[:, None, :]]
+        term = jnp.sum(columns_left[..., :, :, None] * blocks
+                       * columns_right[..., :, None, :], axis=(-3, -2, -1))
+        total = term if total is None else total + term
+    return total
 
 
 class Hamiltonian(eqx.Module):
@@ -341,7 +404,8 @@ class Hamiltonian(eqx.Module):
             return jnp.where(self.mask[ik], 1.0, 0.0)
         vkb = self.projectors.at_k(ik)
         qq = self.projectors.qq.astype(vkb.dtype)
-        diagonal = 1.0 + jnp.real(jnp.einsum("gi,ij,gj->g", vkb.conj(), qq, vkb))
+        diagonal = 1.0 + jnp.real(block_diagonal_form(
+            vkb.conj(), qq, vkb, self.projectors.atom_of_channel))
         return jnp.where(self.mask[ik], diagonal, 0.0)
 
     def _local(self, psi: jnp.ndarray, ik: int) -> jnp.ndarray:
@@ -434,9 +498,8 @@ class Hamiltonian(eqx.Module):
         if self.projectors.nkb:
             vkb = self.projectors.at_k(ik)
             dij = self.coefficients.astype(vkb.dtype)
-            diagonal = diagonal + jnp.real(
-                jnp.einsum("gi,ij,gj->g", vkb.conj(), dij, vkb)
-            )
+            diagonal = diagonal + jnp.real(block_diagonal_form(
+                vkb.conj(), dij, vkb, self.projectors.atom_of_channel))
         return jnp.where(self.mask[ik], diagonal, 0.0)
 
     def overlap_matrix(self, ik: int) -> jnp.ndarray:
