@@ -17,7 +17,14 @@ the atoms ``--phonon-atoms`` names (the first by default), which is the
 dynamical matrix's ``3 nat`` perturbations cut to three; a subset needs a
 ``nosym`` input. ``phonon_q`` adds ``get_phonons_at_q(q=...)`` at the crystal
 wavevector ``--q`` (``(1/2, 0, 0)`` by default), every atom, which needs a
-``nosym`` norm-conserving input with no core charge.
+``nosym`` norm-conserving input with no core charge. ``piezo`` adds
+``get_piezoelectric_tensor()``, the default differentiated route, with the
+ultrasoft mesh refusal and the k-mesh warning lifted so that a coarse mesh can be
+measured (``allow_a_coarse_mesh``, ``kmesh_warning``); it needs a nonpolar crystal
+and an input the strain derivative admits (``alas-piezo.in``). ``strain``
+adds ``get_strain_response()``, the six strains' self-consistent response, and
+``elastic`` adds ``get_elastic_constants()`` on top of it, which admits a
+norm-conserving dataset without symmetry only.
 
     python3 tools/gpu/response_memory.py benchmarks/si8-ecut20-nosym-k3.in \\
         --grids 3 4 --stages scf epsilon born --k-batch 1 --json out.json
@@ -37,7 +44,8 @@ import subprocess
 import sys
 import time
 
-STAGES = ("scf", "epsilon", "born", "phonon", "phonon_q")
+STAGES = ("scf", "epsilon", "born", "phonon", "phonon_q", "piezo", "strain",
+          "elastic")
 
 
 def main() -> int:
@@ -129,7 +137,26 @@ def _measure(args, grid: int, stage: str) -> dict:
             "scf_s": round(scf_seconds, 2),
             "energy": float(result.total_energy),
         }
-        if stage == "phonon_q":
+        if stage in ("strain", "elastic"):
+            start = time.perf_counter()
+            response = calculator.get_strain_response()
+            row["response_s"] = round(time.perf_counter() - start, 2)
+            row["drho_00_max"] = round(float(np.abs(np.asarray(response.drho[0, 0])).max()), 10)
+            row["cg_average"] = round(float(response.average_iterations), 3)
+            if stage == "elastic":
+                start = time.perf_counter()
+                constants = calculator.get_elastic_constants()
+                row["elastic_s"] = round(time.perf_counter() - start, 2)
+                row["c11_GPa"] = round(float(constants.voigt[0, 0]), 6)
+                row["c44_GPa"] = round(float(constants.voigt[3, 3]), 6)
+        elif stage == "piezo":
+            start = time.perf_counter()
+            tensor = calculator.get_piezoelectric_tensor(
+                allow_a_coarse_mesh=True, kmesh_warning=False)
+            row["response_s"] = round(time.perf_counter() - start, 2)
+            row["e14"] = round(float(tensor.e14), 10)
+            row["epsilon"] = round(float(tensor.dielectric.isotropic), 9)
+        elif stage == "phonon_q":
             start = time.perf_counter()
             phonons = calculator.get_phonons_at_q(q=tuple(args.q))
             row["response_s"] = round(time.perf_counter() - start, 2)

@@ -319,8 +319,17 @@ def field_blocks(field):
     return field, solver, v_scf, b, u, stored
 
 
-def refined_states(calculation, result, ethr: float = REFINE_ETHR):
+def refined_states(calculation, result, ethr: float = REFINE_ETHR,
+                   stream: bool = False):
     """Re-diagonalise at the converged density -- ``(eigenvalues, psi)``.
+
+    ``stream`` solves a chunk at a time into a host store
+    (:func:`~defumat.scf.streaming.stream_diagonalize` on a copy of the SCF's
+    states), so the whole set never lands on the device; ``psi`` then comes back
+    as that numpy store. Only a consumer that walks the store itself may ask for
+    it -- the piezoelectric tensor's streamed route
+    (:func:`~defumat.response.piezo.piezoelectric_tensor`). Every other caller
+    indexes ``psi`` with a traced k-point, which a host store refuses.
 
     **This is not a tidying step and leaving it out is silent.** The
     wavefunctions an SCF returns are eigenvectors of the Hamiltonian built from
@@ -343,9 +352,18 @@ def refined_states(calculation, result, ethr: float = REFINE_ETHR):
     nbnd = result.wavefunctions.shape[2]
     v_scf = calculation.potential(density).v_scf
     _, ddd_paw = calculation.onecenter(result.becsum)
+    hamiltonians = calculation.hamiltonian(v_scf, ddd_paw)
+    if stream:
+        from defumat.scf.streaming import stream_diagonalize
+
+        # A copy, since the solve overwrites its store in place and the SCF's
+        # states belong to the cached result.
+        store = np.array(result.wavefunctions)
+        eigenvalues, _, _ = stream_diagonalize(calculation, hamiltonians, nbnd,
+                                               store, ethr)
+        return jnp.asarray(eigenvalues), store
     eigenvalues, psi = calculation.diagonalize(
-        calculation.hamiltonian(v_scf, ddd_paw), nbnd,
-        result.wavefunctions, ethr,
+        hamiltonians, nbnd, result.wavefunctions, ethr,
     )
     return jnp.asarray(eigenvalues), psi
 

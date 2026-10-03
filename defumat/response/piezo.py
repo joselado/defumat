@@ -99,7 +99,13 @@ charge's 1.13 on the same field response, and 6.4 s against 0.8. It does **not**
 move with ``k_batch``, because what the tape holds is not the k axis.
 :func:`piezoelectric_zstar_eu_style` is the same number for 4.0 s and no extra
 memory, and on a cell where this one does not fit it is the route to reach for.
-`PERFORMANCE.md` carries the table.
+`PERFORMANCE.md` carries the table. **Where the field response walks the k axis
+a chunk at a time** (memory mode on a card, a streamed store; ``efield._streams``)
+this route walks it too (:meth:`~defumat.response.chunked.StreamedField.
+piezoelectric`), and its tape is one chunk's: on two-atom ultrasoft AlAs on the
+RTX A2000 the call no longer grows with the mesh, 769 MB at 64 k-points against
+1350 before and an SCF of 178 (`PERFORMANCE.md`, "The piezoelectric tensor a
+k-chunk at a time").
 
 **Elk is the only established code with a piezoelectric tensor and it takes the
 expensive route.** ``piezoelt.f90`` (task 380) runs a full ground state per
@@ -1491,17 +1497,64 @@ def piezoelectric_tensor(
     if method == "zstar_eu":
         require_a_norm_conserving_transcription(calculation)
 
-    eigenvalues, psi = refined_states(calculation, result)
-    density = jnp.asarray(result.density)
+    # **The route is decided before the states are touched**, by the field
+    # response's own rule: where it walks the k axis a chunk at a time, the
+    # differentiated route walks it too (:meth:`~defumat.response.chunked.
+    # StreamedField.piezoelectric`) and the re-diagonalisation writes into a host
+    # store rather than stacking the set onto the device. The transcribed route
+    # reads the field's stores whole and keeps the whole-k route.
+    from defumat.response.efield import _streams
+
+    streamed = method == "autodiff" and _streams(
+        calculation, result.wavefunctions, False, what="the piezoelectric tensor")
+    eigenvalues, psi = refined_states(calculation, result, stream=streamed)
+    e, field = _piezoelectric_from_states(
+        calculation, psi, eigenvalues, jnp.asarray(result.density), result.becsum,
+        method=method, verbose=verbose, allow_unconverged=allow_unconverged,
+        **response_options,
+    )
+    nk, grid = _kmesh_of(calculation)
+    return PiezoelectricTensor(
+        e=e,
+        voigt=to_voigt(e) * E_BOHR2_TO_C_M2,
+        dielectric=field,
+        converged=bool(field.converged),
+        nk=nk,
+        grid=grid,
+        kmesh_drift=kmesh_drift,
+    )
+
+
+def _piezoelectric_from_states(calculation, psi, eigenvalues, density, becsum,
+                               method="autodiff", verbose=False,
+                               allow_unconverged=False, **response_options):
+    """``(e, field)`` from re-diagonalised states: the field response and the assembly.
+
+    The states decide the route: a host store walks the k axis a chunk at a time
+    (the differentiated route only), a device array takes the whole-k route. So
+    the same states handed in both ways are the identity
+    ``tests/regression/test_streamed_piezo.py`` holds the walk to.
+    """
     field = dielectric_tensor(
-        calculation, psi, eigenvalues, density, result.becsum,
+        calculation, psi, eigenvalues, density, becsum,
         born_charges=False, keep_internals=True, verbose=verbose,
+        streamed_internals=(method == "autodiff"),
         **response_options,
     )
     if not allow_unconverged:
         require_converged_responses(field, None)
 
     internals = field.internals
+    if "field" in internals:
+        # The walked route: the field's stores are in host memory and every
+        # pass is one chunk's. Its column is the whole route's below, term for
+        # term, before the ``-1/Omega`` and the rank-3 average.
+        columns = internals["field"].piezoelectric(
+            internals["dvscf"], internals["onecentre"], psi, eigenvalues,
+            internals["weights"], density, becsum,
+        )
+        volume = calculation.system.cell.volume
+        return calculation.symmetrize_cartesian_tensor(-columns / volume), field
     # The three callables the last Sternheimer solve was driven by, rebuilt at
     # the converged ``dV_scf`` exactly as
     # :func:`~defumat.response.efield.dielectric_tensor` rebuilds them for the
@@ -1558,17 +1611,8 @@ def piezoelectric_tensor(
     else:
         e = clamped_ion_piezoelectric(
             calculation, psi, eigenvalues, jnp.asarray(internals["weights"]),
-            density, result.becsum, internals["dpsi"], internals["solver"].nocc,
+            density, becsum, internals["dpsi"], internals["solver"].nocc,
             solver=internals["solver"], field_perturbations=_perturbations,
             commutators=internals["commutators"],
         )
-    nk, grid = _kmesh_of(calculation)
-    return PiezoelectricTensor(
-        e=e,
-        voigt=to_voigt(e) * E_BOHR2_TO_C_M2,
-        dielectric=field,
-        converged=bool(field.converged),
-        nk=nk,
-        grid=grid,
-        kmesh_drift=kmesh_drift,
-    )
+    return e, field

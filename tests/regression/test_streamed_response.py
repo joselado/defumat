@@ -49,11 +49,16 @@ CASES = [
     ("alas-epsilon-us-unshifted-nosym", 3),   # 8 k-points: chunks 3, 3, 2 + 1 pad
     ("si-epsilon", 4),                         # 10 k-points: 4, 4, 2 + 2 pad
     ("si-epsilon-paw", 3),
+    # The wedge of the first cell, 3 k-points in chunks 2, 1 + 1 pad: the one
+    # case here where the full-zone shift of the field's response is not zero
+    # and is not cancelled by symmetry (a polar crystal, an augmented dataset),
+    # so the step between the Born walks is exercised where it can be wrong.
+    ("alas-epsilon-us-unshifted", 2),
 ]
 
-#: Measured on the three cells: the dielectric constant 5e-14, 2.7e-15 and
-#: 5.3e-15 apart; the Born charges 3.5e-13, 8.8e-15 and 4.4e-15; the induced
-#: density 8e-15, 0 and 1.2e-15.
+#: Measured on the four cells: the dielectric constant 5e-14, 2.7e-15, 5.3e-15
+#: and 5.7e-14 apart; the Born charges 3.5e-13, 8.8e-15, 4.4e-15 and 1.6e-13;
+#: the induced density 8e-15, 0 and 1.2e-15 on the first three.
 TOLERANCE = 1e-11
 
 

@@ -711,9 +711,19 @@ def _constraint_sandwich(calculation, positions, occupied, weights, commutator):
     k-chunk at a time adds the chunks' derivatives
     (:mod:`defumat.response.chunked`).
     """
-    batch = calculation.k_batch
-    noncolin = bool(calculation.noncolin)
-    moved = calculation.at_positions(positions)
+    return constraint_sandwich_at(calculation.at_positions(positions), occupied,
+                                  weights, commutator)
+
+
+def constraint_sandwich_at(moved, occupied, weights, commutator):
+    """:func:`_constraint_sandwich` on an already-moved calculation.
+
+    The mover is the caller's: ``at_positions`` for the Born charges,
+    ``at_strain`` for the piezoelectric tensor's walked route, where it is the
+    per-chunk body of :func:`~defumat.response.piezo.constraint_strain_term`.
+    """
+    batch = moved.k_batch
+    noncolin = bool(moved.noncolin)
     vkb = moved.projectors.vkb
     npwx = vkb.shape[1]
     # ``S`` is the metric, so a spinor takes ``qq_so`` here for the reason

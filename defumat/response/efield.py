@@ -227,10 +227,19 @@ def dielectric_tensor(
     born_charges: bool = True,
     keep_internals: bool = False,
     verbose: bool = False,
+    streamed_internals: bool = False,
 ) -> DielectricTensor:
     """``epsilon_infinity`` and the Born charges for a converged insulator.
 
     Args:
+        streamed_internals: the caller reads the internals of a walked response,
+            so ``keep_internals`` does not force the whole-k route. Where the
+            route walks, ``internals["field"]`` is then the
+            :class:`~defumat.response.chunked.StreamedField` with its stores in
+            host memory and the whole-k keys ``bare``, ``dpsi`` and
+            ``commutators`` are absent, so a consumer written for device arrays
+            fails by name rather than stacking the stores onto the device. Only
+            the piezoelectric tensor's differentiated route asks for it.
         calculation: the :class:`~defumat.scf.driver.Calculation` the states
             belong to. The normal case is an ordinary symmetry-reduced wedge,
             which the response is symmetrised over; a ``nosym`` run is accepted
@@ -300,7 +309,8 @@ def dielectric_tensor(
     # memory, memory mode on a card) walked a k-chunk at a time stays where it
     # is (:mod:`defumat.response.chunked`), and ``jnp.asarray`` of it is the
     # whole set back on the device.
-    streamed = _streams(calculation, wavefunctions, keep_internals)
+    streamed = _streams(calculation, wavefunctions,
+                        keep_internals and not streamed_internals)
     if not streamed:
         wavefunctions = jnp.asarray(wavefunctions)
         if wavefunctions.ndim == 3:
@@ -405,11 +415,15 @@ def dielectric_tensor(
     internals = None
     if keep_internals:
         internals = {
-            "calculation": calculation, "solver": solver, "bare": field.bare,
-            "dpsi": field.dpsi, "dvscf": dvscf, "v_scf": potential.v_scf,
-            "onecentre": onecentre, "weights": weights, "nocc": nocc,
-            "commutators": field.commutators,
+            "calculation": calculation, "solver": solver, "dvscf": dvscf,
+            "v_scf": potential.v_scf, "onecentre": onecentre, "weights": weights,
+            "nocc": nocc,
         }
+        if streamed:
+            internals["field"] = field
+        else:
+            internals.update(bare=field.bare, dpsi=field.dpsi,
+                             commutators=field.commutators)
     return DielectricTensor(
         epsilon=epsilon,
         born_charges=charges,
@@ -435,7 +449,10 @@ def _streams(calculation, wavefunctions, keep_internals: bool,
 
     * ``keep_internals``: the third derivatives read ``bare``, ``dpsi`` and the
       solver as device arrays (:mod:`defumat.response.electrostriction`,
-      :mod:`defumat.response.nonlinear`);
+      :mod:`defumat.response.nonlinear`). The piezoelectric tensor's
+      differentiated route does not, and asks for the walk with
+      ``streamed_internals`` (:func:`dielectric_tensor`), so its caller passes
+      ``keep_internals and not streamed_internals`` here;
     * a calculation carrying ``_kcart``, which ``at_strain`` records because
       its ``KPoints`` do not move with the cell: a chunk's velocity operator
       would be built at the unstrained k-points;
