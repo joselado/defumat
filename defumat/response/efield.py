@@ -165,7 +165,12 @@ ALPHA_MIX = 0.7
 #: fourteen ``.ph.in`` references committed here ask for 1e-14, so a default run
 #: is converged the way the reference it is compared with was. Until 2026-10-03
 #: the test was the raw sum, eleven decades tighter on the AlAs spinor cell, and
-#: that was the whole of the factor of two in passes against ``ph.x``.
+#: that was the whole of the factor of two in passes against ``ph.x``. What it
+#: admits at the threshold is an RMS residual per real of ``sqrt(ndimtot npert
+#: tr2)``: 3.8e-5 Ry on silicon's 20^3 grid and 1.8e-4 on O2's 45^3 vacuum box at
+#: ``nspin = 2``, where a residue-sized quantity (a homonuclear molecule's raw
+#: Born charge) can be a per cent short at the default, as it can be in ``ph.x``;
+#: such a quantity wants a smaller ``tr2`` (``PLAN.md`` P127).
 TR2 = 1.0e-14
 
 MAX_ITERATIONS = 40

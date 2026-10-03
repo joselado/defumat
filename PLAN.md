@@ -23460,7 +23460,7 @@ to 1.20x a run, and memory mode 1.97x speed mode at 64 atoms, which is the new o
 measures and which needs a submission. Record: `PERFORMANCE.md`, "A k-chunk sized to the card" and
 "The band side in single precision"; guide: `docs/features.tex`, the batching section.
 
-### P127 -- The response converges where `ph.x`'s does: `ph.x`'s `dr2`, its CG schedule and a warm start. ✅ DONE for the field, the phonon at `Gamma` and at `q`, and the strain; the default `tr2` on a vacuum cell is open (below), and the timings against `ph.x` are owed.
+### P127 -- The response converges where `ph.x`'s does: `ph.x`'s `dr2`, its CG schedule and a warm start. ✅ DONE for the field, the phonon at `Gamma` and at `q`, and the strain; the timings against `ph.x` are owed.
 
 **What was wrong.** The four self-consistent response loops (`response/efield.py`, `phonon.py`,
 `strain.py`, `phononq.py`) stopped on the raw `sum((induced - dvscf)**2)` over the grid, against
@@ -23525,5 +23525,26 @@ pass for pass (4.71e-8, 1.85e-7, 1.35e-9, 2.31e-11, 3.18e-12, 1.43e-14 against 4
 so it stops there while `ph.x` ran an eighth pass to 4e-17; at pass 7 `Z*_zz` is 0.19766 where it converges
 to 0.20042 and `ph.x` prints 0.20023. So a fixed `tr2` in `ph.x`'s units can leave a vacuum cell's Born
 charge a per cent short, as it can `ph.x`'s (the `1/N^2` makes the test weak where `N` is large), and the
-reference agrees only because `ph.x` happened to need one more pass. Whether the default stays `ph.x`'s
-1e-14 is put to a fable subagent; the decision and what it rests on go here.
+reference agrees only because `ph.x` happened to need one more pass. **Decided by a fable subagent (the
+user's delegation): the default stays `ph.x`'s 1e-14**, and the O2 test names the `tr2` its reference
+reached:
+
+| `tr2` | passes | last passes | `Z*_zz` | largest deviation from `ph.x` |
+|---|---|---|---|---|
+| 1e-14 (the default) | 7 | 1.43e-14, 4.56e-15 | 0.19766 | 2.57e-3 |
+| 1e-16 | 8 (`ph.x`'s count) | 4.557e-15, 6.523e-17 | 0.200082 | 1.51e-4 |
+| 1e-18 | 10 | 1.768e-18, 8.989e-21 | 0.200414 | 1.84e-4 |
+| 1e-24, CG fixed at 1e-12 | 14 | | 0.200415 | 1.85e-4 |
+
+1.84e-4 at 1e-18 is `ph.x`'s own distance from converged (it prints 0.20023), and 1e-16 reads closer only
+because both codes stop short in the same direction at about the same `dr2`; 1e-16 is the test's value
+because it is the convergence `ph.x` reached, not because its number is smaller. What `ph.x`'s criterion
+admits at the threshold is an RMS residual per real of `sqrt(ndimtot npert tr2)`: 3.8e-5 Ry on silicon's
+20^3 grid (`ndimtot` 48000) and 1.8e-4 on O2's 45^3 box at `nspin = 2` (1,093,500), and a homonuclear
+molecule's raw Born charge is a residue (0.2 left of an electronic 5.8 against an ionic 6), which is why a
+per cent shows there and 6e-7 on silicon's epsilon. A tighter default was rejected because it costs a pass
+where `ph.x` takes none (`si-epsilon`'s pass 5 reads 4.94e-16, above 1e-16) and loses the pass-for-pass
+agreement; a grid-independent normalisation because `tr2` would stop meaning `tr2_ph`. Pass counts at the
+default are where a trajectory lands, in `ph.x` as here: its own references hover over the threshold
+before dropping under it (`si10-epsilon` three passes at 1.51e-14, 1.46e-14, 1.46e-14 before 1.8e-17;
+`al2-metal` 2.9e-14, 1.68e-14 before 2.15e-16), so no comparison test may rest on one.

@@ -2388,7 +2388,13 @@ representation. The default, $10^{-14}$, is what the committed \code{ph.x}
 references use. Two things come with \code{ph.x}'s formula: a fixed \code{tr2}
 admits a larger residual per grid point on a finer grid, and on an fcc cell the
 number in \code{history} is twice \code{ph.x}'s, because \code{ph.x} perturbs
-along the lattice vectors and this code along Cartesian axes. The CG threshold
+along the lattice vectors and this code along Cartesian axes. What the criterion
+admits at the threshold is a residual of $\sqrt{N_{\mathrm{tot}}\,n_{\mathrm{pert}}\,
+\mathtt{tr2}}$ per real in the RMS, $3.8\times10^{-5}$~Ry on silicon's $20^3$ grid
+and $1.8\times10^{-4}$~Ry on an O$_2$ molecule's $45^3$ vacuum box at
+\code{nspin = 2}, so a quantity that is a small residue of large terms, such as
+the raw Born charge of a homonuclear molecule, can be a per cent short at the
+default, as it can be in \code{ph.x}; ask for a smaller \code{tr2} there. The CG threshold
 follows \code{ph.x}'s schedule, $10^{-2}$ on the first pass and
 $\min\big(0.1\sqrt{|\Delta\Delta V_{\mathrm{scf}}|^2},\,10^{-2}\big)$ after, and
 each solve starts from the previous pass's solution. A number for
