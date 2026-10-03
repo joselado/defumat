@@ -69,7 +69,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.scf.continuation import _axis, _collinear_axis
-from defumat.batching import sum_k
+from defumat.batching import sum_k, upload
 from defumat.eager import compiled, compiled_function
 
 __all__ = [
@@ -182,7 +182,7 @@ def _band_energy(calculation, states, weights, density, becsum=()):
     """``sum_n w_n <psi_n | H[density, becsum] | psi_n>`` over every k-point at once."""
     hamiltonian = _hamiltonian_of(calculation, density, becsum)
 
-    psi = jnp.asarray(states)[0]
+    psi = upload(states)[0]
     occupation = jnp.asarray(weights)[0]
 
     def one(ik):
@@ -234,7 +234,7 @@ def _chunked_value_and_grad(calculation, states, weights, build, parameter,
     k-point at **zero weight**, so all chunks share one shape and therefore one
     compilation, and the padding contributes nothing to either number.
     """
-    psi = jnp.asarray(states)[0]
+    psi = upload(states)[0]
     occupation = jnp.asarray(weights)[0]
     nk = int(psi.shape[0])
 

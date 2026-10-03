@@ -20,6 +20,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 import numpy as np
 
+from defumat.batching import upload
 from defumat.response.conductivity import (
     OpticalConductivity,
     optical_conductivity,
@@ -153,7 +154,7 @@ def run_conductivity(
                np.asarray(eigenvalues)[..., nbnd - 1])
     )
     eigenvalues = eigenvalues[..., :nbnd]
-    wavefunctions = jnp.asarray(wavefunctions[..., :nbnd, :])
+    wavefunctions = upload(wavefunctions[..., :nbnd, :])
     # ``field``/``field_scale`` reach the states above and must reach the
     # potential too: accepting an argument and dropping it half way is how the
     # input's field gets rebuilt at full strength over a ground state that

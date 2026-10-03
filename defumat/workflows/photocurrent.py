@@ -26,6 +26,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 import numpy as np
 
+from defumat.batching import upload
 from defumat.response.photocurrent import (
     ShiftCurrent,
     require_a_shift_current_regime,
@@ -125,7 +126,7 @@ def run_shift_current(
                - np.asarray(eigenvalues)[..., nbnd - 1])
     )
     eigenvalues = eigenvalues[..., :nbnd]
-    wavefunctions = jnp.asarray(wavefunctions[..., :nbnd, :])
+    wavefunctions = upload(wavefunctions[..., :nbnd, :])
     potential = calculation.potential(jnp.asarray(density))
 
     return shift_current(

@@ -400,7 +400,9 @@ def davidson_eigensolver(
     """The ``nbnd`` lowest eigenpairs at k-point ``ik``, iteratively.
 
     Args:
-        hamiltonian: the operator; only ``apply`` and ``diagonal`` are used.
+        hamiltonian: the operator: ``apply_projected`` for every block the
+            subspace grows by, ``s_projections`` and ``s_correction`` for the
+            overlap, and the two diagonals for the preconditioner.
         ik: k-point index. May be traced, so this ``vmap``s over k.
         psi0: ``(nbnd, npwx)`` starting vectors -- normally the previous SCF
             iteration's wavefunctions, which is what makes later iterations
@@ -427,9 +429,10 @@ def davidson_eigensolver(
         return_steps: also return how many Davidson steps the solve took and
             how many bands were still unsettled when it stopped. Both are
             already computed inside the loop -- they are its trip counter and
-            its ``notcnv`` -- so this only widens the return, and it is
-            *static*, read at trace time, so the two-value form compiles to
-            exactly what it did. The count is the number of passes of the
+            its ``notcnv`` -- so this only widens the return. It is *static*,
+            read at trace time, which is why :func:`davidson_eigensolver_all`
+            always asks for the pair and drops it itself: two values of a
+            static argument are two executables. The count is the number of passes of the
             step function, and the initial subspace solve happens outside the
             loop, so a solve that arrives already converged reports 0. Read the
             pair together: a count at ``max_iterations`` with a small
@@ -475,7 +478,9 @@ def davidson_eigensolver(
     # every expression below that touches them is a no-op -- which is how the
     # norm-conserving path stays exactly what it was -- and with a spinor
     # Hamiltonian they carry the spin index folded into their width, so nothing
-    # in this routine has to know how many components a state has.
+    # in this routine has to know how many components a state has. Only the
+    # refresh asks for them alone; a block that ``H`` is applied to gets them
+    # from the same call (``apply_projected``).
     def project(vectors):
         """``<beta|psi>`` and ``q <beta|psi>`` for a block of vectors."""
         return hamiltonian.s_projections(vectors, ik)
@@ -487,8 +492,12 @@ def davidson_eigensolver(
     start = force_real_g0(start, gamma_only)
 
     psi =jnp.zeros((nvecx, ndim), dtype).at[:nbnd].set(start)
-    hpsi = jnp.zeros((nvecx, ndim), dtype).at[:nbnd].set(hamiltonian.apply(start, ik))
-    becp0, becq0 = project(start)
+    # ``H`` and the projections of the starting block from one ``calbec``, as
+    # ``h_psi`` and ``s_psi`` share ``becp`` (:meth:`~defumat.hamiltonian.
+    # operator.Hamiltonian.apply_projected`); the expansion block below does
+    # the same.
+    hstart, becp0, becq0 = hamiltonian.apply_projected(start, ik)
+    hpsi = jnp.zeros((nvecx, ndim), dtype).at[:nbnd].set(hstart)
     nkb = becp0.shape[1]
     becp = jnp.zeros((nvecx, nkb), dtype).at[:nbnd].set(becp0)
     becq = jnp.zeros((nvecx, nkb), dtype).at[:nbnd].set(becq0)
@@ -751,14 +760,18 @@ def davidson_eigensolver(
             and the padding below is their value rather than an approximation
             of it. This is ``cegterg.f90:465``'s ``h_psi_ptr(..., notcnv, ...)``
             under the one shape a ``lax.while_loop`` body is allowed.
+
+            **One ``calbec`` for both**, as ``h_psi`` computes ``becp`` and
+            ``s_psi`` reads it. ``apply`` followed by ``project`` took it twice,
+            on the masked block and on the block as passed, two products XLA
+            cannot merge since their operands are different arrays; the values
+            were equal because :func:`expansion` masked the block already, so
+            the shared one is bit-for-bit what both were.
             """
             if m >= nbnd:
-                h = hamiltonian.apply(correction, ik)
-                bp, bq = project(correction)
-                return h, bp, bq
+                return hamiltonian.apply_projected(correction, ik)
             live = correction[:m]
-            h = hamiltonian.apply(live, ik)
-            bp, bq = project(live)
+            h, bp, bq = hamiltonian.apply_projected(live, ik)
             return (jnp.zeros_like(correction).at[:m].set(h),
                     jnp.zeros((nbnd, bp.shape[1]), bp.dtype).at[:m].set(bp),
                     jnp.zeros((nbnd, bq.shape[1]), bq.dtype).at[:m].set(bq))
@@ -1046,7 +1059,10 @@ def davidson_eigensolver_all(
 
     ``return_steps`` adds the per-k step count and unsettled-band count to the
     return, ``(nk,)`` each. It is off by default so that every existing caller
-    still unpacks two values.
+    still unpacks two values, and it is applied **here, on the host**: the
+    compiled unit returns the pair whatever was asked, so an SCF, which asks,
+    and a residual map or a topology workflow at the same shapes, which do not,
+    run one executable rather than two.
 
     ``psi0_again`` is a callable that returns ``psi0`` afresh, and passing it
     **donates** ``psi0`` to the fast pass: the states are written into its
@@ -1090,9 +1106,20 @@ def davidson_eigensolver_all(
     # exactly as it always has -- ``tools/gpu``'s memory tool and the tests'
     # stand-ins for it are written against that signature.
     chunk = {} if indices is None else {"indices": jnp.asarray(indices)}
+    # **The compiled unit always returns the step counts, and they are dropped
+    # here when they were not asked for** (``OPEN.md`` Part III M6). As a static
+    # argument, ``return_steps`` made ``True`` and ``False`` two compilations of
+    # the whole solver at the same shapes, so a process that ran an SCF, which
+    # asks for them, and then a residual map, a topology workflow or
+    # electrostriction, which do not, compiled Davidson twice. The two counters
+    # are loop carries the solve has anyway, so carrying them out costs two
+    # ``(nk,)`` integer arrays.
+    def wanted(out):
+        return out if return_steps else out[:2]
+
     if not robust_retry:
-        return _every_k(*arguments, robust=False, return_steps=return_steps,
-                        **chunk)
+        return wanted(_every_k(*arguments, robust=False, return_steps=True,
+                               **chunk))
     # Both halves, not just the eigenvalues. A Cholesky factor that has gone
     # non-finite does not necessarily poison every root -- the first regression
     # test written for the 64-atom NaN passed on the *unfixed* code precisely
@@ -1131,12 +1158,12 @@ def davidson_eigensolver_all(
     # retry below starts from instead (see the note above ``arguments``).
     donate = psi0_again is not None and psi0 is not None
     fast = (_every_k_donating if donate else _every_k)(
-        *arguments, robust=False, return_steps=return_steps,
+        *arguments, robust=False, return_steps=True,
         return_finite=True, **chunk)
     fast, per_k = fast[:-1], fast[-1]
     failed = ~np.asarray(per_k)
     if not failed.any():
-        return fast
+        return wanted(fast)
     # Named by their index in the whole set, which on a streamed chunk is not
     # their position in it.
     named = (np.flatnonzero(failed) if indices is None
@@ -1152,16 +1179,15 @@ def davidson_eigensolver_all(
     )
     if donate:
         arguments = (hamiltonian, nbnd, psi0_again(), *arguments[3:])
-    robust = _every_k(*arguments, robust=True, return_steps=return_steps,
-                      **chunk)
+    robust = _every_k(*arguments, robust=True, return_steps=True, **chunk)
     # Keep what the fast route already converged. The robust pass still runs
     # over the whole k-set -- the shapes are static, so it must -- but its
     # answer is taken only where the fast one has none.
     take = jnp.asarray(failed)
-    return tuple(
+    return wanted(tuple(
         jnp.where(take.reshape((-1,) + (1,) * (jnp.ndim(quick) - 1)), sturdy, quick)
         for quick, sturdy in zip(fast, robust)
-    )
+    ))
 
 
 davidson_eigensolver_all.clear_cache = _clear_every_k

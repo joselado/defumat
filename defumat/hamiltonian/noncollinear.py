@@ -257,10 +257,41 @@ class SpinorHamiltonian(eqx.Module):
 
     def apply(self, psi: jnp.ndarray, ik: int) -> jnp.ndarray:
         """``H|psi>`` for ``psi`` of shape ``(..., 2 npwx)``."""
+        return self._applied(psi, self._split(psi, ik), ik)
+
+    def apply_projected(self, psi: jnp.ndarray, ik: int):
+        """``(H|psi>, <beta|psi>, q <beta|psi>)`` from one projection.
+
+        The collinear operator's :meth:`~defumat.hamiltonian.operator.Hamiltonian.apply_projected`,
+        and the same contract: :meth:`apply` and :meth:`s_projections` in one
+        call. **Here it saves nothing in the compiled program**, and it exists
+        so that the solver has one surface: both methods split and mask the
+        block by the same expression before projecting it, so the two
+        projections were already one expression and XLA merged them (the
+        compiled Davidson of ``alas-epsilon-us-soc.in`` holds four products per
+        expansion block either way, 2026-10-03). Writing it once states what
+        the compiler had already found.
+        """
+        if not self.has_overlap:
+            return (self.apply(psi, ik), *self.s_projections(psi, ik))
         components = self._split(psi, ik)
+        becp = self._project(components, ik)
+        becq = jnp.einsum("abij,...bj->...ai", self.qq.astype(self.dtype), becp)
+        return (
+            self._applied(psi, components, ik, becp),
+            becp.reshape(becp.shape[:-2] + (2 * becp.shape[-1],)),
+            becq.reshape(becq.shape[:-2] + (2 * becq.shape[-1],)),
+        )
+
+    def _applied(self, psi: jnp.ndarray, components: jnp.ndarray, ik: int,
+                 becp=None) -> jnp.ndarray:
+        """``H|psi>`` from the split, masked ``components`` of ``psi``.
+
+        ``becp``, when given, is their ``<beta_i|psi^a>``.
+        """
         result = self._pair(self.kinetic, ik) * components
         result = result + self._local(components, ik)
-        result = result + self._nonlocal(components, ik)
+        result = result + self._nonlocal(components, ik, becp)
         result = self._join(jnp.where(self._pair(self.mask, ik), result, 0.0))
         if self.hubbard is not None:
             # Applied to the whole spinor rather than component by component:
@@ -388,15 +419,17 @@ class SpinorHamiltonian(eqx.Module):
         ], axis=-2)
 
 
-    def _nonlocal(self, components: jnp.ndarray, ik: int) -> jnp.ndarray:
+    def _nonlocal(self, components: jnp.ndarray, ik: int, becp=None) -> jnp.ndarray:
         """``sum_{ab,ij} |beta_i a> D^{ab}_ij <beta_j b|psi>``.
 
         ``add_vuspsi_nc``: four matrix products where the collinear case has
         one, and the two off-diagonal ones are what spin-orbit coupling adds.
+        ``becp`` is :meth:`_project` of ``components`` when the caller has it.
         """
         if self.projectors.nkb == 0:
             return jnp.zeros_like(components)
-        becp = self._project(components, ik)
+        if becp is None:
+            becp = self._project(components, ik)
         ps = jnp.einsum("abij,...bj->...ai", self.deeq.astype(self.dtype), becp)
         return self._unproject(ps, ik)
 

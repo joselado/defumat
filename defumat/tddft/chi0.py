@@ -124,7 +124,7 @@ from defumat.basis.fft import g_to_r, r_to_g
 from defumat.basis.gvectors import refuse_gamma_storage
 from defumat.batching import (
     map_axis, map_windows, resolve_k_batch, resolve_pair_batch,
-    resolve_w_batch, sum_k,
+    resolve_w_batch, sum_k, upload,
 )
 from defumat.eager import compiled
 from defumat.response.velocity import VelocityOperator
@@ -453,7 +453,7 @@ def independent_response(
     """
     require_a_sum_over_states_regime(calculation)
 
-    wavefunctions = jnp.asarray(wavefunctions)
+    wavefunctions = upload(wavefunctions)
     if wavefunctions.ndim == 3:
         wavefunctions = wavefunctions[None]
     eigenvalues = jnp.asarray(eigenvalues)

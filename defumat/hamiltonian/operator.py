@@ -235,11 +235,39 @@ class Hamiltonian(eqx.Module):
 
     def apply(self, psi: jnp.ndarray, ik: int) -> jnp.ndarray:
         """``H|psi>`` for ``psi`` of shape ``(..., npwx)``."""
-        psi = jnp.where(self.mask[ik], psi, 0.0)
+        return self._applied(jnp.where(self.mask[ik], psi, 0.0), ik)
 
+    def apply_projected(self, psi: jnp.ndarray, ik: int):
+        """``(H|psi>, <beta|psi>, q <beta|psi>)`` from one ``calbec``.
+
+        What :meth:`apply` and :meth:`s_projections` return, in one call, for
+        the solver that needs both of the same block. ``h_psi`` computes
+        ``becp`` once (``h_psi.f90:231``) and ``s_psi`` reads it
+        (``s_psi.f90:15``); calling the two methods separately computed it
+        twice, once on the masked block inside :meth:`_nonlocal` and once on
+        the block as passed, and XLA cannot merge two products whose operands
+        are different arrays even where their values are equal. Here the
+        nonlocal term and the pair are built from the same ``becp``, taken on
+        the masked block as :meth:`apply` takes it, so ``H|psi>`` is the same
+        expression as :meth:`apply`'s and the pair is :meth:`s_projections`'
+        whenever the block arrives masked, which every Davidson block does.
+
+        Without an augmentation charge the pair is zero-width and nothing is
+        shared: this is :meth:`apply` and :meth:`s_projections` as they were.
+        """
+        if not self.has_overlap:
+            return (self.apply(psi, ik), *self.s_projections(psi, ik))
+        psi = jnp.where(self.mask[ik], psi, 0.0)
+        vkb = self.projectors.at_k(ik)
+        becp = self._becp(psi, vkb)
+        return (self._applied(psi, ik, becp), becp,
+                becp @ self.projectors.qq.astype(vkb.dtype).T)
+
+    def _applied(self, psi: jnp.ndarray, ik: int, becp=None) -> jnp.ndarray:
+        """``H|psi>`` of an already masked block; ``becp`` is its ``<beta|psi>`` if known."""
         result = self.kinetic[ik] * psi
         result = result + self._local(psi, ik)
-        result = result + self._nonlocal(psi, ik)
+        result = result + self._nonlocal(psi, ik, becp)
         if self.hubbard is not None:
             result = result + self.hubbard.apply(psi, ik)
         return jnp.where(self.mask[ik], result, 0.0)
@@ -330,12 +358,13 @@ class Hamiltonian(eqx.Module):
 
         return map_bands(block, psi, batch=self.band_batch)
 
-    def _nonlocal(self, psi: jnp.ndarray, ik: int) -> jnp.ndarray:
-        """``sum_ij |beta_i> D_ij <beta_j|psi>``."""
+    def _nonlocal(self, psi: jnp.ndarray, ik: int, becp=None) -> jnp.ndarray:
+        """``sum_ij |beta_i> D_ij <beta_j|psi>``, from ``becp`` when it is given."""
         if self.projectors.nkb == 0:
             return jnp.zeros_like(psi)
         vkb = self.projectors.at_k(ik)  # (npwx, nkb)
-        becp = self._becp(psi, vkb)  # <beta|psi>
+        if becp is None:
+            becp = self._becp(psi, vkb)  # <beta|psi>
         dij = self.coefficients.astype(vkb.dtype)
         return jnp.einsum("gk,...k->...g", vkb, becp @ dij.T)
 

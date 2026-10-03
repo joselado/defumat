@@ -330,9 +330,12 @@ def _site_density_matrix(calculation, result, projectors, channels):
                 project(0, slice(component * npwx, (component + 1) * npwx)))
         band_weights = [np.asarray(weights[0]), np.asarray(weights[0])]
     else:
-        for spin in range(2):
-            channel = min(spin, nspin - 1)
-            coefficients.append(project(channel, slice(None)))
+        # At ``nspin = 1`` both components are the one channel there is, so it
+        # is projected once and the same array fills both diagonal blocks
+        # rather than the same product being computed a second time.
+        coefficients.append(project(0, slice(None)))
+        coefficients.append(coefficients[0] if nspin == 1
+                            else project(1, slice(None)))
         if nspin == 1:
             # ``wg`` already carries ``degspin = 2``; half of it belongs to each
             # component, and the two are the same state.

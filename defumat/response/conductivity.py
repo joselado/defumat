@@ -156,7 +156,7 @@ from dataclasses import dataclass
 import jax.numpy as jnp
 import numpy as np
 
-from defumat.batching import resolve_k_batch, sum_k
+from defumat.batching import resolve_k_batch, sum_k, upload
 from defumat.eager import compiled
 from defumat.response.velocity import VelocityOperator
 from defumat.scf.occupations import smearing_order, w0gauss
@@ -517,7 +517,7 @@ def optical_conductivity(
     eigenvalues = jnp.asarray(eigenvalues)
     if eigenvalues.ndim == 2:
         eigenvalues = eigenvalues[None]
-    wavefunctions = jnp.asarray(wavefunctions)
+    wavefunctions = upload(wavefunctions)
     if wavefunctions.ndim == 3:
         wavefunctions = wavefunctions[None]
     if eigenvalues.shape[0] != 1:
