@@ -204,6 +204,9 @@ new phase is started. Each entry names the missing term rather than the missing 
 because that is what decides whether it is a session or a phase.
 
 - **Wyckoff input** (P6, the one part of that phase not done).
+- **The mixer's history in G as memory mode's default** (P128, `OPEN.md` Part XXIII item 22): the
+  layout is built and its shell rebuilt from the mixed `becsum`; four cells under the rebuild and one
+  DFT+U test whose basin the layout decides stand between it and the default.
 - **A switch from single to double precision that pays** (P126): `'mixed'` converges to the double
   state and loses the superlinear mixing step a bulk cell converges by, 0.72x on 64-atom silicon on
   the card; and **`k_batch = 'fit'` as memory mode's default on a card**, which the user decided on
@@ -23621,3 +23624,94 @@ agreement; a grid-independent normalisation because `tr2` would stop meaning `tr
 default are where a trajectory lands, in `ph.x` as here: its own references hover over the threshold
 before dropping under it (`si10-epsilon` three passes at 1.51e-14, 1.46e-14, 1.46e-14 before 1.8e-17;
 `al2-metal` 2.9e-14, 1.68e-14 before 2.15e-16), so no comparison test may rest on one.
+
+### P128 -- The second optimisation sweep: work done twice, compiled twice, or held twice, and the trajectories it moved. ✅ DONE for 18 of `OPEN.md` Part XXIII's 26 items (1 to 5 are P127) and four of Part III's; six are done in part and two are not done, each with its reason in the item.
+
+**What it was.** A read-only sweep on 2026-10-03 (two agents re-reading the 122 items already listed
+against the code, five sweeping one subsystem each, two verifying every candidate sceptically) wrote
+`OPEN.md` Part XXIII, 26 items with a site, a fix, a bound and a measurement each, and re-marked
+Part III. Items 1 to 5 are the response loops and are P127. The rest were taken the same night, one
+agent an item or a pair of items, each in a worktree and merged into an integration branch; every one
+was asked for a number that would have caught it and a test that fails on the old code. The detail of
+each, with its sites, is in its `OPEN.md` entry; this is the index and what the night taught.
+
+**Bit-identical, and what each one bought:**
+
+| item | what | the number | commit |
+|---|---|---|---|
+| XXIII 7 | the geometry an argument of the force and stress gradients, the compiled function cached under everything else | `vc-relax4` steps 2 to 10 compile neither gradient (one each a step before); not bit-identical, 1.8e-16 Ry/bohr a call, carried by BFGS to 3.6e-9 bohr | `a7668a7` |
+| XXIII 8 | the DFT+U occupation matrix and `becsum`'s per-k scan through `defumat.eager` | a warm SCF on `ni-ldau-ortho.in` at `k_batch = 1`: 40 compiled programs -> 0; `ni-noncol-111` 14 -> 0, the ultrasoft spiral 10 -> 0, `al-tetrahedra` 6 -> 0 | `bffddf4`, `a7bb0b6`, `bd611bb` |
+| XXIII 9 | a spiral scan's static `npw` the smallest sphere, every point padded to the scan's widths | 298 -> 184 compilations over eight wavevectors, every one after the first compiling none; the random top-up drawn at the sphere's own width, 2.2e-16 Ry from the unpadded run | `dbef30b`, `2322684`, `f8ae017` |
+| XXIII 10 | the lazy projector set's `becp` loop jitted once | a second polarization on `alas-epsilon-us`: 16 programs -> 0 | `da7fce5` |
+| XXIII 12 | a state source's k-independent terms built once a workflow | potentials, `newd`s and `q_ij(b)` 2 -> 1 on two strings | `2bb51bf` |
+| XXIII 13, half | the ultracell's wider solve on the basis calculation | constructors 2 -> 1 | `2b34b2e` |
+| XXIII 14 | `Calculation.with_texture` for a turned system | `run_anisotropy('xyz')` 3 -> 1 calculations, `relax_orientation(curvature=True)` 10 -> 1 | `9f84fde` |
+| XXIII 15 | `at_cell` builds the augmentation as the constructor does | the radial kernel 171 -> 0 times in a memory-mode step-2 SCF on `si8-us-1k`; 1.4e-14 Ry | `a411147` |
+| XXIII 16 | `choose_k_batch` from one size estimate | 8 estimates -> 1; 1720 estimates and 2940 choices equal on 172 cells | `f9e8e2e` |
+| XXIII 17, half | one projection at `nspin = 1` | 2 -> 1 | `6735d1f` |
+| XXIII 18 | one `calbec` a block for `H` and `S` | `_every_k` dots 62 -> 57 on `si8-us-1k` and `si8-paw-1k` | `c8a8dc8` |
+| XXIII 21 | one `device_get` an attempt | blocking reads a steady iteration 15 -> 5 (`si8-1k`) to 27 -> 16 (DFT+U); time not measured | `2430c11` |
+| XXIII 23 | Anderson's history through views, the mix accumulated in place | whole vectors touched a call 26 -> 5; tracemalloc's peak 12.1 -> 4.1 vectors | `5f232bd` |
+| XXIII 24, half | `batching.upload` for a host store | ten sites, 53 arrays bit-identical; the card peak not measured | `7a26cdf` |
+| XXIII 25, half | a run of rows crosses as a view of the store | host copies 27 -> 9 a pass on silicon at `k_batch = 3`, 0 under two pools | `c546917` |
+| XXIII 26, part | one byte-packed all-gather of the eigenvalues and counts | collectives a pooled iteration 15 -> 7 | `d19a211` |
+| III H6 | `find_symmetries` memoised | 5 searches -> 1 a system, calculation and estimate; groups equal on 246 inputs | `fbf44d9` |
+| III M4 | `calbec` conjugates the smaller operand | loop-body copies 5 -> 0 on `si8-us-1k`; temp 10.0 -> 8.4 MB | `32b5605` |
+| III M5 | the preconditioner's `D` and `q` atom block by atom block | temp 8.4 -> 6.5 MB; within 6e-14 Ry | `680e01a` |
+| III M6 | one Davidson executable whether or not the steps are asked for | an SCF and a residual solve share one `_every_k`, 2 compiles -> 1 | `920bf31` |
+
+**Three that move a number on purpose:**
+
+- **XXIII 11, each ionic step starts from the previous step's states at `ethr = 1e-6`** (`1729c2a`), as
+  `run_pwscf.f90:331-334` does. Davidson steps over whole relaxations, old / new / `pw.x`: `relax.in`
+  105.0 / 102.0 / 84.0, `relax2.in` 512.3 / 470.0 / 363.6, `vc-relax4.in` 148.4 / 122.5 / 144.3. Bare
+  carried states would give 86.0 / 456.3 / 115.9, and they are not what ships, because **they locked into
+  the wrong occupied manifold** on two-atom silicon with `nosym` and `nbnd = 4`: step 2 at -15.56894534 Ry
+  against -15.59544593, the new geometry's fourth occupied state below 5e-9 inside the span of the carried
+  four, a symmetry sector crossing at `Gamma` that a Davidson seeded with the old sector cannot leave.
+  `pw.x`'s own `1 + 0.05 rr1 exp(2 pi i rr2)` factor from a fixed key restores the right state and the
+  six steps `pw.x` takes; a fable subagent kept it at `pw.x`'s amplitude (0.01 finds the state only at the
+  fourth SCF iteration, 0.001 never). The same blind spot binds any seeded Davidson where a sector crosses
+  the Fermi level, item 13's second half among them.
+- **XXIII 19, the gamma Davidson in real planes** (`0ed526b`): its work arrays are `(nvecx, 2 npwx)` with
+  the real plane first, so the projected rows, both Ritz rotations, `calbec_gamma` and the unproject are
+  real products, as `regterg` has them. Real-arithmetic dot flops in the loop 1.20e9 -> 6.00e8 on the new
+  `benchmarks/si16-gamma-ecut30.in`; energies within 1.4e-14 Ry, every Davidson step count identical on
+  four cells. XLA has no free real view of a complex array (a `.view` lowers to scatters, 15.0 MB of temp).
+  The time is not measured.
+- **XXIII 22, the mixer's history in G on the smooth sphere**, as `pw.x`'s `mix_rho` keeps it, built as
+  `run_scf(mixing_space='g')` with the shell above `ngms` rebuilt from the mixed `becsum`
+  (`5e6befe`, `78dce02`, `5654db2`, `46d1bf3`). The history's density block falls to 0.141 of the old
+  on the dual-8 benchmarks. Iterations real space / G / `pw.x`: `fe-mag-1k` 11 / 11 / 12,
+  `fe-noncolin-pbe-stress` 15 / 17 / 19, the dual-4 cells byte-identical. **The default stays `'r'`**:
+  four cells are not yet measured under the rebuild and a seeded nickel DFT+U source lands in a
+  different basin under G.
+
+**Two defects found by doing the items, fixed:** `at_cell` did not move `basis_kpoints`, so a DFT+U
+vc-relax rebuilt `wfcU` at the starting cell's Cartesian k-points (1.8e-2 on 0.94 at a 3 per cent
+change on `ni-ldau-stress.in`; `e65a2e4`, with `basis_kpoints` in `GEOMETRY_FIELDS` so the compiled
+gradients key on it, `23f5178`), as `pw.x`'s `scale_h` moves `xk`; and `mixing_beta_mag` had done
+nothing since `2d4c14b` on any run without the fixed-spin-moment warning (`ad95aee`).
+
+**What the night taught, each a sentence a later session would otherwise have to rediscover:**
+
+- **Above dual 4 this code's `conv_thr` is not `pw.x`'s.** `pw.x`'s `dr2` runs over the smooth sphere
+  (`mix_rho.f90`, "this used to be ngm NOT ngms"), this code's over the whole dense set, so on every
+  ultrasoft and PAW run it waits for the shell too. Kept, as a fable subagent decided: on the
+  real-space layout the shell is 0.3 per cent of the residual at the stop, so no stopping point moves,
+  and `pw.x`'s test would stop the G layout 1.13e-4 Ry short on `fe-mag-1k`.
+- **On a CPU in jax 0.11, `device_put` of an aligned contiguous host array is zero-copy whatever
+  `may_alias` says**, so a view handed to it can be the store's own memory; the rule that keeps the
+  streamed store safe is that a host store's rows are written only with the output of the computation
+  that read them (`_to_device`'s docstring).
+- **gloo's CPU all-reduce is not bit-identical beyond two pools when leaves are packed**: it adds an
+  element in an order that depends on its position in the buffer (1839 of 25140 sums moved in the last
+  bit on three processes), which is why item 26's all-reduce pack was not done.
+- **A geometry-keyed compiled gradient must key on every field that moves with the geometry.** The
+  DFT+U fix moved a field the key did not hold, and the gate's three vc-relax failures were every step
+  missing the key rather than a wrong number.
+
+**Not done, and why** (each in its item): XXIII 6, the walked third derivative chunk-outer, deferred
+because it keeps `3 nat` accumulators alive at once where the walk exists to bound that; XXIII 20,
+`notconv`-wide Davidson rows, 1 to 2 per cent at sixteen atoms; the second halves of 13, 17, 24 and 25;
+the all-reduce pack and the G-space payload of 26; and 22's default.
