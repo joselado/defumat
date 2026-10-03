@@ -448,9 +448,10 @@ def test_a_resume_carries_the_g_history_and_drops_a_real_space_one(pseudo_dir, t
     The count is the assertion for the first half, as in
     ``test_an_interrupted_scf_costs_the_same_as_an_uninterrupted_one``, and the
     settings are the ones where it can fail: with the history dropped at the
-    resume (the tag check forced to mismatch) this resume took 17 iterations
-    against the whole run's 19, where at ``conv_thr = 1e-10``, ``beta = 0.3``
-    and a stop at 4 both took 10 and the check could not have seen it.
+    resume (the mixer file deleted) this resume takes 16 iterations against the
+    whole run's 20 (17 against 19 while the shell was mixed linearly), where at
+    ``conv_thr = 1e-10``, ``beta = 0.3`` and a stop at 4 both took 10 and the
+    check could not have seen it.
     """
     from defumat.scf.checkpoint import load_mixer
     from defumat.scf.driver import SCF_MIXER, run_scf
