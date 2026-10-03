@@ -764,29 +764,35 @@ class TabulatedAugmentation(AugmentationCharge):
             for table, betas in zip(self.tables, self.beta_of)
         )
 
-    def _builder(self, t: int):
-        """``Q_ij(G)`` for species ``t``, as a function of a block of G."""
-        table, coefficients = self.tables[t], self.coefficients[t]
-        beta_of, nl = self.beta_of[t], self.nl_species[t]
+    def _factors(self, t: int):
+        """``(ylm, radial)`` of ``Q_ij(G)`` for species ``t``, as a function of a block of G.
 
-        def build(gcart_chunk):
+        What ``Q_ij(G)`` is built from rather than the block itself: the
+        scanned charge and integrals contract them in the radial basis
+        (:func:`_tabulated_charge`). Also the static ``nbeta`` and ``nl``.
+        """
+        table = self.tables[t]
+        nbeta = table.nbeta if isinstance(table, ExactRadial) else int(table.shape[0])
+
+        def factors(gcart_chunk):
             ylm = real_spherical_harmonics(gcart_chunk, self.lmax2)
             qmod = modulus(gcart_chunk)
             radial = (table(qmod) if isinstance(table, ExactRadial)
                       else _interpolate_qrad(table, qmod))
-            return _assemble_qgm(coefficients, ylm, radial, beta_of, nl)
+            return ylm, radial
 
-        return build
+        return factors, nbeta, self.nl_species[t]
 
     def charge(self, becsum: tuple) -> jnp.ndarray:
         total = None
         for t, atoms in enumerate(self.species_atoms):
             if self.tables[t] is None or not atoms:
                 continue
+            factors, nbeta, nl = self._factors(t)
             contribution = _tabulated_charge(
-                self._builder(t), self.gcart, self.mask,
-                self.phases[jnp.asarray(atoms)],
-                becsum[t].astype(self.phases.dtype), self.chunk, self.ngm,
+                factors, self.gcart, self.mask, self.phases[jnp.asarray(atoms)],
+                becsum[t].astype(self.phases.dtype), self.coefficients[t],
+                self.beta_of[t], nbeta, nl, self.chunk, self.ngm,
             )
             total = contribution if total is None else total + contribution
         if total is None:
@@ -803,10 +809,12 @@ class TabulatedAugmentation(AugmentationCharge):
                     jnp.zeros((len(atoms), nh, nh), dtype=self.phases.real.dtype)
                 )
                 continue
+            factors, nbeta, nl = self._factors(t)
             result.append(
                 _tabulated_integrals(
-                    self._builder(t), self.gcart, self.mask, padded,
-                    self.phases[jnp.asarray(atoms)], self.volume, self.chunk, nh,
+                    factors, self.gcart, self.mask, padded,
+                    self.phases[jnp.asarray(atoms)], self.volume, self.chunk,
+                    self.coefficients[t], self.beta_of[t], nbeta, nl,
                 )
             )
         return tuple(result)
@@ -822,11 +830,12 @@ class TabulatedAugmentation(AugmentationCharge):
                     jnp.zeros((len(atoms), nh, nh), dtype=self.phases.dtype)
                 )
                 continue
+            factors, nbeta, nl = self._factors(t)
             result.append(
                 _tabulated_integrals(
-                    self._builder(t), self.gcart, self.mask, padded,
-                    self.phases[jnp.asarray(atoms)], self.volume, self.chunk, nh,
-                    real=False,
+                    factors, self.gcart, self.mask, padded,
+                    self.phases[jnp.asarray(atoms)], self.volume, self.chunk,
+                    self.coefficients[t], self.beta_of[t], nbeta, nl, real=False,
                 )
             )
         return tuple(result)
@@ -844,40 +853,55 @@ class TabulatedAugmentation(AugmentationCharge):
         return eqx.tree_at(lambda a: (a.phases, a.gcart), self, (phases, padded))
 
 
-def _tabulated_charge(build, gcart, mask, phases, becsum, chunk, ngm):
-    """``rho_aug(G)`` for one species, scanning over blocks of G.
+def _beta_basis(coefficients, becsum, beta_of, nbeta: int, nl: int):
+    """``C_{a,LM,n,m} = (-i)^L sum_{i in n, j in m} ap(LM,i,j) b_aij``: ``becsum`` in the radial basis.
 
-    **The body is rematted, and that is what makes P73 reach the backward pass.**
-    Rebuilding ``Q_ij(G)`` a chunk at a time keeps it off the *forward* working
-    set, which is what P73 measured; under ``jax.grad`` it came straight back.
-    ``build(gcart_chunk)`` is a known value while ``weighted`` is not, so
-    transposing ``einsum("ijc,ijc->c", Q, weighted)`` needs ``Q`` -- and because
-    ``build``'s argument comes from a ``dynamic_slice`` on the scan index it is
-    not loop-invariant, so partial evaluation **stacks** it. The residual is
-    ``(nchunks, nh, nh, chunk)``, which is the dense table reborn, plus a
-    ``(nchunks, nat, chunk)`` copy of the atom phases.
+    ``(nat_t, nl^2, nbeta, nbeta)`` with no G index, so it is formed once per
+    call and the scan never holds an ``(nh, nh, chunk)`` block. ``coefficients``
+    carries the cell's ``(2 lmax + 1)^2`` rows and is cut to this species'
+    ``nl^2``; the dtype is ``becsum``'s, which the caller makes the phases'.
+    """
+    expand = jax.nn.one_hot(beta_of, nbeta, dtype=becsum.real.dtype)  # (nh, nbeta)
+    phase = np.concatenate([np.full(2 * l + 1, (-1j) ** l) for l in range(nl)])
+    return jnp.einsum("m,mij,aij,in,jk->amnk", jnp.asarray(phase, dtype=becsum.dtype),
+                      coefficients[: nl * nl].astype(becsum.dtype), becsum,
+                      expand, expand)
 
-    **It has an exact floor.** :func:`build_augmentation` takes this route only
-    when ``nh^2 ngm x 16 > DEFUMAT_AUG_MAX_BYTES`` (2 GiB), and the stacked
-    residual equals that product to within ``npad/ngm``. So on every cell that
-    takes this path the tape was **at least 2 GiB by construction** -- the
-    tabulated scheme is chosen exactly when the array it rebuilds is too large
-    to store. Sized at **65.5 GB** for Ni and 11.1 GB for Br on the 45-atom
-    NiBr2 slab, and 2.73 GB on ``bismuthene-soc``, which is the cell ``PLAN.md``
-    P46 records a spinor force as not running on at all.
 
-    Under ``jax.checkpoint`` the body's residuals are its *inputs*, and
-    ``gcart``, ``phases``, ``becsum`` and ``mask`` are closed over and
-    loop-invariant, so they stay single arrays. Traced on the real function:
-    the ``(nchunks, nh, nh, chunk)`` and ``(nchunks, nat, chunk)`` residuals
-    disappear from the jaxpr and the gradient is **bit-identical** (0.0).
+def _tabulated_charge(factors, gcart, mask, phases, becsum, coefficients, beta_of,
+                      nbeta, nl, chunk, ngm):
+    """``rho_aug(G)`` for one species, scanning over blocks of G without forming ``Q_ij(G)``.
 
-    The cost is one extra evaluation of ``build`` over the padded sphere per
-    backward pass -- one more ``charge`` rebuild, which the docstring below
-    prices at 0.174 s on ``si8-us-1k`` against a derivative costing minutes.
+    ``sum_ij Q_ij(G) sum_a b_aij e^{-iG.tau_a}``, with ``Q_ij(G) = sum_LM (-i)^L
+    ap(LM,i,j) Y_LM(G) Q^L_{n_i n_j}(|G|)``, contracted in the radial basis
+    first: ``becsum`` meets ``ap`` in :func:`_beta_basis`, once and with no G
+    index, and a block of G holds the radial table ``(nbeta, nbeta, nl, chunk)``,
+    the harmonics and ``(nat_t, 2L+1, chunk)`` per ``L``, where it held several
+    ``(nh, nh, chunk)`` complex blocks (``_assemble_qgm``'s angular part,
+    gathered radial part, term and running total, each with a tangent and a
+    cotangent under a derivative). Same arithmetic, summed in another order:
+    against the block form 6e-18 on a charge of 1.2e-2 for ultrasoft silicon
+    and 2e-17 on 1.6e-2 for fully-relativistic bismuth (``nh = 34``), in
+    review. ``factors(gcart_chunk)`` gives ``(ylm, radial)``.
+
+    **The body is rematted, and that is what makes P73 reach the backward
+    pass.** Under ``jax.grad`` partial evaluation would otherwise stack every
+    chunk's known values -- the radial table and the harmonics, built from a
+    ``dynamic_slice`` on the scan index and so not loop-invariant -- plus a
+    ``(nchunks, nat, chunk)`` copy of the atom phases. Under ``jax.checkpoint``
+    the residuals are the body's inputs, which are closed over and
+    loop-invariant (``tests/unit/test_augmentation_remat.py``).
+
+    **What it buys under a strain**, compile only on the CPU, ultrasoft AlAs at
+    200 Ry (aluminium's ``nh = 18``, ``nbeta = 6``, 2048 vectors a chunk), the
+    ``jvp`` of the augmented density's strain gradient: 67.7 MB of temporaries
+    where the block form held 176.1, and its gradient 48.7 where it held 104.7.
+    The chunk is still sized for the block this no longer forms
+    (:func:`_aug_chunk`, ``nh^2`` complex), so it is conservative here.
     """
     nchunks = mask.shape[0] // chunk
     nat = phases.shape[0]
+    basis = _beta_basis(coefficients, becsum.astype(phases.dtype), beta_of, nbeta, nl)
 
     @jax.checkpoint
     def body(carry, index):
@@ -885,30 +909,38 @@ def _tabulated_charge(build, gcart, mask, phases, becsum, chunk, ngm):
         gcart_chunk = jax.lax.dynamic_slice(gcart, (start, 0), (chunk, 3))
         phase_chunk = jax.lax.dynamic_slice(phases, (0, start), (nat, chunk))
         mask_chunk = jax.lax.dynamic_slice(mask, (start,), (chunk,))
-        weighted = jnp.einsum("aij,ac->ijc", becsum, phase_chunk)
-        block = jnp.einsum("ijc,ijc->c", build(gcart_chunk), weighted)
-        return carry, block * mask_chunk
+        ylm, radial = factors(gcart_chunk)
+        per_atom = jnp.zeros((nat, chunk), dtype=phase_chunk.dtype)
+        for l in range(nl):
+            block = slice(l * l, (l + 1) ** 2)
+            radial_l = jnp.einsum("amnk,nkc->amc", basis[:, block],
+                                  radial[:, :, l].astype(basis.dtype))
+            per_atom = per_atom + jnp.einsum(
+                "amc,cm->ac", radial_l, ylm[:, block].astype(basis.dtype))
+        return carry, jnp.einsum("ac,ac->c", per_atom, phase_chunk) * mask_chunk
 
     _, blocks = jax.lax.scan(body, None, jnp.arange(nchunks))
     return blocks.reshape(-1)[:ngm]
 
 
-def _tabulated_integrals(build, gcart, mask, potential_g, phases, volume, chunk, nh,
-                         real: bool = True):
+def _tabulated_integrals(factors, gcart, mask, potential_g, phases, volume, chunk,
+                         coefficients, beta_of, nbeta, nl, real: bool = True):
     """``int V(r) Q_ij^a(r) dr`` for one species, scanning over blocks of G.
 
     ``real = False`` keeps the imaginary part, which is what a displaced table
     or a complex potential needs -- see
     :meth:`AugmentationCharge.cross_integrals`.
 
-    A reduction over G rather than a map along it, so the accumulator is the
-    scan's *carry*: ``(nat, nh, nh)`` whatever the chunk is.
+    A reduction over G, accumulated in the radial basis: the scan's carry is
+    ``T_{a,LM,n,m} = sum_G Y_LM(G) Q^L_{nm}(|G|) V(G) e^{iG.tau_a}``, ``(nat_t,
+    nl^2, nbeta, nbeta)`` complex whatever the chunk is, and ``(n, m)`` is
+    expanded to ``(i, j)`` once after the scan, through ``beta_of``, with
+    ``conj((-i)^L) ap(LM,i,j)``. Against the block form, in review: 9e-15 on
+    12 Ry for ultrasoft silicon, 5e-15 on 7 for fully-relativistic bismuth.
 
-    **The carry was never the problem; the residual was.** The body is rematted
-    for the same reason :func:`_tabulated_charge`'s is, and it stacks the same
-    ``(nchunks, nh, nh, chunk)`` copy of ``Q_ij(G)`` without it -- confirmed by
-    tracing ``jax.grad`` of this function and reading the scan's residuals off
-    the jaxpr. This is the one any reverse-mode consumer of ``newd`` reaches.
+    **The body is rematted** for the reason :func:`_tabulated_charge`'s is:
+    without it the scan stacks every chunk's radial table and harmonics. This is
+    the one any reverse-mode consumer of ``newd`` reaches.
     """
     nchunks = mask.shape[0] // chunk
     nat = phases.shape[0]
@@ -921,21 +953,28 @@ def _tabulated_integrals(build, gcart, mask, potential_g, phases, volume, chunk,
         mask_chunk = jax.lax.dynamic_slice(mask, (start,), (chunk,))
         potential_chunk = jax.lax.dynamic_slice(potential_g, (start,), (chunk,))
         shifted = potential_chunk[None, :] * jnp.conj(phase_chunk) * mask_chunk
-        block = jnp.einsum("ijc,ac->aij", jnp.conj(build(gcart_chunk)), shifted)
-        return carry + (jnp.real(block) if real else block), None
+        ylm, radial = factors(gcart_chunk)
+        parts = [
+            jnp.einsum("cm,nkc,ac->amnk",
+                       ylm[:, l * l:(l + 1) ** 2].astype(shifted.dtype),
+                       radial[:, :, l].astype(shifted.dtype), shifted)
+            for l in range(nl)
+        ]
+        return carry + jnp.concatenate(parts, axis=1), None
 
     # The carry's dtype comes from the data and not from ``jnp``'s default.
     # ``lax.scan`` requires the carry to match what the body returns exactly,
-    # so a hardcoded float64 accumulator is not a policy violation that shows
+    # so a hardcoded complex128 accumulator is not a policy violation that shows
     # up in the sixth decimal -- under a float32 precision policy it does not
     # run at all.
     total, _ = jax.lax.scan(
-        body,
-        jnp.zeros((nat, nh, nh),
-                  dtype=phases.real.dtype if real else phases.dtype),
-        jnp.arange(nchunks),
-    )
-    return volume * total
+        body, jnp.zeros((nat, nl * nl, nbeta, nbeta), dtype=phases.dtype),
+        jnp.arange(nchunks))
+    phase = np.concatenate([np.full(2 * l + 1, (1j) ** l) for l in range(nl)])
+    gathered = total[:, :, beta_of[:, None], beta_of[None, :]]  # (nat, nl^2, nh, nh)
+    block = jnp.einsum("m,mij,amij->aij", jnp.asarray(phase, dtype=phases.dtype),
+                       coefficients[: nl * nl].astype(phases.dtype), gathered)
+    return volume * (jnp.real(block) if real else block)
 
 
 def _dataset_key(pseudo: Pseudopotential, nl_species: int) -> tuple:
