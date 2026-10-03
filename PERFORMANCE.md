@@ -9735,7 +9735,8 @@ displaced and is the next lever for a subset of a large cell.
 ## The phonon at q a k-chunk at a time, and the per-mode grids off the card (RTX A2000, 2026-10-03)
 
 **The number to carry: the phonon at `q` of eight-atom silicon at one k-point a chunk went from 953.7
-MB on the card to 103.0 MB, against the SCF's 35.1, for 3.6 per cent more time; and on a run
+MB on the card to 103.0 MB, against the SCF's 35.1, for 3.6 per cent more time, and to 49.5 MB once
+the Ewald swap's Hessian was taken a column at a time; and on a run
 without symmetry the Gamma phonon of all eight atoms at one k-point a chunk went from 65.8 MB to the
 SCF's own 35.1 (norm-conserving) and from 203.9 to 109.8 MB against 66.9 (ultrasoft), for 0.3 to 0.5 per
 cent more time.** `GPU-MEMORY-NEXT.md` item 2, its third and fourth pieces (`61c71d4` for the phonon at
@@ -9758,7 +9759,7 @@ point, D22 (`tools/gpu/response_memory.py`'s `phonon_q` stage); before at `4241d
 | `'fit'` | 872.9 | 1132.5 | 996.9 | -- | 526.5 | 506.0 |
 
 with `|D_xx(0,0)|` = 0.2797837367 (0.2797837357 at `'fit'`) and 45.822 mean CG iterations in every row.
-**The 68 MB left above the SCF at one k-point a chunk are outside the walks**: the compiler's `memory_analysis()` of each pass gives 28.2 MB of temporaries for the solve and 14.0 or less for the rest, so the peak is set by an eager step around them -- the Ewald term at `q` and its swap (a `jax.hessian` in the positions), the screening kernel at `q` (two eager `jvp` per mode and iteration), or the `k + q` diagonalisation. Which one was not separated.
+**The 68 MB left above the SCF at one k-point a chunk were outside the walks, and are gone**: the compiler's `memory_analysis()` of each pass gives 28.2 MB of temporaries for the solve and 14.0 or less for the rest, and the peak read after each stage of one call (`review/item2ph/stages_q.py` on D22) sits at 42.5 MB through the loop and the frozen Hessian and jumps to 103.0 in the Ewald swap. Not in the Ewald term at `q` itself, which called alone after the SCF leaves the peak at 35.1, but in the swap's subtraction of the Gamma Ewald Hessian, which `jax.hessian` took with all 24 tangents at once, holding 24 copies of the structure factors. Taken a column at a time (`51e257e`) the call reads **49.5 MB** in one process. **A first reading was wrong**: the stage wrapper fired after the Ewald term at `q`, which runs after the Hessian inside the same function, so the jump was first put on the reciprocal sum, and blocking that sum over G moved the peak by nothing (it stays, because its one-piece intermediate grows as `ngm x nat`).
 Against the whole route on the CPU (`tests/regression/test_streamed_phonons.py`, two-atom silicon on
 an unshifted 2x2x2 grid): 2.1e-14 end to end at one k-point a chunk, where the two `k + q`
 diagonalisations are bit-identical; 1.9e-14 at a chunk of 3 with one `k + q` store handed to both; and

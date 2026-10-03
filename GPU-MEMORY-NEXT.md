@@ -353,9 +353,9 @@ below:
   dropped the imaginary part of its response (every mode imaginary at `ecutrho = 8 ecutwfc`). **Still on
   the card**: with symmetry, the per-mode grids, because `symmetrize_atom_displacement` acts on the stack;
   the `k + q` Hamiltonians' whole-k tables beside the `k` ones; the ultrasoft global step's 43 to 50
-  MB of temporaries; and 68 MB above the SCF in the phonon at `q`, outside the walks (whose passes need
-  28.2 MB at most), in one of the eager steps around them -- the Ewald term at `q`, the kernel at `q` or
-  the `k + q` diagonalisation -- not yet separated.
+  MB of temporaries. **The phonon at `q`'s 68 MB above the SCF was the Ewald swap**, `jax.hessian` of
+  the Gamma Ewald sum with all 24 tangents at once; a column at a time (`51e257e`) the call reads 49.5 MB
+  against 103.0.
 
 ## Suggested order
 
