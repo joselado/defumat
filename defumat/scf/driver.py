@@ -6759,8 +6759,11 @@ def run_scf(
     # The rows this pool holds, fixed for the run and computed before a resume
     # needs them: longest-first on each k-point's estimated cost, so that a pool
     # holding the Gamma point takes fewer others (``parallel.balance``).
-    pool_rows = (pools.rows(calculation.system.kpoints.nk, costs=_k_costs(calculation))
-                 if pooled else None)
+    # Every pool's rows, which every pool computes alike, so the gather of the
+    # eigenvalues below needs no shares or positions from the others.
+    pool_layout = (pools.layout(calculation.system.kpoints.nk, costs=_k_costs(calculation))
+                   if pooled else None)
+    pool_rows = pool_layout[pools.rank] if pooled else None
     if pooled:
         # Every pool has built its calculation before the first collective, so
         # gloo's context is made with all of them present (``Pools.barrier``).
@@ -7557,11 +7560,11 @@ def run_scf(
                 if pooled:
                     # The occupations read every k-point (a Fermi level, the
                     # tetrahedra), so every pool evaluates them on the whole
-                    # set; the step counts come along for the printed average.
+                    # set; the step counts come along for the printed average,
+                    # all three in one all-gather.
                     nk_all = calculation.system.kpoints.nk
-                    eigenvalues = pools.gather_k(eigenvalues, nk_all, rows=pool_rows)
-                    steps = pools.gather_k(steps, nk_all, rows=pool_rows)
-                    unsettled = pools.gather_k(unsettled, nk_all, rows=pool_rows)
+                    eigenvalues, steps, unsettled = pools.gather_k(
+                        (eigenvalues, steps, unsettled), nk_all, layout=pool_layout)
                 eigenvalues = jnp.asarray(eigenvalues)
             else:
                 wavefunctions = fetch_wavefunctions(wavefunctions)

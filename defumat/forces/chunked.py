@@ -70,7 +70,7 @@ from defumat.forces.energy import (
 from defumat.hubbard.energy import hubbard_energy
 from defumat.scf.potential import total_charge
 from defumat.parallel import PoolStore, current_pools
-from defumat.scf.streaming import is_host_store
+from defumat.scf.streaming import is_host_store, rows_to_device
 
 __all__ = ["chunked_gradient", "walks_chunks", "wants_chunks"]
 
@@ -153,9 +153,14 @@ def _global(moved, becsum_, rho_smooth, ns):
 
 
 def _rows_of(array, rows):
-    """One chunk of a ``(nspin, nk, ...)`` state array on the device."""
+    """One chunk of a ``(nspin, nk, ...)`` state array on the device.
+
+    A host array crosses as a view of its rows wherever they are a run, which
+    is every chunk but a padded last one (:func:`~defumat.scf.streaming.
+    rows_to_device`); a device array is indexed where it is.
+    """
     if isinstance(array, np.ndarray):
-        return jax.device_put(np.ascontiguousarray(array[:, rows]))
+        return rows_to_device(array, rows)
     return jnp.asarray(array)[:, jnp.asarray(rows)]
 
 
