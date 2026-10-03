@@ -1356,7 +1356,7 @@ dense grid, so `si8-paw-pbe-1k` at 0.841 s/iteration is where to take it.
 LDA number was recorded with -- on an `nspin = 1` and an `nspin = 2` input. `etxc` and the
 total energy must be bit-identical.
 
-### H2. The strain kernel issues nine calls where the loop above it already knows six suffice **[closed 2026-09-20 in `a23b050`; reopened 2026-10-03, Part XXIII item 4]**
+### H2. The strain kernel issues nine calls where the loop above it already knows six suffice **[closed 2026-09-20 in `a23b050`; reopened 2026-10-03, Part XXIII item 4; closed again 2026-10-03 in `055da69`]**
 
 **Reopened 2026-10-03.** `git show a23b050 -- defumat/response/strain.py` has one hunk, in
 `_frozen_density_response` (`:433`), which runs once per response. The loop this entry names is
@@ -1564,7 +1564,7 @@ the explanation to check first.
 **Measure.** An elastic-constants run through `tools/benchmark.py`; the tensor
 bit-identical.
 
-### H8. The q-phonon's CG threshold is fixed at 1e-14, two orders tighter than its own family **[moves a number; open, re-checked 2026-10-03; Part XXIII item 1 comes first]**
+### H8. The q-phonon's CG threshold is fixed at 1e-14, two orders tighter than its own family **[moves a number; done 2026-10-03 with Part XXIII items 1 and 2: every loop schedules its CG as `dfpt_kernels` does, `PLAN.md` P127]**
 
 `defumat/response/phononq.py:903`. `dynamical_matrix_at_q(..., threshold = 1.0e-14)` goes
 straight into the CG convergence test, fixed from the first self-consistency iteration to
@@ -6362,7 +6362,7 @@ minutes against `ph.x`'s 279 s. Items 1 and 2 account for the two factors of tha
 passes and the CG steps a pass, and backlog item 8, scheduling the CG threshold, is the third
 piece and comes after item 1.
 
-### 1. The response loops test an un-normalised `|ddv_scf|^2`, eleven decades tighter than `ph.x` on the AlAs spinor cell **[moves a number]**
+### 1. The response loops test an un-normalised `|ddv_scf|^2`, eleven decades tighter than `ph.x` on the AlAs spinor cell **[moves a number; done 2026-10-03, branch `response-dr2`, `PLAN.md` P127]**
 
 Sites: `response/efield.py:390` and `:403`, against `TR2 = 1e-14` (`:161`); `phonon.py:844`,
 `:857`; `strain.py:617`, `:627`; `phononq.py:715`, `:719`, which tests `max |dV|^2` instead.
@@ -6382,7 +6382,9 @@ arithmetic gives 5 + 4.6 against the 9 recorded. **So the Anderson mixer already
 `ph.x`'s rate, and the gap in passes is the test**, which corrects the attribution in
 `PERFORMANCE.md`'s P98 entry (corrected there). One caveat: `ph.x` perturbs along `at(:, ipol)`
 in units of `alat` (`dvpsi_e.f90:83`) where this code is Cartesian, which moves the raw sum by
-about `alat^2`, under one pass. The q-phonon's `max |dV|^2` is a sibling with a smaller gap,
+`|at_i|^2` in units of `alat`, under one pass: 1/2 on fcc, 1 on sc, 3/4 on bcc, and not a scalar
+at all on a non-cubic cell (corrected 2026-10-03 from "about `alat^2`", which was wrong: `tpiba`
+carries the `alat`; measured on si-epsilon as a constant 2.00 over the first four passes). The q-phonon's `max |dV|^2` is a sibling with a smaller gap,
 about five decades on 20^3 silicon. `AUDIT-2026-09-20.md` (around its line 857) found the
 field's site and it was never carried into a record.
 
@@ -6407,7 +6409,7 @@ of two calls of `get_dielectric_tensor(tr2=<ph.x's bar on the raw sum>, verbose=
 the default: `len(history)`, `average_iterations` and `epsilon` against the `ph.x` references.
 Then every response regression file through `tools/run_regression.sh`.
 
-### 2. The Sternheimer CG starts every solve from zero, where `ph.x` starts each pass from the previous pass's `dpsi` **[moves a number]**
+### 2. The Sternheimer CG starts every solve from zero, where `ph.x` starts each pass from the previous pass's `dpsi` **[moves a number; done 2026-10-03 with the CG schedule, branch `response-dr2`, `PLAN.md` P127]**
 
 Sites: `response/sternheimer.py:632-633`; the loops' stored solutions at `efield.py:575`,
 `phonon.py:673`, `strain.py:537`, `phononq.py:663`, and the walked host store at
@@ -6437,7 +6439,7 @@ the host store they already write. A metal's `ef_shift_wfc` is applied after the
 so the effect is separated from backlog item 8; `epsilon` unchanged to the CG threshold.
 `si-epsilon-unshifted-nosym.in` through `get_phonons_at_q` for the q route.
 
-### 3. Each CG step on an ultrasoft or PAW dataset applies `S` to the level-shift vector, a fixed combination of `S|psi_occ>` the solve already has
+### 3. Each CG step on an ultrasoft or PAW dataset applies `S` to the level-shift vector, a fixed combination of `S|psi_occ>` the solve already has **[done 2026-10-03, `bee24f3`: si-epsilon bit-identical, si-epsilon-us identical to every printed digit]**
 
 Sites: `response/sternheimer.py:469-490`, `:502`.
 
@@ -6458,7 +6460,7 @@ removed per CG step.
 **Measure.** `alas-epsilon-us.in` and `si-epsilon-us.in`, one core, second call, wall clock
 with `average_iterations` equal between the arms.
 
-### 4. The strain loop screens all nine strain components every iteration, where six are independent (Part III H2, reopened)
+### 4. The strain loop screens all nine strain components every iteration, where six are independent (Part III H2, reopened) **[done 2026-10-03, `055da69`: si-electrostriction's history unchanged to every printed digit]**
 
 Sites: `response/strain.py:589-598`, and the PAW branch at `:608-615`.
 
@@ -6479,7 +6481,7 @@ measured. Recorded because the record said closed.
 `get_strain_response`, one core, second call: kernel `jvp`s per iteration, and the response to
 round-off.
 
-### 5. The response mixer keeps eight steps of every perturbation's `dV_scf` on the host **[moves a number]**
+### 5. The response mixer keeps eight steps of every perturbation's `dV_scf` on the host **[moves a number; done 2026-10-03, `fa1c8c1`: `ph.x`'s depth of 4 and the strain's six components mixed, the same passes on four silicon responses]**
 
 Sites: `response/mixing.py:64-65`, `:83-87`; `scf/mixing.py:222`; `phonon.py:741-745`;
 `phononq.py:724`; `strain.py:570`.
