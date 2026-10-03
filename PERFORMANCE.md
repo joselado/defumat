@@ -10105,3 +10105,13 @@ chunk count gives a U: **427.7 MB at one piece, 169.3 at seven, 353.9 at fourtee
 second derivative grows with its number of steps, which a rematted scan is meant to prevent. So the two
 chunks interact under a derivative, and the right sizing -- or a remat that holds under forward-over-
 reverse -- is the next session's to measure, cell by cell, with the time beside it.
+
+**Where the U comes from**, compile only on the CPU (`memory_analysis()` of the augmented density's strain
+gradient and of its `jvp`, AlAs at 8 k-points, `DEFUMAT_AUG_CHUNK` set): 1012.6 / 1900.8 MB at 14211,
+102.8 / 293.7 at 2048, 463.5 / 771.7 at 1024, 232.8 / 388.3 at 512. Aluminium's radial chunk is 1261
+values, so a table chunk of 2048 is walked inside the radial transform as two rematted pieces and one of
+1024 is taken in **one unrematted block**. With the radial chunk forced to 512 the 1024 table chunk holds
+52.6 / 149.4; with the one block merely wrapped in `jax.checkpoint` it holds 262.2 / 648.5, because the
+backward pass then recomputes the same large block at once. So what bounds a second derivative is the
+size of the radial piece, not whether it is rematted, and the radial budget of 8 MB an integrand is the
+dial that matters -- at a time cost, measured above at 256 values. The checkpoint was tried and not kept.
