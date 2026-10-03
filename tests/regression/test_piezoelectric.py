@@ -331,7 +331,10 @@ def test_the_same_assembly_in_the_position_coordinate_is_the_born_charge():
 def test_the_driver_reports_the_dielectric_constant_it_already_solved():
     """One field response serves both, which is what makes this NSCF-scale."""
     _, _, calculation, result = _converged("alas-raman")
-    tensor = piezoelectric_tensor(calculation, result)
+    # The driver against the file's own helper, which runs at :data:`IDENTITY`:
+    # the two must be at one convergence to agree at 1e-8 (at the defaults
+    # against the pinned helper they read 4.9e-6 apart, on D22).
+    tensor = piezoelectric_tensor(calculation, result, **IDENTITY)
     assert tensor.converged
     assert abs(tensor.e14 - to_voigt(_piezo("alas-raman"))[0, 3] * E_BOHR2_TO_C_M2) < 1e-8
     assert abs(np.trace(tensor.dielectric.epsilon) / 3 - 12.9674) < 1e-3
