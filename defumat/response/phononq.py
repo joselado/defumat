@@ -105,7 +105,8 @@ def kpoints_plus_q(kpoints: KPoints, q_cart, cell: Cell) -> KPoints:
     )
 
 
-def states_at_k_plus_q(calculation, v_scf, q_cart, nbnd, ethr: float = 1e-13):
+def states_at_k_plus_q(calculation, v_scf, q_cart, nbnd, ethr: float = 1e-13,
+                       stream: bool = False):
     """The ground state again, on the ``k + q`` sphere, at the converged potential.
 
     ``phq_init``'s job: ``evq``, the unperturbed states the projector ``P_c^+``
@@ -120,13 +121,26 @@ def states_at_k_plus_q(calculation, v_scf, q_cart, nbnd, ethr: float = 1e-13):
     local potential, the Ewald neighbour list and the augmentation tables are
     *shared* between the two calculations rather than built twice.
 
+    ``stream`` writes the states into a numpy store a k-chunk at a time
+    (:func:`~defumat.scf.streaming.stream_states`, ``c_bands_nscf`` with
+    ``save_buffer``), for the k-chunked route
+    (:mod:`defumat.response.chunked_phonon`). The two solve the same problem
+    and agree to round-off at one k-point a chunk; at larger chunks the
+    eigensolver's compiled program differs, and the states agree inside each
+    degenerate multiplet only up to the rotation the solver is free in.
+
     Returns ``(calculation_kq, hamiltonians_kq, eigenvalues_kq, psi_kq)``.
     """
     moved = calculation.at_kpoints(kpoints_plus_q(
         calculation.system.kpoints, q_cart, calculation.system.cell
     ))
     hamiltonians = moved.hamiltonian(v_scf)
-    eigenvalues, wavefunctions = moved.diagonalize(hamiltonians, nbnd, None, ethr)
+    if stream:
+        from defumat.scf.streaming import stream_states
+
+        eigenvalues, wavefunctions = stream_states(moved, hamiltonians, nbnd, ethr)[:2]
+    else:
+        eigenvalues, wavefunctions = moved.diagonalize(hamiltonians, nbnd, None, ethr)
     return moved, hamiltonians, np.asarray(eigenvalues), wavefunctions
 
 
@@ -234,7 +248,16 @@ class TwoSphereSolver(SternheimerSolver):
     # -- the density it produces -------------------------------------------
 
     def response_density_at_q(self, dpsi) -> jnp.ndarray:
-        """``drho_q(r)``: ``incdrhoscf``, and here it is transcribed.
+        """``drho_q(r)``, finished: :meth:`response_parts_at_q`, then
+        :meth:`finish_response_at_q`."""
+        return self.finish_response_at_q(self.response_parts_at_q(dpsi))
+
+    def response_parts_at_q(self, dpsi) -> jnp.ndarray:
+        """``drho_q(r)``'s sum over k: ``incdrhoscf``, and here it is transcribed.
+
+        The sum alone, on the smooth grid and not normalised;
+        :meth:`finish_response_at_q` does the rest, and is linear, so a response
+        walked a k-chunk at a time adds the chunks' sums and finishes once.
 
         At ``Gamma`` the response density is one ``jvp`` of the *code that
         builds a density* -- ``rho = sum wg Re[psi* psi]``, differentiated along
@@ -252,15 +275,11 @@ class TwoSphereSolver(SternheimerSolver):
         two halves are complex conjugates of each other and collapse to the
         ``2 Re[...]`` the ``jvp`` produces, which is what makes the two
         expressions agree there.
-
-        On the **dense** grid, like every other density here, and with the
-        ``(nspin_mag, ...)`` leading axis every consumer of one expects.
         """
         from defumat.batching import sum_bands, sum_k
 
         calculation, kq = self.calculation, self.calculation_kq
         grid = calculation.basis.smooth.grid
-        volume = calculation.system.cell.volume
         dpsi = jnp.asarray(dpsi)
         index_k, index_kq = calculation.fft_index, kq.fft_index
 
@@ -293,7 +312,14 @@ class TwoSphereSolver(SternheimerSolver):
 
         # Called once per displacement per iteration with new closures, so it is
         # compiled by its structure (:mod:`defumat.eager`).
-        total = compiled(summed, self.psi, dpsi)
+        return compiled(summed, self.psi, dpsi)
+
+    def finish_response_at_q(self, total) -> jnp.ndarray:
+        """``2 total / Omega`` on the **dense** grid, like every other density
+        here, with the ``(nspin_mag, ...)`` leading axis every consumer of one
+        expects. Linear in ``total``."""
+        calculation = self.calculation
+        volume = calculation.system.cell.volume
         smooth, dense = calculation.basis.smooth, calculation.basis.dense
         return complex_to_dense(2.0 * total / volume, smooth, dense)[None]
 
@@ -371,6 +397,34 @@ def bare_displacements_at_q(calculation, calculation_kq, solver, q_cart, positio
     Returns an object array of shape ``(nat, 3)`` -- or ``(len(atoms), 3)`` --
     whose entries are ``(nspin, nk, nocc, npwx_kq)``.
     """
+    psi = solver.psi
+    positions = jnp.asarray(positions)
+    dij = tuple(h.coefficients for h in solver.hamiltonians)
+
+    def applied(pos):
+        return applied_at_q(calculation, calculation_kq, psi, pos, q_cart, dij)
+
+    nat = positions.shape[0]
+    chosen = tuple(range(nat)) if atoms is None else tuple(atoms)
+    bare = np.empty((len(chosen), 3), dtype=object)
+    for row, atom in enumerate(chosen):
+        for cart in range(3):
+            tangent = jnp.zeros_like(positions).at[atom, cart].set(1.0)
+            bare[row, cart] = compiled(
+                lambda u, du: jax.jvp(applied, (u,), (du,))[1], positions, tangent)
+    return bare
+
+
+def applied_at_q(calculation, calculation_kq, psi, pos, q_cart, dij):
+    """The function :func:`bare_displacements_at_q` differentiates in ``pos``.
+
+    ``V_loc(G+q)`` applied to ``psi_k`` and gathered onto the ``k+q`` sphere,
+    plus ``|beta_{k+q}> D <beta_k|psi_k>``, at every k-point ``psi`` holds.
+    Module level so that the k-chunked route
+    (:mod:`defumat.response.chunked_phonon`) differentiates the same expression
+    on a chunk's two row-subset calculations. ``dij`` is one ``D`` per channel,
+    which is k-independent.
+    """
     import equinox as eqx
 
     from defumat.basis.fft import gather_from_box
@@ -384,62 +438,47 @@ def bare_displacements_at_q(calculation, calculation_kq, solver, q_cart, positio
     structure = calculation.system.structure
     pseudos = calculation.pseudos
     batch = calculation.k_batch
-    psi = solver.psi
-    positions = jnp.asarray(positions)
-
     index_k = calculation.fft_index
     index_kq = calculation_kq.fft_index
     mask_kq = calculation_kq.basis.planewaves.mask
-    dij = tuple(h.coefficients for h in solver.hamiltonians)
 
-    def applied(pos):
-        moved = eqx.tree_at(lambda s: s.positions, structure, pos)
-        potential = g_to_r(
-            local_potential_at_q(pseudos, moved, cell, smooth, q_cart),
-            smooth.fft_index, grid,
-        )
-        vkb_k = calculation.projector_core.at_positions(pos).vkb
-        vkb_kq = calculation_kq.projector_core.at_positions(pos).vkb
+    moved = eqx.tree_at(lambda s: s.positions, structure, pos)
+    potential = g_to_r(
+        local_potential_at_q(pseudos, moved, cell, smooth, q_cart),
+        smooth.fft_index, grid,
+    )
+    vkb_k = calculation.projector_core.at_positions(pos).vkb
+    vkb_kq = calculation_kq.projector_core.at_positions(pos).vkb
 
-        blocks = []
-        for spin in range(psi.shape[0]):
-            coefficients = dij[spin].astype(vkb_kq.dtype)
+    blocks = []
+    for spin in range(psi.shape[0]):
+        coefficients = dij[spin].astype(vkb_kq.dtype)
 
-            def one_k(item, coefficients=coefficients):
-                states, here, there, beta_k, beta_kq, keep = item
+        def one_k(item, coefficients=coefficients):
+            states, here, there, beta_k, beta_kq, keep = item
 
-                # The local term is a band's box in and a band's box out, so
-                # it takes the band dial; the two einsums below are
-                # ``(n, npwx) x (npwx, nkb)`` and hold nothing grid-sized.
-                def local_block(block):
-                    field = g_to_r(block, here, grid)
-                    box = jnp.fft.fftn(
-                        field * potential, axes=(-3, -2, -1)) / points
-                    return gather_from_box(box, there)
+            # The local term is a band's box in and a band's box out, so
+            # it takes the band dial; the two einsums below are
+            # ``(n, npwx) x (npwx, nkb)`` and hold nothing grid-sized.
+            def local_block(block):
+                field = g_to_r(block, here, grid)
+                box = jnp.fft.fftn(
+                    field * potential, axes=(-3, -2, -1)) / points
+                return gather_from_box(box, there)
 
-                local = map_bands(local_block, states)
-                projected = jnp.einsum("gk,ng->nk", beta_k.conj(), states)
-                nonlocal_ = jnp.einsum(
-                    "gk,nk->ng", beta_kq, projected @ coefficients.T
-                )
-                return jnp.where(keep, local + nonlocal_, 0.0)
+            local = map_bands(local_block, states)
+            projected = jnp.einsum("gk,ng->nk", beta_k.conj(), states)
+            nonlocal_ = jnp.einsum(
+                "gk,nk->ng", beta_kq, projected @ coefficients.T
+            )
+            return jnp.where(keep, local + nonlocal_, 0.0)
 
-            blocks.append(map_k(
-                one_k,
-                (psi[spin], index_k, index_kq, vkb_k, vkb_kq, mask_kq),
-                batch=batch,
-            ))
-        return jnp.stack(blocks)
-
-    nat = positions.shape[0]
-    chosen = tuple(range(nat)) if atoms is None else tuple(atoms)
-    bare = np.empty((len(chosen), 3), dtype=object)
-    for row, atom in enumerate(chosen):
-        for cart in range(3):
-            tangent = jnp.zeros_like(positions).at[atom, cart].set(1.0)
-            bare[row, cart] = compiled(
-                lambda u, du: jax.jvp(applied, (u,), (du,))[1], positions, tangent)
-    return bare
+        blocks.append(map_k(
+            one_k,
+            (psi[spin], index_k, index_kq, vkb_k, vkb_kq, mask_kq),
+            batch=batch,
+        ))
+    return jnp.stack(blocks)
 
 
 # ---------------------------------------------------------------------------
@@ -916,6 +955,17 @@ def frozen_force_constants(calculation, solver, positions, density, q_cart):
         jnp.zeros((nat, 3) + jnp.asarray(density).shape), solver.nocc,
     )).reshape(3 * nat, 3 * nat)
 
+    return swap_ewald(calculation, positions, frozen, q_cart)
+
+
+def swap_ewald(calculation, positions, frozen, q_cart):
+    """``frozen - d2ionq(0) + d2ionq(q)``: the frozen Hessian moved to ``q``.
+
+    ``frozen`` is the ``(3 nat, 3 nat)`` second derivative of the frozen-state
+    functional at ``Gamma``, which carries the Ewald sum's Hessian there; the
+    rest of it is the same at every ``q`` (see :func:`frozen_force_constants`).
+    """
+    nat = np.asarray(positions).shape[0]
     cell = calculation.system.cell
     dense = calculation.basis.dense
     ionic = np.asarray(jax.hessian(
@@ -1054,8 +1104,18 @@ def dynamical_matrix_at_q(
     positions = jnp.asarray(structure.positions)
     nat = structure.nat
 
+    # **The route is decided before anything converts the states**, by the
+    # rule every response shares (:func:`~defumat.response.efield._streams`):
+    # where it says to walk, the states at ``k`` and at ``k + q``, the bare
+    # perturbations and ``dpsi`` stay in host memory and every pass is one
+    # k-chunk's (:mod:`defumat.response.chunked_phonon`).
+    from defumat.response.efield import _streams
+
+    streamed = _streams(calculation, wavefunctions, keep_internals=False,
+                        what="the dynamical matrix at q")
     result = _GroundState(wavefunctions, eigenvalues, density, becsum)
-    solver = make_sternheimer(calculation, result, threshold=threshold)
+    solver = make_sternheimer(calculation, result, threshold=threshold,
+                              host_store=streamed)
     potential = calculation.potential(density)
 
     kq, hamiltonians_kq, eigenvalues_kq, psi_kq = states_at_k_plus_q(
@@ -1063,21 +1123,40 @@ def dynamical_matrix_at_q(
         # ``jnp.shape`` rather than ``np.asarray(...).shape``: the second pulls
         # the whole ground-state block to the host to read one integer, and JAX
         # then keeps that host copy on the array for its lifetime.
-        nbnd=nbnd or jnp.shape(wavefunctions)[2],
+        nbnd=nbnd or jnp.shape(wavefunctions)[2], stream=streamed,
     )
-    two = TwoSphereSolver(solver, hamiltonians_kq, psi_kq, eigenvalues_kq, kq)
+    if streamed:
+        from defumat.response.chunked_phonon import StreamedDisplacementsAtQ
 
-    bare = bare_displacements_at_q(calculation, kq, two, q_cart, positions)
-    dpsi, drho, history, average, converged = self_consistent_response_at_q(
-        calculation, kq, two, bare, density, q_cart,
-        alpha_mix=alpha_mix, tr2=tr2, max_iterations=max_iterations,
-        verbose=verbose,
-    )
+        displacements = StreamedDisplacementsAtQ(
+            calculation, kq, solver, hamiltonians_kq, eigenvalues_kq, psi_kq,
+            q_cart, positions,
+        )
+        displacements.prepare()
+        dpsi, drho, history, average, converged = screening_loop_at_q(
+            calculation, displacements, density, q_cart,
+            alpha_mix=alpha_mix, tr2=tr2, max_iterations=max_iterations,
+            verbose=verbose,
+        )
+        matrix = (
+            swap_ewald(calculation, positions,
+                       displacements.frozen_force_constants(density), q_cart)
+            + displacements.response_force_constants()
+        )
+    else:
+        two = TwoSphereSolver(solver, hamiltonians_kq, psi_kq, eigenvalues_kq, kq)
 
-    matrix = (
-        frozen_force_constants(calculation, solver, positions, density, q_cart)
-        + response_force_constants(two, dpsi, bare, nat)
-    )
+        bare = bare_displacements_at_q(calculation, kq, two, q_cart, positions)
+        dpsi, drho, history, average, converged = self_consistent_response_at_q(
+            calculation, kq, two, bare, density, q_cart,
+            alpha_mix=alpha_mix, tr2=tr2, max_iterations=max_iterations,
+            verbose=verbose,
+        )
+
+        matrix = (
+            frozen_force_constants(calculation, solver, positions, density, q_cart)
+            + response_force_constants(two, dpsi, bare, nat)
+        )
     asymmetry = float(np.max(np.abs(matrix - matrix.conj().T)))
     matrix = 0.5 * (matrix + matrix.conj().T)
 

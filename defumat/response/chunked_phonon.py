@@ -44,6 +44,17 @@ Against the whole-k route on the same converged state
 norm-conserving wedge, a norm-conserving metal, an ultrasoft polar cell, a PAW
 wedge, half-sphere storage and an ``atoms=`` subset.
 
+**The phonon at ``q``** (:class:`StreamedDisplacementsAtQ`) is the same three
+stages on two spheres: the ``k + q`` states are written into a host store a
+chunk at a time (``stream_states``), each chunk has two row-subset calculations
+built from the calculation's own fields, the solve pass is the two-sphere
+solver's, the response density's sum over k is added over chunks and finished
+once, the electronic half of the matrix is one Gram product of the two host
+stores, and the frozen half is the Gamma passes with zero tangents before the
+Ewald term is moved to ``q``. Against the whole route: 2.1e-14 end to end at one
+k-point a chunk, and 1.9e-14 at a chunk of 3 with one ``k + q`` store handed to
+both.
+
 **What it does not change**: the ``P`` dense-grid fields the loop carries
 (``dvscf``, the induced potential, the symmetrised response, ``drhous`` and the
 core term), which are ``5 P nspin_mag`` grids on the device and are the next
@@ -53,6 +64,8 @@ route or are refused before this is reached.
 """
 
 from __future__ import annotations
+
+import dataclasses
 
 import jax
 import jax.numpy as jnp
@@ -645,5 +658,203 @@ def _phonon_passes(calculation, key) -> dict:
         ("ldos", ldos), ("shift", shift), ("multipliers", multipliers),
         ("global_nc", global_nc), ("pull_nc", pull_nc), ("sums", sums_pass),
         ("forward", forward), ("global_us", global_us), ("pull_us", pull_us))}
+    cached[1][key] = passes
+    return passes
+
+
+class StreamedDisplacementsAtQ:
+    """The phonon at ``q``'s stores in host memory, and the walks over them.
+
+    :func:`~defumat.response.phononq.dynamical_matrix_at_q`'s route when the
+    store streams, with the same three stages the whole route has: the bare
+    perturbations (:meth:`prepare`), the solves the self-consistent loop drives
+    (:meth:`respond`, through :func:`~defumat.response.phononq.
+    screening_loop_at_q`), and the two halves of the matrix. Every pass is one
+    k-chunk's, on **two** row-subset calculations: the chunk's k-points and the
+    same rows of the ``k + q`` list, which has the same length and order. Both
+    are built from the calculation's own hoisted fields with the row leaves of
+    their own list, so the passes close over the calculation alone and a second
+    ``q`` reuses them.
+
+    ``solver`` is the whole set's solver at ``k``, built on the host store;
+    ``states_kq`` the ``k + q`` states, a host store from
+    :func:`~defumat.scf.streaming.stream_states`.
+    """
+
+    def __init__(self, calculation, calculation_kq, solver, hamiltonians_kq,
+                 eigenvalues_kq, states_kq, q_cart, positions):
+        self.calculation = calculation
+        self.calculation_kq = calculation_kq
+        self.solver = solver
+        self.hamiltonians = solver.hamiltonians
+        # **Without the per-k plane-wave counts**, which are static and bound
+        # only the Davidson subspace (``Hamiltonian.npw``): they differ from one
+        # ``q`` to the next, and kept they would compile the solve pass again at
+        # every ``q`` of a dispersion for nothing the solve reads.
+        self.hamiltonians_kq = tuple(dataclasses.replace(h, npw=None)
+                                     for h in hamiltonians_kq)
+        keep = solver.psi.shape[2]
+        self.keep = keep
+        self.states_kq = states_kq
+        self.eigenvalues_kq = np.asarray(eigenvalues_kq)[:, :, :keep]
+        self.q_cart = jnp.asarray(np.asarray(q_cart, dtype=float))
+        self.positions = jnp.asarray(positions)
+        self.nat = int(self.positions.shape[0])
+        self.modes = [(atom, cart) for atom in range(self.nat) for cart in range(3)]
+        self.chunks = list(k_chunks(calculation.system.kpoints.nk,
+                                    calculation.k_batch))
+        self.passes = _phonon_q_passes(calculation, (keep, solver.occupied_counts))
+        self.gamma_passes = _phonon_passes(
+            calculation, (solver.nocc, solver.occupied_counts, solver.smearing))
+        self.big = hoisted(calculation)
+        self.scalars = solver.scalars()
+        # ``D`` per channel, k-independent: the whole route reads it off the
+        # ``k + q`` Hamiltonians, and so does this.
+        self.dij = tuple(h.coefficients for h in self.hamiltonians_kq)
+        nspin, nk = solver.psi.shape[:2]
+        ndim = np.shape(states_kq)[-1]
+        shape = (self.nat, 3, nspin, nk, keep, ndim)
+        dtype = np.dtype(solver.psi.dtype)
+        self.bare = np.zeros(shape, dtype)
+        self.dpsi = np.zeros(shape, dtype)
+        self.iterations = 0
+        self.solves = 0
+
+    def _tangent(self, atom: int, cart: int):
+        tangent = np.zeros(self.positions.shape)
+        tangent[atom, cart] = 1.0
+        return jnp.asarray(tangent, dtype=self.positions.dtype)
+
+    def _arguments(self, rows, live):
+        """The leading arguments of the solve pass, for one chunk."""
+        return (self.big, row_leaves(self.calculation, rows),
+                row_leaves(self.calculation_kq, rows), self.hamiltonians,
+                self.hamiltonians_kq, _rows_of(self.solver.psi, rows),
+                _rows_of(self.states_kq[:, :, :self.keep], rows),
+                jnp.asarray(self.eigenvalues_kq[:, rows]),
+                self.solver.chunk_arrays(rows, live), self.scalars)
+
+    def prepare(self) -> None:
+        """``dV_bare_q/du |psi_k>`` per mode, on the ``k + q`` sphere, into the host store."""
+        for rows, live in self.chunks:
+            leaves = row_leaves(self.calculation, rows)
+            leaves_kq = row_leaves(self.calculation_kq, rows)
+            psi = _rows_of(self.solver.psi, rows)
+            written = rows[:live]
+            for atom, cart in self.modes:
+                bare = self.passes["bare"](
+                    self.big, leaves, leaves_kq, psi, self.positions,
+                    self._tangent(atom, cart), self.q_cart, self.dij)
+                self.bare[atom, cart][:, written] = np.asarray(bare)[:, :live]
+
+    def respond(self, dvscf, include_induced: bool):
+        """One iteration's solves: the complex response density per mode, finished."""
+        totals = [None] * len(self.modes)
+        worst = [0] * len(self.modes)
+        for rows, live in self.chunks:
+            arguments = self._arguments(rows, live)
+            written = rows[:live]
+            for index, (atom, cart) in enumerate(self.modes):
+                dv = (dvscf[atom, cart] if include_induced
+                      else jnp.zeros_like(dvscf[atom, cart]))
+                dpsi, steps, total = self.passes["respond"](
+                    *arguments, _rows_of(self.bare[atom, cart], rows), dv)
+                self.dpsi[atom, cart][:, written] = np.asarray(dpsi)[:, :live]
+                totals[index] = total if totals[index] is None else totals[index] + total
+                worst[index] = max(worst[index], int(np.max(np.asarray(steps))))
+        self.iterations += sum(worst)
+        self.solves += len(self.modes)
+        return [self._finish(total) for total in totals]
+
+    def _finish(self, total):
+        """The whole route's own finish (normalise, lift to the dense grid), on
+        the summed chunks: it reads nothing but the calculation's grids."""
+        from defumat.response.phononq import TwoSphereSolver
+
+        holder = TwoSphereSolver.__new__(TwoSphereSolver)
+        holder.calculation = self.calculation
+        return TwoSphereSolver.finish_response_at_q(holder, total)
+
+    def frozen_force_constants(self, density) -> np.ndarray:
+        """``(3 nat, 3 nat)``: the frozen Hessian at ``Gamma`` on the occupied block,
+        walked -- :func:`~defumat.response.phononq.frozen_force_constants` before
+        its Ewald swap. The Gamma route's two assembly passes with zero tangents."""
+        density = jnp.asarray(density)
+        zero = jnp.zeros_like(density)
+        rowset = row_leaves(self.calculation, self.chunks[0][0])
+        matrix = np.zeros((self.nat, 3, self.nat, 3))
+        for atom, cart in self.modes:
+            tangent = self._tangent(atom, cart)
+            column = np.asarray(self.gamma_passes["global_nc"](
+                self.big, rowset, self.positions, tangent, density, zero))
+            for rows, live in self.chunks:
+                arrays = self.solver.chunk_arrays(rows, live)
+                psi = _rows_of(self.solver.psi, rows)
+                column = column + np.asarray(self.gamma_passes["pull_nc"](
+                    self.big, row_leaves(self.calculation, rows), self.positions,
+                    tangent, psi, arrays["weights"], arrays["weights"],
+                    arrays["eigenvalues"], jnp.zeros_like(psi)))
+            matrix[atom, cart] = column
+        return matrix.reshape(3 * self.nat, 3 * self.nat)
+
+    def response_force_constants(self) -> np.ndarray:
+        """``2 sum_kn w <dpsi_i| dV_bare_j |psi>`` from the two host stores --
+        :func:`~defumat.response.phononq.response_force_constants` as one Gram
+        product. The stores hold real rows only, so there is no padding here."""
+        modes = 3 * self.nat
+        weights = np.asarray(self.solver.weights)
+        left = (np.conj(self.dpsi) * weights[None, None, ..., None]).reshape(modes, -1)
+        return 2.0 * left @ self.bare.reshape(modes, -1).T
+
+
+def _phonon_q_passes(calculation, key) -> dict:
+    """The phonon at ``q``'s compiled passes, built once and cached on the calculation.
+
+    ``key`` is the solved block's width and the counts per channel. ``q`` is an
+    argument, and the ``k + q`` sphere arrives as row leaves, so nothing here
+    closes over one ``q``'s calculation.
+    """
+    cached = calculation.__dict__.get("_streamed_response")
+    if cached is None or cached[0] is not calculation:
+        cached = (calculation, {})
+        calculation._streamed_response = cached
+    key = ("phonon-q",) + tuple(key)
+    if key in cached[1]:
+        return cached[1][key]
+    from defumat.response.phononq import (
+        TwoSphereSolver, applied_at_q, induced_perturbation_at_q,
+    )
+
+    keep, counts = key[1:]
+
+    def local(big, rowset):
+        return with_rows(with_hoisted(calculation, big), rowset)
+
+    def bare(big, rowset, rowset_kq, psi, x, dx, q_cart, dij):
+        sub, sub_kq = local(big, rowset), local(big, rowset_kq)
+        return jax.jvp(
+            lambda position: applied_at_q(sub, sub_kq, psi, position, q_cart, dij),
+            (x,), (dx,))[1]
+
+    def respond(big, rowset, rowset_kq, hamiltonians, hamiltonians_kq, psi,
+                psi_kq, eigenvalues_kq, arrays, scalars, bare_c, dv):
+        """``dpsi`` on one chunk, the worst iteration count per channel, and the
+        chunk's share of the response density's sum over k."""
+        sub, sub_kq = local(big, rowset), local(big, rowset_kq)
+        base = SternheimerSolver.on_chunk(
+            sub, sub.restricted_hamiltonians(hamiltonians), psi, arrays, scalars,
+            nocc=keep, occupied_counts=counts, smearing=None)
+        two = TwoSphereSolver(base, sub_kq.restricted_hamiltonians(hamiltonians_kq),
+                              psi_kq, eigenvalues_kq, sub_kq)
+        induced = induced_perturbation_at_q(sub, sub_kq, dv)
+
+        def perturbation(states, ik, spin):
+            return bare_c[spin][ik] + induced(states, ik, spin)
+
+        dpsi, steps, _ = two.solve_arrays(perturbation)
+        return dpsi, steps, two.response_parts_at_q(dpsi)
+
+    passes = {name: jax.jit(fn) for name, fn in (
+        ("bare", bare), ("respond", respond))}
     cached[1][key] = passes
     return passes

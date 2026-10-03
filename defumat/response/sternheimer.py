@@ -1543,7 +1543,8 @@ def smearing_of(calculation, result) -> Smearing | None:
 
 def make_sternheimer(calculation, result, threshold: float = THRESHOLD,
                      metals: bool = False, spin_polarized: bool = False,
-                     gamma_ok: bool = False, noncollinear: bool = False):
+                     gamma_ok: bool = False, noncollinear: bool = False,
+                     host_store: bool = False):
     """A solver for a converged :class:`~defumat.scf.driver.SCFResult`."""
     require_a_sternheimer_regime(
         calculation, metals=metals, spin_polarized=spin_polarized,
@@ -1563,7 +1564,13 @@ def make_sternheimer(calculation, result, threshold: float = THRESHOLD,
     # elsewhere.
     _, ddd_paw = calculation.onecenter(result.becsum)
     hamiltonians = calculation.hamiltonian(potential.v_scf, ddd_paw)
-    wavefunctions = jnp.asarray(result.wavefunctions)
+    # ``host_store``: a caller that walks the k axis a chunk at a time keeps a
+    # streamed store where it is, and the solver then holds it in host memory
+    # (:mod:`defumat.response.chunked_phonon`); every other caller indexes the
+    # states with a traced k and needs them on the device.
+    wavefunctions = result.wavefunctions
+    if not (host_store and is_host_store(wavefunctions)):
+        wavefunctions = jnp.asarray(wavefunctions)
     if wavefunctions.ndim == 3:
         wavefunctions = wavefunctions[None]
     return SternheimerSolver(
