@@ -6808,7 +6808,7 @@ time per one-shot; band energies and torques bit-identical.
 
 ### 15. In memory mode a vc-relax runs every step's SCF on the exact scanned augmentation, recomputing the Bessel transforms of `Q_ij` twice an iteration
 
-**Done 2026-10-03, `a411147`.** `at_cell` builds the augmentation and the projector core as the constructor does (`at_strain(..., _moving=True)`), and the stress keeps the scanned table inside its trace. On `si8-us-1k` in memory mode, a step-2 SCF at a cell compressed by 1 per cent evaluated the radial kernel 171 times over 9 iterations and evaluates it 0 times (3 at the move, the stored table's build); the energy 1.4e-14 Ry apart, 9 iterations both; speed mode bit-identical. The moved calculation holds one stored `(nh, nh, ngm)` table, 18.6 MB on that cell by arithmetic. Found while doing it, **a defect**: `at_cell` does not update `basis_kpoints`, so a DFT+U vc-relax rebuilds `wfcU` at the starting cell's Cartesian k-points (1.8e-2 on 0.94 at a 3 per cent change on `ni-ldau-stress.in`) while the stress uses the moved ones; put to a fable subagent with the one-line fix.
+**Done 2026-10-03, `a411147`.** `at_cell` builds the augmentation and the projector core as the constructor does (`at_strain(..., _moving=True)`), and the stress keeps the scanned table inside its trace. On `si8-us-1k` in memory mode, a step-2 SCF at a cell compressed by 1 per cent evaluated the radial kernel 171 times over 9 iterations and evaluates it 0 times (3 at the move, the stored table's build); the energy 1.4e-14 Ry apart, 9 iterations both; speed mode bit-identical. The moved calculation holds one stored `(nh, nh, ngm)` table, 18.6 MB on that cell by arithmetic. Found while doing it, **a defect**: `at_cell` does not update `basis_kpoints`, so a DFT+U vc-relax rebuilds `wfcU` at the starting cell's Cartesian k-points (1.8e-2 on 0.94 at a 3 per cent change on `ni-ldau-stress.in`) while the stress uses the moved ones; fixed the same night as a fable subagent decided (`e65a2e4`: `at_cell` moves `basis_kpoints` with the cell, as `pw.x`'s `scale_h` moves `xk`; the test fails on the old line by 0.032 in the k-points).
 
 Sites: `scf/driver.py:3226`, `:3369-3378`, `:3383-3399`; `pseudo/augmentation.py:504-514`,
 `:772-825`, `:1231-1235`; `workflows/vc_relax.py:300-305`, `:439`.
@@ -7190,3 +7190,36 @@ across nodes, and `ib0`, unmeasured, shrinks all of it.
 and without `DEFUMAT_POOL_INTERFACE=ib0` (a submission for the user to approve), then a large-box
 pooled input with `tools/parallel/pool_time.py` before and after, energies compared at a fixed
 iteration count.
+
+## Found in passing, 2026-10-03
+
+What the agents of this sweep's follow-up found outside their items, recorded rather than lost.
+
+- **A nonzero second harmonic on centrosymmetric silicon is the FFT grid, not the assembly.** On
+  `si2-nosym.in` (unshifted 2x2x2, `nbnd = 8`) `get_shg` gave max |chi| 0.716 pm/V where inversion
+  requires zero. Under `nosym` the grid is chosen without the fractional translations' factors (QE 7.5
+  does the same, `setup.f90:606-611`), so diamond's quarter-lattice translation is not on the 15^3 grid,
+  the potential breaks inversion at 1.2e-4 relative and an even-order response, a cancellation of large
+  terms, shows it: 0.0018 pm/V on a commensurate 20^3 grid, 0.00074 with symmetry kept for the SCF and the
+  whole unshifted mesh passed as `kpoints=`. Ruled out on the way: the k-set (every point a TRIM), the
+  band cut (0.62 to 0.63 for `nbnd` 8 to 16) and the threshold. A cut multiplet is far worse: `nbnd = 12`
+  there (`band_cut_gap` 2e-14 eV) gives 1095 pm/V. `photocurrent.py`'s refusal text sent users to exactly
+  the incommensurate case, and the silicon floors quoted in `test_shg.py` (0.10, 0.055 pm/V) are this
+  grid effect. A warning for both conditions is being added by a separate agent.
+- **Tetragonal cobalt relaxed from the identity returns the same free energy and torque to the last bit
+  at steps 2 to 4**, in the old code and the new. Presumably a stationary start; not checked.
+- **Two failures that predate tonight**, both reproduced on master: `test_retention.py::
+  test_the_field_keeps_its_commutators_only_for_a_reader` (`KeyError: 'commutators'`), and
+  `test_spinor_response.py::test_the_spinor_density_weights_are_the_ground_state_s` (4.2e-17 against a
+  bound of 1e-18, below the rounding; `GPU-MEMORY-NEXT.md` already lists it).
+- **Small leftovers**: `forces/torque.py` reads a whole store's shape through `jnp.asarray(states).shape[1]`
+  in two places (`np.shape` would do); `hubbard/operator.py` contracts `v_ns` as a dense `gi,ij,gj->g`, the
+  sibling of M5; `response/chunked_phonon.py` still describes the Hamiltonian's `npw` as the per-k counts,
+  stale since item 9 (a); and the `jnp.asarray` uploads of a possibly host store that item 24 did not
+  reach are listed in that item's agent report (`efield.py`, `elastic.py`, `phonon.py`, `sternheimer.py`,
+  `velocity.py`, `phononq.py`, `anisotropy.py`, `spiral_soc.py`).
+- **Item 6 is deferred, deliberately.** Reordering the walked third derivative chunk-outer is
+  bit-identical, but it keeps one accumulator per tangent alive at once, `3 nat` of them for a
+  displacement, where the walked route exists to bound exactly that; the gain is at most the 6 to 8 per
+  cent net gap on record. It wants the compile-only count the entry names before anything else.
+
