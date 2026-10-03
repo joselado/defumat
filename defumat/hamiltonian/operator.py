@@ -47,8 +47,8 @@ from defumat.basis.fft import (
 from defumat.batching import map_bands
 from defumat.pseudo.projectors import Projectors
 
-__all__ = ["Hamiltonian", "to_planes", "from_planes", "planes_inner",
-           "planes_force_real_g0", "twice"]
+__all__ = ["Hamiltonian", "to_planes", "from_planes", "planes_inner", "planes_norm2",
+           "planes_zero_term", "planes_force_real_g0", "twice"]
 
 
 # --- half-sphere states as real planes -----------------------------------------
