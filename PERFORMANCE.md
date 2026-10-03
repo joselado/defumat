@@ -9967,7 +9967,8 @@ to 1e-6 cm^-1 and the Raman activity of each degenerate multiplet to 1e-7 relati
 28.3 -> 8.7 MB at 27 k-points and 54.1 -> 9.6 at 64, the SCF's own both times, with the frequencies the
 same to four decimals; and slower, 29.2 -> 33.4 s and 46.7 -> 72.3 s, because a cell this small has
 little work per k-point and one k-point a chunk pays its dispatch per chunk -- what `k_batch = 'fit'`,
-the default on a card, amortises. The same commit gave
+the default on a card, amortises. At that default (the whole 64-point mesh in one chunk here) the walked
+spectrum is **2.1 times faster**, 28.5 -> 13.6 s, at 196.5 -> 216.7 MB. The same commit gave
 the two routes one expression for the second-order energy's per-k terms and the position residual
 (`second_order_band_terms`, `position_residual`); the whole route is bit-identical to the commit before
 on ultrasoft silicon and within 1.4e-14 on 195 on norm-conserving silicon, both arms on the same cores,
