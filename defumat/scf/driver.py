@@ -226,6 +226,33 @@ class LocalTerms(NamedTuple):
     deeq: object
 
 
+#: The :class:`System` fields a rigid turn of the magnetic texture changes, and
+#: the only ones :meth:`Calculation.with_texture` lets differ.
+_TEXTURE_FIELDS = ("angle1", "angle2", "starting_moments")
+
+
+def _same_value(first, second) -> bool:
+    """Whether two values are the same pytree with bitwise-equal leaves.
+
+    Static fields are in the tree structure and are compared there; array
+    leaves are compared exactly, shape and dtype included.
+    """
+    if first is second:
+        return True
+    leaves, structure = jax.tree_util.tree_flatten(first)
+    others, other_structure = jax.tree_util.tree_flatten(second)
+    if structure != other_structure or len(leaves) != len(others):
+        return False
+    for a, b in zip(leaves, others):
+        if isinstance(a, (np.ndarray, jax.Array)) or isinstance(b, (np.ndarray, jax.Array)):
+            a, b = np.asarray(a), np.asarray(b)
+            if a.shape != b.shape or a.dtype != b.dtype or not np.array_equal(a, b):
+                return False
+        elif a != b:
+            return False
+    return True
+
+
 #: ``quantization_axis`` is a fixed three-vector or ``None``, so it is static:
 #: it comes from the *input* magnetization and cannot change during a run.
 #: ``source_free`` is Elk's ``nosource`` and is an input flag, so it is
@@ -3577,6 +3604,82 @@ class Calculation:
         # projectors, which is silently wrong rather than an error.
         if self.hubbard is not None:
             moved.wfcU = moved._build_hubbard_projectors()
+        return moved
+
+    def with_texture(self, system: System) -> "Calculation":
+        """The same calculation with its magnetic texture turned, every table shared.
+
+        ``system`` is this calculation's own with ``angle1``/``angle2`` and a
+        ``STARTING_MOMENTS`` card turned rigidly, which is what the force
+        theorem and the orientation torque diagonalise one leg at, once per
+        direction or orientation step (:mod:`defumat.workflows.anisotropy`).
+        Turning requires ``nosym``, so the k-set does not move, and neither do
+        the G sets, the grids, the projectors, the local potential or the
+        augmentation and PAW tables. What a constructor reads off the texture
+        is three things, and they are rebuilt here: the system itself, the
+        quantization axis a gradient-corrected noncollinear functional takes
+        the sign of the magnetization along (``compute_ux``), and the magnetic
+        symmetry group, which a ``nosym`` run never applies but which is
+        recomputed so that this object says what a fresh one would. The field
+        and the constraint are rebuilt too, from the turned system, as the
+        constructor builds them. On tetragonal cobalt turned from ``z`` to
+        ``x``, a fresh build differs from the unturned one in exactly those
+        attributes, bitwise (``OPEN.md`` Part XXIII item 14).
+
+        Returns ``self`` for this calculation's own system or one equal to it.
+        Refused: a turn on a run with symmetry, a spin spiral, and a system
+        that differs from this one's in anything but the texture, the k-set
+        included, compared bitwise.
+        """
+        if system is self.system:
+            return self
+        if self.spiral:
+            raise NotImplementedError(
+                "with_texture on a spin spiral is not implemented: the moments' "
+                "angle to the spiral axis is checked when the calculation is "
+                "built, and a new texture means a new calculation"
+            )
+        if not self.gamma_only:
+            system = _without_gamma_storage(system)
+        for field_ in dataclasses.fields(system):
+            if field_.name in _TEXTURE_FIELDS:
+                continue
+            if not _same_value(getattr(system, field_.name),
+                               getattr(self.system, field_.name)):
+                raise ValueError(
+                    f"with_texture turns the magnetic texture and nothing else, "
+                    f"and this system differs from the calculation's in "
+                    f"{field_.name}: build a calculation of it instead"
+                )
+        if all(_same_value(getattr(system, name), getattr(self.system, name))
+               for name in _TEXTURE_FIELDS):
+            # An equal system rebuilt rather than the same object, which a
+            # ``with_soc_scale`` on every call of a scan gives: nothing turned.
+            return self
+        if not system.nosym:
+            raise ValueError(
+                "with_texture needs nosym = .true.: a magnetic noncollinear run "
+                "reduces its k-set with a group that depends on where the "
+                "moments point, so a turned texture is a different k-set and a "
+                "new calculation"
+            )
+        moved = copy.copy(self)
+        # Everything cached lazily that reads the system: the compiled
+        # gradients close over it, and the tetrahedra and the reporting spheres
+        # are built from it on demand.
+        for name in ("_spiral_gradient", "_spiral_gradient_chunk", "_energy_gradient",
+                     "_chunked_gradient", "_analytic_terms", "_tetrahedra"):
+            moved.__dict__.pop(name, None)
+        moved._reporting_regions = None
+        moved.system = system
+        # The constructor's three readings of the texture, in its words.
+        axis = (
+            fixed_quantization_axis(system.local_moments, system.b_field)
+            if self.nspin_mag == 4 and not self.spiral else None
+        )
+        moved.quantization_axis = None if axis is None else tuple(float(v) for v in axis)
+        moved.symmetries = system.symmetry_group()
+        moved.magnetic_field = moved._build_magnetic_field()
         return moved
 
     @property

@@ -537,6 +537,23 @@ def run_force_theorem(
     only real bug (:func:`_with_quantization_axis`), so it is an option rather
     than something only a test can reach by calling internals.
     """
+    return _force_theorem(
+        system, pseudos, density, direction, nbnd, conv_thr, k_batch, ef_0,
+        projected, require_spin_orbit, soc_scale, becsum,
+    )[0]
+
+
+def _force_theorem(system, pseudos, density, direction, nbnd, conv_thr, k_batch,
+                   ef_0, projected, require_spin_orbit, soc_scale, becsum,
+                   calculation=None):
+    """:func:`run_force_theorem`, and the calculation it diagonalised in.
+
+    ``calculation`` is one an earlier direction of the same scan returned: it is
+    turned to this direction with
+    :meth:`~defumat.scf.driver.Calculation.with_texture` rather than built
+    again, so a scan builds one (``OPEN.md`` Part XXIII item 14). ``None``
+    builds it, which is what the first direction does.
+    """
     if soc_scale is not None:
         system = system.with_soc_scale(soc_scale)
     becsum = _checked_becsum(becsum, pseudos)
@@ -581,6 +598,7 @@ def run_force_theorem(
     calculation, system, eigenvalues, wavefunctions = fixed_density_states(
         system, pseudos, rotated, nbnd=nbnd, conv_thr=conv_thr, k_batch=k_batch,
         becsum=rotated_becsum, keep_states=bool(projected),
+        calculation=None if calculation is None else calculation.with_texture(system),
     )
 
     wg, levels = calculation.occupations(jnp.asarray(eigenvalues))
@@ -613,7 +631,7 @@ def run_force_theorem(
         result.projected = _project_band_energy(
             calculation, system, eigenvalues, wg, wavefunctions, ef_0,
         )
-    return result
+    return result, calculation
 
 
 def sphere_cover(n: int) -> tuple:
@@ -724,14 +742,17 @@ def run_anisotropy(
     """
     directions = _direction_set(system, directions)
 
-    results = tuple(
-        run_force_theorem(
-            system, pseudos, density, direction=direction, nbnd=nbnd,
-            conv_thr=conv_thr, k_batch=k_batch, projected=projected,
-            soc_scale=soc_scale, becsum=becsum,
+    # One calculation for the whole scan: the first direction builds it and
+    # every later one turns it (``Calculation.with_texture``), since only the
+    # texture moves between them.
+    results, calculation = [], None
+    for direction in directions:
+        result, calculation = _force_theorem(
+            system, pseudos, density, direction, nbnd, conv_thr, k_batch, None,
+            projected, True, soc_scale, becsum, calculation,
         )
-        for direction in directions
-    )
+        results.append(result)
+    results = tuple(results)
     return MagneticAnisotropy(
         directions=tuple(r.direction for r in results), results=results
     )
@@ -1531,6 +1552,20 @@ def run_orientation_torque(
     coefficients are rebuilt from the turned ``becsum`` inside the energy the
     torque is the gradient of, so their share of the torque is in it.
     """
+    return _orientation_torque(
+        system, pseudos, density, rotation, nbnd, conv_thr, k_batch, soc_scale,
+        becsum,
+    )[0]
+
+
+def _orientation_torque(system, pseudos, density, rotation, nbnd, conv_thr,
+                        k_batch, soc_scale, becsum, calculation=None):
+    """:func:`run_orientation_torque`, and the calculation it diagonalised in.
+
+    ``calculation`` is one an earlier step of the same relaxation returned, turned
+    to this orientation with :meth:`~defumat.scf.driver.Calculation.with_texture`
+    rather than built again (``OPEN.md`` Part XXIII item 14); ``None`` builds it.
+    """
     from defumat.forces.torque import (
         band_energy_at_rotation,
         orientation_torque,
@@ -1557,6 +1592,7 @@ def run_orientation_torque(
         conv_thr=conv_thr, k_batch=k_batch,
         becsum=tuple(None if values is None else rotate_texture(values, rotation)
                      for values in reference_becsum),
+        calculation=None if calculation is None else calculation.with_texture(turned),
     )
     wg, levels = calculation.occupations(jnp.asarray(eigenvalues))
 
@@ -1577,7 +1613,7 @@ def run_orientation_torque(
         band_energy_check=check,
         entropy=float(levels.get("smearing", 0.0)),
         fermi_energy=levels.get("fermi_energy"),
-    )
+    ), calculation
 
 
 #: Trust radii of the orientation relaxation, in **radians**: the rotation
@@ -1783,19 +1819,25 @@ def relax_orientation(
         )
         return optimizer, settings
 
+    # One calculation for the whole relaxation: the first one-shot builds it
+    # and every later one turns it (``Calculation.with_texture``), since only
+    # the texture moves between them.
+    shared = [None]
+
     def one_shot(orientation):
-        result = run_orientation_torque(
-            system, pseudos, density, rotation=orientation, nbnd=nbnd,
-            conv_thr=conv_thr, k_batch=k_batch, soc_scale=soc_scale,
-            becsum=becsum,
+        result, shared[0] = _orientation_torque(
+            system, pseudos, density, orientation, nbnd, conv_thr, k_batch,
+            soc_scale, becsum, shared[0],
         )
-        # **Every orientation is a new calculation**, since the system's angles
-        # turn with it, so every one-shot compiles afresh and XLA keeps each
-        # executable for the life of the process. On the four-cell cobalt helix
-        # that accumulation reached 16 GB in eight steps and the curvature's
-        # one-shots were killed for it (Triton job 20478664); a step's own peak
-        # is a fraction of that. Dropping the compiled code costs nothing a new
-        # calculation was not going to pay anyway.
+        # **Every orientation compiles afresh** on a gradient-corrected
+        # functional, whose quantization axis is a static argument and turns
+        # with the texture, and XLA keeps each executable for the life of the
+        # process. On the four-cell cobalt helix that accumulation reached
+        # 16 GB in eight steps and the curvature's one-shots were killed for it
+        # (Triton job 20478664), when every orientation was also a new
+        # calculation; a step's own peak is a fraction of that. Whether this
+        # can go now that the calculation is shared is a measurement nobody has
+        # made, so it stays.
         jax.clear_caches()
         return result
 
