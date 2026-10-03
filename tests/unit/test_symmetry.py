@@ -241,9 +241,10 @@ def _diamond_on(cell, kinds=(0, 0), species=SI, second=(0.25, 0.25, 0.25)):
 
 
 def _counting_searches(monkeypatch):
-    """Every lattice search :func:`find_symmetries` starts, counted."""
+    """Every lattice search :func:`find_symmetries` starts, counted, from an empty memo."""
     from defumat.system import symmetry
 
+    find_symmetries.cache_clear()
     calls = []
     real = symmetry.lattice_point_group
 
