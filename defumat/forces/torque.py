@@ -70,7 +70,7 @@ import numpy as np
 
 from defumat.scf.continuation import _axis, _collinear_axis
 from defumat.batching import sum_k
-from defumat.eager import compiled
+from defumat.eager import compiled, compiled_function
 
 __all__ = [
     "band_energy_at_angle",
@@ -248,14 +248,21 @@ def _chunked_value_and_grad(calculation, states, weights, build, parameter,
             total = total + live[slot] * jnp.sum(occupation[ik] * bands)
         return total
 
-    compiled = jax.jit(jax.value_and_grad(chunk))
+    # Traced once a call and kept once a process (:mod:`defumat.eager`): a
+    # ``jax.jit`` built here was a new program at every call, and every call
+    # builds a new ``calculation`` (``run_torque``, ``run_orientation_torque``),
+    # so a scan of directions or a relaxation compiled it once per step.
+    value_and_grad = jax.value_and_grad(chunk)
+    program = None
     energy, slope = 0.0, 0.0
     for start in range(0, nk, k_batch):
         ks = np.arange(start, min(start + k_batch, nk))
         pad = k_batch - len(ks)
         indices = jnp.asarray(np.concatenate([ks, np.full(pad, ks[0], dtype=int)]))
         live = jnp.asarray(np.concatenate([np.ones(len(ks)), np.zeros(pad)]))
-        value, derivative = compiled(parameter, indices, live)
+        if program is None:
+            program = compiled_function(value_and_grad, parameter, indices, live)
+        value, derivative = program(parameter, indices, live)
         energy = energy + float(value)
         slope = slope + np.asarray(derivative)
     return energy, slope

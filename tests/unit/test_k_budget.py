@@ -223,3 +223,86 @@ def test_the_size_report_takes_the_store_the_run_takes(pseudo_dir, monkeypatch):
         _a_card_that_holds(chunk, monkeypatch)
         calculator = _calculator(pseudo_dir, memory_mode="memory")
         assert calculator.estimate().wfc_store == expected
+
+
+# --- one estimate serves the whole bisection ----------------------------------
+
+#: Three cells that put every k-dependent line in play: norm-conserving silicon
+#: on 64 k-points, ultrasoft DFT+U nickel at ``nspin = 2`` (projectors in both
+#: Davidson lines), and a spinor ultrasoft cobalt (``npol = 2``).
+_CELLS = ("silicon", "ni-ldau-ortho.in", "co-tetragonal-anisotropy-soc.in")
+
+#: The dials the chooser is called with: memory mode's own, and their opposite.
+_DIALS = ({"band_batch": None, "projectors": "rebuild", "wfc_store": "stream"},
+          {"band_batch": 3, "projectors": "store", "wfc_store": "device"})
+
+
+def _cell(name, pseudo_dir):
+    if name == "silicon":
+        return _calculator(pseudo_dir)
+    from tests.conftest import GENERATED
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return Calculator.from_file(GENERATED / name, pseudo_dir, announce=False)
+
+
+def _bisection(system, pseudos, available, **dials):
+    """``choose_k_batch`` as it was: a whole ``estimate_size`` at every step."""
+    budget = 0.6 * available
+
+    def peak(chunk):
+        return estimate_size(system, pseudos, k_batch=chunk, **dials).peak_bytes
+
+    whole = peak(None)
+    if whole <= budget:
+        return None, True, int(whole)
+    nk = estimate_size(system, pseudos, k_batch=1, **dials).nk
+    low, high = 1, max(1, nk - 1)
+    if peak(low) > budget:
+        return 1, False, int(peak(1))
+    while low < high:
+        middle = (low + high + 1) // 2
+        if peak(middle) <= budget:
+            low = middle
+        else:
+            high = middle - 1
+    calls = -(-nk // low)
+    chunk = -(-nk // calls)
+    return chunk, True, int(peak(chunk))
+
+
+@pytest.mark.parametrize("name", _CELLS)
+def test_one_estimate_is_every_chunk_s_estimate(name, pseudo_dir):
+    """``at_k_batch`` is :func:`estimate_size` at that chunk, every field, every line in order."""
+    calculator = _cell(name, pseudo_dir)
+    system, pseudos = calculator.system, calculator.pseudos
+    for dials in _DIALS:
+        base = estimate_size(system, pseudos, k_batch=None, **dials)
+        other = estimate_size(system, pseudos, k_batch=2, **dials)
+        for chunk in (None, 1, 2, 3, 5, 7, base.nk - 1, base.nk, base.nk + 5):
+            fresh = estimate_size(system, pseudos, k_batch=chunk, **dials)
+            moved = base.at_k_batch(chunk)
+            assert moved == fresh, (dials, chunk)
+            assert list(moved.arrays.items()) == list(fresh.arrays.items())
+            assert moved.peak_bytes == fresh.peak_bytes
+            # ... and from an estimate made at another chunk, not only the whole mesh
+            assert other.at_k_batch(chunk) == fresh, (dials, chunk)
+
+
+@pytest.mark.parametrize("name", _CELLS)
+def test_the_chooser_takes_the_chunk_the_bisection_took(name, pseudo_dir):
+    """Budgets either side of every chunk's peak, the starved one and the whole mesh."""
+    calculator = _cell(name, pseudo_dir)
+    system, pseudos = calculator.system, calculator.pseudos
+    for dials in _DIALS:
+        nk = estimate_size(system, pseudos, k_batch=None, **dials).nk
+        availables = {1, 10**13}
+        for chunk in sorted({1, 2, 3, nk // 3, nk // 2, nk - 1, nk}):
+            peak = estimate_size(system, pseudos, k_batch=chunk, **dials).peak_bytes
+            for available in (int(peak / 0.6), int((peak + 1) / 0.6), int(peak / 0.6) + 2):
+                availables.add(available)
+        for available in sorted(availables):
+            choice = choose_k_batch(system, pseudos, available=available, **dials)
+            assert (choice.k_batch, choice.fits, choice.estimate) == _bisection(
+                system, pseudos, available, **dials), (dials, available)
