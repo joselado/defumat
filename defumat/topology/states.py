@@ -412,6 +412,14 @@ class PlaneWaveStates(StateSet):
     #: The calculation the augmentation factors are rebuilt from. Static: it is
     #: setup, never traced.
     calculation: object = eqx.field(static=True, default=None)
+    #: The long-lived calculation ``q_ij(b)`` is cached on, when
+    #: :attr:`calculation` is a per-call copy of it on this set's k-points
+    #: (:meth:`~defumat.scf.driver.Calculation.at_kpoints`): the factors depend
+    #: on the cell, the atoms and the datasets and not on the k-points, so a
+    #: workflow that walks a mesh a string at a time computes them once per
+    #: direction rather than once per string. ``None`` caches on
+    #: :attr:`calculation`.
+    setup: object = eqx.field(static=True, default=None)
     #: ``(nk, npwx, nkb)`` projectors, kept only when a parity operation needs
     #: to reproject a transformed state. Large -- see the module docstring.
     vkb: jnp.ndarray | None = None
@@ -449,6 +457,11 @@ class PlaneWaveStates(StateSet):
     @property
     def npwx(self) -> int:
         return self.keys.shape[1]
+
+    @property
+    def _owner(self):
+        """The calculation ``q_ij(b)`` is computed from and cached on."""
+        return self.calculation if self.setup is None else self.setup
 
     def _alignment(self, i: int, j: int, shift, other=None):
         """Where each of ``i``'s plane waves sits in ``j``'s list, after ``shift``.
@@ -489,7 +502,7 @@ class PlaneWaveStates(StateSet):
         if self.becp is None:
             return matrix
         factors = _cached_augmentation(
-            self.calculation, self._difference(i, j, shift, other))
+            self._owner, self._difference(i, j, shift, other))
         if factors is None:
             return matrix
         return matrix + _augmentation_term(self.becp[i], other.becp[j], factors)
@@ -538,7 +551,7 @@ class PlaneWaveStates(StateSet):
         npol = self.npol
         factors = None
         if self.becp is not None:
-            factors = _cached_augmentation(self.calculation, differences[0])
+            factors = _cached_augmentation(self._owner, differences[0])
         becp = self.becp
         ket_becp = becp if other is None else other.becp
 
@@ -624,7 +637,7 @@ class PlaneWaveStates(StateSet):
         )
         if self.becp is None or self.vkb is None:
             return matrix
-        factors = _cached_augmentation(self.calculation, np.zeros(3))
+        factors = _cached_augmentation(self._owner, np.zeros(3))
         if factors is None:
             return matrix
         becp = _project(transformed, self.vkb[i], self.npol)
@@ -644,6 +657,7 @@ class PlaneWaveStates(StateSet):
             npol=self.npol,
             becp=None if self.becp is None else self.becp[jnp.asarray(index)],
             calculation=self.calculation,
+            setup=self.setup,
             vkb=None if self.vkb is None else self.vkb[jnp.asarray(index)],
             energies=None if self.energies is None else self.energies[jnp.asarray(index)],
             # **Dropped, not sliced.** The velocity operator is built on a
@@ -680,6 +694,15 @@ class PlaneWaveStates(StateSet):
 #: row's calculation is dropped. An ordinary ``lru_cache`` keyed on the
 #: calculation would pin every one of them and turn a 200 MB working set into
 #: fourteen gigabytes, with nothing in any answer to show for it.
+#:
+#: **The key is the long-lived calculation, not each row's copy.**
+#: :class:`~defumat.workflows.topology.DFTSource` hands every state set it
+#: builds the setup it moves to each k-set (:attr:`PlaneWaveStates.setup`),
+#: and the factors are a property of that setup -- cell, atoms, datasets -- so
+#: they are computed once per direction for the whole workflow. Keyed on the
+#: per-call :meth:`~defumat.scf.driver.Calculation.at_kpoints` copy, as they
+#: were, they missed on every string. The setup is an ordinary object, so it
+#: is a sound weak key; an ``eqx.Module`` with array leaves would not be.
 _AUGMENTATION_CACHE: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
 
 
@@ -712,6 +735,29 @@ def _pair_overlaps(coefficients, kets, becp, ket_becp, factors, index_i, index_j
 
     return map_k(body, {"i": index_i, "j": index_j, "gather": gather, "found": found},
                  batch=batch)
+
+
+@partial(jax.jit, static_argnames=("npol", "batch"))
+def _lazy_becp(coefficients, projectors, npol: int, batch):
+    """``becp`` on a lazy projector set, compiled once per shape.
+
+    :func:`build_plane_wave_states`'s projection when the projectors are rebuilt
+    per k-point (memory mode's ``projectors = 'rebuild'``). It was a ``map_k``
+    over a closure built inside the call, which with a chunk smaller than the
+    call's k-points is an eager ``lax.map`` whose body was a new function every
+    time, so JAX compiled the loop again for every string, column or row: 16
+    compilations in a second Berry-phase polarization of zincblende AlAs in
+    memory mode with one k-point a chunk, and 550 more mappings in the
+    process's address space (``OPEN.md`` Part XXIII item 10). The fix is
+    :func:`_pair_overlaps`'s: the states and the projector set are arguments,
+    and the scan body takes one k-point's rows as it took them from the
+    closure.
+    """
+    from defumat.batching import map_k
+
+    return map_k(
+        lambda ik: _project(coefficients[ik], projectors.at_k(ik), npol),
+        jnp.arange(coefficients.shape[0]), batch=batch)
 
 
 def _cached_augmentation(calculation, qcart):
@@ -775,6 +821,7 @@ def build_plane_wave_states(
     energies: jnp.ndarray | None = None,
     velocity=None,
     hamiltonian=None,
+    setup=None,
 ) -> PlaneWaveStates:
     """Wrap a diagonalisation's output as a :class:`PlaneWaveStates`.
 
@@ -799,6 +846,11 @@ def build_plane_wave_states(
     curvature is a sum over empty states and the truncation is exactly the
     bands the eigensolver did not resolve. Both are off by default for the same
     memory reason ``keep_projectors`` is.
+
+    ``setup`` is the calculation ``calculation`` was moved from to this k-set,
+    when it is a per-call copy (:attr:`PlaneWaveStates.setup`): the
+    augmentation charge between two k-points is cached on it, so that it is
+    computed once per mesh direction rather than once per call.
     """
     basis = calculation.basis
     gvectors = basis.smooth if hasattr(basis, "smooth") else basis.dense
@@ -825,13 +877,9 @@ def build_plane_wave_states(
     if calculation.augmentation is not None:
         projectors = calculation.projectors
         if projectors.is_lazy and not keep_projectors:
-            from defumat.batching import map_k
-
             # One k-point's projectors built at a time rather than the whole-k
             # ``vkb`` stacked (``GPU-MEMORY-NEXT.md`` item 7).
-            becp = map_k(
-                lambda ik: _project(coefficients[ik], projectors.at_k(ik), npol),
-                jnp.arange(coefficients.shape[0]), batch=calculation.k_batch)
+            becp = _lazy_becp(coefficients, projectors, npol, calculation.k_batch)
         else:
             becp = jax.vmap(lambda c, v: _project(c, v, npol))(
                 coefficients, projectors.vkb)
@@ -850,6 +898,7 @@ def build_plane_wave_states(
         npol=npol,
         becp=becp,
         calculation=calculation,
+        setup=setup,
         vkb=vkb,
         energies=energies,
         all_coefficients=all_coefficients,

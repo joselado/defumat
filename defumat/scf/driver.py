@@ -50,6 +50,7 @@ import warnings
 from pathlib import Path
 from dataclasses import dataclass, field
 from functools import partial
+from typing import NamedTuple
 
 import equinox as eqx
 import os
@@ -207,6 +208,49 @@ __all__ = ["SCFResult", "Calculation", "run_scf", "default_nbnd",
 def _field_potential(field, rho_r, cell, scale):
     """``add_bfield``: the potential of the external fields and the constraint."""
     return field.potential(rho_r, cell, scale)
+
+
+class LocalTerms(NamedTuple):
+    """What a Hamiltonian takes from the frozen potential, none of it k-dependent.
+
+    Built by :meth:`Calculation.local_terms` and consumed by
+    :meth:`Calculation.hamiltonian_from`. ``potentials`` holds one smooth-grid
+    potential per Hamiltonian -- one per channel of a collinear run, or the one
+    ``(nspin_mag, ...)`` stack of a spinor run -- and ``waves`` the same fields
+    with their ``xy`` plane contiguous. ``deeq`` is ``newd``'s ``D_ij``, or
+    ``None`` on a norm-conserving scalar run.
+    """
+
+    potentials: tuple
+    waves: tuple
+    deeq: object
+
+
+#: The :class:`System` fields a rigid turn of the magnetic texture changes, and
+#: the only ones :meth:`Calculation.with_texture` lets differ.
+_TEXTURE_FIELDS = ("angle1", "angle2", "starting_moments")
+
+
+def _same_value(first, second) -> bool:
+    """Whether two values are the same pytree with bitwise-equal leaves.
+
+    Static fields are in the tree structure and are compared there; array
+    leaves are compared exactly, shape and dtype included.
+    """
+    if first is second:
+        return True
+    leaves, structure = jax.tree_util.tree_flatten(first)
+    others, other_structure = jax.tree_util.tree_flatten(second)
+    if structure != other_structure or len(leaves) != len(others):
+        return False
+    for a, b in zip(leaves, others):
+        if isinstance(a, (np.ndarray, jax.Array)) or isinstance(b, (np.ndarray, jax.Array)):
+            a, b = np.asarray(a), np.asarray(b)
+            if a.shape != b.shape or a.dtype != b.dtype or not np.array_equal(a, b):
+                return False
+        elif a != b:
+            return False
+    return True
 
 
 #: ``quantization_axis`` is a fixed three-vector or ``None``, so it is static:
@@ -3562,6 +3606,82 @@ class Calculation:
             moved.wfcU = moved._build_hubbard_projectors()
         return moved
 
+    def with_texture(self, system: System) -> "Calculation":
+        """The same calculation with its magnetic texture turned, every table shared.
+
+        ``system`` is this calculation's own with ``angle1``/``angle2`` and a
+        ``STARTING_MOMENTS`` card turned rigidly, which is what the force
+        theorem and the orientation torque diagonalise one leg at, once per
+        direction or orientation step (:mod:`defumat.workflows.anisotropy`).
+        Turning requires ``nosym``, so the k-set does not move, and neither do
+        the G sets, the grids, the projectors, the local potential or the
+        augmentation and PAW tables. What a constructor reads off the texture
+        is three things, and they are rebuilt here: the system itself, the
+        quantization axis a gradient-corrected noncollinear functional takes
+        the sign of the magnetization along (``compute_ux``), and the magnetic
+        symmetry group, which a ``nosym`` run never applies but which is
+        recomputed so that this object says what a fresh one would. The field
+        and the constraint are rebuilt too, from the turned system, as the
+        constructor builds them. On tetragonal cobalt turned from ``z`` to
+        ``x``, a fresh build differs from the unturned one in exactly those
+        attributes, bitwise (``OPEN.md`` Part XXIII item 14).
+
+        Returns ``self`` for this calculation's own system or one equal to it.
+        Refused: a turn on a run with symmetry, a spin spiral, and a system
+        that differs from this one's in anything but the texture, the k-set
+        included, compared bitwise.
+        """
+        if system is self.system:
+            return self
+        if self.spiral:
+            raise NotImplementedError(
+                "with_texture on a spin spiral is not implemented: the moments' "
+                "angle to the spiral axis is checked when the calculation is "
+                "built, and a new texture means a new calculation"
+            )
+        if not self.gamma_only:
+            system = _without_gamma_storage(system)
+        for field_ in dataclasses.fields(system):
+            if field_.name in _TEXTURE_FIELDS:
+                continue
+            if not _same_value(getattr(system, field_.name),
+                               getattr(self.system, field_.name)):
+                raise ValueError(
+                    f"with_texture turns the magnetic texture and nothing else, "
+                    f"and this system differs from the calculation's in "
+                    f"{field_.name}: build a calculation of it instead"
+                )
+        if all(_same_value(getattr(system, name), getattr(self.system, name))
+               for name in _TEXTURE_FIELDS):
+            # An equal system rebuilt rather than the same object, which a
+            # ``with_soc_scale`` on every call of a scan gives: nothing turned.
+            return self
+        if not system.nosym:
+            raise ValueError(
+                "with_texture needs nosym = .true.: a magnetic noncollinear run "
+                "reduces its k-set with a group that depends on where the "
+                "moments point, so a turned texture is a different k-set and a "
+                "new calculation"
+            )
+        moved = copy.copy(self)
+        # Everything cached lazily that reads the system: the compiled
+        # gradients close over it, and the tetrahedra and the reporting spheres
+        # are built from it on demand.
+        for name in ("_spiral_gradient", "_spiral_gradient_chunk", "_energy_gradient",
+                     "_chunked_gradient", "_analytic_terms", "_tetrahedra"):
+            moved.__dict__.pop(name, None)
+        moved._reporting_regions = None
+        moved.system = system
+        # The constructor's three readings of the texture, in its words.
+        axis = (
+            fixed_quantization_axis(system.local_moments, system.b_field)
+            if self.nspin_mag == 4 and not self.spiral else None
+        )
+        moved.quantization_axis = None if axis is None else tuple(float(v) for v in axis)
+        moved.symmetries = system.symmetry_group()
+        moved.magnetic_field = moved._build_magnetic_field()
+        return moved
+
     @property
     def hamiltonian_npw(self) -> tuple[int, ...]:
         """The per-k plane-wave counts a Hamiltonian is built with.
@@ -4840,11 +4960,24 @@ class Calculation:
         problem to solve -- which is also how QE sees it, its ``2 nks`` k-list
         differing only in which ``vrs(:, isk)`` each point reads.
         """
+        return self.hamiltonian_from(self.local_terms(v_scf, ddd_paw), hubbard)
+
+    def local_terms(self, v_scf: jnp.ndarray, ddd_paw=None) -> LocalTerms:
+        """The half of :meth:`hamiltonian` that does not depend on the k-points.
+
+        The total local potential on the smooth grid, in both layouts, and
+        ``D_ij`` from ``newd``. A caller that builds Hamiltonians at many k-sets
+        from one frozen potential -- a Berry phase walks one string at a time --
+        builds these once and hands them to :meth:`hamiltonian_from` on each
+        :meth:`at_kpoints` copy, which shares the grids, ``vltot`` and the
+        augmentation charge they are made from.
+        """
         # ``set_vrs`` adds the fixed local pseudopotential to the self-consistent
         # part on the dense grid, and ``interpolate`` hands the wavefunction
         # transforms a smooth-grid copy. ``newd`` reads the *dense* one, since
         # the augmentation charge it integrates against is only representable
         # there.
+        #
         # ``set_vrs``: the local pseudopotential is felt in full by both
         # channels of an (up, down) potential and only by the charge component
         # of an (n, m) one. That is *not* the rule an unpolarized density
@@ -4853,7 +4986,35 @@ class Calculation:
         total = v_scf + as_potential_components(self.vltot, self.nspin_mag)
         deeq = self.coefficients(total, ddd_paw)
         if self.noncolin:
-            return (self._spinor_hamiltonian(total, deeq, hubbard),)
+            potential = jnp.stack([
+                to_smooth(component, self.basis.dense, self.basis.smooth)
+                for component in total
+            ])
+            potentials = (potential,)
+        else:
+            potentials = tuple(
+                to_smooth(total[spin], self.basis.dense, self.basis.smooth)
+                .astype(self._band_real())
+                for spin in range(self.nspin)
+            )
+        return LocalTerms(
+            potentials=potentials,
+            # the same potentials with their xy plane contiguous, which is the
+            # layout the stick transforms hold the field in
+            waves=tuple(jnp.moveaxis(p, -1, -3) for p in potentials),
+            deeq=deeq,
+        )
+
+    def hamiltonian_from(self, terms: LocalTerms, hubbard=None) -> tuple:
+        """:meth:`hamiltonian` from its k-independent half, built by :meth:`local_terms`.
+
+        ``terms`` may come from another calculation of the same cell and
+        datasets on another k-set (:meth:`at_kpoints`); everything with a ``k``
+        index is read off this one.
+        """
+        deeq = terms.deeq
+        if self.noncolin:
+            return (self._spinor_hamiltonian(terms, hubbard),)
         hamiltonians = []
         for spin in range(self.nspin):
             # ``vhpsi`` is a separate term, not a contribution to ``deeq``: it
@@ -4862,14 +5023,10 @@ class Calculation:
             # ``Hubbard_projectors = 'pseudo'``, where the Hubbard projectors
             # *are* the beta functions and the two terms therefore share a
             # separable form. That projector set is refused here.
-            potential = to_smooth(total[spin], self.basis.dense, self.basis.smooth)
-            potential = potential.astype(self._band_real())
             hamiltonians.append(Hamiltonian(
                 kinetic=self.kinetic.astype(self._band_real()),
-                potential=potential,
-                # the same potential with its xy plane contiguous, which is the
-                # layout the stick transforms hold the field in
-                potential_wave=jnp.moveaxis(potential, -1, -3),
+                potential=terms.potentials[spin],
+                potential_wave=terms.waves[spin],
                 sticks=self.sticks,
                 fft_index=self.fft_index,
                 fft_index_minus=self.fft_index_minus,
@@ -4885,30 +5042,24 @@ class Calculation:
             ))
         return tuple(hamiltonians)
 
-    def _spinor_hamiltonian(
-        self, total: jnp.ndarray, deeq, hubbard=None
-    ) -> SpinorHamiltonian:
-        """The single noncollinear Hamiltonian, at the given total potential.
+    def _spinor_hamiltonian(self, terms: LocalTerms, hubbard=None) -> SpinorHamiltonian:
+        """The single noncollinear Hamiltonian, at the given local terms.
 
         ``hubbard`` is a one-tuple: a spinor has one Hamiltonian on a space
         twice as large, so the DFT+U term's four spin blocks are one operator
         over spinor projector columns rather than one operator per channel.
         """
-        potential = jnp.stack([
-            to_smooth(component, self.basis.dense, self.basis.smooth)
-            for component in total
-        ])
         return SpinorHamiltonian(
             kinetic=self.kinetic,
-            potential=potential,
-            potential_wave=jnp.moveaxis(potential, -1, -3),
+            potential=terms.potentials[0],
+            potential_wave=terms.waves[0],
             spiral=self.spiral,
             sticks=self.sticks,
             fft_index=self.fft_index,
             mask=self.basis.planewaves.mask,
             npw=self.hamiltonian_npw,
             projectors=self.projectors,
-            deeq=deeq,
+            deeq=terms.deeq,
             grid=self.basis.smooth.grid,
             resolves_differences=self.resolves_differences,
             qq=self.qq_so,
