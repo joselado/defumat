@@ -9342,7 +9342,8 @@ closure and compiled every iteration: the collinear and spinor `becsum` (`scf/de
 occupation matrix (`hubbard/occupations.py`) and the tetrahedron Fermi level's bisection
 (`scf/tetrahedra.py`). Measured over a warm SCF, old against new: ultrasoft `si2-us.in` (2 k-points) 9 -> 0
 compiles and +198 -> +0 mappings, `ni-ldau-ortho.in` (10 k-points, DFT+U, `nspin = 2`) 40 -> 20 with either
-of its two fixes alone (the other's 20 left; both together not yet measured in one run), the spinor
+of its two fixes alone and 40 -> 0 with both (+24 mappings, the energy the same; measured on the merged
+branch), the spinor
 `ni-noncol-111.in` 14 -> 0, the ultrasoft spiral 10 -> 0, `al-tetrahedra.in` 6 -> 0, every array
 byte-identical (`a7bb0b6`, `bd611bb`, `bffddf4`; `OPEN.md` Part XXIII item 8). The six cells tried here had
 one k-point or ran the whole axis at once, so the check could not have seen it; the trap is in
