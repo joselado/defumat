@@ -154,3 +154,33 @@ def test_a_moved_core_is_chunked_and_at_the_moved_k_points(base, monkeypatch):
                                np.asarray(whole.columns), rtol=0, atol=1e-13)
     np.testing.assert_allclose(np.asarray(moved.projector_core.kg),
                                np.asarray(whole.kg), rtol=0, atol=1e-13)
+
+
+def test_a_moved_cell_builds_its_hubbard_projectors_at_its_own_k_points():
+    """``at_cell`` moves the k-points ``at_positions`` rebuilds ``wfcU`` from.
+
+    A vc-relax step is ``base.at_cell(at).at_positions(positions)``, and
+    ``at_positions`` builds the Hubbard projectors from ``basis_kpoints`` with no
+    ``kcart``. Before 2026-10-03 that list was left at the starting cell's
+    Cartesian k-points, so a DFT+U step's SCF, energy and force saw projectors
+    1.82e-2 off (on a largest entry of 0.944, at a 3 per cent expansion of this
+    cell) while the stress, which passes ``kcart``, saw the right ones. No SCF.
+    """
+    from pathlib import Path
+
+    from defumat import Calculator
+
+    root = Path(__file__).resolve().parents[2]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        calculator = Calculator.from_file(
+            root / "tests" / "data" / "qe" / "ni-ldau-stress.in",
+            pseudo_dir=root / "tests" / "data" / "pseudo", announce=False)
+    base = calculator.calculation
+    assert base.wfcU is not None, "the cell must carry a U"
+    moved = base.at_cell(1.03 * np.asarray(base.system.cell.at))
+    np.testing.assert_allclose(
+        np.asarray(moved.basis_kpoints.cartesian(moved.system.cell)),
+        np.asarray(moved._kcart), rtol=0, atol=1e-12)
+    rebuilt = moved.at_positions(moved.system.structure.positions)
+    assert np.abs(np.asarray(rebuilt.wfcU) - np.asarray(moved.wfcU)).max() < 1e-12

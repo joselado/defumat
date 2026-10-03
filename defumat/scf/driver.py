@@ -3388,6 +3388,17 @@ class Calculation:
                 np.asarray(self._kcrystal) @ np.asarray(cell.bg) / float(cell.tpiba)
             ),
         )
+        # ``basis_kpoints`` is the same list for every calculation that is not a
+        # spiral (and ``at_strain`` refuses a spiral before this line), and
+        # ``at_positions`` rebuilds ``wfcU`` and the atomic start from it with
+        # no ``kcart``. Left at the starting cell's object, a DFT+U vc-relax ran
+        # every step's SCF, energy and force on Hubbard projectors at the
+        # starting cell's Cartesian k-points while the stress, which passes
+        # ``kcart``, used the moved ones: 1.82e-2 on a largest entry of 0.944 at
+        # a 3 per cent expansion of ``ni-ldau-stress.in``. ``pw.x`` moves ``xk``
+        # with the new ``bg`` (``scale_h.f90:47-48``) and rebuilds the projectors
+        # after every move (``hinit1.f90:130-134``).
+        moved.basis_kpoints = moved.system.kpoints
         # The integration spheres are measured in the cell's own metric, so a
         # cell that has *moved* remeasures them -- the same rule
         # :meth:`_moved_magnetic_field` states for the atoms, and ``at_cell``
