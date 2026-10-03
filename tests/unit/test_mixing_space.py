@@ -418,6 +418,29 @@ def test_a_dual_eight_run_reaches_the_real_space_energy(pseudo_dir):
                                                       abs=1e-9)
 
 
+def test_a_magnetic_ultrasoft_run_takes_the_real_space_count(pseudo_dir):
+    """Noncollinear ultrasoft iron at its own ``beta = 0.3``: the two layouts, one count.
+
+    With the shell mixed linearly the G layout took 17 iterations here against
+    the real-space 11, the tail being the shell's magnetization falling by
+    ``(1 - beta)^2`` an iteration under a stopping test that reads the dense
+    set. Rebuilt from the mixed ``becsum`` it takes 11, and the energies agree
+    to 3e-11 Ry at the input's ``conv_thr = 1e-8``.
+    """
+    from defumat import Calculator
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        calculator = Calculator.from_file(BENCHMARKS / "fe-mag-1k.in",
+                                          pseudo_dir=pseudo_dir, announce=False)
+        results = {space: calculator.get_scf(mixing_space=space, verbose=False)
+                   for space in ("r", "g")}
+    assert results["r"].converged and results["g"].converged
+    assert results["g"].iterations <= results["r"].iterations + 1
+    assert results["g"].total_energy == pytest.approx(results["r"].total_energy,
+                                                      abs=1e-9)
+
+
 def test_a_resume_carries_the_g_history_and_drops_a_real_space_one(pseudo_dir, tmp_path,
                                                                    dual8):
     """A G checkpoint resumes on the same count; a real-space one is dropped, said so.
