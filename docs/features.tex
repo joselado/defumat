@@ -2376,6 +2376,34 @@ print(spectrum.raman_activity, spectrum.depolarisation)
 \code{dynmat.x}'s \code{RamanIR}, kept a pure function of arrays so it is
 testable without a self-consistent run.
 
+\textbf{The loop stops where \code{ph.x}'s does, and its linear solves are no
+tighter than the pass needs.} \code{tr2} is \code{ph.x}'s \code{tr2\_ph}, in its
+units: the loop stops when $|\Delta\Delta V_{\mathrm{scf}}|^2$, the summed square
+of a pass's change in the potential divided by the square of the number of reals
+it holds and by the number of perturbations, falls below \code{tr2}/\code{npol}.
+The field's three directions are tested together, as \code{solve\_e} tests them;
+a phonon's modes and a strain's six components are tested one at a time and the
+worst one decides, which is \code{ph.x}'s test for a one-dimensional
+representation. The default, $10^{-14}$, is what the committed \code{ph.x}
+references use. Two things come with \code{ph.x}'s formula: a fixed \code{tr2}
+admits a larger residual per grid point on a finer grid, and on an fcc cell the
+number in \code{history} is twice \code{ph.x}'s, because \code{ph.x} perturbs
+along the lattice vectors and this code along Cartesian axes. The CG threshold
+follows \code{ph.x}'s schedule, $10^{-2}$ on the first pass and
+$\min\big(0.1\sqrt{|\Delta\Delta V_{\mathrm{scf}}|^2},\,10^{-2}\big)$ after, and
+each solve starts from the previous pass's solution. A number for
+\code{threshold} holds the CG at that value on every pass instead, which together
+with a smaller \code{tr2} is what a comparison of two routes below \code{ph.x}'s
+own convergence needs.
+
+\begin{pycode}
+calc = Calculator.from_file("si-epsilon.in", pseudo_dir="pseudo")
+eps = calc.get_dielectric_tensor()          # ph.x's tr2 and CG schedule
+print(len(eps.history), eps.average_iterations)   # 5 passes, as ph.x; 12.6
+tight = calc.get_dielectric_tensor(tr2=1e-24, threshold=1e-12)
+print(eps.isotropic - tight.isotropic)      # 7.9e-6, the scheduled CG's residue
+\end{pycode}
+
 \textbf{At $\Gamma$ this code carries a term \code{ph.x} does not, and
 \code{origin\_tangent} is the knob that puts \code{ph.x}'s convention back.}
 The plane wave with $\mathbf k+\mathbf G=0$ exists only at $\Gamma$ exactly, and

@@ -55,7 +55,7 @@ from defumat.batching import k_chunks
 from defumat.forces.chunked import _rows_of, row_leaves, with_rows
 from defumat.forces.energy import hoisted, with_hoisted
 from defumat.response.chunked import _add, _passes as _field_passes
-from defumat.response.sternheimer import SternheimerSolver, local_perturbation
+from defumat.response.sternheimer import SternheimerSolver, local_perturbation, scalars_at
 from defumat.response.velocity import over_kpoints
 
 __all__ = ["StreamedStrains"]
@@ -112,12 +112,13 @@ class StreamedStrains:
         tangent[b, a] += 0.5
         return jnp.asarray(tangent)
 
-    def _arguments(self, rows, live):
-        """The leading arguments of the solver passes, for one chunk."""
+    def _arguments(self, rows, live, threshold=None):
+        """The leading arguments of the solver passes, for one chunk, with
+        ``threshold`` in the traced scalars when a schedule sets one."""
         return (self.big, row_leaves(self.calculation, rows), self.hamiltonians,
                 _rows_of(self.solver.psi, rows),
-                self.solver.chunk_arrays(rows, live), self.scalars, self.v_scf,
-                self.ddd_paw)
+                self.solver.chunk_arrays(rows, live),
+                scalars_at(self.scalars, threshold), self.v_scf, self.ddd_paw)
 
     # -- walk 1: the bare perturbations and the frozen-state response ----------
 
@@ -189,10 +190,13 @@ class StreamedStrains:
 
     # -- walk 2: the solves, once per iteration --------------------------------
 
-    def respond(self, dvscf, onecentre, include_induced: bool, frozen_becsum=None):
+    def respond(self, dvscf, onecentre, include_induced: bool, frozen_becsum=None,
+                threshold=None):
         """One iteration's six solves: the finished, unsymmetrised response
         density and (PAW) the raw ``becsum`` response with the frozen-state part
-        added, as ``(3, 3)`` object arrays -- the whole route's ``respond``."""
+        added, as ``(3, 3)`` object arrays -- the whole route's ``respond``.
+        Each chunk starts from its previous solution in the host store (zero
+        before the first pass); ``threshold`` is this pass's CG threshold."""
         solver = self.solver
         fields, coefficients = [], []
         for a, b in PAIRS:
@@ -207,12 +211,12 @@ class StreamedStrains:
         parts = [None] * len(PAIRS)
         worst = [0] * len(PAIRS)
         for rows, live in self.chunks:
-            arguments = self._arguments(rows, live)
+            arguments = self._arguments(rows, live, threshold)
             written = rows[:live]
             for index in range(len(PAIRS)):
                 dpsi, steps, _, chunk_parts = self.field_passes["respond"](
                     *arguments, _rows_of(self.bare[index], rows), fields[index],
-                    coefficients[index])
+                    coefficients[index], _rows_of(self.dpsi[index], rows))
                 self.dpsi[index][:, written] = np.asarray(dpsi)[:, :live]
                 parts[index] = _add(parts[index], chunk_parts)
                 worst[index] = max(worst[index], int(np.max(np.asarray(steps))))

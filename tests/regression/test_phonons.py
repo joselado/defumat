@@ -133,6 +133,17 @@ AL4_TOLERANCE = 0.2
 #: the two routes are the same calculation.
 WEDGE_TOLERANCE = 1e-10
 
+#: What an identity between two routes needs, where each route alone is held
+#: to ``ph.x`` at ``ph.x``'s own convergence. ``tr2`` is in ``ph.x``'s units and
+#: tested per mode since 2026-10-03; 1e-24 is about where the loop stopped
+#: before then on these 20^3 to 32^3 grids (a raw ``sum(dV^2)`` of 1e-14 over
+#: every mode, against a per-mode ``(2 nnr)^2`` of 1.6e9 to 4.3e9), and the CG
+#: threshold is the fixed one it held until then. At the defaults the wedge and
+#: the whole grid agree to 2.1e-7 on the matrix and the PAW induced densities to
+#: 2.1e-6 (measured on D22), which is both routes converged where ``ph.x``
+#: stops and says nothing about the symmetrisation this file checks.
+IDENTITY = {"tr2": 1.0e-24, "threshold": 1.0e-12}
+
 
 @pytest.fixture(autouse=True)
 def _bounded_compilation_cache():
@@ -156,14 +167,15 @@ def _build(case: str):
 
 
 @lru_cache(maxsize=None)
-def _phonons(case: str):
-    """The converged ground state and the force constants of one input."""
+def _phonons(case: str, identity: bool = False):
+    """The converged ground state and the force constants of one input,
+    at :data:`IDENTITY`'s convergence where the test compares two routes."""
     system, pseudos, calculation = _build(case)
     result = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-12,
                      max_iterations=100)
     phonons = dynamical_matrix(
         calculation, result.wavefunctions, result.eigenvalues, result.density,
-        result.becsum,
+        result.becsum, **(IDENTITY if identity else {}),
     )
     return calculation, result, phonons
 
@@ -467,8 +479,8 @@ def test_the_wedge_and_the_whole_grid_give_the_same_matrix():
     shifted one is not (2304 of 3072 images land off it), which is what
     ``require_a_symmetrisable_response`` refuses and what P24 measured.
     """
-    _, _, wedge = _phonons("si-epsilon-unshifted")
-    _, _, whole = _phonons("si-epsilon-unshifted-nosym")
+    _, _, wedge = _phonons("si-epsilon-unshifted", identity=True)
+    _, _, whole = _phonons("si-epsilon-unshifted-nosym", identity=True)
     assert np.abs(wedge.matrix - whole.matrix).max() < WEDGE_TOLERANCE
     assert np.abs(wedge.frequencies - whole.frequencies).max() < 1e-3
 
@@ -492,8 +504,8 @@ def test_a_paw_wedge_and_the_whole_grid_give_the_same_matrix():
     wedge's is 32^3 and the whole grid's 30^3, which differs by a basis rather
     than by a symmetrisation.
     """
-    _, _, wedge = _phonons("si-epsilon-paw-unshifted")
-    _, _, whole = _phonons("si-epsilon-paw-unshifted-nosym")
+    _, _, wedge = _phonons("si-epsilon-paw-unshifted", identity=True)
+    _, _, whole = _phonons("si-epsilon-paw-unshifted-nosym", identity=True)
     assert np.abs(wedge.induced_density - whole.induced_density).max() < 1e-12
     assert np.abs(wedge.matrix - whole.matrix).max() < WEDGE_TOLERANCE
 
@@ -660,15 +672,18 @@ def _partial_pair(case: str):
     system, pseudos, calculation = _build(case)
     result = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-12,
                      max_iterations=100)
+    # A subset tests convergence over the modes it solves, so it can stop at a
+    # different pass from the whole cell: both at :data:`IDENTITY`.
     whole = dynamical_matrix(
         calculation, result.wavefunctions, result.eigenvalues, result.density,
-        result.becsum,
+        result.becsum, **IDENTITY,
     )
     rows = []
     partial = dynamical_matrix(
         calculation, result.wavefunctions, result.eigenvalues, result.density,
         result.becsum, atoms=(0,),
         on_row=lambda atom, cart, row: rows.append((atom, cart)),
+        **IDENTITY,
     )
     return calculation, whole, partial, rows
 
@@ -819,8 +834,10 @@ K_POINTS gamma
         warnings.simplefilter("ignore")
         calculator = Calculator.from_text(text, pseudo_dir, announce=False)
         result = calculator.get_scf()
-        whole = calculator.get_phonons()
-        second = calculator.get_phonons(atoms=(1,))
+        # Two runs over different modes stop at different passes at the
+        # defaults, so both at :data:`IDENTITY`.
+        whole = calculator.get_phonons(**IDENTITY)
+        second = calculator.get_phonons(atoms=(1,), **IDENTITY)
 
     assert calculator.calculation.system.occupations == "smearing"
     assert second.atoms == (1,)

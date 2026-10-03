@@ -132,11 +132,12 @@ import numpy as np
 
 from defumat.forces.energy import FrozenState, frozen_energy
 from defumat.response.efield import _streams, require_a_symmetrisable_response
-from defumat.response.mixing import DEFAULT_RESPONSE_MIXING, ResponseMixer
+from defumat.response.mixing import DEFAULT_RESPONSE_MIXING, ResponseMixer, ddv_scf
 from defumat.response.sternheimer import (
     SternheimerSolver,
     paw_response,
     occupied_counts,
+    pass_threshold,
     require_a_sternheimer_regime,
     smearing_of,
 )
@@ -158,10 +159,21 @@ __all__ = ["Phonons", "DisplacementResponse", "dynamical_matrix",
 #: rather than a value each system has to be tuned to.
 ALPHA_MIX = 0.7
 
-#: Convergence on ``|ddv_scf|^2``. QE's default ``tr2_ph`` is 1e-12.
+#: ``ph.x``'s ``tr2_ph``, in its units (:data:`defumat.response.efield.TR2` says
+#: what they are). The test here is the **largest single-mode** ``|ddv_scf|^2``
+#: below ``tr2 / npol``, which is ``ph.x``'s test for a one-dimensional
+#: irreducible representation and never looser than its test for a larger one:
+#: this loop mixes every mode together where ``ph.x`` mixes a representation at a
+#: time, and a test over the joint vector would loosen the per-mode one by
+#: ``(3 nat)^2``. A subset run (``atoms=``) tests over the modes it solves.
 TR2 = 1.0e-14
 
 MAX_ITERATIONS = 60
+
+#: The CG threshold of every solve that is not scheduled: the bare
+#: ``P_c r|psi>`` always, and the loop's when a caller asks for a fixed one.
+#: It was the loop's too until 2026-10-03.
+FIXED_THRESHOLD = 1.0e-12
 
 
 @dataclass
@@ -271,7 +283,7 @@ def dynamical_matrix(
     alpha_mix: float = ALPHA_MIX,
     tr2: float = TR2,
     max_iterations: int = MAX_ITERATIONS,
-    threshold: float = 1.0e-12,
+    threshold: float | None = None,
     acoustic_sum_rule: bool = False,
     response: "DisplacementResponse | None" = None,
     atoms=None,
@@ -292,6 +304,12 @@ def dynamical_matrix(
         becsum: unused for a norm-conserving dataset, which is the only kind
             this accepts; present so the signature matches
             :func:`~defumat.response.efield.dielectric_tensor`.
+        threshold: the CG threshold of the linear solves. ``None``, the
+            default, is ``ph.x``'s schedule (:func:`~defumat.response.
+            sternheimer.pass_threshold`); a number holds that threshold on every
+            pass (:func:`~defumat.response.efield.dielectric_tensor` says when
+            that is wanted).
+        tr2: ``ph.x``'s ``tr2_ph``, in its units (:data:`TR2`).
         acoustic_sum_rule: whether to impose ``sum_b D_(a i)(b j) = 0`` before
             diagonalising. **Off by default, because ``ph.x`` does not impose
             it** and the residue is the diagnostic described in
@@ -400,10 +418,12 @@ def dynamical_matrix(
         wavefunctions = jnp.asarray(wavefunctions)
     solver = SternheimerSolver(
         calculation, hamiltonians, wavefunctions, eigenvalues, weights,
-        nocc, threshold, v_scf=potential.v_scf, becsum=becsum,
+        nocc, FIXED_THRESHOLD if threshold is None else threshold,
+        v_scf=potential.v_scf, becsum=becsum,
         smearing=smearing_of(calculation, _fermi_level(calculation, eigenvalues)),
         kpoint_weights=calculation.system.kpoints.weights,
     )
+    solver.schedule = threshold is None
 
     if streamed:
         from defumat.response.chunked_phonon import StreamedDisplacements
@@ -657,9 +677,16 @@ class _WholeDisplacements:
         self.iterations = 0
         self.solves = 0
 
-    def respond(self, dvscf, onecentre, include_induced: bool):
+    def respond(self, dvscf, onecentre, include_induced: bool, threshold=None):
         """One iteration's solves: the response density per mode, and for PAW
-        the raw ``becsum`` response the one-centre potential is built from."""
+        the raw ``becsum`` response the one-centre potential is built from.
+
+        Each solve starts from the previous pass's ``dpsi``, zeros on the first
+        (``iudwf``); ``threshold`` is this pass's CG threshold. The store is the
+        unshifted solution inside the loop: :meth:`shift_states` runs once after
+        it and rewrites the store in place, so an object used for one loop is
+        not reused for another after it.
+        """
         solver = self.solver
         response, becsum_response = [], []
         for row in range(self.rows):
@@ -669,7 +696,11 @@ class _WholeDisplacements:
                     include_induced,
                     None if onecentre is None else onecentre[row, cart],
                 )
-                solution = solver.solve(perturbation)
+                previous = self.dpsi[row, cart]
+                start = (jnp.zeros_like(self.bare[row, cart]) if previous is None
+                         else previous)
+                solution = solver.solve(perturbation, start=start,
+                                        threshold=threshold)
                 self.dpsi[row, cart] = solution.dpsi
                 self.iterations += solution.iterations
                 self.solves += 1
@@ -756,7 +787,8 @@ def screening_loop(
     mixer = ResponseMixer(mixing_mode, beta=alpha_mix)
     for iteration in range(max_iterations):
         response, becsum_response = displacements.respond(
-            dvscf, onecentre, iteration > 0
+            dvscf, onecentre, iteration > 0,
+            threshold=pass_threshold(solver, history),
         )
 
         # ``ef_shift``: a displacement at ``q = 0`` moves charge in and out of
@@ -841,10 +873,27 @@ def screening_loop(
         # In host mode a numpy sum, whose order differs from the device's, so
         # the history agrees with the device route's to round-off rather than to
         # the bit.
-        change = float((np if host else jnp).sum((induced - dvscf) ** 2))
+        difference = induced - dvscf
+        onecentre_difference = (None if onecentre is None
+                                else induced_onecentre - onecentre)
+        change = ddv_scf(
+            [difference[row, cart] for row in range(rows) for cart in range(3)],
+            None if onecentre is None else [
+                onecentre_difference[row, cart]
+                for row in range(rows) for cart in range(3)
+            ],
+            joint=False,
+        )
         history.append(change)
         if verbose:
             print(f"  iter {iteration + 1}: |ddv_scf|^2 = {change:.3e}")
+        # Tested before mixing, and on convergence the *input* is kept, as
+        # ``mix_potential`` returns it (``mix_pot.f90:85-113``): the potential
+        # this pass's ``dpsi`` was solved at, which the multipliers' response
+        # and the assembly rebuild their perturbation from.
+        if change < tr2 / calculation.system.npol:
+            converged = True
+            break
         if onecentre is None:
             dvscf = mixer.mix(dvscf, induced, host=host)
         else:
@@ -854,9 +903,6 @@ def screening_loop(
             dvscf, onecentre = mixer.mix(
                 [dvscf, onecentre], [induced, induced_onecentre], host=host
             )
-        if change < tr2:
-            converged = True
-            break
 
     # ``ef_shift_wfc``: the level's motion belongs to the first-order *states*
     # as well, and it is applied once at the end, as QE applies it -- the loop
