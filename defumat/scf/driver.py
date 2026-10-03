@@ -3933,7 +3933,7 @@ class Calculation:
                 # **This is the one expensive thing on a path that is otherwise
                 # arithmetic**: the radial Bessel transforms run inside every
                 # gradient evaluation rather than once per wavevector. Above
-                # ``formfactors.CHUNK`` values of ``|G - q|``, which is every
+                # ``formfactors.radial_chunk`` values of ``|G - q|``, which is every
                 # augmented spiral cell in the tree, ``_qrad_kernel`` runs them
                 # as a rematted scan, so reverse mode holds ``(chunk, kkbeta)``
                 # at a time rather than ``(ngm, kkbeta)`` (`PLAN.md` P112); the

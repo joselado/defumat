@@ -38,12 +38,49 @@ __all__ = [
     "projector_form_factors",
     "atomic_form_factors",
     "CHUNK",
+    "RADIAL_CHUNK_BYTES",
+    "radial_chunk",
 ]
 
-#: Number of q values transformed at once. The intermediate is (chunk, mesh), so
-#: this bounds memory at a few tens of MB while keeping the work as large matrix
-#: products.
+#: The most q values transformed at once. The intermediate is (chunk, mesh); the
+#: chunk a transform actually takes is :func:`radial_chunk`'s, which this caps.
 CHUNK = 4096
+
+#: What one ``(chunk, mesh)`` float64 integrand may occupy, from which
+#: :func:`radial_chunk` sizes the chunk against the dataset's mesh.
+#:
+#: **Sized against the derivatives, not the integrand.** A transform's forward
+#: pass holds a few such arrays, and that is what "a few tens of MB" at
+#: :data:`CHUNK` was; the strain's derivatives hold many more of them at once
+#: (the spherical Bessel function's temporaries, its tangent, the rematted body's
+#: recomputation). Measured on ultrasoft AlAs at ``ecutrho = 200`` (841-point
+#: mesh, 14211 dense G-vectors), the compiled temporaries of the augmented
+#: density's strain derivatives, CPU, ``memory_analysis()``: at 4096 values the
+#: ``jvp`` 270.0 MB, the gradient 924.7, the ``jvp`` of the gradient 1550.9; at
+#: 1024 values 130.1, 102.8 and 293.7; at 256 values 128.0, 102.8 and 185.6. The
+#: local potential's ``jvp`` of the gradient 457.1, 135.7 and 39.6
+#: (``PERFORMANCE.md``, "The radial transforms' chunk, sized from the mesh").
+RADIAL_CHUNK_BYTES = 8 * 1024**2
+
+#: The fewest q values a chunk takes, whatever the mesh.
+MIN_CHUNK = 256
+
+
+def radial_chunk(mesh: int) -> int:
+    """How many ``q`` values one radial transform takes at a time, for a ``mesh``.
+
+    :data:`RADIAL_CHUNK_BYTES` over one row of the ``(chunk, mesh)`` float64
+    integrand, between :data:`MIN_CHUNK` and :data:`CHUNK`: 1246 values on an
+    841-point mesh, 1054 on bismuth's 995. ``DEFUMAT_RADIAL_CHUNK`` overrides it
+    with a count, read when a kernel is first traced. Python arithmetic on a
+    static shape, so a compiled kernel sees a constant.
+    """
+    import os
+
+    value = os.environ.get("DEFUMAT_RADIAL_CHUNK")
+    if value:
+        return max(1, int(value))
+    return int(min(CHUNK, max(MIN_CHUNK, RADIAL_CHUNK_BYTES // (8 * max(1, mesh)))))
 
 # The kernels below are module-level and jitted rather than closures defined
 # per call. Each radial transform is ~30 elementwise operations on a (nq, mesh)
@@ -74,8 +111,8 @@ def _radial_values(values: jnp.ndarray) -> jnp.ndarray:
     return jax.lax.optimization_barrier(values)
 
 
-def _scan_rows(block, q: jnp.ndarray) -> jnp.ndarray:
-    """``block(q)`` in pieces of :data:`CHUNK` values, walked by a rematted scan.
+def _scan_rows(block, q: jnp.ndarray, mesh: int) -> jnp.ndarray:
+    """``block(q)`` in pieces of :func:`radial_chunk` values, walked by a rematted scan.
 
     Called *inside* a jitted kernel, so ``block`` may close over that kernel's
     arguments. ``block`` maps ``(n,)`` values of ``q`` to ``(..., n)``.
@@ -91,8 +128,8 @@ def _scan_rows(block, q: jnp.ndarray) -> jnp.ndarray:
     P112). Measured on ``bn-ldau-noncol.in``'s stress gradient on the GTX 1060:
     see ``PERFORMANCE.md``, "The stress tape".
 
-    **The chunks are exactly** :data:`CHUNK` **wide**, as the loop's were, and
-    only the last is padded, with ``q = 0`` -- a value every transform here
+    **The chunks are exactly** :func:`radial_chunk` **wide**, and only the last
+    is padded, with ``q = 0`` -- a value every transform here
     already meets at ``G = 0`` and is finite at, in value and derivative. So
     every row but the last chunk's is computed at the shape it always was --
     which is not bit-identity: inside the scan XLA fuses the body differently,
@@ -101,10 +138,11 @@ def _scan_rows(block, q: jnp.ndarray) -> jnp.ndarray:
     through all of them within 4.9e-15.
     """
     nq = q.shape[0]
-    if nq <= CHUNK:
+    chunk = radial_chunk(mesh)
+    if nq <= chunk:
         return block(q)
-    nchunks = -(-nq // CHUNK)
-    padded = jnp.pad(q, (0, nchunks * CHUNK - nq)).reshape(nchunks, CHUNK)
+    nchunks = -(-nq // chunk)
+    padded = jnp.pad(q, (0, nchunks * chunk - nq)).reshape(nchunks, chunk)
 
     @jax.checkpoint
     def body(carry, rows):
@@ -156,7 +194,8 @@ def local_potential_of_g(pseudo: Pseudopotential, q, omega: float) -> jnp.ndarra
 @jax.jit
 def _vloc_kernel(q, r, weights, short, at_zero, z, omega):
     return _scan_rows(
-        lambda qq: _vloc_block(qq, r, weights, short, at_zero, z, omega), q
+        lambda qq: _vloc_block(qq, r, weights, short, at_zero, z, omega), q,
+        r.shape[0],
     )
 
 
@@ -189,7 +228,8 @@ def atomic_charge_of_g(pseudo: Pseudopotential, q, omega: float) -> jnp.ndarray:
 
 @jax.jit
 def _rhoat_kernel(q, r, weights, rho, omega):
-    return _scan_rows(lambda qq: _rhoat_block(qq, r, weights, rho, omega), q)
+    return _scan_rows(lambda qq: _rhoat_block(qq, r, weights, rho, omega), q,
+                      r.shape[0])
 
 
 def _rhoat_block(qq, r, weights, rho, omega):
@@ -220,7 +260,8 @@ def core_charge_of_g(pseudo: Pseudopotential, q, omega: float) -> jnp.ndarray:
 
 @jax.jit
 def _rhocore_kernel(q, r, weights, rho, omega):
-    return _scan_rows(lambda qq: _rhocore_block(qq, r, weights, rho, omega), q)
+    return _scan_rows(lambda qq: _rhocore_block(qq, r, weights, rho, omega), q,
+                      r.shape[0])
 
 
 def _rhocore_block(qq, r, weights, rho, omega):
@@ -389,7 +430,8 @@ def atomic_form_factors(pseudo: Pseudopotential, q, omega) -> jnp.ndarray:
 @partial(jax.jit, static_argnames=("l",))
 def _beta_kernel(q, r, weights, beta, prefactor, l):
     return _scan_rows(
-        lambda qq: _beta_block(qq, r, weights, beta, prefactor, l), q
+        lambda qq: _beta_block(qq, r, weights, beta, prefactor, l), q,
+        r.shape[0],
     )
 
 

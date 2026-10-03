@@ -9957,3 +9957,40 @@ own and the same at every geometry, so the pass takes the field's.
 
 **What still goes whole**: the Raman tensors asked for their internals (`get_vibrational_spectrum`),
 because the displacement response handed back is assembled whole by `dynamical_matrix(response=...)`.
+
+## The radial transforms' chunk, sized from the mesh (CPU and RTX A2000, 2026-10-03)
+
+**The number to carry: the radial Bessel transforms took 4096 values of `|q|` at a time whatever the
+dataset's mesh, and the strain's derivatives hold many `(chunk, mesh)` integrands at once; sized to
+8 MB an integrand instead (1246 values on an 841-point mesh), the compiled temporaries of the augmented
+density's strain gradient on ultrasoft AlAs at 200 Ry fall from 924.7 to 102.8 MB and those of its
+second derivative from 1550.9 to 293.7, with the stress unchanged to 3e-15 and no time lost.**
+(`formfactors.radial_chunk`; the cap stays 4096, so no cell takes a larger chunk than before, and
+`DEFUMAT_RADIAL_CHUNK` overrides the count.) Found locating the piezoelectric tensor's 705 MB global
+step (two entries up).
+
+The probe: `memory_analysis()` of one term of the whole-cell energy at a time, compile only, on the CPU,
+`alas-piezo.in` with `nosym` at 8 k-points (36^3 dense grid, 14211 G-vectors, an 841-point mesh), memory
+mode (so the augmentation table is the scanned one), along a shear:
+
+| term, derivative | chunk 4096 | 1024 | 256 |
+|---|---|---|---|
+| augmented density, `jvp` | 270.0 MB | 130.1 MB | 128.0 MB |
+| augmented density, gradient | 924.7 | 102.8 | 102.8 |
+| augmented density, `jvp` of the gradient | 1550.9 | 293.7 | 185.6 |
+| local term, `jvp` of the gradient | 457.1 | 135.7 | 39.6 |
+
+The first derivative -- the stress itself -- is in the table, so this is the stress's memory as much as
+the third derivatives': item 15's scanned augmentation table took BN's stress tape from 1.61 to 0.42
+GiB with the integrand still 4096 values wide.
+
+**Bits and time on the CPU**, the CPU default (speed mode), both arms in fresh processes on the same four
+efficiency cores, medians of five warm calls; the old arm is `DEFUMAT_RADIAL_CHUNK=4096`:
+
+| cell | SCF energy | stress, difference | warm stress, 4096 | budget | setup, 4096 | budget |
+|---|---|---|---|---|---|---|
+| `si2-us-1k.in` | bit-identical | 3.5e-18 on 1.28e-3 Ry/bohr^3 | 2.92 s | 2.64 s | 0.877 s | 0.916 s |
+| `si8-us-1k.in` | bit-identical | 7.1e-18 on 2.63e-5 | 10.65 | 10.60 | 2.571 | 2.587 |
+
+The setup's 4.5 and 0.6 per cent are the extra scan steps over the stored tables' knots; the warm stress
+does not get slower.

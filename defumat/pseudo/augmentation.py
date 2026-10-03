@@ -54,7 +54,7 @@ import numpy as np
 
 from defumat.basis.gvectors import GVectors, modulus
 from defumat.pseudo.coupling import harmonic_products
-from defumat.pseudo.formfactors import CHUNK
+from defumat.pseudo.formfactors import radial_chunk
 from defumat.pseudo.harmonics import real_spherical_harmonics
 from defumat.pseudo.projectors import projector_channels
 from defumat.pseudo.radial import simpson_weights, spherical_bessel
@@ -551,8 +551,8 @@ def _qrad_kernel(q, r, weights, functions, prefactor, l):
     ``ngm``** -- 36257 by 841 on eight-atom ultrasoft silicon
     (``Si.pz-n-rrkjus_psl``), so 244 MB per array, with the temporaries inside
     ``spherical_bessel`` on top and one such set per ``L``. Above
-    :data:`~defumat.pseudo.formfactors.CHUNK` values of ``q`` it is therefore
-    built a chunk of rows at a time, the bound ``pseudo/formfactors.py`` puts
+    :func:`~defumat.pseudo.formfactors.radial_chunk` values of ``q`` it is
+    therefore built a chunk of rows at a time, the bound ``pseudo/formfactors.py`` puts
     on its four transforms and for the same reason: ``(chunk, kkbeta)`` is 27
     MB on that cell. This one walks them in a ``lax.scan`` with a rematted
     body, which bounds the tape as well, and those four have walked theirs the
@@ -578,7 +578,8 @@ def _qrad_kernel(q, r, weights, functions, prefactor, l):
     anything is still the ``custom_jvp`` carrying ``dF/d|G|`` in closed form.
     """
     nq = q.shape[0]
-    if nq <= CHUNK:
+    bound = radial_chunk(r.shape[0])
+    if nq <= bound:
         return prefactor * _qrad_block(q, r, weights, functions, l)
 
     # As few chunks as the bound allows, and those as even as possible, so the
@@ -586,7 +587,7 @@ def _qrad_kernel(q, r, weights, functions, prefactor, l):
     # padded row is ``q = 0``, where both the value and the derivative of
     # ``spherical_bessel`` are finite, and it is sliced off before anything
     # reads it.
-    nchunks = -(-nq // CHUNK)
+    nchunks = -(-nq // bound)
     chunk = -(-nq // nchunks)
     padded = jnp.pad(q, (0, nchunks * chunk - nq)).reshape(nchunks, chunk)
 

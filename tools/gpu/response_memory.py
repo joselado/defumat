@@ -27,7 +27,7 @@ adds ``get_strain_response()``, the six strains' self-consistent response, and
 norm-conserving dataset without symmetry only. ``electrostriction`` adds
 ``get_electrostriction()`` (with the elastic constants on a norm-conserving
 dataset, without them otherwise) and ``raman`` adds ``get_raman_tensors()``, the
-two third derivatives.
+two third derivatives. ``stress`` adds ``get_stress()``, the strain gradient.
 
     python3 tools/gpu/response_memory.py benchmarks/si8-ecut20-nosym-k3.in \\
         --grids 3 4 --stages scf epsilon born --k-batch 1 --json out.json
@@ -48,7 +48,7 @@ import sys
 import time
 
 STAGES = ("scf", "epsilon", "born", "phonon", "phonon_q", "piezo", "strain",
-          "elastic", "electrostriction", "raman")
+          "elastic", "electrostriction", "raman", "stress")
 
 
 def main() -> int:
@@ -140,7 +140,12 @@ def _measure(args, grid: int, stage: str) -> dict:
             "scf_s": round(scf_seconds, 2),
             "energy": float(result.total_energy),
         }
-        if stage == "electrostriction":
+        if stage == "stress":
+            start = time.perf_counter()
+            stress = calculator.get_stress()
+            row["response_s"] = round(time.perf_counter() - start, 2)
+            row["stress_xx"] = float(np.asarray(stress.tensor)[0, 0])
+        elif stage == "electrostriction":
             start = time.perf_counter()
             tensors = calculator.get_electrostriction(
                 elastic=not calculator.calculation.is_ultrasoft)
