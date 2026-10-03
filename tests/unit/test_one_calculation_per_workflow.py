@@ -301,3 +301,54 @@ def test_the_calculator_hands_the_spectra_its_own_calculation(
         call(calculator)
     assert not built, f"{len(built)} Calculation objects built beside the calculator's"
     assert len(reached) == 1 and reached[0] is own
+
+
+# -- the ultracell's second frozen solve ----------------------------------------
+
+
+def test_the_ultracell_reads_its_cut_off_the_basis_calculation(pseudo_dir, monkeypatch):
+    """``OPEN.md`` Part XXIII item 13: one constructor for both frozen solves.
+
+    The gap across the band cut is read off a second solve at one band more than
+    the basis keeps, and that solve passed no calculation, so it built the
+    folded k-set's whole ``Calculation`` again: two builds per run, one now. The
+    unit cell's starting density stands in for the ground state, since neither
+    solve needs it converged, and the run is stopped where the second solve
+    first uses its calculation, so the ultracell loop never starts.
+    """
+    from pathlib import Path
+
+    from defumat import Calculator
+    from defumat.ultracell.driver import run_ultracell
+
+    data = Path(__file__).resolve().parents[1] / "data" / "qe"
+    calculator = Calculator.from_file(data / "h-mag-ultracell.in",
+                                      pseudo_dir=pseudo_dir, announce=False)
+    system, pseudos = calculator.system, calculator.pseudos
+    reference = types.SimpleNamespace(
+        converged=True, magnetic_field=None, becsum=(),
+        density=Calculation(system, pseudos).starting_density(),
+    )
+
+    built, reached = [], []
+    original_init, original_potential = Calculation.__init__, Calculation.potential
+
+    @functools.wraps(original_init)
+    def counting(self, *args, **kwargs):
+        built.append(self)
+        original_init(self, *args, **kwargs)
+
+    def second_solve_stops(self, *args, **kwargs):
+        reached.append(self)
+        if len(reached) == 2:
+            raise _ReachedTheSolve
+        return original_potential(self, *args, **kwargs)
+
+    monkeypatch.setattr(Calculation, "__init__", counting)
+    monkeypatch.setattr(Calculation, "potential", second_solve_stops)
+
+    with pytest.raises(_ReachedTheSolve):
+        run_ultracell(system, pseudos, reference, (2, 1, 1), (2, 2, 2), nbnd=2)
+    assert len(built) == 1, f"{len(built)} Calculation objects built, not 1"
+    # ``for_bands`` may hand the wider solve a copy on a card, sharing every array.
+    assert reached[1].basis is reached[0].basis
