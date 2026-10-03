@@ -740,7 +740,12 @@ def position_residual(velocity, hamiltonians, states, frozen_b, batch):
     (:mod:`defumat.response.chunked_third`) and the whole route on every
     k-point: one expression for both.
     """
-    directions = np.eye(3)
+    # ``jnp.eye`` and not ``np.eye``, and it is worth 126 MB: inside the walked
+    # third derivative's compiled chunk pass a NumPy direction reaches the
+    # velocity operator's ``jvp`` as a literal, and XLA scheduled that program
+    # with 324.0 MB of temporaries against 197.8 (ultrasoft AlAs, RTX A2000,
+    # ``memory_analysis()``); the values are the same.
+    directions = jnp.eye(3)
 
     def apply_h(block):
         return jnp.stack([

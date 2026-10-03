@@ -42,15 +42,19 @@ identity against the whole-k route on the same states.
 
 1. **What is left above the SCF in the strain derivatives, now that the radial chunk is sized.** On
    ultrasoft AlAs the stress adds nothing to the SCF on the card and the piezoelectric tensor 29 MB; the
-   ultrasoft strain response still adds 108 MB on eight-atom silicon and the elastic constants 80 to 90
-   MB on norm-conserving silicon, neither separated. The probe is `memory_analysis()` per pass (the
-   piezoelectric entry's `pass_memory_piezo.py` on D22) and one term at a time (`global_terms.py`'s
-   shape), both re-run at the new chunk.
+   ultrasoft strain response still adds 114 MB on eight-atom silicon (181.2 against 67.3, re-measured
+   at `30c4074`) and the elastic constants about 90 MB on norm-conserving silicon (126.2 against 35.1),
+   neither moved by the chunk and neither separated. The probe is `memory_analysis()` per pass
+   (`review/piezo/pass_memory_third.py` on D22 is the shape, with `jax.jit` wrapped in the module whose
+   passes are measured) and one term at a time (`global_terms.py`'s shape).
 2. **The per-mode grids with symmetry on** stay on the card, because
    `symmetrize_atom_displacement` acts on the whole `(3 nat, ...)` stack; the average's `nsym`-fold
-   transient over them is gone (`90ed76a`), so what is left is the `3 nat` grids themselves, about 50 MB
-   above the SCF on eight-atom silicon. Per orbit of equivalent atoms, or on the host, is the lever for a
-   large symmetric cell.
+   transient over them is gone (`90ed76a`). What is left, measured by a stage probe on eight-atom silicon
+   with 24 operations (`review/piezo/phonon_stages.py` on D22, the warm second run): 39.0 MB after the
+   SCF, 53.1 after the first iteration's solves (the 24 response densities), 72.9 after the first
+   average (the stack in G and its transforms), then a creep of 1 to 5 MB an iteration to 84.7 at the
+   end, which is not located. Per orbit of equivalent atoms, or on the host, is the lever for a large
+   symmetric cell; the creep is the first thing to look at.
 3. **Time**: the ultrasoft bare walks rebuild `newd` and its tangent once per chunk and perturbation
    (the phonon's, the strain's, the third derivative's chunk pass), not separated; and the walked third
    derivative's electrostriction was 6 per cent slower than the whole route at 27 k-points.

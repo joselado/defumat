@@ -9895,7 +9895,10 @@ per point, D22; before at `5e1e6f6`, after on branch `streamed-piezo`:
 
 with `C_11` = 166.96 and 166.44 GPa at 27 and 64 k-points. What the elastic constants add above the
 strain response grows by 10 MB from 27 to 64 k-points where the response grows by 4; which pass holds
-it, and what the ultrasoft response's 108 MB above its SCF is, were not separated. The piezoelectric
+it, and what the ultrasoft response's 108 MB above its SCF is, were not separated. **Re-measured at
+`30c4074`**, after the radial chunk was sized from the mesh: the elastic constants 126.2 MB at 27
+k-points (126.5 before), the ultrasoft strain response 181.2 (174.8 before), so the chunk did not reach
+either, and both remain unseparated. The piezoelectric
 tensor's version of the same question was (the previous entry): there it is the global step's second
 strain derivative of the radial transforms.
 
@@ -9963,7 +9966,15 @@ to 1e-6 cm^-1 and the Raman activity of each degenerate multiplet to 1e-7 relati
 the two routes one expression for the second-order energy's per-k terms and the position residual
 (`second_order_band_terms`, `position_residual`); the whole route is bit-identical to the commit before
 on ultrasoft silicon and within 1.4e-14 on 195 on norm-conserving silicon, both arms on the same cores,
-which is the compiled program's operation order. **Found on the way and fixed separately** (`da8f6cc`):
+which is the compiled program's operation order. **That refactor cost 126 MB on the card and the
+re-measurement caught it**: ultrasoft AlAs's walked electrostriction read 388.6 MB at `30c4074` where it
+had read 263.5 at `b29091e`, Raman 226.4 against 199.3. An A/B on D22 put it on the refactor and not on
+the radial chunk (261.9 MB with the chunk and without the refactor, 388.5 with the refactor and the old
+chunk), and a per-pass `memory_analysis()` on the walked chunk pass (197.8 MB of temporaries before, 324.0
+after, every other pass identical). The shared residual built its directions with `np.eye(3)` where the
+walk had used `jnp.eye(3)`; inside the compiled pass the NumPy direction reaches the velocity operator's
+`jvp` as a literal and XLA schedules the same arithmetic with 126 MB more. With `jnp.eye(3)` the pass is
+197.8 MB again and the call 264.2. **Found on the way and fixed separately** (`da8f6cc`):
 the vibrational spectrum of an ultrasoft or PAW dataset had never run, and with its `becsum` passed it
 gave the optical mode of ultrasoft silicon at 630.8 cm^-1 against 590.6 solved directly, because the
 handed-in response lacked the bare perturbations and extras the ultrasoft assembly needs; now they are
