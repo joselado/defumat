@@ -13683,7 +13683,10 @@ measured rather than unknown.
 of `q` and runs 26 sphere solves where this runs 128, so the like-for-like figure is **12x
 at `L` and 14x at `X`** and the rest is the missing symmetry. `PERFORMANCE.md` has the
 split and why `Gamma`'s row does not divide the same way. Both sides run at
-`tr2 = 1e-14` and `alpha_mix = 0.7`, so neither is buying speed with a looser solve; the
+`tr2 = 1e-14` and `alpha_mix = 0.7`, so neither is buying speed with a looser solve
+(corrected 2026-10-03: the two `tr2` test different quantities, `ph.x` a sum normalised by
+`ndimtot^2` and this code `max |dV|^2`, about five decades tighter on this grid, so this side
+converges further; `OPEN.md` Part XXIII item 1); the
 iteration counts are *not* comparable, because `ph.x` mixes each irreducible
 representation separately (2 at `Gamma`, 4 at `L`, 3 at `X`) where this mixes all `3N`
 perturbations in one loop.

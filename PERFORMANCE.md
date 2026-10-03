@@ -1732,7 +1732,10 @@ default (`compute_stress(..., terms=True)`) because nothing but a diagnostic wan
 
 The third column is not a typo and the second one is the story: **the breakdown costs
 nothing over the plain gradient**, so the 11 GB is the *reverse* pass and not the
-forward-mode Jacobian. On the two-atom cells the gradient costs a few tens of MB over the
+forward-mode Jacobian (corrected 2026-10-03, from `MEMORY-AUDIT.md` section 6 item 2: that
+does not follow, since peak RSS is a high-water mark within one process and the breakdown ran
+after the gradient had already set it; the reverse pass is the likelier reading, not a shown
+one). On the two-atom cells the gradient costs a few tens of MB over the
 SCF, which is nothing; on the eight-atom ultrasoft cell it is the dominant allocation of
 the whole calculation,
 and the reason is the augmentation charge's radial transform: `_qrad_kernel`'s intermediate
@@ -3760,9 +3763,15 @@ instinct. None of these may change a validated number.
 **Twenty-three unmeasured candidates from the read-only sweep of 2026-09-12 are in
 `OPEN.md` Part III**, ordered by ease rather than by gain, each with the input and the
 command that would price it. An entry moves onto *this* list when it has a number; until
-then it is a place to look, not a claim.
+then it is a place to look, not a claim. **Twenty-six more, from the second sweep of
+2026-10-03, are `OPEN.md` Part XXIII**, under the same rule; that sweep also re-read every
+item below against the code, and the dated marks on items 1, 4, 7, 8, 10 and 11 are its.
 
-1. **`jax.sharding` over the k-axis**, and GPU. Now measured to be the *only*
+1. **`jax.sharding` over the k-axis**, and GPU. *(Partly done, re-checked 2026-10-03: the
+   k-parallelism exists as P124's k-point pools, one process per pool through
+   `jax.distributed`, for the SCF, forces, stress and relaxations, and the code runs on a card;
+   nothing shards k inside one process, which `GPU-MEMORY-NEXT.md` item 25 reclassifies as a
+   throughput lever.)* Now measured to be the *only*
    parallelism worth having on CPU: the thread pool gives 15% between one core
    and four and loses badly beyond that, while `metal.in`'s ten k-points are
    independent and are currently run through a single pool. This is where the
@@ -3790,6 +3799,14 @@ then it is a place to look, not a claim.
    reduction and synchronise once -- and the first step is to count the
    transfers per iteration rather than to guess which ones they are. See "What a
    real SCF spends its time on".
+   **Corrected 2026-10-03 (`OPEN.md` Part XXIII item 21), by reading rather than
+   measuring**: the count is about fourteen fetches an iteration on the simplest path, and
+   the 617 ms is not their transfer cost. The installed JAX wraps `ArrayImpl._value`, which
+   every `float()` and `np.asarray` of a device array goes through, in the annotation
+   `np.asarray(jax.Array)` (`jax/_src/array.py:635-636`), and `_value` blocks until the
+   buffer is ready, so the span includes the wait on asynchronously dispatched work. What
+   batching the fetches is worth is unbounded and probably small; the measurement is the
+   same trace with `block_until_ready` on the producers first.
 5. **Fold `dr2` into the iteration's other reductions.** It costs a transform and
    a dispatch of its own (~3% of an iteration) for a quantity the loop already
    computes a residual for. Mixing in G space would save another transform.
@@ -3805,6 +3822,14 @@ then it is a place to look, not a claim.
    costs a signature change in `stress/energy.py`. A fixed-cell `relax` does not
    pay it -- `at_positions` already keeps its compiled force -- which is why this
    surfaced only here.
+   **Corrected 2026-10-03 (`OPEN.md` Part XXIII item 7): the item names the wrong cache.**
+   `_energy_gradient` is the force's (`forces/autodiff.py:52-59`), dropped because the force
+   closes over the cell; the stress's is `_strain_gradient`, keyed on the identity of the
+   calculation (`stress/autodiff.py:95-96`), so a moved copy misses it whatever is dropped.
+   So a vc-relax recompiles **both** gradients every step, and removing the pop fixes
+   neither. The fix is the cell and the other geometry-dependent leaves as arguments of
+   both, with the Ewald list padded over the trajectory; the force's retrace on a moved cell
+   is unmeasured.
 8. **Schedule the response solver's threshold** (P25). `dfpt_kernels.f90` uses
    `thresh = min(0.1 sqrt(dr2), 1e-2)` where `response/phonon.py` holds a fixed
    1e-12, and the cost is `av.it. = 27.7` against `ph.x`'s 9.3 — a factor of
@@ -3812,6 +3837,14 @@ then it is a place to look, not a claim.
    schedule in a second place, the rule is already quoted in
    `response/sternheimer.py`'s docstring, and the same fix applies to
    `response/efield.py`. Cheapest item on this list by a wide margin.
+   **Open, re-checked 2026-10-03, and something comes first** (`OPEN.md` Part XXIII
+   item 1): the response loops converge on the raw `sum(dV^2)`, where `ph.x`'s `dr2` is
+   that sum divided by `ndimtot^2` (`mix_pot.f90:83`), eleven decades apart on the AlAs
+   spinor cell. `thresh = min(0.1 sqrt(dr2), 1e-2)` transcribed onto the raw sum would sit
+   at its cap for the whole run, so the test is normalised first. That also accounts for
+   the factor of two in passes on its own; this item is the factor of three in CG steps.
+   A warm start of each solve from the previous pass, as `ph.x` reads `dpsi` from `iudwf`,
+   is the third piece (Part XXIII item 2).
 9. *(done, 2026-08-22)* **A mixer in the response loop.** Was: 17 linear-mixing
    iterations against `ph.x`'s 5, whose mixer is `LR_Modules/mix_pot.f90`. It
    turned out not to be a speed item at all -- linear mixing of a map whose
@@ -3822,7 +3855,15 @@ then it is a place to look, not a claim.
    than the time: it bounds the working set at 3 modes in flight instead of
    `3 nat`, which is 7 GB on a 16-atom cell. It does not reduce the number of
    solves — `ph.x` perturbs along all `3 nat` modes too.
-11. **The stress's reverse-mode tape through the radial transforms** (P11). 11 GB on
+   *(Partly reached another way, re-checked 2026-10-03: no representations are implemented,
+   but the k-chunked phonon keeps the `3 nat` states in host memory (`af246f1`) and, on a run
+   without symmetry, the per-mode grids too (`7740ab7`, `3601e96`). With symmetry the `3 nat`
+   grids still sit on the device together, which is what is left; so is the response
+   mixer's history of every mode, `OPEN.md` Part XXIII item 5.)*
+11. *(done 2026-10-03, the `bessel-jvp` merge `c3bc04f`: every radial transform's
+   derivative in `|q|` is the same transform one order up, a `custom_jvp` on
+   `formfactors.bessel_transform`; see "The radial transforms' derivatives, as
+   transforms")* **The stress's reverse-mode tape through the radial transforms** (P11). 11 GB on
    eight-atom ultrasoft silicon against the SCF's 0.9, and the largest single
    allocation anywhere in the code. `jax.checkpoint` on the augmentation kernel
    alone was measured and is worth nothing, so the next thing to try is a
@@ -5194,6 +5235,12 @@ way, and the zone-boundary rows are the comparison to quote.
 assumed: the `ph.x` input carries `tr2_ph = 1.0d-14` and `alpha_mix = 0.700`,
 and defumat runs at its matching `tr2 = 1e-14`, `alpha_mix = 0.7`. So neither
 column is buying speed with a looser solve.
+
+**Corrected 2026-10-03: the two `tr2` are not the same quantity.** `ph.x` tests the summed
+square of the change divided by `ndimtot^2` (`LR_Modules/mix_pot.f90:83`), and this code tests
+the maximum of `|dV|^2` over the grid (`response/phononq.py:715`), which is about five decades
+tighter on a 20^3 silicon grid. So this column converges tighter than `ph.x`'s, not to the same
+place, and its iteration count carries that (`OPEN.md` Part XXIII item 1).
 
 The **iteration counts are not comparable**, and the reason is a second thing
 QE has that this does not. `ph.x` decomposes the perturbation into irreducible
@@ -7525,7 +7572,11 @@ to the dynamical matrix that is not computed here.
 **4.4x on the response, and the structure says where it is.** Twice the self-consistent
 iterations and three times the CG steps per band per solve, which is P25's pair of backlog
 items unchanged rather than anything the spin axis added -- the mixer and the
-diagonalisation threshold. The **SCF is faster than `pw.x`'s** on the same cell, 9.9 s
+diagonalisation threshold. **Corrected 2026-10-03: the passes are the convergence test, not
+the mixer.** `ph.x` tests `sum(dV^2) / ndimtot^2` (`mix_pot.f90:83`) and this code the raw sum
+(`response/efield.py:390`), eleven decades apart on this cell at the same `tr2`; at `ph.x`'s rate
+of 1.7 decades a pass that is about 6.5 more passes, 6 + 6.5 against the 12 recorded, so the
+Anderson mixer already contracts as `ph.x`'s does (`OPEN.md` Part XXIII item 1). The **SCF is faster than `pw.x`'s** on the same cell, 9.9 s
 against 12.65 s at 12 iterations against 16, so the ratio is the response's own and not a
 cost the spinor regime carries into everything.
 

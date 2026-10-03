@@ -32,7 +32,7 @@ evidence; an A/B is`. Record the steps with every timing. Two stories that fitte
 (slow genuine convergence and false convergence on stagnation) were both wrong, and so was a workaround
 (an accelerator floor under `ethr`) that fitted the symptom; the replay is what settled it.
 
-## 1. Run the stall check on a production card -- priority 1, needs the user
+## 1. Run the stall check on a production card -- done 2026-10-02 on an H200 (section 4b), the `nsys` stage skipped
 
 The forecast, not a measurement: the one component that differs between the A2000 and a CPU on the
 Davidson pair is the device `eigh`, the random-pair test had the two within 2x, and nothing says
@@ -111,7 +111,7 @@ than the mesh; a store that streams only then is the change this points to, and 
 beside implementing `'fit'` (section 4a); the user chose it and both are in `170f2b6`, with the A2000
 confirming them (`PERFORMANCE.md`, "The defaults that follow").
 
-## 5. The A100-class profile -- priority 3, needs item 1
+## 5. The A100-class profile -- priority 3, needs `nsys` on a Triton GPU node (a module or a container), not item 1 any more
 
 On the float32 card the stall-free 64-atom kernel time is 47 per cent FFT, 33 per cent cuBLAS, 12 per
 cent elementwise (61,528 launches at 31 us), 7 per cent dense solve (9132 launches at 114.5 us). The
@@ -154,7 +154,11 @@ XLA command buffers (a null here: `--xla_gpu_enable_command_buffer` with `WHILE,
   run's setting and not a default.
 * Memory mode costs a steady 8 per cent over speed mode at 64 atoms (the rebuild, the streamed store
   and one k-point at a time together) and 7 per cent at 16 atoms (the streamed store alone). The
-  user chose memory as the default; this is the price to quote.
+  user chose memory as the default; this is the price to quote. *(Superseded by `170f2b6`, found
+  2026-10-03: memory mode at one k-point now keeps the store on the card, and at 64 atoms on the
+  A2000 it reads 1437.90 and 1469.71 ms against speed mode's 1428.20 and 1438.91, so the price to
+  quote is about 1 to 2 per cent wherever speed mode's peak fits; `PERFORMANCE.md`, "The defaults
+  that follow".)*
 
 ## 7. Other items that came up -- priority 4
 
@@ -198,6 +202,9 @@ XLA command buffers (a null here: `--xla_gpu_enable_command_buffer` with `WHILE,
   from the radial tables ignore the precision policy, so `H|psi>` comes back complex128 into a
   complex64 basis). On the development cards it is the lever (a `4096^2` product 10.9 ms against 756);
   on a production card its ceiling is about 2x plus halving every device array. Not started.
+  *(The band side is started, found 2026-10-03: `band_precision = 'single'` exists (`0e7fa07`,
+  section 4a), and on the H200 it is 0.99x in speed mode and 1.20x in memory mode a run. The grid
+  side and the setup arrays' precision policy, the named blocker, are not.)*
 * **A request tighter than `conv_thr = 1e-10`** no longer stalls on the arms measured (1e-11 and 1e-12
   at sixteen atoms, 1e-11 at 64), and `DEFUMAT_ETHR_MIN` raises the floor if one is met, at a cost in
   accuracy (the force error doubled at 3e-12 on a displaced cell). The warning for a call at the budget

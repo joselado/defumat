@@ -29,6 +29,26 @@ with the compile cache warm (a miss costs *more* device memory on this card).
 
 ## Where the next session starts (written 2026-10-03 evening, master at `d227efe`; items 1 to 3 updated later that evening on branch `bessel-jvp`, merged into master at `c3bc04f`, not pushed)
 
+**Reconciled against the code on 2026-10-03** (`OPEN.md` Part XXIII, a read-only sweep; nothing
+measured). Items 1, 3, 5, 8 to 13, 15, 18, 19, 21 and 23 are done as recorded, and 7, 16 and 22
+are closed by verdict as recorded. Four records were too wide: **item 4** listed the three
+sum-over-states workflows as done because they slice their bands, but they still upload the
+whole k axis of a streamed store with `jnp.asarray`, at twice its size on the card, as do the
+TDDFT spectrum and the magnon response, and the torque derivatives (`forces/torque.py:185`,
+`:241`) upload it whole too (Part XXIII item 24); and `get_angular_momenta` builds its atomic
+projectors whole-k (Part XXIII item 17). **Item 17** is done for the nine hoisted fields only;
+`wfcU` and the `(nsym, ngm)` symmetry maps are still constants of the compiled gradients.
+**Item 20**'s "now only the force theorem builds its own" is false: `frozen_expectation`,
+`run_torque` and `run_orientation_torque` build one per call, and `get_nesting` builds two
+(Part XXIII item 14). **Item 24**: `sizing.py:779-786` still bills the stored route's setup
+transient as the whole `(ngm, kkbeta)` block, which `_qrad_kernel` has walked a radial chunk at a
+time since `a71b8a3`, so that term is now overstated. Still open as written: item 6's atomic
+orbitals (their `i^l` keeps the columns complex, `pseudo/atomic.py:215-220`) and a dense NSCF,
+DOS or PDOS mesh walked in blocks; item 14's per-`l` transform; item 26's setup cast; and the
+two below that are measurements. `efield.py:450-452` still says the third derivatives need
+device arrays, stale since `b29091e`. The augmentation chunk of item 1 below also hardcodes
+16 bytes an element (`augmentation.py:655`).
+
 **Item 2 is done**: the field response, the Born charges, both phonons, the piezoelectric tensor, the
 strain response, the elastic constants, the two third derivatives (electrostriction and Raman) and the
 vibrational spectrum walk the k axis with their stores in host memory, and the radial transforms' chunk is
@@ -186,7 +206,8 @@ below:
   moments' density matrix, the force theorem's projected decomposition, its first-order
   spin-orbit energy and the spiral's `spiral_expectation` walk the chunks themselves (the
   last two also read `projectors_at(rows)`, not the whole-k `vkb`); the three sum-over-states
-  workflows slice their bands before the upload. `test_streaming.py` holds the host and
+  workflows slice their bands before the upload *(and then upload the whole k axis with
+  `jnp.asarray`, found 2026-10-03; `OPEN.md` Part XXIII item 24)*. `test_streaming.py` holds the host and
   device routes to 1e-12 on ultrasoft silicon with a short last chunk. **Not done**: the
   in-loop orientation diagnostics, the magnetic torque's derivatives (they are item 3's
   shape), the response stack (item 2) and the ultracell. **Not measured on the card.**
@@ -295,7 +316,9 @@ below:
   (`test_one_calculation_per_workflow.py`, which fails on all six without it). They are
   norm-conserving only, so the second setup cost little memory; what it dropped was the
   calculator's `memory_mode`, so a speed-mode calculator's spectrum ran in the platform's
-  default mode without saying so. Now only the force theorem builds its own.
+  default mode without saying so. Now only the force theorem builds its own. *(Not so, found
+  2026-10-03: `frozen_expectation`, `run_torque`, `run_orientation_torque` and `get_nesting`
+  build their own too; `OPEN.md` Part XXIII item 14.)*
 * **Item 25** (2026-09-29): recorded in `GPU.md` Phase 4 -- k-sharding divides time, not
   per-device memory; distributing the plane waves by sticks is the memory lever.
 * **Item 12, second bullet** (2026-09-29): the TDDFT frequency axis has a dial, `w_batch`

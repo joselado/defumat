@@ -1,5 +1,13 @@
 # Memory audit of defumat
 
+> **Status, 2026-10-03: every lettered entry re-read against the code** (the reconciliation of
+> `OPEN.md` Part XXIII). Each heading now carries what the code shows, with the commit where it was
+> done; until today most of the done ones did not say so. **Done**: A1 to A5, A7 to A10, A12 to A14,
+> A18, B1, C3 (answered by A4), C4, C7 (superseded by the radial walk and the derivative rule), D5,
+> D10, D11; A6 three of four. **Half**: A16, D1, D4, D8. **Open**: A15, A17, B2, C2, C5, C6, D2,
+> D3, D6, D7. **Null**: A11. Two record corrections are applied (D3's sentence on QE's history, which
+> holds at dual 4 only, and section 6's items 2 and 4), and D9's sense is inverted since `d27e690`.
+
 > **Status, 2026-09-28 (branch `gpu-memory-modes`).** `memory_mode = 'memory'`, the
 > accelerator default, adds `wfc_store = 'stream'`, and three entries below move with it.
 > **The store** (the unnumbered row) is now off the device *for the solve, `becsum` and the
@@ -135,7 +143,7 @@ Do not add across those groups: they are three different moments of a run.
 
 ## 2. (a) Wins that need no new physics and break no rule
 
-### A1. The tabulated augmentation charge's `lax.scan` stacks its residuals, so P73 does not reach the backward pass
+### A1. The tabulated augmentation charge's `lax.scan` stacks its residuals, so P73 does not reach the backward pass **[done 2026-09-13, `4c22cc3`; the scan bodies rewritten in the radial basis by `7705fa0` and still rematted]**
 
 **Site.** `defumat/pseudo/augmentation.py:521-530` (`_tabulated_charge`'s body and scan) and
 `:534-558` (`_tabulated_integrals`, same shape, for any reverse-mode consumer of `newd`).
@@ -220,7 +228,7 @@ hit and it is a comment: `augmentation.py:296`, the recorded null for `_qrad_ker
 
 ---
 
-### A2. `run_relax` holds the previous ionic step's Calculation and SCFResult through the whole of the next step
+### A2. `run_relax` holds the previous ionic step's Calculation and SCFResult through the whole of the next step **[done 2026-09-13, `4c22cc3`; extended to `vc_relax` and the spiral loops in `e9f7944`]**
 
 **Site.** `defumat/workflows/relax.py:434` (`previous = calculation`), never dropped — it is
 rebound only at `:434` of the following iteration, so it is live through that iteration's
@@ -298,7 +306,7 @@ matters more there because under a stress `at_cell` goes through `at_strain` and
 own augmentation table and core), in `run_spiral_scan` and in `relax_spiral_q`. No number
 moves; nothing was measured, because nothing reads the dropped objects.
 
-### A3. `vc_relax` ends holding four Calculations and two SCF states while it starts a fresh SCF
+### A3. `vc_relax` ends holding four Calculations and two SCF states while it starts a fresh SCF **[done 2026-09-13, `4c22cc3`]**
 
 **Site.** `defumat/workflows/vc_relax.py`: `base` at `:245`, `current = base` at `:265`, `previous
 = current` at `:326`, `current = _advance(...)` at `:327`, `relaxed = current.system` at `:333`,
@@ -346,7 +354,7 @@ run here. This is a cell of that scale and dataset, not that run.
 
 ---
 
-### A4. PAW's one-centre reverse pass holds every atom's XC quadrature, where QE holds one sphere
+### A4. PAW's one-centre reverse pass holds every atom's XC quadrature, where QE holds one sphere **[done 2026-09-13, `ad4b599`: chunked and rematted, not the one-line fix below]**
 
 **Site.** `defumat/paw/onecenter.py:128`:
 
@@ -454,7 +462,7 @@ the `atom_batch = 1` cost that `PERFORMANCE.md` never separated.
 
 ---
 
-### A5. The per-atom structure factor is a reverse-mode residual, in two places, on every geometry derivative
+### A5. The per-atom structure factor is a reverse-mode residual, in two places, on every geometry derivative **[done 2026-09-13, `3c5d779`]**
 
 **Site.** `defumat/pseudo/potentials.py:224`:
 
@@ -512,7 +520,7 @@ not this.
 
 ---
 
-### A6. `Calculator` and `run_scf` retention: four droppable holdings, all host-side
+### A6. `Calculator` and `run_scf` retention: four droppable holdings, all host-side **[three of four done 2026-09-13, `87611ee`; clearing the seed, (iii), is B2 and open]**
 
 > **The free half is done, 2026-09-13, and measured rather than sized.** All four sites are
 > fixed: `get_scf` drops `_scf` *and* `_strain_response` before the call rather than after
@@ -591,7 +599,7 @@ checkpoint resume `resumed_state` holds it anyway.
 
 ---
 
-### A7. The electric field holds three `(nk, npwx, nkb)` projector-velocity blocks across the whole loop, and never reads them on PAW
+### A7. The electric field holds three `(nk, npwx, nkb)` projector-velocity blocks across the whole loop, and never reads them on PAW **[done 2026-09-13, `87611ee`]**
 
 > **Done, 2026-09-13, and it found a second site the entry does not name.** Both lists are
 > now retained only when something will read them -- `commutators` on `born_charges or
@@ -670,7 +678,7 @@ actual dataset.
 
 ---
 
-### A8. `spinchi0` stacks `nbnd` copies of the response matrix — and the record says this was fixed
+### A8. `spinchi0` stacks `nbnd` copies of the response matrix — and the record says this was fixed **[done 2026-09-13, `87611ee`]**
 
 > **Done, 2026-09-13, and the entry is right about everything including that.** `sum_bands`
 > replaces the `lax.map` plus `jnp.sum`. Sized by the compiler on `h-fcc-magnon` at
@@ -738,7 +746,7 @@ both ways; the axis walked is the band axis *inside* one k-point's body, so R6 i
 
 ---
 
-### A9. `_species_charge` builds a second full-size `(nh, nh, ngm)` beside the resident one, so the stored route's peak is twice what the gate measures
+### A9. `_species_charge` builds a second full-size `(nh, nh, ngm)` beside the resident one, so the stored route's peak is twice what the gate measures **[done 2026-09-13, `87611ee`]**
 
 > **Done, 2026-09-13, and the residual risk resolved the other way.** The entry leaves open
 > whether `(nat, ngm) x (nh^2, ngm)` is a worse BLAS shape on CPU. It is much better: at
@@ -815,7 +823,7 @@ CPU than the present one. Measurement, allocating nothing:
 
 ---
 
-### A10. The bootstrap Dyson loop iterates every frequency when its kernel reads one, and broadcasts `nw` identical copies of `fxc`
+### A10. The bootstrap Dyson loop iterates every frequency when its kernel reads one, and broadcasts `nw` identical copies of `fxc` **[done 2026-09-29, `1298ae5`, as `GPU-MEMORY-NEXT.md` item 12, with the static-kernel gate asked for here]**
 
 **Site.** `defumat/tddft/dyson.py:122-126`. Per pass, all `(nw, nm, nm)` complex: `fxc` (`:122`),
 `fxc_x = fxc @ x` (`:125`), the `eps0 - fxc_x` temporary, `jnp.linalg.inv(...)`, `x @ inv` and the
@@ -873,7 +881,7 @@ dtypes follow `chi.x` throughout, as `identity = jnp.eye(..., dtype=x.dtype)` al
 
 ---
 
-### A11. Every stress tapes a full real copy of `|psi|^2` for the kinetic term, on top of `psi`
+### A11. Every stress tapes a full real copy of `|psi|^2` for the kinetic term, on top of `psi` **[measured null 2026-09-13: not removable]**
 
 > **Checked 2026-09-13 and it is a NULL -- the second entry here whose prescribed one-line
 > fix is not an improvement.** Everything above about the residual and its size is
@@ -941,7 +949,7 @@ makes XLA's own cross-boundary rematerialisation less likely rather than more.
 
 ---
 
-### A12. `PawSpecies.density_ae`/`density_ps` materialise a rank-1 outer product: 553 MB per PAW species that `sizing.py` reports as zero
+### A12. `PawSpecies.density_ae`/`density_ps` materialise a rank-1 outer product: 553 MB per PAW species that `sizing.py` reports as zero **[done 2026-09-28, `62b95fb`, the meta-GGA kinetic maps in `246f355`: factored as `GPU-MEMORY-NEXT.md` item 18]**
 
 > **Half of this is fixed, 2026-09-13, and it is not the half the entry is about.** These
 > two arrays were not only large, they were **constants** of every compiled force and
@@ -1034,7 +1042,7 @@ Ry on `si2-paw-1k.in` and the spinorbit PAW case, not bit-identity.
 
 ---
 
-### A13. `vkb` is materialised for every k-point and sits outside the `k_batch` dial
+### A13. `vkb` is materialised for every k-point and sits outside the `k_batch` dial **[done, `2351b41`, and the memory-mode default since 2026-09-28]**
 
 **Site.** `defumat/pseudo/projectors.py:69` — `Projectors.vkb` `(nk, npwx, nkb)` complex — built at
 `driver.py:1450` and kept as a `Calculation` attribute for the life of the run. Its sources
@@ -1235,7 +1243,7 @@ compiled per-k body, before and after, on `calculations/nbse2-fermi-surface/nbse
 
 ---
 
-### A14. `VelocityOperator.matrix_elements` holds four full-k blocks to build a matrix `nbnd/ndim` smaller
+### A14. `VelocityOperator.matrix_elements` holds four full-k blocks to build a matrix `nbnd/ndim` smaller **[done 2026-09-24, `bde3bed` (`OPEN.md` Part III S5); `band_velocities` still forms the whole tangent block for the diagonal, which this entry did not cover]**
 
 **Site.** `defumat/response/velocity.py:302`:
 
@@ -1299,7 +1307,7 @@ instrument `PERFORMANCE.md:4370` used for `pair_batch`.
 
 ---
 
-### A15. `sum_band` vmaps the spin axis, so both LSDA channels' real-space boxes are in flight at once
+### A15. `sum_band` vmaps the spin axis, so both LSDA channels' real-space boxes are in flight at once **[open, re-checked 2026-10-03; the band budget of `GPU-MEMORY-NEXT.md` item 9 does not size this stage either]**
 
 **Site.** `defumat/scf/density.py:109`, `:118` and `:180` — `jax.vmap(channel)(psi, weights)`. Under
 that vmap every intermediate inside `channel` gains a leading spin axis by construction, so
@@ -1396,7 +1404,7 @@ A4, whose compiled time also gives the missing cost figure.
 
 ---
 
-### B2. The `Calculator`'s retention API: a release path, a seed policy, and one contract change
+### B2. The `Calculator`'s retention API: a release path, a seed policy, and one contract change **[open, re-checked 2026-10-03; its hardest part is gone, since the cache key no longer carries the seed (`calculator.py:793`)]**
 
 Three things that need a declaration rather than only a drop. The free halves are in A6.
 
@@ -1437,7 +1445,7 @@ calculator with an empty cache.
 
 ## 4. (c) One measurement from decidable
 
-### C1. Forward-mode stress. The measurement that looks like it rules forward mode out does not
+### C1. Forward-mode stress. The measurement that looks like it rules forward mode out does not **[closed by `GPU-MEMORY-NEXT.md` item 16's verdict of 2026-09-29, after the chunked stress and the radial remat]**
 
 `stress/autodiff.py:66-78` caches `jax.jit(jax.grad(strained_energy))` — a single reverse pass over
 everything `at_strain` rebuilds (`kinetic` at driver.py:2406, the projector core at `:2411`,
@@ -1484,7 +1492,7 @@ physics coding; this is twenty lines.
 
 ---
 
-### C2. The eigts factorisation of the resident structure factor
+### C2. The eigts factorisation of the resident structure factor **[open, unmeasured, re-checked 2026-10-03]**
 
 `AugmentationCharge.phases` `(nat, ngm)` is **2.546 GB resident** on the 45-atom cell.
 QE's `PW/src/struct_fact.f90` stores `strf(ngm, ntyp)` — 2 x 3.54e6 x 16 = **113 MB** here — plus
@@ -1509,7 +1517,7 @@ mention of `eigts` in the whole tree is a one-line docstring at `forces/analytic
 
 ---
 
-### C3. The PAW one-centre temporary count
+### C3. The PAW one-centre temporary count **[answered by A4's measurement: 272 MB an atom, 244 grid-sized temporaries]**
 
 A4's 3-5 GB rests on "~50 grid-sized temporaries in the PBE-spin kernel", which nothing counts.
 **Measurement, allocation-free:** `jax.jit(jax.grad(lambda b: onecenter_species(paw, b)[1]))
@@ -1526,13 +1534,13 @@ against `nat_t = 15`. The same run gives B1's forward figure and, from the compi
 which is `nat x ngm x 16` to the byte for *one* copy (40 x 241,588 and 10 x 45,043). So A5's
 `_structure_factors_at` half is the **bottom** of its range, 2.55 GB on the 45-atom slab.
 
-### C5. Whether `jnp.take(columns, column_of, -1)` materialises a second `vkb` in the backward pass
+### C5. Whether `jnp.take(columns, column_of, -1)` materialises a second `vkb` in the backward pass **[open, unmeasured, re-checked 2026-10-03]**
 
 `pseudo/projectors.py:273`. If XLA does not fuse the gather into the backward pass it is a second
 `(nk, npwx, nkb)` copy: 876 MB on bi20-soc, 2.6 GB on NiBr2. `memory_analysis()` on the compiled
 force answers it.
 
-### C6. The spiral's XLA executable accumulation
+### C6. The spiral's XLA executable accumulation **[open, unmeasured, re-checked 2026-10-03; the per-q compile it accumulates is `OPEN.md` Part XXIII item 9]**
 
 `workflows/spiral.py:301` (`run_spiral_scan`) and `:528` (`relax_spiral_q`). `at_spiral_q` rebuilds
 the spheres at `k +- q/2`, so `npwx` changes at every step — `PERFORMANCE.md:1146-1148` states this
@@ -1559,7 +1567,7 @@ explicit gradient-cache pop at driver.py:2662-2663. `PERFORMANCE.md:1146-1152` a
 per-step recompilation as a deliberate trade, but in **time**, never in resident bytes. The
 accompanying `result = None` before `:302` is free and does not collide with `keep_results`.
 
-### C7. `dE/dq` on an augmented spiral holds the radial transform's tape, and it is the largest thing the spiral allocates **[measured 2026-09-16, P96]**
+### C7. `dE/dq` on an augmented spiral holds the radial transform's tape, and it is the largest thing the spiral allocates **[measured 2026-09-16, P96]** **[superseded: the rematted radial walk (`bde3bed`) and then the radial derivative rule (`e1f3c4d`); the oxygen chain re-measured at 2.85 GB single pass and 1.95 chunked against 11.4]**
 
 `scf/driver.py`'s `at_spiral_q(rebuild_basis = False)` and `pseudo/augmentation.py`'s
 `_qrad_kernel`. Not a candidate: **measured**, and it is already the gate on which cells the
@@ -1594,7 +1602,7 @@ unchanged to one ulp). `PERFORMANCE.md`'s P96 entry has the timings beside these
 
 Verified by grep: `paw` 0 hits, `spiral` 0, `mixing_ndim` 0, `mixer` 0, `basis_kpoints` 0.
 
-### D1. Both dials are resolved on the machine running the estimate, not the machine the run is for
+### D1. Both dials are resolved on the machine running the estimate, not the machine the run is for **[half done: `Calculator.estimate` resolves with the run's own function, so report and run agree on one machine; an estimate for another machine and the CLI flags are still missing]**
 
 `sizing.py:480-483` resolves a `"default"` `band_batch` through `resolve_band_batch` ->
 `_band_default()` -> `_platform_default()` -> `1 if _backend() == "cpu" else None`
@@ -1636,7 +1644,7 @@ the resolved default is 1.
 initialised the backend before `_backend()` is reached. `sizing.py:11`'s "Nothing here touches the
 device" is already false for a reason removing the `_backend()` call would not fix.*
 
-### D2. A spin spiral is sized on the unshifted k-list
+### D2. A spin spiral is sized on the unshifted k-list **[open, re-checked 2026-10-03]**
 
 `sizing.py:451-455` passes `np.asarray(system.kpoints.coords)` to `_plane_wave_counts` and takes
 `npwx = max(npw)`. `Calculation.__init__` sets `self.basis_kpoints = spiral_kpoints(...)`
@@ -1672,7 +1680,7 @@ takes twice as long on a spiral and still allocates nothing large.
 the second would fail on length alone. `tests/data/qe/h-chain-spiral.in` is a committed one-atom
 cell cheap enough to build.
 
-### D3. The Anderson mixer's history is unmodelled
+### D3. The Anderson mixer's history is unmodelled **[open, re-checked 2026-10-03; its sentence on QE's size is corrected below]**
 
 `mixing.py:110-125`: `_densities` and `_residuals`, each up to `history = mixing_ndim` entries
 (appended `:121-122`, trimmed `:123-125`). Each entry is `np.asarray(rho_in).ravel()` (`:118`) of the
@@ -1724,19 +1732,27 @@ P78 made it actually reach the mixer) and is already measured for convergence at
 code's real-space packing. (Read on `~/apps/qe-7.4.1`; the vendored 7.5 tree is absent from this
 checkout.)
 
+**Corrected 2026-10-03 (`OPEN.md` Part XXIII item 22): "within 5%" holds at dual 4 only.**
+`mix_rho.f90:132` sets `ngm0 = ngms`, the *smooth* sphere, and the shell between `ngms` and `ngm`
+is mixed linearly and never stored (`high_frequency_mixing`, `scf_mod.f90:549-553`), so QE's
+entry is a fraction of about `(4/dual)^1.5` of this code's dense-box one: the same at dual 4,
+about 0.41 at the NiBr2 slab's dual of about 7.5, which is the cell this entry sizes. So this
+*is* a deviation from QE above dual 4, and the fix it points to is mixing in G on the smooth
+sphere rather than only the `arrays` line below.
+
 **Fix.** One `arrays` line — `2 * mixing_ndim * nspin_mag * prod(dense_grid) * zr` — with
 `mixing_ndim` threaded into `estimate_size` the way `davidson_basis` already is (`:377-391`) and
 filled by `Calculator.estimate` from `self.defaults` exactly as calculator.py:372-373 does for
 `david` and `nbnd`, since `mixing_ndim` is a `pw.x` input variable and is in the file. Zero compute.
 
-### D4. No PAW term at all
+### D4. No PAW term at all **[half done, `62b95fb`: the one-centre tables are counted, the quadrature tables and the workspace are not, by choice]**
 
 `grep -ic paw defumat/sizing.py` returns **0**. Two arrays a PAW run makes that the model reports as
 zero bytes: `PawSpecies.density_ae`/`density_ps` at **552.6 MB per Ni species** (A12), and the
 one-centre quadrature at **0.35-0.45 GB** per species sublattice (B1). Both are resident for the
 life of the `Calculation`.
 
-### D5. `ProjectorCore.columns` and `kg` are not in `arrays`
+### D5. `ProjectorCore.columns` and `kg` are not in `arrays` **[closed, `433abd7`, with D11]**
 
 `sizing.py:502` counts only `projectors vkb (nk,npwx,nkb)`. `columns` `(nk, npwx, ncs)` is 242.8 MB
 at nbse2's shapes and 1.42 GB on a NiBr2 slab written one species per magnetic site; `kg` is 10.1 MB
@@ -1744,7 +1760,7 @@ at nbse2. A **candidate** for part of the 4.5 GB `PERFORMANCE.md` P74 leaves una
 measured against 27.80 estimated) — a candidate, not an identification. OPEN.md M2 already asks for
 this line.
 
-### D6. There is no response estimator
+### D6. There is no response estimator **[open, re-checked 2026-10-03]**
 
 `estimate_size` models the SCF only, so none of A7, A8, A10, A14 or the phonon/strain/
 electrostriction working sets is budgetable before a run starts, and `SizeEstimate` cannot warn about
@@ -1752,25 +1768,25 @@ them. A `response=` mode taking `nw`, `nm`, `nbnd` and the perturbation count wo
 A10 and A7 by arithmetic alone — the same argument `PERFORMANCE.md:4320` makes about setup
 allocations missing from the slab estimate (34.78 GB reported against 117.55 measured).
 
-### D7. `Davidson becp+becq (nvecx,nkb)` is a factor of `npol` low on a spinor run
+### D7. `Davidson becp+becq (nvecx,nkb)` is a factor of `npol` low on a spinor run **[open, re-checked 2026-10-03]**
 
 `sizing.py:515` uses `nkb` where the spinor Hamiltonian folds `npol` into that width —
 `operator.py:161`'s `s_projections` returns `(nvec, m)` "whatever the spin structure is". 24 MB at
 NiBr2's shapes; a model nit, listed for completeness.
 
-### D8. The model counts one of each term where a relaxation holds two or four
+### D8. The model counts one of each term where a relaxation holds two or four **[half overtaken: `run_relax` holds one `Calculation` since A2; `vc_relax` still holds `base` beside `current` through every step's SCF, uncounted]**
 
 `wavefunctions`, `vkb` and `phases` are each counted once (`:501-502`, `:590`); `run_relax` holds two
 of each (A2) and `vc_relax` four Calculations (A3). Plausibly part of P74's residual 1.16x.
 
-### D9. The `AUG_MAX_BYTES` gate measures half the stored route's working set
+### D9. The `AUG_MAX_BYTES` gate measures half the stored route's working set **[inverted since `d27e690`: the stored table is real and the gate sizes the complex width, so it now overstates the table by two, deliberately]**
 
 A9, and `:753` hardcodes `16` for the complex byte width, so under `precision = 'single'` it fires at
 twice the true size.
 
 ---
 
-### A16. Fragmentation, not bytes: what churns the arena on the NiBr2 slab, and what blocks the two obvious fixes
+### A16. Fragmentation, not bytes: what churns the arena on the NiBr2 slab, and what blocks the two obvious fixes **[half unblocked: on the streamed store, memory mode's, the donation and the host-side slice are in (`fa951bc`); the device-store path still slices and restacks, and the platform-allocator pair was never run]**
 
 **Opened 2026-09-14.** Every death on that cell was an allocator with **bytes free and no
 contiguous hole** -- roughly 26 GB free against a 21-23 GiB request. That is a different
@@ -1887,7 +1903,7 @@ fresh pair has not been run. One thing it does settle: `memory_stats()` keeps wo
 
 ---
 
-### A17. The stage-peak instrument is in no committed file, and the peak it briefly withdrew is reinstated
+### A17. The stage-peak instrument is in no committed file, and the peak it briefly withdrew is reinstated **[open, re-checked 2026-10-03: `DEFUMAT_STAGE_PEAKS` is in no file under `defumat/` or `tools/`]**
 
 **Opened and closed 2026-09-14.** The instrument hypothesis below was **refuted within the
 day by an accidental A/B**, so the withdrawal it caused is itself withdrawn. What survives
@@ -1972,7 +1988,7 @@ measurement, and it has not been run.
 
 ---
 
-### A18. A resume pinned the checkpoint for the whole run, and the obvious one-line fix frees nothing
+### A18. A resume pinned the checkpoint for the whole run, and the obvious one-line fix frees nothing **[done, `040cce0`; the streamed branch in `ae99566`]**
 
 **Opened and fixed 2026-09-14.** Found from the Triton side as a pattern in the deaths,
 confirmed in source here, and fixed with a test that fails on the unfixed driver.
@@ -2023,7 +2039,7 @@ same-node fresh-against-resumed pair is what would show it.
 
 ---
 
-### D10. `wfcinit` is not modelled at all, and on the one cell measured it is what sets the peak
+### D10. `wfcinit` is not modelled at all, and on the one cell measured it is what sets the peak **[closed, `19d30fb`: `start_buffer` and `start_vectors`, with `natomwfc` counted as `wfcinit` counts it]**
 
 **Added 2026-09-14, from the stage-bracketed NiBr2 runs (jobs 20252135 / 20252136), read
 independently by two sessions that agreed.** This is the largest gap in the list and it is
@@ -2158,7 +2174,8 @@ a defect, and these six are stale.
    lands A8. **Corrected 2026-09-13, in place rather than by deletion**, so the claim and its
    retraction stay in the same sentence.
 2. **P11's conclusion that "the 11 GB is the reverse pass and not the forward-mode Jacobian"** does
-   not follow from peak RSS, which is a within-process high-water mark (C1).
+   not follow from peak RSS, which is a within-process high-water mark (C1). **Corrected
+   2026-10-03, in place.**
 3. **`velocity.py:51-56` states the module's memory model as "the peak is one extra `vkb`"** and calls
    `vkb` "the largest k-indexed array a calculation has after the wavefunctions themselves". It never
    mentions the primal+tangent band blocks at `:302`, which exceed `vkb` whenever `nbnd > nkb` — every
@@ -2166,7 +2183,7 @@ a defect, and these six are stale.
 4. **OPEN.md's "judged clean" list says of `batching.py` "The only vmaps in the hot path are over the
    spin axis, already measured free at width one."** That is a statement about `nspin = 1` and says
    nothing about `nspin = 2`, where the spin vmap is an undialled factor of two on the density stage
-   (A15).
+   (A15). **Corrected 2026-10-03, in place.**
 5. **`CLAUDE.md`'s P46 line** — "the backward pass of an ultrasoft or PAW derivative carries the
    augmentation table `Q_ij(G)`, `nh^2 x ngm` per atom ... which is why a bismuthene spinor force does
    not run here at all" — predates P73 and describes the **stored** route. P73 fixed the forward path

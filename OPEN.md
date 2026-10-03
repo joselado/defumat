@@ -92,7 +92,18 @@ looking for **speed and memory** rather than for wrong answers, 23 entries, orde
 ease times impact. **Nothing in it was measured and nothing in it is a defect**: each
 entry is a reading of the source with the input and the command that would turn it into a
 number, and none of it enters `PERFORMANCE.md`'s backlog until one does. The vendored QE
-tree was absent while it ran, so its QE claims are from this repo's docstrings.
+tree was absent while it ran, so its QE claims are from this repo's docstrings. Every entry
+was re-read against the code on 2026-10-03 and carries its status in its heading; H2, marked
+closed, is reopened.
+
+**Part XXIII** is the second optimisation sweep, **2026-10-03**: two agents re-read the 122
+listed optimisation items against the code (the marks are applied where each item lives), five
+looked for what no list has, and two verifiers tried to refute each of the 30 candidates; 26
+entries survive, nothing was measured. The largest is a finding about the response loops:
+their convergence test is the raw sum where `ph.x` divides by `ndimtot^2`, eleven decades
+tighter on the AlAs spinor cell, which accounts for its 12 passes against `ph.x`'s 6 and has to
+land before the CG threshold is scheduled. What `tr2` should default to in `ph.x`'s units is
+the user's decision.
 
 **Status, 2026-09-11 (later the same day).** Sixteen entries are closed, each with a
 test that was checked to fail against the old code: **A1, A3, A4, A5, A6, A7, A8, A9,
@@ -1263,7 +1274,7 @@ that one ranked by what a wrong answer costs. Nothing here gives a wrong answer.
 entries could move a validated number and are marked **[moves a number]**; they need a
 `pw.x` or reference comparison re-run beside them rather than a timing alone.
 
-**Nothing from this sweep goes into `PERFORMANCE.md`'s ten-item backlog until it has a
+**Nothing from this sweep goes into `PERFORMANCE.md`'s backlog until it has a
 number**, which is the whole rule of that file. Entries that are *siblings* of a backlog
 item say so.
 
@@ -1272,6 +1283,20 @@ the entry's central argument, that XLA does not remove a duplicated energy evalu
 true of the polarized branch (1.10-1.14x, implemented) and false of the unpolarized one
 (1.00x, reverted). That is the first entry priced and it went the way Part II's did: right
 that there was something there, wrong about what. Nothing else here has been measured.
+
+**Status, 2026-10-03, every entry re-read against the code by Part XXIII's sweep.** Closed
+and still true: H1 (the polarized half), H3, H5, H9, M1, M2, M3, S4, S5 and X3. Open as
+written: H6, H8, M4, M5, M6, S3 and X1. Half done: M7 (on a CPU only), S1, S2 and X2. **H2
+is reopened**: the commit that closed it changed the frozen-density stage, which runs once,
+and the per-iteration loop the entry names still runs nine kernel calls. H4 and H7 are as
+their headings say, measured and not landed, but both baselines are gone: since `a0b857a`
+(2026-10-02) the `jvp`s they would replace go through `eager.compiled_jvp`, so the branches
+`p112-h4-linearize-kernel` (`252991a`) and `p112-h7-linearize-elastic` (`783ed10`) have to
+be re-measured against master before either is landed or dropped. Every backlog number in
+this Part read one low from the day `PERFORMANCE.md`'s backlog gained its host-transfer
+item (now item 4) until today, and they are corrected in place. The line numbers in the
+entries are those of 2026-09-12 and most have moved; where an entry was re-read, its
+heading or its first paragraph gives the current ones.
 
 ---
 
@@ -1331,7 +1356,14 @@ dense grid, so `si8-paw-pbe-1k` at 0.841 s/iteration is where to take it.
 LDA number was recorded with -- on an `nspin = 1` and an `nspin = 2` input. `etxc` and the
 total energy must be bit-identical.
 
-### H2. The strain kernel issues nine calls where the loop above it already knows six suffice **[closed 2026-09-20 in `a23b050`; found closed 2026-09-23]**
+### H2. The strain kernel issues nine calls where the loop above it already knows six suffice **[closed 2026-09-20 in `a23b050`; reopened 2026-10-03, Part XXIII item 4]**
+
+**Reopened 2026-10-03.** `git show a23b050 -- defumat/response/strain.py` has one hunk, in
+`_frozen_density_response` (`:433`), which runs once per response. The loop this entry names is
+the per-iteration one in `_self_consistent_response`, now `strain.py:589-598`, and it still calls
+`compiled_jvp` of the potential for all nine `(a, b)`, as its PAW branch at `:608-615` still calls
+`paw_response` nine times. The paragraph below is right about the frozen stage and wrong about
+this loop. The fix and the bound are Part XXIII item 4.
 
 **Closed, and this entry was not told.** `a23b050` ("one duplicate") made the kernel loop in
 `response/strain.py` key its evaluations on the unordered pair, so `[b, a]` reuses `[a, b]`
@@ -1471,7 +1503,7 @@ calbec of that block is ~5.6 ms of a ~190 ms step and is wasted two steps in thr
 the per-operation table came from. Step count from `diagonalize(..., return_steps=True)`
 must not move; norm-conserving inputs are the control and must be bit-identical.
 
-### H6. The symmetry search runs twice for every `Calculation`, and more for a budgeted run
+### H6. The symmetry search runs twice for every `Calculation`, and more for a budgeted run **[open, re-checked 2026-10-03; Part XXIII item 16 multiplies it]**
 
 `defumat/basis/builder.py:132`. `build_basis` calls `find_symmetries(...)` to size the FFT
 box, and `Calculation.__init__` then calls `system.symmetry_group()` (`driver.py:1409`),
@@ -1532,7 +1564,7 @@ the explanation to check first.
 **Measure.** An elastic-constants run through `tools/benchmark.py`; the tensor
 bit-identical.
 
-### H8. The q-phonon's CG threshold is fixed at 1e-14, two orders tighter than its own family **[moves a number]**
+### H8. The q-phonon's CG threshold is fixed at 1e-14, two orders tighter than its own family **[moves a number; open, re-checked 2026-10-03; Part XXIII item 1 comes first]**
 
 `defumat/response/phononq.py:903`. `dynamical_matrix_at_q(..., threshold = 1.0e-14)` goes
 straight into the CG convergence test, fixed from the first self-consistency iteration to
@@ -1542,11 +1574,11 @@ response (`strain.py:215`) all use 1e-12, and `sternheimer.py`'s own default is 
 after. The same signature carries `tr2 = 1.0e-14` for the self-consistency test beside it,
 so there are two fixed thresholds on this entry point, not one.
 
-**Sibling of backlog item 7**, which measures the `Gamma` case at 27.7 CG steps against
+**Sibling of backlog item 8** (scheduling the response solver's threshold), which measures the `Gamma` case at 27.7 CG steps against
 `ph.x`'s 9.3 -- a factor of three on the stage that is 96 per cent of the run. At `q != 0`
 the threshold is a further 100x tighter.
 
-**Gain.** At least item 7's 3x, on runs measured at 12-14x per solve. No sharper figure is
+**Gain.** At least item 8's 3x, on runs measured at 12-14x per solve. No sharper figure is
 claimed, because none exists.
 
 **Measure, and re-run the reference beside it.** P71's three q-phonon cells. Loosening a
@@ -1713,7 +1745,7 @@ the right shape and time `mix()` alone -- no SCF, so it runs in seconds. Then in
 `benchmarks/al-slab.in`, whose history actually fills. The mixed density must be
 bit-identical and the iteration count identical.
 
-### M4. `calbec` conjugates the large operand where the same package's `project` conjugates the small one
+### M4. `calbec` conjugates the large operand where the same package's `project` conjugates the small one **[open, re-checked 2026-10-03]**
 
 `defumat/hamiltonian/operator.py:155`. `Hamiltonian._becp` computes
 `einsum("gk,...g->...k", vkb.conj(), vectors)`: `vkb.conj()` is a separate materialised
@@ -1731,7 +1763,7 @@ against an `h_psi` measured at 146.3 ms.
 **Measure.** `si16-1k-ecut30` and `si8-us-1k` through `tools/benchmark.py`; the Davidson
 line. Bit-identical.
 
-### M5. The preconditioner contracts a block-diagonal `D` as a dense `(nkb, nkb)` **[moves a number]**
+### M5. The preconditioner contracts a block-diagonal `D` as a dense `(nkb, nkb)` **[moves a number; open, re-checked 2026-10-03]**
 
 `defumat/hamiltonian/operator.py:306`. `diagonal(ik)` builds `h_diag` as
 `einsum("gi,ij,gj->g", vkb.conj(), dij, vkb)`, where `dij` is the full matrix that
@@ -1756,7 +1788,7 @@ instrument `davidson.py`'s working-set fit was made with. The converged total to
 and **the per-k Davidson step counts must not move**, which is what makes this a
 number-moving change rather than a free one.
 
-### M6. `return_steps` is a static `jit` argument, so a process that runs an SCF and then anything else compiles Davidson twice
+### M6. `return_steps` is a static `jit` argument, so a process that runs an SCF and then anything else compiles Davidson twice **[open, re-checked 2026-10-03; `workflows/nscf.py:308` and `scf/streaming.py:168` now pass `True` too, so a band structure no longer pays it and the residual solver, topology and electrostriction still do]**
 
 `defumat/solvers/davidson.py:606`. `True` and `False` are two distinct compilations of the
 entire solver -- `h_psi`, the subspace solve, both Ritz rotations. `run_scf`'s mixing loop
@@ -1767,7 +1799,15 @@ default, and `scf/residual.py:172` is one that runs **at the SCF's own shapes**.
 duplicate executable; the only anchor is the 146.3 ms of arithmetic it holds. The first
 step is `JAX_LOG_COMPILES=1` on a script that does both, not a fix.
 
-### M7. `sum_band` transforms the whole FFT box where `h_psi` uses sticks **[moves a number]**
+### M7. `sum_band` transforms the whole FFT box where `h_psi` uses sticks **[moves a number; done on a CPU in `90b50bd`, open on a card and under gamma storage, re-checked 2026-10-03]**
+
+**Half done.** `band_density` takes `sticks_density` only when a plane chunk is set and the band
+batch is one (`scf/density.py:61-66`), and `resolve_plane_chunk` returns `None` on any backend but
+the CPU (`batching.py:855-856`), so a card still scatters every band into the whole box while
+`h_psi` takes the sticks; a gamma-only run does too (`density.py:61` requires no `fft_index_minus`).
+The card half is worth little on the one card measured (sticks against box over a whole iteration:
+63.9 against 70.3 ms at 16 atoms, 1424 against 1423 at 64, `GPU-SPEED-NEXT.md` item 6), so it
+waits with the layout decision for a float64 card.
 
 `defumat/scf/density.py:62`. `band_density`'s `one_band` scatters into a full `(n1,n2,n3)`
 box and does a fused 3D `ifftn`, while `Hamiltonian._local` takes the stick path. The
@@ -1792,7 +1832,7 @@ the honest reading.
 All four are negligible on the small cells and none appears in `sizing.py`'s model. The
 cells they are priced on are the 157-atom slab and P73's 45-atom NiBr2.
 
-### S1. The symmetry maps are `(nsym, ngm)` int64 plus `(nsym, ngm)` complex, resident for the run
+### S1. The symmetry maps are `(nsym, ngm)` int64 plus `(nsym, ngm)` complex, resident for the run **[half done, re-checked 2026-10-03: the per-iteration transient walks the operations past 64 MB (`90ed76a`) and `sizing.py` counts the maps (`08ef191`); the resident int64 indices and the all-ones phases are unchanged]**
 
 `defumat/system/symmetry.py:644`. `permutations` (int64) and `phases` (complex128), both
 on the **dense** G set, held for the life of the `Calculation` (`driver.py:1458`).
@@ -1806,7 +1846,7 @@ resident part to **0.68 GB**. Caveat stated by the entry rather than buried: tha
 particular run is a spin spiral and therefore `nosym`, so the figure is a projection onto
 a symmetric run of that size.
 
-### S2. The Anderson history is sixteen whole real-space densities on the host, reported as zero
+### S2. The Anderson history is sixteen whole real-space densities on the host, reported as zero **[open, re-checked 2026-10-03: `mixing_ndim` is an input since `f10abe8`, `sizing.py` still has no line for the history, and above dual 4 it is larger than QE's, Part XXIII item 22]**
 
 `defumat/scf/mixing.py:120`. `_densities` and `_residuals` each hold `history = 8` entries,
 and what is handed to them is the whole mixed state flattened -- real-space
@@ -1815,10 +1855,10 @@ and what is handed to them is the whole mixed state flattened -- real-space
 **Gain (arithmetic).** On the 157-atom slab (225x216x256, `nspin = 2`) one copy is 199 MB
 and the sixteen are **3.18 GB**, against the 597 MB `sizing.py` reports for dense-grid
 fields -- **the omission is 5.3x what is reported**. `history = 4` halves it. Tens of MB
-on `si8-us-1k`. **Sibling of backlog item 4** in the sense that QE has a knob here
+on `si8-us-1k`. **Sibling of backlog item 5** in the sense that QE has a knob here
 (`mixing_ndim`) that this input parser does not read.
 
-### S3. The augmentation's `(nat, ngm)` structure factor is resident, and only a chunked scan reads it **[moves a number]**
+### S3. The augmentation's `(nat, ngm)` structure factor is resident, and only a chunked scan reads it **[moves a number; open, re-checked 2026-10-03]**
 
 `defumat/pseudo/augmentation.py:80`. On the 45-atom NiBr2 slab (`ngm = 3 536 849`) that is
 **2.55 GB** held for the life of the `Calculation` -- the largest resident line the
@@ -1851,7 +1891,7 @@ it. **Its own docstring records the size** -- 36257 by ~1100 on eight-atom ultra
 silicon, 300 MB, one per `L`. `pseudo/formfactors.py` chunks all four of *its* transforms
 at `CHUNK = 4096` for exactly this reason.
 
-**This is backlog item 10's site**, from the other end: item 10 proposes a `custom_jvp` to
+**This is backlog item 11's site** (done 2026-10-03, `c3bc04f`), from the other end: item 11 proposed a `custom_jvp` to
 shrink the reverse-mode tape, and this is the forward transient, which chunking bounds
 without touching the derivative. Both are wanted; neither substitutes for the other.
 
@@ -2188,7 +2228,7 @@ difference and no truncation in it, at one SCF and one gradient per rung instead
 
 ## X. Downgraded, and test-suite hygiene
 
-### X1. The analytic force recompiles per ionic step -- real, and not the severity the entry claims
+### X1. The analytic force recompiles per ionic step -- real, and not the severity the entry claims **[open, re-checked 2026-10-03; the autodiff force does too in a vc-relax, Part XXIII item 7]**
 
 `defumat/forces/analytic.py:112`. `_compiled_terms` keys its cache on object identity and
 `at_positions` returns a `copy.copy`, so the six-term kernel is traced and compiled again
@@ -2200,9 +2240,9 @@ this as contradicting `PERFORMANCE.md` ("`at_positions` already keeps its compil
 force"). That sentence is about the **default** `jax.grad` route. The analytic force is
 `method='analytic'`, an opt-in cross-check, and is not on the relaxation path at all -- so
 "a relaxation recompiles at every ionic step" holds only for a relaxation that asked for
-the analytic force. Sibling of backlog item 6, at a fraction of its weight.
+the analytic force. Sibling of backlog item 7, at a fraction of its weight.
 
-### X2. The two bounds `CLAUDE.md` requires of a multi-cell test file exist in one file out of thirty-two
+### X2. The two bounds `CLAUDE.md` requires of a multi-cell test file exist in one file out of thirty-two **[partly, re-counted 2026-10-03: 49 files clear the caches and 41 use `maxsize=2`, 33 still use `maxsize=None` and 25 of those clear nothing; the count was wrong on the day, since 19 files already cleared at `9a854e2`, and which of the 25 run more than three cells is not checked]**
 
 `tests/regression/test_response.py:65` and thirty-one others. `CLAUDE.md` names two bounds
 for any file running more than ~three distinct cells: `jax.clear_caches()` in an autouse
@@ -2247,7 +2287,9 @@ A negative is a result: this is where **not** to look.
 
 - **`defumat/batching.py`** -- clean, and the best-argued file in the sweep. Every
   `jax.vmap` call site in the package was grepped: **none walks the k axis by hand.** The
-  only vmaps in the hot path are over the spin axis, already measured free at width one.
+  only vmaps in the hot path are over the spin axis, already measured free at width one
+  (true of one channel; at `nspin = 2` the density's vmap keeps both channels' boxes in flight,
+  `MEMORY-AUDIT.md` A15, still open on 2026-10-03).
 - **The SCF driver's iteration body** -- `next_ethr` has all three of `electrons.f90`'s
   details (reset at iteration 2, monotone `min`, 1e-13 floor) and takes the absolute
   iteration number across a resume; the attempt loop reproduces `electrons.f90:890-908`
@@ -2287,7 +2329,7 @@ A negative is a result: this is where **not** to look.
 **What the sweep did not cover.** The memory half of the response lens is thin: almost
 every allocation there is already sized in `PERFORMANCE.md`, and the two that are not --
 the `(3 nat, nspin, dense grid)` arrays the phonon loop holds six or seven of at once, and
-`keep_internals`' `3 nat` state blocks -- both fall inside **backlog item 9**, which bounds
+`keep_internals`' `3 nat` state blocks -- both fall inside **backlog item 10**, which bounds
 them at three modes in flight.
 
 ---
@@ -3242,6 +3284,15 @@ Two iterations, and even twelve, said nothing about the arena three iterations l
 
 ## 2. `diago_david_ndim = 2` may degrade at the minimum subspace once `ethr` tightens
 
+**Status, 2026-10-03: not measured, and the observation predates two changes to the solver.**
+The 70-plus steps were taken before the band ladder (`07a4332`, 2026-09-16) and before the
+subspace solve parked its unused rows one above a bound of the live block (`90e2f8f`,
+2026-10-01), which ended a card's stalls at the `ethr` floor. The ladder this entry asks for,
+inner steps against `ethr` at `ndim` 2, 3 and 4 on `si16-1k-ecut30`, has never been taken, and it
+is the first step at master. The nearest data are 9 to 20 steps a call at `david` 2 and 3 in the
+pre-fix replay and small cells at `david = 2` taking 2.2 steps against `pw.x`'s 2.8
+(`GPU-SPEED-NEXT.md` item 7).
+
 Observed on the same run: 70+ Davidson inner steps per k-point at `ethr` 2.3e-6, against
 2.0 at the loose starting threshold. `ndim = 2` is what a memory-constrained cell is forced
 into, so if the restart logic is what degrades there the fix would pay twice -- fewer steps
@@ -3575,7 +3626,7 @@ dropped with a `RuntimeWarning` when the count does not match, which is exactly 
 behaviour every resume had until today, and the guard has a test that trips it rather than
 a clean pass that cannot be told from silence.
 
-### 4. `local-TF` costs about 730 s an iteration on a 3.5-million-G-vector dense grid **[opened 2026-09-14, from the NiBr2 helix run; unprofiled]**
+### 4. `local-TF` costs about 730 s an iteration on a 3.5-million-G-vector dense grid **[opened 2026-09-14, from the NiBr2 helix run; unprofiled; re-checked 2026-10-03, the routine unchanged since `375af59` and all four properties below still as described]**
 
 **The evidence is an A/B and a fit, which is the right order.** `nibr2_k161_localtf.scf.in`
 differs from `nibr2_k161_anderson.scf.in` in exactly one line, `mixing_mode`: same geometry,
@@ -6268,3 +6319,834 @@ Two smaller things from the same runs, recorded as reported:
   11); it converged in 46 iterations with `mixing_mode = 'kerker'`, `mixing_beta = 0.2`,
   `mixing_beta_mag = 0.1`.
 
+
+---
+
+# Part XXIII: the optimisation sweep of 2026-10-03
+
+Nine read-only agents, three weeks and about 700 commits after Part III. Two re-read every
+listed optimisation item against the code, 122 in all: Part III, Part VII item 2 and Part VIII
+item 4 here, `PERFORMANCE.md`'s backlog, `MEMORY-AUDIT.md`, `GPU-MEMORY-NEXT.md` and
+`GPU-SPEED-NEXT.md`. Five swept one subsystem each for what none of those lists has (the SCF
+hot path, the response stack, setup and compilation, the derivatives and post-SCF workflows,
+the pools and the accelerator paths), and two verifiers opened every cited line of the 30
+candidates and tried to refute each. 21 were confirmed, 7 confirmed in part with a corrected
+bound or scope, and 2 were duplicates, folded into the entries they duplicate; two more pairs
+merge, so 26 entries follow.
+
+**What binds every entry.** Nothing was executed, as in Part III: no test, no timing, no SCF,
+so no gain below is a measurement of the proposed change. A bound is a figure already on
+record, named where it is, or the entry says unbounded. The vendored QE tree was present this
+time, and every claim about `pw.x` or `ph.x` cites the Fortran line that was read. An entry
+that changes rounding or a validated result is marked **[moves a number]** and needs its
+reference comparison re-run beside the timing. The order is by the size of the gap on record,
+so the response comes first: it is where the largest measured ratio against QE is.
+
+**The reconciliation is applied where the items live** and is not repeated here: each Part III
+entry carries its status in its heading and in Part III's status paragraph of 2026-10-03, and
+the backlog, `MEMORY-AUDIT.md` and the two GPU handoffs carry dated marks. The records it found
+wrong, as distinct from stale: Part III H2 was closed on a commit that changed a different
+loop; backlog item 7 named the force's cache as the stress's; `MEMORY-AUDIT.md` D3 said QE's
+mixer history is the size of this code's, which holds at dual 4 only; three sentences in
+`PERFORMANCE.md` and `PLAN.md` called the response's `tr2` the same as `ph.x`'s, which item 1
+shows it is not; backlog item 4 read 617 ms of a profiler annotation as transfer cost, which
+the annotation does not measure alone; and Part III M7 and backlog item 11 were not marked
+where they are done (M7 on a CPU only).
+
+## The response loops
+
+The largest measured gap against QE left on a CPU is here: the AlAs spinor field response
+takes 144.0 s at 12 iterations and `av.it. = 33.7`, against `ph.x`'s 32.5 s at 6 iterations
+and 10.4 to 11.6 (`PERFORMANCE.md`, P98), and on bismuthene one response did not finish in 70
+minutes against `ph.x`'s 279 s. Items 1 and 2 account for the two factors of that ratio, the
+passes and the CG steps a pass, and backlog item 8, scheduling the CG threshold, is the third
+piece and comes after item 1.
+
+### 1. The response loops test an un-normalised `|ddv_scf|^2`, eleven decades tighter than `ph.x` on the AlAs spinor cell **[moves a number]**
+
+Sites: `response/efield.py:390` and `:403`, against `TR2 = 1e-14` (`:161`); `phonon.py:844`,
+`:857`; `strain.py:617`, `:627`; `phononq.py:715`, `:719`, which tests `max |dV|^2` instead.
+
+`efield.py:390` converges on `change = sum((proposed - dvscf)**2)` over the whole
+`(3, nspin_mag, n1, n2, n3)` grid against `tr2 = 1e-14`, and prints it under `ph.x`'s label.
+`ph.x`'s quantity is the same sum divided by `ndimtot^2` (`LR_Modules/mix_pot.f90:83`,
+`dr2 = (sqrt(dr2)/ndimtot)**2`), with `ndimtot = 2 npert nnr nspin_mag`, the complex array
+counted as reals (`PHonon/PH/dfpt_kernels.f90:226`, `:434-439`), tested against
+`npert tr2_ph / npol` and divided by `npert` before it is printed and before the next pass reads
+it (`:519-523`). On `alas-epsilon-us-soc` (dense 36^3, `npert = 3`, `npol = 2`,
+`tr2_ph = 1e-14`) `ph.x` stops when the raw sum falls below about 1.2e-3, against 1e-14 here:
+eleven decades. `ph.x`'s own trajectory contracts 1.7 decades a pass
+(`reference.out.ph-alas-epsilon-us-soc:163-178`, 1.88e-7 to 5.40e-16 in six), so eleven decades
+is about 6.5 more passes, and 6 + 6.5 against the 12 recorded; on silicon (20^3) the same
+arithmetic gives 5 + 4.6 against the 9 recorded. **So the Anderson mixer already contracts at
+`ph.x`'s rate, and the gap in passes is the test**, which corrects the attribution in
+`PERFORMANCE.md`'s P98 entry (corrected there). One caveat: `ph.x` perturbs along `at(:, ipol)`
+in units of `alat` (`dvpsi_e.f90:83`) where this code is Cartesian, which moves the raw sum by
+about `alat^2`, under one pass. The q-phonon's `max |dV|^2` is a sibling with a smaller gap,
+about five decades on 20^3 silicon. `AUDIT-2026-09-20.md` (around its line 857) found the
+field's site and it was never carried into a record.
+
+**Fix.** Converge on what `ph.x` converges on: `dr2 = sum(diff^2) / (2 npert nnr nspin_mag,
+plus the PAW block where it is mixed)^2` against `npert tr2 / npol`, and keep `dr2 / npert` in
+the history, so that `tr2` means `tr2_ph` and the history reads as `ph.x`'s line; the q-phonon
+the same over its real and imaginary halves. A host-side scalar, so no rule is touched. **It
+lands before backlog item 8**: `dfpt_kernels.f90:280` schedules
+`thresh = min(0.1 sqrt(dr2), 1e-2)` on the normalised, `npert`-divided `dr2`, and on today's raw
+sum `0.1 sqrt(change)` is about `ndimtot` times QE's (2.8e5 on the AlAs spinor cell), so a
+schedule transcribed onto it would sit at its 1e-2 cap for the whole run. Loosening to `ph.x`'s
+meaning moves results at the level `ph.x` itself converges to (the agreements on record are
+3e-6 to 1e-5 relative), so **the default `tr2` in the normalised units is the user's decision**,
+and any test pinned tighter than that will fail.
+
+**Bound.** About 2x on the self-consistent loop of the field, the `Gamma` phonon and the strain
+response: 12 passes against 6 on AlAs (`PERFORMANCE.md`, P98), 9 against 5 on silicon
+(`PERFORMANCE.md`, "What a mixer in the response loop was worth"). Less on the q-phonon.
+
+**Measure.** `tests/data/qe/alas-epsilon-us-soc.in` and `si-epsilon.in`, one core, the second
+of two calls of `get_dielectric_tensor(tr2=<ph.x's bar on the raw sum>, verbose=True)` against
+the default: `len(history)`, `average_iterations` and `epsilon` against the `ph.x` references.
+Then every response regression file through `tools/run_regression.sh`.
+
+### 2. The Sternheimer CG starts every solve from zero, where `ph.x` starts each pass from the previous pass's `dpsi` **[moves a number]**
+
+Sites: `response/sternheimer.py:632-633`; the loops' stored solutions at `efield.py:575`,
+`phonon.py:673`, `strain.py:537`, `phononq.py:663`, and the walked host store at
+`chunked.py:266`.
+
+`solve_at` sets `dpsi = zeros_like(rhs)` and spends its first operator application on that
+zero block, in every pass, for every direction or mode and every k-point. `ph.x` reads the
+previous pass's `dpsi` from `iudwf` as the starting vector from the second pass on
+(`LR_Modules/response_kernels.f90:240-251`, applied on `cgsolve_all`'s first step,
+`cgsolve_all.f90:153-160`), so a later pass removes only the change in the right-hand side,
+which shrinks with `|ddv_scf|`. Here each solve walks a residual of order `|rhs|` down to the
+fixed threshold, which is part of why `av.it.` stays at 33.7 on the AlAs spinor cell while
+`ph.x`'s later passes take 10.4 to 11.6. It is independent of the threshold schedule: at a
+fixed 1e-12 a warm start still cuts the decades each later solve has to cover.
+
+**Fix.** An optional starting block for `solve`, `solve_arrays` and `solve_at`, masked as `rhs`
+is and zero by default, with each loop passing its previous solution. No new memory on the
+whole-k routes, which already hold it; the walked routes upload one more chunk a solve from
+the host store they already write. A metal's `ef_shift_wfc` is applied after the loop
+(`phonon.py:684-691`), so the stored `dpsi` is the unshifted one the next pass wants.
+
+**Bound.** Unbounded on its own. The CG-step gap it shares with backlog item 8 is 33.7 against
+10.4 to 11.6 on the AlAs spinor cell and 27.7 against 9.3 on silicon (P25).
+
+**Measure.** `si-epsilon.in` and `alas-epsilon-us-soc.in`, one core, second call:
+`average_iterations` and wall clock with and without the start, at the threshold left at 1e-12
+so the effect is separated from backlog item 8; `epsilon` unchanged to the CG threshold.
+`si-epsilon-unshifted-nosym.in` through `get_phonons_at_q` for the q route.
+
+### 3. Each CG step on an ultrasoft or PAW dataset applies `S` to the level-shift vector, a fixed combination of `S|psi_occ>` the solve already has
+
+Sites: `response/sternheimer.py:469-490`, `:502`.
+
+`_operator` applies `H` (a `calbec` and an expansion with `D`), `S` to the vectors, and `S`
+again to `lifted = sum_m overlaps[m, n] psi_m` (`:490`): a third `(nocc, npwx) x (npwx, nkb)`
+`calbec` and a third expansion every CG step. `S` is linear, so
+`S lifted = overlaps^T (S psi_occ)`, and `project` already builds `S psi_occ` once for the
+solve (`:502`). `ph.x` pays this application too (`ch_psi_all.f90:216-227`), so this goes past
+QE. Zero on a norm-conserving dataset.
+
+**Fix.** Hand `s_occupied` to `_operator` and replace `apply_s(lifted)` by
+`einsum('mn,mg->ng', overlaps, s_occupied)`. Exact in arithmetic, round-off in practice.
+
+**Bound.** Unbounded. One `calbec` of a band block is about 5.6 ms of a 190 ms Davidson step on
+sixteen-atom ultrasoft silicon (Part III H5's arithmetic), the scale of one of the contractions
+removed per CG step.
+
+**Measure.** `alas-epsilon-us.in` and `si-epsilon-us.in`, one core, second call, wall clock
+with `average_iterations` equal between the arms.
+
+### 4. The strain loop screens all nine strain components every iteration, where six are independent (Part III H2, reopened)
+
+Sites: `response/strain.py:589-598`, and the PAW branch at `:608-615`.
+
+H2's site, still open; the H2 entry says why it was marked closed. `[a, b]` and `[b, a]` of
+`symmetrised` are one object, so three of the nine `compiled_jvp` calls of the potential, and
+three of the nine `paw_response` calls, are duplicates. The walked strain route goes through
+the same loop (`strain.py:312`).
+
+**Fix.** `range(a, 3)` with `[b, a]` filled from `[a, b]`, after asserting the two equal to
+round-off as H2 asked, and the same for `paw_response`. Round-off, since the symmetriser's sum
+order differs between the two.
+
+**Bound.** Small: one kernel call is 1.91 ms on the 20^3 LDA grid and 11.4 ms on PBE at 24^3
+(H4), so three an iteration over about eleven iterations is well under a second on the cells
+measured. Recorded because the record said closed.
+
+**Measure.** `si-electrostriction.in` and `alas-piezo-tiny-paw.in` through
+`get_strain_response`, one core, second call: kernel `jvp`s per iteration, and the response to
+round-off.
+
+### 5. The response mixer keeps eight steps of every perturbation's `dV_scf` on the host **[moves a number]**
+
+Sites: `response/mixing.py:64-65`, `:83-87`; `scf/mixing.py:222`; `phonon.py:741-745`;
+`phononq.py:724`; `strain.py:570`.
+
+`ResponseMixer` calls `get_mixer(name, beta=beta)` and nothing else, so the history is
+`AndersonMixer`'s default of 8, and each entry keeps the input and the residual as flat float64
+host vectors of every perturbation's grid concatenated: `16 P nspin_mag nnr x 8` bytes, with
+`P = 3` for the field, `3 nat` for a `Gamma` phonon, `2 x 3 nat` at q (the real and imaginary
+halves) and 9 for the strain, three of which are duplicates inside one Anderson fit. Each
+`mix` also makes two whole flat copies. `ph.x` keeps `nmix_ph = 4` (`phq_readin.f90:258`) per
+irreducible representation, on disk when `flmixdpot` is set (`mix_pot.f90:101-115`). No record
+sizes this history: `MEMORY-AUDIT.md` names the field's as live, and Part III S2 sizes only the
+SCF's.
+
+**Fix.** Pass `history` through `ResponseMixer` (`get_mixer` already takes it) and default it to
+`ph.x`'s 4, which halves the history; mix the six independent strain components and fill
+`[b, a]` afterwards, which also takes three duplicate directions out of the fit (the sibling
+of item 4); one representation at a time (backlog item 10) bounds it at a few modes. Host-side
+only, but the depth changes the iteration path, so counts and converged numbers move at the
+`tr2` level.
+
+**Bound.** The code's own figure (`phonon.py:732-735`): about 40 GB for six to seven sets of
+the `3 nat` grids on a 57-atom molecule on a 6M-point grid, so 100 to 130 GB for a sixteen-set
+history on that hypothetical cell. Nothing is measured.
+
+**Measure.** `benchmarks/si8-ecut20-nosym-k3.in` in memory mode at `k_batch = 1`, the
+host-field route: `get_phonons()`, peak RSS and `len(history)` at history 8 against 4.
+`get_strain_response` on `si-electrostriction.in` for the six-against-nine fit.
+
+### 6. The walked third derivative builds a chunk's arguments once per tangent, and its strained Hamiltonian once per chunk **[confirmed in part]**
+
+Sites: `response/chunked_third.py:91-123`, `:246-285`; `scf/driver.py:3383-3420`.
+
+`walked_susceptibility_derivative` loops tangent outer and chunk inner, so `field._arguments`
+(the chunk's `at_rows`, its upload, `chunk_arrays`) and `_stacked_rows` are built once per
+tangent per chunk, where the walked field and strain routes put the chunk outer
+(`chunked.py:258-268`, `chunked_strain.py:137-160`). Inside the chunk pass, `_move` is
+`at_strain` (`forces/chunked.py:102-105`), which rebuilds the local potential's radial
+transforms, the core charge and the augmentation inside a program run once per chunk per
+tangent, all of it independent of k. The loop order is confirmed. What the rebuild is worth is
+not: XLA may merge the repeated primals inside the one `jit`, and the one sibling cost measured,
+`newd` per chunk, is a null at 0.2 per cent (`GPU-MEMORY-NEXT.md`).
+
+**Fix.** (1) Chunk outer and tangents inner, so arguments and uploads are built once per chunk
+per pass; bit-identical, since the per-tangent sums keep their chunk order. (2) Have the global
+step return the moved `vltot + v` and `deeq` with their tangents, and build the chunk's
+Hamiltonians from them; last bit only.
+
+**Bound.** The walked route's net gap against the whole one is 8.8 s of 143.3 at 27 k-points on
+ultrasoft AlAs and 10.2 s of 134.0 on eight-atom silicon (`PERFORMANCE.md`, "The third
+derivatives a k-chunk at a time"); at 8 k-points the walked call was the faster (54.4 against
+82.8 s), so these are nets of two effects and a ceiling for both halves together.
+
+**Measure.** First a count with no timing: the augmentation scans and radial transforms in
+`passes['chunk'].lower(...).compile().as_text()` on `alas-piezo.in` (nosym, memory mode, one
+k-point a chunk); if XLA collapsed them to one, (1) is the whole lever. Then warm second calls
+of `get_electrostriction` at 8 and 27 k-points on D22's card, the three passes timed apart.
+
+## Compilation
+
+### 7. A vc-relax compiles both the force and the stress gradients again at every ionic step
+
+Sites: `scf/driver.py:3226`, `:3332-3337`; `forces/autodiff.py:43-60`; `stress/autodiff.py:84-103`;
+`forces/energy.py:121-122`; `workflows/vc_relax.py:306-307`, `:439`; `forces/chunked.py:166`.
+
+Backlog item 7 said `at_strain` drops `_energy_gradient` and so the strain derivative
+recompiles. `_energy_gradient` is the **force's** cache (`forces/autodiff.py:52-59`), and it is
+dropped because the force closes over the calculation, and with it the cell, `vloc_species`,
+`rho_core_species`, the Ewald translations and `wfcU`, as constants (only `HOISTED_FIELDS` are
+arguments). The **stress's** cache is `_strain_gradient`, keyed on the identity of the
+calculation (`stress/autodiff.py:95-96`, already so at the P29 commit `0679a6e`), so a copy
+misses it whatever is dropped. `run_vc_relax` builds `current = base.at_cell(at).at_positions(pos)`
+at every step and calls both on it, so both compile every step, and each writes a persistent
+cache entry that no later run reads. Removing the pop, as the backlog item proposed, fixes
+neither. In memory mode both take the chunked route and repeat the same forward walk, and
+`_chunk` converts `state.weights[:, rows]` with `np.array` per chunk per walk
+(`forces/chunked.py:166`), a host sync each time.
+
+**Fix.** Make every geometry-dependent leaf an argument of both gradients (the cell, the
+positions, `vloc_species`, `rho_core_species`, the Ewald and dispersion lists, `wfcU`), which
+is partitioning the calculation's array leaves, the option `GPU-MEMORY-NEXT.md` item 17 did not
+take; then remove the pop and key the stress cache as the force's. The Ewald list has to be
+padded to a fixed count over the trajectory under its `rmax` mask, or the gradients retrace
+whenever the count changes. With the cell an argument, one `value_and_grad` of `E(tau, eps)`
+gives both from one tape. Free and bit-identical on its own: convert `state.weights` to NumPy
+once before the walks in `chunked_gradient`.
+
+**Bound.** About 0.6 s of stress retracing a step against 0.55 to 0.57 s of arithmetic on
+`vc-relax4` (`PERFORMANCE.md`, P29); the force's retrace on a moved cell is unmeasured (0.38 s
+first call and 0.02 s after, on a fixed cell). That section's own figures do not close (27 s
+of SCF plus 1.2 s a step exceeds its 32.4 s), so they are not summed here.
+
+**Measure.** `test-suite/pw_vc-relax/vc-relax4.in`, one core: compiles per ionic step with a
+`jax_log_compiles` handler on the `jax` logger, and `compute_forces` and `compute_stress` first
+against second call on each step's `current`; forces and stress bit-identical without the
+Ewald padding.
+
+### 8. The DFT+U occupation matrix runs an eager `map_k` over a fresh closure every SCF iteration **[confirmed in part]**
+
+Sites: `hubbard/occupations.py:72-78`, `:110`, `:119`; `scf/driver.py:2842`, `:7338-7340`;
+`scf/residual.py:186`.
+
+`projections()` defines a new closure at every call and hands it to `map_k`, and `run_scf`
+calls `occupation_matrix` once an iteration outside any `jit`, which calls it once per spin
+channel. On a CPU `k_batch = 1`, so with `nk > 1` `map_axis` takes `lax.map`, whose body is a new
+function at each call: the trap `CLAUDE.md` names and `defumat/eager.py` exists for, missed
+here (the driver wraps its own eager `map_k`, `driver.py:5367`). Not reached at `nk = 1` or on
+the streamed route. **It conflicts with `PERFORMANCE.md`'s entry of 2026-10-02**, "The response
+stack compiled its k loops again at every iteration", which says a warm second SCF on a DFT+U
+cell compiles nothing; that cell is not named, and with one k-point it could not have seen this
+path. The measurement settles which.
+
+**Fix.** A module-level `jit` of `projections` with `k_batch` static and `wfcU` and `psi` as
+arguments, or the call through `defumat.eager.compiled`: the same program, bit-identical.
+
+**Bound.** No time a compile on record. Mappings: about 16 a compile for an eager `jit(scan)`
+(the Berry-phase string loop, `PERFORMANCE.md`), two compiles an iteration at `nspin = 2`, so
+about 32 an iteration and roughly 2000 iterations in one process to reach a Triton node's
+`vm.max_map_count` of 65,530.
+
+**Measure.** `tests/data/qe/ni-ldau-ortho.in` (`nspin = 2`, 4x4x4 shifted), one core, a fresh
+process, `get_scf()` with a `jax_log_compiles` handler: compiles and `/proc/self/maps` lines per
+iteration, two before and none after; energy and `ns` bit-identical.
+
+### 9. A spin-spiral `E(q)` scan, and `relax_spiral_q`, compile the whole SCF stack again at every wavevector **[confirmed in part; half (b) moves a number]**
+
+Sites: `scf/driver.py:4001-4010`, `:3576-3579`, and the pattern at `:3528-3539`;
+`hamiltonian/operator.py:93`, `:146-158`; `hamiltonian/noncollinear.py:136`, `:196-207`;
+`workflows/spiral.py:313-317`.
+
+`at_spiral_q(rebuild_basis=True)` rebuilds both spheres with no width arguments, so every q
+gets its own `npwx`, `nsticks` and per-k `npw` tuple, and the Hamiltonian carries that tuple as
+a static field that is read only as `min(npw)`, for the subspace cap. Every jitted SCF unit
+that takes the Hamiltonian therefore sees a new treedef or new shapes at every q and compiles
+again, writing a cache entry for shapes that recur only if the same q list is rerun.
+`PERFORMANCE.md`'s P21 entry records the gradient's per-step compile as deliberate on the
+premise that a new q is a new `npwx`; `at_kpoints` already removes that premise for band paths
+with `sphere_widths`.
+
+**Fix.** (a) Hold `space = npol * min(npw)` as the static field instead of the tuple: moves
+nothing, and removes the recompile wherever `npwx` and `nsticks` coincide between wavevectors.
+(b) Give `at_spiral_q` a `widths` argument and have `run_spiral_scan` compute `sphere_widths`
+over the union of every q's `k + q/2` and `k - q/2` lists, so the scan is one shape, as
+`run_bands` does. (b) moves `E(q)` at the `conv_thr` level, not at round-off, wherever the start
+is topped up with random vectors, since `starting_vectors` draws at `(nbnd, ndim)` with a fixed
+key.
+
+**Bound.** No per-q figure on record. A noncollinear ultrasoft SCF on `fe-mag-1k` is 21.8 s
+cold against 6.6 s warm with the cache off (`PERFORMANCE.md`, P17 to P19), about 15 s of
+compilation a new shape on a cell that is not a spiral.
+
+**Measure.** `tests/data/qe/h-fcc-spiral-scan.in` or `h-chain-spiral.in`, a fresh process,
+`DEFUMAT_CACHE_DIR=off`, one core: `run_spiral_scan` over eight wavevectors with compiles counted
+and `npwx` printed per q, then with (a), then with (a) and (b).
+
+### 10. `build_plane_wave_states` compiles its `becp` loop again at every call when the projectors are rebuilt per k-point
+
+Sites: `topology/states.py:825-837`, and its sibling's fix at `:686-714`.
+
+On an ultrasoft or PAW dataset with a lazy projector set, `becp` is a `map_k` over a closure
+built at every call, outside any `jit`; with an integer batch smaller than the call's points
+it is an eager `lax.map`, compiled every call. It fires under memory mode's
+`projectors = 'rebuild'` with a `k_batch` of 1 or a chunk smaller than a string, column or row
+(a CPU in memory mode, or `DEFUMAT_K_BATCH=1` as the cluster runs set it), once per
+`DFTSource.states` call. The check of 2026-10-02 ran in speed mode, where the projectors are
+stored and the `vmap` branch is taken, so it could not see this path.
+
+**Fix.** A module-level `jit` with `npol` and the batch static, as `_pair_overlaps` already is.
+Bit-identical.
+
+**Bound.** Unbounded at this site. Its sibling in the same file compiled 16 programs in a
+second `get_polarization()` of AlAs, 8.2 s against 4.2 after its fix, and grew
+`/proc/self/maps` by 256 a call (`PERFORMANCE.md`, "The Berry-phase string loop compiled its
+overlaps again for every string").
+
+**Measure.** `alas-epsilon-us.in` with `DEFUMAT_MEMORY_MODE=memory DEFUMAT_K_BATCH=1` on the CPU,
+`get_polarization()` twice: compiles and mappings around the second call, one compile a string
+before and none after, the phases identical.
+
+## Work a workflow repeats
+
+### 11. Every ionic step restarts the eigensolver from atomic orbitals at `ethr = 1e-2`, where `pw.x` keeps the previous step's states and starts at 1e-6 **[moves a number]**
+
+Sites: `workflows/relax.py:380-393`; `workflows/vc_relax.py:299-305`; `scf/driver.py:6868`,
+`:7136-7154`, `:6297-6308`.
+
+`run_relax` and `run_vc_relax` hand each step's `run_scf` the extrapolated density and `becsum`
+and nothing else, so every step begins as a fresh SCF, at `ethr = 1e-2` and from the atomic
+orbitals. `pw.x` does neither: `wfcinit` runs once (`init_run.f90:177`); `update_pot`
+extrapolates wavefunctions only when `wfc_order > 0` (`update_pot.f90:293`), whose default is 0
+(`input.f90:1043`), so `evc` is the previous geometry's converged states; and
+`run_pwscf.f90:331-334` sets `ethr = 1e-6` for the first iteration of every later step, with
+`electrons.f90:631-654` resetting it to 1e-2 at iteration 2 as `next_ethr` does. At a fixed cell
+`at_positions` shares the basis, so the coefficients are valid on the new geometry.
+`PERFORMANCE.md` (P21) and `PLAN.md` say the wavefunctions cannot travel between steps, and both
+are about the spiral, whose sphere moves.
+
+**Fix.** Pass `result.wavefunctions` as `starting_wavefunctions` to the next step's `run_scf` in
+`run_relax` and in the frozen-basis branch of `run_vc_relax`, with a first-iteration `ethr` of
+1e-6 in that case, or the floor-and-redo logic still starts from 1e-2. Not for a rebuilt basis
+and not for `relax_spiral_q`; the Davidson path only, since a residual solver starts its own.
+The trade is one more wavefunction set alive until the first Rayleigh-Ritz releases it, the
+object `MEMORY-AUDIT.md` A2 sized at 7.7 GB on the 45-atom slab when it was held for a whole
+step; here it lasts one stage.
+
+**Bound.** Unbounded: no per-step SCF count of a relaxation against `pw.x` is on record.
+`vc-relax4` takes 57 SCF iterations over 10 steps against 6 for its first SCF, 85 per cent of
+the run (`PERFORMANCE.md`, P29), which is where any gain lands.
+
+**Measure.** `test-suite/pw_relax/relax.in` and `pw_vc-relax/vc-relax4.in` through `get_relax()`
+and `get_relax(variable_cell=True)`, one core, warm: each step's `scf_iterations` and Davidson
+steps against the committed benchmark's per-step counts; the relaxed geometry to
+`forc_conv_thr`.
+
+### 12. `DFTSource.states` rebuilds the potential, `newd`, the smooth-grid potential and `q_ij(b)` at every string, column, row and plane
+
+Sites: `workflows/topology.py:215`, `:280-287`, and the cached `_ddd_paw` at `:175-189`;
+`topology/states.py:681`, `:717-725`.
+
+Each `states(points)` call moves the base calculation with `at_kpoints`, then computes
+`calculation.potential(self.density)`, the whole `v_of_rho`, and `calculation.hamiltonian(...)`,
+which runs `newd` on an ultrasoft or PAW dataset and `to_smooth` per spin. None of the three
+depends on the k-points. The polarization calls `states` once per string, the streamed Chern
+number once per column, the streamed Wilson loop once per pumping step and the orbital
+magnetization once per plane. `q_ij(b)` is cached in a weak dictionary keyed on the
+calculation the states carry, which is the per-call `at_kpoints` copy, so it misses on every
+string although its comment (`states.py:670-675`) intends once per direction. The module already
+caches `_ddd_paw` on the source for exactly this reason.
+
+**Fix.** Cache `v_scf`, `deeq` and the smooth potential on the source as `_ddd_paw` is, and key
+the `q_ij(b)` cache on the source's `_base()` calculation, an ordinary object that lives for the
+whole workflow (an `eqx.Module` with array leaves is not a reliable weak key). Bit-identical.
+
+**Bound.** `newd` with its tangent is 36.7 ms a call on ultrasoft eight-atom silicon
+(`GPU-MEMORY-NEXT.md`, an overstatement of the forward `newd`), a streamed Wilson-loop row 0.16 s
+on `si8-us` (`PLAN.md` P16), and `v_of_rho` 8.0 ms on sixteen atoms (Part III H4). Different
+machines and dates, so no ratio is claimed. On a norm-conserving cell only the potential and the
+interpolation are saved.
+
+**Measure.** On record: `alas-berry.in`, second `get_polarization()` 4.2 s on one core. The
+augmented half on `alas-epsilon-us.in` (`get_polarization`) and `bi111-bilayer-soc.in` (`get_z2`,
+the streamed Wilson loop), warm second call, one core; phases and Z2 bit-identical.
+
+### 13. `run_ultracell` solves the frozen states twice, the second time on a second `Calculation`, to read one band across the cut
+
+Sites: `ultracell/driver.py:1097-1100`, `:1110-1115`, `:1133`; `workflows/nscf.py:205-206`,
+`:378-384`.
+
+The basis is a fixed-density solve at `kept` bands on the folded k-set. The gap across the cut
+is then read off a second, independent `fixed_density_bands` call at `kept + 1` bands whose
+states are discarded, and it passes no `calculation=`, so `fixed_density_states` builds a whole
+new `Calculation` (both G sets, the grids, the symmetry search, the local potential, the
+projector core, the augmentation and PAW tables) and runs the Davidson from its own start for
+every band, although `kept` of the `kept + 1` are already converged. `PLAN.md` (P88) records the
+second solve as "a second frozen diagonalisation per run, unmeasured" and says nothing of the
+second constructor.
+
+**Fix.** (1) Pass `calculation=calculation` and `kpoints=None`, which `nscf.py:383-384` requires:
+no second constructor, bit-identical. (2) Seed the wider solve with the kept states and one more
+vector, so only band `kept + 1` is iterated (a `psi0` path into `Calculation.diagonalize`, which
+`fixed_density_states` does not expose today). The basis stays the kept-band solve, as P88
+requires.
+
+**Bound.** Two-cell silicon ultracell: 5.40 s at `nbnd = 24` and 36.46 s at 48, the extra being
+the frozen-state Davidson (`PERFORMANCE.md`, P88), taken at `2f9711a` before the second solve was
+added in `697d0af`, so it bounds one frozen solve, which the second repeats at one more band. The
+constructor half: 1.53 s on one-atom Pt PAW and 7.08 s on bcc Fe (Part III H3).
+
+**Measure.** P88's two-cell silicon or `tests/data/qe/h-mag-ultracell.in`,
+`get_ultracell(supercell, nbnd=48)`, warm second call, one core: `Calculation.__init__` calls,
+two before and one after, and `multiplet_gap` between the arms.
+
+### 14. The force theorem, `frozen_expectation`, `run_torque` and `run_orientation_torque` build a `Calculation` per call **[confirmed in part]**
+
+Sites: `workflows/anisotropy.py:581-584`, `:1132-1134`, `:1312-1314`, `:1555-1560`, with their
+callers at `:727-734`, `:1786-1800`, `:1855-1859`; `forces/torque.py:251`.
+
+All four call `fixed_density_states` with no `calculation=`, so the constructor runs once per
+direction of `run_anisotropy` and once per step and curvature one-shot of `relax_orientation`.
+Turning already requires `nosym`, so the k-set, both G sets, the projector core, the local
+potential and the augmentation and PAW tables are the same at every orientation.
+`GPU-MEMORY-NEXT.md` item 20 says only the force theorem builds its own; three more do, and
+`get_nesting` builds two (`workflows/nesting.py:100`, `:137`). There is no compile saving for the
+potential: it is a module-level `jit` keyed on shapes and statics, so an LDA already reuses it
+and a GGA recompiles through its static `quantization_axis` whatever is shared. Separately,
+`torque.py:251` builds a fresh `jax.jit(jax.value_and_grad(chunk))` at every call.
+
+**Fix.** One calculation for the one-shot leg, built once per scan or relaxation, and a mover
+returning it with the turned system and axis, sharing every table; `torque.py:251` a
+module-level `jit` or through `defumat.eager.compiled`. Whether `relax_orientation`'s
+`jax.clear_caches()` after each one-shot (`:1799`) can then go is a measurement.
+
+**Bound.** About one constructor per direction or step: 1.53 s on Pt PAW and 7.08 s on bcc Fe
+(Part III H3).
+
+**Measure.** `co-tetragonal-anisotropy-soc.in` with its source `co-tetragonal-anisotropy-sr.in`,
+set up as `tools/compare_orientation.py` does: `get_anisotropy(directions='xyz')` and
+`get_relaxed_orientation(curvature=True)`, one core, warm; constructor calls, compiles and wall
+time per one-shot; band energies and torques bit-identical.
+
+### 15. In memory mode a vc-relax runs every step's SCF on the exact scanned augmentation, recomputing the Bessel transforms of `Q_ij` twice an iteration
+
+Sites: `scf/driver.py:3226`, `:3369-3378`, `:3383-3399`; `pseudo/augmentation.py:504-514`,
+`:772-825`, `:1231-1235`; `workflows/vc_relax.py:300-305`, `:439`.
+
+`at_cell` is `at_strain(D - 1)`, and `at_strain` builds the augmentation with
+`scanned = (memory_mode == 'memory')`, the route chosen for the stress tape. That gives an
+`ExactRadial` table whose factors evaluate the radial transform inside every chunk of `charge()`
+and `integrals()`, so each SCF iteration of every step after the first recomputes the same
+radial table at the same fixed `|G|` twice, where step 1, built by the constructor, reads the
+stored table. The trigger is the mode, so a card by default, or a large cell on a CPU set to
+memory mode. The same `at_cell` also builds the projector core whole rather than in k-chunks,
+which is memory mode's setup peak.
+
+**Fix.** In `at_cell`, after `at_strain`, rebuild the augmentation as the constructor does
+(stored under `AUG_MAX_BYTES`, knot-tabulated above it), on the rule `at_cell` already applies to
+the Ewald and dispersion lists, and build the core chunked; the stress still calls `at_strain`
+inside its trace and keeps the scanned route. The trade is one stored real `(nh, nh, ngm)` table
+resident for `current` beside `base`'s, which memory mode was avoiding; caching `ExactRadial`'s
+values at the fixed `|G|`, `(nbeta, nbeta, nl, ngm)`, is the middle option, at about half the
+stored table.
+
+**Bound.** Arithmetic only: one 28572 x 995 radial transform is 21.1 to 35.7 ms on the A2000
+(`formfactors.py:113-118`), so on bismuthene (`ngm = 60543`, `nl = 7`) about 0.45 s a call and
+0.9 s an iteration. Even the knot-table route costs 4.5x on `charge` and `integrals`
+(`augmentation.py:723-732`).
+
+**Measure.** `benchmarks/si8-us-1k.in`, `DEFUMAT_MEMORY_MODE=memory`, one core: warm second calls
+of `charge(becsum)` and `integrals(v_g)` on the constructed calculation and on
+`at_cell(0.99 * at)`; then a vc-relax of a compressed copy, seconds per SCF iteration of step 1
+against step 2 with the Davidson steps equal; step 2's energy to 1e-12 Ry.
+
+### 16. `choose_k_batch` calls the whole `estimate_size` at every bisection step
+
+Sites: `sizing.py:1087-1163`, `:226-244`, `:545`, `:561-570`, `:697`, and the pattern at
+`:361-376`; `scf/driver.py:1897-1911`, `:3613-3628`; `calculator.py:577-593`.
+
+Memory mode on a card defaults to `k_batch = 'fit'`, so every `Calculation` there runs
+`choose_k_batch`, whose `peak(chunk)` is a whole `estimate_size`: for the mesh, again only to
+read `nk`, at 1, once per bisection step and at the answer, up to `log2(nk) + 4` calls after
+`choose_band_batch`'s one. Each recounts both spheres, counts `npw` at every k-point in a Python
+loop and runs the symmetry search twice (Part III H6), although only the `k_live` terms change
+between calls and each of them is linear in `k_live`. `for_bands` repeats it for every
+fixed-density solve, and `Calculator.estimate` once more.
+
+**Fix.** An `at_k_batch(chunk)` on `SizeEstimate`, built like `at_band_batch`, so that one
+estimate serves the whole bisection; host side, the same chunk chosen. A memo on the symmetry
+search (H6) removes part of it without the refactor.
+
+**Bound.** One estimate is 9 ms on `si8-1k`, 22 ms on `pt-soc-paw-nosym` and 0.29 s on
+`h40-chain-lsda`, against builds of 0.67, 2.41 and 4.57 s (`PERFORMANCE.md`, "The band dial,
+budgeted from the card in memory mode"), times up to 12 calls on a 216-point mesh, and only
+where the whole mesh does not fit.
+
+**Measure.** On D22: `benchmarks/si8-ecut20-nosym-k3.in` (or a k4 copy) with
+`XLA_CLIENT_MEM_FRACTION=0.35` to force the chooser, a call counter and a clock on
+`estimate_size`, the second of two builds; the same `k_batch` chosen.
+
+### 17. `get_angular_momenta` builds the whole-k atomic projectors at once, and projects an unpolarized run twice
+
+Sites: `projwfc/angular_momentum.py:248-252`, `:333-341`; the pattern at
+`projwfc/projections.py:349-376`.
+
+`angular_momenta` builds the ortho-atomic projectors for every k-point in one call, with the
+Loewdin copies beside them, and copies the result to the host, in every memory mode; the
+projected DOS stopped doing exactly this in `ed1ef29` by building a block of k-points at a time
+on `at_rows`. Separately, at `nspin = 1` the loop at `:333-335` calls `project(0, slice(None))`
+twice, once per spin component, so the same `(nk, nbnd, natomwfc)` projection is computed a
+second time and both copies have their weights halved. `GPU-MEMORY-NEXT.md` item 4 counts the
+site moments among the consumers that walk the chunks, which is true of the states and not of
+the projectors.
+
+**Fix.** Build and project per block on `at_rows`, accumulating the density matrix, as the PDOS
+does (round-off); reuse the first projection for the second component at `nspin = 1`
+(bit-identical, half the projection work).
+
+**Bound.** The PDOS sibling: eight-atom silicon at 20 Ry, nosym, 216 k-points, 645.6 MB to
+96.2 MB on the card (`GPU-MEMORY-NEXT.md`, `ed1ef29`). The `nspin = 1` half is one projection pass
+a call, unbounded on record.
+
+**Measure.** `si8-ecut20-nosym-k3.in` with a 6x6x6 mesh, `get_angular_momenta()` on D22's card in
+memory mode, the peak per process; `<L>`, `<S>` and `<J>` to round-off; the `nspin = 1` arm
+timed on one CPU core.
+
+## The SCF hot path
+
+### 18. On an ultrasoft or PAW dataset the collinear Davidson computes `calbec` twice for every block it applies `H` to
+
+Sites: `solvers/davidson.py:490-491`, `:714`, `:756-761`; `hamiltonian/operator.py:216-217`,
+`:238`, `:338`.
+
+`live_block` applies `hamiltonian.apply` to the correction block, whose `_nonlocal` computes
+`<beta|psi>` on the masked block, and then calls `project`, which computes `<beta|psi>` again on
+the unmasked one. The operands differ, so XLA cannot merge the two, while the values are equal
+because `expansion` already masked the block (`:625`); the starting block of every call does
+the same (`:490-491`). QE computes `becp` once, in `h_psi` (`h_psi.f90:231`), and `s_psi` reads
+it (`s_psi.f90:15`). Part III H5 moved the refresh's `calbec` and did not touch this pair. The
+spinor operator masks the same way in both paths, so there the two are one expression and are
+probably merged; that was not checked. Secondary: `refresh` recomputes `project(evc)` (`:714`)
+where `cegterg` rotates `spsi` by the Ritz coefficients (`cegterg.f90:620-627`).
+
+**Fix.** One operator method returning `(H psi, becp)` from a single `calbec`, used in
+`live_block` and for the starting block, with `becq = becp @ qq.T` as now; bit-identical, the
+operand values being the same. Rotating the stored projections inside `refresh` instead of
+calling `project(evc)` moves the last bits.
+
+**Bound.** One `calbec` of a block is about 5.6 ms of a step of about 190 ms on sixteen-atom
+ultrasoft silicon (H5's arithmetic, not a timing), so about 3 per cent of every step plus one
+`calbec` a call. Zero on a norm-conserving run.
+
+**Measure.** `benchmarks/si8-us-1k.in` and `si8-paw-1k.in` through `tools/compare_qe.py
+--repeats 5` and `tools/gpu/davidson_profile.py`, the step counts equal and the energies
+bit-identical, `si8-1k.in` as the control.
+
+### 19. Gamma-only storage does every plane-wave contraction as a complex product, where `regterg` and `calbec_gamma` do it as a real DGEMM over `2 npw` **[moves a number]**
+
+Sites: `solvers/davidson.py:270-277`, `:518-522`, `:549-554`, `:564`; `hamiltonian/operator.py:196-200`,
+`:224`, `:340`.
+
+Under `K_POINTS gamma` the projected matrices are made real (`:549-554`) and the eigenvectors are
+then cast to the complex band dtype (`:564`), so each Ritz rotation is a complex product whose
+imaginary half is exactly zero; `_extend_projection` forms the whole complex
+`rows.conj() @ hpsi.T` and keeps `.real`; `_becp` does the same for `calbec`, and the unproject
+multiplies the complex `vkb` by a real-valued `becp`. A complex product costs four real
+multiply-adds an element, and QE's gamma routines treat the arrays as real of length `2 npw` and
+call DGEMM, two an element (`regterg.f90:204`, `:213-220`, `:318-338`, `:403-428`, `:511`;
+`becmod.f90:321-324`; `add_vuspsi.f90:115`). So every `O(nbnd nvecx npwx)` and
+`O(nbnd nkb npwx)` contraction on the gamma path does twice `regterg`'s arithmetic. The FFT half
+of the same departure (QE packs two bands per transform) is recorded in `PLAN.md` (P68); this
+half was not.
+
+**Fix.** Carry the gamma Davidson's work arrays for the whole solve as real `(nvecx, 2 npwx)`,
+real and imaginary planes in the policy's real dtype, so the rows, both rotations and `calbec`
+become real dot products over `2 npwx` with the factor 2 and the `G = 0` correction as now, and
+reassemble the complex block only for the transform in `h_psi`. Splitting `psi.real` and
+`psi.imag` inside each product instead would materialise one more `(m, npwx)` block per product,
+which on the slab is the memory gamma storage exists to save.
+
+**Bound.** At most 2x on the share of the Davidson that is these contractions, by construction;
+the size of that share on the 157-atom slab, the cell gamma storage was built for, is not
+measured.
+
+**Measure.** No gamma benchmark is committed: write `si16-1k-ecut30.in` with `K_POINTS gamma`,
+time a Ritz rotation and `_extend_projection` at the same widths with
+`tools/gpu/davidson_profile.py`, then the SCF through `tools/compare_qe.py --repeats 5`, the
+Davidson steps equal.
+
+### 20. The Davidson step still forms `nbnd` Ritz vectors, residuals and projection rows, where `cegterg` forms `notcnv` **[confirmed in part: 1 to 2 per cent at sixteen atoms]**
+
+Sites: `solvers/davidson.py:255`, `:518-522`, `:619-646`, `:682`, `:744`, `:772-777`.
+
+`ritz` forms `evc` and `hevc` for all `nbnd` roots at every step, `expansion` builds residuals and
+norms for all `nbnd` rows and zeroes the settled ones, and `_extend_projection` is called with
+`block = nbnd`, so the projection rows past `notcnv` are exact zeros. `cegterg` forms only the
+`notcnv` correction vectors (`cegterg.f90:353-395`), extends `hc` and `sc` by `notcnv` rows
+(`:478-499`), and rotates to all the Ritz vectors only at the refresh or the exit. Backlog item 3,
+marked done, narrowed only `h_psi` of the block (the band ladder); the rotation's output width is
+named in `PERFORMANCE.md`, "Where the CPU gap against `pw.x` actually is", as the structural
+difference and was never taken.
+
+**Fix.** Inside the width switch, apply the permutation `expansion` already computes to the
+coefficient columns first, form the residual from the first `r` columns at the band rung that
+covers `notcnv` (a nested `lax.switch` of small GEMMs), and call `_extend_projection` with
+`block = r`; the full `evc` and `hevc` only inside `refresh` and at the exit. On the routes where
+`narrow` is false (an unnamed `vmap`), keep today's form, since a `cond` there evaluates both
+branches.
+
+**Bound.** One Ritz rotation is 3.2 to 11.7 ms at widths 32 to 128 and `_extend_projection`
+11.3 ms on `si16-1k-ecut30` (`PERFORMANCE.md`, "Inside a Davidson step"), the live fraction over
+a real SCF is 0.72, and that SCF has about 11 in-loop steps, so about 50 to 100 ms of its 5.5 s,
+1 to 2 per cent: no more than backlog item 3 measured for `h_psi`. It grows as `nbnd^2 npwx`
+against `h_psi`'s `nbnd npwx log N`, so a large cell is the only place it pays.
+
+**Measure.** `si16-1k-ecut30.in`, `si8-1k-ecut30.in` and a large cell through
+`tools/compare_qe.py --repeats 5`, one process per arm, the Davidson steps equal.
+
+### 21. The host fetches of an SCF iteration, counted: about fourteen, and the 617 ms on record is not their transfer cost
+
+Sites: `solvers/davidson.py:1137`; `scf/driver.py:554-555`, `:606`, `:5546-5547`, `:5603-5616`,
+`:7237-7241`, `:7310-7313`, `:7408-7424`, `:7523-7525`.
+
+Backlog item 4 asks for this count first. For the simplest path (norm-conserving, `nspin = 1`,
+not pooled, not streamed): the finiteness guard once per spin channel (`davidson.py:1137`);
+`steps` and `unsettled` (`driver.py:7237`, `:7239`, and a third, short-circuited fetch at
+`:7241`); `homo` and `lumo` for fixed occupations, or `entropy` and `ef` when smeared (`:5546-5547`,
+`:5603-5616`); three floats from `_accuracy_split` (`:7310-7313`); three from
+`_iteration_scalars` (`:7408-7424`); `ehart` and `etxc` (`:7523-7524`); then the mixer's two
+`np.asarray` and one `jnp.asarray` back (`:554-555`, `:606`). `nspin = 2` adds two floats and two
+site arrays, and ultrasoft, PAW and Hubbard runs add more. **What the 617 ms is**: the installed
+JAX wraps `ArrayImpl._value`, which every `float()` and every `np.asarray` of a device array goes
+through, in the profiler annotation `np.asarray(jax.Array)` (`jax/_src/array.py:635-636`), and
+`_value` blocks until the buffer is ready, so the span includes the wait on asynchronously
+dispatched work. Fourteen scalar fetches at about 5 ms each is not what copying a scalar costs,
+so the record's reading of the figure as transfer cost is not supported, and the transfer part
+is probably much smaller.
+
+**Fix.** Read the scalars after the occupations together (`copy_to_host_async` on all of them
+and then read, or one `jax.device_get` of the tuple), leaving each jitted expression as it is,
+so that nothing moves. Fusing `_accuracy_split` and `_iteration_scalars` into one `jit` could
+reassociate `dr2`, and one ulp there moves the `ethr` schedule.
+
+**Bound.** Unbounded, and probably small: most of what the annotation covers is compute that
+still has to finish.
+
+**Measure.** The op-level trace of `PERFORMANCE.md`'s "What a real SCF spends its time on" on
+`si16-1k-ecut30.in`, with `jax.block_until_ready` on the Davidson result and on `rho_out` before
+their first fetch, so the wait is billed to the producer; what `np.asarray` costs after that is
+the transfer.
+
+## The mixer and host memory
+
+### 22. The SCF mixer's history holds the whole dense box in real space, where `pw.x` keeps the smooth sphere in G and mixes the rest linearly **[moves a number]**
+
+Sites: `scf/driver.py:554-560`, `:602-606`; `scf/mixing.py:330-331`, `:805-809`, `:840`.
+
+`_mix` flattens the whole dense-grid density (`nspin_mag x n1 n2 n3` reals), with `becsum`, `ns`
+and `tau`, into the vector the Anderson history keeps, fetching both densities from the device
+every iteration, and Kerker runs a full `fftn` and `ifftn` pair on the box with a host round
+trip. `pw.x`'s `mix_type` holds `of_g(1:ngms, nspin)` (`scf_mod.f90:216`, `:316`), `mix_rho` fits
+on `ngm0 = ngms` (`mix_rho.f90:132`), and the components between `ngms` and `ngm` are mixed
+linearly and never stored (`high_frequency_mixing`, `scf_mod.f90:549-553`, called at
+`mix_rho.f90:548`). With the dense sphere about 0.52 of the box, `pw.x`'s entry is a fraction of
+about `(4/dual)^1.5` of this code's: the same at dual 4, which is the only case
+`MEMORY-AUDIT.md` D3's "within 5 per cent" covers (corrected there), and about 0.41 at the NiBr2
+slab's dual of about 7.5, the cell D3 itself sizes.
+
+**Fix.** Keep and fit the history in G on the smooth sphere (half of it, the density being real),
+mix the shell between `ngms` and `ngm` linearly with the same `beta`, and transform back once;
+Kerker then becomes a multiplication with no transform pair. Host NumPy, so no `jit` rule is
+touched. **This changes the SCF trajectory, not the fixed point**, and `PLAN.md` records that on
+the nickel cell the state reached depends on the mixer's path (four states within 7.5e-3 Ry), so
+on a magnet with more than one basin it can move the converged energy. The comparison is against
+`pw.x`'s iteration counts and energies, with an ultrasoft or PAW cell, whose augmentation charge
+has G beyond `ngms`, as the case that matters.
+
+**Bound.** Memory, by arithmetic: 3.46 GB of history on the 45-atom NiBr2 slab (`MEMORY-AUDIT.md`
+D3), about 1.4 GB in G; the 157-atom slab is at dual 4 and gains nothing. Host memory, and under
+pools rank 0's alone. The time is unbounded: no slab iteration with a full history is on record.
+
+**Measure.** Iteration counts and converged energies on `benchmarks/al-slab.in`, `si8-paw-1k.in`
+and `fe-mag-1k.in` against the current mixer and against `pw.x` (`tools/compare_qe.py`); then
+`mix()` time and the history's resident bytes at the dense size.
+
+### 23. Anderson's `mix()` copies every history entry through a boolean mask, and allocates whole vectors for every term of its combination
+
+Sites: `scf/mixing.py:340-342`, `:368`, `:463-469`; `scf/driver.py:554-555`, `:602`, `:7713-7742`.
+
+Every call cuts the fitted part out of every history entry through a mask (`:368`), a
+whole-vector copy per entry even when nothing is excluded, since `fitted` is then a whole-length
+array of ones (`:340`), although the cached Gram matrix needs only its new row; the combination
+(`:465-467`) allocates two temporaries per entry for each of its two sums; and `_mix`
+concatenates the packed state twice beforehand. `PERFORMANCE.md` (P110) records `mix()` at
+9.04 s on an 83 MB vector with a full history of 8 on one core, the Gram matrix already cached,
+and names the remainder as these copies and the combination without sizing it. The vector timed
+was the smooth box, while the SCF mixes the dense state. Under pools only rank 0 mixes and every
+other pool waits at the broadcast, so the step is on every pool's critical path.
+
+**Fix.** Profile first and split the 9 s three ways: the mask copies, the combination's
+temporaries and `_extend_gram`'s dots. Then a view in place of the masked copy when nothing is
+excluded or the excluded block is the tail (every run without `ns` or `tau`), accumulation in
+place into two preallocated buffers in the same order, and a preallocated ring buffer for the
+history. Bit-identical.
+
+**Bound.** 9.04 s a call at 83 MB, history 8, one core (`PERFORMANCE.md`, P110); the copies' share
+is unsized, and the dense-grid vector a slab mixes was never timed.
+
+**Measure.** Part III M3's recipe: an `AndersonMixer` with a synthetic eight-deep history at
+83 MB and at the dense size, `mix()` alone, median of seven, the mixed vector compared bit for
+bit; then `benchmarks/al-slab.in`, bit-identical at the same iteration count; under pools,
+rank 0's mix against the iteration with `tools/parallel/pool_time.py`.
+
+### 24. The sum-over-states consumers upload a streamed store whole, with `jnp.asarray`, at twice its size on a card
+
+Sites: `workflows/conductivity.py:156`, `shg.py:130`, `photocurrent.py:128`, `tddft.py:245-266`;
+`tddft/chi0.py:456`, `spinchi0.py:458`; `response/conductivity.py:520`, `shg.py:553`,
+`photocurrent.py:515`; `forces/torque.py:185`, `:241`.
+
+Where the store streams, `fixed_density_states` with `keep_states` returns the states as a host
+NumPy store (`nscf.py:293-306`). The conductivity, SHG and shift-current workflows then
+`jnp.asarray` the whole k axis of it after slicing the bands, and the TDDFT spectrum and the
+magnon response hand it to `independent_response` and `transverse_response`, which do the same.
+That puts the whole k axis back on the device, which streaming had removed, and `jnp.asarray` of
+a host array peaks at twice its size where `jax.device_put` peaks at once (`GPU-MEMORY-NEXT.md`,
+2026-09-29). None of the three assemblies walks k. The torque derivatives upload the whole store
+too. `GPU-MEMORY-NEXT.md` item 4 lists these workflows as done because they slice their bands;
+the upload was not changed.
+
+**Fix.** First, bit-identical: `jax.device_put(np.ascontiguousarray(...))` where the store is a
+host array. Second: walk `k_chunks` inside the five assemblies, each a sum over k of per-k terms,
+with the field response's chunked route as the template; round-off, through the order of the
+k sum.
+
+**Bound.** For the first half, one copy of the uploaded store. The second is unbounded; for
+scale, a streamed SCF keeps 12.10 GB of store on the NiBr2 slab, which a whole-k upload brings
+back.
+
+**Measure.** `tests/data/qe/al-conductivity.in` on D22's card in memory mode with a k chunk
+smaller than the mesh: `get_optical_conductivity()` and `get_absorption()`, one process per arm,
+`peak_bytes_in_use`, warm cache; the tensors bit-identical for the first half.
+
+## The streamed store and the pools
+
+### 25. The streamed store crosses the bus through a fancy-index copy at every pass **[confirmed in part: the copy is real, the diagnosis is not]**
+
+Sites: `scf/streaming.py:65-67`, `:161-184`, `:284-297`; `forces/chunked.py:152-172`.
+
+Every pass that reads the store picks a chunk with an integer index array (`array[spin, positions]`
+for the solve, `array[:, positions]` for the density, twice per force or stress call), which NumPy
+answers with a fresh copy, and `device_put` then copies that pageable buffer again; the new
+states come back through `np.asarray` and a fancy assignment. So an SCF iteration moves the store
+three times (solve in, solve out, density in), each with one or two extra host passes. The sweep
+read the stream's measured cost as a byte rate (58.71 ms of 124.02 at 64 atoms on an H100, about
+2.3 GB/s over three crossings) and argued from three cards in one band that the bound is
+host-side; the verifier refuted that as arithmetic on unlike measurements, since the 1.3 GB/s on
+record is a CPU-backend park and fetch rather than a PCIe transfer, and the 58.71 ms is the
+difference between two arms that also differ in syncs and launches. The stream still runs by
+default where the chunk is smaller than the mesh, and always under pools.
+
+**Fix.** Measure the transfer alone first. Then, bit-identical: take every chunk but a padded
+last one as a contiguous slice (a view) and write back by slice assignment, at `nspin = 2` one
+channel at a time. Unbounded and later: a reused pinned staging buffer; `device_put(...,
+may_alias=True)` on a CPU for the read-only density pass only (the solve donates its starting
+block, and the host block is the retry's input); and, for an insulator, the density accumulated
+in the solve's walk, which removes the third crossing.
+
+**Bound.** The whole stream is 58.71 ms of 124.02 at 64 atoms on an H100 and 76 to 88 ms of about
+1535 on the A2000 (`PERFORMANCE.md`, "The stall check on a data-centre card" and the defaults
+that follow it), and 3 per cent of an iteration on one CPU core under pools; what the copy is of
+that is unmeasured.
+
+**Measure.** On D22, a transfer-only script: `_to_device(array[spin, positions])` against a slice
+view against a pinned buffer at the si64 chunk's size. Then `DEFUMAT_WFC_STORE=stream` against
+`device` with `tools/parallel/time_scf.py benchmarks/si64-1k-ecut30.in`, and
+`DEFUMAT_K_BATCH=9 DEFUMAT_WFC_STORE=stream` on `si8-ecut20-nosym-k3.in`, the Davidson steps
+equal.
+
+### 26. A pooled iteration moves the density twice in real space, the second time on the dense grid as an all-reduce of zeros
+
+Sites: `parallel.py:264-292`, `:317-363`; `scf/streaming.py:298-300`; `scf/driver.py:4751-4759`,
+`:7073`, `:7223-7225`, `:7381`, `:7477`, `:7737-7742`; `basis/interpolate.py:56-72`.
+
+Per iteration: (a) the raw smooth-box density, `becsum` (one leaf per species), `tau` and `ns` are
+all-reduced, one collective per leaf; (b) after rank 0 mixes, `pools.broadcast` sends
+`(rho, becsum, ns, tau)` with `rho` the dense-grid density, and `JaxCommunicator.broadcast` calls
+`multihost_utils.broadcast_one_to_all`, which fills every other process with zeros and sums
+(`jax/experimental/multihost_utils.py:73-86`; `lax.pbroadcast` lowers on GPU only), so on gloo
+the broadcast is a full ring all-reduce, twice an all-gather's traffic, on the dense grid rather
+than the smooth one; (c) three `gather_k` calls, each three all-gathers, although every pool
+computes every pool's rows from the same costs, plus the flag and accuracy broadcasts.
+`PARALLEL-NEXT.local.md` gives the broadcast as the same 83 MB as the all-reduce, which is wrong
+on a dual-grid run. A single-precision broadcast is not proposed: rank 0 would have to round its
+own state to stay bit-identical with the others, which is what the broadcast is for.
+
+**Fix.** Bit-identical: pack every leaf of the raw sums into one buffer, one all-reduce in place of
+`nsp + 3`; one all-gather of the eigenvalues, step counts and unsettled counts together, with the
+shares and positions computed locally. Reassociating: all-reduce the smooth density as its
+half-sphere G coefficients (free on a dual-grid run, since `to_dense` starts with that transform,
+and a transform pair per pool on a norm-conserving one), and broadcast the mixed density in G
+(already so if item 22 is taken); the sphere is about 0.52 of a box, so the payload roughly
+halves.
+
+**Bound.** 868 ms per 83 MB all-reduce between two Triton nodes on `eth0`, and 231, 330 and 571 ms
+on one node at 2, 8 and 16 processes (`PLAN.md` P124 for the first, `CLAUDE.local.md` for the rest); on one machine at six pools the
+collectives were 25 ms an iteration on si32, about 1.3 per cent. So the gain is for a large box
+across nodes, and `ib0`, unmeasured, shrinks all of it.
+
+**Measure.** `tools/parallel/comm_bench.py --sizes-mb 40 83 110 216` across two Milan nodes with
+and without `DEFUMAT_POOL_INTERFACE=ib0` (a submission for the user to approve), then a large-box
+pooled input with `tools/parallel/pool_time.py` before and after, energies compared at a fixed
+iteration count.
