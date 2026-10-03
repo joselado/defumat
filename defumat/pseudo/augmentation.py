@@ -54,10 +54,10 @@ import numpy as np
 
 from defumat.basis.gvectors import GVectors, modulus
 from defumat.pseudo.coupling import harmonic_products
-from defumat.pseudo.formfactors import radial_chunk
+from defumat.pseudo.formfactors import bessel_transform
 from defumat.pseudo.harmonics import real_spherical_harmonics
 from defumat.pseudo.projectors import projector_channels
-from defumat.pseudo.radial import simpson_weights, spherical_bessel
+from defumat.pseudo.radial import simpson_weights
 from defumat.pseudo.upf import Pseudopotential
 from defumat.system.cell import Cell
 from defumat.system.structure import Structure
@@ -547,71 +547,28 @@ class ExactRadial(eqx.Module):
 def _qrad_kernel(q, r, weights, functions, prefactor, l):
     """``4 pi / Omega int dr j_l(q r) [r^2 Q^l(r)]`` for a stack of ``Q``.
 
-    **The intermediate is ``(nq, kkbeta)``, and on the stored route ``nq`` is
-    ``ngm``** -- 36257 by 841 on eight-atom ultrasoft silicon
-    (``Si.pz-n-rrkjus_psl``), so 244 MB per array, with the temporaries inside
-    ``spherical_bessel`` on top and one such set per ``L``. Above
-    :func:`~defumat.pseudo.formfactors.radial_chunk` values of ``q`` it is
-    therefore built a chunk of rows at a time, the bound ``pseudo/formfactors.py`` puts
-    on its four transforms and for the same reason: ``(chunk, kkbeta)`` is 27
-    MB on that cell. This one walks them in a ``lax.scan`` with a rematted
-    body, which bounds the tape as well, and those four have walked theirs the
-    same way since the stress of ``bn-ldau-noncol.in`` was found taping every
-    chunk of a Python loop (``formfactors._scan_rows``). The table on
-    the knots (:func:`_qrad_table`) has 2533 at ``ecutrho = 160`` and crosses
-    the bound only above about 419 Ry; a single-``q`` caller never does. Every
-    row is independent and its sum over the mesh keeps its length, so the chunk
-    is a loop bound over an exact sum.
+    :func:`~defumat.pseudo.formfactors.bessel_transform` with the Simpson
+    weights folded into the integrand, so it is walked a
+    :func:`~defumat.pseudo.formfactors.radial_chunk` of ``q`` at a time and its
+    derivative in ``q`` is the same transform one order up. **The intermediate
+    is ``(nq, kkbeta)``, and on the stored route ``nq`` is ``ngm``** -- 36257 by
+    841 on eight-atom ultrasoft silicon (``Si.pz-n-rrkjus_psl``), 244 MB a
+    kernel matrix -- which is why it is chunked at all; the table on the knots
+    (:func:`_qrad_table`) has 2533 values at ``ecutrho = 160`` and is one chunk.
 
-    **The scan body is rematted**, because a scan under ``jax.grad`` stacks
-    every chunk's residuals, which is the whole ``(ngm, kkbeta)`` set again on
-    the tape; with the remat the tape holds the ``q`` chunks and the backward
-    pass recomputes one chunk at a time. The earlier null for
-    ``jax.checkpoint`` here (11.0 GB against 10.7 on the eight-atom stress,
-    `PERFORMANCE.md` P11) was a remat of the *unchunked* kernel, whose
-    recomputation rebuilds the whole ``(ngm, kkbeta)`` array at once, so it
-    moved the same array to another phase of the pass and says nothing about a
-    chunked body. With this body the compiled temporary of the stress's
-    gradient on ``si2-us-1k.in`` falls from 2534 to 881 MB (`PLAN.md` P112);
-    the eight-atom cell the figures above are for has not been re-measured.
-    The alternative that shrinks the tape without recomputing
-    anything is still the ``custom_jvp`` carrying ``dF/d|G|`` in closed form.
+    **Under a strain the derivatives no longer differentiate through that
+    matrix.** They did, inside a scan with a rematted body, which bounded a
+    gradient's tape to one chunk (the compiled temporary of
+    ``si2-us-1k.in``'s stress gradient 2534 -> 881 MB, `PLAN.md` P112) but not
+    a derivative of the gradient, whose memory followed the chunk size; the
+    rule is the ``custom_jvp`` carrying ``dQ/d|G|`` as a transform that this
+    docstring used to name as the alternative.
+
+    ``prefactor`` is applied outside the transform, as it was to the whole
+    array: under a strain it is a tracer, and this keeps its cotangent one sum
+    over ``(nf, nq)``.
     """
-    nq = q.shape[0]
-    bound = radial_chunk(r.shape[0])
-    if nq <= bound:
-        return prefactor * _qrad_block(q, r, weights, functions, l)
-
-    # As few chunks as the bound allows, and those as even as possible, so the
-    # padding is under one row per chunk rather than up to a whole chunk. A
-    # padded row is ``q = 0``, where both the value and the derivative of
-    # ``spherical_bessel`` are finite, and it is sliced off before anything
-    # reads it.
-    nchunks = -(-nq // bound)
-    chunk = -(-nq // nchunks)
-    padded = jnp.pad(q, (0, nchunks * chunk - nq)).reshape(nchunks, chunk)
-
-    @jax.checkpoint
-    def body(carry, block):
-        return carry, _qrad_block(block, r, weights, functions, l)
-
-    _, blocks = jax.lax.scan(body, None, padded)  # (nchunks, nf, chunk)
-    values = jnp.moveaxis(blocks, 0, 1).reshape(functions.shape[0], -1)[:, :nq]
-    # ``prefactor`` is applied outside the scan, as it was to the whole array:
-    # under a strain it is a tracer, and this keeps its cotangent one sum over
-    # ``(nf, nq)`` rather than a sum of per-chunk sums.
-    return prefactor * values
-
-
-def _qrad_block(q, r, weights, functions, l):
-    """:func:`_qrad_kernel` without its prefactor, on one block of ``q``."""
-    argument = q[:, None] * r[None, :]
-    # kept out of the contraction, as every radial transform's integrand is:
-    # fused into it, XLA's GPU backend takes minutes to compile the result
-    # (``formfactors._radial_values``)
-    bessel = jax.lax.optimization_barrier(spherical_bessel(l, argument))  # (nq, mesh)
-    return jnp.einsum("fm,qm,m->fq", functions, bessel, weights)
-
+    return prefactor * bessel_transform(q, r, functions * weights, l)
 
 
 #: QE's interpolation step in ``|q|`` (``upflib/qrad_mod.f90:22``). ``q`` is in
