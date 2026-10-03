@@ -134,7 +134,7 @@ from defumat.batching import map_k
 from defumat.eager import compiled, compiled_jvp
 from defumat.pseudo.augmentation import augmentation_dipole
 from defumat.response.born import born_effective_charges, require_born_charges
-from defumat.response.mixing import DEFAULT_RESPONSE_MIXING, ResponseMixer
+from defumat.response.mixing import DEFAULT_RESPONSE_MIXING, ResponseMixer, ddv_scf
 from defumat.response.sternheimer import (
     SternheimerSolver,
     paw_response,
@@ -156,8 +156,15 @@ __all__ = ["DielectricTensor", "dielectric_tensor",
 #: rather than a value each system has to be tuned to.
 ALPHA_MIX = 0.7
 
-#: Convergence on ``|ddv_scf|^2``, the quantity ``dfpt_kernels`` prints and
-#: tests. QE's default ``tr2_ph`` is 1e-12 and ``si.phG.in`` asks for 1e-14.
+#: ``ph.x``'s ``tr2_ph``, in its units: the loop stops when ``|ddv_scf|^2``,
+#: the summed square of the pass's change divided by the square of its length in
+#: reals and by ``npert`` (:func:`defumat.response.mixing.ddv_scf`, which says
+#: what that means on a fine grid and why the number is twice ``ph.x``'s on an
+#: fcc cell), falls below ``tr2 / npol``. QE's default is 1e-12; thirteen of the
+#: fourteen ``.ph.in`` references committed here ask for 1e-14, so a default run
+#: is converged the way the reference it is compared with was. Until 2026-10-03
+#: the test was the raw sum, eleven decades tighter on the AlAs spinor cell, and
+#: that was the whole of the factor of two in passes against ``ph.x``.
 TR2 = 1.0e-14
 
 MAX_ITERATIONS = 40
@@ -178,7 +185,9 @@ class DielectricTensor:
     #: and it is carried out because nothing else here shows it.
     induced_density: np.ndarray | None = None
     #: ``|ddv_scf|^2`` at each iteration -- the trajectory ``ph.x`` prints, and
-    #: the only intermediate quantity there is a reference for.
+    #: the only intermediate quantity there is a reference for, up to the
+    #: direction convention :func:`~defumat.response.mixing.ddv_scf` describes
+    #: (twice ``ph.x``'s on an fcc cell).
     history: list = field(default_factory=list)
     #: Mean CG iterations per band per solve, QE's ``av.it.``.
     average_iterations: float = 0.0
@@ -387,10 +396,24 @@ def dielectric_tensor(
 
         proposed = jnp.stack(induced)
         _require_a_finite_kernel(calculation, proposed, density)
-        change = float(jnp.sum((proposed - dvscf) ** 2))
+        proposed_onecentre = (None if onecentre is None
+                              else jnp.stack(induced_onecentre))
+        change = ddv_scf(
+            proposed - dvscf,
+            None if onecentre is None else proposed_onecentre - onecentre,
+            joint=True,
+        )
         history.append(change)
         if verbose:
             print(f"  iter {iteration + 1}: |ddv_scf|^2 = {change:.3e}")
+        # ``mix_potential`` decides convergence before it mixes and, when it
+        # has converged, returns the *input* unchanged (``mix_pot.f90:85-113``),
+        # so the loop leaves with the potential this pass's ``dpsi`` and
+        # one-centre response were computed at. The Born charges below rebuild
+        # their perturbation from it.
+        if change < tr2 / calculation.system.npol:
+            converged = True
+            break
         if onecentre is None:
             dvscf = mixer.mix(dvscf, proposed)
         else:
@@ -398,11 +421,8 @@ def dielectric_tensor(
             # potential and ``dV_scf`` are coupled through the same ``dbecsum``,
             # and ``mix_pot`` concatenates them for exactly this reason.
             dvscf, onecentre = mixer.mix(
-                [dvscf, onecentre], [proposed, jnp.stack(induced_onecentre)]
+                [dvscf, onecentre], [proposed, proposed_onecentre]
             )
-        if change < tr2:
-            converged = True
-            break
 
     epsilon = _assemble_overlaps(calculation, field.overlaps())
     charges = None

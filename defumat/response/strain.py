@@ -98,7 +98,7 @@ import numpy as np
 from defumat.basis.interpolate import to_dense
 from defumat.batching import map_k
 from defumat.response.efield import require_a_symmetrisable_response
-from defumat.response.mixing import DEFAULT_RESPONSE_MIXING, ResponseMixer
+from defumat.response.mixing import DEFAULT_RESPONSE_MIXING, ResponseMixer, ddv_scf
 from defumat.response.sternheimer import (
     paw_response,
     SternheimerSolver,
@@ -122,7 +122,10 @@ __all__ = ["StrainResponse", "strain_response", "strain_tangent",
 #: rather than a value each system has to be tuned to.
 ALPHA_MIX = 0.7
 
-#: Convergence on ``|ddv_scf|^2``.
+#: ``ph.x``'s ``tr2_ph``, in its units (:data:`defumat.response.efield.TR2` says
+#: what they are), tested as the phonon tests it: the largest ``|ddv_scf|^2`` of
+#: one strain component below ``tr2 / npol``, over the six independent
+#: components, since ``[a, b]`` and ``[b, a]`` are one object.
 TR2 = 1.0e-14
 
 MAX_ITERATIONS = 60
@@ -614,19 +617,33 @@ def _self_consistent_response(
                 for a in range(3)
             ])
 
-        change = float(jnp.sum((induced - dvscf) ** 2))
+        independent = [(a, b) for a in range(3) for b in range(a, 3)]
+        difference = induced - dvscf
+        onecentre_difference = (None if onecentre is None
+                                else induced_onecentre - onecentre)
+        change = ddv_scf(
+            [difference[a, b] for a, b in independent],
+            None if onecentre is None else [
+                onecentre_difference[a, b] for a, b in independent
+            ],
+            joint=False,
+        )
         history.append(change)
         if verbose:
             print(f"  iter {iteration + 1}: |ddv_scf|^2 = {change:.3e}")
+        # Tested before mixing, and on convergence the *input* is kept, as
+        # ``mix_potential`` returns it: the potential the states were solved at,
+        # which ``eigenvalue_response`` and the piezoelectric assembly rebuild
+        # their perturbation from.
+        if change < tr2 / calculation.system.npol:
+            converged = True
+            break
         if onecentre is None:
             dvscf = mixer.mix(dvscf, induced)
         else:
             dvscf, onecentre = mixer.mix(
                 [dvscf, onecentre], [induced, induced_onecentre]
             )
-        if change < tr2:
-            converged = True
-            break
 
     return symmetrised, dvscf, history, converged
 

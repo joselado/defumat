@@ -679,7 +679,7 @@ def screening_loop_at_q(
     (:mod:`defumat.response.chunked_phonon`) -- and everything here acts on
     whole-grid objects: the kernel at ``q``, the convergence test and the mixer.
     """
-    from defumat.response.mixing import ResponseMixer
+    from defumat.response.mixing import ResponseMixer, ddv_scf
 
     nat = displacements.nat
     grid_shape = tuple(np.shape(density))
@@ -687,8 +687,8 @@ def screening_loop_at_q(
     # device, where the displacements ask for it (the k-chunked route, which at
     # ``q`` always runs without symmetry): every operation here is per mode
     # except the mixer, whose history is in host memory already. The
-    # convergence test is a maximum, which does not depend on the order, so
-    # the history is the device route's to the bit.
+    # convergence test sums each mode's change, in numpy here and on the device
+    # on the other route, so the two histories agree to round-off.
     host = bool(getattr(displacements, "host_fields", False))
     stack = np.stack if host else jnp.stack
     xp = np if host else jnp
@@ -712,12 +712,23 @@ def screening_loop_at_q(
             for atom in range(nat) for cart in range(3)
         ]).reshape(dvscf.shape)
 
-        change = float(xp.max(xp.abs(induced - dvscf)) ** 2)
+        # ``ph.x``'s ``|ddv_scf|^2`` of the worst single mode, as the Gamma
+        # loop tests it (:data:`defumat.response.phonon.TR2`); the potential is
+        # complex, and ``ndimtot`` counts its entries as two reals each, as at
+        # ``Gamma``. Until 2026-10-03 this was ``max |dV|^2`` over the grid,
+        # about five decades tighter than ``ph.x``'s test on 20^3 silicon.
+        difference = induced - dvscf
+        change = ddv_scf(
+            [difference[atom, cart] for atom in range(nat) for cart in range(3)],
+            joint=False,
+        )
         history.append(change)
         if verbose:
-            print(f"  response iteration {iteration + 1}: |ddV|^2 = {change:.3e}")
-        if change < tr2:
-            dvscf = induced
+            print(f"  response iteration {iteration + 1}: |ddv_scf|^2 = {change:.3e}")
+        # Tested before mixing, and on convergence the input is kept, as
+        # ``mix_potential`` keeps it; ``drho`` is this pass's output density,
+        # which is ``ph.x``'s ``drhop`` too.
+        if change < tr2 / calculation.system.npol:
             converged = True
             break
 

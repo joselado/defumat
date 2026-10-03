@@ -45,7 +45,69 @@ import numpy as np
 
 from defumat.scf.mixing import get_mixer
 
-__all__ = ["ResponseMixer", "DEFAULT_RESPONSE_MIXING"]
+__all__ = ["ResponseMixer", "DEFAULT_RESPONSE_MIXING", "ddv_scf"]
+
+
+def _squared_norm(array) -> float:
+    """``sum |x|^2`` over every entry, real or complex, numpy or JAX."""
+    xp = np if isinstance(array, np.ndarray) else jnp
+    return float(xp.real(xp.vdot(array, array)))
+
+
+def ddv_scf(changes, onecentre_changes=None, *, joint: bool) -> float:
+    """``ph.x``'s ``|ddv_scf|^2`` for one pass of a self-consistent response.
+
+    ``LR_Modules/mix_pot.f90:77-83`` is
+
+        dr2 = (|| vout - vin || / ndimtot)^2,
+
+    the summed square of the change over the whole mixed vector divided by the
+    *square* of its length in reals, with the complex potential counted as two
+    reals an entry (``dfpt_kernels.f90:226``, ``:438``). ``dfpt_kernels`` tests
+    ``dr2 < npert tr2_ph / npol`` and prints ``dr2 / npert`` (``:519-523``), so
+    what this returns is the printed number, and the loops stop when it falls
+    below ``tr2 / npol``. Two consequences of the formula, both QE's: ``dr2`` is
+    ``N`` squared residuals over ``N^2``, so a fixed ``tr2`` admits an RMS
+    residual of about ``sqrt(N tr2)`` per entry and loosens as the grid grows;
+    and ``nspin_mag = 2`` doubles ``N`` while each channel's potential equals the
+    one-channel one, so an unpolarized cell run at ``nspin = 2`` reads half.
+
+    **The direction convention differs from ``ph.x``'s, and it is left so.**
+    ``dvpsi_e.f90:83`` perturbs along ``at(:, ipol)``, a lattice vector in units
+    of ``alat`` with no normalisation, where this code perturbs along Cartesian
+    unit vectors. On an fcc cell each ``at`` has length ``1/sqrt(2)``, so
+    ``ph.x``'s field values are half of these (measured on ``si-epsilon``: 2.00,
+    2.00, 2.00, 1.98 over the first four passes); on a non-cubic cell the two
+    are not related by a scalar at all, which is why no factor is applied.
+
+    Args:
+        changes: one entry per perturbation, each ``induced - input`` of that
+            perturbation's grid potential, any shape.
+        onecentre_changes: the same for PAW's one-centre block, which is mixed
+            beside the grid potential and so belongs to the test as ``dbecsum``
+            does to ``ph.x``'s (``dfpt_kernels.f90:433-436``), or ``None``.
+        joint: ``True`` for ``ph.x``'s test over all the perturbations at once,
+            divided by their number -- the field, whose three directions are
+            ``solve_e``'s ``npert``. ``False`` for the largest single-perturbation
+            value, which is ``ph.x``'s test for a one-dimensional irreducible
+            representation and never looser than its test for a larger one:
+            the phonon, the phonon at ``q`` and the strain, which mix every mode
+            together where ``ph.x`` mixes one representation at a time.
+    """
+    changes = list(changes)
+    others = (list(onecentre_changes) if onecentre_changes is not None
+              else [None] * len(changes))
+    squares, counts = [], []
+    for grid, onecentre in zip(changes, others):
+        square, count = _squared_norm(grid), int(np.size(grid))
+        if onecentre is not None:
+            square += _squared_norm(onecentre)
+            count += int(np.size(onecentre))
+        squares.append(square)
+        counts.append(count)
+    if joint:
+        return sum(squares) / (2.0 * sum(counts)) ** 2 / len(changes)
+    return max(s / (2.0 * n) ** 2 for s, n in zip(squares, counts))
 
 #: What a response loop mixes with unless told otherwise. QE's ``mix_pot`` is a
 #: modified Broyden; :mod:`defumat.scf.mixing` offers Anderson under that name,
