@@ -10217,7 +10217,9 @@ processes per point (`tools/gpu/response_memory.py`), master `d687623` against t
 with `sigma_xx` the same to 3.3e-17 (AlAs) and 8e-16 (Pt), `e_14` = 1.4752843184 and `C_11`, `C_44` =
 166.961132, 106.378199 GPa in every column. Platinum's 516.4 had been put on its one-centre terms and its
 spinor block (the entry two up); it was the radial derivative. The ultrasoft strain response is the
-augmentation table's G-chunk under a forward derivative, and does not move.
+augmentation table's G-chunk under a forward derivative, and the rule does not move it; contracting the
+charge in the radial basis does, 180.8 -> 140.7 MB ("The scanned augmentation charge in the radial basis",
+the next entry).
 
 **Time on the card**, warm, the median of five calls in one process after one to compile, two rounds with
 the arms alternated (`card_times.py`), in the order the kernel was written:
