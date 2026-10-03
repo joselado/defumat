@@ -1422,18 +1422,18 @@ class SphereLayout:
         _scale_magnetization(stepped, float(beta_mag) / float(beta))
         return stepped
 
-    def rebuilt_shell(self, becsum, dtype) -> np.ndarray:
+    def rebuilt_shell(self, becsum, dtype):
         """The shell's half, ``(nspin, nshell)`` complex: the augmentation charge of ``becsum``.
 
         ``becsum`` is the mixed one, so this is the Anderson step on the shell
         (class docstring). One forward transform per channel on top of what
         :attr:`augmentation` costs, and nothing at all where there is no shell
-        or no ultrasoft species, whose shell is zero. ``dtype`` is the density's
+        or no ultrasoft species: the shell is zero there, and ``None`` is
+        returned, which :meth:`field` reads as zero. ``dtype`` is the density's
         real type, which the zero field the charge is added to takes.
         """
-        zero = np.zeros((self.nspin, self.nshell), dtype=np.result_type(dtype, 1j))
         if self.nshell == 0 or not any(b is not None for b in becsum):
-            return zero
+            return None
         if self.augmentation is None:
             raise ValueError(
                 "rebuilt_shell needs the augmentation charge, and this layout was "
