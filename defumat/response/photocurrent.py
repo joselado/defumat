@@ -281,11 +281,22 @@ def band_velocity_difference(energies, velocity, tol: float):
     the bare diagonal the two ``Delta`` terms -- Eqs. (B12a) and (B16b), the
     only two places ``Delta`` appears -- come out at **1499** and **238** on a
     4x4x4 mesh where the other three sit at 0.09, and with the multiplet
-    average they fall to **0.10** and **0.055**, which is the same floor. The
-    high-symmetry points of the mesh are what does it: at ``Gamma`` silicon's
-    valence top is threefold degenerate, its block trace of ``v`` is zero by
-    symmetry, and an arbitrary basis inside it gives three nonzero diagonal
-    entries that cancel only in that sum.
+    average they fall to **0.10** and **0.055**, the level of the other three.
+    The high-symmetry points of the mesh are what does it: at ``Gamma``
+    silicon's valence top is threefold degenerate, its block trace of ``v`` is
+    zero by symmetry, and an arbitrary basis inside it gives three nonzero
+    diagonal entries that cancel only in that sum.
+
+    **That level is the FFT grid, not a floor of the assembly.** The silicon
+    cell is ``si2-nosym.in``, and ``nosym`` chooses its 15^3 grid without the
+    factor of 4 that diamond's quarter-lattice translation needs, so the
+    potential breaks inversion at the grid's sampling error and every term of
+    the tensor carries it. Measured again on the same call (the whole 4x4x4
+    mesh, 14 bands, broadening 0.005): ``max|chi|`` is **3.2e-2** pm/V as
+    committed, its three parts 3.5e-2, 4.2e-2 and 2.1e-2, and **3.0e-5** with
+    symmetry kept for the SCF (a commensurate 16^3 grid) and the same mesh
+    passed as ``kpoints=``. :func:`~defumat.response.shg.second_harmonic` warns
+    in the first case.
 
     Elk does not need this at 42x42x42 with a shifted mesh that misses the
     symmetry points, which is why ``nonlinopt.f90`` has no counterpart to it
@@ -678,9 +689,17 @@ def require_a_velocity_sum_regime(calculation) -> None:
             "the cell's until it is averaged over the point group, which this "
             "assembly does not do (defumat.system.symmetry."
             "symmetrize_cartesian_tensor would, and lifting this is a "
-            "separate piece of work). Run with nosym = .true. and "
-            "noinv = .true. on an *unshifted* grid, which is closed under the "
-            "point group where a shifted one is not"
+            "separate piece of work). Keep symmetry for the SCF and pass the "
+            "whole unshifted grid as kpoints= (KPoints.automatic((n, n, n), "
+            "(0, 0, 0), cell) with no rotations), which is closed under the "
+            "point group where a shifted one is not. Running the SCF with "
+            "nosym = .true. instead is not the same escape: a nosym run's FFT "
+            "grid is chosen without the factors the fractional translations "
+            "need, so on a crystal whose operations carry one (diamond, not "
+            "zincblende) the potential breaks them at the grid's sampling "
+            "error, and two-atom silicon's tensor, which inversion forbids, "
+            "then comes out three to four orders of magnitude larger than "
+            "with symmetry kept"
         )
     if calculation.is_hubbard:
         raise NotImplementedError(
