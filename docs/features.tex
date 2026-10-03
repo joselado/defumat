@@ -7003,7 +7003,11 @@ On a run without symmetry the phonon's $3\,n_{\rm at}$ induced potentials and
 response densities, grids with no $k$ index that grow with the number of atoms
 displaced rather than with the mesh, are kept in host memory as well and go to
 the card one mode at a time; with symmetry they stay on the card, because the
-displacement average acts on all of them together. \textbf{So do the
+displacement average acts on all of them together. That average, like every
+symmetrisation here, walks the group's operations one at a time once holding
+them all at once would pass 64~MB, rather than gathering \code{nsym} copies of
+the field: on eight-atom silicon with 24 operations the $\Gamma$ phonon of every
+atom reads 89~MB on a card where it read 503, against an SCF of 39. \textbf{So do the
 piezoelectric tensor, the strain response and the elastic constants}: the
 piezoelectric tensor's derivative of the stress along the field's response is
 assembled a block of $k$-points at a time from the field's stores in host
@@ -7016,10 +7020,10 @@ the electrostriction's $\partial\epsilon/\partial\varepsilon$ and the Raman
 tensors: the variational second-order energy is a sum over $k$ plus terms of the
 whole sums, so its derivative along each strain or displacement is taken a
 block of $k$-points at a time, with the three further Sternheimer solves per
-direction on the block. \textbf{What still moves them to the card whole} is
-the Raman tensors asked for their internals (the vibrational spectrum, whose
-dynamical matrix is then assembled whole), the transcribed piezoelectric route
-\code{method="zstar\_eu"}, and the sum-over-states spectra. \textbf{The host
+direction on the block; and the vibrational spectrum assembles its dynamical
+matrix from the walked displacement response the Raman tensors hand over.
+\textbf{What still moves them to the card whole} is the transcribed
+piezoelectric route \code{method="zstar\_eu"} and the sum-over-states spectra. \textbf{The host
 must hold the set} ($n_{\rm spin} n_k n_{\rm bnd} n_{\rm pwx} n_{\rm pol}$
 complex), which is the point but is not free. And \textbf{the fall-back from
 \code{'speed'} fires only where the preset is what would run}: with a
@@ -7387,6 +7391,17 @@ exactly at $\mathbf{G} = 0$. On eight-atom ultrasoft silicon the two
 contractions cost about \textbf{4.5x} more from the table, and the whole run
 comes out level, because the table is cheaper to build than the stored array
 is.
+
+\textbf{Every radial transform --- $Q^L_{nm}(q)$, the local potential, the core
+and atomic charges, the projectors --- is integrated a block of $|q|$ values at a
+time}, the block sized so that one $(\text{block}, \text{mesh})$ integrand
+takes 8~MB (1246 values on an 841-point mesh, never more than 4096). The size
+matters for the derivatives, which hold many such integrands at once: on
+ultrasoft AlAs at 200~Ry the stress on a card peaks at the SCF's own 169~MB
+with it, and at 652~MB with the earlier fixed 4096 values, for 5 to 8\% of the
+call's time. \code{DEFUMAT\_RADIAL\_CHUNK} sets the count; like the other
+chunk dials it bounds a loop over an exact sum and moves a result only in its
+last digits.
 
 \begin{refuses}
 \textbf{Past the end of the table is NaN, not an extrapolation.} The table

@@ -29,9 +29,10 @@ with the compile cache warm (a miss costs *more* device memory on this card).
 
 ## Where the next session starts (written 2026-10-03 afternoon, branch `streamed-piezo`)
 
-**Item 2 is done for every consumer but one**: the field response, the Born charges, both phonons, the
-piezoelectric tensor, the strain response, the elastic constants and the two third derivatives
-(electrostriction and Raman) walk the k axis with their stores in host memory; the numbers are the
+**Item 2 is done**: the field response, the Born charges, both phonons, the piezoelectric tensor, the
+strain response, the elastic constants, the two third derivatives (electrostriction and Raman) and the
+vibrational spectrum walk the k axis with their stores in host memory, and the radial transforms' chunk is
+sized from the mesh, which took the strain derivatives' global step off the card; the numbers are the
 "Done since" entries of 2026-10-03 and the matching `PERFORMANCE.md` entries. The regressions are
 `tests/regression/test_streamed_{response,phonons,piezo,strain,third}.py` (slow set). Every piece was
 planned in writing, reviewed by Fable against the code before it was written, and validated as a route
@@ -39,25 +40,23 @@ identity against the whole-k route on the same states.
 
 **What to pick up, in order:**
 
-1. **The radial transforms' chunk, sized from the mesh** (on the branch, uncommitted when this was
-   written; see "Done since" if it landed). The strain derivatives' remaining memory is the radial
-   Bessel transforms under the strain: on ultrasoft AlAs at 200 Ry the augmentation term's first strain
-   derivative held 925 MB of temporaries and its second 1551 at the fixed 4096-value chunk, against 103
-   and 294 at 1024 (`formfactors.radial_chunk`, `PERFORMANCE.md`). If it did not land: the CPU A/B
-   (bits and time) is in `PERFORMANCE.md`, and the card A/B is `review/piezo/chunk.sh` on D22.
-2. **One expression for the second-order energy.** `chunked_third.py`'s per-chunk `F_c` and residual
-   are transcriptions of `electrostriction._second_order_energy_at`'s per-k terms and
-   `_position_response`'s residual. The slow test guards against drift; the right form is Fable's seam
-   -- `(v_scf, ddd_paw)` as optional arguments of the whole route's two functions, split into a per-k
-   part both routes call -- with a bit-identity A/B of the whole route as its gate.
-3. **The vibrational spectrum still puts a streamed store on the card whole.** Raman with
-   `keep_internals=True` keeps the whole route, because the `DisplacementResponse` it hands back is
-   assembled whole by `dynamical_matrix(response=...)`. The fix is that `response=` path walked: the
-   streamed displacements' stores handed over rather than re-solved.
-4. **The per-mode grids with symmetry on** stay on the card, because
-   `symmetrize_atom_displacement` acts on the whole `(3 nat, ...)` stack.
-5. **Time**: the ultrasoft bare walks rebuild `newd` and its tangent once per chunk and perturbation
-   (the phonon's, the strain's, the third derivative's chunk pass), not separated.
+1. **What is left above the SCF in the strain derivatives, now that the radial chunk is sized.** On
+   ultrasoft AlAs the stress adds nothing to the SCF on the card and the piezoelectric tensor 29 MB; the
+   ultrasoft strain response still adds 108 MB on eight-atom silicon and the elastic constants 80 to 90
+   MB on norm-conserving silicon, neither separated. The probe is `memory_analysis()` per pass (the
+   piezoelectric entry's `pass_memory_piezo.py` on D22) and one term at a time (`global_terms.py`'s
+   shape), both re-run at the new chunk.
+2. **The per-mode grids with symmetry on** stay on the card, because
+   `symmetrize_atom_displacement` acts on the whole `(3 nat, ...)` stack; the average's `nsym`-fold
+   transient over them is gone (`90ed76a`), so what is left is the `3 nat` grids themselves, about 50 MB
+   above the SCF on eight-atom silicon. Per orbit of equivalent atoms, or on the host, is the lever for a
+   large symmetric cell.
+3. **Time**: the ultrasoft bare walks rebuild `newd` and its tangent once per chunk and perturbation
+   (the phonon's, the strain's, the third derivative's chunk pass), not separated; and the walked third
+   derivative's electrostriction was 6 per cent slower than the whole route at 27 k-points.
+4. **The radial chunk's ceiling on a production card**: the budget (8 MB an integrand) was chosen on the
+   A2000 and the CPU; on a float64 card the smaller transforms' launch count may cost more than the 5 to 8
+   per cent measured here, and `DEFUMAT_RADIAL_CHUNK` is the dial.
 
 **Loose ends, none blocking:** the branch `streamed-piezo` (merged once the gate passes on its last
 commit); on D22 the worktrees `/l/ladovj1/defumat-piezo` and `/l/ladovj1/defumat-chunk` (the branch's
@@ -442,8 +441,32 @@ below:
   k-points, Raman 299.0 / 368.5 -> 199.3 / 203.1 MB, against an SCF of 169 to 172 (`PERFORMANCE.md`,
   "The third derivatives a k-chunk at a time"). Against the whole route
   (`tests/regression/test_streamed_third.py`): 1.3e-14 and 1.9e-15 relative on the same states and
-  tangents, about 1e-13 relative end to end. **Not walked**: Raman with `keep_internals=True` (the
-  vibrational spectrum), whose displacement response is assembled whole.
+  tangents, about 1e-13 relative end to end. **The vibrational spectrum walks too** (2026-10-03, after
+  this entry): the walked Raman route hands back its walked displacement response
+  (`DisplacementResponse.walked`) and `dynamical_matrix` assembles from its stores, with nothing
+  re-diagonalised or put on the device. **Found on the way and fixed separately** (`da8f6cc`): on an
+  ultrasoft or PAW dataset the vibrational spectrum had never run (no `becsum` for the dynamical matrix,
+  an `IndexError`), and with that fixed it gave wrong phonons silently -- ultrasoft silicon's optical mode
+  at 630.8 cm^-1 against 590.6 solved directly -- because the response the Raman tensors handed over
+  lacked the bare perturbations and extras the ultrasoft assembly rebuilds the multipliers from; the
+  existing reuse test ran on a norm-conserving cell, where both are zero.
+* **The radial transforms' chunk, sized from the mesh** (2026-10-03, `a71b8a3`). The Bessel transforms
+  took 4096 values of `|q|` at a time; the strain's derivatives hold many `(chunk, mesh)` integrands at
+  once, so the chunk is now sized to 8 MB an integrand (`formfactors.radial_chunk`, capped at 4096,
+  `DEFUMAT_RADIAL_CHUNK` overrides it). **On the card**, ultrasoft AlAs at 200 Ry and 8 k-points: the
+  stress 652.2 -> 169.3 MB (the SCF's own) and the piezoelectric tensor 759.5 -> 198.4 MB, for 5 to 8 per
+  cent of those calls' time; on the CPU the energy is bit-identical, the stress moves by 3e-15 relative,
+  and the warm stress is no slower (`PERFORMANCE.md`, "The radial transforms' chunk, sized from the
+  mesh"). This is the global step the piezoelectric tensor's entry located, and it was the stress's own
+  memory as much as the third derivatives'.
+* **The group averages walk the operations** (2026-10-03, `90ed76a`). Every symmetrisation gathered the
+  field for all `nsym` operations at once, `nsym` copies of it, and a two-rotation one (strain, spin
+  vector) an intermediate three times that. Past 64 MB of that working set each walks the operations in a
+  compiled scan (`symmetry.GATHER_BUDGET_BYTES`); below it the batched gather stays to the last bit. **On
+  the card**, eight-atom silicon at 20 Ry with its 24 operations: the Gamma phonon of all atoms 503.0 ->
+  89.4 MB and the strain response 219.5 -> 50.7 MB against an SCF of 39.0 (`PERFORMANCE.md`, "The group
+  averages walk the operations past a budget"). This was most of what "the per-mode grids with symmetry
+  stay on the card" cost: the grids are `3 nat` fields, the average was `nsym` copies of them.
 
 ## Suggested order
 
@@ -473,9 +496,8 @@ but 24 and 25 have been measured on the card, two as nulls. What is left, in ord
    split one derivative up, as forecast. **The `Gamma` phonon and the phonon at `q` are done
    too** (2026-10-03, see "Done since"), and on a run without symmetry their per-mode grids
    are in host memory. **The piezoelectric tensor, the strain response, the elastic constants
-   and the two third derivatives are done** (2026-10-03, see "Done since"); what is left of the
-   item is the vibrational spectrum's handed-in displacement response (see "Where the next
-   session starts").
+   and the two third derivatives are done** (2026-10-03, see "Done since"), and so is the
+   vibrational spectrum; the item is closed.
 4. The small tail: a dense NSCF/DOS/PDOS mesh a block at a time (item 6's third bullet;
    the band path is done), item 14's per-`l` transform (time only), and the float32 tier's
    setup cast (item 26, its first blocker named). Items 7, 16 and 22 are closed by verdict.
@@ -514,8 +536,8 @@ an 800-point path; the difference should go from ~0.6 MB per k-point to flat.
 the `Gamma` phonon and the phonon at `q` (2026-10-03, `af246f1`, `61c71d4`, with the per-mode grids
 in host memory on a run without symmetry, `7740ab7`, `3601e96`; see "Done since"), and the
 piezoelectric tensor, the strain response, the elastic constants and the two third derivatives,
-Raman and electrostriction (2026-10-03, branch `streamed-piezo`); the vibrational spectrum's
-handed-in displacement response is open.**
+Raman and electrostriction, and the vibrational spectrum (2026-10-03, branch `streamed-piezo`). The
+item is closed.**
 The text below is the item as it stood, and its per-k-point estimate was low: measured on the
 card, the field response grew 5.3 MB per k-point and with the Born charges 7.6, against the
 3.7 forecast below.

@@ -9941,9 +9941,10 @@ Electrostriction without the elastic constants, which an ultrasoft dataset refus
 | electrostriction, 27 | 172.2 | 882.8 | 264.9 | 134.5 | 143.3 |
 | Raman, 8 | 169.3 | 299.0 | 199.3 | 52.3 | 24.1 |
 | Raman, 27 | 172.2 | 368.5 | 203.1 | 86.4 | 62.2 |
+| eight-atom norm-conserving Si, electrostriction with the elastic constants, 27 | 35.1 | 839.1 | 157.9 | 123.8 | 134.0 |
 
 with the largest tensor component the same to the ten printed digits in every pair (154.286037218 and
-50.4728747174; 33.8208349275 and 11.6779538538).
+50.4728747174; 33.8208349275 and 11.6779538538; 16.9085155951 on silicon).
 
 **Against the whole-k route on the CPU** (`tests/regression/test_streamed_third.py`): `d(eps)/d(strain)`
 on the same states and tangents agrees to 2.5e-12 on 194.9 (norm-conserving silicon) and 4.1e-13 on
@@ -9955,16 +9956,28 @@ way**: the ultrasoft tail first rebuilt the augmentation dipole from the dataset
 pass, where their radial arrays are traced and `np.asarray` refuses them; the dipole is the datasets'
 own and the same at every geometry, so the pass takes the field's.
 
-**What still goes whole**: the Raman tensors asked for their internals (`get_vibrational_spectrum`),
-because the displacement response handed back is assembled whole by `dynamical_matrix(response=...)`.
+**The vibrational spectrum walks too** (`5b2ab3d`): the walked Raman route hands back its walked
+displacement response, and `dynamical_matrix` assembles from that response's own host stores with the
+walked Gamma phonon's assembly; end to end on ultrasoft silicon the frequencies agree with the whole route
+to 1e-6 cm^-1 and the Raman activity of each degenerate multiplet to 1e-7 relative. The same commit gave
+the two routes one expression for the second-order energy's per-k terms and the position residual
+(`second_order_band_terms`, `position_residual`); the whole route is bit-identical to the commit before
+on ultrasoft silicon and within 1.4e-14 on 195 on norm-conserving silicon, both arms on the same cores,
+which is the compiled program's operation order. **Found on the way and fixed separately** (`da8f6cc`):
+the vibrational spectrum of an ultrasoft or PAW dataset had never run, and with its `becsum` passed it
+gave the optical mode of ultrasoft silicon at 630.8 cm^-1 against 590.6 solved directly, because the
+handed-in response lacked the bare perturbations and extras the ultrasoft assembly needs; now they are
+equal to the printed digits (`test_spectra.py`).
 
 ## The radial transforms' chunk, sized from the mesh (CPU and RTX A2000, 2026-10-03)
 
 **The number to carry: the radial Bessel transforms took 4096 values of `|q|` at a time whatever the
 dataset's mesh, and the strain's derivatives hold many `(chunk, mesh)` integrands at once; sized to
-8 MB an integrand instead (1246 values on an 841-point mesh), the compiled temporaries of the augmented
-density's strain gradient on ultrasoft AlAs at 200 Ry fall from 924.7 to 102.8 MB and those of its
-second derivative from 1550.9 to 293.7, with the stress unchanged to 3e-15 and no time lost.**
+8 MB an integrand instead (1246 values on an 841-point mesh), ultrasoft AlAs's stress on the card peaks
+at the SCF's own 169.3 MB where it read 652.2, and its piezoelectric tensor at 198.4 where it read 759.5,
+for 5 to 8 per cent of those calls' time on the card and none on the CPU; the compiled temporaries of the
+augmented density's strain gradient fall from 924.7 to 102.8 MB and those of its second derivative from
+1550.9 to 293.7, with the stress unchanged to 3e-15.**
 (`formfactors.radial_chunk`; the cap stays 4096, so no cell takes a larger chunk than before, and
 `DEFUMAT_RADIAL_CHUNK` overrides the count.) Found locating the piezoelectric tensor's 705 MB global
 step (two entries up).
@@ -9994,3 +10007,60 @@ efficiency cores, medians of five warm calls; the old arm is `DEFUMAT_RADIAL_CHU
 
 The setup's 4.5 and 0.6 per cent are the extra scan steps over the stored tables' knots; the warm stress
 does not get slower.
+
+**On the card**, memory mode at one k-point a chunk, the 8-point unshifted grid, warm cache, the second
+of two fresh processes per point, D22; both arms on the branch, the old one as
+`DEFUMAT_RADIAL_CHUNK=4096`:
+
+| cell, call | SCF alone | chunk 4096 | budget | time, 4096 | budget |
+|---|---|---|---|---|---|
+| ultrasoft AlAs (`alas-piezo.in`, `nosym`), stress | 169.3 MB | 652.2 MB | **169.3 MB** | 3.80 s | 4.10 s |
+| ultrasoft AlAs, piezoelectric tensor | 169.3 | 759.5 | **198.4** | 14.6 | 15.4 |
+| spin-orbit PAW Pt (`pt-soc-paw-nosym.in`), stress | 274.8 | 525.9 | 516.4 | 3.58 | 3.59 |
+
+with `sigma_xx` the same to 1.5e-17 relative and `e_14` to the ten printed digits. **The stress of
+ultrasoft AlAs now adds nothing to its SCF on the card, and the piezoelectric tensor 29 MB**, where the
+global step held 705 MB (two entries up). The price is 5 to 8 per cent of those two calls' time on the
+card, more scan steps of a smaller transform, and none on the CPU; `DEFUMAT_RADIAL_CHUNK=4096` puts the old
+chunk back. Platinum's stress peak is set elsewhere (its PAW one-centre terms and its spinor block), so the
+chunk moves it by 2 per cent.
+
+## The group averages walk the operations past a budget (RTX A2000 and CPU, 2026-10-03)
+
+**The number to carry: with symmetry on, the Gamma phonon of all eight atoms of eight-atom silicon at
+20 Ry read 503.0 MB on the card against an SCF of 39.0, and now reads 89.4, for 2 per cent more time.**
+Every group average in `system/symmetry.py` -- the density, a polar or axial vector field, a
+displacement-labelled field, a strain-labelled one, a spin-vector one -- gathered the field at `S^T G` for
+all `nsym` operations at once and took the mean, so it held `nsym` copies of the field, and the
+two-rotation contractions (strain, spin vector) an intermediate three times larger again. Above
+`GATHER_BUDGET_BYTES` (64 MB of the batched expression's working set, counted as two copies of the gather,
+or four for the two-rotation kinds) each now walks the operations in a module-level compiled `lax.scan`,
+one operation's term at a time; below it the batched gather stays, as one kernel and to the last bit.
+This is where "the per-mode grids with symmetry stay on the card" was paying: not the grids, which are
+`3 nat` fields, but the average's `nsym`-fold transient over them.
+
+Compile only, CPU, `memory_analysis()`, eight atoms' displacement fields on 30000 G-vectors under 48
+operations: **1054.7 MB** of temporaries batched against **22.0** walked for an 11 MB input; on the card
+the strain kind at 48 operations and 25000 G-vectors 333.6 MB against 10.9. Agreement: 1.1e-15 there; in
+the unit test (`tests/unit/test_symmetry_walk.py`) each kind walked against batched to 1e-13 relative; and
+on real 48-operation wedges with the budget forced to zero (`si-epsilon`, `si-epsilon-paw`): the dielectric
+constant to 3.6e-15 / 8.9e-15, the Born charges 1.7e-14 / 3.3e-15, the strain response 3.7e-16 / 6.2e-16
+on 0.09, the force constants 6.4e-15 / 7.1e-15 on 0.28.
+
+On the card, `si8-ecut20-sym` (the eight-atom cell at 20 Ry with its 24 operations, an unshifted 3x3x3
+grid reduced to 4 k-points), memory mode at one k-point a chunk, warm, the second of two processes, D22:
+
+| call | SCF alone | before | after | time, before | after |
+|---|---|---|---|---|---|
+| Gamma phonon, all eight atoms | 39.0 MB | 503.0 MB | 89.4 MB | 65.8 s | 67.0 s |
+| dielectric tensor | 39.0 | 60.7 | 60.7 | 5.8 | 5.8 |
+| strain response | 39.0 | 219.5 | 50.7 | 12.2 | 12.3 |
+
+with `D_xx(0,0)` = 0.2765359262 in both phonon arms and the strain's `max |drho_00|` = 0.0896234712 in
+both, though its mean CG count moved from 26.97 to 26.88: a last-bit difference in the averaged response
+steering the next solve, not a different answer. The dielectric tensor's vector field (29.7 MB of batched
+working set here) stays batched and so does its peak. **The strain row is the budget's own lesson**: counted
+from the gather alone, its 42.5 MB stayed under 64 MB and batched, and the stage probe (the peak read after
+each step of one call) put the jump from 43.7 to 215.7 MB inside `symmetrize_strain_response`; the
+two-rotation contraction's intermediate (24 x 27 x 12893 complex, 133 MB) was the rest, and the budget
+now counts it.
