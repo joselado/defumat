@@ -720,7 +720,6 @@ BORN_TOLERANCE = {
 CUBIC_TOLERANCE = 1e-9
 
 
-@lru_cache(maxsize=None)
 #: The convergence an identity between two routes needs, where each route
 #: alone is compared with ``ph.x`` at ``ph.x``'s own. ``tr2`` is in ``ph.x``'s
 #: units since 2026-10-03, and 1e-24 is where the loop stopped before then on the
@@ -731,6 +730,7 @@ CUBIC_TOLERANCE = 1e-9
 IDENTITY = {"tr2": 1.0e-24, "threshold": 1.0e-12}
 
 
+@lru_cache(maxsize=None)
 def _dielectric(case: str, **options):
     """The electric-field response of one of the committed inputs."""
     from defumat.response.efield import dielectric_tensor
