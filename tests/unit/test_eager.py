@@ -157,6 +157,42 @@ def test_a_second_dielectric_tensor_call_compiles_nothing(silicon):
     np.testing.assert_allclose(second.epsilon, first.epsilon, rtol=0, atol=1e-12)
 
 
+def _hubbard_arrays(seed, nspin=2, nk=3, nbnd=4, npwx=7, nwfcU=5):
+    """Random states, projectors and weights shaped as ``occupation_matrix`` takes them."""
+    rng = np.random.default_rng(seed)
+
+    def complex_normal(*shape):
+        return jnp.asarray(rng.normal(size=shape) + 1j * rng.normal(size=shape))
+
+    return (complex_normal(nk, npwx, nwfcU), complex_normal(nspin, nk, nbnd, npwx),
+            jnp.asarray(rng.random((nspin, nk, nbnd))))
+
+
+@pytest.mark.parametrize("nk", [1, 3])
+def test_a_second_hubbard_occupation_matrix_compiles_nothing(nk):
+    """``projections`` walked k with an eager ``lax.map`` over a closure built per call.
+
+    ``run_scf`` calls :func:`~defumat.hubbard.occupations.occupation_matrix`
+    once an iteration outside any ``jit``, once per spin channel inside it, so on
+    a CPU (one k-point a step) with more than one k-point every iteration
+    compiled the loop again: two programs an iteration at ``nspin = 2``. Two
+    calls with different arrays of the same shapes, the second compiling
+    nothing, and the value the per-k contraction written out.
+    """
+    from defumat.hubbard.occupations import occupation_matrix
+
+    columns = jnp.asarray([[[0, 1, 2]], [[2, 3, 4]]])  # two slots of l = 1
+    mask = jnp.ones((2, 3), dtype=bool)
+    occupation_matrix(*_hubbard_arrays(0, nk=nk)[:3], columns, mask, 1)
+    wfcU, psi, weights = _hubbard_arrays(1, nk=nk)
+    with counting_compiles() as names:
+        ns = occupation_matrix(wfcU, psi, weights, columns, mask, 1)
+    assert names == []
+    proj = jnp.einsum("kgi,skbg->skbi", jnp.conj(wfcU), psi)[..., columns[:, 0]]
+    expected = jnp.einsum("skb,skbna,skbnc->snac", weights, jnp.conj(proj), proj).real
+    np.testing.assert_allclose(ns, expected, rtol=1e-13, atol=1e-13)
+
+
 def test_a_full_cache_says_so_once(monkeypatch):
     monkeypatch.setattr(eager, "CACHE_SIZE", 1)
     _loop(jnp.arange(4.0))

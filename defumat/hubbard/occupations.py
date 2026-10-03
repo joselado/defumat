@@ -51,6 +51,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.batching import map_k
+from defumat.eager import compiled
 
 __all__ = [
     "NsSymmetry",
@@ -70,12 +71,22 @@ __all__ = [
 
 
 def projections(wfcU: jnp.ndarray, psi: jnp.ndarray, k_batch=1) -> jnp.ndarray:
-    """``<wfcU|psi>``: ``(nk, nbnd, nwfcU)`` from ``(nk, nbnd, npwx)`` states."""
+    """``<wfcU|psi>``: ``(nk, nbnd, nwfcU)`` from ``(nk, nbnd, npwx)`` states.
+
+    ``run_scf`` reaches this once an iteration and once per spin channel, outside
+    any ``jit``, and with more than one k-point and one k-point a step (a CPU's
+    default) ``map_k`` is an eager ``lax.map`` over a closure built here, which
+    JAX compiled again at every call: two programs an iteration at ``nspin = 2``
+    on ``tests/data/qe/ni-ldau-ortho.in``. Through :func:`defumat.eager.compiled`
+    the loop is compiled once per shape; under a trace (the forces'
+    ``jax.grad``) that is the plain call, so those paths are unchanged.
+    """
     def one(arrays):
         columns, states = arrays
         return jnp.einsum("gi,bg->bi", jnp.conj(columns), states)
 
-    return map_k(one, (wfcU, psi), batch=k_batch)
+    return compiled(lambda columns, states: map_k(one, (columns, states), batch=k_batch),
+                    wfcU, psi)
 
 
 def occupation_matrix(
