@@ -20,7 +20,7 @@ import jax
 import jax.numpy as jnp
 
 from defumat.forces.chunked import chunked_gradient, wants_chunks
-from defumat.forces.energy import FrozenState, frozen_energy, hoisted, with_hoisted
+from defumat.forces.energy import FrozenState, frozen_energy, geometry_compiled, hoisted
 
 __all__ = ["autodiff_forces"]
 
@@ -36,25 +36,28 @@ def autodiff_forces(calculation, state: FrozenState) -> jnp.ndarray:
         # Memory mode, or a state in host memory: the k axis is walked rather
         # than taped whole (``GPU-MEMORY-NEXT.md`` item 3).
         return -chunked_gradient(calculation, state, "positions", positions)[1]
-    gradient = _energy_gradient(calculation)(positions, state, hoisted(calculation))
-    return -gradient
+    gradient, geometry = _energy_gradient(calculation)
+    return -gradient(positions, state, hoisted(calculation), geometry)
 
 
 def _energy_gradient(calculation):
-    """``grad`` of the frozen energy, compiled once per calculation.
+    """``(grad of the frozen energy, its geometry arguments)``, compiled once per run.
 
-    The compiled function is cached on the calculation, and a calculation moved
-    with :meth:`~defumat.scf.driver.Calculation.at_positions` inherits the
-    cache: the energy depends on the geometry only through the ``positions``
-    argument -- everything position-dependent on the object itself is rebuilt
-    inside -- so the same compiled kernel serves every step of a relaxation.
+    The compiled function takes the positions, the large fields
+    (:data:`~defumat.forces.energy.HOISTED_FIELDS`) and every other array the
+    geometry moves (:data:`~defumat.forces.energy.GEOMETRY_FIELDS`) as
+    arguments, and is cached on the calculation under a key of everything it
+    still closes over (:class:`~defumat.forces.energy.GeometryKey`). A
+    calculation moved with :meth:`~defumat.scf.driver.Calculation.at_positions`
+    or :meth:`~defumat.scf.driver.Calculation.at_cell` inherits the cache and
+    matches the key, so one compiled kernel serves every step of a relaxation,
+    the variable-cell one included.
     """
-    cached = getattr(calculation, "_energy_gradient", None)
-    if cached is None:
-        def energy(tau, state, big):
-            here = with_hoisted(calculation, big)
+    def build(key):
+        def energy(tau, state, big, geometry):
+            here = key.rebuild(geometry, big)
             return frozen_energy(here, tau, state, spinors=True)
 
-        cached = jax.jit(jax.grad(energy))
-        calculation._energy_gradient = cached
-    return cached
+        return jax.jit(jax.grad(energy))
+
+    return geometry_compiled(calculation, "_energy_gradient", build)

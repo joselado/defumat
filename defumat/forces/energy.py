@@ -73,6 +73,7 @@ from functools import partial
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from defumat.hubbard.energy import hubbard_energy
 from defumat.scf.potential import total_charge
@@ -142,6 +143,159 @@ def with_hoisted(calculation, values: tuple):
         if value is not None:
             setattr(replaced, name, value)
     return replaced
+
+
+#: The fields of a :class:`~defumat.scf.driver.Calculation` that move with the
+#: geometry and that :data:`HOISTED_FIELDS` do not already carry, which a
+#: compiled force or stress gradient takes as **arguments** too
+#: (`OPEN.md` Part XXIII item 7).
+#:
+#: **Why.** A gradient that closes over these compiles once per *geometry*
+#: rather than once per run. A variable-cell relaxation moves every one of them
+#: at every ionic step -- ``at_cell`` rebuilds the cell, the Ewald and
+#: dispersion lists and the radial tables, ``at_positions`` the projectors --
+#: and measured on QE's ``vc-relax4`` the force and the stress gradients were
+#: each compiled again at every step after the first. Only the float leaves
+#: travel (:func:`_travels`), so an integer index array, ``structure.types``
+#: and anything held in NumPy stay concrete, which is what every host-side
+#: step inside ``at_strain`` and ``build_augmentation`` reads.
+#:
+#: ``ewald`` and ``dispersion`` are numbers, a Python float out of the
+#: constructor or ``at_cell`` and an array out of ``at_positions``; both movers
+#: overwrite them before anything reads them, and they travel as arrays of the
+#: cell's precision so that the two spellings are one argument type.
+GEOMETRY_FIELDS = ("system", "projectors", "cross_augmentation", "vloc_species",
+                   "rho_core_species", "rho_core_g", "rho_atomic_species",
+                   "ewald_sum", "ewald", "dispersion_sum", "dispersion", "wfcU",
+                   "magnetic_field")
+
+#: Attributes a compiled gradient neither closes over nor takes: the compiled
+#: caches themselves, and the lazily filled conveniences the frozen energy does
+#: not read (``_kcart`` is the velocity operator's, ``_reporting_regions`` the
+#: site report's, ``_tetrahedra`` the occupations'). They are removed from the
+#: calculation a gradient is traced at, so a read of one there fails loudly
+#: rather than meeting a stale value.
+NOT_CARRIED = ("_energy_gradient", "_strain_gradient", "_strain_term_gradients",
+               "_chunked_gradient", "_spiral_gradient", "_spiral_gradient_chunk",
+               "_analytic_terms", "_streamed_response", "_tetrahedra",
+               "_reporting_regions", "_kcart")
+
+
+def _travels(leaf) -> bool:
+    """A leaf of a :data:`GEOMETRY_FIELDS` entry that is passed rather than captured."""
+    return isinstance(leaf, jax.Array) and jnp.issubdtype(leaf.dtype, jnp.inexact)
+
+
+class GeometryKey:
+    """What a compiled gradient closes over, and the test that it is still that.
+
+    ``skeleton`` is the calculation with every :data:`HOISTED_FIELDS` and
+    :data:`GEOMETRY_FIELDS` entry emptied and :data:`NOT_CARRIED` removed;
+    ``statics`` holds each geometry field with its travelling leaves taken out.
+    A compiled function closes over a key and nothing else, so it may serve
+    another calculation exactly when :meth:`matches` says the two keys are the
+    same: every captured attribute the same object or the same plain value, and
+    every geometry field the same structure around its arrays. **The safety is
+    in the comparison, not in the list**: a field that moves and is missing from
+    :data:`GEOMETRY_FIELDS` costs a compilation, never a stale constant.
+
+    The key holds no array of the geometry, so a cached entry does not keep the
+    step it was compiled at alive; :func:`split_geometry` returns those apart.
+    """
+
+    def __init__(self, skeleton, statics: dict):
+        self.skeleton, self.statics = skeleton, statics
+
+    def matches(self, other: "GeometryKey") -> bool:
+        mine, theirs = vars(self.skeleton), vars(other.skeleton)
+        if mine.keys() != theirs.keys() or self.statics.keys() != other.statics.keys():
+            return False
+        return (all(_same(mine[name], theirs[name]) for name in mine)
+                and all(_same(self.statics[name], other.statics[name])
+                        for name in self.statics))
+
+    def rebuild(self, leaves: dict, big: tuple):
+        """The calculation the key was taken from, carrying ``leaves`` and ``big``."""
+        here = copy.copy(self.skeleton)
+        for name, static in self.statics.items():
+            setattr(here, name, eqx.combine(leaves[name], static))
+        return with_hoisted(here, big)
+
+
+def split_geometry(calculation) -> tuple:
+    """``(key, leaves)``: a :class:`GeometryKey` and the geometry's float leaves, by field."""
+    skeleton = copy.copy(calculation)
+    for name in NOT_CARRIED:
+        skeleton.__dict__.pop(name, None)
+    statics, leaves = {}, {}
+    precision = calculation.system.cell.precision
+    for name in GEOMETRY_FIELDS:
+        if name not in skeleton.__dict__:
+            continue
+        value = skeleton.__dict__[name]
+        if isinstance(value, (float, np.floating)):
+            leaves[name], statics[name] = precision.as_real(value), None
+        else:
+            leaves[name], statics[name] = eqx.partition(value, _travels)
+        skeleton.__dict__[name] = None
+    for name in HOISTED_FIELDS:
+        if name in skeleton.__dict__:
+            skeleton.__dict__[name] = None
+    return GeometryKey(skeleton, statics), leaves
+
+
+def _same(a, b) -> bool:
+    """Whether a captured value may stand in for another: conservative by design."""
+    if a is b:
+        return True
+    if type(a) is not type(b):
+        return False
+    if isinstance(a, (bool, int, float, complex, str, bytes, np.generic)):
+        return bool(a == b)
+    if isinstance(a, np.ndarray):
+        return a.shape == b.shape and a.dtype == b.dtype and np.array_equal(a, b)
+    if isinstance(a, jax.Array):
+        # A traced value has no bytes to compare, and a miss is the safe answer.
+        if isinstance(a, jax.core.Tracer) or isinstance(b, jax.core.Tracer):
+            return False
+        try:
+            return (a.shape == b.shape and a.dtype == b.dtype
+                    and bool(np.array_equal(np.asarray(a), np.asarray(b))))
+        except Exception:
+            return False
+    if isinstance(a, (tuple, list)):
+        return len(a) == len(b) and all(_same(x, y) for x, y in zip(a, b))
+    if isinstance(a, dict):
+        return a.keys() == b.keys() and all(_same(a[k], b[k]) for k in a)
+    leaves_a, tree_a = jax.tree_util.tree_flatten(a)
+    if jax.tree_util.treedef_is_leaf(tree_a):
+        # An object that is not a pytree: only itself will do.
+        return False
+    leaves_b, tree_b = jax.tree_util.tree_flatten(b)
+    try:
+        if tree_a != tree_b:
+            return False
+    except Exception:  # a static field that cannot be compared
+        return False
+    return all(_same(x, y) for x, y in zip(leaves_a, leaves_b))
+
+
+def geometry_compiled(calculation, slot: str, build):
+    """``(compiled, leaves)``: the entry in ``slot``, built by ``build(key)`` on a miss.
+
+    The cache lives on the calculation and is inherited by every copy a mover
+    makes, so a relaxation's later steps find the first step's entry and reuse
+    it whenever :meth:`GeometryKey.matches` allows. The compiled function takes
+    ``leaves`` and ``hoisted(calculation)`` as arguments and rebuilds the
+    calculation inside its trace with :meth:`GeometryKey.rebuild`.
+    """
+    key, leaves = split_geometry(calculation)
+    cached = calculation.__dict__.get(slot)
+    if not (isinstance(cached, tuple) and len(cached) == 2
+            and isinstance(cached[0], GeometryKey) and cached[0].matches(key)):
+        cached = (key, build(key))
+        calculation.__dict__[slot] = cached
+    return cached[1], leaves
 
 
 class FrozenState(eqx.Module):

@@ -177,6 +177,7 @@ from defumat.solvers.davidson import (
 )
 from defumat.solvers.subspace import rayleigh_ritz
 from defumat.system.builder import System
+from defumat.system.cell import fold_radius, pair_separation_bound
 from defumat.system.kpoints import KPoints
 from defumat.system.spiral import spiral_cartesian, spiral_kcart, spiral_kpoints
 from defumat.system.symmetry import (
@@ -903,8 +904,13 @@ CORE_CHUNK_BYTES = 8 * 1024**2
 
 
 def _projector_core(pseudos, structure, cell, smooth, planewaves, kpoints,
-                    origin_tangent, chunked):
+                    origin_tangent, chunked, kcart=None):
     """:func:`build_projector_core`, in k-chunks when ``chunked``.
+
+    ``kcart`` is :func:`build_projector_core`'s, the k-points in 1/bohr at this
+    cell, and is sliced with each chunk: :meth:`Calculation.at_cell` passes it,
+    because a moved cell's ``kpoints`` still hold the starting cell's cartesian
+    coordinates.
 
     **The one-shot build is the setup's peak in memory mode**: every
     intermediate -- ``k + G``, its modulus, the harmonics, the radial table,
@@ -922,20 +928,22 @@ def _projector_core(pseudos, structure, cell, smooth, planewaves, kpoints,
     """
     if not chunked:
         return build_projector_core(pseudos, structure, cell, smooth, planewaves,
-                                    kpoints, origin_tangent=origin_tangent)
+                                    kpoints, kcart, origin_tangent=origin_tangent)
     nk = planewaves.nk
     ncs = sum(len(projector_channels(p)) for p in pseudos) or 1
     per_k = planewaves.npwx * (ncs + 3) * 8
     batch = max(1, CORE_CHUNK_BYTES // max(1, per_k))
     if batch >= nk:
         return build_projector_core(pseudos, structure, cell, smooth, planewaves,
-                                    kpoints, origin_tangent=origin_tangent)
+                                    kpoints, kcart, origin_tangent=origin_tangent)
     columns = kg = None
     piece = None
     for rows, live in k_chunks(nk, batch):
         piece = build_projector_core(
             pseudos, structure, cell, smooth, _planewaves_rows(planewaves, rows),
-            _kpoints_rows(kpoints, rows), origin_tangent=origin_tangent,
+            _kpoints_rows(kpoints, rows),
+            None if kcart is None else jnp.asarray(kcart)[np.asarray(rows)],
+            origin_tangent=origin_tangent,
         )
         block_columns = np.asarray(piece.columns)[:live]
         block_kg = np.asarray(piece.kg)[:live]
@@ -953,6 +961,47 @@ def _projector_core(pseudos, structure, cell, smooth, planewaves, kpoints,
         lambda core: (core.columns, core.kg, core.mask),
         piece, (jax.device_put(columns), jax.device_put(kg), planewaves.mask),
     )
+
+
+def _padded_translations(neighbours, count: int, cell, structure):
+    """``neighbours`` (an Ewald or dispersion sum) with its translation list padded to ``count`` rows.
+
+    **What a variable-cell step needs and the starting cell does not.** The
+    compiled force and stress take the list as an argument, so its length is a
+    shape, and :meth:`Calculation.at_cell` rebuilds it at every step: an image
+    count that changes from one step to the next would compile both gradients
+    again. Padding to the count of the calculation ``at_cell`` was called on --
+    the starting one, throughout :func:`~defumat.workflows.vc_relax.run_vc_relax`
+    -- removes that wherever the count fell. Where it grew, the list is longer
+    and that one shape compiles once.
+
+    The rows added are one lattice vector, a multiple of the longest lattice
+    vector at least twice ``cutoff + separation`` long, so every pair it forms
+    lies past the kernels' ``rmax`` or ``rcut`` mask and adds an exact zero --
+    and, being a lattice vector, it deforms under a strain as the real rows
+    do. They go at the end, after the real rows in their own order, so what
+    changes is only the length the kernel reduces over, which moves its sum at
+    round-off when the sum has live pairs at all: on QE's ``vc-relax4`` cell
+    with ``alpha`` lowered to 0.1, so that it does, 4.4e-16 Ry on 2.2 Ry, 7.8e-17
+    in the position derivative and 7.7e-16 in the strain derivative. At the
+    ``alpha`` a run takes, that cell and two-atom silicon have no pair inside
+    ``rmax`` and the padding changes nothing.
+    """
+    translations = getattr(neighbours, "translations", None)
+    if translations is None or translations.shape[0] >= count:
+        return neighbours
+    at = np.asarray(cell.at)
+    tau = np.asarray(structure.positions)
+    cutoff = float(getattr(neighbours, "rmax", None) or getattr(neighbours, "rcut"))
+    separation = max(pair_separation_bound(at, tau), fold_radius(at))
+    longest = at[int(np.argmax(np.linalg.norm(at, axis=1)))]
+    multiple = int(np.ceil(2.0 * (cutoff + separation) / np.linalg.norm(longest))) + 1
+    filler = jnp.asarray(multiple * longest, dtype=translations.dtype)
+    padded = jnp.concatenate([
+        translations,
+        jnp.broadcast_to(filler, (count - translations.shape[0], 3)),
+    ])
+    return eqx.tree_at(lambda n: n.translations, neighbours, padded)
 
 
 def _kpoints_rows(kpoints, rows):
@@ -3176,11 +3225,12 @@ class Calculation:
         # The spiral gradient's compiled kernel closes over *this* calculation --
         # its local potential, its Ewald sum, its projector positions -- so it
         # cannot follow the atoms, and would otherwise be evaluated in silence at
-        # the geometry it was built at. The analytic force's and the stress's
-        # kernels close over the calculation the same way; they do not need a pop
-        # here because they are keyed on the calculation they captured and the
-        # copy below is a different object, which is the invalidation this one
-        # gets by name.
+        # the geometry it was built at. The analytic force's kernel closes over
+        # the calculation the same way; it needs no pop here because it is keyed
+        # on the calculation it captured and the copy below is a different
+        # object. The autodiff force's and stress's take the geometry as
+        # arguments and are keyed on what they still close over
+        # (:class:`~defumat.forces.energy.GeometryKey`), so they follow the move.
         moved.__dict__.pop("_spiral_gradient", None)
         moved.__dict__.pop("_spiral_gradient_chunk", None)
         moved.system = eqx.tree_at(
@@ -3262,23 +3312,47 @@ class Calculation:
         else. That is what lets a whole variable-cell relaxation be a single
         setup, with the basis rebuilt once at the end
         (:mod:`defumat.workflows.vc_relax`).
+
+        **The augmentation charge and the projector core are built the
+        constructor's way, not the strain derivative's.** :meth:`at_strain`
+        chooses both for a tape: in memory mode the augmentation charge is the
+        exact scanned table, which evaluates the radial transforms of ``Q_ij``
+        inside every chunk of ``charge()`` and ``integrals()``, twice an SCF
+        iteration, and the core is built whole. A moved cell runs SCF
+        iterations rather than one derivative, so here the table is stored, or
+        knot-tabulated above :data:`~defumat.pseudo.augmentation.AUG_MAX_BYTES`,
+        and the core is built in k-chunks in memory mode, as the constructor
+        builds both (`OPEN.md` Part XXIII item 15). The trade is one stored
+        real ``(nh, nh, ngm)`` table for the moved calculation. The stress, a
+        derivative, still calls :meth:`at_strain` inside its trace and keeps the
+        scanned route.
         """
         at = jnp.asarray(at)
         current = self.system.cell.at
         # ``at_strain`` deforms by ``a_i -> D a_i``, i.e. ``at -> at @ D.T``.
         deformation = jnp.asarray(at).T @ jnp.linalg.inv(jnp.asarray(current)).T
-        moved = self.at_strain(deformation - jnp.eye(3, dtype=deformation.dtype))
+        moved = self.at_strain(deformation - jnp.eye(3, dtype=deformation.dtype),
+                               _moving=True)
 
         cell, structure = moved.system.cell, moved.system.structure
         dense = moved.basis.dense
-        moved.ewald_sum = build_ewald(cell, structure, dense, moved.charges)
+        # Both lists are padded to at least the length this calculation's own
+        # had, so that a step whose count of images fell does not hand the
+        # compiled force and stress a new shape (:func:`_padded_translations`).
+        moved.ewald_sum = _padded_translations(
+            build_ewald(cell, structure, dense, moved.charges),
+            self.ewald_sum.translations.shape[0], cell, structure,
+        )
         moved.ewald = float(
             moved.ewald_sum.energy(cell, structure.positions, dense)
         )
         if moved.dispersion_sum is not None:
-            moved.dispersion_sum = build_vdw_correction(
-                moved.system.vdw_corr, cell, structure,
-                **vdw_options(moved.system),
+            moved.dispersion_sum = _padded_translations(
+                build_vdw_correction(
+                    moved.system.vdw_corr, cell, structure,
+                    **vdw_options(moved.system),
+                ),
+                self.dispersion_sum.translations.shape[0], cell, structure,
             )
             moved.dispersion = float(
                 moved.dispersion_sum.energy(structure.positions)
@@ -3315,7 +3389,7 @@ class Calculation:
         moved._reporting_regions = None
         return moved
 
-    def at_strain(self, strain: jnp.ndarray) -> "Calculation":
+    def at_strain(self, strain: jnp.ndarray, *, _moving: bool = False) -> "Calculation":
         """The same calculation in a cell deformed by ``h -> (1 + epsilon) h``.
 
         The third member of the family, after :meth:`at_positions` and
@@ -3358,6 +3432,11 @@ class Calculation:
         The atomic starting charge is deliberately *not* rebuilt: nothing in the
         energy being differentiated uses it (only the SCF's first guess and
         ``force_corr`` do).
+
+        ``_moving`` is for :meth:`at_cell` alone, which calls this for a cell
+        that has moved rather than one being differentiated: the augmentation
+        charge, the projector core and the projectors are then built as the
+        constructor builds them rather than for a tape.
         """
         if self.spiral:
             raise NotImplementedError(
@@ -3372,11 +3451,14 @@ class Calculation:
 
         strained = copy.copy(self)
         # As in ``at_positions`` and ``at_spiral_q``: any compiled kernel that
-        # closed over *this* cell cannot follow one that has been deformed.
+        # closed over *this* cell cannot follow one that has been deformed. The
+        # force's and the stress's gradients are not among them: they take the
+        # geometry as arguments and are keyed on what they still close over
+        # (:class:`~defumat.forces.energy.GeometryKey`), so a moved cell reuses
+        # them, which is what keeps a variable-cell relaxation from compiling
+        # both again at every step (`OPEN.md` Part XXIII item 7).
         strained.__dict__.pop("_spiral_gradient", None)
         strained.__dict__.pop("_spiral_gradient_chunk", None)
-        strained.__dict__.pop("_energy_gradient", None)
-        strained.__dict__.pop("_chunked_gradient", None)
         strained.__dict__.pop("_analytic_terms", None)
         strained.__dict__.pop("_tetrahedra", None)
 
@@ -3416,15 +3498,44 @@ class Calculation:
         # The projectors: rebuilt whole, radial integrals included. Unlike a
         # change of position, ``|k+G|`` itself moves, so the form factors are
         # part of the derivative rather than a cached table it multiplies.
-        strained.projector_core = build_projector_core(
-            self.pseudos, structure, cell, smooth, self.basis.planewaves,
-            self.basis_kpoints, kcart, origin_tangent=self.origin_tangent,
-        )
-        strained.projectors = strained.projector_core.at_positions(
-            positions, qq=self.projectors.qq
-        )
+        # ``_moving`` is :meth:`at_cell`'s: a cell that has moved and will run
+        # SCF iterations, so the core and the projectors are built the
+        # constructor's way -- in k-chunks in memory mode, in the band side's
+        # dtype, lazy or pool-restricted as the run stores them.
+        if _moving:
+            strained.projector_core = _projector_core(
+                self.pseudos, structure, cell, smooth, self.basis.planewaves,
+                self.basis_kpoints, self.origin_tangent,
+                chunked=self.memory_mode == "memory", kcart=kcart,
+            )
+            if self.band_precision.complex != strained.projector_core.complex_dtype:
+                strained.projector_core = dataclasses.replace(
+                    strained.projector_core,
+                    complex_dtype=self.band_precision.complex)
+            strained.projectors = strained.projector_core.at_positions(
+                positions, qq=self.projectors.qq,
+                lazy=self.projector_storage == "rebuild", rows=self.projector_rows,
+            )
+        else:
+            strained.projector_core = build_projector_core(
+                self.pseudos, structure, cell, smooth, self.basis.planewaves,
+                self.basis_kpoints, kcart, origin_tangent=self.origin_tangent,
+            )
+            strained.projectors = strained.projector_core.at_positions(
+                positions, qq=self.projectors.qq
+            )
 
-        if self.augmentation is not None:
+        if self.augmentation is not None and _moving:
+            # The constructor's rule for a cell that has moved: stored below
+            # ``AUG_MAX_BYTES``, knot-tabulated above it, and never the exact
+            # scanned table, whose radial transforms would be evaluated again
+            # inside every ``charge()`` and ``integrals()`` of every SCF
+            # iteration at a ``|G|`` that no longer changes (`OPEN.md` Part
+            # XXIII item 15).
+            strained.augmentation = build_augmentation(
+                self.pseudos, structure, cell, dense,
+            )
+        elif self.augmentation is not None:
             # **Scanned in memory mode, stored in speed mode**, on the stored
             # route's numbers either way (to round-off). Stored, the whole
             # ``(nh, nh, ngm)`` array and its per-``L`` blocks are on the
