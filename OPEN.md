@@ -7259,4 +7259,11 @@ What the agents of this sweep's follow-up found outside their items, recorded ra
   `conv_thr` trap of `CLAUDE.md` on a regime where the gap between the two is three decades wider than on
   a collinear cell. Not investigated; the measurement is the energy per iteration against `dr2` per
   iteration on that cell, and on a collinear one for comparison.
+- **`test_nonlinear.py::test_the_raman_tensors_have_the_zincblende_form` fails at master, before tonight.**
+  The AlAs Raman tensor's symmetry-forbidden components read 1.0e-9 against a bound of 3.1e-10 (1e-10
+  relative; the file's `EXACT_TOLERANCE` comment records 3e-13 measured), and the allowed ones differ by
+  3.6e-9 relative: at `7f6fef2` with the defaults, and the same 1.0e-9 on tonight's branch at the old
+  response convergence. A residue that was round-off went up by three decades at some commit before
+  2026-10-03 and nothing caught it, since the file is in the slow set; the commit is not found (the
+  bisection is over master's history, with this file's test as the probe).
 
