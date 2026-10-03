@@ -3813,7 +3813,7 @@ item below against the code, and the dated marks on items 1, 4, 7, 8, 10 and 11 
 6. **Shell-based radial evaluation** for quantities depending only on `|G|` (~100
    shells vs 1459 G-vectors for Si). Note this is *not* strain-safe: shells split
    under strain, so it must stay off the stress path.
-7. **Stop closing over the cell in the stress gradient** (P29). `at_strain`
+7. *(done, 2026-10-03, `a7668a7`)* **Stop closing over the cell in the stress gradient** (P29). `at_strain`
    drops `_energy_gradient` on every call, because the compiled gradient closes
    over the cell it was traced at, so a variable-cell relaxation compiles the
    strain derivative again at every ionic step: **0.6 s of retracing for 0.57 s
@@ -3829,8 +3829,10 @@ item below against the code, and the dated marks on items 1, 4, 7, 8, 10 and 11 
    So a vc-relax recompiles **both** gradients every step, and removing the pop fixes
    neither. The fix is the cell and the other geometry-dependent leaves as arguments of
    both, with the Ewald list padded over the trajectory; the force's retrace on a moved cell
-   is unmeasured.
-8. **Schedule the response solver's threshold** (P25). `dfpt_kernels.f90` uses
+   is unmeasured. **Done the same night**: the geometry's arrays are arguments of both
+   gradients, and `vc-relax4`'s steps 2 to 10 compile neither (`OPEN.md` Part XXIII item 7,
+   `PLAN.md` P128).
+8. *(done, 2026-10-03, `PLAN.md` P127)* **Schedule the response solver's threshold** (P25). `dfpt_kernels.f90` uses
    `thresh = min(0.1 sqrt(dr2), 1e-2)` where `response/phonon.py` holds a fixed
    1e-12, and the cost is `av.it. = 27.7` against `ph.x`'s 9.3 — a factor of
    three, on the stage that is 96% of the run. It is `electrons.f90`'s `ethr`
@@ -3845,6 +3847,10 @@ item below against the code, and the dated marks on items 1, 4, 7, 8, 10 and 11 
    the factor of two in passes on its own; this item is the factor of three in CG steps.
    A warm start of each solve from the previous pass, as `ph.x` reads `dpsi` from `iudwf`,
    is the third piece (Part XXIII item 2).
+   **Done, all three pieces**: on `si-epsilon` the `Gamma` phonon takes 6 passes at 10.8 CG
+   steps a solve where it took 10 at 27.7, and the field 5 passes at 12.6 where it took 8 at
+   28.0 (`ph.x` 5 at 9 in its late passes). The wall-clock pair against `ph.x` is in "The
+   response against `ph.x`".
 9. *(done, 2026-08-22)* **A mixer in the response loop.** Was: 17 linear-mixing
    iterations against `ph.x`'s 5, whose mixer is `LR_Modules/mix_pot.f90`. It
    turned out not to be a speed item at all -- linear mixing of a map whose
@@ -10417,3 +10423,22 @@ not. Contracting one atom at a time inside each block (a scan over atoms, interm
 74.1 MB at the default chunk and 43.7 at 4096 against 71.4 and 42.8, a null, and not kept. What the chunk
 does move is the total, 71.4 / 42.8 / 71.5 MB at 16384 / 4096 / 1024 vectors, not monotonic, the U the stress
 showed in "The augmentation chunk under a strain"; which arrays make it up is not located.
+
+## The response against `ph.x`: its `dr2`, its CG schedule and a warm start (CPU, 2026-10-04)
+
+**The number to carry: the field response on `si-epsilon` takes 5 passes at 12.6 CG steps a solve where
+it took 8 at 28.0, and `ph.x` takes 5 at 9 in its late passes.** The three changes are `PLAN.md` P127:
+the loops stop on `ph.x`'s `|ddv_scf|^2` (the raw sum divided by `ndimtot^2`, ten decades looser on
+silicon than what they stopped on), the CG threshold follows `dfpt_kernels.f90`'s
+`min(0.1 sqrt(dr2), 1e-2)`, and each solve starts from the previous pass's `dpsi`. Passes and steps
+are counts and do not depend on the machine's load:
+
+| response | passes before -> after (`ph.x`) | CG steps a solve before -> after |
+|---|---|---|
+| `si-epsilon`, field | 8 -> 5 (5) | 28.0 -> 12.6 |
+| `si-epsilon-us`, field | 9 -> 5 (5) | 31.7 -> 13.7 |
+| `si-epsilon`, `Gamma` phonon | 10 -> 6 | 27.7 -> 10.8 |
+| `si-electrostriction`, strain | 11 -> 7 | 22.0 -> 6.7 |
+
+**Not yet timed.** The wall-clock pair against `ph.x`, one core each, needs this workstation idle, and it
+carried other work throughout the night the change was made.
