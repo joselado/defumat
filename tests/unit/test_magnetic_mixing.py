@@ -138,3 +138,36 @@ def test_the_scale_is_exact_at_a_ratio_of_one():
     plain = mixer.step(residual).copy()
     mixer.beta_mag = 0.37
     assert np.array_equal(mixer.step(residual), plain)
+
+
+@pytest.mark.parametrize("space", ["r", "g"])
+def test_mixing_beta_mag_reaches_the_run(space, pseudo_dir):
+    """The guard that fires: a run with the knob set takes a different path.
+
+    Every test above sets ``mixer.shape`` by hand, so none of them could see
+    that ``run_scf`` set it only inside the fixed-spin-moment warning's branch
+    (since ``2d4c14b``), which left ``mixing_beta_mag`` inert on every other
+    run: :meth:`Mixer.magnetic_step` returns the step unchanged without a
+    shape. What is asserted is the observable, the second iteration's ``dr2``,
+    which the first mix decides; on one hydrogen atom, LSDA, at
+    ``mixing_beta = 0.3`` against ``mixing_beta_mag = 0.9``.
+    """
+    import warnings
+
+    from defumat import Calculator
+    from defumat.scf.driver import run_scf
+    from tests.conftest import GENERATED
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        calculator = Calculator.from_file(GENERATED / "h-atom-lsda.in",
+                                          pseudo_dir=pseudo_dir, announce=False)
+        runs = [
+            run_scf(calculator.system, calculator.pseudos, mixing_beta=0.3,
+                    mixing_beta_mag=beta_mag, mixing_space=space, max_iterations=3,
+                    verbose=False)
+            for beta_mag in (None, 0.9)
+        ]
+    plain, magnetic = (run.history[1]["accuracy"] for run in runs)
+    assert runs[0].history[0]["accuracy"] == runs[1].history[0]["accuracy"]
+    assert abs(magnetic - plain) > 1e-3 * plain
