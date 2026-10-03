@@ -40,10 +40,12 @@ array for the same reason.
 
 from __future__ import annotations
 
+import dataclasses
+
 import jax.numpy as jnp
 import numpy as np
 
-from defumat.scf.mixing import get_mixer
+from defumat.scf.mixing import MIXERS, get_mixer
 
 __all__ = ["ResponseMixer", "DEFAULT_RESPONSE_MIXING", "NMIX_PH", "ddv_scf"]
 
@@ -134,7 +136,11 @@ class ResponseMixer:
 
     def __init__(self, name: str = DEFAULT_RESPONSE_MIXING, beta: float = 0.7,
                  history: int = NMIX_PH):
-        self.mixer = get_mixer(name, beta=beta, history=history)
+        # Only a mixer with a history takes a depth; linear mixing has none.
+        takes_history = "history" in {
+            entry.name for entry in dataclasses.fields(MIXERS[name.lower()])}
+        self.mixer = get_mixer(name, beta=beta,
+                               history=history if takes_history else None)
         self.name = name
 
     def mix(self, current, proposed, host: bool = False):
