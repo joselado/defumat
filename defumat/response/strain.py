@@ -610,14 +610,20 @@ def _self_consistent_response(
         ]) + frozen_drho
         symmetrised = calculation.symmetrize_strain_response(stacked)
 
-        induced = jnp.stack([
-            jnp.stack([
-                compiled_jvp(
+        # **Six screenings, not nine.** ``[a, b]`` and ``[b, a]`` are one strain
+        # and the response is symmetric in them (``strain_tangent`` is
+        # ``(E_ab + E_ba)/2``), so ``[b, a]`` takes ``[a, b]``'s kernel; the
+        # symmetriser's sums run in a different order for the two, so what
+        # this drops is a round-off difference and nothing else.
+        screened = {}
+        for a in range(3):
+            for b in range(a, 3):
+                screened[a, b] = compiled_jvp(
                     lambda r: calculation.potential(r).v_scf,
                     (jnp.asarray(density),), (symmetrised[a, b],),
                 )[1]
-                for b in range(3)
-            ])
+        induced = jnp.stack([
+            jnp.stack([screened[min(a, b), max(a, b)] for b in range(3)])
             for a in range(3)
         ])
 
@@ -629,12 +635,13 @@ def _self_consistent_response(
             symmetrised_becsum = _symmetrize_becsum_strain(
                 calculation, becsum_response
             )
+            onecentre_of = {
+                (a, b): paw_response(calculation, symmetrised_becsum[a, b],
+                                     solver.becsum)
+                for a in range(3) for b in range(a, 3)
+            }
             induced_onecentre = jnp.stack([
-                jnp.stack([
-                    paw_response(calculation, symmetrised_becsum[a, b],
-                                 solver.becsum)
-                    for b in range(3)
-                ])
+                jnp.stack([onecentre_of[min(a, b), max(a, b)] for b in range(3)])
                 for a in range(3)
             ])
 
