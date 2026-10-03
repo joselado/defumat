@@ -277,6 +277,7 @@ def _calculator(pseudo_dir):
                                     announce=False)
 
 
+@pytest.mark.slow
 def test_the_shell_of_an_output_density_is_its_symmetrised_augmentation_charge(
         pseudo_dir, monkeypatch):
     """What the rebuild rests on: above ``ngms``, ``rho_out`` is ``sym_rho(addusdens(becsum_out))``.
@@ -418,6 +419,7 @@ def test_a_dual_eight_run_reaches_the_real_space_energy(pseudo_dir):
                                                       abs=1e-9)
 
 
+@pytest.mark.slow
 def test_a_magnetic_ultrasoft_run_takes_the_real_space_count(pseudo_dir):
     """Noncollinear ultrasoft iron at its own ``beta = 0.3``: the two layouts, one count.
 
