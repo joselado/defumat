@@ -4853,6 +4853,11 @@ All of these were taken on an idle machine and repeated: two runs agree to 8
 per cent and a third, taken while a second test suite was running, is 20 per
 cent slower across the board. The numbers below are the quiet ones.
 
+They are 22-band timings and stay as what they were. Since 2026-10-04 the tests,
+notebook 33 and the guide's snippet run 23 bands, the count at which the band set
+is cut in a gap rather than inside a doublet (`PLAN.md` P54), and nothing here was
+re-timed at 23.
+
 | stage | s |
 |---|---|
 | SCF on the input's own 4x4x4 grid | 5.6 |
