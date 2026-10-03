@@ -7236,7 +7236,11 @@ What the agents of this sweep's follow-up found outside their items, recorded ra
   against 3e-8 at 23 or 27, and that test's docstring had put the 6.6e-4 down to the radial
   interpolation (corrected). Whether to move those tests to a clean `nbnd` and re-measure the Elk
   figures, the A/B and the notebook is put to a fable subagent. On supercells `find_symmetries` drops the
-  fractional translations, so the grid warning stays silent there.
+  fractional translations, so the grid warning stays silent there. **Moved 2026-10-04 (`bc4ce56`)**: the
+  Elk comparisons, the scissors and absorption tests and the augmented pair (bounds now 1e-6) run 23
+  bands and pass under `-W error::RuntimeWarning`, notebook 33 and the guide's snippet followed, and
+  re-measuring them found the recorded Elk figures predate `27eeaa2`'s `l = 1` tangent at `k + G = 0`,
+  which is worth 6 per cent of the peak (`PLAN.md` P54).
 - **Tetragonal cobalt relaxed from the identity returns the same free energy and torque to the last bit
   at steps 2 to 4**, in the old code and the new. Presumably a stationary start; not checked.
 - **Two failures that predate tonight**, both reproduced on master: `test_retention.py::

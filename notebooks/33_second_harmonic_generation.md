@@ -29,14 +29,14 @@ PSEUDO, CASES = Path("../tests/data/pseudo"), Path("../tests/data/qe")
 
 alas = Calculator.from_file(CASES / "alas-shg.in", PSEUDO, announce=False)
 mesh = KPoints.automatic((6, 6, 6), (0, 0, 0), alas.system.cell)
-chi = alas.get_shg(kpoints=mesh, nbnd=22, window=0.6, nw=240, broadening=0.010)
+chi = alas.get_shg(kpoints=mesh, nbnd=23, window=0.6, nw=240, broadening=0.010)
 
 xyz = chi.component(0, 1, 2)
 print("AlAs chi_xyz at low frequency = %.1f pm/V  (d = %.1f pm/V)"
       % (xyz[0].real, xyz[0].real / 2))
 ```
 
-    AlAs chi_xyz at low frequency = -75.8 pm/V  (d = -37.9 pm/V)
+    AlAs chi_xyz at low frequency = -78.5 pm/V  (d = -39.2 pm/V)
 
 
 ## Zincblende leaves exactly one number
@@ -64,14 +64,14 @@ print("\nlargest of the other %d components: %.2e of the peak"
       % (27 - len(survive), max(v for k, v in peaks.items() if k not in survive) / largest))
 ```
 
-    chi^xyz     672.4 pm/V
-    chi^xzy     672.4 pm/V
-    chi^yxz     672.4 pm/V
-    chi^yzx     672.4 pm/V
-    chi^zxy     672.6 pm/V
-    chi^zyx     672.6 pm/V
+    chi^xyz     632.9 pm/V
+    chi^xzy     632.9 pm/V
+    chi^yxz     632.9 pm/V
+    chi^yzx     632.9 pm/V
+    chi^zxy     632.9 pm/V
+    chi^zyx     632.9 pm/V
     
-    largest of the other 21 components: 4.07e-04 of the peak
+    largest of the other 21 components: 2.41e-09 of the peak
 
 
 ## The control: silicon has to give nothing
@@ -92,9 +92,13 @@ print("silicon peak |chi| = %9.4f pm/V" % np.abs(si_chi.chi).max())
 print("ratio              = %.1e" % (np.abs(si_chi.chi).max() / np.abs(chi.chi).max()))
 ```
 
-    AlAs    peak |chi| =    672.58 pm/V
+    /u/40/ladovj1/data/Documents/programs/claude/defumat/.claude/worktrees/agent-ab23bc009de195db9/defumat/workflows/shg.py:137: RuntimeWarning: the dense FFT grid of this nosym run, (15, 15, 15), is not a multiple of (4, 4, 4), which the crystal's fractional translations need, so the second-harmonic tensor chi^abc carries a residue the crystal does not have. The operations nosym dropped do not map this grid onto itself, the exchange-correlation potential evaluated pointwise on it breaks them at the grid's sampling error, and a second-order tensor picks that up in every component one of those operations forbids: on two-atom silicon, whose inversion carries a quarter-lattice translation, chi^(2) on the whole unshifted 2x2x2 mesh at 8 bands reads 0.72 pm/V on the 15^3 grid ecutwfc = 12 gives under nosym, where inversion requires zero, against 0.0018 on the commensurate 20^3 grid of ecutwfc = 16 and 0.00074 with symmetry kept for the SCF. Keep symmetry for the SCF and pass the whole unshifted mesh as kpoints= (KPoints.automatic((n, n, n), (0, 0, 0), cell), given no rotations, is the complete grid), or choose a cutoff whose dense grid is a multiple of (4, 4, 4)
+      return second_harmonic(
+
+
+    AlAs    peak |chi| =    632.90 pm/V
     silicon peak |chi| =    0.0120 pm/V
-    ratio              = 1.8e-05
+    ratio              = 1.9e-05
 
 
 ## The spectrum, and where its absorption starts
@@ -163,8 +167,8 @@ print("chi(0)     (pm/V)   %8.1f  %8.1f" % (xyz[0].real, chi_elk[0].real * 24.43
 
                         defumat     Elk
     resonance (eV)         2.152     2.163
-    peak |chi| (pm/V)      672.4     628.0
-    chi(0)     (pm/V)      -75.8     -85.4
+    peak |chi| (pm/V)      632.9     628.0
+    chi(0)     (pm/V)      -78.5     -85.4
 
 
 ## What the number means
@@ -188,8 +192,8 @@ print("chi = %.1f pm/V   ->   d = %.1f pm/V" % (xyz[0].real, xyz[0].real / 2))
 print("band truncation diagnostic: %.1e of the peak" % chi.truncation)
 ```
 
-    chi = -75.8 pm/V   ->   d = -37.9 pm/V
-    band truncation diagnostic: 2.9e-03 of the peak
+    chi = -78.5 pm/V   ->   d = -39.2 pm/V
+    band truncation diagnostic: 3.6e-03 of the peak
 
 
 ---

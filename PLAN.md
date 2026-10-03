@@ -10186,18 +10186,76 @@ comparable stated rather than discovered — all-electron LAPW against a
 norm-conserving pseudopotential, and a second-order susceptibility carries two
 energy denominators, so a gap difference is not a scale factor:
 
-* the **resonance position** to **0.5%**: 2.152 eV against 2.163;
-* the **peak height** to **7%**: 27.52 a.u. against 25.70;
-* the **static value** to **11%**: -3.10 a.u. against -3.50 — and the basis is
-  shown converged there, `ecutwfc` 10 → 30 → 45 giving -2.71 → -3.10 → -3.13,
-  so the residue is the pseudopotential and not the cutoff;
+* the **resonance position** to **0.5%**: 2.152 eV against 2.163, at 22 bands
+  when written and at 23 since 2026-10-04;
+* the **peak height** to **7%** when written, 27.52 a.u. against 25.70 at 22
+  bands; **0.8%** since, 25.90 a.u. (632.9 pm/V) at 23 bands, and the move is
+  not the band count (the 2026-10-04 paragraph below);
+* the **static value** to **11%** when written, -3.10 a.u. against -3.50 at 22
+  bands; **8%** since, -3.21 a.u. (-78.5 pm/V) at 23. The basis is
+  shown converged there, `ecutwfc` 10 → 30 → 45 giving -2.71 → -3.10 → -3.13
+  on the code of the time, so the residue is the pseudopotential and not the
+  cutoff;
 * the **three parts separately**, because Elk writes `chi_II`, `eta_II` and
   `i/2w sigma_II` to three files and comparing only their sum would let two
-  errors cancel — P43's lesson;
+  errors cancel, which is P43's lesson. At 23 bands they read 36.08, 53.95 and 21.33
+  a.u. against Elk's 30.81, 45.35 and 17.31 (+17, +19 and +23 per cent, under
+  a 35 per cent tolerance); at 22 bands on the code of the time, 34.70, 54.04
+  and 21.32;
 * and the **scissors branch**, which Elk's own GaAs example is built around: at
   `Delta = 0.05` Ha the 2w peak moves **0.0502 Ry** against a half-scissor of
   0.0500, and its height falls to **0.60** of the unscissored value against
-  Elk's 0.58.
+  Elk's 0.58 (0.62 at 23 bands since 2026-10-04, the static value going -3.21
+  to -1.17 a.u. where it went -3.10 to -1.14, and Elk's -3.50 to -1.00).
+
+**Revisited 2026-10-04: the band count, and a 6 per cent that was not the band
+count.** The cut warning (`569df06`) fires on every 22-band run of this phase:
+on `alas-shg.in`'s 6x6x6 mesh 22 bands cut doublets at 13 of the 216 k-points,
+`band_cut_gap` exactly 0, so which member of each doublet is summed is the
+eigensolver's arbitrary rotation. Rotating them moves chi by up to **4.7e-4** of
+its peak, and the components zincblende forbids read 2.2e-4 of the allowed ones
+at 22 bands against **3.8e-9** at 23, the allowed spread 1.7e-4 against 5.7e-10.
+A scan over band counts by the session that decided the move found 23 the one
+count that is a clean cut on every cell and mesh in use (`alas-raman` 4^3
+1.8e-3 Ry and 6^3 1.3e-2, `alas-shg` 4^3 4.1e-3 and 6^3 9.0e-3, `alas-us` 4^3
+1.57e-2), so `tests/regression/test_shg.py`, notebook 33 and the guide's
+`get_shg` snippet now run 23. **Elk cuts inside a multiplet too, at its own
+count.** Its run holds 37 states, 12 of them occupied, because Al 2p and As 3d
+are valence in its species (`spcore` false for both in `Al.in` and `As.in`, so
+`chgval = 24`; `nempty 12` is per atom, so `init1.f90:316-319` gives
+`nstfv = 12 + 24 + 1`), and its top state is degenerate with the next at 3 of
+its 22 reduced k-points (that session's measurement; Elk was not re-run here).
+The comparison's tolerances, 25 per cent on the static value, 5 on the peak
+position, 20 on its height and 35 on the parts, are 100 to 1000 times the cut's
+effect, so it is indifferent to the cut on either side: the tests run the same
+mesh as Elk and not the same band count.
+
+**The re-measurement did not reproduce the recorded figures at 22 bands, and
+the reason is `27eeaa2`.** Today's code at 22 bands gives 632.49 pm/V (25.88
+a.u.) and -78.33 pm/V (-3.205 a.u.) where this entry recorded 672.5 and -75.8,
+and the band count is worth +0.41 and -0.14 of that (632.90 and -78.47 at 23).
+`cff88a4`, the code of 2026-09-02, reproduces 672.5048 and -75.799; `d75c1b4`,
+the code of 2026-10-03 before the cut warning, gives 632.4902, bit-identical to
+today's. Bisected over the 807 mainline commits between them on a 2x2x2 proxy
+(2339 against 2456 pm/V), the move is `27eeaa2` (2026-09-20), the `l = 1`
+projector's tangent at `k + G = 0` put back on Gamma's row of `dH/dk` (P28,
+"The repair is a `custom_jvp`"), and the switch it added says so on its own:
+today's code at 22 bands with `origin_tangent=False` gives **672.5008** and
+-75.807, the recorded figures to 6e-6 of the peak, which is inside what the
+22-band cut's rotation moves. The tangent moves
+`chi_II`, the part with the intermediate state, by 4 per cent and the other two
+by 0.2 or less. P28's rule for which leg a test takes does not put these tests
+on `origin_tangent=False`: their anchor is Elk, an all-electron code with no
+reason to zero that row, and the default agrees with Elk's peak height to 0.8
+per cent where `ph.x`'s convention agreed to 7. `OPEN.md` had listed "SHG's and
+the shift current's three-band terms" among the consumers of that row before it
+was repaired; nothing re-measured this entry's figures when it was. The
+absorption edge moved with it: on `alas-raman.in`'s 6x6x6 mesh the 5 per cent
+crossing of `Im chi` reads 0.89 eta *below* `E_gap / 2` at 22 and at 23 bands
+alike, against the 0.12 eta above it recorded in the test, which
+`origin_tangent=False` gives back; the 10 per cent crossing is 2.13 eta above
+on both legs. The `truncation` diagnostic reads 2.73e-3 at 22 bands on the old
+code, 3.37e-3 at 22 on today's and 3.56e-3 at 23.
 
 **Four findings, and the first two are the phase.**
 
@@ -20388,13 +20446,28 @@ by **40.832 pm/V**, 2.59 per cent, against 0.5 per cent in the linear conductivi
 is what a quantity carrying the velocity matrix element three times rather than twice
 should do. The zincblende symmetry is *not* evidence about the term, and the test says so:
 a wrong augmentation term respects the point group exactly as a right one does.
+**Re-measured 2026-10-04 at 23 bands**, a cut in a gap (below), on code that carries
+`27eeaa2`'s `l = 1` tangent at `k + G = 0` (P28): **1578.3015 pm/V** at 2.744 eV, and the
+deletion moves it by **34.0576 pm/V**, 2.16 per cent. With `origin_tangent=False` at 23
+bands the two read 1578.1755 and 40.2403 (2.55 per cent), so the tangent is worth 6.2 pm/V
+of the deletion and 0.13 of the peak, and the rest, 0.6 and 0.8, is going from 24 bands to 23.
 
-**What the symmetry is evidence for is the augmentation's own floor**, and it is three
-orders worse than the norm-conserving cell's. The six allowed components agree to
+~~**What the symmetry is evidence for is the augmentation's own floor**, and it is three
+orders worse than the norm-conserving cell's.~~ The six allowed components agree to
 **3.5e-6** of the peak and the largest forbidden one is **6.6e-4** of it, where
-`alas-raman.in` on the same grid gives **2.3e-9** for the first. Nothing imposes the
+`alas-raman.in` on the same grid gives **2.3e-9** for the first. ~~Nothing imposes the
 symmetry on either cell, so the gap is the radial interpolation of `Q_ij(G)` and `dpqq`,
-the same order the project has measured for it elsewhere (P39a's carbon, 2.3e-4).
+the same order the project has measured for it elsewhere (P39a's carbon, 2.3e-4).~~
+**Corrected 2026-10-04: the 6.6e-4 was the 24-band cut and not the augmentation.** 24 bands
+cut a doublet or a triplet at 7 of the 64 k-points (`band_cut_gap` 5.3e-15 Ry), so which
+members were summed was the eigensolver's arbitrary rotation, and rotating the cut
+multiplets moved the tensor by 6.8e-4 and 1.05e-3 of its peak in two draws, against the
+test's bound of 3e-3. At 23 bands, a cut in a gap of 1.57e-2 Ry, the largest forbidden
+component is **3.65e-8** of the allowed ones and their spread **5.5e-9**, the same order as
+the norm-conserving cell's (`alas-raman.in`, 4x4x4 at 14 bands, re-measured the same night:
+1.49e-8 and 2.3e-9), so at the level the symmetry can see this cell shows no augmentation
+floor at all. `test_shg.py` now runs the pair at 23 bands with both zincblende bounds at
+1e-6, 27 and 180 times the measurements.
 
 **What is outstanding.**
 
