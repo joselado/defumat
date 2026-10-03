@@ -40,11 +40,11 @@ identity against the whole-k route on the same states.
 
 **What to pick up, in order:**
 
-1. **What is left above the SCF in the strain derivatives, now that the radial chunk is sized.** On
-   ultrasoft AlAs the stress adds nothing to the SCF on the card and the piezoelectric tensor 29 MB; the
-   ultrasoft strain response still adds 114 MB on eight-atom silicon (181.2 against 67.3, re-measured
-   at `30c4074`) and the elastic constants about 90 MB on norm-conserving silicon (126.2 against 35.1),
-   neither moved by the chunk and neither separated. The probe is `memory_analysis()` per pass
+1. **What is left above the SCF in the strain derivatives.** On ultrasoft AlAs the stress adds
+   nothing to the SCF on the card and the piezoelectric tensor 29 MB. The ultrasoft strain response's
+   114 MB on eight-atom silicon was the augmentation table's G-chunk under the strain's `jvp` and is 48
+   MB since `83ac598` (115.0 against 67.3). Still unseparated: the elastic constants' 90 MB above the
+   norm-conserving response (126.2 against 35.1 for the SCF), which the radial chunk did not move. The probe is `memory_analysis()` per pass
    (`review/piezo/pass_memory_third.py` on D22 is the shape, with `jax.jit` wrapped in the module whose
    passes are measured) and one term at a time (`global_terms.py`'s shape).
 2. **The per-mode grids with symmetry on** stay on the card, because
@@ -471,6 +471,10 @@ below:
   89.4 MB and the strain response 219.5 -> 50.7 MB against an SCF of 39.0 (`PERFORMANCE.md`, "The group
   averages walk the operations past a budget"). This was most of what "the per-mode grids with symmetry
   stay on the card" cost: the grids are `3 nat` fields, the average was `nsym` copies of them.
+* **The augmentation chunk under a strain** (2026-10-03, `83ac598`). `AUG_CHUNK_BYTES` 16 -> 4 MB (16384
+  -> 4096 G-vectors for `nh = 8`): ultrasoft eight-atom silicon's walked strain response 181.0 -> 115.0 MB
+  on the card and the tabulated SCF and stress 267.9 -> 145.2 MB, no slower on the card and faster on the
+  CPU (`PERFORMANCE.md`, "The augmentation chunk under a strain").
 
 ## Suggested order
 
