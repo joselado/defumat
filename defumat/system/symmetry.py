@@ -26,6 +26,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import math
+from functools import lru_cache
 
 import equinox as eqx
 import jax
@@ -259,7 +260,11 @@ def is_supercell(cell: Cell, structure: Structure) -> bool:
     energy.
     """
     positions = np.asarray(structure.positions_crystal(cell)) % 1.0
-    types = np.asarray(structure.types)
+    return _is_supercell(positions, np.asarray(structure.types))
+
+
+def _is_supercell(positions, types) -> bool:
+    """:func:`is_supercell` on the crystal positions, folded into ``[0, 1)``."""
     if len(positions) < 2:
         return False
 
@@ -282,11 +287,58 @@ def find_symmetries(cell: Cell, structure: Structure) -> Symmetries:
 
     Fractional translations are dropped altogether when the cell turns out to be
     a supercell; see :func:`is_supercell`.
+
+    **The search is memoised on what it reads**, because one run asks for it
+    several times on objects built separately: ``build_basis`` for the FFT
+    box's factors, ``Calculation`` through ``System.symmetry_group()``, and the
+    sizing once more per estimate (``OPEN.md`` Part III H6). The key is the
+    bytes of ``cell.at``, of the crystal positions folded into ``[0, 1)`` and of
+    the species labels, with the three module constants the search compares
+    against, so two calls share a result exactly when they would have computed
+    it from the same numbers. The magnetic filters are applied to the result
+    by the callers and are not part of it. What is returned is shared between
+    callers, which is safe because a :class:`Symmetries` is a frozen module of
+    tuples; ``find_symmetries.cache_clear()`` empties the memo.
     """
-    at = np.asarray(cell.at)
-    positions = np.asarray(structure.positions_crystal(cell)) % 1.0
-    types = np.asarray(structure.types)
-    symmorphic_only = is_supercell(cell, structure)
+    at = np.ascontiguousarray(np.asarray(cell.at))
+    positions = np.ascontiguousarray(np.asarray(structure.positions_crystal(cell)) % 1.0)
+    types = tuple(int(t) for t in structure.types)
+    return _memoised_search(
+        (at.tobytes(), at.dtype.str, at.shape),
+        (positions.tobytes(), positions.dtype.str, positions.shape),
+        types,
+        (_TOLERANCE, _POSITION_TOLERANCE, tuple(_CRYSTALLOGRAPHIC_DENOMINATORS)),
+    )
+
+
+#: How many crystals :func:`find_symmetries` remembers, the least recently used
+#: dropped past it. A run asks about one cell or a few, and a test file sweeps a
+#: few dozen; an entry is the key's bytes and a group of small tuples, so the
+#: bound is about not growing without limit rather than about memory.
+SYMMETRY_CACHE_SIZE = 64
+
+
+@lru_cache(maxsize=SYMMETRY_CACHE_SIZE)
+def _memoised_search(at_key, positions_key, types, constants) -> Symmetries:
+    """:func:`find_symmetries` on the arrays its key holds.
+
+    ``constants`` is in the key only: the search reads the module's tolerances
+    itself, and their values at the call are what the key records.
+    """
+    def array(key):
+        data, dtype, shape = key
+        return np.frombuffer(data, dtype=dtype).reshape(shape)
+
+    return _search(array(at_key), array(positions_key), np.asarray(types))
+
+
+find_symmetries.cache_clear = _memoised_search.cache_clear
+find_symmetries.cache_info = _memoised_search.cache_info
+
+
+def _search(at, positions, types) -> Symmetries:
+    """The search itself; ``positions`` in crystal coordinates folded into ``[0, 1)``."""
+    symmorphic_only = _is_supercell(positions, types)
 
     rotations, translations = [], []
     for rotation in lattice_point_group(at):
