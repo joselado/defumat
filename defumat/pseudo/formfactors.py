@@ -29,7 +29,8 @@ from jax.custom_derivatives import SymbolicZero
 from jax.scipy.special import erf
 
 from defumat.pseudo.radial import (
-    simpson_weights, spherical_bessel, spherical_bessel_derivative)
+    simpson_weights, spherical_bessel, spherical_bessel_derivative,
+    spherical_bessel_derivative_pair)
 from defumat.pseudo.upf import Pseudopotential
 from defumat.units import E2, FPI
 
@@ -142,31 +143,46 @@ def _sinc(x):
     return jnp.where(zero, 1.0, jnp.sin(safe) / safe)
 
 
-def _transform_block(q, r, h, l: int, order: int, sinc: bool):
-    """``sum_m h_m r_m^order K(q r_m)`` on one block of ``q``, ``(..., nq)``.
+def _kernels(argument, l: int, orders: tuple, sinc: bool) -> tuple:
+    """The kernel of each order in ``orders``: one order, or a value and its slope.
 
-    ``K`` is the value's own kernel at ``order = 0`` -- :func:`spherical_bessel`,
-    or ``sin(x)/x`` for the local potential, which is the form QE's
-    ``vloc_mod.f90`` integrates -- and the ``order``-th derivative of ``j_l``
-    from :func:`~defumat.pseudo.radial.spherical_bessel_derivative` above it.
-    The kernel matrix is kept out of the contraction (:func:`_radial_values`).
+    The value's own kernel at order 0 -- :func:`spherical_bessel`, or
+    ``sin(x)/x`` for the local potential, which is the form QE's
+    ``vloc_mod.f90`` integrates -- and the derivatives of ``j_l`` from
+    :func:`~defumat.pseudo.radial.spherical_bessel_derivative` above it; a pair
+    of consecutive orders above 0 comes from one evaluation
+    (:func:`~defumat.pseudo.radial.spherical_bessel_derivative_pair`).
+    """
+    first = orders[0]
+    if first == 0:
+        value = _sinc(argument) if sinc else spherical_bessel(l, argument)
+        if len(orders) == 1:
+            return (value,)
+        return value, spherical_bessel_derivative(l, 1, argument)
+    if len(orders) == 1:
+        return (spherical_bessel_derivative(l, first, argument),)
+    return spherical_bessel_derivative_pair(l, first, argument)
+
+
+def _transform_block(q, r, h, l: int, orders: tuple, sinc: bool) -> tuple:
+    """``sum_m h_m r_m^n K_n(q r_m)`` on one block of ``q`` for each ``n`` in ``orders``.
+
+    Each ``(..., nq)``. The kernel matrices are kept out of the contraction
+    (:func:`_radial_values`).
     """
     argument = q[:, None] * r[None, :]
-    if order > 0:
-        kernel = spherical_bessel_derivative(l, order, argument)
-    elif sinc:
-        kernel = _sinc(argument)
-    else:
-        kernel = spherical_bessel(l, argument)
-    weights = h * r**order if order else h
-    return jnp.einsum("...m,qm->...q", weights, _radial_values(kernel))
+    kernels = _radial_values(_kernels(argument, l, orders, sinc))
+    return tuple(
+        jnp.einsum("...m,qm->...q", h * r**n if n else h, kernel)
+        for n, kernel in zip(orders, kernels)
+    )
 
 
-def _evaluate(q, r, h, l: int, order: int, sinc: bool):
-    """:func:`bessel_transform`'s value, a block of :func:`radial_chunk` values of ``q`` at a time.
+def _evaluate(q, r, h, l: int, orders: tuple, sinc: bool) -> tuple:
+    """:func:`_transform_block` a block of :func:`radial_chunk` values of ``q`` at a time.
 
-    **The body is rematted for the integrand's derivative alone.** The rule
-    answers a derivative in ``q`` with another call to this, so nothing
+    **The body is rematted for the integrand's derivative alone.** The rules
+    answer a derivative in ``q`` with another call to this, so nothing
     differentiates through the scan along ``q``; along ``h`` the tangent is
     this same scan evaluated at ``h_dot``, and a reverse-mode derivative in
     ``h`` transposes it, which without the remat stacks every block's kernel
@@ -177,16 +193,19 @@ def _evaluate(q, r, h, l: int, order: int, sinc: bool):
     nq = q.shape[0]
     nchunks, chunk = _chunks(nq, r.shape[0])
     if nchunks == 1:
-        return _transform_block(q, r, h, l, order, sinc)
+        return _transform_block(q, r, h, l, orders, sinc)
     padded = jnp.pad(q, (0, nchunks * chunk - nq)).reshape(nchunks, chunk)
 
     @jax.checkpoint
     def body(carry, rows):
-        return carry, _transform_block(rows, r, h, l, order, sinc)
+        return carry, _transform_block(rows, r, h, l, orders, sinc)
 
-    _, blocks = jax.lax.scan(body, None, padded)  # (nchunks, ..., chunk)
-    values = jnp.moveaxis(blocks, 0, -2)
-    return values.reshape(values.shape[:-2] + (-1,))[..., :nq]
+    _, blocks = jax.lax.scan(body, None, padded)  # each (nchunks, ..., chunk)
+    out = []
+    for block in blocks:
+        values = jnp.moveaxis(block, 0, -2)
+        out.append(values.reshape(values.shape[:-2] + (-1,))[..., :nq])
+    return tuple(out)
 
 
 @partial(jax.custom_jvp, nondiff_argnums=(3, 4, 5))
@@ -230,26 +249,66 @@ def bessel_transform(q, r, h, l: int, order: int = 0, sinc: bool = False):
     4.3e-9 relative at ``l = 0`` and 2.2e-8 at ``l = 3``, and the third by 2.9e-7
     and 1.3e-6; through the rule every order to the third is within 4.4e-14.
     """
-    return _evaluate(q, r, h, l, order, sinc)
+    return _evaluate(q, r, h, l, (order,), sinc)[0]
+
+
+def _check_mesh(r_dot):
+    if not isinstance(r_dot, SymbolicZero):
+        raise NotImplementedError(
+            "bessel_transform: the radial mesh is differentiated; only q and the "
+            "integrand have a derivative rule")
 
 
 def _bessel_transform_jvp(l, order, sinc, primals, tangents):
     q, r, h = primals
     q_dot, r_dot, h_dot = tangents
-    if not isinstance(r_dot, SymbolicZero):
-        raise NotImplementedError(
-            "bessel_transform: the radial mesh is differentiated; only q and the "
-            "integrand have a derivative rule")
-    value = bessel_transform(q, r, h, l, order, sinc)
-    tangent = jnp.zeros_like(value)
-    if not isinstance(q_dot, SymbolicZero):
-        tangent = tangent + bessel_transform(q, r, h, l, order + 1, sinc) * q_dot
+    _check_mesh(r_dot)
+    if isinstance(q_dot, SymbolicZero):
+        value = bessel_transform(q, r, h, l, order, sinc)
+        tangent = jnp.zeros_like(value)
+    else:
+        # the value and its slope from one walk over the blocks
+        value, slope = _transform_pair(q, r, h, l, order, sinc)
+        tangent = slope * q_dot
     if not isinstance(h_dot, SymbolicZero):
         tangent = tangent + bessel_transform(q, r, h_dot, l, order, sinc)
     return value, tangent
 
 
 bessel_transform.defjvp(_bessel_transform_jvp, symbolic_zeros=True)
+
+
+@partial(jax.custom_jvp, nondiff_argnums=(3, 4, 5))
+def _transform_pair(q, r, h, l: int, order: int, sinc: bool):
+    """``(T_order, T_order+1)`` of :func:`bessel_transform`, from one walk over the blocks.
+
+    What :func:`bessel_transform`'s rule wants, a value and its slope, which as
+    two calls cost two walks over the ``(chunk, mesh)`` kernels where JAX's own
+    derivative had taken one: measured warm on the RTX A2000, a strained call
+    was 6 to 8 per cent slower with two walks than master's autodiff. It has a
+    rule of its own for the same reason the transform does, the slope's
+    derivative being the transform two orders up, so a derivative of a
+    gradient walks the blocks twice, once here and once at ``order + 2``.
+    """
+    return _evaluate(q, r, h, l, (order, order + 1), sinc)
+
+
+def _transform_pair_jvp(l, order, sinc, primals, tangents):
+    q, r, h = primals
+    q_dot, r_dot, h_dot = tangents
+    _check_mesh(r_dot)
+    value, slope = _transform_pair(q, r, h, l, order, sinc)
+    value_dot, slope_dot = jnp.zeros_like(value), jnp.zeros_like(slope)
+    if not isinstance(q_dot, SymbolicZero):
+        value_dot = value_dot + slope * q_dot
+        slope_dot = slope_dot + bessel_transform(q, r, h, l, order + 2, sinc) * q_dot
+    if not isinstance(h_dot, SymbolicZero):
+        h_value, h_slope = _transform_pair(q, r, h_dot, l, order, sinc)
+        value_dot, slope_dot = value_dot + h_value, slope_dot + h_slope
+    return (value, slope), (value_dot, slope_dot)
+
+
+_transform_pair.defjvp(_transform_pair_jvp, symbolic_zeros=True)
 
 
 def _truncated(pseudo: Pseudopotential):

@@ -29,7 +29,8 @@ import jax.numpy as jnp
 import numpy as np
 
 __all__ = ["simpson", "mesh_cutoff_index", "spherical_bessel",
-           "spherical_bessel_derivative", "simpson_weights"]
+           "spherical_bessel_derivative", "spherical_bessel_derivative_pair",
+           "simpson_weights"]
 
 #: QE truncates the radial mesh here before integrating (``rcut`` in read_pseudo).
 RCUT = 10.0
@@ -239,3 +240,24 @@ def spherical_bessel_derivative(l: int, n: int, x: jnp.ndarray) -> jnp.ndarray:
     exact = _nth_derivative(partial(spherical_bessel, l), n)(
         jnp.where(small, DERIVATIVE_SERIES_BELOW, x))
     return jnp.where(small, series, exact)
+
+
+def spherical_bessel_derivative_pair(l: int, n: int, x: jnp.ndarray):
+    """``(d^n j_l/dx^n, d^(n+1) j_l/dx^(n+1))`` for ``n >= 1``, from one evaluation.
+
+    :func:`spherical_bessel_derivative` at ``n`` and ``n + 1``, to the bit,
+    for the price of one more forward derivative rather than of a second
+    nested evaluation: what a transform and its slope want together.
+    """
+    if n < 1:
+        raise ValueError(f"spherical_bessel_derivative_pair wants n >= 1, got {n}")
+    x = jnp.asarray(x)
+    small = x < DERIVATIVE_SERIES_BELOW
+
+    def both(f, y):
+        return jax.jvp(_nth_derivative(f, n), (y,), (jnp.ones_like(y),))
+
+    series = both(partial(_bessel_series, l), jnp.where(small, x, 0.0))
+    exact = both(partial(spherical_bessel, l), jnp.where(small, DERIVATIVE_SERIES_BELOW, x))
+    return (jnp.where(small, series[0], exact[0]),
+            jnp.where(small, series[1], exact[1]))
