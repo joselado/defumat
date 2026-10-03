@@ -7240,7 +7240,14 @@ What the agents of this sweep's follow-up found outside their items, recorded ra
   Elk comparisons, the scissors and absorption tests and the augmented pair (bounds now 1e-6) run 23
   bands and pass under `-W error::RuntimeWarning`, notebook 33 and the guide's snippet followed, and
   re-measuring them found the recorded Elk figures predate `27eeaa2`'s `l = 1` tangent at `k + G = 0`,
-  which is worth 6 per cent of the peak (`PLAN.md` P54).
+  which is worth 6 per cent of the peak (`PLAN.md` P54). **Not checked: whether the same history sits
+  under P51's and P53's recorded figures.** The optical conductivity and the shift current are built from
+  the same `dH/dk` on unshifted meshes that hold `Gamma`, and nobody re-measured either when `27eeaa2`
+  landed; the measurement is one run of each recorded case today and one with
+  `Calculation(..., origin_tangent=False)`, which gave P54's old figure back to 4e-3 pm/V. Notebooks 32
+  and 33 now converge their silicon control with symmetry kept and pass the whole mesh as `kpoints=`
+  (`tests/data/qe/si2-symmetric.in`), which is what the grid warning of `263b6a3` advises; the two
+  regression controls stay on `si2-nosym.in`, whose residue `test_shg.py` measures and bounds.
 - **Tetragonal cobalt relaxed from the identity returns the same free energy and torque to the last bit
   at steps 2 to 4**, in the old code and the new. Presumably a stationary start; not checked.
 - **Two failures that predate tonight**, both reproduced on master: `test_retention.py::

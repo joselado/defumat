@@ -10,6 +10,12 @@
 ! -76.6, so 30 is converged and the residual 11% against Elk is the
 ! pseudopotential rather than the basis.
 !
+! Those four figures predate `27eeaa2` (2026-09-20), which restored the tangent
+! at k + G = 0 that Gamma's row of dH/dk carries and moved this tensor by 6 per
+! cent. Today's code at 30 Ry on the same mesh gives -78.3 pm/V at 22 bands and
+! -78.5 at 23 (PLAN.md P54), so the residual against Elk is 8 per cent; the 10
+! and 45 Ry points have not been taken again.
+!
 ! `nosym`/`noinv` and an **unshifted** grid, for P24's reason: chi^abc is a polar
 ! rank-3 tensor, a symmetry-reduced wedge does not sum to the cell's until it is
 ! averaged over the point group, and a *shifted* Monkhorst-Pack grid is not
@@ -18,7 +24,8 @@
 !
 ! AlAs is zincblende and therefore non-centrosymmetric, which is the whole point
 ! of the case: chi^(2) vanishes identically in every centrosymmetric crystal and
-! `si2-nosym.in` is the control that says so.
+! `si2-nosym.in` (the tests) and `si2-symmetric.in` (the notebooks) are the
+! controls that say so.
  &control
     calculation = 'scf'
     prefix = 'alas'

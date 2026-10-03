@@ -78,12 +78,14 @@ print("\nlargest of the other %d components: %.2e of the peak"
 
 A number that comes out small has to be shown to be small for the right reason. Silicon is
 diamond structure, which has an inversion centre, so every component of $\chi^{abc}$ is
-forbidden. It differs from AlAs by one species and is otherwise the same calculation, which
-makes it the sharpest test of the whole machinery that exists here.
+forbidden. It is one species away from AlAs and goes through the same calculation, which
+makes it the sharpest test of the whole machinery that exists here. Its ground state is
+converged with the crystal's symmetry kept, so the density has the inversion centre exactly,
+and the tensor is then summed over the whole mesh, as AlAs's is.
 
 
 ```python
-silicon = Calculator.from_file(CASES / "si2-nosym.in", PSEUDO, announce=False)
+silicon = Calculator.from_file(CASES / "si2-symmetric.in", PSEUDO, announce=False)
 si_mesh = KPoints.automatic((6, 6, 6), (0, 0, 0), silicon.system.cell)
 si_chi = silicon.get_shg(kpoints=si_mesh, nbnd=14, window=0.6, nw=120, broadening=0.010)
 
@@ -92,13 +94,9 @@ print("silicon peak |chi| = %9.4f pm/V" % np.abs(si_chi.chi).max())
 print("ratio              = %.1e" % (np.abs(si_chi.chi).max() / np.abs(chi.chi).max()))
 ```
 
-    /u/40/ladovj1/data/Documents/programs/claude/defumat/.claude/worktrees/agent-ab23bc009de195db9/defumat/workflows/shg.py:137: RuntimeWarning: the dense FFT grid of this nosym run, (15, 15, 15), is not a multiple of (4, 4, 4), which the crystal's fractional translations need, so the second-harmonic tensor chi^abc carries a residue the crystal does not have. The operations nosym dropped do not map this grid onto itself, the exchange-correlation potential evaluated pointwise on it breaks them at the grid's sampling error, and a second-order tensor picks that up in every component one of those operations forbids: on two-atom silicon, whose inversion carries a quarter-lattice translation, chi^(2) on the whole unshifted 2x2x2 mesh at 8 bands reads 0.72 pm/V on the 15^3 grid ecutwfc = 12 gives under nosym, where inversion requires zero, against 0.0018 on the commensurate 20^3 grid of ecutwfc = 16 and 0.00074 with symmetry kept for the SCF. Keep symmetry for the SCF and pass the whole unshifted mesh as kpoints= (KPoints.automatic((n, n, n), (0, 0, 0), cell), given no rotations, is the complete grid), or choose a cutoff whose dense grid is a multiple of (4, 4, 4)
-      return second_harmonic(
-
-
     AlAs    peak |chi| =    632.90 pm/V
-    silicon peak |chi| =    0.0120 pm/V
-    ratio              = 1.9e-05
+    silicon peak |chi| =    0.0000 pm/V
+    ratio              = 8.4e-09
 
 
 ## The spectrum, and where its absorption starts
