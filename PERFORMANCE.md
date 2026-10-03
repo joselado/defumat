@@ -10075,29 +10075,3 @@ from the gather alone, its 42.5 MB stayed under 64 MB and batched, and the stage
 each step of one call) put the jump from 43.7 to 215.7 MB inside `symmetrize_strain_response`; the
 two-rotation contraction's intermediate (24 x 27 x 12893 complex, 133 MB) was the rest, and the budget
 now counts it.
-
-## The augmentation chunk under a strain (RTX A2000 and CPU, 2026-10-03)
-
-**The number to carry: the augmentation table's G-chunk target 16 -> 4 MB (16384 -> 4096 G-vectors for
-silicon's `nh = 8`) takes the walked strain response of ultrasoft eight-atom silicon from 181.0 to 115.0
-MB on the card, and the tabulated route's SCF and stress from 267.9 to 145.2 MB, at no cost in time.**
-Found locating the strain response's 114 MB above its SCF (`GPU-MEMORY-NEXT.md`, the handoff's first
-item): `memory_analysis()` of each walked pass put it in two, the bare walk (116.3 MB of temporaries) and
-the finish of the frozen-state density (122.9), both rebuilding `Q_ij(G)` under the strain's `jvp`, a
-chunk of G at a time. `AUG_CHUNK_BYTES` had been sized against one forward block and a gradient's tape
-(item 15); under a forward derivative each chunk holds the table, its tangent and the radial values at
-once. With `DEFUMAT_AUG_CHUNK=4096` the two passes hold 45.0 and 42.9 MB.
-
-`si8-us-1k.in` in memory mode with the tabulated route forced (`DEFUMAT_AUG_MAX_BYTES=0`, so the SCF uses
-the chunk too), warm, the second of two runs per process, D22 (`review/piezo/aug_time.py`):
-
-| platform | chunk | SCF | stress | peak | energy | `sigma_xx` |
-|---|---|---|---|---|---|---|
-| RTX A2000 | 16384 | 0.59 s | 1.03 s | 267.9 MB | -91.01392589108195 | 2.6314307632132e-05 |
-| RTX A2000 | 4096 | 0.60 | 1.01 | 145.2 | -91.01392589108195 | 2.6314307632125e-05 |
-| D22 CPU, 4 cores | 16384 | 1.71 | 2.06 | -- | -91.01392589108194 | 2.6314307629473e-05 |
-| D22 CPU, 4 cores | 4096 | 1.53 | 1.88 | -- | -91.01392589108193 | 2.6314307629493e-05 |
-
-nine SCF iterations in every row. A dataset with larger `nh` hits the floor of 1024 G-vectors (BN's
-`nh = 14` went from 4096 to 1024, bismuth's `nh = 34` was at the floor already). `DEFUMAT_AUG_CHUNK`
-overrides it, as before.
