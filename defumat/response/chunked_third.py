@@ -50,12 +50,11 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.basis.interpolate import to_dense
-from defumat.batching import k_chunks
 from defumat.forces.chunked import _move, _rows_of, row_leaves, with_rows
 from defumat.forces.energy import hoisted, with_hoisted
 from defumat.response.chunked import _add
 from defumat.response.sternheimer import SternheimerSolver, paw_response
-from defumat.response.velocity import VelocityOperator, over_kpoints
+from defumat.response.velocity import VelocityOperator
 from defumat.units import FPI
 
 __all__ = ["walked_susceptibility_derivative"]
@@ -133,7 +132,9 @@ def walked_susceptibility_derivative(calculation, field, rho, kind, x, tangents,
 def _third_passes(calculation, key, kind, project) -> dict:
     """The compiled passes, built once and cached on the calculation."""
     from defumat.response.efield import _solve_stored, ultrasoft_position
-    from defumat.response.electrostriction import _apply_overlap, _project_conduction
+    from defumat.response.electrostriction import (
+        _project_conduction, position_residual, second_order_band_terms,
+    )
 
     cached = calculation.__dict__.get("_streamed_response")
     if cached is None or cached[0] is not calculation:
@@ -211,7 +212,6 @@ def _third_passes(calculation, key, kind, project) -> dict:
                 jax.jvp(lambda q: moved.potential(q).v_scf, (r,), (fields[axis],))[1]
                 for axis in range(3)])
             measure = moved.system.cell.volume / r.size * r.shape[0]
-            onecentre = None
             if moved.paw is not None:
                 dbecsum = [becsum_part for _, becsum_part in responses]
                 blocks = [jnp.stack([
@@ -248,34 +248,11 @@ def _third_passes(calculation, key, kind, project) -> dict:
             return (moved, VelocityOperator(moved, vv, dd),
                     moved.hamiltonian(vv, dd))
 
-        def apply_h(hams, block):
-            return jnp.stack([over_kpoints(hams[spin], block[spin], batch)
-                              for spin in range(block.shape[0])])
-
-        def apply_s(hams, block):
-            return jnp.stack([over_kpoints(hams[spin], block[spin], batch,
-                                           overlap=True)
-                              for spin in range(block.shape[0])])
-
-        # ``_position_response``'s residual, with ``(v, D)`` handed in.
+        # ``_position_response``'s residual, with ``(v, D)`` handed in: the
+        # whole route's own expression (``position_residual``) at the chunk.
         def residual(y, states, vv, dd):
             moved, velocity, hams = operators(y, vv, dd)
-            lambdas = jnp.einsum("skmg,skng->skmn", jnp.conj(states),
-                                 apply_h(hams, states))
-            s_states = apply_s(hams, states)
-            out = []
-            for axis in range(3):
-                derivative, overlap = velocity.both(states, directions[axis])
-                commutator = -1j * (
-                    derivative - jnp.einsum("skmn,skmg->skng", lambdas, overlap))
-                overlaps = jnp.einsum("skmg,skng->skmn", jnp.conj(states),
-                                      commutator)
-                projected = commutator - jnp.einsum("skmn,skmg->skng", overlaps,
-                                                    s_states)
-                applied = apply_h(hams, stored[axis]) - jnp.einsum(
-                    "skmn,skmg->skng", lambdas, apply_s(hams, stored[axis]))
-                out.append(projected - applied)
-            return jnp.stack(out)
+            return position_residual(velocity, hams, states, stored, batch)
 
         _, rhs = jax.jvp(residual, (x, solver.psi, v, ddd),
                          (dx, tangent, dv, dddd))
@@ -298,32 +275,11 @@ def _third_passes(calculation, key, kind, project) -> dict:
             _, db = jax.jvp(tail, (x, solver.psi, v, ddd, stored),
                             (dx, tangent, dv, dddd, solution))
 
-        # ``F_c``: the band, multiplier and source terms of the chunk.
+        # ``F_c``: the band, multiplier and source terms of the chunk, by the
+        # whole route's own expression (``second_order_band_terms``).
         def separable(y, states, bb, vv, dd):
-            moved = _move(sub, kind, y)
-            hams = moved.hamiltonian(vv, dd)
-            lambdas = jnp.einsum("skmg,skng->skmn", jnp.conj(states),
-                                 apply_h(hams, states))
-            overlapped = _apply_overlap(states, hams, batch)
-            overlaps = jnp.einsum("skmg,askng->askmn", jnp.conj(states), bb)
-            pcb = bb - jnp.einsum("askmn,skmg->askng", overlaps, overlapped)
-            pcu = _project_conduction(states, u, hams, batch)
-            hu = jnp.stack([apply_h(hams, pcu[axis]) for axis in range(3)])
-            su = _apply_overlap(pcu, hams, batch)
-            rows_ = []
-            for i in range(3):
-                row = []
-                for j in range(3):
-                    band = jnp.sum(weights * jnp.real(
-                        jnp.einsum("skng,skng->skn", jnp.conj(pcu[i]), hu[j])))
-                    multiplier = jnp.sum(weights * jnp.real(jnp.einsum(
-                        "skmn,skng,skmg->skn", lambdas, jnp.conj(pcu[i]), su[j])))
-                    source = jnp.sum(weights * jnp.real(
-                        jnp.einsum("skng,skng->skn", jnp.conj(pcu[i]), pcb[j])
-                        + jnp.einsum("skng,skng->skn", jnp.conj(pcu[j]), pcb[i])))
-                    row.append(band - multiplier + source)
-                rows_.append(jnp.stack(row))
-            return jnp.stack(rows_)
+            hams = _move(sub, kind, y).hamiltonian(vv, dd)
+            return second_order_band_terms(hams, states, bb, u, weights, batch)[0]
 
         return jax.jvp(separable, (x, solver.psi, b, v, ddd),
                        (dx, tangent, db, dv, dddd))

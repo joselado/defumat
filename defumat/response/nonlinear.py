@@ -457,12 +457,12 @@ def raman_tensors(
     # the k axis a chunk at a time, so do the displacement response
     # (:mod:`defumat.response.chunked_phonon`) and the third derivative
     # (:mod:`defumat.response.chunked_third`), with every store in host memory.
-    # ``keep_internals`` keeps the whole route: the displacement response it
-    # hands back is assembled whole by :func:`~defumat.response.phonon.
-    # dynamical_matrix`, which a host store would reach through ``_whole_k``.
+    # ``keep_internals`` then hands back the walked displacement response, which
+    # :func:`~defumat.response.phonon.dynamical_matrix` assembles a chunk at a
+    # time from its own stores.
     from defumat.response.efield import _streams
 
-    walked = not keep_internals and _streams(
+    walked = _streams(
         calculation, result.wavefunctions, False, what="the Raman tensors")
     eigenvalues, psi = refined_states(calculation, result, stream=walked)
     density = jnp.asarray(result.density)
@@ -483,16 +483,17 @@ def raman_tensors(
             )
         v_scf = field.internals["v_scf"]
         field = replace(field, internals=None)
-        tensors, history, phonon_converged = _walked_raman(
+        tensors, response = _walked_raman(
             calculation, streamed, v_scf, psi, eigenvalues, density,
             result.becsum, verbose, response_options)
-        if not (phonon_converged or allow_unconverged):
+        if not (response.converged or allow_unconverged):
             raise ValueError(
                 "the displacement response did not converge; see the electric "
                 "field's message above for why that is fatal here"
             )
-        return _raman_result(calculation, tensors, field, None, history,
-                             phonon_converged)
+        return _raman_result(calculation, tensors, field,
+                             response if keep_internals else None,
+                             response.history, response.converged)
     field, solver, v_scf, b, u, stored = field_blocks(field)
     # **Handed over unprojected.** ``F`` projects both itself, and with the
     # *right* projector for each: a state takes ``1 - sum |psi><psi| S`` and a
@@ -580,7 +581,7 @@ def _raman_result(calculation, tensors, field, displacement, history,
 
 def _walked_raman(calculation, streamed, v_scf, psi, eigenvalues, density,
                   becsum, verbose, response_options):
-    """``(tensors, history, converged)`` with the k axis walked.
+    """``(tensors, displacement response)`` with the k axis walked.
 
     The displacement response is the Gamma phonon's walked stages
     (:class:`~defumat.response.chunked_phonon.StreamedDisplacements`, every
@@ -603,7 +604,7 @@ def _walked_raman(calculation, streamed, v_scf, psi, eigenvalues, density,
         calculation, solver, v_scf, positions, tuple(range(nat)), psi,
         eigenvalues, jnp.asarray(weights), density, becsum)
     displacements.prepare()
-    dpsi, drho, history, _, converged, _ = screening_loop(
+    dpsi, drho, history, _, converged, extras = screening_loop(
         calculation, displacements, density, positions=positions,
         becsumort=displacements.becsumort, drhous=displacements.drhous,
         verbose=verbose, **response_options)
@@ -623,4 +624,6 @@ def _walked_raman(calculation, streamed, v_scf, psi, eigenvalues, density,
         calculation, streamed, density, "positions", positions, tangents,
         project=True, verbose=verbose)
     tensors = np.stack(columns).reshape((nat, 3, 3, 3))
-    return tensors, history, converged
+    return tensors, DisplacementResponse(
+        dpsi=dpsi, drho=drho, history=history, converged=converged,
+        extras=extras, walked=displacements)

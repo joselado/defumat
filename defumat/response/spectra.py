@@ -667,18 +667,28 @@ def vibrational_spectrum(
             verbose=verbose, **response_options,
         )
     if phonons is None:
-        eigenvalues, psi = refined_states(calculation, result)
-        if verbose and raman.displacement is None:
-            print("  no displacement response to reuse: solving it again")
-        # ``becsum`` is not optional for an ultrasoft or PAW dataset: the
-        # assembly's mixed state is built from it, and without it the
-        # augmentation charge has nothing to contract (an ``IndexError`` deep
-        # in ``_addusdens``, which is how this was found).
-        phonons = dynamical_matrix(
-            calculation, psi, eigenvalues, jnp.asarray(result.density),
-            result.becsum, response=raman.displacement, verbose=verbose,
-            **response_options,
-        )
+        if getattr(raman.displacement, "walked", None) is not None:
+            # Walked a k-chunk at a time: the response holds the re-diagonalised
+            # states it was solved at in host memory and is assembled from them,
+            # so nothing is re-diagonalised or put on the device here.
+            phonons = dynamical_matrix(
+                calculation, None, result.eigenvalues,
+                jnp.asarray(result.density), response=raman.displacement,
+                verbose=verbose, **response_options,
+            )
+        else:
+            eigenvalues, psi = refined_states(calculation, result)
+            if verbose and raman.displacement is None:
+                print("  no displacement response to reuse: solving it again")
+            # ``becsum`` is not optional for an ultrasoft or PAW dataset: the
+            # assembly's mixed state is built from it, and without it the
+            # augmentation charge has nothing to contract (an ``IndexError``
+            # deep in ``_addusdens``, which is how this was found).
+            phonons = dynamical_matrix(
+                calculation, psi, eigenvalues, jnp.asarray(result.density),
+                result.becsum, response=raman.displacement, verbose=verbose,
+                **response_options,
+            )
 
     born = getattr(raman.field, "born_charges", None) if infrared else None
     if infrared and born is None:

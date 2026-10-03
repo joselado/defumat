@@ -255,6 +255,11 @@ class DisplacementResponse:
     #: ``{"dvscf", "onecentre", "dbecsum"}`` at convergence, for the same
     #: reason.
     extras: dict | None = None
+    #: The :class:`~defumat.response.chunked_phonon.StreamedDisplacements` that
+    #: solved it, when the solve walked the k axis: ``dpsi`` is then its host
+    #: store, and :func:`dynamical_matrix` assembles from it a chunk at a time
+    #: rather than putting the stores on the device whole.
+    walked: object = None
 
 
 def dynamical_matrix(
@@ -355,6 +360,24 @@ def dynamical_matrix(
             "translations, which are physical"
         )
 
+    walked = None if response is None else getattr(response, "walked", None)
+    if walked is not None:
+        # **A response solved a k-chunk at a time is assembled the same way**,
+        # from its own stores (:meth:`~defumat.response.chunked_phonon.
+        # StreamedDisplacements.force_constants`): the states it was solved at
+        # are the ones it holds, so ``wavefunctions`` is not read. It solved
+        # every atom.
+        if chosen is not None:
+            raise ValueError(
+                "a displacement response walked a k-chunk at a time holds every "
+                "atom's perturbations; ask for the whole matrix (atoms=None)")
+        matrix = walked.force_constants(response.drho, response.extras,
+                                        on_row=on_row)
+        drho, history = response.drho, response.history
+        average_iterations, converged = float("nan"), response.converged
+        return _phonons_of(calculation, matrix, drho, history, average_iterations,
+                           converged, chosen, acoustic_sum_rule)
+
     # **The route is decided before anything converts the states**, by the
     # field response's rule (:func:`~defumat.response.efield._streams`): a
     # streamed store, memory mode with a chunk smaller than the mesh, or memory
@@ -409,6 +432,14 @@ def dynamical_matrix(
             max_iterations, verbose, on_row,
         )
 
+    return _phonons_of(calculation, matrix, drho, history, average_iterations,
+                       converged, chosen, acoustic_sum_rule)
+
+
+def _phonons_of(calculation, matrix, drho, history, average_iterations,
+                converged, chosen, acoustic_sum_rule) -> "Phonons":
+    """The force constants averaged, hermitised and diagonalised, for any route."""
+    structure = calculation.system.structure
     # ``symdynph_gq`` first and the hermitisation second, which is the order
     # that makes the second one a *measurement*. A column of the raw matrix is a
     # sum over the irreducible wedge, and such a sum is not symmetric in

@@ -392,51 +392,7 @@ def _second_order_energy_at(moved, psi, rho, b, u, weights, reference=None):
     parts = mixed_becsum(moved, psi, weights)
     _, ddd_paw = moved.onecenter(parts)
     hamiltonians = moved.hamiltonian(moved.potential(rho).v_scf, ddd_paw)
-    nspin = psi.shape[0]
-
-    def apply_h(states):
-        return jnp.stack([
-            over_kpoints(hamiltonians[spin], states[spin], batch)
-            for spin in range(nspin)
-        ])
-
-    # ``Lambda_mn = <psi_m|H|psi_n>``: the orthonormality multipliers as a
-    # matrix. Diagonal and equal to the eigenvalues at the solution
-    # (:func:`refined_states`), so the *value* of ``F`` is what it would be with
-    # the eigenvalues written in; its derivative is not, and that is the point.
-    lambdas = jnp.einsum("skmg,skng->skmn", jnp.conj(psi), apply_h(psi))
-
-    # ``P_c b``. Its value equals ``b`` and so does its derivative once both
-    # ``<psi|u> = 0`` and ``<psi|b> = 0``; it is written because that is the
-    # functional, not because the two terms are large.
-    # **``b`` is a right-hand side and ``u`` is a state, and they take
-    # different projectors.** ``orthogonalize`` builds
-    # ``P_c^+ = 1 - sum S|psi><psi|`` for the source of the Sternheimer
-    # equation, while what makes a *state* orthogonal to the occupied manifold
-    # is ``P_c = 1 - sum |psi><psi| S``. The two coincide when ``S`` is the
-    # identity, which is why one expression served both until now.
-    overlapped = _apply_overlap(psi, hamiltonians, batch)
-    overlaps = jnp.einsum("skmg,askng->askmn", jnp.conj(psi), b)
-    pcb = b - jnp.einsum("askmn,skmg->askng", overlaps, overlapped)
-
-    # **``u`` is frozen, but the subspace it is constrained to live in is not.**
-    # The Sternheimer solution is required to be orthogonal to the occupied
-    # manifold, and that manifold moves with the strain, so the variable of the
-    # functional is ``P_c(psi) u`` and not the stored array. Writing ``u``
-    # changes no value -- ``P_c u = u`` at the point everything is evaluated --
-    # and it breaks the *stationarity*: varying an unrestricted ``u`` gives
-    # ``A u + P_c b + K drho psi = 0`` where the loop solves the same equation
-    # with the screening term projected too, and the two differ by the occupied
-    # component of ``(K drho) psi``. That is the envelope theorem's hypothesis
-    # failing, not a small term: it is worth **2%** of ``d(eps)/dx`` on silicon,
-    # it is invisible at zeroth order, and it survives every check that does not
-    # difference the functional itself at a *re-converged* strained cell.
-    pcu = _project_conduction(psi, u, hamiltonians, batch)
-
-    hu = jnp.stack([apply_h(pcu[axis]) for axis in range(3)])
-    # ``S|u>``: the multiplier term contracts ``<u_i|S|u_j>`` and not
-    # ``<u_i|u_j>``, for the same reason the projector above carries ``S``.
-    su = _apply_overlap(pcu, hamiltonians, batch)
+    terms, pcu = second_order_band_terms(hamiltonians, psi, b, u, weights, batch)
 
     # **PAW's one-centre energy is a second, independent functional of
     # ``becsum``**, so the second-order energy has a one-centre screening term
@@ -517,6 +473,75 @@ def _second_order_energy_at(moved, psi, rho, b, u, weights, reference=None):
     for i in range(3):
         row = []
         for j in range(3):
+            screening = 0.5 * measure * jnp.sum(drho[i] * kernel[j])
+            if onecentre is not None:
+                screening = screening + onecentre[i][j]
+            row.append(terms[i, j] + screening)
+        rows.append(jnp.stack(row))
+    return jnp.stack(rows)
+
+
+def second_order_band_terms(hamiltonians, psi, b, u, weights, batch):
+    """``F_ij``'s per-k terms -- band, multiplier and source -- and ``P_c u``.
+
+    The part of :func:`_second_order_energy_at` that is a plain sum over the
+    k-points it is handed, given the Hamiltonians at the moved geometry: a
+    response walked a k-chunk at a time adds it over chunks
+    (:mod:`defumat.response.chunked_third`), and the whole route calls it once.
+    One expression for both, so the two routes cannot drift apart. Returns the
+    ``(3, 3)`` terms and the projected field response the screening term is
+    built from.
+    """
+    nspin = psi.shape[0]
+
+    def apply_h(states):
+        return jnp.stack([
+            over_kpoints(hamiltonians[spin], states[spin], batch)
+            for spin in range(nspin)
+        ])
+
+    # ``Lambda_mn = <psi_m|H|psi_n>``: the orthonormality multipliers as a
+    # matrix. Diagonal and equal to the eigenvalues at the solution
+    # (:func:`refined_states`), so the *value* of ``F`` is what it would be with
+    # the eigenvalues written in; its derivative is not, and that is the point.
+    lambdas = jnp.einsum("skmg,skng->skmn", jnp.conj(psi), apply_h(psi))
+
+    # ``P_c b``. Its value equals ``b`` and so does its derivative once both
+    # ``<psi|u> = 0`` and ``<psi|b> = 0``; it is written because that is the
+    # functional, not because the two terms are large.
+    # **``b`` is a right-hand side and ``u`` is a state, and they take
+    # different projectors.** ``orthogonalize`` builds
+    # ``P_c^+ = 1 - sum S|psi><psi|`` for the source of the Sternheimer
+    # equation, while what makes a *state* orthogonal to the occupied manifold
+    # is ``P_c = 1 - sum |psi><psi| S``. The two coincide when ``S`` is the
+    # identity, which is why one expression served both until now.
+    overlapped = _apply_overlap(psi, hamiltonians, batch)
+    overlaps = jnp.einsum("skmg,askng->askmn", jnp.conj(psi), b)
+    pcb = b - jnp.einsum("askmn,skmg->askng", overlaps, overlapped)
+
+    # **``u`` is frozen, but the subspace it is constrained to live in is not.**
+    # The Sternheimer solution is required to be orthogonal to the occupied
+    # manifold, and that manifold moves with the strain, so the variable of the
+    # functional is ``P_c(psi) u`` and not the stored array. Writing ``u``
+    # changes no value -- ``P_c u = u`` at the point everything is evaluated --
+    # and it breaks the *stationarity*: varying an unrestricted ``u`` gives
+    # ``A u + P_c b + K drho psi = 0`` where the loop solves the same equation
+    # with the screening term projected too, and the two differ by the occupied
+    # component of ``(K drho) psi``. That is the envelope theorem's hypothesis
+    # failing, not a small term: it is worth **2%** of ``d(eps)/dx`` on silicon,
+    # it is invisible at zeroth order, and it survives every check that does not
+    # difference the functional itself at a *re-converged* strained cell.
+    pcu = _project_conduction(psi, u, hamiltonians, batch)
+
+    hu = jnp.stack([apply_h(pcu[axis]) for axis in range(3)])
+    # ``S|u>``: the multiplier term contracts ``<u_i|S|u_j>`` and not
+    # ``<u_i|u_j>``, for the same reason the projector above carries ``S``.
+    su = _apply_overlap(pcu, hamiltonians, batch)
+
+    rows = []
+    for i in range(3):
+        row = []
+        for j in range(3):
             band = jnp.sum(weights * jnp.real(
                 jnp.einsum("skng,skng->skn", jnp.conj(pcu[i]), hu[j])
             ))
@@ -538,12 +563,9 @@ def _second_order_energy_at(moved, psi, rho, b, u, weights, reference=None):
                 jnp.einsum("skng,skng->skn", jnp.conj(pcu[i]), pcb[j])
                 + jnp.einsum("skng,skng->skn", jnp.conj(pcu[j]), pcb[i])
             ))
-            screening = 0.5 * measure * jnp.sum(drho[i] * kernel[j])
-            if onecentre is not None:
-                screening = screening + onecentre[i][j]
-            row.append(band - multiplier + source + screening)
+            row.append(band - multiplier + source)
         rows.append(jnp.stack(row))
-    return jnp.stack(rows)
+    return jnp.stack(rows), pcu
 
 
 def second_order_energy(calculation, strain, psi, rho, b, u, weights):
@@ -677,67 +699,8 @@ def _position_response(calculation, solver, rho, b, tangent, dpsi, drho,
 
     def residual(geometry, states, density):
         moved, velocity, hamiltonians = operators(geometry, states, density)
-        batch = moved.k_batch
-
-        def apply_h(block):
-            return jnp.stack([
-                over_kpoints(hamiltonians[spin], block[spin], batch)
-                for spin in range(block.shape[0])
-            ])
-
-        def apply_s(block):
-            return jnp.stack([
-                over_kpoints(hamiltonians[spin], block[spin], batch, overlap=True)
-                for spin in range(block.shape[0])
-            ])
-
-        lambdas = jnp.einsum("skmg,skng->skmn", jnp.conj(states), apply_h(states))
-        # ``S|psi>`` once: the right-hand side's projector puts it on the left
-        # (``orthogonalize``), and the operator's multiplier term needs it on
-        # ``b``. Both are the identity for a norm-conserving dataset.
-        s_states = apply_s(states)
-
-        out = []
-        for axis in range(3):
-            # ``[H - eps S, r] = -i (dH/dk - eps dS/dk)``: the same commutator
-            # :mod:`defumat.response.efield` builds, and its second half is
-            # zero only when ``S`` does not move with ``k``.
-            #
-            # **The eigenvalue is the multiplier matrix here too**, the same
-            # rule as the operator below and for the same reason. The equation
-            # that defines ``b`` carries the band's own eigenvalue on *both*
-            # sides, so differentiating it produces ``d(eps_n)`` twice -- as
-            # ``-dLambda S b`` in the operator and as
-            # ``+i dLambda dS/dk|psi>`` here -- and both are identically zero
-            # when ``S`` does not move with ``k``. Writing this one as a frozen
-            # scalar carried the first and dropped the second, which is not the
-            # exact differential of anything (``PLAN.md`` P100).
-            #
-            # **P44 excluded this term, and what excluded it was a step size.**
-            # The exclusion rested on the *displacement* coordinate going from
-            # 1.2e-4 to 1.14e-3 against a central difference of ``epsilon`` at
-            # ``h = 0.02``, and that reference is itself 1.1e-3 from its own
-            # limit: the same difference reads -69.1942, -69.1350 and -69.1205
-            # at 0.02, 0.01 and 0.005 on ultrasoft silicon. Its truncation
-            # error very nearly cancelled the missing term, which is what made
-            # the incomplete form look like the tighter one. Extrapolated, the
-            # form below is **3e-8** relative where the frozen scalar is
-            # 1.26e-3, on a reference whose own floor -- the norm-conserving
-            # control through the identical script, where the analytic answer
-            # is exact -- is 1.8e-6.
-            derivative, overlap = velocity.both(states, directions[axis])
-            commutator = -1j * (
-                derivative - jnp.einsum("skmn,skmg->skng", lambdas, overlap)
-            )
-            overlaps = jnp.einsum("skmg,skng->skmn", jnp.conj(states), commutator)
-            projected = commutator - jnp.einsum(
-                "skmn,skmg->skng", overlaps, s_states
-            )
-            applied = apply_h(frozen_b[axis]) - jnp.einsum(
-                "skmn,skmg->skng", lambdas, apply_s(frozen_b[axis])
-            )
-            out.append(projected - applied)
-        return jnp.stack(out)
+        return position_residual(velocity, hamiltonians, states, frozen_b,
+                                 moved.k_batch)
 
     _, rhs = compiled_jvp(
         residual, (geometry, psi, rho), (tangent, dpsi, drho)
@@ -766,6 +729,78 @@ def _position_response(calculation, solver, rho, b, tangent, dpsi, drho,
         (tangent, dpsi, drho, solution),
     )
     return out
+
+
+def position_residual(velocity, hamiltonians, states, frozen_b, batch):
+    """``_position_response``'s right-hand side before its ``jvp``, per k.
+
+    ``P_c^+ [H - Lambda S, r]|psi> - (H - Lambda S) b`` at the geometry the
+    Hamiltonians and the velocity operator were built at. A plain map over the
+    k-points it is handed, so the walked third derivative calls it on a chunk
+    (:mod:`defumat.response.chunked_third`) and the whole route on every
+    k-point: one expression for both.
+    """
+    directions = np.eye(3)
+
+    def apply_h(block):
+        return jnp.stack([
+            over_kpoints(hamiltonians[spin], block[spin], batch)
+            for spin in range(block.shape[0])
+        ])
+
+    def apply_s(block):
+        return jnp.stack([
+            over_kpoints(hamiltonians[spin], block[spin], batch, overlap=True)
+            for spin in range(block.shape[0])
+        ])
+
+    lambdas = jnp.einsum("skmg,skng->skmn", jnp.conj(states), apply_h(states))
+    # ``S|psi>`` once: the right-hand side's projector puts it on the left
+    # (``orthogonalize``), and the operator's multiplier term needs it on
+    # ``b``. Both are the identity for a norm-conserving dataset.
+    s_states = apply_s(states)
+
+    out = []
+    for axis in range(3):
+        # ``[H - eps S, r] = -i (dH/dk - eps dS/dk)``: the same commutator
+        # :mod:`defumat.response.efield` builds, and its second half is
+        # zero only when ``S`` does not move with ``k``.
+        #
+        # **The eigenvalue is the multiplier matrix here too**, the same
+        # rule as the operator below and for the same reason. The equation
+        # that defines ``b`` carries the band's own eigenvalue on *both*
+        # sides, so differentiating it produces ``d(eps_n)`` twice -- as
+        # ``-dLambda S b`` in the operator and as
+        # ``+i dLambda dS/dk|psi>`` here -- and both are identically zero
+        # when ``S`` does not move with ``k``. Writing this one as a frozen
+        # scalar carried the first and dropped the second, which is not the
+        # exact differential of anything (``PLAN.md`` P100).
+        #
+        # **P44 excluded this term, and what excluded it was a step size.**
+        # The exclusion rested on the *displacement* coordinate going from
+        # 1.2e-4 to 1.14e-3 against a central difference of ``epsilon`` at
+        # ``h = 0.02``, and that reference is itself 1.1e-3 from its own
+        # limit: the same difference reads -69.1942, -69.1350 and -69.1205
+        # at 0.02, 0.01 and 0.005 on ultrasoft silicon. Its truncation
+        # error very nearly cancelled the missing term, which is what made
+        # the incomplete form look like the tighter one. Extrapolated, the
+        # form below is **3e-8** relative where the frozen scalar is
+        # 1.26e-3, on a reference whose own floor -- the norm-conserving
+        # control through the identical script, where the analytic answer
+        # is exact -- is 1.8e-6.
+        derivative, overlap = velocity.both(states, directions[axis])
+        commutator = -1j * (
+            derivative - jnp.einsum("skmn,skmg->skng", lambdas, overlap)
+        )
+        overlaps = jnp.einsum("skmg,skng->skmn", jnp.conj(states), commutator)
+        projected = commutator - jnp.einsum(
+            "skmn,skmg->skng", overlaps, s_states
+        )
+        applied = apply_h(frozen_b[axis]) - jnp.einsum(
+            "skmn,skmg->skng", lambdas, apply_s(frozen_b[axis])
+        )
+        out.append(projected - applied)
+    return jnp.stack(out)
 
 
 # -- the third derivative ----------------------------------------------------

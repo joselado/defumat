@@ -18,7 +18,10 @@ alone:
   ultrasoft and PAW silicon: the walked displacement response (the Gamma
   phonon's stages without the assembly), ``ort`` rebuilt from the overlap
   derivatives and added after the projection, and the third derivative along
-  the positions.
+  the positions;
+* the end-to-end **vibrational spectrum**, whose dynamical matrix is assembled
+  from the walked displacement response the Raman tensors hand back, rather
+  than solved again or put on the device whole.
 """
 
 import dataclasses
@@ -38,6 +41,7 @@ from defumat.response.electrostriction import (
     susceptibility_strain_derivative,
 )
 from defumat.response.nonlinear import raman_tensors
+from defumat.response.spectra import vibrational_spectrum
 from defumat.response.strain import strain_response, strain_tangent
 
 pytestmark = [pytest.mark.regression, pytest.mark.slow]
@@ -126,3 +130,31 @@ def test_the_walked_raman_tensors_are_the_whole_route(case, k_batch):
     assert scale > 1e-2, "a tensor of zeros agreeing with another"
     assert float(np.abs(walked.raman - whole.raman).max()) < 1e-7 * scale
     assert walked.converged and whole.converged
+
+
+def _multiplet_sums(frequencies, values, tolerance=1e-3):
+    """``values`` summed over each degenerate group of frequencies (rule D4)."""
+    order = np.argsort(frequencies)
+    groups, sums = [], []
+    for index in order:
+        if groups and abs(frequencies[index] - groups[-1]) < tolerance:
+            sums[-1] += values[index]
+        else:
+            groups.append(frequencies[index])
+            sums.append(values[index])
+    return np.array(groups), np.array(sums)
+
+
+@pytest.mark.parametrize("case, k_batch", [("si-us-nosym", 3)])
+def test_the_walked_vibrational_spectrum_is_the_whole_route(case, k_batch):
+    calculation, result = _converged(case, k_batch)
+    whole = vibrational_spectrum(calculation, result)
+    hosted = dataclasses.replace(result, wavefunctions=np.asarray(result.wavefunctions))
+    walked = vibrational_spectrum(calculation, hosted)
+    np.testing.assert_allclose(np.sort(walked.frequencies),
+                               np.sort(whole.frequencies), rtol=0, atol=1e-6)
+    _, whole_sums = _multiplet_sums(whole.frequencies, whole.raman_activity)
+    _, walked_sums = _multiplet_sums(walked.frequencies, walked.raman_activity)
+    scale = float(np.abs(whole_sums).max())
+    assert scale > 0.0
+    assert float(np.abs(walked_sums - whole_sums).max()) < 1e-7 * scale
