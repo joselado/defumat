@@ -1137,6 +1137,34 @@ MIXING_SPACES = {"g": "g", "reciprocal": "g", "r": "r", "real": "r"}
 
 #: What an unset ``mixing_space`` resolves to, for every mixer that accepts a
 #: layout (:attr:`Mixer.accepts_layout`); the adaptive mixer always gets ``'r'``.
+#:
+#: **Real space, on a measurement against ``pw.x`` (2026-10-04).** Iterations to
+#: each input's own ``conv_thr``, real-space layout / smooth sphere / ``pw.x``:
+#: every cell at ``mixing_beta = 0.7`` is unchanged (``si8-1k`` 8/8/9,
+#: ``si8-us-1k`` 9/9/8, ``si8-paw-1k`` 8/8/9, ``o-paw-spin`` 8/8/8, ``al-slab``
+#: 25/25/16 plain, 15/15/14 Kerker, 13/13/14 local-TF), and the magnetic
+#: ultrasoft cells at a small ``beta`` get clearly worse: ``fe-mag-1k`` 11/17/12
+#: at 0.3, ``fe-noncolin-pbe-stress`` 15/34/19 at 0.2. The cobalt film
+#: (local-TF at 0.7) goes 30/34/24 for a reason not measured here, since the
+#: tail below is worth 0.09 an iteration at that ``beta``. The energies agree
+#: within each input's ``conv_thr`` (2.0e-9 Ry on ``fe-mag-1k`` and 5.7e-10 on
+#: ``fe-unstable``, both at 1e-8, and 1e-11 or below elsewhere), except on the
+#: nickel DFT+U cell, which has several self-consistent states and where the
+#: two layouts reach two of them 1.1e-6 Ry apart. On the iron cells the tail is
+#: the shell's magnetization alone, falling by ``(1 - beta)^2`` an iteration
+#: (0.49 at 0.3, 0.64 at 0.2) while the smooth sphere is already below
+#: ``conv_thr``: a component mixed linearly, under a stopping test that reads
+#: it. ``pw.x`` never reads its own shell, its ``dr2`` being
+#: ``rho_ddot(rhout_m, rhout_m, ngms)`` (``mix_rho.f90``, "this used to be ngm
+#: NOT ngms"), where this code's ``accuracy`` is over the dense set; read over
+#: ``ngms`` off the recorded trajectories, the smooth-sphere runs fall below
+#: ``conv_thr`` at 11 and 16 rather than 17 and 34 (an estimate: the ``ethr``
+#: schedule follows ``dr2`` and would move them a little, and the energy at
+#: such a stop was not measured). So ``pw.x``'s layout and this code's stopping
+#: test are an
+#: inconsistent pair above dual 4, which the real-space layout hides by fitting
+#: the shell, and the layout stays selectable rather than the default until
+#: one of the two is changed.
 DEFAULT_MIXING_SPACE = "r"
 
 

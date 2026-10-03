@@ -249,7 +249,8 @@ def test_a_dual_eight_run_reaches_the_real_space_energy(pseudo_dir):
 
     ``si2-us-1k.in`` is ultrasoft at ``ecutrho = 8 ecutwfc``, so the shell is
     the augmentation charge's and is mixed linearly where the old layout fitted
-    it. Measured: 9 and 9 iterations, the energies 1e-14 Ry apart.
+    it. On its eight-atom sibling ``benchmarks/si8-us-1k.in`` the two layouts
+    took 9 iterations each and printed the same energy to every digit.
     """
     from defumat.scf.driver import run_scf
 
@@ -313,3 +314,41 @@ def test_a_resume_carries_the_g_history_and_drops_a_real_space_one(pseudo_dir, t
                           checkpoint_dir=tmp_path / "r", checkpoint_every=1, **options)
     assert crossed.converged
     assert crossed.total_energy == pytest.approx(whole.total_energy, abs=1e-9)
+
+
+def test_the_rho_ddot_fit_runs_on_the_stored_sphere(pseudo_dir, monkeypatch):
+    """``RHO_DDOT_FIT`` under the layout: fit vectors over ``ngm0``, same fixed point.
+
+    The flag is off by default (``PLAN.md`` P113), so nothing else runs this
+    plumbing: ``_mix`` hands the stored residual to the metric, whose density
+    part is :meth:`SphereLayout.rho_ddot_vector`. One channel here, so a fit
+    vector is the charge alone, ``ngms`` reals.
+    """
+    import defumat.scf.driver as driver
+
+    calculator = _calculator(pseudo_dir)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        plain = driver.run_scf(calculator.system, calculator.pseudos, conv_thr=1e-10,
+                               mixing_space="g", verbose=False)
+        monkeypatch.setattr(driver, "RHO_DDOT_FIT", True)
+        fitted = driver.run_scf(calculator.system, calculator.pseudos, conv_thr=1e-10,
+                                mixing_space="g", verbose=False)
+    assert fitted.converged
+    assert fitted.total_energy == pytest.approx(plain.total_energy, abs=1e-9)
+
+    calculation = calculator.calculation
+    layout = SphereLayout(calculation.basis.dense, calculation.basis.ngms,
+                          calculation.system.cell, (1,) + calculation.basis.dense.grid)
+    mixer = get_mixer("anderson", beta=0.4)
+    mixer.layout, mixer.shape = layout, layout.stored_shape
+    mixer.metric = driver._rho_ddot_metric(calculation, layout)
+    rng = np.random.default_rng(40)
+    rho_in, rho_out = _field(layout, rng), _field(layout, rng)
+    driver._mix(mixer, rho_in, rho_out, (), ())
+    (fit,) = mixer._fits
+    assert fit.size == layout.ngms
+    smooth = np.asarray(layout.field(layout.stored_of(rho_out - rho_in)))
+    expected = float(scf_accuracy(jnp.asarray(smooth), calculation.basis.dense,
+                                  calculation.system.cell))
+    assert float(fit @ fit) == pytest.approx(expected, rel=1e-11)
