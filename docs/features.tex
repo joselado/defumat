@@ -7386,7 +7386,7 @@ DEFUMAT_AUG_CHUNK=8192    python3 run.py   # G vectors per block
 \end{shcode}
 
 \code{DEFUMAT\_AUG\_CHUNK} sizes the rebuild's working array,
-$(n_h, n_h, \text{chunk})$, and defaults to putting it near 4~MB (4096
+$(n_h, n_h, \text{chunk})$, and defaults to putting it near 16~MB (16384
 $\mathbf G$ vectors for silicon, never fewer than 1024), because a stress or a
 strain response differentiates through the rebuild and holds many such blocks
 at once; like the

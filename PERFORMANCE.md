@@ -10075,3 +10075,27 @@ from the gather alone, its 42.5 MB stayed under 64 MB and batched, and the stage
 each step of one call) put the jump from 43.7 to 215.7 MB inside `symmetrize_strain_response`; the
 two-rotation contraction's intermediate (24 x 27 x 12893 complex, 133 MB) was the rest, and the budget
 now counts it.
+
+## The augmentation chunk under a strain: a trade, measured and withdrawn (RTX A2000 and CPU, 2026-10-03)
+
+**The number to carry: lowering the augmentation table's G-chunk target from 16 to 4 MB takes ultrasoft
+eight-atom silicon's walked strain response from 181.0 to 115.0 MB on the card, and makes ultrasoft
+AlAs's stress and piezoelectric tensor worse, 169.3 -> 353.9 and 198.2 -> 348.5 MB; it was committed
+(`83ac598`) on the first measurement and reverted on the second.** The strain response's 114 MB above its
+SCF is two walked passes, the bare walk (116.3 MB of temporaries) and the frozen-state density's finish
+(122.9), both rebuilding `Q_ij(G)` under the strain's `jvp` a G-chunk at a time; at a 4096-vector chunk
+they hold 45.0 and 42.9. And on the tabulated route (`DEFUMAT_AUG_MAX_BYTES=0`) `si8-us-1k`'s SCF and
+stress fell from 267.9 to 145.2 MB on the card in the same time (0.60 / 1.01 s against 0.59 / 1.03), and
+ran faster on D22's CPU (1.53 / 1.88 against 1.71 / 2.06), the energy equal to the last digit.
+
+**What withdrew it**: two-atom ultrasoft AlAs at 200 Ry (14211 G-vectors), whose table the old target
+built in one piece and the new one in four, each with the radial transform's own rematted scan inside.
+Same code on D22, only the constant changed: the stress 169.3 against 353.9 MB, the piezoelectric tensor
+198.2 against 348.5. With the radial chunk at 256 as well, both read the SCF's own 169.3 MB, but every
+strained call then costs 20 to 26 per cent more on the card (the stress 3.70 -> 4.53 s, the piezoelectric
+tensor 14.48 -> 18.13, the elastic constants 5.14 -> 6.47), and on norm-conserving eight-atom silicon the
+elastic constants' pull-back pass falls from 113.2 to 21.3 MB of temporaries (the call 127.0 -> 45.4 MB,
+the strain response's own). **One reading is not understood**: `DEFUMAT_AUG_CHUNK=16384`, which sets the
+same chunk as the old default on this cell, read 427.7 and 601.6 MB on the current code; the A/B above is
+the module default against itself, both arms in separate fresh processes. So the two chunks interact under
+a derivative, and the right sizing is the next session's to measure, cell by cell, with the time beside it.
