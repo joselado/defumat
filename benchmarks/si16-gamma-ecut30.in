@@ -1,0 +1,42 @@
+! Silicon, sixteen atoms, at a production cutoff, on the half sphere.
+!
+! si16-1k-ecut30.in at k = 0 with `K_POINTS gamma`, so that the states are
+! stored on one plane wave of each (G, -G) pair and the eigensolver runs the
+! gamma path: real projected matrices and real Ritz rotations, as `regterg`
+! does them. `nosym = .true.` is what lets the run consume that storage at all
+! (`gamma_storage_is_consumable`); without it the driver substitutes an explicit
+! k = 0 on the whole sphere and this would measure the k-point path instead.
+! Still the same crystal as the other silicon cells, so the energy per atom is
+! known and any disagreement is this code's fault rather than the system's.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav=6, celldm(1) =10.20, celldm(3) =2.0,
+    nat=16, ntyp=1,
+    ecutwfc=30.0,
+    nosym = .true.
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-vbc.UPF
+ATOMIC_POSITIONS crystal
+ Si  0.00000  0.00000  0.00000
+ Si  0.00000  0.50000  0.25000
+ Si  0.50000  0.00000  0.25000
+ Si  0.50000  0.50000  0.00000
+ Si  0.25000  0.25000  0.12500
+ Si  0.25000  0.75000  0.37500
+ Si  0.75000  0.25000  0.37500
+ Si  0.75000  0.75000  0.12500
+ Si  0.00000  0.00000  0.50000
+ Si  0.00000  0.50000  0.75000
+ Si  0.50000  0.00000  0.75000
+ Si  0.50000  0.50000  0.50000
+ Si  0.25000  0.25000  0.62500
+ Si  0.25000  0.75000  0.87500
+ Si  0.75000  0.25000  0.87500
+ Si  0.75000  0.75000  0.62500
+K_POINTS gamma

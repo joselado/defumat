@@ -122,10 +122,13 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from defumat.basis.fft import force_real_g0, gamma_inner
+from defumat.basis.fft import force_real_g0
 from defumat.batching import map_k, resolve_k_batch, whole_axis_vmap
 from defumat.config import subspace_dtype
-from defumat.hamiltonian.operator import Hamiltonian
+from defumat.hamiltonian.operator import (
+    Hamiltonian, from_planes, planes_force_real_g0, planes_inner, planes_norm2, to_planes,
+    twice,
+)
 from defumat.solvers.subspace import generalised_eigh
 
 __all__ = ["davidson_eigensolver", "davidson_eigensolver_all", "DAVID_NDIM",
@@ -243,6 +246,10 @@ def _extend_projection(hc, sc, psi, hpsi, becp, becq, offset, block,
     ``q <beta|psi>``, so ``becp^H becq`` is the ``<psi|S - 1|psi>`` block. They
     have zero columns when there is no augmentation charge.
 
+    ``gamma_only`` says that ``psi`` and ``hpsi`` are a half sphere held as
+    real planes, ``(nvecx, 2 npwx)``, and the matrices real; see
+    :func:`davidson_eigensolver`.
+
     **The new rows are sliced back out of ``psi`` rather than passed in**, and
     that is the measured choice rather than the obvious one. The caller has
     just written them there and still holds them, so handing them over looks
@@ -260,21 +267,18 @@ def _extend_projection(hc, sc, psi, hpsi, becp, becq, offset, block,
     live = psi.shape[0] if width is None else width
     psi_c, hpsi_c, becq_c = psi[:live], hpsi[:live], becq[:live]
     if gamma_only:
-        # ``regterg``'s ``MYDGER(..., -1.D0, psi, ..., hr, ...)``: the stored
-        # half is doubled and ``G = 0`` -- its own conjugate partner rather than
-        # half of a pair -- is then counted once. Both matrices are **real**
-        # here, which is the point of the branch: a complex overlap is round-off
-        # that ``generalised_eigh`` turns into an arbitrary phase per
-        # eigenvector, hence a complex ``c(0)``, hence a state that is no longer
-        # real. `regterg` never sees one because it works in real arithmetic.
-        row_h = 2.0 * (rows.conj() @ hpsi_c.T).real - (
-            rows[:, :1].conj() * hpsi_c[:, :1].T
-        ).real
-        row_s = 2.0 * (rows.conj() @ psi_c.T).real - (
-            rows[:, :1].conj() * psi_c[:, :1].T
-        ).real
-        row_h = row_h.astype(psi.dtype)
-        row_s = row_s.astype(psi.dtype)
+        # ``regterg.f90:403-404`` and ``:422-428``: ``DGEMM('T', 'N', ...,
+        # npw2, 2.D0, psi, ...)`` and ``MYDGER(..., -1.D0, ...)`` -- the stored
+        # half doubled and ``G = 0``, its own conjugate partner rather than half
+        # of a pair, counted once. **The arrays are real planes here**
+        # (:func:`~defumat.hamiltonian.operator.to_planes`), so this is one real
+        # product over ``2 npwx`` rather than a complex one whose imaginary half
+        # was discarded, and both matrices are real by construction: a complex
+        # overlap is round-off that ``generalised_eigh`` turns into an arbitrary
+        # phase per eigenvector, hence a complex ``c(0)``, hence a state that is
+        # no longer real.
+        row_h = planes_inner(rows, hpsi_c)
+        row_s = planes_inner(rows, psi_c)
     else:
         row_h = rows.conj() @ hpsi_c.T
         row_s = rows.conj() @ psi_c.T
@@ -473,6 +477,39 @@ def davidson_eigensolver(
     s_diagonal = hamiltonian.overlap_diagonal(ik)
     dtype = hamiltonian.dtype
 
+    start = starting_vectors(psi0, nbnd, ndim, kinetic, mask, dtype)
+    # ``regterg.f90:174``: ``psi(1,k) = CMPLX(DBLE(psi(1,k)), 0)`` for every
+    # vector that enters the subspace. A random start has an imaginary part at
+    # ``G = 0`` and it makes the rebuilt field complex.
+    start = force_real_g0(start, gamma_only)
+
+    # **Under half-sphere storage the solve runs in real arithmetic, as
+    # ``regterg`` does** (``OPEN.md`` Part XXIII item 19). The work arrays are
+    # the states' real planes, ``(nvecx, 2 npwx)`` in the policy's real dtype
+    # (:func:`~defumat.hamiltonian.operator.to_planes`), so the projected rows,
+    # both Ritz rotations and ``calbec`` are real products over ``2 npwx`` --
+    # ``regterg``'s DGEMMs, two multiply-adds an element where the complex
+    # products this replaces spent four on a result whose imaginary half was
+    # exactly zero or discarded. The complex block is rebuilt only per band
+    # chunk inside ``h_psi``'s transform, and the states leave as complex
+    # coefficients at the end. A view of the complex buffers as reals would
+    # have been the cheaper change and does not exist under XLA:
+    # ``bitcast_convert_type`` refuses complex operands and ``ndarray.view``
+    # lowers to two scatters. On the k-point path every name below is the
+    # object it always was, so that path's program is unchanged.
+    if gamma_only:
+        dtype = jnp.finfo(dtype).dtype
+        start = to_planes(start)
+        mask, diagonal, s_diagonal = twice(mask), twice(diagonal), twice(s_diagonal)
+        apply_projected = hamiltonian.apply_projected_planes
+        s_projections = hamiltonian.s_projections_planes
+        s_correction = hamiltonian.s_correction_planes
+    else:
+        apply_projected = hamiltonian.apply_projected
+        s_projections = hamiltonian.s_projections
+        s_correction = hamiltonian.s_correction
+    length = start.shape[-1]
+
     # The projections S is built from, asked of the operator rather than
     # assembled here. With no augmentation charge they are zero-width arrays and
     # every expression below that touches them is a no-op -- which is how the
@@ -483,21 +520,15 @@ def davidson_eigensolver(
     # from the same call (``apply_projected``).
     def project(vectors):
         """``<beta|psi>`` and ``q <beta|psi>`` for a block of vectors."""
-        return hamiltonian.s_projections(vectors, ik)
+        return s_projections(vectors, ik)
 
-    start = starting_vectors(psi0, nbnd, ndim, kinetic, mask, dtype)
-    # ``regterg.f90:174``: ``psi(1,k) = CMPLX(DBLE(psi(1,k)), 0)`` for every
-    # vector that enters the subspace. A random start has an imaginary part at
-    # ``G = 0`` and it makes the rebuilt field complex.
-    start = force_real_g0(start, gamma_only)
-
-    psi =jnp.zeros((nvecx, ndim), dtype).at[:nbnd].set(start)
+    psi = jnp.zeros((nvecx, length), dtype).at[:nbnd].set(start)
     # ``H`` and the projections of the starting block from one ``calbec``, as
     # ``h_psi`` and ``s_psi`` share ``becp`` (:meth:`~defumat.hamiltonian.
     # operator.Hamiltonian.apply_projected`); the expansion block below does
     # the same.
-    hstart, becp0, becq0 = hamiltonian.apply_projected(start, ik)
-    hpsi = jnp.zeros((nvecx, ndim), dtype).at[:nbnd].set(hstart)
+    hstart, becp0, becq0 = apply_projected(start, ik)
+    hpsi = jnp.zeros((nvecx, length), dtype).at[:nbnd].set(hstart)
     nkb = becp0.shape[1]
     becp = jnp.zeros((nvecx, nkb), dtype).at[:nbnd].set(becp0)
     becq = jnp.zeros((nvecx, nkb), dtype).at[:nbnd].set(becq0)
@@ -555,12 +586,12 @@ def davidson_eigensolver(
             hc = jnp.where(pair, hc_raw[:m, :m], 0.0)
             sc = jnp.where(pair, sc_raw[:m, :m], 0.0) + jnp.diag(inactive.astype(dtype))
 
-            if gamma_only:
-                # Real symmetric, as ``regterg``'s ``hr``/``sr`` are. Taking the
-                # real part is not a truncation: the imaginary part is round-off
-                # in a quantity that is real by construction, and leaving it in
-                # is what gives each eigenvector an arbitrary phase.
-                hc, sc = hc.real, sc.real
+            # Under gamma both are real symmetric, as ``regterg``'s ``hr``/``sr``
+            # are, because the rows they are built from are real products
+            # (:func:`_extend_projection`); and so are the eigenvectors, the Ritz
+            # coefficients and every rotation they drive. A complex matrix here
+            # would be round-off in a quantity real by construction, and
+            # leaving it in is what gives each eigenvector an arbitrary phase.
             # In the subspace precision whatever the bands run in (config.py's
             # SUBSPACE_PRECISION; a no-op in double), and back: the energies in
             # the bands' real precision, since they enter the preconditioner
@@ -589,7 +620,7 @@ def davidson_eigensolver(
             # off by default (:data:`RESIDUAL_THRESHOLD`). :func:`expansion`
             # builds its own from the same inputs.
             evc, hevc = ritz(coefficients, psi, hpsi, live)
-            sevc = (evc + hamiltonian.s_correction(sbec, ik)
+            sevc = (evc + s_correction(sbec, ik)
                     if hamiltonian.has_overlap else evc)
             residual = hevc - energies[:, None].astype(dtype) * sevc
             settled = jnp.logical_and(
@@ -626,20 +657,21 @@ def davidson_eigensolver(
         would move the answer in the last bits.
         """
         if hamiltonian.has_overlap:
-            sevc = evc + hamiltonian.s_correction(sbec, ik)
+            sevc = evc + s_correction(sbec, ik)
         else:
             sevc = evc
         residual = hevc - energies[:, None].astype(dtype) * sevc
         correction = _precondition(residual, diagonal, s_diagonal, energies)
         correction = jnp.where(mask, correction, 0.0)
-        correction = force_real_g0(correction, gamma_only)
-        # ``regterg.f90:361``: ``ew(n) = ew(n) - DBLE(psi(1,n) psi(1,n))`` --
-        # the same doubling and the same ``G = 0`` correction as every other
-        # plane-wave sum here.
-        norm = jnp.sqrt(gamma_inner(correction, correction, gamma_only,
-                                    keepdims=True).real
-                        if gamma_only else
-                        jnp.sum(jnp.abs(correction) ** 2, axis=1, keepdims=True))
+        if gamma_only:
+            # ``regterg.f90:375`` and ``:360-361``: ``Im psi(1) = 0`` -- the
+            # imaginary plane's first entry -- and ``ew(n) = 2 psi.psi -
+            # psi(1) psi(1)``, the same doubling and the same ``G = 0``
+            # correction as every other plane-wave sum here.
+            correction = planes_force_real_g0(correction)
+            norm = jnp.sqrt(planes_norm2(correction))
+        else:
+            norm = jnp.sqrt(jnp.sum(jnp.abs(correction) ** 2, axis=1, keepdims=True))
         # **The sort comes before the normalisation, and only the buffer cares.**
         # Each row is still divided by its own norm and zeroed by its own flag,
         # so the value is what it was; but a gather whose consumer is elementwise
@@ -769,9 +801,9 @@ def davidson_eigensolver(
             the shared one is bit-for-bit what both were.
             """
             if m >= nbnd:
-                return hamiltonian.apply_projected(correction, ik)
+                return apply_projected(correction, ik)
             live = correction[:m]
-            h, bp, bq = hamiltonian.apply_projected(live, ik)
+            h, bp, bq = apply_projected(live, ik)
             return (jnp.zeros_like(correction).at[:m].set(h),
                     jnp.zeros((nbnd, bp.shape[1]), bp.dtype).at[:m].set(bp),
                     jnp.zeros((nbnd, bq.shape[1]), bq.dtype).at[:m].set(bq))
@@ -801,6 +833,9 @@ def davidson_eigensolver(
     energies = final[9]
     evc, _ = ritz(final[8], final[0], final[1], final[7], with_h=False)
     wavefunctions = jnp.where(mask, evc, 0.0)
+    if gamma_only:
+        # the states leave as the complex coefficients every caller stores
+        wavefunctions = from_planes(wavefunctions)
     out = (energies, wavefunctions)
     if return_steps:
         # Both are loop carries already: nothing is measured that was not
