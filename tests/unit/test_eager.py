@@ -231,3 +231,25 @@ def test_a_second_becsum_call_compiles_nothing(pseudo_dir, regime):
     assert names == []
     for a, b in zip(first, second):
         np.testing.assert_array_equal(a, b)
+
+
+def test_a_second_tetrahedron_occupation_call_compiles_nothing(pseudo_dir):
+    """The Fermi level's bisection is a ``fori_loop`` the SCF reaches eagerly.
+
+    ``Calculation.occupations`` is called once an SCF iteration outside any
+    ``jit``, and with ``occupations = 'tetrahedra'`` the shared Fermi level was
+    bisected by a loop over a closure built at the call, compiled again every
+    time: six compilations over a warm five-iteration SCF on this cell.
+    """
+    calculation = Calculator.from_file(SILICON_US.parent / "al-tetrahedra.in",
+                                       pseudo_dir, announce=False).calculation
+    nk = calculation.system.kpoints.nk
+    rng = np.random.default_rng(0)
+    eigenvalues = jnp.asarray(np.sort(rng.uniform(-0.5, 1.0, (1, nk, 6)), axis=-1))
+
+    first, first_levels = calculation.occupations(eigenvalues)
+    with counting_compiles() as names:
+        second, second_levels = calculation.occupations(eigenvalues)
+    assert names == []
+    np.testing.assert_array_equal(first, second)
+    assert first_levels == second_levels

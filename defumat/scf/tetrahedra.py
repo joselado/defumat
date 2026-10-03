@@ -435,6 +435,15 @@ def _bisect(e_sorted, ntetra: int, nelec, spin):
     return 0.5 * (low + high)
 
 
+#: :func:`_bisect` for a caller outside any ``jit``. Its loop is a ``fori_loop``
+#: over a closure built at the call, so called eagerly it was compiled again at
+#: every call: once an SCF iteration with ``occupations = 'tetrahedra'``, six
+#: compilations over a warm five-iteration SCF on ``tests/data/qe/al-tetrahedra.in``.
+#: Jitted here, the loop is compiled once per shape; :func:`tetrahedron_occupations`
+#: is jitted itself and keeps the plain call.
+_bisect_compiled = jax.jit(_bisect, static_argnames=("ntetra",))
+
+
 # --------------------------------------------------------------------------
 # Occupation weights.
 # --------------------------------------------------------------------------
@@ -789,7 +798,7 @@ def tetrahedron_occupations_spin(
         ]
         return jnp.stack([wg for wg, _ in solved]), tuple(ef for _, ef in solved)
 
-    ef = _bisect(
+    ef = _bisect_compiled(
         _stacked_corners(tetra, eigenvalues),
         tetra.ntetra,
         nelec,
@@ -806,7 +815,7 @@ def tetrahedron_fermi_level(
 ) -> jnp.ndarray:
     """The Fermi level alone, without building the weights."""
     e_sorted, _ = _sorted_corners(tetra, eigenvalues)
-    return _bisect(e_sorted, tetra.ntetra, nelec, jnp.sum(weights))
+    return _bisect_compiled(e_sorted, tetra.ntetra, nelec, jnp.sum(weights))
 
 
 # --------------------------------------------------------------------------
