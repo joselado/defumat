@@ -7003,9 +7003,23 @@ On a run without symmetry the phonon's $3\,n_{\rm at}$ induced potentials and
 response densities, grids with no $k$ index that grow with the number of atoms
 displaced rather than with the mesh, are kept in host memory as well and go to
 the card one mode at a time; with symmetry they stay on the card, because the
-displacement average acts on all of them together. \textbf{What still moves
-them to the card whole} is the rest of the linear-response stack --- Raman, the
-strain response --- and the sum-over-states spectra. \textbf{The host
+displacement average acts on all of them together. \textbf{So do the
+piezoelectric tensor, the strain response and the elastic constants}: the
+piezoelectric tensor's derivative of the stress along the field's response is
+assembled a block of $k$-points at a time from the field's stores in host
+memory, as the Born charges are, and on two-atom ultrasoft AlAs it no longer
+grows with the mesh (769~MB at 64 $k$-points where it read 1350, the SCF's
+being 178); the strain response keeps its six bare perturbations and
+first-order states in host memory, and the elastic constants differentiate the
+walked stress once more along them. \textbf{So do the two third derivatives},
+the electrostriction's $\partial\epsilon/\partial\varepsilon$ and the Raman
+tensors: the variational second-order energy is a sum over $k$ plus terms of the
+whole sums, so its derivative along each strain or displacement is taken a
+block of $k$-points at a time, with the three further Sternheimer solves per
+direction on the block. \textbf{What still moves them to the card whole} is
+the Raman tensors asked for their internals (the vibrational spectrum, whose
+dynamical matrix is then assembled whole), the transcribed piezoelectric route
+\code{method="zstar\_eu"}, and the sum-over-states spectra. \textbf{The host
 must hold the set} ($n_{\rm spin} n_k n_{\rm bnd} n_{\rm pwx} n_{\rm pol}$
 complex), which is the point but is not free. And \textbf{the fall-back from
 \code{'speed'} fires only where the preset is what would run}: with a

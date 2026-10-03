@@ -9794,3 +9794,166 @@ without symmetry, with the iteration counts equal and the history equal to round
 place of the device's); at `q` the convergence test is a maximum, so its history is bit-identical. On a
 run with symmetry the grids stay on the card, because the displacement average acts on all of them
 together.
+
+## The piezoelectric tensor a k-chunk at a time (RTX A2000, 2026-10-03)
+
+**The number to carry: on two-atom ultrasoft AlAs the piezoelectric tensor in memory mode at one
+k-point a chunk read 1208.4 / 1256.6 / 1349.6 MB on the card at 8 / 27 / 64 k-points and now reads
+759.7 / 763.2 / 768.8, growing only as the SCF does (169.3 / 172.2 / 178.2), and it takes 14.8 / 29.3 /
+59.3 s where it took 28.2 / 41.7 / 69.3; on the eight-atom cubic cell at 8 k-points, 1660.1 -> 986.3 MB
+against an SCF of 669.6, 65.9 -> 46.6 s.** `GPU-MEMORY-NEXT.md` item 2, its fifth piece. The
+differentiated route (`clamped_ion_piezoelectric`) is one `jvp` of the stress along each field response;
+it asked the field response for its internals, which forced the field's whole-k route, and assembled
+each column with the whole k axis on one forward-over-reverse tape. Now, where the field response walks
+(`efield._streams`), the re-diagonalisation writes into a host store (`refined_states(stream=True)`),
+the field keeps its stores in host memory (`dielectric_tensor(streamed_internals=True)`, which hands back
+the `StreamedField` itself), and each column is the streamed Born charges' split with `at_strain` where
+they have `at_positions` (`StreamedField.piezoelectric`, `_born_passes(kind="strain")`): a forward walk
+for the raw sums and their tangents, the `jvp` of the whole-cell terms' gradient at the whole sums with
+the full-zone shifts as tangent, and a pull-back walk carrying the states, the multipliers and the
+global cotangent, plus `add_for_charges` in the strain coordinate per chunk. The transcribed route
+(`method="zstar_eu"`) is unchanged.
+
+`alas-piezo.in` with `nosym`, 25/200 Ry, unshifted n^3 grids, memory mode, warm cache, the second of two
+fresh processes per point, D22 (`tools/gpu/response_memory.py`, its new `piezo` stage); before at
+`5e1e6f6`, after on branch `streamed-piezo`. The time is the call alone:
+
+| cell, k-points, `k_batch` | SCF alone | piezo, before | after | time, before | after |
+|---|---|---|---|---|---|
+| two atoms, 8, 1 | 169.3 MB | 1208.4 MB | 759.7 MB | 28.2 s | 14.8 s |
+| two atoms, 27, 1 | 172.2 | 1256.6 | 763.2 | 41.7 | 29.3 |
+| two atoms, 64, 1 | 178.2 | 1349.6 | 768.8 | 69.3 | 59.3 |
+| two atoms, 8, `'fit'` | -- | 1203.4 | 761.7 | 29.4 | 15.7 |
+| two atoms, 27, `'fit'` | -- | -- | 773.3 | -- | 24.3 |
+| eight atoms, 8, 1 | 669.6 | 1660.1 | 986.3 | 65.9 | 46.6 |
+
+with `e_14` the same to the ten printed digits in every pair (1.4752843184, 0.9842119318, 0.8212331821,
+-0.8347910163; the eight-atom cell's sign is the mirror its axes put on it). **The 590 MB left above
+the SCF on the two-atom cell is one pass with no k index**: the compiler's `memory_analysis()` of each
+pass at 8 k-points gives 705.2 MB of temporaries for the global step (the `jvp` of the whole-cell
+terms' strain gradient on the 200 Ry dense grid, with the augmentation charge, the local and core
+terms and Ewald all moving with the cell), against 121.3 for the pull-back, 48.5 for the multipliers'
+pass, 48.4 for the field's bare walk and 30 or less for the rest. It is the same term in the whole
+route, so it is a lever of its own, sized by the dense grid and the atoms rather than the mesh.
+**Located on the CPU**, compile only (`memory_analysis()` of the global step's `jvp` of the strain
+gradient with one term at a time, the same cell at 8 k-points, a 36^3 dense grid; two instruments on two
+backends, so the CPU's figures below and the card's 705.2 MB are not one number measured twice): Ewald 4.3 MB of
+temporaries, Hartree 4.5, the local term 457.1, exchange-correlation 611.5 (its core charge), and the
+augmentation charge rebuilt under the strain **1550.9**, which is also the peak of all of them together
+(1551.4). So the lever is the radial transforms' second strain derivative, the augmentation table's
+above all. Item 13's remat took these transforms off the stress's tape; how much of it reaches the
+`jvp` of that gradient was not measured, and the first-derivative figure for this cell is the A/B to
+take next.
+
+**The 380 MB a k-point recorded for this route on 2026-09-19 is not what it costs now.** That was the
+compiled tape on the CPU (`memory_analysis()`, 31.5 GiB at 64 k-points); on the card the same route grew
+2.5 MB a k-point before this change. Between the two came the strain gradient's remat of the radial
+transforms (item 13, 2026-09-28), which took BN's stress tape off its linear growth in `nk`; the CPU tape
+was not re-measured, so how much of the difference that change is was not separated.
+
+**Against the whole-k route on the CPU**, the same re-diagonalised states handed in as a device array
+and as a host store (`tests/regression/test_streamed_piezo.py`, 6 tests in 9 min 58 s at a 5.1 GB
+peak): the tensor agrees to 2.1e-17 e/bohr^2 on norm-conserving AlAs's wedge (`e_xyz` = -1.3e-2),
+1.1e-15 and 3.1e-17 on ultrasoft AlAs's closed grid and wedge (2.6e-2) and 1.4e-15 on PAW AlAs's wedge,
+with the dielectric constant shared between the two routes to 3.6e-14 or better. The file holds a
+falsifier: on ultrasoft AlAs's
+wedge the walk with its full-zone shift zeroed moves by more than 1e-6, so the comparison sees the one
+term a closed grid cannot (the whole route records 1.05e-3 C/m^2 for it); and a second walked call
+compiles nothing. **The shift's step between the walks had been validated only where it is zero or
+cancels**: the streamed Born charges' cells were a closed grid and silicon wedges. On the ultrasoft
+AlAs wedge, the case where it is neither, the streamed Born charges agree with the whole route to
+1.6e-13 and the dielectric constant to 5.7e-14 (`test_streamed_response.py` carries that cell now).
+
+## The strain response and the elastic constants a k-chunk at a time (RTX A2000, 2026-10-03)
+
+**The number to carry: on a streamed store the strain response did not run at all, and it now runs at
+45.7 / 50.1 MB on the card for eight-atom norm-conserving silicon at 27 / 64 k-points against SCFs of
+35.1 / 39.6, and at 174.8 MB for the ultrasoft cell at 27 against 67.3; the elastic constants on top
+read 126.5 / 141.0 MB.** `GPU-MEMORY-NEXT.md` item 2. The strain response held six bare perturbations
+and six first-order states (and for an augmented dataset the occupied block and the overlap
+derivatives) whole-k on the device, and on a host store it raised `TracerArrayConversionError` in
+`_bare_strains`, which indexes the store with a traced k, the failure the Gamma phonon had before
+`af246f1`. Where the field response walks it now takes the Gamma phonon's three stages with the six
+strains as its modes (`defumat/response/chunked_strain.py`): the bare walk, with the potential's strain
+tangent at the frozen density taken once per strain and handed to every chunk; `S'` per chunk and the
+frozen-state response finished from summed tangents (the strained augmentation charge at the summed
+`becsum` for the half at frozen states, the unstrained one for the occupied block's); the field's own
+`respond` pass; and the eigenvalue response walked. The elastic constants are the walked stress
+differentiated once more (`forces/chunked.chunked_gradient_tangent`: a forward walk of the raw sums and
+their tangents, the `jvp` of the whole-cell terms' gradient at the whole sums, and a pull-back walk
+carrying the strain, the states and the global cotangent).
+
+Eight-atom Si at 20 Ry (`benchmarks/si8-ecut20-nosym-k3.in`) and its ultrasoft counterpart, `nosym`,
+unshifted n^3 grids, memory mode at one k-point a chunk, warm cache, the second of two fresh processes
+per point, D22; before at `5e1e6f6`, after on branch `streamed-piezo`:
+
+| cell, k-points | SCF alone | strain response, before | after | time | elastic constants on top | time |
+|---|---|---|---|---|---|---|
+| norm-conserving, 27 | 35.1 MB | dies | 45.7 MB | 70.4 s | 126.5 MB | 5.2 s |
+| norm-conserving, 64 | 39.6 | -- | 50.1 | 163.4 | 141.0 | 10.6 |
+| ultrasoft, 27 | 67.3 | dies | 174.8 | 175.4 | (refused) | -- |
+
+with `C_11` = 166.96 and 166.44 GPa at 27 and 64 k-points. What the elastic constants add above the
+strain response grows by 10 MB from 27 to 64 k-points where the response grows by 4; which pass holds
+it, and what the ultrasoft response's 108 MB above its SCF is, were not separated. The piezoelectric
+tensor's version of the same question was (the previous entry): there it is the global step's second
+strain derivative of the radial transforms.
+
+**Against the whole-k route on the CPU**, the same re-diagonalised states as a device array and as a
+host store (`tests/regression/test_streamed_strain.py`): the response density to 1.0e-14 / 2.2e-15 /
+8.0e-15 / 7.1e-15 on densities of 0.10 (norm-conserving silicon closed and on its wedge, ultrasoft and
+PAW silicon), the first-order states to 4.7e-13 or better, the eigenvalue response to 2.3e-14, with the
+history and the mean CG count equal; the elastic constants to 1.0e-11 GPa on `C_11` = 209.4. The whole
+route is bit-identical to `5e1e6f6` after the loop was shared between the two routes (every field, the
+history and the iteration count, on ultrasoft and PAW silicon, both arms on the efficiency cores).
+
+## The third derivatives a k-chunk at a time: electrostriction and Raman (RTX A2000, 2026-10-03)
+
+**The number to carry: on two-atom ultrasoft AlAs at one k-point a chunk, electrostriction's
+`d(eps)/d(strain)` read 784.9 / 882.8 MB on the card at 8 / 27 k-points and now reads 263.5 / 264.9,
+and the Raman tensors 299.0 / 368.5 -> 199.3 / 203.1 MB, against an SCF of 169.3 / 172.2.**
+`GPU-MEMORY-NEXT.md` item 2, its last consumers. Both are, per geometry tangent, one `jvp` of
+`eps = 1 - 4 FPI F / Omega` with `F` the variational second-order energy and `db` three further
+Sternheimer solves (`_position_response`), and both read the field's stores whole, so the field
+response took its whole route under them. `F` is a sum over k of per-k terms that read two whole-cell
+objects -- the potential at the moved geometry and PAW's one-centre coefficients -- plus the screening
+and one-centre terms of the whole raw response sums, so the `jvp` distributes and needs no cotangent
+walk (`defumat/response/chunked_third.py`): a forward walk for the raw sums and their tangents, one
+global step, and a chunk walk that solves `db` on the chunk (the residual's `jvp` with the two globals
+handed in as primal and tangent, three solves, the ultrasoft tail's `jvp`) and takes the `jvp` of the
+chunk's terms. Electrostriction routes there with the walked strain response and elastic constants
+under it; Raman with the walked Gamma phonon's stages for the displacement response (without the
+assembly), `ort` rebuilt from the overlap derivatives and added after the conduction projection. The
+review that preceded it (Fable, against the code) confirmed the decomposition line by line and listed
+the four ways it could go silently wrong, all four avoided in the first draft: the per-chunk terms read
+the *moved* Hamiltonians, not the ground state's restricted ones; the rows are restricted before the
+strain is applied, so the velocity operator sees the strained k-points; the potential's tangent is
+along `(t, drho_t)`, not the strain alone; and `ort` goes in after the projection, which would delete
+it.
+
+`alas-piezo.in` with `nosym`, 25/200 Ry, unshifted n^3 grids, memory mode at one k-point a chunk, warm
+cache, the second of two fresh processes per point, D22; before at `5e1e6f6`, after at `b29091e`.
+Electrostriction without the elastic constants, which an ultrasoft dataset refuses:
+
+| quantity, k-points | SCF alone | before | after | time, before | after |
+|---|---|---|---|---|---|
+| electrostriction, 8 | 169.3 MB | 784.9 MB | 263.5 MB | 82.8 s | 54.4 s |
+| electrostriction, 27 | 172.2 | 882.8 | 264.9 | 134.5 | 143.3 |
+| Raman, 8 | 169.3 | 299.0 | 199.3 | 52.3 | 24.1 |
+| Raman, 27 | 172.2 | 368.5 | 203.1 | 86.4 | 62.2 |
+
+with the largest tensor component the same to the ten printed digits in every pair (154.286037218 and
+50.4728747174; 33.8208349275 and 11.6779538538).
+
+**Against the whole-k route on the CPU** (`tests/regression/test_streamed_third.py`): `d(eps)/d(strain)`
+on the same states and tangents agrees to 2.5e-12 on 194.9 (norm-conserving silicon) and 4.1e-13 on
+214.3 (ultrasoft, the occupied block and the tail in `db` both reached); end to end on a host store,
+where the two re-diagonalisations are different programs, electrostriction to 7.4e-12 (the elastic
+constants 1.7e-11 GPa) and the Raman tensors to 7.1e-12 on 62.0 (norm-conserving) and 2.1e-12 on 68.6
+(ultrasoft), with PAW in the test as well; 6 tests in about 17 min at a 2.8 GB peak. **One fix on the
+way**: the ultrasoft tail first rebuilt the augmentation dipole from the datasets inside the compiled
+pass, where their radial arrays are traced and `np.asarray` refuses them; the dipole is the datasets'
+own and the same at every geometry, so the pass takes the field's.
+
+**What still goes whole**: the Raman tensors asked for their internals (`get_vibrational_spectrum`),
+because the displacement response handed back is assembled whole by `dynamical_matrix(response=...)`.
