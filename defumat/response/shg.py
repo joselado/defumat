@@ -89,6 +89,7 @@ from defumat.response.photocurrent import (
     DEGENERACY_TOL,
     _kpoints_are_reduced,
     _safe_ratio,
+    _warn_about_the_cut,
     _warn_about_the_grid,
     # Defined there rather than here because the shift current needs the same
     # multiplet average for the same reason, and ``shg`` imports from
@@ -154,6 +155,18 @@ _GRID_RESIDUE_SHG = (
     "0.72 pm/V on the 15^3 grid ecutwfc = 12 gives under nosym, where "
     "inversion requires zero, against 0.0018 on the commensurate 20^3 grid of "
     "ecutwfc = 16 and 0.00074 with symmetry kept for the SCF"
+)
+
+#: What the cut warning quotes for this tensor: how far it moves when the
+#: multiplet straddling the cut is rotated before the cut is made, and what a
+#: cut inside one leaves where inversion forbids everything.
+_CUT_RESIDUE_SHG = (
+    "on AlAs (alas-shg.in, the whole 6x6x6 mesh), cut at 22 bands through "
+    "doublets at 13 of the 216 k-points, rotating each doublet before the cut "
+    "moves chi^(2) by up to 4.7e-4 of its peak, and the components zincblende "
+    "forbids read 2.5e-4 of the allowed ones against 1.5e-9 at 23 bands, a "
+    "clean cut; on two-atom silicon a cut at 12 bands leaves 1095 pm/V where "
+    "inversion forbids any"
 )
 
 
@@ -393,7 +406,9 @@ class SecondHarmonic:
             under-reports by orders of magnitude. **Read it before believing a
             number.**
         band_cut_gap: ``min_k (e_(nbnd+1) - e_nbnd)`` in Ry when the caller
-            diagonalised one extra band to measure it, else ``nan``.
+            diagonalised one extra band to measure it, else ``nan``. Below
+            :data:`~defumat.response.photocurrent.DEGENERACY_TOL` the cut fell
+            inside a degenerate multiplet and :func:`second_harmonic` warns.
     """
 
     frequencies: np.ndarray
@@ -558,15 +573,22 @@ def second_harmonic(
     The frequency axis carries the **fundamental** ``hbar omega`` in Ry, so a
     semiconductor's two-photon absorption edge sits at half its gap.
 
-    **Warns**, rather than refuses, when the run is ``nosym`` on a dense FFT
-    grid the crystal's fractional translations do not map onto itself
-    (:func:`~defumat.response.photocurrent._incommensurate_grid`): the tensor
-    then carries a residue in the components the dropped operations forbid,
-    0.72 pm/V on two-atom silicon where inversion forbids all of them.
+    **Warns**, rather than refuses, in two cases where the tensor carries a
+    part the crystal does not have. The run is ``nosym`` on a dense FFT grid
+    the crystal's fractional translations do not map onto itself
+    (:func:`~defumat.response.photocurrent._incommensurate_grid`), which leaves
+    0.72 pm/V on two-atom silicon where inversion forbids every component. And
+    ``band_cut_gap`` is below :data:`~defumat.response.photocurrent.
+    DEGENERACY_TOL`, a band set cut inside a degenerate multiplet
+    (:func:`~defumat.response.photocurrent._warn_about_the_cut`), which leaves
+    1095 pm/V on the same silicon cut at 12 bands.
     """
     require_an_shg_regime(calculation)
     _warn_about_the_grid(
         calculation, "the second-harmonic tensor chi^abc", _GRID_RESIDUE_SHG
+    )
+    _warn_about_the_cut(
+        band_cut_gap, "the second-harmonic tensor chi^abc", _CUT_RESIDUE_SHG
     )
 
     eigenvalues = jnp.asarray(eigenvalues)

@@ -227,6 +227,14 @@ _GRID_RESIDUE_SHIFT = (
     "ecutwfc = 16 and 5.3e-12 with symmetry kept for the SCF"
 )
 
+#: What :func:`_warn_about_the_cut` quotes for this tensor: how far it moves
+#: when the multiplet straddling the cut is rotated before the cut is made.
+_CUT_RESIDUE_SHIFT = (
+    "on AlAs (alas-raman.in, the whole 6x6x6 mesh), cut at 22 bands through "
+    "doublets at 13 of the 216 k-points, rotating each doublet before the cut "
+    "moves sigma^abc by 1.6e-8 A/V^2, 1.4e-4 of its peak"
+)
+
 
 def _safe_ratio(numerator, denominator, tol: float):
     """``numerator / denominator`` where the denominator is resolvable, else 0."""
@@ -428,7 +436,8 @@ class ShiftCurrent:
             diagonalised one extra band to measure it, else ``nan``. The same
             warning :class:`~defumat.response.conductivity.
             OpticalConductivity` carries: cutting inside a degenerate multiplet
-            keeps some members and drops others.
+            keeps some members and drops others. Below :data:`DEGENERACY_TOL`
+            :func:`shift_current` warns.
     """
 
     frequencies: np.ndarray
@@ -522,14 +531,19 @@ def shift_current(
     The frequency axis carries ``hbar omega`` in Ry, so a visible-light photon
     is around 0.15-0.25.
 
-    **Warns**, rather than refuses, when the run is ``nosym`` on a dense FFT
-    grid the crystal's fractional translations do not map onto itself
-    (:func:`_incommensurate_grid`): the tensor then carries a residue in the
-    components the dropped operations forbid.
+    **Warns**, rather than refuses, in two cases where the tensor carries a
+    part the crystal does not have: the run is ``nosym`` on a dense FFT grid
+    the crystal's fractional translations do not map onto itself
+    (:func:`_incommensurate_grid`), and ``band_cut_gap`` is below
+    :data:`DEGENERACY_TOL`, a band set cut inside a degenerate multiplet
+    (:func:`_warn_about_the_cut`).
     """
     require_a_shift_current_regime(calculation)
     _warn_about_the_grid(
         calculation, "the shift-current tensor sigma^abc", _GRID_RESIDUE_SHIFT
+    )
+    _warn_about_the_cut(
+        band_cut_gap, "the shift-current tensor sigma^abc", _CUT_RESIDUE_SHIFT
     )
 
     eigenvalues = jnp.asarray(eigenvalues)
@@ -769,6 +783,47 @@ def _warn_about_the_grid(calculation, quantity: str, measured: str) -> None:
         "kpoints= (KPoints.automatic((n, n, n), (0, 0, 0), cell), given no "
         "rotations, is the complete grid), or choose a cutoff whose dense grid "
         f"is a multiple of {factors}",
+        RuntimeWarning,
+        stacklevel=3,
+    )
+
+
+def _warn_about_the_cut(band_cut_gap: float, quantity: str, measured: str) -> None:
+    """Say so when the band set was cut inside a degenerate multiplet.
+
+    ``band_cut_gap`` is ``min_k (e_(nbnd+1) - e_nbnd)``, which the workflows
+    measure by diagonalising one band more than the sum uses. Below
+    :data:`DEGENERACY_TOL` the last band kept and the first one dropped are one
+    level, and which members of it the eigensolver put below the cut is
+    arbitrary, since any rotation inside a multiplet is an equally good set of
+    eigenvectors. Every quantity built from the kept bands then depends on that
+    rotation, the intermediate sums of both tensors among them, and no
+    multiplet average inside the assembly can repair it, because the members
+    it would average with are not in the set.
+
+    **The threshold is the floor and not the broadening**:
+    :data:`DEGENERACY_TOL`, where the sums use the broadening for their own
+    denominators. The broadening is where a spectrum stops
+    resolving a splitting, not where the eigenvectors stop being determined:
+    AlAs's cut at 14 bands on the whole 6x6x6 mesh is 9.66e-3 Ry wide, below
+    the shift current's default broadening of 0.01, and it is a real gap. A cut
+    inside a multiplet comes out at round-off instead: 3.1e-15 Ry for
+    ``alas-raman.in`` at 22 bands on 6x6x6, exactly 0 for ``alas-shg.in`` at 22
+    on 6x6x6 and 5.3e-15 for ``alas-us.in`` at 24 on 4x4x4.
+
+    ``nan``, which is what the assembly carries when nobody measured the cut,
+    compares false and says nothing.
+    """
+    if not band_cut_gap < DEGENERACY_TOL:
+        return
+    warnings.warn(
+        f"the band set is cut inside a degenerate multiplet: band_cut_gap = "
+        f"{band_cut_gap:.2e} Ry, below DEGENERACY_TOL = {DEGENERACY_TOL:g} Ry, "
+        "the splitting under which two bands are one level. Which members of "
+        "the multiplet fall below the cut is arbitrary, since any rotation "
+        "inside it is an equally good set of eigenvectors, so "
+        f"{quantity} carries a part that is not a property of the crystal: "
+        f"{measured}. Choose an nbnd at which band_cut_gap is a real gap",
         RuntimeWarning,
         stacklevel=3,
     )
