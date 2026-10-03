@@ -581,8 +581,13 @@ class _WholeField:
         # ``(nk, npwx, nkb)`` block on its own. Nothing below reads them.
         commutator = derivative = overlap = position = None
 
-    def respond(self, dvscf, onecentre, include_induced: bool):
-        """One iteration's three solves: ``(drho, dbecsum)`` per direction."""
+    def respond(self, dvscf, onecentre, include_induced: bool, threshold=None):
+        """One iteration's three solves: ``(drho, dbecsum)`` per direction.
+
+        Each solve starts from the previous pass's ``dpsi`` (zeros on the first),
+        as ``solve_linter`` reads it back from ``iudwf``; ``threshold`` is this
+        pass's CG threshold, the solver's own when ``None``.
+        """
         solver = self.solver
         response, becsum_response = [], []
         for axis in range(3):
@@ -591,7 +596,9 @@ class _WholeField:
                 None if onecentre is None else onecentre[axis],
                 include_induced,
             )
-            solution = solver.solve(perturbation)
+            start = (jnp.zeros_like(self.bare[axis]) if self.dpsi[axis] is None
+                     else self.dpsi[axis])
+            solution = solver.solve(perturbation, start=start, threshold=threshold)
             self.dpsi[axis] = solution.dpsi
             self.iterations += solution.iterations
             self.solves += 1

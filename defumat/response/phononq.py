@@ -641,8 +641,12 @@ class _WholeDisplacementsAtQ:
         self.iterations = 0
         self.solves = 0
 
-    def respond(self, dvscf, include_induced: bool):
-        """One iteration's solves: the complex response density per mode."""
+    def respond(self, dvscf, include_induced: bool, threshold=None):
+        """One iteration's solves: the complex response density per mode.
+
+        Each solve starts from the previous pass's ``dpsi``, zeros on the first
+        (``iudwf``); ``threshold`` is this pass's CG threshold.
+        """
         solver = self.solver
         response = []
         for atom in range(self.nat):
@@ -659,7 +663,11 @@ class _WholeDisplacementsAtQ:
                         lambda psi, ik, spin, b=self.bare[atom, cart], f=induced:
                         b[spin][ik] + f(psi, ik, spin)
                     )
-                solution = solver.solve(perturbation)
+                previous = self.dpsi[atom, cart]
+                start = (jnp.zeros_like(self.bare[atom, cart]) if previous is None
+                         else previous)
+                solution = solver.solve(perturbation, start=start,
+                                        threshold=threshold)
                 self.dpsi[atom, cart] = solution.dpsi
                 self.iterations += solution.iterations
                 self.solves += 1

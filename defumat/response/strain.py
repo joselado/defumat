@@ -523,10 +523,12 @@ class _WholeStrains:
         self.solves = 0
 
     def respond(self, dvscf, onecentre, include_induced: bool,
-                frozen_becsum=None):
+                frozen_becsum=None, threshold=None):
         """One iteration's six solves: the unsymmetrised response density and
         (PAW) the raw ``becsum`` response plus its frozen-state part, as
-        ``(3, 3)`` object arrays."""
+        ``(3, 3)`` object arrays. Each solve starts from the previous pass's
+        ``dpsi``, zeros on the first (``iudwf``); ``threshold`` is this pass's
+        CG threshold."""
         solver = self.solver
         response = np.empty((3, 3), dtype=object)
         becsum_response = np.empty((3, 3), dtype=object)
@@ -536,7 +538,11 @@ class _WholeStrains:
                     solver, self.bare[a, b], dvscf[a, b], include_induced,
                     None if onecentre is None else onecentre[a, b],
                 )
-                solution = solver.solve(perturbation)
+                previous = self.dpsi[a, b]
+                start = (jnp.zeros_like(self.bare[a, b]) if previous is None
+                         else previous)
+                solution = solver.solve(perturbation, start=start,
+                                        threshold=threshold)
                 self.dpsi[a, b] = self.dpsi[b, a] = solution.dpsi
                 self.iterations += solution.iterations
                 self.solves += 1

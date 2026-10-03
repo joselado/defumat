@@ -663,9 +663,16 @@ class _WholeDisplacements:
         self.iterations = 0
         self.solves = 0
 
-    def respond(self, dvscf, onecentre, include_induced: bool):
+    def respond(self, dvscf, onecentre, include_induced: bool, threshold=None):
         """One iteration's solves: the response density per mode, and for PAW
-        the raw ``becsum`` response the one-centre potential is built from."""
+        the raw ``becsum`` response the one-centre potential is built from.
+
+        Each solve starts from the previous pass's ``dpsi``, zeros on the first
+        (``iudwf``); ``threshold`` is this pass's CG threshold. The store is the
+        unshifted solution inside the loop: :meth:`shift_states` runs once after
+        it and rewrites the store in place, so an object used for one loop is
+        not reused for another after it.
+        """
         solver = self.solver
         response, becsum_response = [], []
         for row in range(self.rows):
@@ -675,7 +682,11 @@ class _WholeDisplacements:
                     include_induced,
                     None if onecentre is None else onecentre[row, cart],
                 )
-                solution = solver.solve(perturbation)
+                previous = self.dpsi[row, cart]
+                start = (jnp.zeros_like(self.bare[row, cart]) if previous is None
+                         else previous)
+                solution = solver.solve(perturbation, start=start,
+                                        threshold=threshold)
                 self.dpsi[row, cart] = solution.dpsi
                 self.iterations += solution.iterations
                 self.solves += 1
