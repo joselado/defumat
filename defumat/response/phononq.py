@@ -576,37 +576,81 @@ def self_consistent_response_at_q(
 
     Returns ``(dpsi, drho, history, average_iterations, converged)``.
     """
+    nat = np.asarray(calculation.system.structure.positions).shape[0]
+    return screening_loop_at_q(
+        calculation, _WholeDisplacementsAtQ(calculation, calculation_kq, solver,
+                                            bare, nat),
+        density, q_cart, alpha_mix=alpha_mix, tr2=tr2,
+        max_iterations=max_iterations, mixing_mode=mixing_mode, verbose=verbose,
+    )
+
+
+class _WholeDisplacementsAtQ:
+    """The ``3 nat`` solves at ``q`` with every k-point in one array: the route as it was.
+
+    :class:`~defumat.response.chunked_phonon.StreamedDisplacementsAtQ` is the
+    other one; :func:`screening_loop_at_q` drives either.
+    """
+
+    def __init__(self, calculation, calculation_kq, solver, bare, nat: int):
+        self.calculation = calculation
+        self.calculation_kq = calculation_kq
+        self.solver = solver
+        self.bare = bare
+        self.nat = nat
+        self.dpsi = np.empty((nat, 3), dtype=object)
+        self.iterations = 0
+        self.solves = 0
+
+    def respond(self, dvscf, include_induced: bool):
+        """One iteration's solves: the complex response density per mode."""
+        solver = self.solver
+        response = []
+        for atom in range(self.nat):
+            for cart in range(3):
+                if not include_induced:
+                    perturbation = (
+                        lambda psi, ik, spin, b=self.bare[atom, cart]: b[spin][ik]
+                    )
+                else:
+                    induced = induced_perturbation_at_q(
+                        self.calculation, self.calculation_kq, dvscf[atom, cart]
+                    )
+                    perturbation = (
+                        lambda psi, ik, spin, b=self.bare[atom, cart], f=induced:
+                        b[spin][ik] + f(psi, ik, spin)
+                    )
+                solution = solver.solve(perturbation)
+                self.dpsi[atom, cart] = solution.dpsi
+                self.iterations += solution.iterations
+                self.solves += 1
+                response.append(solver.response_density_at_q(solution.dpsi))
+        return response
+
+
+def screening_loop_at_q(
+    calculation, displacements, density, q_cart, alpha_mix: float = 0.7,
+    tr2: float = 1e-14, max_iterations: int = 100, mixing_mode: str = "anderson",
+    verbose: bool = False,
+):
+    """:func:`self_consistent_response_at_q`'s loop around a set of solves.
+
+    ``displacements`` holds the bare perturbations and does the solves --
+    every k-point in one array, or a k-chunk at a time
+    (:mod:`defumat.response.chunked_phonon`) -- and everything here acts on
+    whole-grid objects: the kernel at ``q``, the convergence test and the mixer.
+    """
     from defumat.response.mixing import ResponseMixer
 
-    nat = np.asarray(calculation.system.structure.positions).shape[0]
+    nat = displacements.nat
     grid_shape = jnp.asarray(density).shape
-    dvscf = jnp.zeros((nat, 3) + grid_shape, dtype=solver.psi.dtype)
-    dpsi = np.empty((nat, 3), dtype=object)
-    history, total_iterations, solves = [], 0, 0
+    dvscf = jnp.zeros((nat, 3) + grid_shape, dtype=displacements.solver.psi.dtype)
+    history = []
     converged = False
 
     mixer = ResponseMixer(mixing_mode, beta=alpha_mix)
     for iteration in range(max_iterations):
-        response = []
-        for atom in range(nat):
-            for cart in range(3):
-                if iteration == 0:
-                    perturbation = (
-                        lambda psi, ik, spin, b=bare[atom, cart]: b[spin][ik]
-                    )
-                else:
-                    induced = induced_perturbation_at_q(
-                        calculation, calculation_kq, dvscf[atom, cart]
-                    )
-                    perturbation = (
-                        lambda psi, ik, spin, b=bare[atom, cart], f=induced:
-                        b[spin][ik] + f(psi, ik, spin)
-                    )
-                solution = solver.solve(perturbation)
-                dpsi[atom, cart] = solution.dpsi
-                total_iterations += solution.iterations
-                solves += 1
-                response.append(solver.response_density_at_q(solution.dpsi))
+        response = displacements.respond(dvscf, iteration > 0)
 
         drho = jnp.stack(response).reshape((nat, 3) + grid_shape)
         induced = jnp.stack([
@@ -629,7 +673,8 @@ def self_consistent_response_at_q(
         )
         dvscf = real + 1j * imaginary
 
-    return dpsi, drho, history, total_iterations / max(1, solves), converged
+    return (displacements.dpsi, drho, history,
+            displacements.iterations / max(1, displacements.solves), converged)
 
 
 # ---------------------------------------------------------------------------
