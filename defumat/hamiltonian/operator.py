@@ -32,6 +32,8 @@ when there is not.
 
 from __future__ import annotations
 
+import math
+
 import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
@@ -60,6 +62,28 @@ def smallest_sphere(npw) -> int | None:
         return int(npw)
     npw = tuple(npw)
     return int(min(npw)) if npw else None
+
+
+def conjugated_contraction(projectors, states, subscripts: str) -> jnp.ndarray:
+    """``einsum(subscripts, conj(projectors), states)``, conjugating the smaller operand.
+
+    ``<beta|psi>`` needs one of its two operands conjugated, and conjugating
+    ``vkb`` materialises an ``(npwx, nkb)`` copy of it at every call: XLA does
+    not fold an elementwise op into a dot's operand on a CPU, and in the
+    compiled Davidson the copy sits inside the loop body, once for each rung of
+    the band ladder (``OPEN.md`` Part III M4).
+    ``conj(einsum(projectors, conj(states)))`` is the same number **to the last
+    bit**: each product in the sum has both factors' imaginary parts negated,
+    which negates its imaginary part exactly and leaves its real part alone,
+    the operands keep their places in the dot, and round-to-nearest is
+    symmetric under negation. So which one is conjugated is decided by size
+    alone, from static shapes: the band block where it is the smaller -- a
+    Davidson block of at most ``nbnd`` states against ``nkb`` projector
+    channels -- and the projectors where they are.
+    """
+    if math.prod(states.shape) < math.prod(projectors.shape):
+        return jnp.einsum(subscripts, projectors, states.conj()).conj()
+    return jnp.einsum(subscripts, projectors.conj(), states)
 
 
 class Hamiltonian(eqx.Module):
@@ -218,8 +242,10 @@ class Hamiltonian(eqx.Module):
         ``|beta> D <beta|psi>`` is an expansion in the stored basis, not a sum
         over it, and doubling it too is the classic way to get an energy that
         is nearly right.
+
+        The conjugate goes on the smaller operand (:func:`conjugated_contraction`).
         """
-        product = jnp.einsum("gk,...g->...k", vkb.conj(), vectors)
+        product = conjugated_contraction(vkb, vectors, "gk,...g->...k")
         if not self.gamma_only:
             return product
         zero = vkb[0].conj() * vectors[..., :1]

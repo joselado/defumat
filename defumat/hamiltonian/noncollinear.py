@@ -44,7 +44,7 @@ from defumat.basis.fft import (
     g_to_r, gather_from_box, r_to_sticks, sticks_local, sticks_to_r,
 )
 from defumat.batching import map_bands
-from defumat.hamiltonian.operator import smallest_sphere
+from defumat.hamiltonian.operator import conjugated_contraction, smallest_sphere
 from defumat.pseudo.projectors import Projectors
 
 __all__ = ["SpinorHamiltonian", "spin_multiply"]
@@ -317,12 +317,11 @@ class SpinorHamiltonian(eqx.Module):
         nonlocal term differs from the ordinary noncollinear one.
         """
         if not self.spiral:
-            return jnp.einsum(
-                "gk,...ag->...ak", self.projectors.at_k(ik).conj(), components
-            )
+            return conjugated_contraction(
+                self.projectors.at_k(ik), components, "gk,...ag->...ak")
         up, down = self._rows(ik)
         vkb = jnp.stack([self.projectors.at_k(up), self.projectors.at_k(down)])
-        return jnp.einsum("agk,...ag->...ak", vkb.conj(), components)
+        return conjugated_contraction(vkb, components, "agk,...ag->...ak")
 
     def _unproject(self, coefficients: jnp.ndarray, ik: int) -> jnp.ndarray:
         """``sum_i |beta_i> c^a_i``, shaped ``(..., 2, npwx)``."""
