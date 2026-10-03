@@ -1749,6 +1749,8 @@ bit-identical and the iteration count identical.
 
 ### M4. `calbec` conjugates the large operand where the same package's `project` conjugates the small one **[open, re-checked 2026-10-03]**
 
+**Done 2026-10-03, `32b5605`, and not a null**: the compiled Davidson materialised `conj(vkb)` (c128[1607, 64] on `si8-us-1k`) inside the loop once per rung. `conjugated_contraction` conjugates the smaller operand, decided from static shapes; loop-body copies 5 -> 0 on `si8-us-1k`, 4 -> 0 on `si8-1k`, 5 -> 3 on spinor `pt-so-1k` (whose widest rungs keep the old form), temp bytes 10.0 -> 8.4 MB on `si8-us-1k`; bit-identical.
+
 `defumat/hamiltonian/operator.py:155`. `Hamiltonian._becp` computes
 `einsum("gk,...g->...k", vkb.conj(), vectors)`: `vkb.conj()` is a separate materialised
 `(npwx, nkb)` buffer -- XLA does not fuse an elementwise op into a dot operand on CPU,
@@ -1766,6 +1768,8 @@ against an `h_psi` measured at 146.3 ms.
 line. Bit-identical.
 
 ### M5. The preconditioner contracts a block-diagonal `D` as a dense `(nkb, nkb)` **[moves a number; open, re-checked 2026-10-03]**
+
+**Done 2026-10-03, `680e01a`.** The diagonals are contracted atom block by atom block as one broadcast and one sum, which XLA fuses into a single reduction with no `(npwx, nkb)` intermediate (a batched einsum was measured worse, a dot not being fused on a CPU). Temp bytes 8.4 -> 6.5 MB on `si8-us-1k` and `si8-paw-1k`; energies within 6e-14 Ry, eigenvalues within 1e-13 (si16's 9.75e-13 is in pairs inside multiplets whose means agree to 6e-16, rule D4), iteration counts and every per-k Davidson step array unchanged on five cells. `hubbard/operator.py` has the same dense contraction on `v_ns` and is not changed.
 
 `defumat/hamiltonian/operator.py:306`. `diagonal(ik)` builds `h_diag` as
 `einsum("gi,ij,gj->g", vkb.conj(), dij, vkb)`, where `dij` is the full matrix that
@@ -6616,6 +6620,8 @@ iteration, two before and none after; energy and `ns` bit-identical.
 
 ### 9. A spin-spiral `E(q)` scan, and `relax_spiral_q`, compile the whole SCF stack again at every wavevector **[confirmed in part; half (b) moves a number]**
 
+**Done 2026-10-03.** (a) `dbef30b`: the Hamiltonian's static `npw` is the one number the solver reads, `min_k npw`; a scan's wavevectors whose `(npwx, nsticks, npw_min)` repeat compile nothing (298 -> 292 compilations over eight wavevectors), bit-identical. (b) `2322684`: `run_spiral_scan` pads every point to `scan_widths`, the union's `sphere_widths`, so one shape serves the scan (292 -> 184, every wavevector after the first compiling none); `relax_spiral_q` gets (a) only. (b) moves `E(q)` at the `conv_thr` level, as forecast: at one wavevector of eight on the hydrogen chain (`conv_thr = 1e-11`) the padded run stopped an iteration earlier and read 1.75e-10 Ry higher, and converged further the two agree to 9.5e-15, so it is the same state and the slack is `conv_thr`'s own (the unpadded run's previous iteration was 2.9e-6 Ry from its end); the others are identical or within 3.3e-12. `dE/dq` on the padded sphere agrees to 3.7e-9 in 9.3e-3.
+
 Sites: `scf/driver.py:4001-4010`, `:3576-3579`, and the pattern at `:3528-3539`;
 `hamiltonian/operator.py:93`, `:146-158`; `hamiltonian/noncollinear.py:136`, `:196-207`;
 `workflows/spiral.py:313-317`.
@@ -6674,6 +6680,8 @@ before and none after, the phases identical.
 ## Work a workflow repeats
 
 ### 11. Every ionic step restarts the eigensolver from atomic orbitals at `ethr = 1e-2`, where `pw.x` keeps the previous step's states and starts at 1e-6 **[moves a number]**
+
+**Done 2026-10-03, `1729c2a`, with a guard `pw.x` does not have.** `run_scf(diago_thr_init=...)` (the redo floor `diago_thr_init * nelec`, `electrons.f90`'s `tr2_min`), and `run_relax` and the frozen-basis branch of `run_vc_relax` hand each step the previous step's states at `1e-6` (`LATER_STEP_ETHR`); nothing is carried under a rebuilt basis, into the final SCF, a resumed step, under pools or into a residual solver. **Bare carried states locked into the wrong occupied manifold** on two-atom silicon with `nosym` and `nbnd = 4` (step 2 at -15.56894534 Ry against -15.59544593 from atomic orbitals and `pw.x`'s -15.59545201, the fourth band at Gamma 0.6345 against 0.5353; the relaxation 2 + 8 steps against 6), which `pw.x` escapes for a reason not established; with `pw.x`'s own `atomic+random` factor `1 + 0.05 rr1 exp(2 pi i rr2)` from a fixed key (`relax._randomized`) step 2 reads -15.5954458873 and the relaxation takes 6 steps as `pw.x`'s does. Davidson steps over whole relaxations, old / new / `pw.x`: `relax.in` 105.0 / 102.0 / 84.0, `relax2.in` 512.3 / 470.0 / 363.6, `vc-relax4.in` 148.4 / 122.5 / 144.3 (bare states would give 86.0 / 456.3 / 115.9, so the factor costs most of the gain); redos 4 -> 1, 14 -> 2, 11 -> 6, now on `pw.x`'s steps; geometries within 1.4e-6 to 1.7e-4 bohr and energies within 5e-11 to 8.3e-6 Ry of the old code, inside each run's thresholds. Carrying the previous occupations too (`pw.x`'s `btype`) took bare `vc-relax4` from 115.9 to 104.7 steps, measured and not implemented. Whether to keep the factor is put to a fable subagent.
 
 Sites: `workflows/relax.py:380-393`; `workflows/vc_relax.py:299-305`; `scf/driver.py:6868`,
 `:7136-7154`, `:6297-6308`.
@@ -6984,6 +6992,8 @@ against `h_psi`'s `nbnd npwx log N`, so a large cell is the only place it pays.
 
 ### 21. The host fetches of an SCF iteration, counted: about fourteen, and the 617 ms on record is not their transfer cost
 
+**Done 2026-10-03, `2430c11`, bit-identical on six SCFs** (`si8-1k`, `si8-paw-1k`, smeared `al2-metal`, ultrasoft DFT+U, `nspin = 2`, meta-GGA): one `jax.device_get` an attempt reads the steps, the unsettled count, the accuracy split, the iteration scalars, `ehart`, `etxc` and PAW's two, with no jit fused. Blocking reads a steady iteration: 15 -> 5 on `si8-1k`, 21 -> 8 on `si8-paw-1k`, 16 -> 6 smeared, 27 -> 16 with U, 21 -> 11 at `nspin = 2`, 21 -> 12 meta-GGA. What it is worth in time is not measured.
+
 Sites: `solvers/davidson.py:1137`; `scf/driver.py:554-555`, `:606`, `:5546-5547`, `:5603-5616`,
 `:7237-7241`, `:7310-7313`, `:7408-7424`, `:7523-7525`.
 
@@ -7050,6 +7060,8 @@ and `fe-mag-1k.in` against the current mixer and against `pw.x` (`tools/compare_
 `mix()` time and the history's resident bytes at the dense size.
 
 ### 23. Anderson's `mix()` copies every history entry through a boolean mask, and allocates whole vectors for every term of its combination
+
+**Done 2026-10-03, `5f232bd`, bit-identical** (the mixed vector and the Gram matrix byte for byte over every kind of exclusion, float64 and float32; `si8-1k` and `si8-paw-1k` SCFs identical in every iteration): views of the history where the fitted part is one block, and the combination accumulated in place in the same order. Whole vectors touched a call at history 8: 26 -> 5 with nothing excluded, 24.5 -> 5 with a tail excluded, 24.5 -> 11.5 with a middle block (PAW with `ns` or `tau`); tracemalloc's peak 12.1 -> 4.1 vectors. The time is not measured.
 
 Sites: `scf/mixing.py:340-342`, `:368`, `:463-469`; `scf/driver.py:554-555`, `:602`, `:7713-7742`.
 
