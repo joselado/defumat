@@ -62,6 +62,13 @@ together -- so only *differences* between them mean anything. And a single
 ``deps_n`` is defined only up to the rotation a degenerate multiplet is free in,
 so the trace is what a comparison can use.
 
+**Where the field response walks the k axis a chunk at a time, so does this**
+(:mod:`defumat.response.chunked_strain`, the field response's rule in
+:func:`~defumat.response.efield._streams`): the bare perturbations and the
+first-order states are then host stores, and so are ``dpsi``, ``ort`` and
+``overlap_derivatives`` on the :class:`StrainResponse` it returns. The
+self-consistent loop is one function for both routes.
+
 **Refused rather than approximated**: everything
 :func:`~defumat.response.sternheimer.require_a_sternheimer_regime` refuses, which
 for this perturbation means a **noncollinear** ultrasoft or PAW dataset.
@@ -142,7 +149,10 @@ class StrainResponse:
     """The first-order state, density and eigenvalues under the six strains."""
 
     #: Object array ``(3, 3)``; each entry ``(nspin, nk, nocc, npwx)`` complex.
-    #: Symmetric in its two labels -- ``dpsi[a, b] is dpsi[b, a]``.
+    #: Symmetric in its two labels -- ``dpsi[a, b] is dpsi[b, a]``. A device
+    #: array on the whole-k route and a numpy host store on the walked one
+    #: (:mod:`defumat.response.chunked_strain`); ``ort`` and
+    #: ``overlap_derivatives`` follow it.
     dpsi: np.ndarray
     #: ``(3, 3, nspin_mag, n1, n2, n3)`` -- the total ``drho/dx_ab`` on the
     #: dense grid, symmetrised as a rank-2 tensor field, **including** the
@@ -255,6 +265,15 @@ def strain_response(
     # term that is missing.
     require_a_sternheimer_regime(calculation, metals_missing=_NO_METAL_YET)
 
+    # **The route is decided before anything converts the states**, by the
+    # field response's rule (:func:`~defumat.response.efield._streams`): where it
+    # walks the k axis a chunk at a time, so does this
+    # (:mod:`defumat.response.chunked_strain`), with the bare perturbations and
+    # the first-order states in host memory.
+    from defumat.response.efield import _streams
+
+    streamed = _streams(calculation, wavefunctions, False,
+                        what="the strain response")
     weights, _ = calculation.occupations(eigenvalues)
     weights = jnp.asarray(weights)
     nocc = occupied_counts(calculation)
@@ -267,31 +286,45 @@ def strain_response(
     )
     density = jnp.asarray(density)
 
-    # 0. What a deforming ``S`` adds, and all of it is zero for a
-    #    norm-conserving dataset (``PLAN.md`` P41).
-    derivatives = overlap_derivatives(calculation, solver)
-    ort = orthogonality_states(calculation, solver, derivatives)
+    if streamed:
+        from defumat.response.chunked_strain import StreamedStrains
 
-    # 1. The bare perturbation and the frozen-state half of ``drho``, both from
-    #    ``at_strain`` and both stored: the loop below drives on them at every
-    #    iteration and neither changes.
-    bare = _bare_strains(calculation, solver, density)
-    frozen_drho, moved_drho, frozen_becsum, moved_becsum = (
-        _frozen_density_response(calculation, solver, weights, ort)
-    )
+        strains = StreamedStrains(calculation, solver, density)
+        # 0 and 1 walked: the bare perturbations, ``S'`` and the frozen-state
+        # half of ``drho``.
+        frozen_drho, moved_drho, frozen_becsum, moved_becsum = strains.prepare()
+    else:
+        # 0. What a deforming ``S`` adds, and all of it is zero for a
+        #    norm-conserving dataset (``PLAN.md`` P41).
+        derivatives = overlap_derivatives(calculation, solver)
+        ort = orthogonality_states(calculation, solver, derivatives)
 
-    # 2. ``solve_linter``'s loop.
-    dpsi, drho, dvscf, history, average_iterations, converged = (
-        _self_consistent_response(
-            calculation, solver, bare, frozen_drho, density,
-            alpha_mix=alpha_mix, tr2=tr2, max_iterations=max_iterations,
-            mixing_mode=mixing_mode, verbose=verbose,
-            frozen_becsum=frozen_becsum,
+        # 1. The bare perturbation and the frozen-state half of ``drho``, both
+        #    from ``at_strain`` and both stored: the loop below drives on them at
+        #    every iteration and neither changes.
+        bare = _bare_strains(calculation, solver, density)
+        frozen_drho, moved_drho, frozen_becsum, moved_becsum = (
+            _frozen_density_response(calculation, solver, weights, ort)
         )
+        strains = _WholeStrains(solver, bare)
+
+    # 2. ``solve_linter``'s loop, one loop for both routes.
+    drho, dvscf, history, converged = _self_consistent_response(
+        calculation, solver, strains, frozen_drho, density,
+        alpha_mix=alpha_mix, tr2=tr2, max_iterations=max_iterations,
+        mixing_mode=mixing_mode, verbose=verbose,
+        frozen_becsum=frozen_becsum,
     )
+    average_iterations = strains.iterations / max(strains.solves, 1)
 
     # 3. The eigenvalue response, from the converged perturbation.
-    deigenvalues = _eigenvalue_response(solver, bare, dvscf)
+    if streamed:
+        dpsi = strains.first_order_states()
+        derivatives, ort = strains.overlap_derivatives()
+        deigenvalues = strains.eigenvalue_response(dvscf)
+    else:
+        dpsi = strains.dpsi
+        deigenvalues = _eigenvalue_response(solver, bare, dvscf)
 
     return StrainResponse(
         dpsi=dpsi,
@@ -472,43 +505,38 @@ def _frozen_density_response(calculation, solver, weights, ort=None):
     return (jnp.stack(grids), jnp.stack(moved_grids), parts_total, parts_moved)
 
 
-def _self_consistent_response(
-    calculation, solver, bare, frozen_drho, density,
-    alpha_mix, tr2, max_iterations, verbose, mixing_mode=DEFAULT_RESPONSE_MIXING,
-    frozen_becsum=None,
-):
-    """The loop, with the frozen-state density response added at every pass.
+class _WholeStrains:
+    """The six solves with every k-point in one array: the route as it was.
 
-    Structurally :func:`~defumat.response.phonon.self_consistent_response` with
-    the rank-2 symmetriser and one extra term: ``drho`` is the states' response
-    **plus** ``frozen_drho``, so the induced potential the next iteration sees
-    carries the volume's contribution as well.
+    :class:`~defumat.response.chunked_strain.StreamedStrains` is the other one;
+    :func:`_self_consistent_response` drives either through :meth:`respond`.
     """
-    grid_shape = jnp.asarray(density).shape
-    dvscf = jnp.zeros((3, 3) + grid_shape)
-    history, total_iterations, solves = [], 0, 0
-    dpsi = np.empty((3, 3), dtype=object)
-    symmetrised = jnp.zeros_like(dvscf)
-    converged = False
-    mixer = ResponseMixer(mixing_mode, beta=alpha_mix)
 
-    onecentre = None if solver.ddd_paw is None else jnp.zeros(
-        (3, 3) + solver.ddd_paw.shape
-    )
+    def __init__(self, solver, bare):
+        self.solver = solver
+        self.bare = bare
+        self.dpsi = np.empty((3, 3), dtype=object)
+        self.iterations = 0
+        self.solves = 0
 
-    for iteration in range(max_iterations):
+    def respond(self, dvscf, onecentre, include_induced: bool,
+                frozen_becsum=None):
+        """One iteration's six solves: the unsymmetrised response density and
+        (PAW) the raw ``becsum`` response plus its frozen-state part, as
+        ``(3, 3)`` object arrays."""
+        solver = self.solver
         response = np.empty((3, 3), dtype=object)
         becsum_response = np.empty((3, 3), dtype=object)
         for a in range(3):
             for b in range(a, 3):
                 perturbation = _bare_plus_induced(
-                    solver, bare[a, b], dvscf[a, b], iteration > 0,
+                    solver, self.bare[a, b], dvscf[a, b], include_induced,
                     None if onecentre is None else onecentre[a, b],
                 )
                 solution = solver.solve(perturbation)
-                dpsi[a, b] = dpsi[b, a] = solution.dpsi
-                total_iterations += solution.iterations
-                solves += 1
+                self.dpsi[a, b] = self.dpsi[b, a] = solution.dpsi
+                self.iterations += solution.iterations
+                self.solves += 1
                 value = solver.response_density(solution.dpsi)
                 response[a, b] = response[b, a] = value
                 if onecentre is not None:
@@ -519,6 +547,39 @@ def _self_consistent_response(
                             for x, y in zip(parts, frozen_becsum[a, b])
                         )
                     becsum_response[a, b] = becsum_response[b, a] = parts
+        return response, becsum_response
+
+
+def _self_consistent_response(
+    calculation, solver, strains, frozen_drho, density,
+    alpha_mix, tr2, max_iterations, verbose, mixing_mode=DEFAULT_RESPONSE_MIXING,
+    frozen_becsum=None,
+):
+    """The loop, with the frozen-state density response added at every pass.
+
+    Structurally :func:`~defumat.response.phonon.self_consistent_response` with
+    the rank-2 symmetriser and one extra term: ``drho`` is the states' response
+    **plus** ``frozen_drho``, so the induced potential the next iteration sees
+    carries the volume's contribution as well. ``strains`` does the solves --
+    :class:`_WholeStrains`, or :class:`~defumat.response.chunked_strain.
+    StreamedStrains` a k-chunk at a time -- and everything here acts on
+    whole-grid objects with no k index. Returns ``(drho, dvscf, history,
+    converged)``; the first-order states are the object's own store.
+    """
+    grid_shape = jnp.asarray(density).shape
+    dvscf = jnp.zeros((3, 3) + grid_shape)
+    history = []
+    symmetrised = jnp.zeros_like(dvscf)
+    converged = False
+    mixer = ResponseMixer(mixing_mode, beta=alpha_mix)
+
+    onecentre = None if solver.ddd_paw is None else jnp.zeros(
+        (3, 3) + solver.ddd_paw.shape
+    )
+
+    for iteration in range(max_iterations):
+        response, becsum_response = strains.respond(
+            dvscf, onecentre, iteration > 0, frozen_becsum)
 
         stacked = jnp.stack([
             jnp.stack([response[a, b] for b in range(3)]) for a in range(3)
@@ -567,8 +628,7 @@ def _self_consistent_response(
             converged = True
             break
 
-    return (dpsi, symmetrised, dvscf, history,
-            total_iterations / max(solves, 1), converged)
+    return symmetrised, dvscf, history, converged
 
 
 def _symmetrize_becsum_strain(calculation, per_strain):

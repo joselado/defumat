@@ -162,12 +162,24 @@ def elastic_constants(
     # calls this function directly, so the check has to be here and not only in
     # :mod:`~defumat.response.electrostriction`.
     require_a_measured_elastic_regime(calculation)
-    psi = jnp.asarray(wavefunctions)
     eigenvalues = jnp.asarray(eigenvalues)
     if eigenvalues.ndim == 2:
         eigenvalues = eigenvalues[None]
     _require_a_closed_grid(calculation)
     weights, _ = calculation.occupations(eigenvalues)
+    # **Walked where the strain response walked**: the field response's rule
+    # (:func:`~defumat.response.efield._streams`), so the states and the
+    # first-order states stay in host memory and each column is the chunked
+    # stress differentiated once more
+    # (:func:`~defumat.forces.chunked.chunked_gradient_tangent`). The same
+    # functional as the single pass below, the k axis off the tape.
+    from defumat.response.efield import _streams
+
+    if _streams(calculation, wavefunctions, False,
+                what="the elastic constants"):
+        return _walked_elastic_constants(calculation, wavefunctions, eigenvalues,
+                                         np.asarray(weights), response)
+    psi = jnp.asarray(wavefunctions)
     weights = jnp.asarray(weights)
     # ``.shape`` off the device array, not ``np.asarray(...).shape``: the entry
     # is the solver's ``(nspin, nk, nocc, npwx)`` block, so materialising it to
@@ -210,10 +222,41 @@ def elastic_constants(
         column = 0.5 * (column + column.T)
         tensor[:, :, k, l] = tensor[:, :, l, k] = column
 
+    return _from_tensor(tensor)
+
+
+def _from_tensor(tensor) -> ElasticConstants:
     voigt = np.array([
         [tensor[i][j][k][l] for (k, l) in VOIGT] for (i, j) in VOIGT
     ]) * RY_TO_GPA
     return ElasticConstants(tensor=tensor, voigt=voigt)
+
+
+def _walked_elastic_constants(calculation, wavefunctions, eigenvalues, weights,
+                              response) -> ElasticConstants:
+    """:func:`elastic_constants` with the k axis walked a chunk at a time.
+
+    Each column is :func:`~defumat.forces.chunked.chunked_gradient_tangent` of
+    the stress along ``(T_kl, dpsi_kl)``: the frozen energy split as the chunked
+    stress splits it, with its diagonal constraint, which is the functional
+    :func:`~defumat.forces.energy.energy_at` differentiates in the single pass.
+    ``response.dpsi`` may be a host store (a walked strain response) or a device
+    array; each chunk takes its rows.
+    """
+    from defumat.forces.chunked import chunked_gradient_tangent
+
+    state = FrozenState(wavefunctions=wavefunctions, weights=weights,
+                        eigenvalues=np.asarray(eigenvalues))
+    zero = jnp.zeros((3, 3))
+    volume = calculation.system.cell.volume
+    tensor = np.zeros((3, 3, 3, 3))
+    for (k, l) in VOIGT:
+        column = np.asarray(chunked_gradient_tangent(
+            calculation, state, "strain", zero, strain_tangent(k, l),
+            response.dpsi[k, l])) / volume
+        column = 0.5 * (column + column.T)
+        tensor[:, :, k, l] = tensor[:, :, l, k] = column
+    return _from_tensor(tensor)
 
 
 def require_a_measured_elastic_regime(calculation) -> None:

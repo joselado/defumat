@@ -293,6 +293,106 @@ def chunked_gradient(calculation, state: FrozenState, kind: str, x,
     return e_glob + state.entropy + separable, g_x + pulled
 
 
+def _tangent_compiled(calculation, kind: str) -> dict:
+    """The three passes of :func:`chunked_gradient_tangent`, cached beside
+    :func:`_compiled`'s under the same rule (keyed on the calculation for a
+    strain)."""
+    _compiled(calculation, kind)
+    cached = calculation._chunked_gradient
+    name = "tangent-" + kind
+    if name in cached[1]:
+        return cached[1][name]
+
+    def local(big, rowset):
+        return with_rows(with_hoisted(calculation, big), rowset)
+
+    def embed(psi, dpsi):
+        """A tangent over the first bands, widened to every band with zeros."""
+        return jnp.zeros_like(psi).at[:, :, :dpsi.shape[2]].set(dpsi)
+
+    def forward(x, dx, big, rowset, psi, weights, eigenvalues, dpsi):
+        """The chunk's raw sums and their tangent along ``(dx, dpsi)``."""
+        return jax.jvp(
+            lambda y, states: _separable(_move(local(big, rowset), kind, y),
+                                         states, weights, eigenvalues,
+                                         _all(states))[1:],
+            (x, psi), (dx, embed(psi, dpsi)))
+
+    def global_(x, dx, big, rowset, sums, dsums):
+        """``(grad, d grad)`` of the whole-cell terms in ``(x, b, rho, ns)``."""
+        gradient = jax.grad(
+            lambda y, b, rho, ns: _global(_move(local(big, rowset), kind, y),
+                                          b, rho, ns),
+            argnums=(0, 1, 2, 3))
+        return jax.jvp(gradient, (x,) + tuple(sums), (dx,) + tuple(dsums))
+
+    def pull(x, dx, big, rowset, psi, weights, eigenvalues, dpsi, cotangent,
+             dcotangent):
+        """The ``jvp`` of the chunk's pull-back ``d/dx [E_c + g . sums_c]``
+        along ``(dx, dpsi, dg)``."""
+        def slope(y, states, g):
+            g_b, g_rho, g_ns = g
+
+            def energy(z):
+                value, b, rho, ns = _separable(
+                    _move(local(big, rowset), kind, z), states, weights,
+                    eigenvalues, _all(states))
+                coupled = jnp.sum(g_rho * rho) + sum(
+                    jnp.sum(gb * part) for gb, part in zip(g_b, b)
+                    if part is not None)
+                if ns is not None:
+                    coupled = coupled + jnp.sum(g_ns * ns)
+                return value + coupled
+            return jax.grad(energy)(y)
+
+        return jax.jvp(slope, (x, psi, cotangent),
+                       (dx, embed(psi, dpsi), dcotangent))[1]
+
+    passes = {"forward": jax.jit(forward), "global": jax.jit(global_),
+              "pull": jax.jit(pull)}
+    cached[1][name] = passes
+    return passes
+
+
+def chunked_gradient_tangent(calculation, state: FrozenState, kind: str, x, dx,
+                             dstates, k_batch: int | None = None):
+    """``d/dt [dE/dx](x + t dx, psi + t dstates)``, the k axis walked.
+
+    :func:`chunked_gradient`'s split differentiated once more: a forward walk
+    for the raw sums and their tangent, one ``jvp`` of the whole-cell terms'
+    gradient at the whole sums, and a walk whose ``jvp`` of each chunk's
+    pull-back carries the coordinate, the states and the global cotangent. It is
+    what the elastic constants are with ``kind = "strain"`` and the strain
+    response's ``dpsi`` as ``dstates`` (:func:`~defumat.response.elastic.
+    elastic_constants`), with the energy's diagonal constraint, as there.
+
+    ``dstates`` is ``(nspin, nk, nocc, ndim)``, the first ``nocc`` bands' tangent
+    (a host store or a device array); the rest of the bands have none.
+    """
+    reject_potential_only(calculation)
+    passes = _tangent_compiled(calculation, kind)
+    big = hoisted(calculation)
+    nk = calculation.system.kpoints.nk
+    batch = (calculation.k_batch if k_batch is None else k_batch) or nk
+    chunks = list(k_chunks(nk, batch))
+    sums = dsums = None
+    for rows, live in chunks:
+        psi, weights, eigenvalues = _chunk(state, rows, live)
+        value, tangent = passes["forward"](
+            x, dx, big, row_leaves(calculation, rows), psi, weights, eigenvalues,
+            _rows_of(dstates, rows))
+        sums, dsums = _add(sums, value), _add(dsums, tangent)
+    gradient, dgradient = passes["global"](
+        x, dx, big, row_leaves(calculation, chunks[0][0]), sums, dsums)
+    column = dgradient[0]
+    for rows, live in chunks:
+        psi, weights, eigenvalues = _chunk(state, rows, live)
+        column = column + passes["pull"](
+            x, dx, big, row_leaves(calculation, rows), psi, weights, eigenvalues,
+            _rows_of(dstates, rows), tuple(gradient[1:]), tuple(dgradient[1:]))
+    return column
+
+
 #: The :class:`~defumat.scf.driver.Calculation` attributes that carry a k
 #: index -- what :meth:`~defumat.scf.driver.Calculation.at_rows` slices. Inside
 #: the compiled passes they are replaced by one chunk's rows, passed as traced
