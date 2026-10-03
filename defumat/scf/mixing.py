@@ -207,6 +207,32 @@ class LinearMixer(Mixer):
         return rho_in + self.step(rho_out - rho_in, rho_in)
 
 
+def _contiguous_part(exclude, size: int) -> slice | None:
+    """The fitted part of a packed vector as one slice, or ``None`` if it is two.
+
+    The same entries ``fitted[exclude] = False`` leaves set, read off the slice
+    rather than off the mask: nothing excluded, or an excluded block at either
+    end, leaves one contiguous stretch, and an empty fit falls back to the whole
+    vector as :meth:`AndersonMixer.mix` does. A block in the middle, a strided
+    slice or anything that is not a slice gives ``None``, and the caller keeps
+    the masked copy.
+    """
+    if exclude is None:
+        return slice(0, size)
+    if not isinstance(exclude, slice):
+        return None
+    start, stop, step = exclude.indices(size)
+    if step != 1:
+        return None
+    if stop <= start or (start == 0 and stop >= size):
+        return slice(0, size)
+    if stop >= size:
+        return slice(0, start)
+    if start == 0:
+        return slice(stop, size)
+    return None
+
+
 def _same_fit(cached, fitted) -> bool:
     """Whether a cached Gram matrix was built in the inner product now asked for."""
     if isinstance(cached, str) or isinstance(fitted, str):
@@ -329,6 +355,7 @@ class AndersonMixer(Mixer):
         """
         rho_in = np.asarray(rho_in).ravel()
         residual = np.asarray(rho_out).ravel() - rho_in
+        segment = None
         if fit is not None:
             if len(self._fits) != len(self._residuals):
                 # A history written without fit vectors -- a checkpoint from
@@ -342,6 +369,10 @@ class AndersonMixer(Mixer):
                 fitted[exclude] = False
                 if not fitted.any():
                     fitted[:] = True
+            # The mask is still built, because it is what the cached Gram
+            # matrix is keyed on (``_fit_mask``, and a checkpoint carries it);
+            # what is no longer made from it is a copy of every entry.
+            segment = _contiguous_part(exclude, residual.size)
 
         self._densities.append(rho_in)
         self._residuals.append(residual)
@@ -357,13 +388,27 @@ class AndersonMixer(Mixer):
                 # left is the oldest, so its row and column are the leading ones.
                 self._gram, self._norms = self._gram[1:, 1:], self._norms[1:]
 
-        # Every entry's fitted part is still cut out on every call, because the
-        # new row of the Gram matrix needs all of them; what is no longer
-        # recomputed is the rest of the matrix. Extended before the ``n == 1``
-        # return, which costs one dot there and keeps the cache the size of the
-        # history after every call. With a metric the fit vectors are stored.
+        # Every entry's fitted part is read on every call, because the new row
+        # of the Gram matrix needs all of them; what is no longer recomputed is
+        # the rest of the matrix. Extended before the ``n == 1`` return, which
+        # costs one dot there and keeps the cache the size of the history after
+        # every call. With a metric the fit vectors are stored.
+        #
+        # **A view where the fitted part is one block, a copy only where it is
+        # two.** Nothing excluded, or ``becsum`` as the tail of the packed
+        # vector (every run without ``ns`` or ``tau``), leaves one contiguous
+        # stretch, and slicing it is free where the mask made a whole copy of
+        # every entry on every call: eight vectors at the default depth, each
+        # the size of the dense-grid state. The dot of a view and of a copy of
+        # the same contiguous numbers is one call to the same BLAS routine over
+        # the same values, so no number moves (measured: MKL's ``ddot`` gives
+        # the same bits at every 8-byte offset of either operand). ``becsum``
+        # between the density and ``ns`` or ``tau`` keeps the masked copy,
+        # since joining two stretches would split the dot into two sums.
         if fit is not None:
             fit = self._fits
+        elif segment is not None:
+            fit = [r[segment] for r in self._residuals]
         else:
             fit = [r[fitted] for r in self._residuals]
         gram, norms = self._extend_gram(fit, fitted)
@@ -460,13 +505,37 @@ class AndersonMixer(Mixer):
         # on the density it is built at -- and preconditioning each history
         # entry separately would also run its Krylov solve once per entry
         # instead of once per iteration, which is up to eight times the cost.
-        combination = zip(coefficients, self._densities[used], self._residuals[used])
-        mixed_density, mixed_residual = 0.0, 0.0
-        for c, d, r in combination:
-            mixed_density = mixed_density + c * d
-            mixed_residual = mixed_residual + c * r
-        mixed = mixed_density + self.step(mixed_residual, mixed_density)
-        return np.asarray(mixed).reshape(np.asarray(rho_out).shape)
+        #
+        # **Accumulated in place, in the order the sums always had.** Written
+        # as ``total = total + c * d`` the loop made a whole vector per term
+        # per sum even with numpy's temporary elision, 16 at the default depth,
+        # each a fresh mapping the size of the dense-grid state. Here there are
+        # three buffers for the whole call, and every element is the same
+        # floating-point operation as before: each product ``c * d`` in full,
+        # then added to the running total, term by term in history order. The
+        # first term is ``0.0 + c * d`` as it always was, the product and then
+        # an add of zero, which is not a no-op on a negative zero. The buffers
+        # take the dtype ``c * d`` promotes to, float64 for a float32 density
+        # too (NEP 50: the coefficient is a float64 scalar), and they are
+        # allocated per call rather than kept, because the returned array is
+        # handed to ``jnp.asarray``, which on a CPU may share its memory.
+        densities, residuals = self._densities[used], self._residuals[used]
+        dtype = np.result_type(coefficients.dtype, *(d.dtype for d in densities),
+                               *(r.dtype for r in residuals))
+        mixed_density = np.empty(rho_in.size, dtype=dtype)
+        mixed_residual = np.empty(rho_in.size, dtype=dtype)
+        term = np.empty(rho_in.size, dtype=dtype) if keep > 1 else None
+        for index, (c, d, r) in enumerate(zip(coefficients, densities, residuals)):
+            if index == 0:
+                np.add(np.multiply(c, d, out=mixed_density), 0.0, out=mixed_density)
+                np.add(np.multiply(c, r, out=mixed_residual), 0.0, out=mixed_residual)
+            else:
+                np.add(mixed_density, np.multiply(c, d, out=term), out=mixed_density)
+                np.add(mixed_residual, np.multiply(c, r, out=term), out=mixed_residual)
+        del term
+        mixed = np.add(mixed_density, self.step(mixed_residual, mixed_density),
+                       out=mixed_density)
+        return mixed.reshape(np.asarray(rho_out).shape)
 
     def _extend_gram(self, fit, fitted):
         """``(gram, norms)`` over ``fit``, from the cache and the one entry that is new.
@@ -479,8 +548,9 @@ class AndersonMixer(Mixer):
         NiBr2 grid ``PERFORMANCE.md`` sizes P74 against, one residual is 83 MB,
         so the matrix streamed 10.6 GB of host memory per iteration and its one
         new row streams 1.3 GB (``OPEN.md`` M3, arithmetic rather than a
-        timing). The fitted copies are still cut once per entry per call, which
-        is ``n`` passes in both versions. ``pw.x`` rebuilds too, over the upper
+        timing). The fitted parts are views where they are one contiguous block
+        and copies, one per entry per call, only where ``exclude`` sits in the
+        middle of the packed vector (:meth:`mix`). ``pw.x`` rebuilds too, over the upper
         triangle (``mix_rho.f90:403-425``, ``betamix(i,j) = rho_ddot(df(j),
         df(i))`` and then ``betamix(j,i) = betamix(i,j)``), so this departs from
         it in cost and not in arithmetic.
@@ -493,10 +563,12 @@ class AndersonMixer(Mixer):
         was. The norm is kept beside the matrix rather than read off its
         diagonal, because under a float32 policy ``np.sqrt`` of the float32 dot
         and of its float64 copy differ in the last bit. What the cache does
-        change is *when* a pair is computed, once, on the fitted copy made in
+        change is *when* a pair is computed, once, on the fitted part read in
         the call it arrived in; that the old code's recomputation on a fresh
         copy gave the same bits assumes the BLAS returns one dot of two vectors
-        the same wherever they sit in memory.
+        the same wherever they sit in memory, which is also what makes a view
+        and a copy interchangeable here, and which was measured for MKL's
+        ``ddot`` at every 8-byte offset of either operand.
 
         **When it is rebuilt from scratch**, which is exactly when it would
         otherwise describe something other than ``fit``: after :meth:`reset`,
