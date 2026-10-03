@@ -56,11 +56,14 @@ CASES = [
     ("si-epsilon-paw", 3, None),                        # 10 k: 3, 3, 3, 1 + 2 pad
     ("gamma", 1, None),
     ("gamma", 1, (0,)),
+    ("si-epsilon-paw-unshifted-nosym", 3, None),        # 8 k: 3, 3, 2 + 1 pad
 ]
 
 #: Measured, the matrix: 5.1e-15 on silicon's force constants of 0.28, 4.3e-15
-#: on aluminium's 0.048, 2.3e-15 on AlAs's 0.22, and 2.2e-16 on the half sphere;
-#: the induced densities 1e-14 or below.
+#: on aluminium's 0.048, 5.2e-14 on AlAs's 0.22, 3.7e-14 on PAW silicon's 0.36
+#: without symmetry, and 2.2e-16 on the half sphere; the induced densities 1e-14
+#: or below. On the cells without symmetry the grids are in host memory, and
+#: the history then agrees to round-off rather than to the bit (a numpy sum).
 TOLERANCE = 1e-11
 
 #: Two-atom silicon at Gamma, stored on the half sphere (``K_POINTS gamma``).
@@ -132,6 +135,39 @@ def test_the_streamed_phonon_is_the_whole_k_phonon(case, k_batch, atoms):
     assert streamed.average_iterations == whole.average_iterations
     # ``on_row`` still fires a row at a time, in the whole route's order.
     assert rows["streamed"] == rows["whole"]
+
+
+def test_a_run_without_symmetry_keeps_its_grids_in_host_memory(monkeypatch):
+    """The ``3 nat`` dense grids stay on the host where the run has no symmetry.
+
+    The loop's ``dvscf``, response, induced potential, ``drhous`` and core term
+    are ``P`` grids each, and with no symmetry the displacement average is the
+    identity, so the chunked route keeps them in host memory and puts one mode
+    at a time on the device. The comparison above says the answer is the same;
+    this says the mode was the one taken, on the PAW cell, whose one-centre
+    fields go through the host mixer beside ``dvscf``.
+    """
+    import defumat.response.phonon as phonon
+
+    seen = {}
+    original = phonon.screening_loop
+
+    def spy(calculation, displacements, *args, **kwargs):
+        seen["host"] = getattr(displacements, "host_fields", None)
+        out = original(calculation, displacements, *args, **kwargs)
+        seen["drho"] = type(out[1])
+        seen["dvscf"] = type(out[5]["dvscf"])
+        return out
+
+    monkeypatch.setattr(phonon, "screening_loop", spy)
+    calculation, result = _converged("si-epsilon-paw-unshifted-nosym", 3)
+    _phonons(calculation, result, np.asarray(result.wavefunctions), None)
+    assert seen == {"host": True, "drho": np.ndarray, "dvscf": np.ndarray}
+
+    seen.clear()
+    calculation, result = _converged("si-epsilon", 4)
+    _phonons(calculation, result, np.asarray(result.wavefunctions), None)
+    assert seen["host"] is False
 
 
 def test_a_second_streamed_call_compiles_nothing():

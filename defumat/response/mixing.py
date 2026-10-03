@@ -65,14 +65,16 @@ class ResponseMixer:
         self.mixer = get_mixer(name, beta=beta)
         self.name = name
 
-    def mix(self, current, proposed):
+    def mix(self, current, proposed, host: bool = False):
         """The next input, given this iteration's input and output.
 
         Args:
             current: one array, or a sequence of them, as the loop holds them.
             proposed: what the loop's evaluation produced from ``current``.
+            host: return numpy arrays rather than device ones, for a loop that
+                keeps its fields in host memory (the history already is).
 
-        Returns the same structure, as JAX arrays.
+        Returns the same structure, as JAX arrays unless ``host``.
         """
         one = not isinstance(current, (list, tuple))
         current = [current] if one else list(current)
@@ -87,7 +89,8 @@ class ResponseMixer:
         out, start = [], 0
         for shape in shapes:
             size = int(np.prod(shape)) if shape else 1
-            out.append(jnp.asarray(mixed[start:start + size].reshape(shape)))
+            piece = mixed[start:start + size].reshape(shape)
+            out.append(piece if host else jnp.asarray(piece))
             start += size
         return out[0] if one else out
 

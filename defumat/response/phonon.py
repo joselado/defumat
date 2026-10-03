@@ -693,11 +693,26 @@ def screening_loop(
     # act on (see :func:`dynamical_matrix`).
     chosen = tuple(range(nat)) if atoms is None else tuple(atoms)
     rows = len(chosen)
-    grid_shape = jnp.asarray(density).shape
-    core = _core_charge_response(calculation, density, positions, chosen)
-    dvscf = jnp.zeros((rows, 3) + grid_shape)
+    grid_shape = tuple(np.shape(density))
+    # **The ``3 nat`` grids in host memory**, one mode at a time on the device,
+    # where the displacements ask for it: the k-chunked route on a run with no
+    # symmetry, where ``symmetrize_atom_displacement`` is the identity and so
+    # nothing below needs the modes together. ``dvscf``, the response, the
+    # induced potential, ``drhous`` and the core term are each ``P`` dense grids
+    # -- six to seven of them at once at an iteration's peak, which on a
+    # 57-atom molecule over a 6M-point grid is about 40 GB -- and every
+    # operation on them here is per mode except the mixer, whose history is in
+    # host memory already.
+    host = bool(getattr(displacements, "host_fields", False))
+    core = _core_charge_response(calculation, density, positions, chosen,
+                                 host=host)
+    if host:
+        dvscf = np.zeros((rows, 3) + grid_shape)
+        symmetrised = np.zeros_like(dvscf)
+    else:
+        dvscf = jnp.zeros((rows, 3) + grid_shape)
+        symmetrised = jnp.zeros_like(dvscf)
     history = []
-    symmetrised = jnp.zeros_like(dvscf)
     converged = False
     # PAW's one-centre coefficients respond too, and they are *not* a function
     # of the density -- they come from ``becsum``. Carried and mixed beside
@@ -729,7 +744,8 @@ def screening_loop(
         # ``symdvscf``: the 3 nat responses are symmetrised *together*, after
         # the loop over modes and before the kernel, because an operation mixes
         # them -- rotating the direction and permuting the atom.
-        stacked = jnp.stack(response).reshape((rows, 3) + grid_shape)
+        stack = np.stack if host else jnp.stack
+        stacked = stack(response).reshape((rows, 3) + grid_shape)
         if drhous is not None:
             # The first-order density the potential responds to is the *whole*
             # of it, and for an ultrasoft or PAW dataset the variational part is
@@ -737,15 +753,23 @@ def screening_loop(
             # occupied block of ``dpsi`` is not zero, so ``drho.f90``'s
             # "change at fixed wavefunctions" screens beside it.
             stacked = stacked + drhous
-        symmetrised = calculation.symmetrize_atom_displacement(stacked)
+        # In host mode the run has no symmetry and the average is the identity
+        # (``host_fields`` is set only then), so it is not called on a stack the
+        # device would have to hold.
+        symmetrised = (stacked if host
+                       else calculation.symmetrize_atom_displacement(stacked))
 
         # ``dv_of_drho``: one jvp of the potential this code already writes.
-        induced = jnp.stack([
-            compiled_jvp(
+        def screened(field):
+            out = compiled_jvp(
                 lambda r: calculation.potential(r).v_scf,
                 (jnp.asarray(density),),
-                (symmetrised[row, cart],),
+                (jax.device_put(field) if host else field,),
             )[1]
+            return np.asarray(out) if host else out
+
+        induced = stack([
+            screened(symmetrised[row, cart])
             for row in range(rows) for cart in range(3)
         ]).reshape(dvscf.shape)
 
@@ -783,18 +807,21 @@ def screening_loop(
             # -- so it is built once and added to the induced potential here.
             induced = induced + core
 
-        change = float(jnp.sum((induced - dvscf) ** 2))
+        # In host mode a numpy sum, whose order differs from the device's, so
+        # the history agrees with the device route's to round-off rather than to
+        # the bit.
+        change = float((np if host else jnp).sum((induced - dvscf) ** 2))
         history.append(change)
         if verbose:
             print(f"  iter {iteration + 1}: |ddv_scf|^2 = {change:.3e}")
         if onecentre is None:
-            dvscf = mixer.mix(dvscf, induced)
+            dvscf = mixer.mix(dvscf, induced, host=host)
         else:
             # **One Anderson problem over both.** The one-centre potential and
             # ``dV_scf`` are coupled through the same ``dbecsum``, which is why
             # ``mix_pot`` concatenates them rather than mixing them apart.
             dvscf, onecentre = mixer.mix(
-                [dvscf, onecentre], [induced, induced_onecentre]
+                [dvscf, onecentre], [induced, induced_onecentre], host=host
             )
         if change < tr2:
             converged = True
@@ -825,7 +852,8 @@ def screening_loop(
             extras)
 
 
-def _core_charge_response(calculation, density, positions, atoms=None):
+def _core_charge_response(calculation, density, positions, atoms=None,
+                          host: bool = False):
     """``dv_xc`` from the core charge travelling with its atom -- ``addcore``.
 
     ``(nat, 3, nspin_mag, n1, n2, n3)``, or ``None`` when no species has a
@@ -876,8 +904,12 @@ def _core_charge_response(calculation, density, positions, atoms=None):
     for atom in chosen:
         for cart in range(3):
             tangent = jnp.zeros_like(positions).at[atom, cart].set(1.0)
-            fields.append(compiled_jvp(potential_at, (positions,), (tangent,))[1])
-    return jnp.stack(fields).reshape((len(chosen), 3) + rho.shape)
+            field = compiled_jvp(potential_at, (positions,), (tangent,))[1]
+            # ``host``: the loop keeps its ``3 nat`` grids in host memory, and
+            # this is one more set of them.
+            fields.append(np.asarray(field) if host else field)
+    stack = np.stack if host else jnp.stack
+    return stack(fields).reshape((len(chosen), 3) + rho.shape)
 
 
 def _bare_displacements(calculation, solver, v_scf, positions, atoms=None) -> np.ndarray:

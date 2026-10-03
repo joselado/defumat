@@ -55,12 +55,20 @@ Ewald term is moved to ``q``. Against the whole route: 2.1e-14 end to end at one
 k-point a chunk, and 1.9e-14 at a chunk of 3 with one ``k + q`` store handed to
 both.
 
-**What it does not change**: the ``P`` dense-grid fields the loop carries
-(``dvscf``, the induced potential, the symmetrised response, ``drhous`` and the
-core term), which are ``5 P nspin_mag`` grids on the device and are the next
-lever for a subset of a large cell; and a response handed in through
-``response=``, a strained calculation and a k-point pool, which take the whole-k
-route or are refused before this is reached.
+**The ``P`` dense-grid fields the loop carries** (``dvscf``, the response,
+the induced potential, ``drhous`` and the core term, six to seven grids per
+perturbation at an iteration's peak) are kept in host memory too, one mode at a
+time on the device, **wherever the run has no symmetry** (``host_fields``):
+there the displacement average is the identity and nothing in
+:func:`~defumat.response.phonon.screening_loop` needs the modes together, and
+the mixer's history was in host memory already. With symmetry they stay on the
+device, because ``symmetrize_atom_displacement`` acts on the stack as one object.
+
+**What it does not change**: a response handed in through ``response=``, a
+strained calculation and a k-point pool, which take the whole-k route or are
+refused before this is reached; and the phonon at ``q``'s loop
+(:func:`~defumat.response.phononq.screening_loop_at_q`), whose ``3 nat``
+complex grids are still on the device.
 """
 
 from __future__ import annotations
@@ -141,8 +149,18 @@ class StreamedDisplacements:
         self.iterations = 0
         self.solves = 0
         self._levels = None
+        #: Whether :func:`~defumat.response.phonon.screening_loop` keeps the
+        #: ``P`` dense grids in host memory and puts one mode at a time on the
+        #: device: wherever the run has no symmetry, so that the displacement
+        #: average is the identity and nothing needs the modes together.
+        self.host_fields = calculation._symmetry_maps is None
 
     # -- the chunk's arguments -------------------------------------------------
+
+    def _on_device(self, field):
+        """One mode's field for a pass: uploaded from the host store in host
+        mode, where the device holds no stack of them."""
+        return jax.device_put(field) if isinstance(field, np.ndarray) else field
 
     def _tangent(self, atom: int, cart: int):
         """The unit displacement, built on the host so that no index is a
@@ -216,18 +234,26 @@ class StreamedDisplacements:
         moved_becsum = np.empty(shape, dtype=object)
         ort_density = np.empty(shape, dtype=object)
         ort_becsum = np.empty(shape, dtype=object)
+        keep = np.asarray if self.host_fields else (lambda field: field)
         for index, (row, atom, cart) in enumerate(self.modes):
             d_becsum, _ = moved_sums[index]
-            moved_density[row, cart] = self.passes["moved_density"](
+            moved_density[row, cart] = keep(self.passes["moved_density"](
                 self.big, rowset, self.positions, self._tangent(atom, cart),
-                self.density, tuple(self.becsum), d_becsum)
+                self.density, tuple(self.becsum), d_becsum))
             moved_becsum[row, cart] = d_becsum
             o_becsum, o_smooth = ort_sums[index]
-            ort_density[row, cart] = self.solver.finish_density(o_smooth, o_becsum)
+            ort_density[row, cart] = keep(
+                self.solver.finish_density(o_smooth, o_becsum))
             ort_becsum[row, cart] = o_becsum
-        moved_stacked = _stack_modes(_symmetrize_modes(calculation, moved_density))
-        self.drhous = moved_stacked + _stack_modes(
-            _symmetrize_modes(calculation, ort_density))
+        if self.host_fields:
+            # No symmetry, so the average is the identity: stacked on the host.
+            self.drhous = (_stack_host(moved_density)
+                           + _stack_host(ort_density))
+        else:
+            moved_stacked = _stack_modes(
+                _symmetrize_modes(calculation, moved_density))
+            self.drhous = moved_stacked + _stack_modes(
+                _symmetrize_modes(calculation, ort_density))
         self.becsumort = _add_becsum(
             symmetrize_becsum_modes(calculation, moved_becsum),
             symmetrize_becsum_modes(calculation, ort_becsum))
@@ -238,15 +264,17 @@ class StreamedDisplacements:
         """``(dv, int3 + d(ddd_paw))`` per mode: k-independent, so once per mode
         and iteration rather than per chunk; ``None`` coefficients on a
         norm-conserving dataset."""
+        zeros = np.zeros_like if self.host_fields else jnp.zeros_like
         fields, coefficients = [], []
         for row, _, cart in self.modes:
-            dv = dvscf[row, cart] if include_induced else jnp.zeros_like(dvscf[row, cart])
+            dv = dvscf[row, cart] if include_induced else zeros(dvscf[row, cart])
             dddd = None if onecentre is None else (
                 onecentre[row, cart] if include_induced
                 else jnp.zeros_like(onecentre[row, cart]))
             fields.append(dv)
-            coefficients.append(self.solver.perturbed_coefficients(dv, dddd)
-                                if self.ultrasoft else None)
+            coefficients.append(
+                self.solver.perturbed_coefficients(self._on_device(dv), dddd)
+                if self.ultrasoft else None)
         return fields, coefficients
 
     def respond(self, dvscf, onecentre, include_induced: bool):
@@ -256,19 +284,27 @@ class StreamedDisplacements:
         fields, coefficients = self._coefficients(dvscf, onecentre, include_induced)
         parts = [None] * len(self.modes)
         worst = [0] * len(self.modes)
+        add = _add_host if self.host_fields else _add
         for rows, live in self.chunks:
             arguments = self._arguments(rows, live)
             written = rows[:live]
             for index, (row, _, cart) in enumerate(self.modes):
                 dpsi, steps, _, chunk_parts = self.field_passes["respond"](
                     *arguments, _rows_of(self.bare[row, cart], rows),
-                    fields[index], coefficients[index])
+                    self._on_device(fields[index]), coefficients[index])
                 self.dpsi[row, cart][:, written] = np.asarray(dpsi)[:, :live]
-                parts[index] = _add(parts[index], chunk_parts)
+                # In host mode each mode's share of the two raw sums is added on
+                # the host, in the same order, so the ``P`` accumulators are not
+                # held on the device across the chunks.
+                parts[index] = add(parts[index], chunk_parts)
                 worst[index] = max(worst[index], int(np.max(np.asarray(steps))))
         self.iterations += sum(worst)
         self.solves += len(self.modes)
-        response = [solver.finish_density(*part) for part in parts]
+        if self.host_fields:
+            response = [np.asarray(solver.finish_density(
+                *jax.tree_util.tree_map(jax.device_put, part))) for part in parts]
+        else:
+            response = [solver.finish_density(*part) for part in parts]
         becsum_response = ([part[1] for part in parts]
                            if onecentre is not None else [])
         return response, becsum_response
@@ -282,7 +318,11 @@ class StreamedDisplacements:
                 total = _add(total, parts)
                 dos_ef += float(weight)
             self._levels = (self.solver.finish_density(*total), dos_ef)
-        return self.solver.fermi_level_shift(drho, levels=self._levels)
+        corrected, shift = self.solver.fermi_level_shift(
+            self._on_device(drho), levels=self._levels)
+        if self.host_fields:
+            corrected = np.asarray(corrected)
+        return corrected, shift
 
     def shift_states(self, shifts) -> None:
         """``ef_shift_wfc`` on the host store, chunk by chunk, ``shifts`` in mode order."""
@@ -312,7 +352,7 @@ class StreamedDisplacements:
             for index, (row, _, cart) in enumerate(self.modes):
                 dlambda = self.passes["multipliers"](
                     *arguments, weights, _rows_of(self.bare[row, cart], rows),
-                    fields[index], coefficients[index],
+                    self._on_device(fields[index]), coefficients[index],
                     _rows_of(self.overlaps[row, cart], rows))
                 self.multipliers[row, cart][:, written] = (
                     np.asarray(dlambda)[:, :live])
@@ -331,12 +371,13 @@ class StreamedDisplacements:
             if self.ultrasoft:
                 dbecsum = extras.get("dbecsum")
                 column = self._ultrasoft_column(
-                    row, cart, tangent, rowset, raw, drho[row, cart],
+                    row, cart, tangent, rowset, raw,
+                    self._on_device(drho[row, cart]),
                     None if dbecsum is None else dbecsum[row, cart])
             else:
                 column = np.asarray(self.passes["global_nc"](
                     self.big, rowset, self.positions, tangent, self.density,
-                    drho[row, cart]))
+                    self._on_device(drho[row, cart])))
                 for rows, live in self.chunks:
                     psi, weights, eigenvalues = self._states(rows, live)
                     arrays = self.solver.chunk_arrays(rows, live)
@@ -408,6 +449,19 @@ class StreamedDisplacements:
                 _rows_of(self.overlaps[row, cart], rows),
                 jax.device_put(multipliers), dg_b, dg_rho))
         return column
+
+
+def _add_host(total, part):
+    """:func:`~defumat.response.chunked._add` into a host accumulator."""
+    part = jax.tree_util.tree_map(np.asarray, part)
+    return part if total is None else jax.tree_util.tree_map(np.add, total, part)
+
+
+def _stack_host(per_mode) -> np.ndarray:
+    """``(rows, 3)`` object array of host grids -> one stacked host array."""
+    rows, ncart = per_mode.shape
+    return np.stack([np.stack([per_mode[row, cart] for cart in range(ncart)])
+                     for row in range(rows)])
 
 
 def _phonon_passes(calculation, key) -> dict:
