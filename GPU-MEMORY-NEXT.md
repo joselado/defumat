@@ -27,6 +27,46 @@ evidence; an A/B is*. Several fixes below are "remat this" or "chunk that", and
 the peak before and after, one run per fresh process (`peak_bytes_in_use` has no reset),
 with the compile cache warm (a miss costs *more* device memory on this card).
 
+## Where the next session starts (written 2026-10-03, at `a6b845f`)
+
+**Item 2's phonons are done.** The `Gamma` dynamical matrix and the phonon at `q` walk the k
+axis a chunk at a time with their per-perturbation arrays in host memory
+(`defumat/response/chunked_phonon.py`), and on a run without symmetry the loop's per-mode
+dense grids are in host memory too; the numbers are the two "Done since" entries of
+2026-10-03 below and the two `PERFORMANCE.md` entries of that date. On the RTX A2000,
+eight-atom silicon at one k-point a chunk: the `Gamma` phonon of every atom now reads the
+SCF's own 35.1 MB (norm-conserving) and 109.8 MB against 66.9 (ultrasoft), where before it
+did not run at all; the phonon at `q` reads 49.5 MB where it read 953.7. The regression is
+`tests/regression/test_streamed_phonons.py` (13 tests, 18 minutes, slow set).
+
+**What to pick up, in the order the night's reviews put it:**
+
+1. **The `keep_internals` consumers**: the strain response (`defumat/response/strain.py`),
+   electrostriction and Raman. Each is larger than an evening by the Fable review of
+   2026-10-03: `StrainResponse.dpsi`/`ort` are read whole-k by `elastic.py`,
+   `electrostriction.py` and `piezo.py`, and the bare, frozen-density and overlap passes
+   through `at_strain` are the `Gamma` phonon's amount of work again. Write the plan and send
+   it to a Fable review first; `chunked_phonon.py` is the template.
+2. **The per-mode grids with symmetry on** stay on the card, because
+   `symmetrize_atom_displacement` acts on the whole `(3 nat, ...)` stack. Doing it on the host,
+   or per orbit of equivalent atoms (an orbit times three directions is closed under the
+   group), is the lever for a symmetric large cell.
+3. **Time, not memory**: the ultrasoft bare walk rebuilds `newd` and its tangent once per
+   chunk and perturbation where the whole route did it once per perturbation; not separated.
+   And the ultrasoft global step's 43 to 50 MB of temporaries, flat in the mesh.
+
+**Loose ends the night left for the user, none of them blocking:** a pre-existing failure,
+`tests/regression/test_spinor_response.py::test_the_spinor_density_weights_are_the_ground_state_s`,
+which asserts an absolute 1e-18 on a density of order 0.1 and reads 4e-17 to 7e-17 at `c43cb6d`
+and at `a6b845f` alike (a tolerance below the rounding, not a defect of that night's work);
+three merged local branches (`streamed-q`, `phonon-host-fields`, `ewald-q-chunks`); and on D22
+the worktrees `/l/ladovj1/defumat-old` and `/l/ladovj1/defumat-hf` beside a checkout at
+master, with the runs in `/l/ladovj1/review/item2ph/` (`CLAUDE.local.md` has the details).
+**Two habits the night paid for**: a padded chunk row must be zeroed for anything weighted by
+something other than the occupation (the multipliers were); and on the sessions' workstation a
+bit-identity check runs both arms on the same kind of core, since the performance and
+efficiency cores differ in the last bit.
+
 ## Fixed while this list was written
 
 Three survey findings were small enough to fix in the same branch, and are not repeated
