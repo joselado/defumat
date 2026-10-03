@@ -9962,7 +9962,12 @@ own and the same at every geometry, so the pass takes the field's.
 **The vibrational spectrum walks too** (`5b2ab3d`): the walked Raman route hands back its walked
 displacement response, and `dynamical_matrix` assembles from that response's own host stores with the
 walked Gamma phonon's assembly; end to end on ultrasoft silicon the frequencies agree with the whole route
-to 1e-6 cm^-1 and the Raman activity of each degenerate multiplet to 1e-7 relative. The same commit gave
+to 1e-6 cm^-1 and the Raman activity of each degenerate multiplet to 1e-7 relative. On the card
+(`get_vibrational_spectrum`, norm-conserving AlAs, `alas-raman.in` at 10 Ry, one k-point a chunk, warm):
+28.3 -> 8.7 MB at 27 k-points and 54.1 -> 9.6 at 64, the SCF's own both times, with the frequencies the
+same to four decimals; and slower, 29.2 -> 33.4 s and 46.7 -> 72.3 s, because a cell this small has
+little work per k-point and one k-point a chunk pays its dispatch per chunk -- what `k_batch = 'fit'`,
+the default on a card, amortises. The same commit gave
 the two routes one expression for the second-order energy's per-k terms and the position residual
 (`second_order_band_terms`, `position_residual`); the whole route is bit-identical to the commit before
 on ultrasoft silicon and within 1.4e-14 on 195 on norm-conserving silicon, both arms on the same cores,
