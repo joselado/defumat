@@ -64,9 +64,20 @@ pytestmark = [pytest.mark.regression, pytest.mark.slow]
 CASES = Path(__file__).resolve().parents[1] / "data" / "qe"
 PSEUDO = Path(__file__).resolve().parents[1] / "data" / "pseudo"
 
-#: What a symmetry forbids is round-off here: nothing in these runs imposes the
-#: crystal class, and the measured residue is 1.7e-14 on AlAs.
-FORBIDDEN = 1e-10
+#: What a symmetry forbids is the **ground state's** own asymmetry here, not
+#: round-off: nothing in these runs imposes the crystal class, and at
+#: ``conv_thr = 1e-12`` the SCF density is converged to about 1e-8 (refining the
+#: states moves it by 3.5e-8), so which way its last 1e-10 falls is decided by
+#: rounding. Measured on AlAs, ``nosym``: the density's cubic asymmetry is 7e-17
+#: on the default k batch and 8.7e-11 with ``DEFUMAT_K_BATCH=2``, a dial that
+#: moves results only at round-off, and the largest forbidden component reads
+#: 2.4e-14 and **1.4e-9** respectively (2.8e-9 on a rounding pattern of the
+#: radial transforms' chunking); at ``conv_thr`` 1e-14 and 1e-15 the density's
+#: asymmetry falls to 1.1e-11 and 8.0e-12, so it is convergence and not a floor.
+#: This bound was 1e-10, read off the one pattern that happened to land
+#: symmetric. What the test exists for is a wrong assembly, which shows at the
+#: order of ``e_14`` itself, 0.76 C/m^2.
+FORBIDDEN = 1e-8
 
 #: ``ph.x``'s own Born charges for this cell, from
 #: ``reference.out.ph-alas-raman`` -- printed to five decimals, which is what
@@ -201,7 +212,11 @@ def test_the_transcribed_contraction_reproduces_the_differentiated_one():
         field.internals["dpsi"],
     )
     differentiated = _piezo("alas-raman")
-    assert np.abs(transcribed - differentiated).max() < 1e-12
+    # The two agree at self-consistency, so their difference follows the
+    # ground state's convergence: 3.6e-16 on the default k batch and 6.2e-12
+    # with ``DEFUMAT_K_BATCH=2`` (1.2e-11 on a rounding pattern of the radial
+    # transforms' chunking), on a tensor of 1.3e-2 e/bohr^2 -- see FORBIDDEN.
+    assert np.abs(transcribed - differentiated).max() < 1e-10
 
 
 def test_the_constraint_term_is_wired_and_inert_on_this_dataset():

@@ -105,7 +105,13 @@ def test_the_walked_strain_response_is_the_whole_k_response(case, k_batch):
     _close(walked.moved_drho, whole.moved_drho, "moved_drho")
     assert len(walked.history) == len(whole.history)
     assert walked.converged and whole.converged
-    assert walked.average_iterations == whole.average_iterations
+    # The same work, not the same count: which side of the CG threshold one
+    # solve lands on is rounding, and the two routes round differently. On
+    # PAW silicon master's two routes agreed at the default radial chunk and
+    # read 20.233 / 20.2 and 20.283 / 20.217 at 700 and 2000 values
+    # (2026-10-03), one or two iterations over thirty solves.
+    assert abs(walked.average_iterations - whole.average_iterations) <= (
+        0.01 * whole.average_iterations)
     # Not a response of zeros agreeing with another.
     assert float(np.abs(np.asarray(whole.drho)).max()) > 1e-2
 

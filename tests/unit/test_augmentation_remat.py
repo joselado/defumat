@@ -32,25 +32,35 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from defumat.pseudo.augmentation import _tabulated_charge, _tabulated_integrals
+from defumat.pseudo.augmentation import (
+    _assemble_qgm, _tabulated_charge, _tabulated_integrals,
+)
 
 pytestmark = [pytest.mark.unit]
 
 #: Toy shapes. Nothing here is physical -- what is asserted is the *shape* of the
-#: traced program, which does not depend on the numbers.
-NH, NAT, NPAD, CHUNK = 3, 2, 20, 5
+#: traced program, which does not depend on the numbers. Since the scan
+#: contracts in the radial basis it builds no ``(nh, nh, chunk)`` block at all;
+#: what it builds per chunk, and what must not be stacked, is the radial table
+#: ``(nbeta, nbeta, nl, chunk)`` and the harmonics ``(chunk, nl^2)``.
+NH, NAT, NPAD, CHUNK = 3, 2, 30, 5
+NBETA, NL = 4, 2
 NCHUNKS = NPAD // CHUNK
+BETA_OF = jnp.asarray([0, 1, 3])
+COEFFICIENTS = jnp.asarray(np.random.RandomState(1).randn(NL * NL, NH, NH))
 
 
-def _build(gcart):
-    """Stands in for the radial-to-G transform: a function of ``gcart`` alone.
+def _factors(gcart):
+    """Stands in for the harmonics and the radial transform: functions of ``gcart`` alone.
 
-    That is the whole of the mechanism -- it makes ``Q`` a *known* value inside
-    the body, which is what lets partial evaluation stack it as a residual.
+    That is the whole of the mechanism -- it makes them *known* values inside
+    the body, which is what lets partial evaluation stack them as residuals.
     """
     radius = jnp.linalg.norm(gcart, axis=-1)
-    decay = jnp.arange(1, NH * NH + 1, dtype=radius.dtype).reshape(NH, NH)
-    return jnp.exp(-radius[None, None, :] * decay[..., None]) + 0j
+    decay = jnp.arange(1, NBETA * NBETA * NL + 1, dtype=radius.dtype)
+    radial = jnp.exp(-radius[None, :] * decay[:, None]).reshape(NBETA, NBETA, NL, -1)
+    ylm = jnp.cos(gcart[:, :1] * jnp.arange(1, NL * NL + 1, dtype=radius.dtype))
+    return ylm, radial
 
 
 def _stacked_leading(jaxpr_text, leading=NCHUNKS):
@@ -71,88 +81,131 @@ def _inputs():
     )
 
 
-def test_the_charge_scan_does_not_stack_the_augmentation_table():
-    """No ``(nchunks, nh, nh, chunk)`` residual survives into the backward pass.
-
-    Measured before the remat: the jaxpr carried ``(4, 3, 3, 5)`` -- the table --
-    and ``(4, 2, 5)``, a copy of the atom phases. Both are gone with it.
-    """
+def _charge(fn=_tabulated_charge):
     data = _inputs()
+    return lambda becsum: fn(
+        _factors, data["gcart"], data["mask"], data["phases"], becsum,
+        COEFFICIENTS, BETA_OF, NBETA, NL, CHUNK, NPAD)
 
-    def energy(becsum):
-        charge = _tabulated_charge(
-            _build, data["gcart"], data["mask"], data["phases"], becsum,
-            CHUNK, NPAD,
-        )
-        return jnp.sum(jnp.abs(charge) ** 2)
 
-    text = str(jax.make_jaxpr(jax.grad(energy))(data["becsum"]))
+def test_the_charge_scan_does_not_stack_its_factors():
+    """No per-chunk radial table, harmonics or phases survive into the backward pass.
+
+    Before the scan contracted in the radial basis the residual was the block
+    of ``Q_ij(G)`` itself, ``(nchunks, nh, nh, chunk)``; now, measured on the
+    same body without its remat (:func:`_unrematted_charge`), it is each ``L``'s
+    slice of the radial table, ``(6, 4, 4, 5)``, and ``(6, 2, 5)`` for the
+    phases, as before. Both are gone with the remat.
+    """
+    charge = _charge()
+    text = str(jax.make_jaxpr(jax.grad(
+        lambda b: jnp.sum(jnp.abs(charge(b)) ** 2)))(_inputs()["becsum"]))
     stacked = _stacked_leading(text)
-    table = f"{NH},{NH},{CHUNK}"
-    assert table not in stacked, (
-        f"the dense Q_ij(G) table is stacked as a scan residual ({NCHUNKS}, "
-        f"{table}); the body's @jax.checkpoint has been lost. This is >= 2 GiB "
-        f"of tape by construction on any cell that takes this route "
-        f"(MEMORY-AUDIT.md A1)"
-    )
-    assert f"{NAT},{CHUNK}" not in stacked, "the atom phases are stacked too"
+    for shape, what in ((f"{NBETA},{NBETA},{NL},{CHUNK}", "the radial table"),
+                        (f"{NBETA},{NBETA},{CHUNK}", "one L of the radial table"),
+                        (f"{CHUNK},{NL * NL}", "the harmonics"),
+                        (f"{NAT},{CHUNK}", "the atom phases")):
+        assert shape not in stacked, (
+            f"{what} is stacked as a scan residual ({NCHUNKS}, {shape}); the "
+            f"body's @jax.checkpoint has been lost (MEMORY-AUDIT.md A1)")
 
 
-def test_the_integral_scan_does_not_stack_the_augmentation_table():
+def test_the_integral_scan_does_not_stack_its_factors():
     """The same, for the route every reverse-mode consumer of ``newd`` reaches.
 
     Its accumulator was always the scan's *carry* and so never the problem; the
-    residual is, and it is the same table.
+    residual is.
     """
     data = _inputs()
 
     def energy(potential):
         integrals = _tabulated_integrals(
-            _build, data["gcart"], data["mask"], potential, data["phases"],
-            1.0, CHUNK, NH,
+            _factors, data["gcart"], data["mask"], potential, data["phases"],
+            1.0, CHUNK, COEFFICIENTS, BETA_OF, NBETA, NL,
         )
         return jnp.sum(integrals ** 2)
 
     text = str(jax.make_jaxpr(jax.grad(energy))(data["potential"]))
-    assert f"{NH},{NH},{CHUNK}" not in _stacked_leading(text), (
-        "the dense Q_ij(G) table is stacked as a scan residual in "
-        "_tabulated_integrals (MEMORY-AUDIT.md A1)"
-    )
+    stacked = _stacked_leading(text)
+    assert f"{NBETA},{NBETA},{NL},{CHUNK}" not in stacked, (
+        "the radial table is stacked as a scan residual in _tabulated_integrals "
+        "(MEMORY-AUDIT.md A1)")
+    assert f"{NBETA},{NBETA},{CHUNK}" not in stacked
+    assert f"{CHUNK},{NL * NL}" not in stacked
+
+
+def _block_form(data, becsum, potential):
+    """The charge and the integrals through ``Q_ij(G)`` itself, ``_assemble_qgm``'s block."""
+    ylm, radial = _factors(data["gcart"])
+    q = _assemble_qgm(COEFFICIENTS, ylm, radial, BETA_OF, NL)  # (nh, nh, npad)
+    weighted = jnp.einsum("aij,ac->ijc", becsum + 0j, data["phases"])
+    charge = jnp.einsum("ijc,ijc->c", q, weighted) * data["mask"]
+    shifted = potential[None, :] * jnp.conj(data["phases"]) * data["mask"]
+    integrals = jnp.einsum("ijc,ac->aij", jnp.conj(q), shifted)
+    return charge, integrals
+
+
+def test_the_radial_basis_contraction_is_the_block_contraction():
+    """Contracting ``becsum`` with ``ap`` first is the same sum as forming ``Q_ij(G)``.
+
+    Against ``_assemble_qgm``'s block on the same factors, with ``beta_of``
+    mapping three channels onto two radial functions and both ``L`` present:
+    the charge, and the integrals with and without their real part.
+    """
+    data = _inputs()
+    becsum = data["becsum"]
+    charge, integrals = _block_form(data, becsum, data["potential"])
+    scale = float(jnp.max(jnp.abs(charge)))
+    assert float(jnp.max(jnp.abs(_charge()(becsum) - charge))) < 1e-14 * scale
+    for real in (True, False):
+        factored = _tabulated_integrals(
+            _factors, data["gcart"], data["mask"], data["potential"],
+            data["phases"], 1.0, CHUNK, COEFFICIENTS, BETA_OF, NBETA, NL,
+            real=real)
+        expected = jnp.real(integrals) if real else integrals
+        assert float(jnp.max(jnp.abs(factored - expected))) < (
+            1e-13 * float(jnp.max(jnp.abs(integrals))))
 
 
 def test_the_remat_does_not_move_the_gradient():
     """The guard on the guard: remat must be a memory trade and nothing else.
 
     A test that only checked the jaxpr would pass if the body were replaced by
-    something cheaper *and wrong*, so the value is pinned too. Against a
-    hand-written unrematted copy of the same body the gradient is bit-identical;
-    through the full force and stress of a displaced ultrasoft cell it agrees to
-    one ulp, because remat reorders the backward pass (`PERFORMANCE.md`).
+    something cheaper *and wrong*, so the value is pinned too: against the same
+    contraction with no remat the gradient is bit-identical.
     """
     data = _inputs()
-
-    def unrematted(build, gcart, mask, phases, becsum, chunk, ngm):
-        nchunks = mask.shape[0] // chunk
-        nat = phases.shape[0]
-
-        def body(carry, index):
-            start = index * chunk
-            gcart_chunk = jax.lax.dynamic_slice(gcart, (start, 0), (chunk, 3))
-            phase_chunk = jax.lax.dynamic_slice(phases, (0, start), (nat, chunk))
-            mask_chunk = jax.lax.dynamic_slice(mask, (start,), (chunk,))
-            weighted = jnp.einsum("aij,ac->ijc", becsum, phase_chunk)
-            block = jnp.einsum("ijc,ijc->c", build(gcart_chunk), weighted)
-            return carry, block * mask_chunk
-
-        _, blocks = jax.lax.scan(body, None, jnp.arange(nchunks))
-        return blocks.reshape(-1)[:ngm]
-
-    def make(fn):
-        return jax.grad(lambda becsum: jnp.sum(jnp.abs(fn(
-            _build, data["gcart"], data["mask"], data["phases"], becsum,
-            CHUNK, NPAD,
-        )) ** 2))
-
-    rematted = np.asarray(make(_tabulated_charge)(data["becsum"]))
-    plain = np.asarray(make(unrematted)(data["becsum"]))
+    rematted = np.asarray(jax.grad(
+        lambda b: jnp.sum(jnp.abs(_charge()(b)) ** 2))(data["becsum"]))
+    unrematted_charge = _charge(_unrematted_charge)
+    plain = np.asarray(jax.grad(
+        lambda b: jnp.sum(jnp.abs(unrematted_charge(b)) ** 2))(data["becsum"]))
     assert np.array_equal(rematted, plain)
+
+
+def _unrematted_charge(factors, gcart, mask, phases, becsum, coefficients, beta_of,
+                       nbeta, nl, chunk, ngm):
+    """:func:`_tabulated_charge` with its body written out and no ``jax.checkpoint``."""
+    from defumat.pseudo.augmentation import _beta_basis
+
+    nchunks = mask.shape[0] // chunk
+    nat = phases.shape[0]
+    basis = _beta_basis(coefficients, becsum.astype(phases.dtype), beta_of, nbeta, nl)
+
+    def body(carry, index):
+        start = index * chunk
+        gcart_chunk = jax.lax.dynamic_slice(gcart, (start, 0), (chunk, 3))
+        phase_chunk = jax.lax.dynamic_slice(phases, (0, start), (nat, chunk))
+        mask_chunk = jax.lax.dynamic_slice(mask, (start,), (chunk,))
+        ylm, radial = factors(gcart_chunk)
+        per_atom = jnp.zeros((nat, chunk), dtype=phase_chunk.dtype)
+        for l in range(nl):
+            block = slice(l * l, (l + 1) ** 2)
+            radial_l = jnp.einsum("amnk,nkc->amc", basis[:, block],
+                                  radial[:, :, l].astype(basis.dtype))
+            per_atom = per_atom + jnp.einsum(
+                "amc,cm->ac", radial_l, ylm[:, block].astype(basis.dtype))
+        return carry, jnp.einsum("ac,ac->c", per_atom, phase_chunk) * mask_chunk
+
+    _, blocks = jax.lax.scan(body, None, jnp.arange(nchunks))
+    return blocks.reshape(-1)[:ngm]

@@ -25,9 +25,12 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jax.custom_derivatives import SymbolicZero
 from jax.scipy.special import erf
 
-from defumat.pseudo.radial import simpson_weights, spherical_bessel
+from defumat.pseudo.radial import (
+    simpson_weights, spherical_bessel, spherical_bessel_derivative,
+    spherical_bessel_derivative_pair, value_and_slope)
 from defumat.pseudo.upf import Pseudopotential
 from defumat.units import E2, FPI
 
@@ -40,6 +43,7 @@ __all__ = [
     "CHUNK",
     "RADIAL_CHUNK_BYTES",
     "radial_chunk",
+    "bessel_transform",
 ]
 
 #: The most q values transformed at once. The intermediate is (chunk, mesh); the
@@ -49,17 +53,20 @@ CHUNK = 4096
 #: What one ``(chunk, mesh)`` float64 integrand may occupy, from which
 #: :func:`radial_chunk` sizes the chunk against the dataset's mesh.
 #:
-#: **Sized against the derivatives, not the integrand.** A transform's forward
-#: pass holds a few such arrays, and that is what "a few tens of MB" at
-#: :data:`CHUNK` was; the strain's derivatives hold many more of them at once
-#: (the spherical Bessel function's temporaries, its tangent, the rematted body's
-#: recomputation). Measured on ultrasoft AlAs at ``ecutrho = 200`` (841-point
-#: mesh, 14211 dense G-vectors), the compiled temporaries of the augmented
-#: density's strain derivatives, CPU, ``memory_analysis()``: at 4096 values the
-#: ``jvp`` 270.0 MB, the gradient 924.7, the ``jvp`` of the gradient 1550.9; at
-#: 1024 values 130.1, 102.8 and 293.7; at 256 values 128.0, 102.8 and 185.6. The
-#: local potential's ``jvp`` of the gradient 457.1, 135.7 and 39.6
-#: (``PERFORMANCE.md``, "The radial transforms' chunk, sized from the mesh").
+#: **What it sizes is the forward evaluations, several at once.** Since
+#: :func:`bessel_transform` answers every derivative with another transform, no
+#: derivative holds this matrix on a tape; what the block still bounds is each
+#: evaluation, and inside one compiled pass XLA keeps several alive together (an
+#: augmentation block evaluates every ``L``, and the derivative of a gradient
+#: three orders of each). Measured on ultrasoft AlAs at ``ecutrho = 200``
+#: (841-point mesh, 14211 dense G-vectors), CPU, ``memory_analysis()``, the
+#: ``jvp`` of the augmented density's strain gradient: **174.0 MB** of compiled
+#: temporaries at this budget and the same at 256 values, the rest being the
+#: augmentation table's own G-chunk, against 385.3 at 4096 values. Before the
+#: rule, when the derivatives went through the integrand, the same pass held
+#: 293.7, 185.6 and 1550.9 (``PERFORMANCE.md``, "The radial transforms' chunk,
+#: sized from the mesh" and "The radial transforms' derivatives, as
+#: transforms").
 #:
 #: Chosen on an RTX A2000 (5 to 8 per cent of a strained call's time there) and a
 #: CPU (none). A float64 card may find the smaller transforms' launches cost more
@@ -115,46 +122,198 @@ def _radial_values(values: jnp.ndarray) -> jnp.ndarray:
     return jax.lax.optimization_barrier(values)
 
 
-def _scan_rows(block, q: jnp.ndarray, mesh: int) -> jnp.ndarray:
-    """``block(q)`` in pieces of :func:`radial_chunk` values, walked by a rematted scan.
+def _chunks(nq: int, mesh: int) -> tuple[int, int]:
+    """``(nchunks, chunk)``: as few pieces as :func:`radial_chunk` allows, as even as possible.
 
-    Called *inside* a jitted kernel, so ``block`` may close over that kernel's
-    arguments. ``block`` maps ``(n,)`` values of ``q`` to ``(..., n)``.
+    So the padding is under one row per piece rather than up to a whole piece.
+    A padded row is ``q = 0``, where every kernel here is finite, and it is
+    sliced off before anything reads it.
+    """
+    bound = radial_chunk(mesh)
+    if nq <= bound:
+        return 1, nq
+    nchunks = -(-nq // bound)
+    return nchunks, -(-nq // nchunks)
 
-    **Why a scan and a remat rather than a loop.** These transforms were a
-    Python loop of jitted calls, which bounds the forward pass and nothing
-    else: under ``jax.grad`` every chunk's ``(chunk, mesh)`` residuals stay on
-    the tape, and ``Calculation.at_strain`` rebuilds ``V_loc``, the core charge
-    and the projectors against the strained ``|G|`` inside the stress's
-    gradient. With the body under ``jax.checkpoint`` the tape holds the ``q``
-    chunks and the backward pass recomputes one chunk at a time -- the pattern
-    ``augmentation._qrad_kernel`` took first (``OPEN.md`` S4, ``PLAN.md``
-    P112). Measured on ``bn-ldau-noncol.in``'s stress gradient on the GTX 1060:
-    see ``PERFORMANCE.md``, "The stress tape".
 
-    **The chunks are exactly** :func:`radial_chunk` **wide**, and only the last
-    is padded, with ``q = 0`` -- a value every transform here
-    already meets at ``G = 0`` and is finite at, in value and derivative. So
-    every row but the last chunk's is computed at the shape it always was --
-    which is not bit-identity: inside the scan XLA fuses the body differently,
-    and on N, B and Si datasets at 100 to 43903 values of ``q`` 53 of 68
-    arrays came out identical and the rest within 2.2e-16 relative, a gradient
-    through all of them within 4.9e-15.
+def _sinc(x):
+    """``sin(x) / x``, which is ``j_0`` as QE's ``vloc_mod.f90`` writes it."""
+    zero = x == 0.0
+    safe = jnp.where(zero, 1.0, x)
+    return jnp.where(zero, 1.0, jnp.sin(safe) / safe)
+
+
+def _kernels(argument, l: int, orders: tuple, sinc: bool) -> tuple:
+    """The kernel of each order in ``orders``: one order, or a value and its slope.
+
+    The value's own kernel at order 0 -- :func:`spherical_bessel`, or
+    ``sin(x)/x`` for the local potential, which is the form QE's
+    ``vloc_mod.f90`` integrates -- and the derivatives of ``j_l`` from
+    :func:`~defumat.pseudo.radial.spherical_bessel_derivative` above it; a pair
+    of consecutive orders above 0 comes from one evaluation
+    (:func:`~defumat.pseudo.radial.spherical_bessel_derivative_pair`).
+    """
+    first = orders[0]
+    if first == 0:
+        value = _sinc if sinc else partial(spherical_bessel, l)
+        if len(orders) == 1:
+            return (value(argument),)
+        return value_and_slope(value, l, argument)
+    if len(orders) == 1:
+        return (spherical_bessel_derivative(l, first, argument),)
+    return spherical_bessel_derivative_pair(l, first, argument)
+
+
+def _transform_block(q, r, h, l: int, orders: tuple, sinc: bool) -> tuple:
+    """``sum_m h_m r_m^n K_n(q r_m)`` on one block of ``q`` for each ``n`` in ``orders``.
+
+    Each ``(..., nq)``. The kernel matrices are kept out of the contraction
+    (:func:`_radial_values`).
+    """
+    argument = q[:, None] * r[None, :]
+    kernels = _radial_values(_kernels(argument, l, orders, sinc))
+    return tuple(
+        jnp.einsum("...m,qm->...q", h * r**n if n else h, kernel)
+        for n, kernel in zip(orders, kernels)
+    )
+
+
+def _evaluate(q, r, h, l: int, orders: tuple, sinc: bool) -> tuple:
+    """:func:`_transform_block` a block of :func:`radial_chunk` values of ``q`` at a time.
+
+    **The body is rematted for the integrand's derivative alone.** The rules
+    answer a derivative in ``q`` with another call to this, so nothing
+    differentiates through the scan along ``q``; along ``h`` the tangent is
+    this same scan evaluated at ``h_dot``, and a reverse-mode derivative in
+    ``h`` transposes it, which without the remat stacks every block's kernel
+    matrix on the tape (measured in review: ``f64[3, 512, 301]``, more than the
+    whole ``(nq, mesh)`` matrix). Nothing differentiates a tabulated function
+    today; the remat keeps that from being a trap.
     """
     nq = q.shape[0]
-    chunk = radial_chunk(mesh)
-    if nq <= chunk:
-        return block(q)
-    nchunks = -(-nq // chunk)
+    nchunks, chunk = _chunks(nq, r.shape[0])
+    if nchunks == 1:
+        return _transform_block(q, r, h, l, orders, sinc)
     padded = jnp.pad(q, (0, nchunks * chunk - nq)).reshape(nchunks, chunk)
 
     @jax.checkpoint
     def body(carry, rows):
-        return carry, block(rows)
+        return carry, _transform_block(rows, r, h, l, orders, sinc)
 
-    _, blocks = jax.lax.scan(body, None, padded)  # (nchunks, ..., CHUNK)
-    values = jnp.moveaxis(blocks, 0, -2)
-    return values.reshape(values.shape[:-2] + (-1,))[..., :nq]
+    _, blocks = jax.lax.scan(body, None, padded)  # each (nchunks, ..., chunk)
+    out = []
+    for block in blocks:
+        values = jnp.moveaxis(block, 0, -2)
+        out.append(values.reshape(values.shape[:-2] + (-1,))[..., :nq])
+    return tuple(out)
+
+
+@partial(jax.custom_jvp, nondiff_argnums=(3, 4, 5))
+def bessel_transform(q, r, h, l: int, order: int = 0, sinc: bool = False):
+    """``T(q) = sum_m h_m r_m^order j_l^(order)(q r_m)``, every radial transform here.
+
+    ``q`` is ``(nq,)``, ``r`` the ``(mesh,)`` radial mesh and ``h`` the
+    ``(..., mesh)`` integrand with its quadrature weights folded in -- for a
+    projector ``w r beta(r)``, for the augmentation charge ``w r^2 Q^L(r)`` --
+    and the result is ``(..., nq)``.
+
+    **Its derivative in** ``q`` **is the same transform one order up**,
+
+        dT/dq = sum_m h_m r_m^(order+1) j_l^(order+1)(q r_m),
+
+    and that is the rule given to JAX, so no derivative ever differentiates
+    *through* the ``(chunk, mesh)`` kernel matrix: a gradient keeps the
+    ``(..., nq)`` slope as its residual, and a derivative of the gradient
+    evaluates the transform two orders up. Without the rule the strain's
+    derivatives held that matrix per chunk -- rematerialised, but under a
+    ``jvp`` of a gradient several at once -- and the memory followed the chunk:
+    ultrasoft AlAs's augmented density, the ``jvp`` of its strain gradient,
+    1550.9 MB of compiled temporaries at 4096 values of ``q`` a chunk, 293.7 at
+    the 8 MB budget, 185.6 at 256 (``PERFORMANCE.md``, "The radial transforms'
+    derivatives, as transforms").
+
+    ``sinc`` takes ``sin(x)/x`` for the value's ``j_0``, as QE's local
+    potential does, where :func:`spherical_bessel` switches to a short series
+    below ``x = 0.05``; it changes the value and not the derivatives.
+
+    ``h`` is differentiated as the linear argument it is; ``r`` is the dataset's
+    mesh and is never differentiated, which the rule checks rather than
+    assumes: a tangent on ``r`` that is not JAX's symbolic zero is refused, an
+    explicit array of zeros included.
+
+    **What the rule changes besides the memory is the derivatives' accuracy.**
+    Differentiating :func:`spherical_bessel` as written lost digits on either
+    side of its switch at ``x = 0.05``, and the transform's ``q``-derivatives
+    with them: against the closed-form transform of ``r^l exp(-a r^2)``
+    (``tests/unit/test_bessel_transform.py``) the second derivative was off by
+    4.3e-9 relative at ``l = 0`` and 2.2e-8 at ``l = 3``, and the third by 2.9e-7
+    and 1.3e-6; through the rule every order to the third is within 4.4e-14.
+    """
+    return _evaluate(q, r, h, l, (order,), sinc)[0]
+
+
+def _check_mesh(r_dot):
+    if not isinstance(r_dot, SymbolicZero):
+        raise NotImplementedError(
+            "bessel_transform: the radial mesh is differentiated; only q and the "
+            "integrand have a derivative rule")
+
+
+def _bessel_transform_jvp(l, order, sinc, primals, tangents):
+    q, r, h = primals
+    q_dot, r_dot, h_dot = tangents
+    _check_mesh(r_dot)
+    if isinstance(q_dot, SymbolicZero):
+        value = bessel_transform(q, r, h, l, order, sinc)
+        tangent = jnp.zeros_like(value)
+    else:
+        # the value and its slope from one walk over the blocks
+        value, slope = _transform_pair(q, r, h, l, order, sinc)
+        tangent = slope * q_dot
+    if not isinstance(h_dot, SymbolicZero):
+        tangent = tangent + bessel_transform(q, r, h_dot, l, order, sinc)
+    return value, tangent
+
+
+bessel_transform.defjvp(_bessel_transform_jvp, symbolic_zeros=True)
+
+
+@partial(jax.custom_jvp, nondiff_argnums=(3, 4, 5))
+def _transform_pair(q, r, h, l: int, order: int, sinc: bool):
+    """``(T_order, T_order+1)`` of :func:`bessel_transform`, from one walk over the blocks.
+
+    What :func:`bessel_transform`'s rule wants, a value and its slope, which as
+    two calls cost two walks over the ``(chunk, mesh)`` kernels where JAX's own
+    derivative had taken one. It has a rule of its own for the same reason the
+    transform does, the slope's derivative being the transform two orders up,
+    so a derivative of a gradient walks the blocks twice, once here and once at
+    ``order + 2``. **The second walk was not where the time went**: on the RTX
+    A2000 a strained call was 6 to 9 per cent slower than master's autodiff with
+    two walks and the same with one; it was the derivative kernel's arithmetic
+    on a card that runs float64 at 1/70 of float32, which
+    :func:`~defumat.pseudo.radial.value_and_slope` and the series written as a
+    polynomial removed (``PERFORMANCE.md``, "The radial transforms' derivatives,
+    as transforms").
+    """
+    return _evaluate(q, r, h, l, (order, order + 1), sinc)
+
+
+def _transform_pair_jvp(l, order, sinc, primals, tangents):
+    q, r, h = primals
+    q_dot, r_dot, h_dot = tangents
+    _check_mesh(r_dot)
+    value, slope = _transform_pair(q, r, h, l, order, sinc)
+    value_dot, slope_dot = jnp.zeros_like(value), jnp.zeros_like(slope)
+    if not isinstance(q_dot, SymbolicZero):
+        value_dot = value_dot + slope * q_dot
+        slope_dot = slope_dot + bessel_transform(q, r, h, l, order + 2, sinc) * q_dot
+    if not isinstance(h_dot, SymbolicZero):
+        h_value, h_slope = _transform_pair(q, r, h_dot, l, order, sinc)
+        value_dot, slope_dot = value_dot + h_value, slope_dot + h_slope
+    return (value, slope), (value_dot, slope_dot)
+
+
+_transform_pair.defjvp(_transform_pair_jvp, symbolic_zeros=True)
 
 
 def _truncated(pseudo: Pseudopotential):
@@ -197,22 +356,13 @@ def local_potential_of_g(pseudo: Pseudopotential, q, omega: float) -> jnp.ndarra
 
 @jax.jit
 def _vloc_kernel(q, r, weights, short, at_zero, z, omega):
-    return _scan_rows(
-        lambda qq: _vloc_block(qq, r, weights, short, at_zero, z, omega), q,
-        r.shape[0],
-    )
-
-
-def _vloc_block(qq, r, weights, short, at_zero, z, omega):
-    qq = qq[:, None]
-    small = qq[:, 0] < 1e-8
-    safe = jnp.where(qq < 1e-8, 1.0, qq)
-    integrand = jnp.where(small[:, None], at_zero[None, :],
-                          short[None, :] * jnp.sin(safe * r[None, :]) / safe)
-    value = _radial_values(integrand) @ weights * FPI / omega
-
-    analytic = FPI / omega * z * E2 * jnp.exp(-safe[:, 0] ** 2 * 0.25) / safe[:, 0] ** 2
-    return jnp.where(small, value, value - analytic)
+    small = q < 1e-8
+    safe = jnp.where(small, 1.0, q)
+    # ``short sin(q r) / q`` is ``short r j_0(q r)``, with QE's ``sin(x)/x``
+    # for the ``j_0``
+    value = bessel_transform(safe, r, weights * short * r, 0, 0, True) * FPI / omega
+    analytic = FPI / omega * z * E2 * jnp.exp(-safe ** 2 * 0.25) / safe ** 2
+    return jnp.where(small, at_zero @ weights * FPI / omega, value - analytic)
 
 
 def atomic_charge_of_g(pseudo: Pseudopotential, q, omega: float) -> jnp.ndarray:
@@ -232,19 +382,10 @@ def atomic_charge_of_g(pseudo: Pseudopotential, q, omega: float) -> jnp.ndarray:
 
 @jax.jit
 def _rhoat_kernel(q, r, weights, rho, omega):
-    return _scan_rows(lambda qq: _rhoat_block(qq, r, weights, rho, omega), q,
-                      r.shape[0])
-
-
-def _rhoat_block(qq, r, weights, rho, omega):
-    qq = qq[:, None]
-    small = qq[:, 0] < 1e-8
-    safe = jnp.where(qq < 1e-8, 1.0, qq)
-    argument = safe * r[None, :]
-    integrand = jnp.where(
-        small[:, None], rho[None, :], rho[None, :] * spherical_bessel(0, argument)
-    )
-    return _radial_values(integrand) @ weights / omega
+    small = q < 1e-8
+    safe = jnp.where(small, 1.0, q)
+    value = bessel_transform(safe, r, weights * rho, 0)
+    return jnp.where(small, rho @ weights, value) / omega
 
 
 def core_charge_of_g(pseudo: Pseudopotential, q, omega: float) -> jnp.ndarray:
@@ -264,14 +405,7 @@ def core_charge_of_g(pseudo: Pseudopotential, q, omega: float) -> jnp.ndarray:
 
 @jax.jit
 def _rhocore_kernel(q, r, weights, rho, omega):
-    return _scan_rows(lambda qq: _rhocore_block(qq, r, weights, rho, omega), q,
-                      r.shape[0])
-
-
-def _rhocore_block(qq, r, weights, rho, omega):
-    argument = qq[:, None] * r[None, :]
-    integrand = FPI * r[None, :] ** 2 * rho[None, :] * spherical_bessel(0, argument)
-    return _radial_values(integrand) @ weights / omega
+    return bessel_transform(q, r, weights * FPI * r ** 2 * rho, 0) / omega
 
 
 def projector_form_factors(pseudo: Pseudopotential, q, omega: float) -> jnp.ndarray:
@@ -433,13 +567,4 @@ def atomic_form_factors(pseudo: Pseudopotential, q, omega) -> jnp.ndarray:
 
 @partial(jax.jit, static_argnames=("l",))
 def _beta_kernel(q, r, weights, beta, prefactor, l):
-    return _scan_rows(
-        lambda qq: _beta_block(qq, r, weights, beta, prefactor, l), q,
-        r.shape[0],
-    )
-
-
-def _beta_block(qq, r, weights, beta, prefactor, l):
-    argument = qq[:, None] * r[None, :]
-    integrand = beta[None, :] * spherical_bessel(l, argument) * r[None, :]
-    return _radial_values(integrand) @ weights * prefactor
+    return bessel_transform(q, r, weights * beta * r, l) * prefactor

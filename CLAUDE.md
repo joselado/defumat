@@ -678,7 +678,14 @@ plausible wrong answer rather than an error. `PLAN.md` has the phase that found 
   a residue that shrinks with `conv_thr` is convergence, one that **plateaus** is real, and
   only a sweep tells them apart -- the anisotropy case did both, falling by seven and then
   stopping on a floor that a scalar-relativistic dataset then localised to seven orders
-  below.
+  below. **When the old commit passes, it can still be the test**: a bound read off the one
+  rounding pattern that happened to land well passes there and nowhere else, and the
+  falsifier is the old commit under a dial documented as moving results only at round-off
+  (`DEFUMAT_K_BATCH=2`, `DEFUMAT_RADIAL_CHUNK`). Three tests failed on a change that moved
+  only the last bit of the radial transforms (2026-10-03, two in `test_piezoelectric.py`, one
+  in `test_streamed_strain.py`); master passed all three, and failed all three under such a
+  dial -- an AlAs density converged at `conv_thr = 1e-12` to about 1e-8 had been asserted
+  cubic to 1e-10.
 
 - **The forecast sentence under a verified table is the one nobody checks.** Its two
   siblings above are about how a number was obtained; this is about *where the scrutiny

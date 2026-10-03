@@ -10045,7 +10045,11 @@ ultrasoft AlAs now adds nothing to its SCF on the card, and the piezoelectric te
 global step held 705 MB (two entries up). The price is 5 to 8 per cent of those two calls' time on the
 card, more scan steps of a smaller transform, and none on the CPU; `DEFUMAT_RADIAL_CHUNK=4096` puts the old
 chunk back. Platinum's stress peak is set elsewhere (its PAW one-centre terms and its spinor block), so the
-chunk moves it by 2 per cent.
+chunk moves it by 2 per cent. **That explanation was wrong (2026-10-03 evening)**: it fitted the number and
+nobody measured it. With the radial transforms' derivatives given as transforms the same stress reads
+274.8 MB, the SCF's own, at either chunk, so the 516.4 was the radial transforms' derivative after all;
+why the chunk did not move it is not measured (see "The radial transforms' derivatives, as transforms"
+below).
 
 ## The group averages walk the operations past a budget (RTX A2000 and CPU, 2026-10-03)
 
@@ -10147,3 +10151,198 @@ At 512 values every strained call on these cells reads its SCF's peak or the str
 performance cores, the CPU default (speed mode), the median of five warm stresses: `si2-us-1k` 0.692 /
 0.670 / 0.627 s and `si8-us-1k` 2.799 / 2.635 / 2.636 s at the default, 1024 and 512 values, the stress
 the same to 3e-17. So the trade is the card's alone.
+
+## The radial transforms' derivatives, as transforms (CPU and RTX A2000, 2026-10-03 evening)
+
+**The number to carry: every radial transform's derivative in `|q|` is now the same kind of transform one
+order up, given to JAX as the rule, so no derivative holds the `(chunk, mesh)` kernel; on the card at the
+default chunk the piezoelectric tensor of ultrasoft AlAs peaks at its SCF's 169.3 MB where it read 198.5,
+the elastic constants of eight-atom silicon at 45.0 where they read 127.7, and the stress of spin-orbit PAW
+platinum at its SCF's 274.8 where it read 516.4, every result the same to the printed digits, and those
+calls are 2 to 17 per cent faster than master's warm, because no backward pass recomputes a block.** (`formfactors.bessel_transform`, `formfactors._transform_pair`,
+`radial.spherical_bessel_derivative`; branch `bessel-jvp`.) The handoff's first item, its radial half: the
+previous entry found that what bounded a second derivative was the size of the radial piece, and the only
+lever then was a smaller chunk at 13 to 26 per cent of the card's time.
+
+Every one of these transforms is `T(q) = sum_m h_m j_l(q r_m)` with the Simpson weights folded into `h`,
+and `dT/dq = sum_m h_m r_m j_l'(q r_m)`, so the derivative of the transform at order `n` is the transform
+at order `n + 1` with one more power of `r`. That is the `custom_jvp`: a gradient keeps the `(nq,)` slope
+as its residual and nothing else, and the derivative of a gradient evaluates the transform two orders up.
+The value and its slope come from one walk over the blocks (`_transform_pair`, with a rule of its own), so
+a first derivative walks the blocks once, as JAX's own derivative did, and a derivative of a gradient
+twice. The values keep their kernels (QE's `sph_bes` form, and `sin(x)/x` for the local potential, as
+`vloc_mod.f90` writes it), and the SCF energies are identical to every printed digit on the cells below.
+Reviewed against the code by Fable before it was written; its four changes are in.
+
+**The derivatives are more accurate as well.** Differentiating `spherical_bessel` as written lost digits on
+both sides of its switch at `x = 0.05` (the series is cut at `x^4`, and the closed form of `l = 2` and 3
+cancels there); against `mpmath` at 50 digits for `x` from 1e-4 to 25, the derivatives JAX took were off
+by up to 3.5e-10 absolute in `j_0'`, 3.5e-8 in `j_0''`, 1.2e-8 in `j_3''` and 4.8e-6 in `j_3'''`, where
+`spherical_bessel_derivative` (a 16-term series below `x = 2`, the closed form above) is within 5.5e-14 for
+every `l` and `n` to 4. On whole transforms, against the closed form of `int r^(l+2) exp(-a r^2) j_l(qr) dr`
+(`tests/unit/test_bessel_transform.py`): the second derivative was off by 4.3e-9 relative at `l = 0` and
+2.2e-8 at `l = 3`, the third by 2.9e-7 and 1.3e-6, and every order to the third is now within 4.4e-14.
+Against QE's hand-differentiated `drhoc` and `dvloc_of_g` (the transcribed stress, sharing no code): 5.6e-15
+and 2.3e-16 relative on aluminium's ultrasoft dataset.
+
+**Compile only, CPU, `memory_analysis()`**, ultrasoft AlAs at 200 Ry and 8 k-points (14211 dense G-vectors,
+an 841-point mesh), the `jvp` of the strain gradient of one energy term at a time (`global_terms.py`):
+
+| term | master, default chunk | master, 4096 | rule, default | rule, 4096 |
+|---|---|---|---|---|
+| local potential | 135.8 MB | 457.1 MB | **15.8 MB** | 35.5 MB |
+| exchange-correlation with the core charge | 179.6 | 611.5 | **47.3** | 48.3 |
+| augmented density | 293.7 | 1550.9 | **174.0** | 385.3 |
+
+The augmented density's 174.0 MB is the same at 256 values a chunk, so it is no longer the radial
+transform: it follows the augmentation table's own G-chunk (100.8 MB at 512 vectors, 195.6 at 1024, 174.0
+at aluminium's default 2048), which the rule does not touch. At 4096 values the remaining cost is several
+transforms evaluated in one compiled pass (every `L` of a block, two orders of each), so the 8 MB budget
+still sizes the forward evaluations, and the user's decision to keep it stands on firmer ground: below it
+nothing is left to buy.
+
+**On the card**, D22's RTX A2000, memory mode at one k-point a chunk, warm, the second of two fresh
+processes per point (`tools/gpu/response_memory.py`), master `d687623` against the rule:
+
+| call | master, default | master, 4096 | rule, default | rule, 4096 |
+|---|---|---|---|---|
+| ultrasoft AlAs (`alas-piezo.in`, `nosym`, 8 k), SCF | 169.3 MB | 169.3 | 169.3 | 169.3 |
+| its stress | 169.3 | 652.1 | **169.3** | 193.8 |
+| its piezoelectric tensor | 198.5 | 760.0 | **169.3** | 206.5 |
+| spin-orbit PAW Pt (`pt-soc-paw-nosym.in`, 8 k), SCF | 274.8 | 274.8 | 274.8 | 274.8 |
+| its stress | 516.4 | 525.9 | **274.8** | 274.8 |
+| eight-atom NC Si (27 k), elastic constants on the strain response | 127.7 | 126.7 | **45.0** | 45.1 |
+| ultrasoft eight-atom Si (27 k), strain response | 180.7 | | 181.1 | |
+
+with `sigma_xx` the same to 3.3e-17 (AlAs) and 8e-16 (Pt), `e_14` = 1.4752843184 and `C_11`, `C_44` =
+166.961132, 106.378199 GPa in every column. Platinum's 516.4 had been put on its one-centre terms and its
+spinor block (the entry two up); it was the radial derivative. The ultrasoft strain response is the
+augmentation table's G-chunk under a forward derivative, and does not move.
+
+**Time on the card**, warm, the median of five calls in one process after one to compile, two rounds with
+the arms alternated (`card_times.py`), in the order the kernel was written:
+
+| call | master | two walks | one walk | the series as a polynomial |
+|---|---|---|---|---|
+| AlAs stress | 0.790 / 0.787 s | 0.851 / 0.858 | 0.832 / 0.862 | **0.652 / 0.656** |
+| AlAs piezoelectric tensor | 9.085 / 9.091 | 9.646 / 9.664 | 9.646 / 9.643 | **8.497 / 8.483** |
+| Si8 elastic constants | 3.820 / 3.759 | 4.067 / 4.112 | 4.092 / 4.027 | **3.681 / 3.666** |
+
+(master's own column moved by up to 2 per cent between the three sessions, 0.775 to 0.794 s on the stress;
+each column above is against the master run beside it.) The second walk was not the cost: fusing the value
+and its slope into one walk (`_transform_pair`) changed nothing. The kernel was. On a `(1246, 841)` block
+the value and its slope cost 3.7 to 4.2 ms against 1.6 to 2.1 for JAX's own derivative, the 16-term series
+(differentiated in forward mode, which doubles the work at every order) and the closed form about evenly,
+on a card that runs float64 at 1/70 of float32; on the CPU the same kernel had been cheaper than JAX's,
+which is why the CPU microbenchmark did not show it. Writing each derivative of the series as its own
+polynomial (one multiply-add a term) and taking the slope's closed form from the value's own forward pass
+(`radial.value_and_slope`) brings the block to 1.38, 2.66 and 2.17 ms for `l` = 0, 2 and 4 against JAX's
+1.13, 1.99 and 2.86 measured beside it, and the whole calls come out faster than master's because a
+rematted scan recomputed every block in its backward pass and the rule recomputes nothing. The ultrasoft
+eight-atom strain response, a forward derivative per k-chunk dominated by the augmentation table, read
+the same to 1 per cent, medians of three alternated runs 183.3 s against master's 181.1 (213.6 in one sample with the two-walk kernel), at the same 180.8 MB.
+
+**What the rule exposed in two tests, and why it is not the rule.** `test_piezoelectric.py`'s
+forbidden-component bound (1e-10) and its transcribed-against-differentiated bound (1e-12) failed, at 2.8e-9
+and 1.2e-11: the AlAs ground state at `conv_thr = 1e-12` came out off cubic symmetry by 1.1e-10 where
+master's is cubic to 7e-17, with the same energy, the same Davidson steps per iteration and every radial
+transform bit-for-bit the same to 3.4e-16 and symmetric across equal `|G|`. Putting back any one of three
+master kernels, each differing only in its last bit, restored the symmetry, as did any of six other chunk
+counts; and **master itself fails both tests with `DEFUMAT_K_BATCH=2`**, a dial that moves results only at
+round-off (1.4e-9 and 6.2e-12, its density off by 8.7e-11). At that threshold the density is converged to
+about 1e-8 (refining the states moves it by 3.5e-8) and the asymmetry falls with the threshold, 1.1e-11 at
+1e-14 and 8.0e-12 at 1e-15, so it is convergence, and which way it falls is rounding. The bounds were read
+off the one pattern that happened to land symmetric; they are now 1e-8 and 1e-10, against a defect that
+shows at the order of `e_14` (`CLAUDE.md`'s trap of a test asserting a tolerance its own `conv_thr` does
+not deliver).
+
+**One more item sized on the way, a null**: the walked responses rebuild `newd`'s tangent once per k-chunk
+and perturbation (`GPU-MEMORY-NEXT.md`'s third item); on ultrasoft eight-atom silicon at 8 k-points it is
+36.7 ms a call, 0.88 s of a 384 s walked phonon of one atom on the CPU, 0.2 per cent.
+
+**And one located**: the symmetric Gamma phonon's card peak climbing 1 to 5 MB an iteration (eight-atom
+silicon, 24 operations; "The group averages walk the operations past a budget") is not a leak. The card's
+bytes in use swing between 35 and 50 MB across the sixteen iterations and end at 34.6 where the first
+began at 34.9; the peak, 72.1 -> 87.1 MB, is each group average's ~40 MB transient landing on whatever was
+live at that moment, which varies with when Python frees the previous iteration's arrays. On the CPU the
+live arrays read 35.8 -> 40.7 MB at every average and nothing compiles inside the iterations after the
+first.
+
+## The scanned augmentation charge in the radial basis (CPU and RTX A2000, 2026-10-03 evening)
+
+**The number to carry: the scanned augmentation table no longer forms `Q_ij(G)` at all; `becsum` meets
+the angular coefficients in the radial basis once, with no G index, and the strain's second derivative of
+ultrasoft AlAs's augmented density compiles to 67.7 MB where it took 176.1, on the card the ultrasoft
+eight-atom strain response peaks at 140.7 MB where it read 180.8 (74 MB over its SCF where it was 114), in the same time.**
+(`augmentation._tabulated_charge`, `_tabulated_integrals`, `_beta_basis`; branch `bessel-jvp`.) What the
+previous entry left of the handoff's first item: with the radial derivative a transform, the memory that
+still followed a chunk was the augmentation table's own, the `(nh, nh, chunk)` complex blocks
+`_assemble_qgm` builds one `L` at a time, each with a tangent and a cotangent under a derivative.
+
+`sum_ij Q_ij(G) sum_a b_aij e^{-iG.tau_a}` with `Q_ij(G) = sum_LM (-i)^L ap(LM,i,j) Y_LM(G) Q^L_{n_i n_j}(|G|)`
+is the same sum taken with `C_{a,LM,n,m} = (-i)^L sum_{i in n, j in m} ap(LM,i,j) b_aij` first, `(nat_t,
+nl^2, nbeta, nbeta)`; a block of G then holds the radial table `(nbeta, nbeta, nl, chunk)` real, the
+harmonics and `(nat_t, 2L+1, chunk)` per `L`: for aluminium 180 real rows and 25 complex ones per atom
+against several blocks of 324 complex rows. The integrals (`newd`) accumulate `T_{a,LM,n,m}` as the scan's
+carry and expand to `(i, j)` once after it. Planned in writing and reviewed by Fable against the code, which
+ran the contraction against the block form on four kinds of dataset: ultrasoft silicon on the knot table
+with a displacement and a complex `becsum` (6e-18 on a charge of 1.2e-2, 9e-15 on integrals of 12, 1e-14
+with the imaginary part kept), the same on `ExactRadial`, fully-relativistic bismuth with `nh = 34` (2e-17,
+5e-15, 7e-15) and two-species PAW AlAs with `nl` (5, 3) (7e-19, 7e-16, 9e-16).
+
+**Compile only**, D22's CPU, `memory_analysis()`, ultrasoft AlAs at 200 Ry and 8 k-points, the augmented
+density's strain derivatives (`aug_u_probe.py`), the radial rule in both arms:
+
+| | `jvp` | gradient | `jvp` of the gradient |
+|---|---|---|---|
+| the block, aluminium's 2048-vector chunk | 130.1 MB | 104.7 | 176.1 |
+| the block, 512 vectors | 70.9 | 61.4 | 90.9 |
+| **the radial basis, 2048 vectors** | **45.9** | **48.7** | **67.7** |
+| the radial basis, 512 vectors | 55.1 | 51.1 | 71.0 |
+
+so the chunk no longer matters to the derivative's memory either, and it is still sized from `nh` (for the
+block it no longer forms), which is now conservative; re-keying it is a time trade not measured.
+
+**On the card**, D22, memory mode at one k-point a chunk, warm, the second of two processes, the rule alone
+(`85e7d6d`) against the rule with the radial basis:
+
+| call | the rule alone | with the radial basis |
+|---|---|---|
+| ultrasoft AlAs (8 k) stress | 169.3 MB (its SCF's) | 169.3 |
+| its piezoelectric tensor | 169.3 | 169.3 |
+| ultrasoft eight-atom Si (27 k), strain response, SCF 66.9 | 180.8 | **140.7** |
+
+with `sigma_xx` the same to 1e-17, `e_14` = 1.4752843184 and the strain response's `max |drho_00|` =
+0.0887714883 at a mean of 32.5 CG steps in both, and the strain response 182.8 s in one sample against
+the rule's 181.8 and 183.3. Warm, the median of five calls, two rounds alternated (`card_times.py`): the
+AlAs stress 0.666 / 0.650 s with the rule alone against **0.634 / 0.637** with the radial basis, the
+piezoelectric tensor 8.423 / 8.487 against **8.363 / 8.409**, so it is also 1 to 4 per cent faster.
+
+**On a CPU, both changes together**, D22's four performance cores at four threads, `JAX_PLATFORMS=cpu`,
+warm medians in one process (`warm_times.py`), two rounds with the three arms alternated, each from its own
+worktree: master `d687623`, the radial rule alone `85e7d6d`, and the rule with the radial basis `7705fa0`:
+
+| call | master | the rule | with the radial basis |
+|---|---|---|---|
+| ultrasoft AlAs (`alas-piezo-tiny.in`) stress | 0.704 / 0.714 s | 0.258 / 0.261 | 0.263 / 0.259 |
+| NC Si (`si-epsilon-unshifted-nosym.in`, 2x2x2) elastic constants | 1.272 / 1.254 | 0.970 / 0.960 | 0.957 / 0.954 |
+| ultrasoft Si (`si2-us-force.in`, 3x3x3) dielectric tensor | 14.177 / 14.233 | 14.028 / 13.909 | 13.897 / 14.029 |
+| NC Si (`si-epsilon-unshifted.in`) dielectric tensor | 4.080 / 4.054 | 4.045 / 4.068 | 4.032 / 4.055 |
+
+with `eps_xx` the same to 8e-15 and 1.5e-13 relative. **The rule is worth most on a CPU**: the ultrasoft
+stress is 2.7 times faster and the elastic constants 24 per cent, because the rematted scan recomputed
+every block's Bessel kernel in the backward pass and differentiated through it, where the rule evaluates
+one more transform and recomputes nothing; the dielectric tensors, whose velocity operator takes the
+projectors' first derivative in `k` inside a `jvp`, are at parity, which is the cost the review asked to see
+measured.
+
+**What the ultrasoft eight-atom strain response's remaining 74 MB over its SCF is**: the `finish_moved`
+pass (82.9 MB of temporaries on the card, per pass by `memory_analysis()`; the `bare` walk 59.9 next), and in
+it the augmentation charge's forward derivative along the strain, 71.4 of the pass's 86.1 MB compile only on
+D22's CPU (the strained G set 0.8, `to_dense` 2.8, the charge along `becsum` unstrained 5.8). With eight
+atoms of one species and `nh = 8` the factored body's `(nat_t, 2L+1, chunk)` intermediate is about the old
+block's size, 72 against 64 complex values a G vector, so the obvious suspect was that intermediate: it is
+not. Contracting one atom at a time inside each block (a scan over atoms, intermediate `(2L+1, chunk)`) reads
+74.1 MB at the default chunk and 43.7 at 4096 against 71.4 and 42.8, a null, and not kept. What the chunk
+does move is the total, 71.4 / 42.8 / 71.5 MB at 16384 / 4096 / 1024 vectors, not monotonic, the U the stress
+showed in "The augmentation chunk under a strain"; which arrays make it up is not located.
