@@ -629,7 +629,9 @@ def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None,
     # ``becsum`` is mixed with the density's coefficients and kept out of the
     # fit that chooses them, which is ``rho_ddot``'s rule (see
     # :meth:`~defumat.scf.mixing.AndersonMixer.mix` for the measurement).
-    becsum_size = sum(np.asarray(b).size for b in becsum_in if b is not None)
+    # ``np.size`` reads the shape; ``np.asarray(b).size`` converted the array
+    # first, a second host read of a block already packed above.
+    becsum_size = sum(np.size(b) for b in becsum_in if b is not None)
     exclude = (slice(rho.size, rho.size + becsum_size)
                if becsum_size and not FIT_BECSUM else None)
     metric = getattr(mixer, "metric", None)
@@ -1425,13 +1427,21 @@ def _without_gamma_storage(system: System) -> System:
     return eqx.tree_at(lambda s: s.kpoints, system, replacement)
 
 
-def _meta_c(potential):
+def _meta_c(potential, is_meta: bool = True):
     """The Tran-Blaha ``c`` a potential was built with, or ``None``.
 
     ``Potential.meta_c`` is ``0`` for every functional that is not a meta-GGA,
     and the PAW one-centre terms want ``None`` there rather than a coefficient
     that means nothing.
+
+    ``is_meta`` is the functional's own flag, and ``False`` answers ``None``
+    without reading ``c``: ``v_of_rho`` sets it to exactly ``0.0`` outside its
+    meta branch, so the answer is the same, and the read it saves is a blocking
+    fetch of a device scalar at the top of every SCF iteration, which waited for
+    the whole potential before the Hamiltonian could be dispatched.
     """
+    if not is_meta:
+        return None
     c = potential.meta_c
     return None if np.ndim(c) == 0 and float(c) == 0.0 else c
 
@@ -6517,6 +6527,7 @@ def run_scf(
     rotation_freeze_phase: bool = True,
     rotation_flat_curvature: float | None = None,
     pools=None,
+    diago_thr_init: float | None = None,
 ) -> SCFResult:
     """Run the self-consistent field loop to convergence.
 
@@ -6568,6 +6579,21 @@ def run_scf(
     than a set of wavefunctions -- see
     :meth:`Calculation.starting_wavefunctions`. It replaces the pseudo-atomic
     orbitals, and it is ignored by a residual solver, which starts its own.
+
+    ``diago_thr_init`` is ``pw.x``'s variable of the same name, the eigenvalue
+    threshold ``ethr`` of the first iteration, and ``None`` is ``ETHR_INIT``
+    (1e-2), the value for a start from atomic orbitals. The second iteration
+    resets it to 1e-2 and tightens it from ``dr2`` as always (``next_ethr``),
+    and the first iteration's redo test reads it, so a first diagonalisation
+    whose density turns out better than ``diago_thr_init * nelec`` is redone at
+    ``0.1 dr2 / nelec``, which is ``tr2_min`` in ``electrons.f90:677``,
+    ``:898-906``. It is floored at the band side's ``ethr`` floor. What it is
+    for is a start from states that are already nearly converged: a relaxation
+    passes 1e-6 with the previous ionic step's wavefunctions, which is what
+    ``run_pwscf.f90:331-334`` sets for every step after the first. It is **not**
+    read from an input file's ``&electrons``, and two things override it: a
+    residual solver, which sets the threshold from its own converged ``dr2``,
+    and a checkpoint resume, which restores the one it left with.
 
     ``starting_from`` is all four at once, taken from another run's
     :class:`SCFResult` **and promoted into this run's spin regime**: a converged
@@ -7116,8 +7142,12 @@ def run_scf(
     # ``wg`` either -- the occupations are rebuilt from the first
     # diagonalisation, as ``scf/continuation.py`` says. The deviation is one
     # iteration of extra accuracy on the empty bands of a seeded run, which is
-    # the conservative direction and is bounded because such a run starts at
-    # ``ETHR_INIT``.
+    # the conservative direction, and its size is set by the first threshold:
+    # at ``ETHR_INIT`` the empty bands are held to 1e-2 where ``max(5 ethr,
+    # 1e-5)`` would be 5e-2, which is loose either way, and at the 1e-6 a
+    # relaxation's later steps pass as ``diago_thr_init`` they are held to 1e-6
+    # where ``pw.x``, with the previous geometry's ``btype``, holds them to
+    # 1e-5, for that one iteration.
     #
     # **A checkpoint resume overwrites this below**, where the rest of the loop
     # state comes back: it re-enters with a converged ``ethr``, where a flat
@@ -7128,6 +7158,11 @@ def run_scf(
     converged = False
     wavefunctions = None
     ethr, accuracy = ETHR_INIT, None
+    if diago_thr_init is not None:
+        # Set before the residual solver's and the resume's assignments below,
+        # so that both still win (see the docstring).
+        ethr = max(float(diago_thr_init),
+                   resolve_ethr_floor(getattr(calculation, "ethr_floor", ETHR_MIN)))
     # The two halves of ``accuracy``, set together with it inside the loop. Named
     # here so a resumed run that never reaches the retry block still has them.
     charge_accuracy = magnetic_accuracy = 0.0
@@ -7384,7 +7419,8 @@ def run_scf(
                       f"precision at ethr = {ethr:.2e}")
 
         potential = calculation.potential(rho, field_scale, field, tau=tau_state)
-        epaw, ddd_paw = calculation.onecenter(becsum_state, _meta_c(potential))
+        epaw, ddd_paw = calculation.onecenter(
+            becsum_state, _meta_c(potential, calculation.functional.is_meta))
         hubbard_terms = v_ns = None
         eth = 0.0
         if calculation.is_hubbard:
@@ -7491,43 +7527,6 @@ def run_scf(
                 eigenvalues, wavefunctions, steps, unsettled = calculation.diagonalize(
                     hamiltonians, nbnd, wavefunctions, thresholds, return_steps=True
                 )
-            # ``c_bands.f90:159``: ``avg_iter / nkstot``, and ``nkstot`` counts
-            # spin channels, so the mean over both axes is the same quantity.
-            # One line per attempt, as ``pw.x`` prints one per ``c_bands``
-            # call; the history entry below sums them, since that is what the
-            # SCF iteration paid.
-            steps_here = float(np.mean(np.asarray(steps)))
-            davidson_steps += steps_here
-            davidson_unconverged = int(np.max(np.asarray(unsettled)))
-            if (not budget_warned and davidson_unconverged > 0
-                    and int(np.max(np.asarray(steps))) >= MAX_ITERATIONS):
-                # ``c_bands`` prints "eigenvalues not converged" here; a quiet run
-                # that spent most of its time in one call gave no sign of it.
-                budget_warned = True
-                warnings.warn(
-                    f"SCF iteration {iteration}: the eigensolver used its whole budget of "
-                    f"{MAX_ITERATIONS} steps and left up to {davidson_unconverged} of {nbnd} "
-                    f"bands unsettled at ethr = {ethr:.2e}. The step count is what the run paid "
-                    "for this iteration (history['davidson_iterations']). At a threshold this "
-                    "tight the stopping test, a change in an eigenvalue between two steps, "
-                    "can be decided by round-off; DEFUMAT_ETHR_MIN raises the floor under "
-                    "the threshold at some cost in accuracy.",
-                    RuntimeWarning, stacklevel=2,
-                )
-            if verbose:
-                # **The unsettled count is printed and not only recorded.** A
-                # step count says how hard the solve worked; it does not say
-                # whether it gave up, and the two look the same in a log --
-                # ``avg # of iterations = 100.0`` is the budget exactly, which
-                # means every k-point was cut off mid-flight rather than that
-                # the last one took a hundred steps. It is appended only when
-                # something is actually unsettled, so a healthy run's line is
-                # byte for byte ``pw.x``'s.
-                stalled = ("" if davidson_unconverged == 0 else
-                           f",  up to {davidson_unconverged} of {nbnd} bands "
-                           "unsettled")
-                print(f"     ethr = {ethr:9.2E},  avg # of iterations = "
-                      f"{steps_here:4.1f}{stalled}")
             wg, levels = calculation.occupations(eigenvalues)
             if streaming:
                 # One walk of the store for every sum over k the iteration
@@ -7569,11 +7568,111 @@ def run_scf(
             # eigensolver's threshold and with it the last digits of every
             # eigenvalue. A diagnostic must not change the run it is diagnosing,
             # and it must not pay for a second FFT of the residual either.
-            accuracy, charge_accuracy, magnetic_accuracy = (
-                float(term) for term in _accuracy_split(
-                    rho_out - rho, calculation.basis.dense, calculation.system.cell
-                )
+            accuracy_terms = _accuracy_split(
+                rho_out - rho, calculation.basis.dense, calculation.system.cell
             )
+            # Which density each energy term is evaluated at is QE's
+            # convention, and it is not uniform (``electrons.f90``, and the
+            # comment there justifying ``descf``):
+            #
+            #   * ``eband``  -- the eigenvalues, hence the potential of the
+            #     *input* density, the one the Hamiltonian was built from;
+            #   * ``deband`` -- ``delta_e()``, which runs *before* ``v_of_rho``
+            #     is called again, so it pairs the **output** density with the
+            #     **input** potential;
+            #   * ``ehart``/``etxc`` -- ``v_of_rho`` on the density that will be
+            #     used next, which at convergence is the unmixed **output** one.
+            #
+            # ``descf`` is QE's first-order correction for that mismatch, and it
+            # is identically zero at convergence, which is the only iteration
+            # whose terms are compared. Evaluating all of them at the input
+            # density instead leaves each one ~1e-5 Ry away from QE's while the
+            # total -- being variational -- still agrees to 1e-9.
+            #
+            # Dispatched here, inside the attempt, so that its three numbers
+            # come back in the one fetch below; an attempt that is redone throws
+            # them away, which happens at most once a run, at iteration 1.
+            iteration_terms = _iteration_scalars(
+                eigenvalues, wg, rho, rho_out, potential.v_scf,
+                # ``calculation.system``, never the ``system`` argument. They are
+                # the same object for every ordinary call and *not* for one that
+                # supplies its own ``calculation`` -- which is exactly what a run
+                # on a deformed cell does (:meth:`Calculation.at_strain`). With
+                # the caller's volume here, ``deband`` is scaled wrongly and the
+                # reported total energy acquires a slope in the strain of
+                # **3.9 Ry per unit strain** on two-atom silicon, against a true
+                # ``dE/d(eps)`` of 0.09. The density, the potential and every
+                # response are unaffected, which is why it survived: only the
+                # number printed at the end is wrong.
+                calculation.system.cell.volume
+            )
+            # PAW's contribution to ``deband``: ``delta_e`` subtracts
+            # ``sum ddd_paw * becsum`` for the same reason it subtracts
+            # ``int rho v_scf`` -- the one-centre potential is already inside
+            # every eigenvalue through ``deeq``, and ``eband`` would
+            # double-count it. Neither input changes after this attempt (the
+            # converged branch below refreshes ``epaw`` and deliberately not
+            # ``ddd_paw``), so it is dispatched here with the others.
+            paw_deband = (_paw_deband(ddd_paw, calculation.augmentation, becsum_out)
+                          if calculation.is_paw else None)
+            # **One fetch for the iteration's scalars** (``OPEN.md`` Part XXIII
+            # item 21). They were read one ``float()`` or ``np.asarray`` at a
+            # time, ten blocking reads on the simplest path (eleven when the
+            # eigensolver used its budget), each waiting for its own producer;
+            # here every copy is started before any is waited for. Every
+            # expression above is the one that was there and each is still its
+            # own ``jit``: fusing ``_accuracy_split`` with ``_iteration_scalars``
+            # could reassociate ``dr2``, and one ulp there moves the ``ethr``
+            # schedule. The Hartree and
+            # exchange-correlation energies are the *input* potential's, which
+            # is what the total reports unless the run converges, and the
+            # converged branch reads its rebuilt ones again.
+            (steps, unsettled, accuracy_terms, iteration_terms,
+             (ehart, etxc, epaw_value, paw_deband)) = jax.device_get((
+                 steps, unsettled, accuracy_terms, iteration_terms,
+                 (potential.ehart, potential.etxc,
+                  epaw if calculation.is_paw else None, paw_deband),
+             ))
+            accuracy, charge_accuracy, magnetic_accuracy = (
+                float(term) for term in accuracy_terms
+            )
+            # ``c_bands.f90:159``: ``avg_iter / nkstot``, and ``nkstot`` counts
+            # spin channels, so the mean over both axes is the same quantity.
+            # One line per attempt, as ``pw.x`` prints one per ``c_bands``
+            # call; the history entry below sums them, since that is what the
+            # SCF iteration paid.
+            steps_here = float(np.mean(steps))
+            davidson_steps += steps_here
+            davidson_unconverged = int(np.max(unsettled))
+            if (not budget_warned and davidson_unconverged > 0
+                    and int(np.max(steps)) >= MAX_ITERATIONS):
+                # ``c_bands`` prints "eigenvalues not converged" here; a quiet run
+                # that spent most of its time in one call gave no sign of it.
+                budget_warned = True
+                warnings.warn(
+                    f"SCF iteration {iteration}: the eigensolver used its whole budget of "
+                    f"{MAX_ITERATIONS} steps and left up to {davidson_unconverged} of {nbnd} "
+                    f"bands unsettled at ethr = {ethr:.2e}. The step count is what the run paid "
+                    "for this iteration (history['davidson_iterations']). At a threshold this "
+                    "tight the stopping test, a change in an eigenvalue between two steps, "
+                    "can be decided by round-off; DEFUMAT_ETHR_MIN raises the floor under "
+                    "the threshold at some cost in accuracy.",
+                    RuntimeWarning, stacklevel=2,
+                )
+            if verbose:
+                # **The unsettled count is printed and not only recorded.** A
+                # step count says how hard the solve worked; it does not say
+                # whether it gave up, and the two look the same in a log --
+                # ``avg # of iterations = 100.0`` is the budget exactly, which
+                # means every k-point was cut off mid-flight rather than that
+                # the last one took a hundred steps. It is appended only when
+                # something is actually unsettled, so a healthy run's line is
+                # byte for byte ``pw.x``'s.
+                stalled = ("" if davidson_unconverged == 0 else
+                           f",  up to {davidson_unconverged} of {nbnd} bands "
+                           "unsettled")
+                print(f"     ethr = {ethr:9.2E},  avg # of iterations = "
+                      f"{steps_here:4.1f}{stalled}")
             # **The half `accuracy` cannot see**, reported every iteration and
             # fed to nothing. What reaches `accuracy` from `becsum` is only what
             # `addusdens` put on the grid; PAW's one-centre piece is not in it
@@ -7650,40 +7749,9 @@ def run_scf(
                 print(f"  iteration {iteration:3d}   ethr was too large; "
                       f"diagonalising again at {ethr:.2e}")
 
-        # Which density each term is evaluated at is QE's convention, and it is
-        # not uniform (``electrons.f90``, and the comment there justifying
-        # ``descf``):
-        #
-        #   * ``eband``  -- the eigenvalues, hence the potential of the *input*
-        #     density, the one the Hamiltonian was built from;
-        #   * ``deband`` -- ``delta_e()``, which runs *before* ``v_of_rho`` is
-        #     called again, so it pairs the **output** density with the
-        #     **input** potential;
-        #   * ``ehart``/``etxc`` -- ``v_of_rho`` on the density that will be
-        #     used next, which at convergence is the unmixed **output** one.
-        #
-        # ``descf`` is QE's first-order correction for that mismatch, and it is
-        # identically zero at convergence, which is the only iteration whose
-        # terms are compared. Evaluating all of them at the input density
-        # instead leaves each one ~1e-5 Ry away from QE's while the total --
-        # being variational -- still agrees to 1e-9.
-        eband, deband, residual = (
-            float(x) for x in
-            _iteration_scalars(
-                eigenvalues, wg, rho, rho_out, potential.v_scf,
-                # ``calculation.system``, never the ``system`` argument. They are
-                # the same object for every ordinary call and *not* for one that
-                # supplies its own ``calculation`` -- which is exactly what a run
-                # on a deformed cell does (:meth:`Calculation.at_strain`). With
-                # the caller's volume here, ``deband`` is scaled wrongly and the
-                # reported total energy acquires a slope in the strain of
-                # **3.9 Ry per unit strain** on two-atom silicon, against a true
-                # ``dE/d(eps)`` of 0.09. The density, the potential and every
-                # response are unaffected, which is why it survived: only the
-                # number printed at the end is wrong.
-                calculation.system.cell.volume
-            )
-        )
+        # ``eband``, ``deband`` and ``|drho|``, read in the attempt's one fetch;
+        # the comment there says which density each is evaluated at.
+        eband, deband, residual = (float(x) for x in iteration_terms)
 
         if track_orientation:
             # ``potential`` is still the input's here, which is the field the
@@ -7694,7 +7762,8 @@ def run_scf(
                                 calculation.system.cell).total)
             if calculation.is_paw:
                 torque_now = torque_now + _onecenter_torque(
-                    calculation, becsum_state, becsum_out, _meta_c(potential),
+                    calculation, becsum_state, becsum_out,
+                    _meta_c(potential, calculation.functional.is_meta),
                     wavefunctions=fetch_wavefunctions(wavefunctions), weights=wg)
             if pooled:
                 # The stepper keeps a quasi-Newton history of the torques it is
@@ -7751,7 +7820,11 @@ def run_scf(
             # ... and the one-centre energy with it. ``ddd_paw`` is deliberately
             # *not* refreshed: ``deband`` below pairs it with the output becsum
             # exactly as ``delta_e`` does, which runs before QE recomputes it.
-            epaw, _ = calculation.onecenter(becsum_out, _meta_c(potential))
+            epaw, _ = calculation.onecenter(
+                becsum_out, _meta_c(potential, calculation.functional.is_meta))
+            ehart, etxc, epaw_value = jax.device_get((
+                potential.ehart, potential.etxc,
+                epaw if calculation.is_paw else None))
             if calculation.is_hubbard:
                 # ``eth`` is recomputed by ``v_of_rho`` on the density that will
                 # be used next, which at convergence is the unmixed output one.
@@ -7759,12 +7832,10 @@ def run_scf(
                 # not: ``deband`` pairs it with the output occupations.
                 eth = hubbard_energy(ns_out, calculation.hubbard_coefficients)
 
-        # PAW's contribution to ``deband``: ``delta_e`` subtracts
-        # ``sum ddd_paw * becsum`` for the same reason it subtracts
-        # ``int rho v_scf`` -- the one-centre potential is already inside every
-        # eigenvalue through ``deeq``, and ``eband`` would double-count it.
+        # PAW's contribution to ``deband``, computed and fetched with the
+        # attempt's other scalars (the comment there gives the reason for it).
         if calculation.is_paw:
-            deband -= float(_paw_deband(ddd_paw, calculation.augmentation, becsum_out))
+            deband -= float(paw_deband)
         if calculation.is_hubbard:
             # ``delta_e``'s ``- SUM(rho%ns * v%ns)``, doubled when there is one
             # spin channel. Same pairing as every other term there: the
@@ -7782,8 +7853,8 @@ def run_scf(
 
         terms = {
             "one-electron": eband + deband,
-            "hartree": float(potential.ehart),
-            "xc": float(potential.etxc),
+            "hartree": float(ehart),
+            "xc": float(etxc),
             "ewald": float(calculation.ewald),
         }
         if calculation.dispersion_sum is not None:
@@ -7793,7 +7864,7 @@ def run_scf(
             # ``electrons.f90`` adds ``elondon``.
             terms["dispersion"] = float(calculation.dispersion)
         if calculation.is_paw:
-            terms["one_center_paw"] = float(epaw)
+            terms["one_center_paw"] = float(epaw_value)
         if calculation.is_hubbard:
             terms["hubbard"] = float(eth)
         if "smearing" in levels:
