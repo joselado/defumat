@@ -7144,6 +7144,12 @@ def run_scf(
             "Elk's beta0 and holds a canted iron pair to 0.001 degrees",
             RuntimeWarning, stacklevel=2,
         )
+    if getattr(mixer, "beta_mag", None) is not None:
+        # :meth:`Mixer.magnetic_step` finds the magnetization through the
+        # density's shape and does nothing without one. This line sat inside the
+        # warning's branch above from ``2d4c14b`` on, so ``mixing_beta_mag`` was
+        # inert on every run that did not also trigger that warning. A layout
+        # below replaces it with its own stored shape.
         mixer.shape = tuple(np.shape(rho))
 
     # **Where the history keeps the density** (``mixing_space``), installed
