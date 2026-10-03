@@ -10267,3 +10267,82 @@ began at 34.9; the peak, 72.1 -> 87.1 MB, is each group average's ~40 MB transie
 live at that moment, which varies with when Python frees the previous iteration's arrays. On the CPU the
 live arrays read 35.8 -> 40.7 MB at every average and nothing compiles inside the iterations after the
 first.
+
+## The scanned augmentation charge in the radial basis (CPU and RTX A2000, 2026-10-03 evening)
+
+**The number to carry: the scanned augmentation table no longer forms `Q_ij(G)` at all; `becsum` meets
+the angular coefficients in the radial basis once, with no G index, and the strain's second derivative of
+ultrasoft AlAs's augmented density compiles to 67.7 MB where it took 176.1, on the card the ultrasoft
+eight-atom strain response peaks at 140.7 MB where it read 180.8 (74 MB over its SCF where it was 114), in the same time.**
+(`augmentation._tabulated_charge`, `_tabulated_integrals`, `_beta_basis`; branch `bessel-jvp`.) What the
+previous entry left of the handoff's first item: with the radial derivative a transform, the memory that
+still followed a chunk was the augmentation table's own, the `(nh, nh, chunk)` complex blocks
+`_assemble_qgm` builds one `L` at a time, each with a tangent and a cotangent under a derivative.
+
+`sum_ij Q_ij(G) sum_a b_aij e^{-iG.tau_a}` with `Q_ij(G) = sum_LM (-i)^L ap(LM,i,j) Y_LM(G) Q^L_{n_i n_j}(|G|)`
+is the same sum taken with `C_{a,LM,n,m} = (-i)^L sum_{i in n, j in m} ap(LM,i,j) b_aij` first, `(nat_t,
+nl^2, nbeta, nbeta)`; a block of G then holds the radial table `(nbeta, nbeta, nl, chunk)` real, the
+harmonics and `(nat_t, 2L+1, chunk)` per `L`: for aluminium 180 real rows and 25 complex ones per atom
+against several blocks of 324 complex rows. The integrals (`newd`) accumulate `T_{a,LM,n,m}` as the scan's
+carry and expand to `(i, j)` once after it. Planned in writing and reviewed by Fable against the code, which
+ran the contraction against the block form on four kinds of dataset: ultrasoft silicon on the knot table
+with a displacement and a complex `becsum` (6e-18 on a charge of 1.2e-2, 9e-15 on integrals of 12, 1e-14
+with the imaginary part kept), the same on `ExactRadial`, fully-relativistic bismuth with `nh = 34` (2e-17,
+5e-15, 7e-15) and two-species PAW AlAs with `nl` (5, 3) (7e-19, 7e-16, 9e-16).
+
+**Compile only**, D22's CPU, `memory_analysis()`, ultrasoft AlAs at 200 Ry and 8 k-points, the augmented
+density's strain derivatives (`aug_u_probe.py`), the radial rule in both arms:
+
+| | `jvp` | gradient | `jvp` of the gradient |
+|---|---|---|---|
+| the block, aluminium's 2048-vector chunk | 130.1 MB | 104.7 | 176.1 |
+| the block, 512 vectors | 70.9 | 61.4 | 90.9 |
+| **the radial basis, 2048 vectors** | **45.9** | **48.7** | **67.7** |
+| the radial basis, 512 vectors | 55.1 | 51.1 | 71.0 |
+
+so the chunk no longer matters to the derivative's memory either, and it is still sized from `nh` (for the
+block it no longer forms), which is now conservative; re-keying it is a time trade not measured.
+
+**On the card**, D22, memory mode at one k-point a chunk, warm, the second of two processes, the rule alone
+(`85e7d6d`) against the rule with the radial basis:
+
+| call | the rule alone | with the radial basis |
+|---|---|---|
+| ultrasoft AlAs (8 k) stress | 169.3 MB (its SCF's) | 169.3 |
+| its piezoelectric tensor | 169.3 | 169.3 |
+| ultrasoft eight-atom Si (27 k), strain response, SCF 66.9 | 180.8 | **140.7** |
+
+with `sigma_xx` the same to 1e-17, `e_14` = 1.4752843184 and the strain response's `max |drho_00|` =
+0.0887714883 at a mean of 32.5 CG steps in both, and the strain response 182.8 s in one sample against
+the rule's 181.8 and 183.3. Warm, the median of five calls, two rounds alternated (`card_times.py`): the
+AlAs stress 0.666 / 0.650 s with the rule alone against **0.634 / 0.637** with the radial basis, the
+piezoelectric tensor 8.423 / 8.487 against **8.363 / 8.409**, so it is also 1 to 4 per cent faster.
+
+**On a CPU, both changes together**, D22's four performance cores at four threads, `JAX_PLATFORMS=cpu`,
+warm medians in one process (`warm_times.py`), two rounds with the three arms alternated, each from its own
+worktree: master `d687623`, the radial rule alone `85e7d6d`, and the rule with the radial basis `7705fa0`:
+
+| call | master | the rule | with the radial basis |
+|---|---|---|---|
+| ultrasoft AlAs (`alas-piezo-tiny.in`) stress | 0.704 / 0.714 s | 0.258 / 0.261 | 0.263 / 0.259 |
+| NC Si (`si-epsilon-unshifted-nosym.in`, 2x2x2) elastic constants | 1.272 / 1.254 | 0.970 / 0.960 | 0.957 / 0.954 |
+| ultrasoft Si (`si2-us-force.in`, 3x3x3) dielectric tensor | 14.177 / 14.233 | 14.028 / 13.909 | 13.897 / 14.029 |
+| NC Si (`si-epsilon-unshifted.in`) dielectric tensor | 4.080 / 4.054 | 4.045 / 4.068 | 4.032 / 4.055 |
+
+with `eps_xx` the same to 8e-15 and 1.5e-13 relative. **The rule is worth most on a CPU**: the ultrasoft
+stress is 2.7 times faster and the elastic constants 24 per cent, because the rematted scan recomputed
+every block's Bessel kernel in the backward pass and differentiated through it, where the rule evaluates
+one more transform and recomputes nothing; the dielectric tensors, whose velocity operator takes the
+projectors' first derivative in `k` inside a `jvp`, are at parity, which is the cost the review asked to see
+measured.
+
+**What the ultrasoft eight-atom strain response's remaining 74 MB over its SCF is**: the `finish_moved`
+pass (82.9 MB of temporaries on the card, per pass by `memory_analysis()`; the `bare` walk 59.9 next), and in
+it the augmentation charge's forward derivative along the strain, 71.4 of the pass's 86.1 MB compile only on
+D22's CPU (the strained G set 0.8, `to_dense` 2.8, the charge along `becsum` unstrained 5.8). With eight
+atoms of one species and `nh = 8` the factored body's `(nat_t, 2L+1, chunk)` intermediate is about the old
+block's size, 72 against 64 complex values a G vector, so what the radial basis bought on this cell (180.8
+-> 140.7 MB on the card) is fewer such arrays alive at once rather than smaller ones, and the chunk sized for
+the old block (16384 vectors) sets what is left: 71.4 / 42.8 / 71.5 MB at 16384 / 4096 / 1024 vectors, not
+monotonic, the U the stress showed in "The augmentation chunk under a strain", so part of it is how XLA
+schedules the scan.

@@ -40,21 +40,31 @@ identity against the whole-k route on the same states.
 
 **What to pick up, in order:**
 
-1. **The two chunks under a strain's derivatives: the radial half is done** (2026-10-03, later the same
+1. **The two chunks under a strain's derivatives: both halves are done** (2026-10-03, later the same
    evening, branch `bessel-jvp`). Every radial transform's derivative in `|q|` is the same transform one
    order up, given to JAX as a `custom_jvp` (`formfactors.bessel_transform`), so no derivative holds the
    radial kernel and the radial chunk no longer trades memory against time below its default: on the card
    the ultrasoft AlAs piezoelectric tensor 198.5 -> 169.3 MB (its SCF's), the eight-atom silicon elastic
    constants 127.7 -> 45.0 (the strain response's), spin-orbit PAW platinum's stress 516.4 -> 274.8 (its
    SCF's; the old record had put that peak on the one-centre terms, wrongly), every result the same to the
-   printed digits; `PERFORMANCE.md`, "The radial transforms' derivatives, as transforms". **What is left is
-   the augmentation table's own G-chunk** under a strain's derivatives: the augmented density's second
-   derivative on AlAs compiles to 174.0 MB at aluminium's 2048-vector chunk (the same at a radial chunk of
-   256, so it is not the radial transform), 100.8 at 512 vectors and 195.6 at 1024, not monotonic, so
-   XLA's scheduling of the outer scan's body is part of it; and the ultrasoft eight-atom strain response's
-   114 MB above its SCF (180.5 MB on the card, 184.8 with the rule) is the same object under a forward
-   derivative. The lever is the outer scan's body, `augmentation._tabulated_charge` and
-   `_tabulated_integrals`, under a derivative; any default that trades time is the user's.
+   printed digits; `PERFORMANCE.md`, "The radial transforms' derivatives, as transforms". **The
+   augmentation half is done too** (the same evening): the scanned table no longer forms `Q_ij(G)`;
+   `becsum` meets the angular coefficients in the radial basis once, and a block of G holds the radial
+   table and the harmonics (`augmentation._tabulated_charge`, `_tabulated_integrals`, `_beta_basis`;
+   reviewed by Fable, who ran it against the block form on four kinds of dataset). The second derivative
+   of AlAs's augmented density compiles to 67.7 MB where it took 176.1, and on the card the ultrasoft
+   eight-atom strain response peaks at 140.7 MB where it read 180.8 (74 MB over its SCF where it was
+   114); `PERFORMANCE.md`, "The scanned augmentation charge in the radial basis". **Left**: the
+   augmentation chunk is still sized from `nh` for the block it no longer forms, so it is conservative,
+   and re-keying it on `nbeta^2 nl` is a time trade not measured (the user's). **The strain response's
+   remaining 74 MB is located**: its `finish_moved` pass (82.9 MB of temporaries on the card; the `bare`
+   walk 59.9 is next), and in it the augmentation charge's forward derivative along the strain, 71.4 of
+   86.1 MB compile only (D22's CPU, `review/bessel/moved_terms.py`). With eight atoms of one species the
+   factored body's `(nat_t, 2L+1, chunk)` intermediate is about the old block's size (72 against 64
+   complex values a G vector), so what it bought there (180.8 -> 140.7 MB) is fewer arrays alive at once,
+   not smaller ones, and the 16384-vector chunk sized for the old block sets what is left: 71.4 / 42.8 / 71.5 MB at 16384 / 4096 / 1024 vectors, not monotonic, the same U the
+   stress showed, so part of it is XLA's scheduling of the scan. Two levers, neither tried: contract one
+   atom at a time inside the block, and re-key the chunk on what the body now holds.
 2. **The per-mode grids with symmetry on** stay on the card, because
    `symmetrize_atom_displacement` acts on the whole `(3 nat, ...)` stack; the average's `nsym`-fold
    transient over them is gone (`90ed76a`). What is left, measured by a stage probe on eight-atom silicon
