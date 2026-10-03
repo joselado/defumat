@@ -521,8 +521,21 @@ class SternheimerSolver:
 
     # -- the pieces of ``ch_psi_all`` -------------------------------------
 
-    def _operator(self, vectors, ik, spin):
-        """``(H - eps S + alpha_pv S P_occ S) |h>`` -- ``ch_psi_all``."""
+    def _occupied_overlapped(self, ik, spin):
+        """``S|psi_occ>`` at one k-point, the level shift's fixed half."""
+        return self.hamiltonians[spin].apply_s(self.psi[spin][ik], ik)
+
+    def _operator(self, vectors, ik, spin, s_occupied=None):
+        """``(H - eps S + alpha_pv S P_occ S) |h>`` -- ``ch_psi_all``.
+
+        ``s_occupied`` is :meth:`_occupied_overlapped`, which a solve builds once:
+        ``S`` is linear, so ``S (sum_m o_mn psi_m) = sum_m o_mn (S psi_m)``, and
+        the level shift then costs a contraction instead of a ``calbec`` and an
+        expansion every CG step. ``ch_psi_all.f90:216-227`` applies ``S`` to the
+        lifted vector at every step; this is past QE, exact in arithmetic and
+        round-off in practice, and on a norm-conserving dataset, where ``S`` is
+        the identity, the same numbers to the bit.
+        """
         hamiltonian = self.hamiltonians[spin]
         occupied = self.psi[spin][ik]
         eps = self.eigenvalues[spin][ik][:, None]
@@ -541,6 +554,8 @@ class SternheimerSolver:
             jnp.conj(occupied[:, :1]) * s[:, :1].T,
         )
         overlaps = jnp.where(self.projector_mask[spin][ik][:, None], overlaps, 0.0)
+        if s_occupied is not None:
+            return out + self.alpha_pv * jnp.einsum("mn,mg->ng", overlaps, s_occupied)
         lifted = jnp.einsum("mn,mg->ng", overlaps, occupied)
         return out + self.alpha_pv * hamiltonian.apply_s(lifted, ik)
 
@@ -676,8 +691,11 @@ class SternheimerSolver:
         precondition = self._preconditioner(ik, spin)
         threshold = self.threshold if threshold is None else threshold
 
+        s_occupied = self._occupied_overlapped(ik, spin)
+
         def operator(vectors):
-            return jnp.where(mask, self._operator(vectors, ik, spin), 0.0)
+            return jnp.where(
+                mask, self._operator(vectors, ik, spin, s_occupied), 0.0)
 
         def dot(a, b):
             """``MYDDOTV3``: the real part of the Hermitian product, per band.

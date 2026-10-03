@@ -200,8 +200,13 @@ class TwoSphereSolver(SternheimerSolver):
 
     # -- the three pieces that move to the second sphere -------------------
 
-    def _operator(self, vectors, ik, spin):
-        """``ch_psi_all`` with ``H`` and ``S`` at ``k+q`` and ``eps`` at ``k``."""
+    def _occupied_overlapped(self, ik, spin):
+        """``S_{k+q}|psi_occ(k+q)>``, the level shift's fixed half on the second sphere."""
+        return self.hamiltonians[spin].apply_s(self.psi_kq[spin][ik], ik)
+
+    def _operator(self, vectors, ik, spin, s_occupied=None):
+        """``ch_psi_all`` with ``H`` and ``S`` at ``k+q`` and ``eps`` at ``k``;
+        ``s_occupied`` as :meth:`SternheimerSolver._operator` takes it."""
         hamiltonian = self.hamiltonians[spin]
         occupied = self.psi_kq[spin][ik]
         eps = self.eigenvalues[spin][ik][:, None]
@@ -212,6 +217,8 @@ class TwoSphereSolver(SternheimerSolver):
 
         overlaps = jnp.einsum("mg,ng->mn", jnp.conj(occupied), s)
         overlaps = jnp.where(self.projector_mask_kq[spin][ik][:, None], overlaps, 0.0)
+        if s_occupied is not None:
+            return out + self.alpha_pv * jnp.einsum("mn,mg->ng", overlaps, s_occupied)
         lifted = jnp.einsum("mn,mg->ng", overlaps, occupied)
         return out + self.alpha_pv * hamiltonian.apply_s(lifted, ik)
 
