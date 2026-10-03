@@ -795,16 +795,8 @@ def ewald_dynamical_matrix(calculation, q_cart, alpha: float | None = None):
     volume = cell.volume
 
     def reciprocal(shift):
-        gq = g + jnp.asarray(shift)[None, :]
-        g2 = jnp.sum(gq * gq, axis=-1)
-        finite = g2 > 1.0e-8
-        safe = jnp.where(finite, g2, 1.0)
-        factor = jnp.where(
-            finite, -E2 * FPI / volume * jnp.exp(-safe / alpha / 4.0) / safe, 0.0
-        )
-        phases = jnp.exp(1j * (gq @ positions.T))       # (ngm, nat)
-        weighted = factor[:, None, None] * gq[:, :, None] * gq[:, None, :]
-        return jnp.einsum("ga,gij,gb->abij", phases, weighted, jnp.conj(phases))
+        return _ewald_reciprocal(g, positions, jnp.asarray(shift),
+                                 jnp.asarray(volume), jnp.asarray(alpha))
 
     pairs = charges[:, None] * charges[None, :]
     cross = pairs[:, :, None, None] * reciprocal(q)
@@ -850,6 +842,54 @@ def ewald_dynamical_matrix(calculation, q_cart, alpha: float | None = None):
         self_term, axis=1
     )[:, None, :, :]
     return -jnp.transpose(matrix, (0, 2, 1, 3)).reshape(3 * nat, 3 * nat)
+
+
+#: How many G vectors :func:`_ewald_reciprocal` contracts at once.
+EWALD_G_CHUNK = 4096
+
+
+@jax.jit
+def _ewald_reciprocal(g, positions, shift, volume, alpha):
+    """``sum_G w(G+q) (G+q)_i (G+q)_j e^{i(G+q).(tau_a - tau_b)}``, ``(nat, nat, 3, 3)``.
+
+    The reciprocal half of :func:`ewald_dynamical_matrix`, **walked over G in
+    blocks of** :data:`EWALD_G_CHUNK`. Contracted in one piece the einsum's
+    intermediate is ``(ngm, nat, 3, 3)`` complex, which grows as ``ngm x nat``:
+    on a slab of a hundred atoms and a million dense G vectors, tens of GB. On
+    eight-atom silicon at 20 Ry it is small enough that the RTX A2000's peak did
+    not move either way. A padded block's rows carry a weight of zero; the
+    blocks are added in order, so the sum differs from the single contraction
+    in its rounding only.
+    """
+    from defumat.units import E2, FPI
+
+    ngm = g.shape[0]
+    blocks = -(-ngm // EWALD_G_CHUNK)
+    padded = blocks * EWALD_G_CHUNK
+    valid = jnp.arange(padded) < ngm
+    g = jnp.concatenate([g, jnp.zeros((padded - ngm, 3), dtype=g.dtype)])
+    nat = positions.shape[0]
+
+    def block(total, item):
+        gb, live = item
+        gq = gb + shift[None, :]
+        g2 = jnp.sum(gq * gq, axis=-1)
+        finite = (g2 > 1.0e-8) & live
+        safe = jnp.where(finite, g2, 1.0)
+        factor = jnp.where(
+            finite, -E2 * FPI / volume * jnp.exp(-safe / alpha / 4.0) / safe, 0.0
+        )
+        phases = jnp.exp(1j * (gq @ positions.T))       # (chunk, nat)
+        weighted = factor[:, None, None] * gq[:, :, None] * gq[:, None, :]
+        return total + jnp.einsum("ga,gij,gb->abij", phases, weighted,
+                                  jnp.conj(phases)), None
+
+    total = jnp.zeros((nat, nat, 3, 3), dtype=jnp.result_type(1j, g.dtype))
+    total, _ = jax.lax.scan(
+        block, total,
+        (g.reshape(blocks, EWALD_G_CHUNK, 3),
+         valid.reshape(blocks, EWALD_G_CHUNK)))
+    return total
 
 
 # ---------------------------------------------------------------------------
@@ -981,12 +1021,21 @@ def swap_ewald(calculation, positions, frozen, q_cart):
     functional at ``Gamma``, which carries the Ewald sum's Hessian there; the
     rest of it is the same at every ``q`` (see :func:`frozen_force_constants`).
     """
+    from defumat.response.chunked import _jacobian_by_columns
+
     nat = np.asarray(positions).shape[0]
     cell = calculation.system.cell
     dense = calculation.basis.dense
-    ionic = np.asarray(jax.hessian(
-        lambda pos: calculation.ewald_sum.energy(cell, pos, dense)
-    )(jnp.asarray(positions))).reshape(3 * nat, 3 * nat)
+    gradient = jax.grad(lambda pos: calculation.ewald_sum.energy(cell, pos, dense))
+    # **A column at a time**, where ``jax.hessian`` takes all ``3 nat`` tangents
+    # at once and holds that many copies of the Ewald sum's structure factors,
+    # ``(ngm, nat)`` each: that was the peak of the whole k-chunked phonon at
+    # ``q`` on the RTX A2000, 103.0 MB against 42.5 for everything else,
+    # eight-atom silicon at 20 Ry with the SCF's own peak at 35.1. Compiled by
+    # its structure, so a second call compiles nothing (:mod:`defumat.eager`).
+    ionic = np.asarray(compiled(
+        lambda pos: _jacobian_by_columns(gradient, pos), jnp.asarray(positions)
+    )).reshape(3 * nat, 3 * nat)
 
     return frozen - ionic + np.asarray(ewald_dynamical_matrix(calculation, q_cart))
 
