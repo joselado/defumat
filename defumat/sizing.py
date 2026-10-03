@@ -796,11 +796,14 @@ def estimate_size(
             )
             arrays["augmentation phases (nat,npad)"] = len(structure.types) * npad * zc
             arrays["augmentation G set (npad,3)"] = npad * 3 * zr + npad * zr
-            # What one block of the rebuild holds: the assembled (nh, nh, chunk)
-            # and the two it is contracted against. This is the dial's cost and
-            # the reason ``_aug_chunk`` sizes itself from ``nh`` rather than
-            # being a fixed count.
-            arrays["augmentation rebuild block"] = 3 * nh_max * nh_max * chunk * zc
+            # What one block of the rebuild holds. Since the scan contracts in
+            # the radial basis (``augmentation._tabulated_charge``) it forms no
+            # ``(nh, nh, chunk)`` block: what it holds is the radial table
+            # ``(nbeta, nbeta, nl, chunk)`` and the harmonics. ``_aug_chunk`` is
+            # still sized from ``nh``, so this is smaller than the dial assumes.
+            arrays["augmentation rebuild block"] = chunk * max(
+                pseudo.nbeta**2 * nl * zr + nl * nl * zr for pseudo, nl, _ in datasets
+            )
             setup_transient = max(
                 nqx * pseudo.kkbeta * zr for pseudo, _, _ in datasets
             )

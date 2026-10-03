@@ -629,6 +629,11 @@ def _aug_max_bytes() -> int:
 #: ``charge`` + ``integrals`` on ``si8-us-1k`` are 0.144 s at the old chunk and
 #: 0.116 s at 1024 on one CPU core, and on the GTX 1060 0.346 s at 8192 against
 #: 0.312 s at 1024 for spin-orbit bismuthene (``nh = 34``).
+#:
+#: **Since 2026-10-03 the scan forms no such block** (:func:`_tabulated_charge`
+#: contracts in the radial basis), so a chunk sized from ``nh`` is conservative:
+#: what a block holds is the radial table, ``nbeta^2 nl`` real values a G vector.
+#: Re-keying the chunk on that is a time trade not yet measured.
 AUG_CHUNK_BYTES = 16 * 1024**2
 
 
