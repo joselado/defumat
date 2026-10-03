@@ -59,7 +59,7 @@ import numpy as np
 
 from defumat.basis.fft import g_to_r, r_to_g
 from defumat.eager import compiled
-from defumat.response.sternheimer import SternheimerSolver
+from defumat.response.sternheimer import SternheimerSolver, pass_threshold
 from defumat.system.cell import Cell
 from defumat.system.kpoints import KPoints
 
@@ -712,7 +712,9 @@ def screening_loop_at_q(
 
     mixer = ResponseMixer(mixing_mode, beta=alpha_mix)
     for iteration in range(max_iterations):
-        response = displacements.respond(dvscf, iteration > 0)
+        response = displacements.respond(
+            dvscf, iteration > 0,
+            threshold=pass_threshold(displacements.solver, history))
 
         drho = stack(response).reshape((nat, 3) + grid_shape)
         induced = stack([
@@ -1142,7 +1144,7 @@ def require_a_two_sphere_regime(calculation, q_crystal) -> None:
 def dynamical_matrix_at_q(
     calculation, wavefunctions, eigenvalues, density, becsum=(),
     q=(0.0, 0.0, 0.0), q_cartesian: bool = False, nbnd: int | None = None,
-    threshold: float = 1.0e-14, alpha_mix: float = 0.7, tr2: float = 1.0e-14,
+    threshold: float | None = None, alpha_mix: float = 0.7, tr2: float = 1.0e-14,
     max_iterations: int = 100, verbose: bool = False,
 ):
     """``D(q)``: the dynamical matrix at one wavevector.
@@ -1198,8 +1200,12 @@ def dynamical_matrix_at_q(
     streamed = _streams(calculation, wavefunctions, keep_internals=False,
                         what="the dynamical matrix at q")
     result = _GroundState(wavefunctions, eigenvalues, density, becsum)
-    solver = make_sternheimer(calculation, result, threshold=threshold,
-                              host_store=streamed)
+    # The bare solves stay at the fixed 1e-14 this entry always used; the
+    # loop's are scheduled unless a number is given (``pass_threshold``).
+    solver = make_sternheimer(
+        calculation, result, threshold=1.0e-14 if threshold is None else threshold,
+        host_store=streamed)
+    solver.schedule = threshold is None
     potential = calculation.potential(density)
 
     kq, hamiltonians_kq, eigenvalues_kq, psi_kq = states_at_k_plus_q(

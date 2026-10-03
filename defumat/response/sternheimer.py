@@ -140,6 +140,8 @@ import jax.numpy as jnp
 import numpy as np
 from jax import lax
 
+import math
+
 import jax
 
 from defumat.basis.fft import force_real_g0, g_to_r, g_to_r_gamma
@@ -168,11 +170,43 @@ __all__ = [
     "paw_response",
     "require_a_sternheimer_regime",
     "scalars_at",
+    "pass_threshold",
+    "FIRST_PASS_THRESHOLD",
     "smearing_of",
 ]
 
 #: ``cgsolve_all``'s own ceiling on the CG iterations.
 MAX_ITERATIONS = 400
+
+
+#: ``dfpt_kernels.f90:277-281``'s first-pass threshold, which is also its cap.
+FIRST_PASS_THRESHOLD = 1.0e-2
+
+
+def pass_threshold(solver, history):
+    """This pass's CG threshold in a self-consistent response, or ``None``.
+
+    ``dfpt_kernels.f90:277-281``: ``1e-2`` on the first pass and
+    ``min(0.1 sqrt(dr2), 1e-2)`` after, with ``dr2`` the previous pass's
+    ``|ddv_scf|^2`` as it is printed (divided by ``npert``, ``:519``) -- here
+    ``history[-1]``, from :func:`defumat.response.mixing.ddv_scf`. The solve
+    need be no tighter than the potential it is solving at is converged, so the
+    early passes cost a few CG steps and the late ones what the end needs. The
+    last pass is at the schedule too, which is ``ph.x``'s accuracy: its final
+    ``dpsi`` carry a residual of order ``0.1 sqrt`` of the pass before.
+
+    ``None`` -- the solver's own fixed :attr:`~SternheimerSolver.threshold` --
+    unless the solver was built to be scheduled (:attr:`SternheimerSolver.
+    schedule`), which the response entry points do when they are given
+    ``threshold=None``. The schedule is not monotone and is not meant to be:
+    the loose first pass can make the second pass's ``dr2`` the larger of the
+    two, as it does in ``ph.x`` (``reference.out.ph-al2-metal:167-172``).
+    """
+    if not getattr(solver, "schedule", False):
+        return None
+    if not history:
+        return FIRST_PASS_THRESHOLD
+    return min(0.1 * math.sqrt(max(float(history[-1]), 0.0)), FIRST_PASS_THRESHOLD)
 
 
 def scalars_at(scalars: dict, threshold=None) -> dict:
@@ -285,6 +319,13 @@ class SternheimerSolver:
     perturbations as the caller has: the operator, the projector and the
     preconditioner all depend on the ground state alone.
     """
+
+    #: Whether a self-consistent loop schedules this solver's CG threshold pass
+    #: by pass (:func:`pass_threshold`) rather than holding :attr:`threshold`.
+    #: Set by the response entry points when called with ``threshold=None``;
+    #: :attr:`threshold` stays the tight fixed value every other solve uses (the
+    #: bare ``P_c r|psi>``, which ``ph.x`` solves at its own fixed ``eth_rps``).
+    schedule: bool = False
 
     def __init__(
         self,

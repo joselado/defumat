@@ -139,6 +139,7 @@ from defumat.response.sternheimer import (
     SternheimerSolver,
     paw_response,
     occupied_counts,
+    pass_threshold,
     require_a_sternheimer_regime,
 )
 from defumat.response.velocity import VelocityOperator, over_kpoints
@@ -168,6 +169,11 @@ ALPHA_MIX = 0.7
 TR2 = 1.0e-14
 
 MAX_ITERATIONS = 40
+
+#: The CG threshold of every solve that is not scheduled: the bare
+#: ``P_c r|psi>`` always, and the loop's when a caller asks for a fixed one.
+#: It was the loop's too until 2026-10-03.
+FIXED_THRESHOLD = 1.0e-12
 
 
 @dataclass
@@ -230,7 +236,7 @@ def dielectric_tensor(
     alpha_mix: float = ALPHA_MIX,
     tr2: float = TR2,
     max_iterations: int = MAX_ITERATIONS,
-    threshold: float = 1.0e-12,
+    threshold: float | None = None,
     mixing_mode: str = DEFAULT_RESPONSE_MIXING,
     screening: str = "full",
     born_charges: bool = True,
@@ -269,6 +275,14 @@ def dielectric_tensor(
             only way to compare this solve with a sum-over-states response run
             in RPA (:mod:`defumat.tddft`): the two routes are identities of
             each other only when their kernels match.
+        threshold: the CG threshold of the linear solves. ``None``, the
+            default, is ``ph.x``'s schedule (:func:`~defumat.response.
+            sternheimer.pass_threshold`): ``1e-2`` on the first pass and
+            ``min(0.1 sqrt(|ddv_scf|^2), 1e-2)`` after, so the solves are only
+            as tight as the potential they solve at is converged. A number holds
+            that threshold on every pass, which is what a test comparing two
+            routes below ``ph.x``'s own convergence wants.
+        tr2: ``ph.x``'s ``tr2_ph``, in its units (:data:`TR2`).
     """
     eigenvalues = jnp.asarray(eigenvalues)
     if eigenvalues.ndim == 2:
@@ -334,8 +348,10 @@ def dielectric_tensor(
     hamiltonians = calculation.hamiltonian(potential.v_scf, ddd_paw)
     solver = SternheimerSolver(
         calculation, hamiltonians, wavefunctions, eigenvalues, jnp.asarray(weights),
-        nocc, threshold, v_scf=potential.v_scf, becsum=becsum,
+        nocc, FIXED_THRESHOLD if threshold is None else threshold,
+        v_scf=potential.v_scf, becsum=becsum,
     )
+    solver.schedule = threshold is None
 
     # 1. The bare perturbation, once: ``P_c r_a |psi>`` for the three cartesian
     #    directions -- see :meth:`_WholeField.prepare`.
@@ -373,7 +389,9 @@ def dielectric_tensor(
     screen = _screening_kernel(calculation, density, screening)
     mixer = ResponseMixer(mixing_mode, beta=alpha_mix)
     for iteration in range(max_iterations):
-        response, becsum_response = field.respond(dvscf, onecentre, iteration > 0)
+        response, becsum_response = field.respond(
+            dvscf, onecentre, iteration > 0,
+            threshold=pass_threshold(solver, history))
 
         # ``psymdvscf(drhop)``: the three responses are symmetrised *together*,
         # after the loop over directions and before the kernel, because a

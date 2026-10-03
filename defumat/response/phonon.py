@@ -137,6 +137,7 @@ from defumat.response.sternheimer import (
     SternheimerSolver,
     paw_response,
     occupied_counts,
+    pass_threshold,
     require_a_sternheimer_regime,
     smearing_of,
 )
@@ -168,6 +169,11 @@ ALPHA_MIX = 0.7
 TR2 = 1.0e-14
 
 MAX_ITERATIONS = 60
+
+#: The CG threshold of every solve that is not scheduled: the bare
+#: ``P_c r|psi>`` always, and the loop's when a caller asks for a fixed one.
+#: It was the loop's too until 2026-10-03.
+FIXED_THRESHOLD = 1.0e-12
 
 
 @dataclass
@@ -277,7 +283,7 @@ def dynamical_matrix(
     alpha_mix: float = ALPHA_MIX,
     tr2: float = TR2,
     max_iterations: int = MAX_ITERATIONS,
-    threshold: float = 1.0e-12,
+    threshold: float | None = None,
     acoustic_sum_rule: bool = False,
     response: "DisplacementResponse | None" = None,
     atoms=None,
@@ -298,6 +304,12 @@ def dynamical_matrix(
         becsum: unused for a norm-conserving dataset, which is the only kind
             this accepts; present so the signature matches
             :func:`~defumat.response.efield.dielectric_tensor`.
+        threshold: the CG threshold of the linear solves. ``None``, the
+            default, is ``ph.x``'s schedule (:func:`~defumat.response.
+            sternheimer.pass_threshold`); a number holds that threshold on every
+            pass (:func:`~defumat.response.efield.dielectric_tensor` says when
+            that is wanted).
+        tr2: ``ph.x``'s ``tr2_ph``, in its units (:data:`TR2`).
         acoustic_sum_rule: whether to impose ``sum_b D_(a i)(b j) = 0`` before
             diagonalising. **Off by default, because ``ph.x`` does not impose
             it** and the residue is the diagnostic described in
@@ -406,10 +418,12 @@ def dynamical_matrix(
         wavefunctions = jnp.asarray(wavefunctions)
     solver = SternheimerSolver(
         calculation, hamiltonians, wavefunctions, eigenvalues, weights,
-        nocc, threshold, v_scf=potential.v_scf, becsum=becsum,
+        nocc, FIXED_THRESHOLD if threshold is None else threshold,
+        v_scf=potential.v_scf, becsum=becsum,
         smearing=smearing_of(calculation, _fermi_level(calculation, eigenvalues)),
         kpoint_weights=calculation.system.kpoints.weights,
     )
+    solver.schedule = threshold is None
 
     if streamed:
         from defumat.response.chunked_phonon import StreamedDisplacements
@@ -773,7 +787,8 @@ def screening_loop(
     mixer = ResponseMixer(mixing_mode, beta=alpha_mix)
     for iteration in range(max_iterations):
         response, becsum_response = displacements.respond(
-            dvscf, onecentre, iteration > 0
+            dvscf, onecentre, iteration > 0,
+            threshold=pass_threshold(solver, history),
         )
 
         # ``ef_shift``: a displacement at ``q = 0`` moves charge in and out of
