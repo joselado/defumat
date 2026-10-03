@@ -52,17 +52,20 @@ CHUNK = 4096
 #: What one ``(chunk, mesh)`` float64 integrand may occupy, from which
 #: :func:`radial_chunk` sizes the chunk against the dataset's mesh.
 #:
-#: **Sized against the derivatives, not the integrand.** A transform's forward
-#: pass holds a few such arrays, and that is what "a few tens of MB" at
-#: :data:`CHUNK` was; the strain's derivatives hold many more of them at once
-#: (the spherical Bessel function's temporaries, its tangent, the rematted body's
-#: recomputation). Measured on ultrasoft AlAs at ``ecutrho = 200`` (841-point
-#: mesh, 14211 dense G-vectors), the compiled temporaries of the augmented
-#: density's strain derivatives, CPU, ``memory_analysis()``: at 4096 values the
-#: ``jvp`` 270.0 MB, the gradient 924.7, the ``jvp`` of the gradient 1550.9; at
-#: 1024 values 130.1, 102.8 and 293.7; at 256 values 128.0, 102.8 and 185.6. The
-#: local potential's ``jvp`` of the gradient 457.1, 135.7 and 39.6
-#: (``PERFORMANCE.md``, "The radial transforms' chunk, sized from the mesh").
+#: **What it sizes is the forward evaluations, several at once.** Since
+#: :func:`bessel_transform` answers every derivative with another transform, no
+#: derivative holds this matrix on a tape; what the block still bounds is each
+#: evaluation, and inside one compiled pass XLA keeps several alive together (an
+#: augmentation block evaluates every ``L``, and the derivative of a gradient
+#: three orders of each). Measured on ultrasoft AlAs at ``ecutrho = 200``
+#: (841-point mesh, 14211 dense G-vectors), CPU, ``memory_analysis()``, the
+#: ``jvp`` of the augmented density's strain gradient: **174.0 MB** of compiled
+#: temporaries at this budget and the same at 256 values, the rest being the
+#: augmentation table's own G-chunk, against 385.3 at 4096 values. Before the
+#: rule, when the derivatives went through the integrand, the same pass held
+#: 293.7, 185.6 and 1550.9 (``PERFORMANCE.md``, "The radial transforms' chunk,
+#: sized from the mesh" and "The radial transforms' derivatives, as
+#: transforms").
 #:
 #: Chosen on an RTX A2000 (5 to 8 per cent of a strained call's time there) and a
 #: CPU (none). A float64 card may find the smaller transforms' launches cost more

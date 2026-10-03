@@ -7400,13 +7400,27 @@ is.
 \textbf{Every radial transform --- $Q^L_{nm}(q)$, the local potential, the core
 and atomic charges, the projectors --- is integrated a block of $|q|$ values at a
 time}, the block sized so that one $(\text{block}, \text{mesh})$ integrand
-takes 8~MB (1246 values on an 841-point mesh, never more than 4096). The size
-matters for the derivatives, which hold many such integrands at once: on
-ultrasoft AlAs at 200~Ry the stress on a card peaks at the SCF's own 169~MB
-with it, and at 652~MB with the earlier fixed 4096 values, for 5 to 8\% of the
-call's time. \code{DEFUMAT\_RADIAL\_CHUNK} sets the count; like the other
-chunk dials it bounds a loop over an exact sum and moves a result only in its
-last digits.
+takes 8~MB (1246 values on an 841-point mesh, never more than 4096).
+\textbf{Its derivatives in $|q|$ are transforms of the same kind}, not
+derivatives taken through the integrand: every one of these is
+$T(q) = \sum_m h_m\, j_l(q r_m)$ with the quadrature weights in $h$, and
+\begin{equation*}
+  \frac{dT}{dq} = \sum_m h_m\, r_m\, j_l'(q r_m),
+\end{equation*}
+meaning that the derivative of a transform is another transform with one more
+power of $r$ and one more derivative of the Bessel function, which is the rule
+the code hands to the differentiation. So a stress, an elastic constant or a
+third derivative holds one block of one transform at a time whatever its
+order, and the derivatives of $j_l$ come from a series below $x = 2$ and the
+closed form above, within $5.5\times10^{-14}$ of the exact functions to the
+fourth order (differentiating QE's own \code{sph\_bes} form, which switches at
+$x = 0.05$, lost up to $3.5\times10^{-8}$ in $j_0''$ there). The values
+themselves are QE's. On ultrasoft AlAs at 200~Ry the strain's second derivative
+of the local potential compiles to 16~MB of temporaries where it took 136, and
+the stress on a card peaks at the SCF's own 169~MB (652~MB with the old fixed
+4096 values before the block was sized at all). \code{DEFUMAT\_RADIAL\_CHUNK}
+sets the count; like the other chunk dials it bounds a loop over an exact sum
+and moves a result only in its last digits.
 
 \begin{refuses}
 \textbf{Past the end of the table is NaN, not an extrapolation.} The table
