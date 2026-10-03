@@ -164,10 +164,14 @@ def with_hoisted(calculation, values: tuple):
 #: constructor or ``at_cell`` and an array out of ``at_positions``; both movers
 #: overwrite them before anything reads them, and they travel as arrays of the
 #: cell's precision so that the two spellings are one argument type.
+#:
+#: ``basis_kpoints`` moves with the cell since 2026-10-03 (``at_cell`` sets it to
+#: the moved ``system.kpoints``, which a DFT+U step's ``wfcU`` is rebuilt from),
+#: so it travels too; captured, it would make every step's key a miss.
 GEOMETRY_FIELDS = ("system", "projectors", "cross_augmentation", "vloc_species",
                    "rho_core_species", "rho_core_g", "rho_atomic_species",
                    "ewald_sum", "ewald", "dispersion_sum", "dispersion", "wfcU",
-                   "magnetic_field")
+                   "magnetic_field", "basis_kpoints")
 
 #: Attributes a compiled gradient neither closes over nor takes: the compiled
 #: caches themselves, and the lazily filled conveniences the frozen energy does
