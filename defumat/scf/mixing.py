@@ -1161,10 +1161,24 @@ MIXING_SPACES = {"g": "g", "reciprocal": "g", "r": "r", "real": "r"}
 #: ``conv_thr`` at 11 and 16 rather than 17 and 34 (an estimate: the ``ethr``
 #: schedule follows ``dr2`` and would move them a little, and the energy at
 #: such a stop was not measured). So ``pw.x``'s layout and this code's stopping
-#: test are an
-#: inconsistent pair above dual 4, which the real-space layout hides by fitting
-#: the shell, and the layout stays selectable rather than the default until
-#: one of the two is changed.
+#: test were an inconsistent pair above dual 4, which the real-space layout hid
+#: by fitting the shell.
+#:
+#: **The layout was changed and the stopping test kept** (2026-10-04): the shell
+#: is now rebuilt from the mixed ``becsum`` (:class:`SphereLayout`), which gives
+#: it the Anderson step with nothing stored. Iterations, real space / smooth
+#: sphere with the rebuilt shell / ``pw.x``, each at its input's ``conv_thr``
+#: and ``beta``: ``fe-mag-1k`` 11/11/12 (energies 3.0e-11 Ry apart),
+#: ``fe-noncolin-pbe-stress`` 15/17/19 (1.9e-11 Ry), ``si8-us-1k`` 9/9/8
+#: (4.1e-13 Ry), ``si8-paw-1k`` 8/8/9 (equal to the last printed bit); and at
+#: dual 4, where nothing is installed, ``si8-1k`` and ``al-slab`` are
+#: byte-identical to the layout before the rebuild. On the noncollinear iron
+#: the shell is at most 7 per cent of ``accuracy`` at any iteration and 0.3 per
+#: cent at the last one mixed, so its two extra iterations are the path the fit
+#: takes on the smooth sphere (``pw.x``'s own fit, which takes 19) against the
+#: whole box, not a tail, and reading ``dr2`` over ``ngms`` would stop it at the
+#: same iteration. Whether this is now the default is a decision this measurement
+#: does not make.
 DEFAULT_MIXING_SPACE = "r"
 
 
@@ -1249,9 +1263,40 @@ class SphereLayout:
     each block has. And at dual 4, where the shell is empty, the fit is the
     old real-space one to round-off, which is what tests the packing.
 
-    **The shell is mixed and not stored** (:meth:`shell_step`), with the plain
-    ``beta`` and no preconditioner, which is ``high_frequency_mixing``: Kerker's
-    ``approx_screening`` and ``approx_screening2`` act on ``of_g(:ngm0)`` only.
+    **The shell is never stored, and a run rebuilds it from the mixed
+    ``becsum``** (:attr:`augmentation`, :meth:`rebuilt_shell`). Above ``ngms``
+    an output density is pure augmentation charge: ``sum_band``'s ``|psi|^2``
+    reaches the dense grid through a zero-padded extension (``to_dense``), so
+    what lies in the shell is ``sym_rho(addusdens(becsum_out))`` and nothing
+    else, measured on ``benchmarks/si8-us-1k.in`` at 1e-12 of the shell's
+    largest coefficient (1e-18 absolute, the round-off of a field of 3e-2) at
+    every iteration, and on ``si8-paw-1k`` and the noncollinear ``fe-mag-1k``
+    to the same order. **The symmetrisation is part of it**: an ultrasoft
+    ``becsum`` summed over a k-wedge is not symmetrised (only PAW's is), so
+    ``Q_ij(G) becsum_out`` alone is 9 per cent off that shell on the same cell,
+    while ``sym_rho`` maps every ``|G|`` to itself and moved nothing across the
+    cutoff. The mixer combines ``becsum`` with the coefficients it fits on the
+    smooth sphere and steps it at the plain ``beta`` (:meth:`Mixer.magnetic_step`
+    leaves the tail alone, and both preconditioners give it ``beta``), and
+    ``sym_rho(addusdens(.))`` is linear, so the augmentation charge of the mixed
+    ``becsum`` is exactly that Anderson step applied to every history entry's
+    shell, with nothing stored. Without augmentation the shell of every output
+    is zero, and so is the rebuilt one. Two consequences: the shell's
+    magnetization moves at ``beta`` and not at ``beta_mag``, because it follows
+    ``becsum``; and the input density's shell is the rebuilt one from the first
+    mix on, the starting density's own shell (an atomic superposition, not
+    ``Q becsum_atomic``) being read only by the first iteration's potential.
+
+    **Without** :attr:`augmentation` the shell is mixed linearly
+    (:meth:`shell_step`) with the plain ``beta`` and no preconditioner, which is
+    ``high_frequency_mixing``: Kerker's ``approx_screening`` and
+    ``approx_screening2`` act on ``of_g(:ngm0)`` only. That is ``pw.x``'s
+    rule, and it is what this layout did on every run until the rebuild: the
+    shell's residual then falls as ``(1 - beta)`` an iteration while this code's
+    ``accuracy``, which reads the dense set where ``pw.x``'s ``dr2`` reads
+    ``ngms`` only, waits for it, so two magnetic ultrasoft cells took 17 and 34
+    iterations where the real-space layout takes 11 and 15 (``OPEN.md`` Part
+    XXIII item 22).
 
     The transforms run where the density lives, compiled once per grid
     (:func:`_to_half_sphere`, :func:`_from_half_sphere`), and everything after the
@@ -1263,7 +1308,7 @@ class SphereLayout:
     #: The tag the mixer's history is written under (:mod:`~defumat.scf.checkpoint`).
     name = "g"
 
-    def __init__(self, dense: GVectors, ngms: int, cell, shape):
+    def __init__(self, dense: GVectors, ngms: int, cell, shape, augmentation=None):
         shape = tuple(int(n) for n in shape)
         if len(shape) != 4 or shape[1:] != tuple(dense.grid):
             raise ValueError(
@@ -1305,6 +1350,15 @@ class SphereLayout:
         self._volume = float(cell.volume)
         self._w0 = float(np.sqrt(self.points))
         self._w = float(np.sqrt(2.0 * self.points))
+        #: ``(base, becsum) -> sym_rho(addusdens(base, becsum))``: the field
+        #: ``base`` (``self.shape``, real, on the dense grid) with the
+        #: augmentation charge of ``becsum`` added and the density's symmetry
+        #: imposed, which is :meth:`~defumat.scf.driver.Calculation.augmented`
+        #: then :meth:`~defumat.scf.driver.Calculation.symmetrize`. Installed by
+        #: ``run_scf`` on a layout that has a shell, and then the shell of a mixed
+        #: density is :meth:`rebuilt_shell` rather than :meth:`shell_step`; see
+        #: the class docstring. ``None`` keeps ``high_frequency_mixing``.
+        self.augmentation = augmentation
 
     def history_bytes(self, depth: int, itemsize: int = 8) -> int:
         """Resident bytes of a full history's density blocks: densities and residuals."""
@@ -1367,6 +1421,26 @@ class SphereLayout:
         stepped = np.array(stepped, copy=True)
         _scale_magnetization(stepped, float(beta_mag) / float(beta))
         return stepped
+
+    def rebuilt_shell(self, becsum, dtype):
+        """The shell's half, ``(nspin, nshell)`` complex: the augmentation charge of ``becsum``.
+
+        ``becsum`` is the mixed one, so this is the Anderson step on the shell
+        (class docstring). One forward transform per channel on top of what
+        :attr:`augmentation` costs, and nothing at all where there is no shell
+        or no ultrasoft species: the shell is zero there, and ``None`` is
+        returned, which :meth:`field` reads as zero. ``dtype`` is the density's
+        real type, which the zero field the charge is added to takes.
+        """
+        if self.nshell == 0 or not any(b is not None for b in becsum):
+            return None
+        if self.augmentation is None:
+            raise ValueError(
+                "rebuilt_shell needs the augmentation charge, and this layout was "
+                "built without one; run_scf installs it"
+            )
+        field = self.augmentation(jnp.zeros(self.shape, dtype=dtype), tuple(becsum))
+        return self.pack(jax.device_get(self.forward(field)))[1]
 
     def rho_ddot_vector(self, stored_residual) -> np.ndarray:
         """``F`` with ``F(a) . F(b) = rho_ddot(a, b)`` over the smooth sphere, ``ngm0 = ngms``.

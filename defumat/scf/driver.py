@@ -572,6 +572,21 @@ def _rho_ddot_metric(calculation, layout=None):
     return metric
 
 
+def _augmentation_of(calculation):
+    """``(base, becsum) -> sym_rho(addusdens(base, becsum))``, for :attr:`SphereLayout.augmentation`.
+
+    The two operators :meth:`Calculation.finish_density` applies after the lift
+    to the dense grid, in the same order and through the same kernels, so the
+    shell this rebuilds from a ``becsum`` is the one an output density built
+    from that ``becsum`` has, to round-off: the spiral's displaced table and the
+    axial-vector symmetrisation of a noncollinear magnetization come with them.
+    """
+    def augmentation(base, becsum_):
+        return calculation.symmetrize(calculation.augmented(base, becsum_))
+
+    return augmentation
+
+
 def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None,
          tau_in=None, tau_out=None):
     """One mixing step over the density and, for PAW, DFT+U and a meta-GGA, its companions.
@@ -616,13 +631,19 @@ def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None,
 
     **Where the density sits in the packed vector is the mixer's layout**
     (:attr:`~defumat.scf.mixing.Mixer.layout`). Without one it is the whole
-    dense box in real space, which is what a bare mixer gets. ``run_scf``
-    installs a :class:`~defumat.scf.mixing.SphereLayout` by default, and then
-    the density block is ``pw.x``'s ``mix_type``: the smooth sphere in G, fitted
-    and kept, with the shell between ``ngms`` and ``ngm`` mixed here linearly at
-    ``beta`` and never handed to the mixer (``high_frequency_mixing``). Each
-    density is transformed once on the way in and the mixed one once on the way
-    out, per channel; ``becsum``, ``ns`` and ``tau`` are packed as before.
+    dense box in real space, which is what a bare mixer gets and what
+    ``run_scf`` installs by default. Under ``mixing_space = 'g'`` it installs a
+    :class:`~defumat.scf.mixing.SphereLayout`, and then the density block is
+    ``pw.x``'s ``mix_type``: the smooth sphere in G, fitted and kept, with the
+    shell between ``ngms`` and ``ngm`` never handed to the mixer. ``run_scf``
+    gives such a layout the augmentation charge, and the mixed density's shell
+    is then rebuilt from the mixed ``becsum``, which is the Anderson step on the
+    shell exactly because the shell of every output density is that charge; a
+    bare layout mixes the shell linearly at ``beta`` (``high_frequency_mixing``).
+    Each density is transformed once on the way in and the mixed one once on
+    the way out, per channel, and the rebuilt shell costs one more forward
+    transform beside the augmentation charge itself; ``becsum``, ``ns`` and
+    ``tau`` are packed as before.
     """
     layout = getattr(mixer, "layout", None)
     shell_mixed = None
@@ -637,8 +658,11 @@ def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None,
             (layout.forward(rho), layout.forward(rho_out)))
         head_in, shell_in = layout.pack(coefficients_in)
         head_out, shell_out = layout.pack(coefficients_out)
-        shell_mixed = shell_in + layout.shell_step(
-            shell_out - shell_in, mixer.beta, getattr(mixer, "beta_mag", None))
+        if layout.augmentation is None:
+            # ``high_frequency_mixing``; with the augmentation charge installed
+            # the shell is rebuilt below from the mixed ``becsum`` instead.
+            shell_mixed = shell_in + layout.shell_step(
+                shell_out - shell_in, mixer.beta, getattr(mixer, "beta_mag", None))
         flat = [head_in.ravel()]
         flat_out = [head_out.ravel()]
         head_size = int(head_in.size)
@@ -697,11 +721,6 @@ def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None,
                       fit=fit)
 
     offset = head_size
-    if layout is None:
-        rho_mixed = jnp.asarray(mixed[:offset].reshape(rho.shape))
-    else:
-        # The density's own dtype, as ``tau``'s below: the combination promotes.
-        rho_mixed = layout.field(mixed[:offset], shell_mixed).astype(rho.dtype)
     becsum_mixed = []
     for old in becsum_in:
         if old is None:
@@ -709,6 +728,18 @@ def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None,
             continue
         becsum_mixed.append(jnp.asarray(mixed[offset : offset + old.size].reshape(old.shape)))
         offset += old.size
+    if layout is None:
+        rho_mixed = jnp.asarray(mixed[:head_size].reshape(rho.shape))
+    else:
+        if layout.augmentation is not None:
+            # The shell of the mixed density is the augmentation charge of the
+            # mixed ``becsum``, symmetrised as ``rho_out``'s is: the Anderson
+            # combination of every history entry's shell, which is pure
+            # augmentation charge, at the step ``becsum`` takes
+            # (:class:`~defumat.scf.mixing.SphereLayout`).
+            shell_mixed = layout.rebuilt_shell(becsum_mixed, rho.dtype)
+        # The density's own dtype, as ``tau``'s below: the combination promotes.
+        rho_mixed = layout.field(mixed[:head_size], shell_mixed).astype(rho.dtype)
     ns_mixed = None
     if ns_in is not None:
         ns_dtype, ns_real = _ns_dtypes(ns_in)
@@ -7165,12 +7196,18 @@ def run_scf(
     # beside the preconditioner because it too needs the G-vectors. ``'g'`` is
     # ``pw.x``'s ``mix_type`` (:class:`SphereLayout`); its density block is
     # ``(nspin, ngms)`` reals, and ``mixer.shape`` says so, so that a
-    # ``beta_mag`` finds the magnetization in the stored vector.
+    # ``beta_mag`` finds the magnetization in the stored vector. Where there is
+    # a shell (above dual 4) the layout is handed the augmentation charge, and
+    # the shell of each mixed density is rebuilt from the mixed ``becsum``
+    # rather than mixed linearly; at dual 4 nothing is installed, so the run is
+    # the bare layout's bit for bit.
     space = resolve_mixing_space(mixing_space, mixer)
     layout = None
     if space == "g":
         layout = SphereLayout(calculation.basis.dense, calculation.basis.ngms,
                               calculation.system.cell, tuple(np.shape(rho)))
+        if layout.nshell:
+            layout.augmentation = _augmentation_of(calculation)
         mixer.layout = layout
         mixer.shape = layout.stored_shape
     restored_space = getattr(mixer, "_history_space", None) or "r"
