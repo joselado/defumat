@@ -833,6 +833,65 @@ def test_the_balanced_assignment_covers_every_row_once_and_evens_the_load():
     assert all(np.array_equal(p.rows(8, costs=costs), sets[p.rank]) for p in pools)
 
 
+class _ReplayCommunicator:
+    """One rank of an in-process pool layout, for the gather's count and placement.
+
+    The first pass records what each rank hands to each ``allgather`` (and
+    returns copies of its own, which is all a call whose payload does not
+    depend on the answer needs); the second returns, for call ``i``, every
+    rank's ``i``-th payload stacked in rank order, which is what the transport
+    does.
+    """
+
+    def __init__(self, size, rank, recorded=None):
+        self.size, self.rank, self.recorded, self.handed = size, rank, recorded, []
+
+    def allgather(self, array):
+        array = np.asarray(array)
+        call = len(self.handed)
+        self.handed.append(array)
+        if self.recorded is None:
+            return np.stack([array] * self.size)
+        return np.stack([self.recorded[pool][call] for pool in range(self.size)])
+
+
+def test_the_eigenvalue_gather_is_one_all_gather_with_the_layout_known():
+    """``OPEN.md`` Part XXIII item 26: every pool knows every pool's rows, so the
+    eigenvalues, the step counts and the unsettled counts cross in one all-gather
+    of their bytes, where each used to take three (shares, data, positions)."""
+    from defumat.parallel import balance
+
+    size, nk = 3, 7
+    costs = np.array([2.0, 1.0, 1.0, 1.0, 3.0, 1.0, 1.0])
+    layout = balance(costs, size)
+    rng = np.random.default_rng(3)
+    whole = (rng.normal(size=(2, nk, 4)),
+             rng.integers(0, 50, size=(2, nk)).astype(np.int32),
+             rng.integers(0, 3, size=(2, nk)))
+    local = [tuple(array[:, rows] for array in whole) for rows in layout]
+
+    recorders = [_ReplayCommunicator(size, rank) for rank in range(size)]
+    for rank in range(size):
+        Pools(recorders[rank]).gather_k(local[rank], nk, layout=layout)
+    recorded = [r.handed for r in recorders]
+    for rank in range(size):
+        replay = _ReplayCommunicator(size, rank, recorded)
+        pools = Pools(replay)
+        assert np.array_equal(pools.layout(nk, costs=costs)[rank], layout[rank])
+        gathered = pools.gather_k(local[rank], nk, layout=layout)
+        assert len(replay.handed) == 1
+        for got, expected in zip(gathered, whole):
+            assert got.dtype == expected.dtype and np.array_equal(got, expected)
+    # One array without a layout or rows: the contiguous blocks, still one call.
+    blocks = [Pools(_FakeCommunicator(size, rank)).rows(nk) for rank in range(size)]
+    recorders = [_ReplayCommunicator(size, rank) for rank in range(size)]
+    for rank in range(size):
+        Pools(recorders[rank]).gather_k(whole[0][:, blocks[rank]], nk)
+    replay = _ReplayCommunicator(size, 1, [r.handed for r in recorders])
+    assert np.array_equal(Pools(replay).gather_k(whole[0][:, blocks[1]], nk), whole[0])
+    assert len(replay.handed) == 1
+
+
 GATHER_ROWS_SCRIPT = textwrap.dedent("""
     import json
     import numpy as np
