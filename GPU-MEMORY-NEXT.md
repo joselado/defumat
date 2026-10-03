@@ -27,7 +27,7 @@ evidence; an A/B is*. Several fixes below are "remat this" or "chunk that", and
 the peak before and after, one run per fresh process (`peak_bytes_in_use` has no reset),
 with the compile cache warm (a miss costs *more* device memory on this card).
 
-## Where the next session starts (written 2026-10-03 evening, master at `d227efe`)
+## Where the next session starts (written 2026-10-03 evening, master at `d227efe`; item 1 updated later that evening, branch `bessel-jvp`)
 
 **Item 2 is done**: the field response, the Born charges, both phonons, the piezoelectric tensor, the
 strain response, the elastic constants, the two third derivatives (electrostriction and Raman) and the
@@ -40,30 +40,21 @@ identity against the whole-k route on the same states.
 
 **What to pick up, in order:**
 
-1. **The two chunks under a strain's derivatives.** The default is decided (8 MB, the user,
-   2026-10-03); what is left is the structural fix, a remat that holds under forward-over-reverse,
-   so that no chunk size has to be traded against time. Located but not fixed: the
-   ultrasoft strain response's 114 MB above its SCF on eight-atom silicon is the augmentation table's
-   G-chunk under the `jvp` (45 MB at a 4096-vector chunk against 117 and 123 at 16384, two passes), and
-   the elastic constants' 90 MB above the norm-conserving response is the radial chunk under the `jvp` of
-   the gradient (21.3 MB of pull-back temporaries at 256 values against 113.2 at the 8 MB budget). A 4 MB
-   augmentation target was committed and reverted (`83ac598`, `b164421`): it made ultrasoft AlAs's stress
-   169.3 -> 353.9 MB. With the radial chunk at 256 as well every strained call reads the SCF's own peak and
-   costs 20 to 26 per cent more time on the card. On AlAs the stress against the augmentation chunk is a
-   U, 427.7 MB at one piece, 169.3 at seven, 353.9 at fourteen, so the outer scan's cost under the
-   second derivative grows with its steps: a remat that holds under forward-over-reverse would be the
-   structural fix, a per-cell size the stopgap. `PERFORMANCE.md`, "The augmentation chunk under a strain:
-   a trade, measured and withdrawn", has the tables. Any default that trades time is the user's, and the
-   choice put to the user on 2026-10-03 (Fable's framing) was: keep 8 MB; 1024 values everywhere (60 MB off
-   the elastic constants only, about 1 s on a 75 s run); 512 everywhere (the piezoelectric tensor at the
-   SCF's peak, 13 to 23 per cent on the card's strained calls, and on a CPU no slower: the stress 0.63
-   against 0.69 s and 2.64 against 2.80 on D22); or 512 under memory mode only, which needs
-   the chunk threaded from `Calculation.at_strain` through every radial kernel (`radial_chunk` is read
-   at trace time and cannot see the mode) -- a session's plumbing with a test that the chunk stays
-   invisible in results. **The user decided on 2026-10-03 to keep 8 MB**; `DEFUMAT_RADIAL_CHUNK` is the
-   dial for a run that needs the memory more than the time. The probe is `memory_analysis()` per pass
-   (`review/piezo/pass_memory_third.py` on D22 is the shape, with `jax.jit` wrapped in the module whose
-   passes are measured) and one term at a time (`global_terms.py`'s shape).
+1. **The two chunks under a strain's derivatives: the radial half is done** (2026-10-03, later the same
+   evening, branch `bessel-jvp`). Every radial transform's derivative in `|q|` is the same transform one
+   order up, given to JAX as a `custom_jvp` (`formfactors.bessel_transform`), so no derivative holds the
+   radial kernel and the radial chunk no longer trades memory against time below its default: on the card
+   the ultrasoft AlAs piezoelectric tensor 198.5 -> 169.3 MB (its SCF's), the eight-atom silicon elastic
+   constants 127.7 -> 45.0 (the strain response's), spin-orbit PAW platinum's stress 516.4 -> 274.8 (its
+   SCF's; the old record had put that peak on the one-centre terms, wrongly), every result the same to the
+   printed digits; `PERFORMANCE.md`, "The radial transforms' derivatives, as transforms". **What is left is
+   the augmentation table's own G-chunk** under a strain's derivatives: the augmented density's second
+   derivative on AlAs compiles to 174.0 MB at aluminium's 2048-vector chunk (the same at a radial chunk of
+   256, so it is not the radial transform), 100.8 at 512 vectors and 195.6 at 1024, not monotonic, so
+   XLA's scheduling of the outer scan's body is part of it; and the ultrasoft eight-atom strain response's
+   114 MB above its SCF (180.5 MB on the card, 184.8 with the rule) is the same object under a forward
+   derivative. The lever is the outer scan's body, `augmentation._tabulated_charge` and
+   `_tabulated_integrals`, under a derivative; any default that trades time is the user's.
 2. **The per-mode grids with symmetry on** stay on the card, because
    `symmetrize_atom_displacement` acts on the whole `(3 nat, ...)` stack; the average's `nsym`-fold
    transient over them is gone (`90ed76a`). What is left, measured by a stage probe on eight-atom silicon
@@ -73,10 +64,20 @@ identity against the whole-k route on the same states.
    end, which is not located; the probe places it in the `symmetrize_atom_displacement` calls (each
    iteration's `respond` adds nothing), so the eager `r_to_g`/`g_to_r` around the walked average are the
    first place to look. Per orbit of equivalent atoms, or on the host, is the lever for a large
-   symmetric cell; the creep is the first thing to look at.
-3. **Time**: the ultrasoft bare walks rebuild `newd` and its tangent once per chunk and perturbation
-   (the phonon's, the strain's, the third derivative's chunk pass), not separated; and the walked third
-   derivative's electrostriction was 6 per cent slower than the whole route at 27 k-points.
+   symmetric cell; the creep is the first thing to look at. **The creep is located, and it is not a
+   leak** (2026-10-03 evening, D22, `review/bessel/phonon_inuse.py`, the card's `bytes_in_use` beside its
+   peak after each stage): the bytes in use swing between 35 and 50 MB from iteration to iteration and
+   end at 34.6 where the first iteration had 34.9, while the peak climbs 72.1 -> 77.5 -> 82.2 -> 84.4 ->
+   87.1, each step at an average whose ~40 MB transient landed on a higher baseline (41.9 MB before the
+   one that set 87.1). The baseline varies with when Python frees the previous iteration's arrays. On the
+   CPU the live arrays are the same 35.8 -> 40.7 MB at every average and no program is compiled inside
+   the iterations after the first. So the peak is a running maximum of a fluctuating sum; releasing the
+   previous iteration's grids before the average would take the few MB off, and the average's own
+   transient (per orbit, or on the host) is the lever that matters.
+3. **Time**: the ultrasoft bare walks rebuild `newd` and its tangent once per chunk and perturbation --
+   **sized 2026-10-03 evening as a null**: 36.7 ms a call on ultrasoft eight-atom silicon at 8 k-points,
+   0.88 s of a 384 s walked phonon of one atom on the CPU, 0.2 per cent. The walked third derivative's
+   electrostriction being 6 per cent slower than the whole route at 27 k-points is not separated.
 4. **The radial chunk's ceiling on a production card**: the budget (8 MB an integrand) was chosen on the
    A2000 and the CPU; on a float64 card the smaller transforms' launch count may cost more than the 5 to 8
    per cent measured here, and `DEFUMAT_RADIAL_CHUNK` is the dial.
@@ -499,6 +500,15 @@ below:
   stay on the card" cost: the grids are `3 nat` fields, the average was `nsym` copies of them.
 * **The augmentation chunk under a strain** (2026-10-03): measured, committed (`83ac598`) and reverted
   (`b164421`) -- see the handoff's first item.
+* **The radial transforms' derivatives, as transforms** (2026-10-03 evening, branch `bessel-jvp`): the
+  structural fix the first item asked for, on its radial half. A `custom_jvp` whose `q`-derivative is the
+  transform one order up (`formfactors.bessel_transform`, value and slope from one walk in
+  `_transform_pair`), more accurate derivatives of `j_l` (`radial.spherical_bessel_derivative`, 5.5e-14
+  against `mpmath` where JAX's derivative of the `sph_bes` form was off by up to 3.5e-8 in `j_0''`), and on
+  the card the AlAs piezoelectric tensor, the Si8 elastic constants and the Pt stress at their SCF's or
+  strain response's peak (`PERFORMANCE.md`, "The radial transforms' derivatives, as transforms"). It also
+  found two piezoelectric tests whose bounds rested on a rounding pattern: master fails them too with
+  `DEFUMAT_K_BATCH=2`.
 
 ## Suggested order
 

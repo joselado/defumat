@@ -284,11 +284,16 @@ def _transform_pair(q, r, h, l: int, order: int, sinc: bool):
 
     What :func:`bessel_transform`'s rule wants, a value and its slope, which as
     two calls cost two walks over the ``(chunk, mesh)`` kernels where JAX's own
-    derivative had taken one: measured warm on the RTX A2000, a strained call
-    was 6 to 8 per cent slower with two walks than master's autodiff. It has a
-    rule of its own for the same reason the transform does, the slope's
-    derivative being the transform two orders up, so a derivative of a
-    gradient walks the blocks twice, once here and once at ``order + 2``.
+    derivative had taken one. It has a rule of its own for the same reason the
+    transform does, the slope's derivative being the transform two orders up,
+    so a derivative of a gradient walks the blocks twice, once here and once at
+    ``order + 2``. **The second walk was not where the time went**: on the RTX
+    A2000 a strained call was 6 to 8 per cent slower than master's autodiff with
+    two walks and the same with one; it was the derivative kernel's arithmetic
+    on a card that runs float64 at 1/70 of float32, which
+    :func:`~defumat.pseudo.radial.value_and_slope` and the series written as a
+    polynomial removed (``PERFORMANCE.md``, "The radial transforms' derivatives,
+    as transforms").
     """
     return _evaluate(q, r, h, l, (order, order + 1), sinc)
 

@@ -7418,7 +7418,9 @@ $x = 0.05$, lost up to $3.5\times10^{-8}$ in $j_0''$ there). The values
 themselves are QE's. On ultrasoft AlAs at 200~Ry the strain's second derivative
 of the local potential compiles to 16~MB of temporaries where it took 136, and
 the stress on a card peaks at the SCF's own 169~MB (652~MB with the old fixed
-4096 values before the block was sized at all). \code{DEFUMAT\_RADIAL\_CHUNK}
+4096 values before the block was sized at all), and the strained calls run 2
+to 17\% faster than when the derivative was taken through the integrand,
+because nothing has to be recomputed for a backward pass. \code{DEFUMAT\_RADIAL\_CHUNK}
 sets the count; like the other chunk dials it bounds a loop over an exact sum
 and moves a result only in its last digits.
 
