@@ -10095,7 +10095,13 @@ Same code on D22, only the constant changed: the stress 169.3 against 353.9 MB, 
 strained call then costs 20 to 26 per cent more on the card (the stress 3.70 -> 4.53 s, the piezoelectric
 tensor 14.48 -> 18.13, the elastic constants 5.14 -> 6.47), and on norm-conserving eight-atom silicon the
 elastic constants' pull-back pass falls from 113.2 to 21.3 MB of temporaries (the call 127.0 -> 45.4 MB,
-the strain response's own). **One reading is not understood**: `DEFUMAT_AUG_CHUNK=16384`, which sets the
-same chunk as the old default on this cell, read 427.7 and 601.6 MB on the current code; the A/B above is
-the module default against itself, both arms in separate fresh processes. So the two chunks interact under
-a derivative, and the right sizing is the next session's to measure, cell by cell, with the time beside it.
+the strain response's own). **The chunk is not the same on the two cells, and that explains a reading
+that first looked impossible**: aluminium's dataset carries d projectors (`nh = 18`, against 8 for As and
+for silicon), so the 16 MB target gives AlAs a 2048-vector chunk, seven pieces of its 14211, not one.
+`DEFUMAT_AUG_CHUNK=16384` therefore put the whole table in one piece and read 427.7 MB (the stress) and
+601.6 (the piezoelectric tensor), reproduced back to back with the default's 169.3. On AlAs's stress the
+chunk count gives a U: **427.7 MB at one piece, 169.3 at seven, 353.9 at fourteen** (the 4 MB target's
+1024). The large end is one piece's integrand; the small end says the outer scan's cost under the
+second derivative grows with its number of steps, which a rematted scan is meant to prevent. So the two
+chunks interact under a derivative, and the right sizing -- or a remat that holds under forward-over-
+reverse -- is the next session's to measure, cell by cell, with the time beside it.

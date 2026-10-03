@@ -47,9 +47,11 @@ identity against the whole-k route on the same states.
    the gradient (21.3 MB of pull-back temporaries at 256 values against 113.2 at the 8 MB budget). A 4 MB
    augmentation target was committed and reverted (`83ac598`, `b164421`): it made ultrasoft AlAs's stress
    169.3 -> 353.9 MB. With the radial chunk at 256 as well every strained call reads the SCF's own peak and
-   costs 20 to 26 per cent more time on the card. `PERFORMANCE.md`, "The augmentation chunk under a strain:
-   a trade, measured and withdrawn", has the table and the one reading not understood. This is a decision
-   about time against memory, and the user's. The probe is `memory_analysis()` per pass
+   costs 20 to 26 per cent more time on the card. On AlAs the stress against the augmentation chunk is a
+   U, 427.7 MB at one piece, 169.3 at seven, 353.9 at fourteen, so the outer scan's cost under the
+   second derivative grows with its steps: a remat that holds under forward-over-reverse would be the
+   structural fix, a per-cell size the stopgap. `PERFORMANCE.md`, "The augmentation chunk under a strain:
+   a trade, measured and withdrawn", has the tables. Any default that trades time is the user's. The probe is `memory_analysis()` per pass
    (`review/piezo/pass_memory_third.py` on D22 is the shape, with `jax.jit` wrapped in the module whose
    passes are measured) and one term at a time (`global_terms.py`'s shape).
 2. **The per-mode grids with symmetry on** stay on the card, because
