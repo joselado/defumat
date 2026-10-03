@@ -90,6 +90,16 @@ def _bounded_compilation():
     jax.clear_caches()
 
 
+#: What the identities in this file need: the convergence they were measured at
+#: before 2026-10-03, when ``tr2`` became ``ph.x``'s (a raw ``sum(dV^2)`` of 1e-14
+#: is about 1e-24 in those units on these grids) and the CG threshold became
+#: scheduled. At the defaults the responses stop where ``ph.x`` would and the
+#: identities hold only to that level: the screened term's absence outside the shear to
+#: 5.4e-7 against a bound of 1e-10; the fixture is shared with the wedge and PAW files,
+#: whose recorded constant was taken at this convergence too (D22).
+IDENTITY = {"tr2": 1.0e-24, "threshold": 1.0e-12}
+
+
 @lru_cache(maxsize=1)
 def _field(case: str = CASE):
     """One converged ground state and one field response, shared by the file.
@@ -116,7 +126,7 @@ def _field(case: str = CASE):
     density = jnp.asarray(result.density)
     field = dielectric_tensor(
         calculation, psi, eigenvalues, density, result.becsum,
-        born_charges=False, keep_internals=True,
+        born_charges=False, keep_internals=True, **IDENTITY,
     )
     assert field.converged
     return calculation, result, eigenvalues, psi, density, field

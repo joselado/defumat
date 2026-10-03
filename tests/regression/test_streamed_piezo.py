@@ -75,11 +75,18 @@ def _refined(case: str, k_batch: int):
         return calculation, result, eigenvalues, psi
 
 
+#: The CG held at a fixed threshold, as it was before 2026-10-03, so that the two
+#: routes differ only by the order of their sums: at the scheduled default they
+#: still stop at the same pass but a band's CG can stop a step apart near the looser
+#: threshold, which on D22 read beyond the 1e-11 bounds below on both AlAs cells.
+ROUTE = {"threshold": 1.0e-12}
+
+
 def _tensor(case, k_batch, states, **options):
     calculation, result, eigenvalues, _ = _refined(case, k_batch)
     e, field = _piezoelectric_from_states(
         calculation, states, eigenvalues, jnp.asarray(result.density),
-        result.becsum, **options)
+        result.becsum, **{**ROUTE, **options})
     return np.asarray(e), field
 
 

@@ -329,6 +329,15 @@ def test_chi0_matches_a_finite_difference_for_a_spin_polarized_insulator():
     assert relative < CHI0_RELATIVE
 
 
+#: What an identity between two runs of the response needs: the convergence it
+#: was measured at before 2026-10-03, when ``tr2`` became ``ph.x``'s (a raw
+#: ``sum(dV^2)`` of 1e-14 is about 1e-24 in those units on these grids) and the
+#: CG threshold became scheduled. At the defaults both runs stop where ``ph.x``
+#: would and agree only to that level: the polarized and unpolarized dielectric constants of silicon to 1.3e-7,
+#: since ``nspin_mag = 2`` doubles ``ndimtot`` and halves ``dr2`` for the same potential (D22).
+IDENTITY = {"tr2": 1.0e-24, "threshold": 1.0e-12}
+
+
 @lru_cache(maxsize=None)
 def _silicon_dielectric(nspin: int):
     """``epsilon_infinity`` of ``si-epsilon.in`` at ``nspin = 1`` or ``2``.
@@ -359,7 +368,7 @@ def _silicon_dielectric(nspin: int):
     assert result.converged
     response = dielectric_tensor(
         calculation, result.wavefunctions, result.eigenvalues, result.density,
-        result.becsum, born_charges=False,
+        result.becsum, born_charges=False, **IDENTITY,
     )
     assert response.converged
     return result, response
