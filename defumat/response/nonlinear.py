@@ -522,13 +522,21 @@ def raman_tensors(
             symmetrize_becsum_modes(calculation, bec_moved),
             symmetrize_becsum_modes(calculation, bec_ort),
         )
-    dpsi, drho, history, _, phonon_converged, _ = self_consistent_response(
+    dpsi, drho, history, _, phonon_converged, extras = self_consistent_response(
         calculation, solver, bare, density, positions=positions,
         becsumort=becsumort, drhous=drhous, verbose=verbose, **response_options,
     )
     # The displacements' bare perturbations drive that solve and nothing after
-    # it: ``3 nat`` wavefunction-sized blocks, 7.4 GB on the P25 yardstick,
-    # that were carried through the whole assembly below.
+    # it here: ``3 nat`` wavefunction-sized blocks, 7.4 GB on the P25
+    # yardstick, that were carried through the whole assembly below. **Except
+    # that a dynamical matrix built from this response needs them** on an
+    # ultrasoft or PAW dataset, with the converged ``extras``: it rebuilds the
+    # multipliers' response from them (``multiplier_response``), and handed a
+    # response without them it skips that term and returns force constants
+    # that are plausible and wrong -- ultrasoft silicon's optical mode at 630.8
+    # cm^-1 against 590.6 solved directly. So a caller keeping the internals
+    # keeps them too.
+    kept_bare = bare if keep_internals and calculation.is_ultrasoft else None
     del bare
     if not (phonon_converged or allow_unconverged):
         raise ValueError(
@@ -548,6 +556,7 @@ def raman_tensors(
         calculation, tensors, field,
         None if not keep_internals else DisplacementResponse(
             dpsi=dpsi, drho=drho, history=history, converged=phonon_converged,
+            bare=kept_bare, extras=extras,
         ),
         history, phonon_converged)
 
