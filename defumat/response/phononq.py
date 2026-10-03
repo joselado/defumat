@@ -682,22 +682,37 @@ def screening_loop_at_q(
     from defumat.response.mixing import ResponseMixer
 
     nat = displacements.nat
-    grid_shape = jnp.asarray(density).shape
-    dvscf = jnp.zeros((nat, 3) + grid_shape, dtype=displacements.solver.psi.dtype)
+    grid_shape = tuple(np.shape(density))
+    # **The ``3 nat`` complex grids in host memory**, one mode at a time on the
+    # device, where the displacements ask for it (the k-chunked route, which at
+    # ``q`` always runs without symmetry): every operation here is per mode
+    # except the mixer, whose history is in host memory already. The
+    # convergence test is a maximum, which does not depend on the order, so
+    # the history is the device route's to the bit.
+    host = bool(getattr(displacements, "host_fields", False))
+    stack = np.stack if host else jnp.stack
+    xp = np if host else jnp
+    dtype = np.dtype(displacements.solver.psi.dtype)
+    dvscf = xp.zeros((nat, 3) + grid_shape, dtype=dtype)
     history = []
     converged = False
+
+    def screened(field):
+        out = induced_potential_at_q(
+            calculation, density, jax.device_put(field) if host else field, q_cart)
+        return np.asarray(out) if host else out
 
     mixer = ResponseMixer(mixing_mode, beta=alpha_mix)
     for iteration in range(max_iterations):
         response = displacements.respond(dvscf, iteration > 0)
 
-        drho = jnp.stack(response).reshape((nat, 3) + grid_shape)
-        induced = jnp.stack([
-            induced_potential_at_q(calculation, density, drho[atom, cart], q_cart)
+        drho = stack(response).reshape((nat, 3) + grid_shape)
+        induced = stack([
+            screened(drho[atom, cart])
             for atom in range(nat) for cart in range(3)
         ]).reshape(dvscf.shape)
 
-        change = float(jnp.max(jnp.abs(induced - dvscf)) ** 2)
+        change = float(xp.max(xp.abs(induced - dvscf)) ** 2)
         history.append(change)
         if verbose:
             print(f"  response iteration {iteration + 1}: |ddV|^2 = {change:.3e}")
@@ -709,6 +724,7 @@ def screening_loop_at_q(
         real, imaginary = mixer.mix(
             [np.real(dvscf), np.imag(dvscf)],
             [np.real(induced), np.imag(induced)],
+            host=host,
         )
         dvscf = real + 1j * imaginary
 

@@ -66,9 +66,9 @@ device, because ``symmetrize_atom_displacement`` acts on the stack as one object
 
 **What it does not change**: a response handed in through ``response=``, a
 strained calculation and a k-point pool, which take the whole-k route or are
-refused before this is reached; and the phonon at ``q``'s loop
-(:func:`~defumat.response.phononq.screening_loop_at_q`), whose ``3 nat``
-complex grids are still on the device.
+refused before this is reached. The phonon at ``q``'s loop
+(:func:`~defumat.response.phononq.screening_loop_at_q`) keeps its ``3 nat``
+complex grids in host memory always, since it runs without symmetry.
 """
 
 from __future__ import annotations
@@ -765,6 +765,9 @@ class StreamedDisplacementsAtQ:
         # ``D`` per channel, k-independent: the whole route reads it off the
         # ``k + q`` Hamiltonians, and so does this.
         self.dij = tuple(h.coefficients for h in self.hamiltonians_kq)
+        #: The loop's ``3 nat`` complex grids in host memory: always, since the
+        #: phonon at ``q`` runs without symmetry (``require_a_two_sphere_regime``).
+        self.host_fields = True
         nspin, nk = solver.psi.shape[:2]
         ndim = np.shape(states_kq)[-1]
         shape = (self.nat, 3, nspin, nk, keep, ndim)
@@ -810,15 +813,19 @@ class StreamedDisplacementsAtQ:
             written = rows[:live]
             for index, (atom, cart) in enumerate(self.modes):
                 dv = (dvscf[atom, cart] if include_induced
-                      else jnp.zeros_like(dvscf[atom, cart]))
+                      else np.zeros_like(dvscf[atom, cart]))
                 dpsi, steps, total = self.passes["respond"](
-                    *arguments, _rows_of(self.bare[atom, cart], rows), dv)
+                    *arguments, _rows_of(self.bare[atom, cart], rows),
+                    jax.device_put(dv))
                 self.dpsi[atom, cart][:, written] = np.asarray(dpsi)[:, :live]
+                # Each mode's share of the sum over k is added on the host, in
+                # the same order, so the ``P`` accumulators stay off the device.
+                total = np.asarray(total)
                 totals[index] = total if totals[index] is None else totals[index] + total
                 worst[index] = max(worst[index], int(np.max(np.asarray(steps))))
         self.iterations += sum(worst)
         self.solves += len(self.modes)
-        return [self._finish(total) for total in totals]
+        return [np.asarray(self._finish(jax.device_put(total))) for total in totals]
 
     def _finish(self, total):
         """The whole route's own finish (normalise, lift to the dense grid), on
