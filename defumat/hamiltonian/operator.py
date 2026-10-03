@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import equinox as eqx
 import jax.numpy as jnp
+import numpy as np
 
 from defumat.basis.fft import (
     g_to_r, g_to_r_gamma, gamma_inner, gather_from_box, r_to_sticks, sticks_local,
@@ -43,6 +44,22 @@ from defumat.batching import map_bands
 from defumat.pseudo.projectors import Projectors
 
 __all__ = ["Hamiltonian"]
+
+
+def smallest_sphere(npw) -> int | None:
+    """The one plane-wave count an operator keeps: ``min_k npw``, or ``None``.
+
+    The converter of both operators' ``npw`` field. A per-k list is reduced to
+    its minimum, because that minimum is all the eigensolver reads, and an
+    empty list or ``None`` -- a chunk of a force pass carries ``()`` -- is
+    ``None``, which leaves the bound at the padded width.
+    """
+    if npw is None:
+        return None
+    if isinstance(npw, (int, np.integer)):
+        return int(npw)
+    npw = tuple(npw)
+    return int(min(npw)) if npw else None
 
 
 class Hamiltonian(eqx.Module):
@@ -81,16 +98,24 @@ class Hamiltonian(eqx.Module):
     #: ``None`` unless this is a gamma-only run. Its presence *is* the switch:
     #: see :attr:`gamma_only`.
     fft_index_minus: jnp.ndarray | None = None
-    #: ``(nk,)`` how many plane waves each k-point's sphere actually holds, as
-    #: against ``npwx``, which is the padded maximum over k. **Static, because
-    #: it bounds an array's length**: the Davidson subspace cannot be larger
-    #: than the smallest space it is built in, and the k-points that go singular
-    #: are precisely the ones *below* ``npwx`` -- see
+    #: How many plane waves the *smallest* k-point's sphere holds, ``min_k
+    #: npw``, as against ``npwx``, which is the padded maximum over k. **Static,
+    #: because it bounds an array's length**: the Davidson subspace cannot be
+    #: larger than the smallest space it is built in, and the k-points that go
+    #: singular are precisely the ones *below* ``npwx`` -- see
     #: :func:`~defumat.solvers.davidson.davidson_eigensolver_all`. ``None``
     #: leaves the bound at ``npwx``, which is QE's own ``ipw``
     #: (``c_bands.f90:286``) and is what a Hamiltonian built without its basis
     #: gets.
-    npw: tuple[int, ...] | None = eqx.field(static=True, default=None)
+    #:
+    #: **One number and not the per-k list**, which is what it held until
+    #: ``OPEN.md`` Part XXIII item 9: a static field is part of the treedef, so
+    #: two spheres with the same padded width and the same smallest sphere --
+    #: two wavevectors of a spin-spiral scan, typically -- were two treedefs,
+    #: and the Davidson solve and the Rayleigh-Ritz start compiled again at
+    #: every wavevector for counts nothing read. A list passed in is reduced to
+    #: its minimum by :func:`smallest_sphere`.
+    npw: int | None = eqx.field(static=True, default=None, converter=smallest_sphere)
     #: How many bands :meth:`_local` puts through the grid at once --
     #: :func:`~defumat.batching.map_bands`'s dial, carried here so that the
     #: value the :class:`~defumat.scf.driver.Calculation` resolved (from the
@@ -152,10 +177,11 @@ class Hamiltonian(eqx.Module):
         oversized subspace goes singular at: on silicon at ``ecutwfc = 12``
         folded to a 32 k-point ultracell the spheres run from 169 to 192, so a
         bound at ``npwx`` would leave every k-point below 192 oversubscribed.
+        :attr:`npw` already holds that minimum.
         """
         if self.npw is None:
             return self.ndim
-        return self.npol * min(self.npw)
+        return self.npol * self.npw
 
     @property
     def dtype(self):

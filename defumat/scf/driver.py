@@ -3683,20 +3683,23 @@ class Calculation:
         return moved
 
     @property
-    def hamiltonian_npw(self) -> tuple[int, ...]:
-        """The per-k plane-wave counts a Hamiltonian is built with.
+    def hamiltonian_npw(self) -> int | None:
+        """The smallest sphere's plane-wave count a Hamiltonian is built with.
 
-        The sphere's own, except on a block of a longer k-list
-        (:meth:`at_kpoints` with ``widths``), where every entry is the whole
-        list's smallest. A Hamiltonian reads the counts only for the
-        eigensolver's cap, ``npol min_k npw``, and holds them **static**, so a
-        block's own counts would recompile the solve once per block; the whole
-        list's minimum is also exactly the cap the unblocked list has.
+        The sphere's own ``min_k npw``, except on a block of a longer list
+        (:meth:`at_kpoints` with ``widths``), where it is
+        the whole list's. A Hamiltonian reads it only for the eigensolver's cap,
+        ``npol min_k npw``, and holds it **static**, so a block's own minimum
+        would recompile the solve once per block; the whole list's minimum is
+        also exactly the cap the unblocked list has. ``None`` for a sphere that
+        carries no counts (a chunk of a force pass), which leaves the cap at
+        ``npwx``.
         """
         floor = getattr(self, "npw_floor", None)
-        if floor is None:
-            return self.basis.planewaves.npw
-        return (int(floor),) * len(self.basis.planewaves.npw)
+        if floor is not None:
+            return int(floor)
+        npw = self.basis.planewaves.npw
+        return int(min(npw)) if npw else None
 
     def band_count(self, nbnd: int | None = None) -> int:
         """``nbnd`` if given, else the system's, else QE's default for this run."""
