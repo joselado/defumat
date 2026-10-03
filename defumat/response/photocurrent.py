@@ -124,6 +124,7 @@ for its own missing term, in :func:`require_a_shift_current_regime`.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 import jax
@@ -135,6 +136,7 @@ from defumat.eager import compiled
 from defumat.response.velocity import VelocityOperator
 from defumat.scf.occupations import w0gauss
 from defumat.system.kpoints import is_reduced
+from defumat.system.symmetry import find_symmetries
 
 __all__ = [
     "ShiftCurrent",
@@ -213,6 +215,17 @@ DEGENERACY_TOL = 1.0e-8
 #: its normalisation is worth nothing to better than a factor of two. The
 #: comparison above is against the first convention.
 SIGMA_SI = 1.4049e-5
+
+#: What :func:`_warn_about_the_grid` quotes for this tensor: the residue on
+#: two-atom silicon, where inversion forbids every component, against the two
+#: ways out.
+_GRID_RESIDUE_SHIFT = (
+    "on two-atom silicon, whose inversion carries a quarter-lattice "
+    "translation, sigma^abc on the whole unshifted 2x2x2 mesh at 8 bands reads "
+    "1.2e-8 A/V^2 on the 15^3 grid ecutwfc = 12 gives under nosym, where "
+    "inversion requires zero, against 1.1e-11 on the commensurate 20^3 grid of "
+    "ecutwfc = 16 and 5.3e-12 with symmetry kept for the SCF"
+)
 
 
 def _safe_ratio(numerator, denominator, tol: float):
@@ -508,8 +521,16 @@ def shift_current(
 
     The frequency axis carries ``hbar omega`` in Ry, so a visible-light photon
     is around 0.15-0.25.
+
+    **Warns**, rather than refuses, when the run is ``nosym`` on a dense FFT
+    grid the crystal's fractional translations do not map onto itself
+    (:func:`_incommensurate_grid`): the tensor then carries a residue in the
+    components the dropped operations forbid.
     """
     require_a_shift_current_regime(calculation)
+    _warn_about_the_grid(
+        calculation, "the shift-current tensor sigma^abc", _GRID_RESIDUE_SHIFT
+    )
 
     eigenvalues = jnp.asarray(eigenvalues)
     wavefunctions = upload(wavefunctions)
@@ -682,3 +703,72 @@ def _kpoints_are_reduced(calculation) -> bool:
     group acts freely on it, which is what a shift arranges.
     """
     return is_reduced(calculation.system.kpoints)
+
+
+# -- the warnings --------------------------------------------------------------
+
+
+def _incommensurate_grid(calculation):
+    """``(grid, factors)`` when a ``nosym`` grid misses a translation, else ``None``.
+
+    ``factors`` are what :meth:`~defumat.system.symmetry.Symmetries.
+    fft_factors` asks of the dense FFT grid for the crystal's fractional
+    translations to map it onto itself, and a run that keeps its symmetry is
+    given a grid that is a multiple of them. A ``nosym`` run is not:
+    ``build_basis`` follows ``pw.x`` there (``setup.f90`` sets ``fft_fact = 1``
+    under ``nosym``), which is right for a run that wants no symmetry and
+    leaves the operations it dropped broken by the grid itself. The
+    exchange-correlation potential is evaluated pointwise on that grid, so it
+    breaks them at the grid's sampling error, and the density follows it
+    self-consistently.
+
+    That is invisible in a total energy and visible in a second-order tensor,
+    which inversion forbids outright and which is a cancellation of large
+    terms. Diamond's inversion carries a quarter-lattice translation, so
+    two-atom silicon at ``ecutwfc = 12`` (15^3 against a factor of 4) is the
+    case: ``get_shg(nbnd=8)`` on the whole unshifted 2x2x2 mesh reads
+    **0.7157 pm/V** where inversion requires zero, **0.0018** at
+    ``ecutwfc = 16`` (20^3, commensurate) and **0.00074** with symmetry kept for
+    the SCF and the same mesh passed as ``kpoints=``; the shift current on the
+    same three runs reads **1.2e-8**, 1.1e-11 and 5.3e-12 A/V^2. A symmorphic
+    crystal (zincblende AlAs, whose factors are all 1) is not affected whatever
+    its grid.
+    """
+    system = calculation.system
+    if not system.nosym:
+        return None
+    grid = tuple(int(g) for g in calculation.basis.dense.grid)
+    factors = tuple(find_symmetries(system.cell, system.structure).fft_factors())
+    if not any(g % f for g, f in zip(grid, factors)):
+        return None
+    return grid, factors
+
+
+def _warn_about_the_grid(calculation, quantity: str, measured: str) -> None:
+    """Say so when :func:`_incommensurate_grid` finds the case it describes.
+
+    A warning and not a refusal, because the residue is the size of the
+    grid's sampling error and is harmless wherever the tensor is not being
+    read for a component a dropped operation forbids. ``quantity`` names the
+    tensor and ``measured`` is the measurement on it that says how large the
+    residue is.
+    """
+    found = _incommensurate_grid(calculation)
+    if found is None:
+        return
+    grid, factors = found
+    warnings.warn(
+        f"the dense FFT grid of this nosym run, {grid}, is not a multiple of "
+        f"{factors}, which the crystal's fractional translations need, so "
+        f"{quantity} carries a residue the crystal does not have. The "
+        "operations nosym dropped do not map this grid onto itself, the "
+        "exchange-correlation potential evaluated pointwise on it breaks them "
+        "at the grid's sampling error, and a second-order tensor picks that up "
+        f"in every component one of those operations forbids: {measured}. "
+        "Keep symmetry for the SCF and pass the whole unshifted mesh as "
+        "kpoints= (KPoints.automatic((n, n, n), (0, 0, 0), cell), given no "
+        "rotations, is the complete grid), or choose a cutoff whose dense grid "
+        f"is a multiple of {factors}",
+        RuntimeWarning,
+        stacklevel=3,
+    )

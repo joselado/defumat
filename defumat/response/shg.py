@@ -89,6 +89,7 @@ from defumat.response.photocurrent import (
     DEGENERACY_TOL,
     _kpoints_are_reduced,
     _safe_ratio,
+    _warn_about_the_grid,
     # Defined there rather than here because the shift current needs the same
     # multiplet average for the same reason, and ``shg`` imports from
     # ``photocurrent`` and not the other way round. It stays in this module's
@@ -144,6 +145,16 @@ OCCUPATION_TOL = 1.0e-8
 #: literature more often quotes ``d^abc = chi^abc / 2``, so a number compared
 #: against a ``d`` coefficient without halving it is wrong by exactly two.
 CHI2_AU_TO_PM_PER_V = 24.4377
+
+#: What the grid warning quotes for this tensor: the residue on two-atom
+#: silicon, where inversion forbids every component, against the two ways out.
+_GRID_RESIDUE_SHG = (
+    "on two-atom silicon, whose inversion carries a quarter-lattice "
+    "translation, chi^(2) on the whole unshifted 2x2x2 mesh at 8 bands reads "
+    "0.72 pm/V on the 15^3 grid ecutwfc = 12 gives under nosym, where "
+    "inversion requires zero, against 0.0018 on the commensurate 20^3 grid of "
+    "ecutwfc = 16 and 0.00074 with symmetry kept for the SCF"
+)
 
 
 class _Shared(NamedTuple):
@@ -546,8 +557,17 @@ def second_harmonic(
 
     The frequency axis carries the **fundamental** ``hbar omega`` in Ry, so a
     semiconductor's two-photon absorption edge sits at half its gap.
+
+    **Warns**, rather than refuses, when the run is ``nosym`` on a dense FFT
+    grid the crystal's fractional translations do not map onto itself
+    (:func:`~defumat.response.photocurrent._incommensurate_grid`): the tensor
+    then carries a residue in the components the dropped operations forbid,
+    0.72 pm/V on two-atom silicon where inversion forbids all of them.
     """
     require_an_shg_regime(calculation)
+    _warn_about_the_grid(
+        calculation, "the second-harmonic tensor chi^abc", _GRID_RESIDUE_SHG
+    )
 
     eigenvalues = jnp.asarray(eigenvalues)
     wavefunctions = upload(wavefunctions)
