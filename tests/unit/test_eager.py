@@ -193,6 +193,92 @@ def test_a_second_hubbard_occupation_matrix_compiles_nothing(nk):
     np.testing.assert_allclose(ns, expected, rtol=1e-13, atol=1e-13)
 
 
+class _TurningCalculation:
+    """The three methods the torque's chunked derivative calls, on random arrays.
+
+    The potential is linear in the density and the Hamiltonian multiplies a
+    state by a number read off the magnetization, so the band energy turns with
+    the moment and its derivative is not zero; a new instance holds new arrays
+    of the same shapes, which is what ``run_torque`` builds at every call.
+    """
+
+    k_batch = 1
+
+    def __init__(self, seed, nk):
+        rng = np.random.default_rng(seed)
+        self.scale = jnp.asarray(1.0 + rng.random(4))
+        self.coupling = jnp.asarray(rng.normal(size=(nk, 3)))
+
+    def potential(self, density, *_):
+        return type("Potential", (), {"v_scf": self.scale[:, None] * density})
+
+    def hamiltonian(self, v_scf, ddd_paw):
+        field = jnp.sum(v_scf[1:], axis=-1)  # (3,)
+        coupling = self.coupling
+
+        class Hamiltonian:
+            @staticmethod
+            def apply(psi, ik):
+                return (coupling[ik] @ field) * psi
+
+        return (Hamiltonian,)
+
+
+def test_a_second_chunked_torque_compiles_nothing():
+    """``torque_at_angle`` jitted its chunk's ``value_and_grad`` afresh at every call.
+
+    Two calls, each on a new calculation and a new density of the same shapes,
+    k-points one at a time: the second compiles nothing, and both match the
+    whole-axis gradient taken without chunks.
+    """
+    from defumat.forces.torque import torque_at_angle
+
+    nk, nbnd, npw = 3, 2, 5
+    rng = np.random.default_rng(7)
+    plane = ((0.0, 0.0, 1.0), (1.0, 0.0, 0.0))
+
+    def case(seed):
+        states = jnp.asarray(rng.normal(size=(1, nk, nbnd, npw))
+                             + 1j * rng.normal(size=(1, nk, nbnd, npw)))
+        weights = jnp.asarray(rng.random((1, nk, nbnd)))
+        density = jnp.asarray(1.0 + rng.random((2, 6)))
+        return _TurningCalculation(seed, nk), states, weights, density
+
+    first = case(0)
+    torque_at_angle(*first, plane, 0.3, k_batch=1)
+    second = case(1)
+    with counting_compiles() as names:
+        chunked = torque_at_angle(*second, plane, 0.3, k_batch=1)
+    assert names == []
+    whole = torque_at_angle(*second, plane, 0.3, k_batch=None)
+    assert chunked == pytest.approx(whole, rel=1e-12)
+    assert abs(whole) > 1e-3
+
+
+def test_a_kept_function_takes_another_structure_through_compiled():
+    """``compiled_function`` traces once; a call of another shape is keyed afresh.
+
+    And under a trace it is ``jax.jit(fn)``, keeping nothing, which is what the
+    loops that use it did before.
+    """
+    arr = jnp.arange(4.0)
+    run = eager.compiled_function(lambda xs: lax.map(lambda x: x * arr, xs), jnp.arange(4.0))
+    assert len(eager._PROGRAMS) == 1
+    run(jnp.arange(4.0))
+    ones = jnp.ones(4)
+    with counting_compiles() as names:
+        got = run(ones)
+    assert names == []
+    np.testing.assert_array_equal(got, ones[:, None] * arr)
+    np.testing.assert_array_equal(run(jnp.ones(3)), jnp.ones(3)[:, None] * arr)
+    assert len(eager._PROGRAMS) == 2
+    eager.clear()
+    traced = jax.jit(lambda s: eager.compiled_function(lambda xs: xs * s, jnp.ones(2))(
+        jnp.ones(2)))(2.0)
+    assert len(eager._PROGRAMS) == 0
+    np.testing.assert_array_equal(traced, 2.0 * jnp.ones(2))
+
+
 def test_a_full_cache_says_so_once(monkeypatch):
     monkeypatch.setattr(eager, "CACHE_SIZE", 1)
     _loop(jnp.arange(4.0))
