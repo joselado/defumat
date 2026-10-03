@@ -400,7 +400,9 @@ def davidson_eigensolver(
     """The ``nbnd`` lowest eigenpairs at k-point ``ik``, iteratively.
 
     Args:
-        hamiltonian: the operator; only ``apply`` and ``diagonal`` are used.
+        hamiltonian: the operator: ``apply_projected`` for every block the
+            subspace grows by, ``s_projections`` and ``s_correction`` for the
+            overlap, and the two diagonals for the preconditioner.
         ik: k-point index. May be traced, so this ``vmap``s over k.
         psi0: ``(nbnd, npwx)`` starting vectors -- normally the previous SCF
             iteration's wavefunctions, which is what makes later iterations
@@ -475,7 +477,9 @@ def davidson_eigensolver(
     # every expression below that touches them is a no-op -- which is how the
     # norm-conserving path stays exactly what it was -- and with a spinor
     # Hamiltonian they carry the spin index folded into their width, so nothing
-    # in this routine has to know how many components a state has.
+    # in this routine has to know how many components a state has. Only the
+    # refresh asks for them alone; a block that ``H`` is applied to gets them
+    # from the same call (``apply_projected``).
     def project(vectors):
         """``<beta|psi>`` and ``q <beta|psi>`` for a block of vectors."""
         return hamiltonian.s_projections(vectors, ik)
@@ -487,8 +491,12 @@ def davidson_eigensolver(
     start = force_real_g0(start, gamma_only)
 
     psi =jnp.zeros((nvecx, ndim), dtype).at[:nbnd].set(start)
-    hpsi = jnp.zeros((nvecx, ndim), dtype).at[:nbnd].set(hamiltonian.apply(start, ik))
-    becp0, becq0 = project(start)
+    # ``H`` and the projections of the starting block from one ``calbec``, as
+    # ``h_psi`` and ``s_psi`` share ``becp`` (:meth:`~defumat.hamiltonian.
+    # operator.Hamiltonian.apply_projected`); the expansion block below does
+    # the same.
+    hstart, becp0, becq0 = hamiltonian.apply_projected(start, ik)
+    hpsi = jnp.zeros((nvecx, ndim), dtype).at[:nbnd].set(hstart)
     nkb = becp0.shape[1]
     becp = jnp.zeros((nvecx, nkb), dtype).at[:nbnd].set(becp0)
     becq = jnp.zeros((nvecx, nkb), dtype).at[:nbnd].set(becq0)
@@ -751,14 +759,18 @@ def davidson_eigensolver(
             and the padding below is their value rather than an approximation
             of it. This is ``cegterg.f90:465``'s ``h_psi_ptr(..., notcnv, ...)``
             under the one shape a ``lax.while_loop`` body is allowed.
+
+            **One ``calbec`` for both**, as ``h_psi`` computes ``becp`` and
+            ``s_psi`` reads it. ``apply`` followed by ``project`` took it twice,
+            on the masked block and on the block as passed, two products XLA
+            cannot merge since their operands are different arrays; the values
+            were equal because :func:`expansion` masked the block already, so
+            the shared one is bit-for-bit what both were.
             """
             if m >= nbnd:
-                h = hamiltonian.apply(correction, ik)
-                bp, bq = project(correction)
-                return h, bp, bq
+                return hamiltonian.apply_projected(correction, ik)
             live = correction[:m]
-            h = hamiltonian.apply(live, ik)
-            bp, bq = project(live)
+            h, bp, bq = hamiltonian.apply_projected(live, ik)
             return (jnp.zeros_like(correction).at[:m].set(h),
                     jnp.zeros((nbnd, bp.shape[1]), bp.dtype).at[:m].set(bp),
                     jnp.zeros((nbnd, bq.shape[1]), bq.dtype).at[:m].set(bq))
