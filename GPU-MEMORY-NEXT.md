@@ -27,7 +27,7 @@ evidence; an A/B is*. Several fixes below are "remat this" or "chunk that", and
 the peak before and after, one run per fresh process (`peak_bytes_in_use` has no reset),
 with the compile cache warm (a miss costs *more* device memory on this card).
 
-## Where the next session starts (written 2026-10-03 evening, master at `d227efe`; item 1 updated later that evening, branch `bessel-jvp`)
+## Where the next session starts (written 2026-10-03 evening, master at `d227efe`; items 1 to 3 updated later that evening on branch `bessel-jvp`)
 
 **Item 2 is done**: the field response, the Born charges, both phonons, the piezoelectric tensor, the
 strain response, the elastic constants, the two third derivatives (electrostriction and Raman) and the
@@ -92,6 +92,12 @@ identity against the whole-k route on the same states.
 4. **The radial chunk's ceiling on a production card**: the budget (8 MB an integrand) was chosen on the
    A2000 and the CPU; on a float64 card the smaller transforms' launch count may cost more than the 5 to 8
    per cent measured here, and `DEFUMAT_RADIAL_CHUNK` is the dial.
+
+**Loose ends of the later evening (branch `bessel-jvp`):** the branch holds the radial derivative rule,
+the factored augmentation charge and three test tolerances read off one rounding pattern (`CLAUDE.md`'s
+`conv_thr` trap); whether it is merged and pushed is in the session's last commit message. On D22 the
+worktrees `/l/ladovj1/defumat-bessel` and `/l/ladovj1/defumat-factored` and the runs in
+`/l/ladovj1/review/bessel/` (`CLAUDE.local.md`).
 
 **Loose ends, none blocking:** nothing is pushed (master `d227efe`, 27 commits past `5e1e6f6`); the
 merged branch `streamed-piezo` can be deleted. On D22: the worktrees `/l/ladovj1/defumat-piezo` (master's
