@@ -192,3 +192,42 @@ def test_a_value_read_off_an_argument_falls_back_to_the_plain_call():
     got = compiled(lambda xs: map_k(body, xs, batch=1), jnp.ones(1))
     assert len(eager._PROGRAMS) == 0
     np.testing.assert_allclose(got, [2.0])
+
+
+#: The smallest ultrasoft cell with more than one k-point, which is what puts
+#: ``becsum``'s sum over k on a scan at ``k_batch = 1``.
+SILICON_US = Path(__file__).resolve().parents[1] / "data" / "qe" / "si2-us.in"
+
+
+@pytest.mark.parametrize("regime", ["", "nspin = 2, starting_magnetization(1) = 0.5, "
+                                    "occupations = 'smearing', degauss = 0.02",
+                                    "noncolin = .true."],
+                         ids=["unpolarized", "lsda", "noncollinear"])
+def test_a_second_becsum_call_compiles_nothing(pseudo_dir, regime):
+    """The SCF calls ``becsum`` eagerly once an iteration, outside any ``jit``.
+
+    Its sum over k is a scan over a closure built at the call, and before it
+    went through :func:`compiled` the second call compiled that scan again,
+    once per spin channel (``spinor_becsum`` once): two compilations a warm
+    iteration on ``ni-ldau-ortho.in``. No SCF is needed to see it, since the
+    contraction does not care whether the states are converged.
+    """
+    text = SILICON_US.read_text()
+    if regime:
+        text = text.replace("ecutrho=160.0", f"ecutrho=160.0, {regime}")
+    calculation = Calculator.from_text(text, pseudo_dir, k_batch=1,
+                                       announce=False).calculation
+    nk = calculation.system.kpoints.nk
+    channels = 2 if "nspin" in regime else 1
+    width = calculation.basis.npwx * (2 if "noncolin" in regime else 1)
+    rng = np.random.default_rng(0)
+    shape = (channels, nk, 4, width)
+    states = jnp.asarray(rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
+    weights = jnp.full((channels, nk, 4), 0.5)
+
+    first = calculation.becsum(states, weights)
+    with counting_compiles() as names:
+        second = calculation.becsum(states, weights)
+    assert names == []
+    for a, b in zip(first, second):
+        np.testing.assert_array_equal(a, b)

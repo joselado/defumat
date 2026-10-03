@@ -25,6 +25,7 @@ import jax.numpy as jnp
 
 from defumat.basis.fft import g_to_r, g_to_r_gamma, sticks_density
 from defumat.batching import resolve_band_batch, resolve_k_batch, sum_bands, sum_k
+from defumat.eager import compiled
 from defumat.system.cell import Cell
 
 __all__ = ["sum_band", "band_density", "becsum", "spinor_sum_band",
@@ -391,8 +392,26 @@ def becsum(psi, vkb, weights, species_channels,
     it is not decoration: with two channels the augmentation charge, the
     self-consistent ``D_ij`` and PAW's one-centre terms all become per-channel
     quantities, and they are all built from this one.
+
+    **Called eagerly, it goes through** :func:`defumat.eager.compiled`. The SCF
+    calls this outside any ``jit`` once per iteration, and the per-k sum is a
+    ``lax.scan`` over a closure built at that call, so without it the scan was
+    compiled again at every call and channel: two compilations a warm iteration
+    on ``tests/data/qe/ni-ldau-ortho.in`` at ``nspin = 2`` and one on
+    ``si2-us.in``, each mapping some twenty more lines into the process. Under a
+    trace (a force, a stress, a response taking ``jax.grad`` through this)
+    ``compiled`` is the plain call, so a derivative sees what it saw before.
     """
     batch = resolve_k_batch(k_batch)
+    return compiled(
+        lambda states, occupations: _becsum(states, vkb, occupations,
+                                            species_channels, batch),
+        psi, weights,
+    )
+
+
+def _becsum(psi, vkb, weights, species_channels, batch) -> tuple:
+    """:func:`becsum` itself, at a resolved ``batch``."""
     operand, fetch = walk_projectors(vkb, psi.shape[1])
 
     def channel(states, occupations):
@@ -593,7 +612,22 @@ def spinor_becsum(psi, vkb, weights, species_channels,
             :meth:`defumat.scf.driver.Calculation.augmented`.
 
     Returns one complex ``(nat_t, nh_t, 2, nh_t, 2)`` array per species.
+
+    Called eagerly it goes through :func:`defumat.eager.compiled`, for
+    :func:`becsum`'s reason: the per-k scan over a fresh closure was compiled
+    again at every SCF iteration, once a warm iteration on
+    ``tests/data/qe/ni-noncol-111.in``.
     """
+    batch = resolve_k_batch(k_batch)
+    return compiled(
+        lambda states, occupations: _spinor_becsum(states, vkb, occupations,
+                                                   species_channels, batch, spiral),
+        psi, weights,
+    )
+
+
+def _spinor_becsum(psi, vkb, weights, species_channels, batch, spiral) -> tuple:
+    """:func:`spinor_becsum` itself, at a resolved ``batch``."""
     npwx = psi.shape[-1] // 2
     operand, fetch = walk_projectors(vkb, psi.shape[0], spiral)
 
@@ -611,7 +645,7 @@ def spinor_becsum(psi, vkb, weights, species_channels,
             for channels in species_channels
         )
 
-    return sum_k(one_k, (operand, psi, weights), batch=resolve_k_batch(k_batch))
+    return sum_k(one_k, (operand, psi, weights), batch=batch)
 
 
 @jax.jit
