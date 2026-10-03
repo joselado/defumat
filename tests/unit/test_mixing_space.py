@@ -222,6 +222,39 @@ def test_the_stored_rho_ddot_is_the_loops_accuracy_on_the_smooth_sphere(dual4, n
     assert float(f @ f) == pytest.approx(expected, rel=1e-11)
 
 
+@pytest.mark.parametrize("nspin", [1, 2])
+def test_at_dual_four_an_installed_augmentation_changes_no_bit(dual4, nspin):
+    """No shell, so the rebuild is never reached and the mixed density is byte-equal.
+
+    ``run_scf`` installs the augmentation only where there is a shell; this
+    is the guard that a layout which has one installed anyway at dual 4 does
+    not call it and moves nothing.
+    """
+    from defumat.scf.driver import _mix
+
+    def augmentation(base, becsum):
+        raise AssertionError("a dual-4 layout has no shell to rebuild")
+
+    bare, hooked = _layout(dual4, nspin), _layout(dual4, nspin)
+    hooked.augmentation = augmentation
+    rng = np.random.default_rng(50 + nspin)
+    # A ``becsum`` block rides along, so the rebuild would be reached if a
+    # shell-less layout did not stop before it.
+    pairs = [(_field(hooked, rng), _field(hooked, rng),
+              (rng.normal(size=(nspin, 2, 4, 4)),), (rng.normal(size=(nspin, 2, 4, 4)),))
+             for _ in range(3)]
+    mixers = []
+    for layout in (bare, hooked):
+        mixer = get_mixer("anderson", beta=0.4)
+        mixer.layout, mixer.shape = layout, layout.stored_shape
+        mixers.append(mixer)
+    for rho_in, rho_out, becsum_in, becsum_out in pairs:
+        a = _mix(mixers[0], rho_in, rho_out, becsum_in, becsum_out)
+        b = _mix(mixers[1], rho_in, rho_out, becsum_in, becsum_out)
+        assert np.asarray(a[0]).tobytes() == np.asarray(b[0]).tobytes()
+        assert np.asarray(a[1][0]).tobytes() == np.asarray(b[1][0]).tobytes()
+
+
 def test_the_adaptive_mixer_keeps_real_space_and_says_so():
     assert resolve_mixing_space(None, get_mixer("adaptive")) == "r"
     with pytest.raises(ValueError, match="sign"):
@@ -242,6 +275,124 @@ def _calculator(pseudo_dir):
         warnings.simplefilter("ignore")
         return Calculator.from_file(BENCHMARKS / "si2-us-1k.in", pseudo_dir=pseudo_dir,
                                     announce=False)
+
+
+def test_the_shell_of_an_output_density_is_its_symmetrised_augmentation_charge(
+        pseudo_dir, monkeypatch):
+    """What the rebuild rests on: above ``ngms``, ``rho_out`` is ``sym_rho(addusdens(becsum_out))``.
+
+    The smooth density reaches the dense grid through a zero-padded extension,
+    so nothing but the augmentation charge can be in the shell. Read off the
+    first two output densities of a real-space run, the shell agrees with the
+    rebuild to round-off; and the symmetrisation is part of it, since an
+    ultrasoft ``becsum`` summed over a k-wedge is not symmetrised, and on this
+    cell ``Q_ij(G) becsum_out`` alone is far off the shell.
+    """
+    import defumat.scf.driver as driver
+
+    calculator = _calculator(pseudo_dir)
+    calculation = calculator.calculation
+    captured = []
+    original = driver._mix
+
+    def capture(mixer, rho, rho_out, becsum_in, becsum_out, *args, **kwargs):
+        captured.append((np.asarray(rho_out), becsum_out))
+        return original(mixer, rho, rho_out, becsum_in, becsum_out, *args, **kwargs)
+
+    monkeypatch.setattr(driver, "_mix", capture)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        driver.run_scf(calculator.system, calculator.pseudos, calculation=calculation,
+                       max_iterations=2, mixing_space="r", verbose=False)
+    assert len(captured) == 2
+    basis = calculation.basis
+    rebuild = driver._augmentation_of(calculation)
+    for rho_out, becsum_out in captured:
+        layout = SphereLayout(basis.dense, basis.ngms, calculation.system.cell,
+                              rho_out.shape)
+        zero = jnp.zeros(rho_out.shape, dtype=rho_out.dtype)
+        shell = _shell(layout, rho_out)
+        scale = np.max(np.abs(shell))
+        assert scale > 0.0
+        rebuilt = _shell(layout, np.asarray(rebuild(zero, becsum_out)))
+        bare = _shell(layout, np.asarray(calculation.augmented(zero, becsum_out)))
+        assert np.max(np.abs(rebuilt - shell)) < 1e-10 * scale
+        assert np.max(np.abs(bare - shell)) > 1e-3 * scale
+
+
+@pytest.mark.parametrize("preconditioned", [False, True])
+def test_the_rebuilt_shell_is_the_anderson_step_on_every_entrys_shell(pseudo_dir,
+                                                                      preconditioned):
+    """The mixed density's shell is the history's combination of shells, nothing stored.
+
+    Every pair is a random field on the smooth sphere plus the symmetrised
+    augmentation charge of a random ``becsum``, which is what an output density
+    is above ``ngms`` (the test above). The Anderson coefficients are read back
+    off the ``becsum`` block, which the mixer steps at the plain ``beta`` with
+    or without Kerker, by least squares; the shell of the mixed density must
+    then be ``sum_i c_i ((1 - beta) s_in_i + beta s_out_i)`` over the shells of
+    the fields actually handed in. A shell mixed linearly at ``beta`` is the
+    newest pair's step alone and fails from the second call on.
+    """
+    from defumat.scf.driver import _augmentation_of, _mix
+
+    calculation = _calculator(pseudo_dir).calculation
+    basis, cell = calculation.basis, calculation.system.cell
+    shape = (calculation.nspin_mag,) + tuple(basis.dense.grid)
+    layout = SphereLayout(basis.dense, basis.ngms, cell, shape)
+    assert layout.nshell > 0
+    layout.augmentation = _augmentation_of(calculation)
+    beta = 0.3
+    mixer = get_mixer("anderson", beta=beta)
+    mixer.layout, mixer.shape = layout, layout.stored_shape
+    if preconditioned:
+        mixer.precondition = kerker_preconditioner_g(layout, cell, beta=beta,
+                                                     nelec=calculation.nelec)
+
+    template = calculation.starting_becsum()
+    rng = np.random.default_rng(60 + int(preconditioned))
+
+    def random_becsum():
+        drawn = []
+        for block in template:
+            if block is None:
+                drawn.append(None)
+                continue
+            m = rng.normal(size=np.shape(block))
+            drawn.append(0.5 * (m + np.swapaxes(m, -1, -2)))
+        return tuple(drawn)
+
+    def flat(becsum):
+        return np.concatenate([np.ravel(b) for b in becsum if b is not None])
+
+    def density(becsum):
+        smooth = _field(layout, rng, shell=False)
+        zero = jnp.zeros(shape, dtype=smooth.dtype)
+        return smooth + np.asarray(layout.augmentation(zero, becsum))
+
+    entries = []
+    for call in range(4):
+        becsum_in, becsum_out = random_becsum(), random_becsum()
+        rho_in, rho_out = density(becsum_in), density(becsum_out)
+        mixed, becsum_mixed, _, _ = _mix(mixer, rho_in, rho_out, becsum_in, becsum_out)
+        entries.append(((1 - beta) * _shell(layout, rho_in) + beta * _shell(layout, rho_out),
+                        (1 - beta) * flat(becsum_in) + beta * flat(becsum_out)))
+        columns = np.stack([b for _, b in entries], axis=1)
+        coefficients = np.linalg.lstsq(columns, flat(becsum_mixed), rcond=None)[0]
+        np.testing.assert_allclose(columns @ coefficients, flat(becsum_mixed),
+                                   rtol=0, atol=1e-12)
+        assert coefficients.sum() == pytest.approx(1.0, abs=1e-10)
+        if call:
+            # A genuine combination, not the newest pair alone.
+            assert np.max(np.abs(coefficients[:-1])) > 1e-3
+        expected = sum(c * s for c, (s, _) in zip(coefficients, entries))
+        coefficients_mixed = np.asarray(layout.forward(np.asarray(mixed)))
+        got = coefficients_mixed[:, layout.nsmooth:]
+        # Round-off is the whole field's (about 1e-18 here), and the shell is
+        # 1e-7, so the bound sits five orders below what it discriminates.
+        np.testing.assert_allclose(got, expected, rtol=0,
+                                   atol=1e-12 * np.max(np.abs(coefficients_mixed)))
+        assert np.max(np.abs(expected)) > 1e5 * 1e-12 * np.max(np.abs(coefficients_mixed))
 
 
 def test_a_dual_eight_run_reaches_the_real_space_energy(pseudo_dir):
