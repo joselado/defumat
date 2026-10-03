@@ -9731,6 +9731,8 @@ through `response=` (Raman's). **What this does not change**: the `3 nat` dense-
 self-consistent loop carries (`dvscf`, the induced potential, the symmetrised response, `drhous`, the
 core term), about `5 P nspin_mag n_grid x 8 B` on the card, which grows with the number of atoms
 displaced and is the next lever for a subset of a large cell.
+(*Both done later the same night, for the phonon at `q` and for the dense-grid fields on a run without
+symmetry: the next entry.*)
 
 ## The phonon at q a k-chunk at a time, and the per-mode grids off the card (RTX A2000, 2026-10-03)
 
