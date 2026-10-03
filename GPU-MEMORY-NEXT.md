@@ -27,7 +27,7 @@ evidence; an A/B is*. Several fixes below are "remat this" or "chunk that", and
 the peak before and after, one run per fresh process (`peak_bytes_in_use` has no reset),
 with the compile cache warm (a miss costs *more* device memory on this card).
 
-## Where the next session starts (written 2026-10-03 afternoon, branch `streamed-piezo`)
+## Where the next session starts (written 2026-10-03 evening, master at `d227efe`)
 
 **Item 2 is done**: the field response, the Born charges, both phonons, the piezoelectric tensor, the
 strain response, the elastic constants, the two third derivatives (electrostriction and Raman) and the
@@ -40,7 +40,9 @@ identity against the whole-k route on the same states.
 
 **What to pick up, in order:**
 
-1. **The two chunks under a strain's derivatives, sized together.** Located but not fixed: the
+1. **The two chunks under a strain's derivatives.** The default is decided (8 MB, the user,
+   2026-10-03); what is left is the structural fix, a remat that holds under forward-over-reverse,
+   so that no chunk size has to be traded against time. Located but not fixed: the
    ultrasoft strain response's 114 MB above its SCF on eight-atom silicon is the augmentation table's
    G-chunk under the `jvp` (45 MB at a 4096-vector chunk against 117 and 123 at 16384, two passes), and
    the elastic constants' 90 MB above the norm-conserving response is the radial chunk under the `jvp` of
@@ -79,10 +81,17 @@ identity against the whole-k route on the same states.
    A2000 and the CPU; on a float64 card the smaller transforms' launch count may cost more than the 5 to 8
    per cent measured here, and `DEFUMAT_RADIAL_CHUNK` is the dial.
 
-**Loose ends, none blocking:** the branch `streamed-piezo` (merged once the gate passes on its last
-commit); on D22 the worktrees `/l/ladovj1/defumat-piezo` and `/l/ladovj1/defumat-chunk` (the branch's
-files copied over a `32bfa0f` checkout) and the runs in `/l/ladovj1/review/piezo/`; the morning's
-worktrees `/l/ladovj1/defumat-old` and `defumat-hf`; and the pre-existing failure
+**Loose ends, none blocking:** nothing is pushed (master `d227efe`, 27 commits past `5e1e6f6`); the
+merged branch `streamed-piezo` can be deleted. On D22: the worktrees `/l/ladovj1/defumat-piezo` (master's
+code as of `d227efe`, copied file by file over `32bfa0f`) and `/l/ladovj1/defumat-chunk` (the state before
+the symmetry walk), the plain copy `/l/ladovj1/bisect`, and `/l/ladovj1/review/piezo/`, which holds every
+run of the session **and the probe scripts, which are not in the repository**: `pass_memory_*.py` (each
+compiled pass's `memory_analysis()`, by wrapping `jax.jit` in the module measured), `*_stages.py` (the card
+peak after each stage of one call; run twice and read the second), `global_terms.py` and
+`first_vs_second.py` (one energy term at a time, compile only, CPU), `sym_probe.py` and `walk_card.py`
+(a symmetriser walked against batched), `aug_time.py` (SCF and stress time per chunk), and the two
+plans Fable reviewed. `CLAUDE.local.md` has the D22 details. The morning's loose ends stand: the D22
+worktrees `/l/ladovj1/defumat-old` and `defumat-hf`, and the pre-existing failure
 `test_spinor_response.py::test_the_spinor_density_weights_are_the_ground_state_s` (a tolerance below the
 rounding).
 
