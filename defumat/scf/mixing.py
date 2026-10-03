@@ -1161,10 +1161,24 @@ MIXING_SPACES = {"g": "g", "reciprocal": "g", "r": "r", "real": "r"}
 #: ``conv_thr`` at 11 and 16 rather than 17 and 34 (an estimate: the ``ethr``
 #: schedule follows ``dr2`` and would move them a little, and the energy at
 #: such a stop was not measured). So ``pw.x``'s layout and this code's stopping
-#: test are an
-#: inconsistent pair above dual 4, which the real-space layout hides by fitting
-#: the shell, and the layout stays selectable rather than the default until
-#: one of the two is changed.
+#: test were an inconsistent pair above dual 4, which the real-space layout hid
+#: by fitting the shell.
+#:
+#: **The layout was changed and the stopping test kept** (2026-10-04): the shell
+#: is now rebuilt from the mixed ``becsum`` (:class:`SphereLayout`), which gives
+#: it the Anderson step with nothing stored. Iterations, real space / smooth
+#: sphere with the rebuilt shell / ``pw.x``, each at its input's ``conv_thr``
+#: and ``beta``: ``fe-mag-1k`` 11/11/12 (energies 3.0e-11 Ry apart),
+#: ``fe-noncolin-pbe-stress`` 15/17/19 (1.9e-11 Ry), ``si8-us-1k`` 9/9/8
+#: (4.1e-13 Ry), ``si8-paw-1k`` 8/8/9 (equal to the last printed bit); and at
+#: dual 4, where nothing is installed, ``si8-1k`` and ``al-slab`` are
+#: byte-identical to the layout before the rebuild. On the noncollinear iron
+#: the shell is at most 7 per cent of ``accuracy`` at any iteration and 0.3 per
+#: cent at the last one mixed, so its two extra iterations are the path the fit
+#: takes on the smooth sphere (``pw.x``'s own fit, which takes 19) against the
+#: whole box, not a tail, and reading ``dr2`` over ``ngms`` would stop it at the
+#: same iteration. Whether this is now the default is a decision this measurement
+#: does not make.
 DEFAULT_MIXING_SPACE = "r"
 
 
