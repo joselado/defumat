@@ -1505,6 +1505,8 @@ must not move; norm-conserving inputs are the control and must be bit-identical.
 
 ### H6. The symmetry search runs twice for every `Calculation`, and more for a budgeted run **[open, re-checked 2026-10-03; Part XXIII item 16 multiplies it]**
 
+**Done 2026-10-03, `fbf44d9`.** `find_symmetries` is an `lru_cache(maxsize=64)` keyed on the cell, the folded positions, the types and the three tolerances read at call time. Building a system, its calculation and one size estimate ran 5 searches and runs 1; the groups are identical to the old module's on all 246 parseable committed inputs of up to 200 atoms.
+
 `defumat/basis/builder.py:132`. `build_basis` calls `find_symmetries(...)` to size the FFT
 box, and `Calculation.__init__` then calls `system.symmetry_group()` (`driver.py:1409`),
 which calls `find_symmetries` on the identical cell and structure. Neither is cached:
@@ -1789,6 +1791,8 @@ and **the per-k Davidson step counts must not move**, which is what makes this a
 number-moving change rather than a free one.
 
 ### M6. `return_steps` is a static `jit` argument, so a process that runs an SCF and then anything else compiles Davidson twice **[open, re-checked 2026-10-03; `workflows/nscf.py:308` and `scf/streaming.py:168` now pass `True` too, so a band structure no longer pays it and the residual solver, topology and electrostriction still do]**
+
+**Done 2026-10-03, `920bf31`.** The solver always carries the step count and the wrapper drops it, so an SCF and a residual solve share one `_every_k` (2 compiles -> 1), bit-identical. Test: `test_davidson_one_executable.py`.
 
 `defumat/solvers/davidson.py:606`. `True` and `False` are two distinct compilations of the
 entire solver -- `h_psi`, the subspace solve, both Ritz rotations. `run_scf`'s mixing loop
@@ -6581,6 +6585,8 @@ Ewald padding.
 
 ### 8. The DFT+U occupation matrix runs an eager `map_k` over a fresh closure every SCF iteration **[confirmed in part]**
 
+**Done 2026-10-03, `bffddf4`, and the conflict is settled: the defect was real.** `projections()` goes through `defumat.eager.compiled`. On `ni-ldau-ortho.in` (`nspin = 2`, 10 k-points, `k_batch = 1`, 10 iterations) a warm SCF compiled 40 `jit(scan)` programs and gained 844 mappings before, 20 and 500 after, every number bit-identical. The 20 left are not DFT+U's: they are the collinear ultrasoft `becsum` (`scf/density.py`'s eager `sum_k`), two a warm iteration, the same trap on every ultrasoft or PAW SCF with more than one k-point on a CPU, so `PERFORMANCE.md`'s "a warm second SCF on a DFT+U cell compiles nothing" was wrong for ultrasoft and PAW cells generally. Test: `test_eager.py::test_a_second_hubbard_occupation_matrix_compiles_nothing`.
+
 Sites: `hubbard/occupations.py:72-78`, `:110`, `:119`; `scf/driver.py:2842`, `:7338-7340`;
 `scf/residual.py:186`.
 
@@ -6638,6 +6644,8 @@ compilation a new shape on a cell that is not a spiral.
 and `npwx` printed per q, then with (a), then with (a) and (b).
 
 ### 10. `build_plane_wave_states` compiles its `becp` loop again at every call when the projectors are rebuilt per k-point
+
+**Done 2026-10-03, `da7fce5`.** A module-level `_lazy_becp` jit with `npol` and the batch static. On `alas-epsilon-us.in` in memory mode at `k_batch = 1`, a second `get_polarization()` compiled 16 `jit(scan)` programs (one a string) and gained 550 mappings before, none and 4 after; phases and density bit-identical. Test: `test_topology_shared_setup.py::test_a_lazy_projector_set_projects_without_compiling_again`.
 
 Sites: `topology/states.py:825-837`, and its sibling's fix at `:686-714`.
 
@@ -6698,6 +6706,8 @@ steps against the committed benchmark's per-step counts; the relaxed geometry to
 
 ### 12. `DFTSource.states` rebuilds the potential, `newd`, the smooth-grid potential and `q_ij(b)` at every string, column, row and plane
 
+**Done 2026-10-03, `2bb51bf`.** `Calculation.hamiltonian` is split into `local_terms` (k-independent) and `hamiltonian_from`; `DFTSource` builds the frozen potential and the local terms once, on the first call's `at_kpoints` copy rather than on `_base()` (the band dtype is read off the projector core, which `at_kpoints` rebuilds in the cell's precision), and the `q_ij(b)` cache is keyed on the long-lived setup. On ultrasoft silicon with two strings: 2 -> 1 potentials, `newd`s and `augmentation_at_q`s. Bit-identical on `alas-epsilon-us`'s 16 phases and on `H|psi>` of four cells (one channel, two collinear channels, a nonmagnetic and a magnetic GGA spinor). Test: `test_topology_shared_setup.py`.
+
 Sites: `workflows/topology.py:215`, `:280-287`, and the cached `_ddd_paw` at `:175-189`;
 `topology/states.py:681`, `:717-725`.
 
@@ -6727,6 +6737,8 @@ the streamed Wilson loop), warm second call, one core; phases and Z2 bit-identic
 
 ### 13. `run_ultracell` solves the frozen states twice, the second time on a second `Calculation`, to read one band across the cut
 
+**First half done 2026-10-03, `2b34b2e`**: the wider solve reuses the basis calculation, 2 -> 1 constructors on `h-mag-ultracell.in`, the wider block, the multiplet gap (2.03e-10 Ry), the density and both cell moments bit-identical on a CPU (on a card the wider solve now re-checks the kept-band copy's dials rather than a fresh build's). The second half, seeding the wider Davidson with the kept states, is not done.
+
 Sites: `ultracell/driver.py:1097-1100`, `:1110-1115`, `:1133`; `workflows/nscf.py:205-206`,
 `:378-384`.
 
@@ -6755,6 +6767,8 @@ constructor half: 1.53 s on one-atom Pt PAW and 7.08 s on bcc Fe (Part III H3).
 two before and one after, and `multiplet_gap` between the arms.
 
 ### 14. The force theorem, `frozen_expectation`, `run_torque` and `run_orientation_torque` build a `Calculation` per call **[confirmed in part]**
+
+**Both halves done 2026-10-03.** `Calculation.with_texture` (`9f84fde`) returns the calculation with a turned system, accepting a difference in `angle1`, `angle2` and `starting_moments` only and refusing a run with symmetry or a spiral; `run_anisotropy('xyz')` builds 1 calculation where it built 3 and `relax_orientation(curvature=True)` 1 where it built 10 on `co-tetragonal-anisotropy-soc`, every eigenvalue, band energy, torque and the curvature matrix bit-identical. `run_torque` and `frozen_expectation` are not looped over by anything, so they are left. The chunked torque's gradient (`4e63f67`) goes through a new `eager.compiled_function`, traced once per structure: one compile on the first call and none on a second with a new calculation, bit-identical; **the trade** is that the kept program holds about 1250 mappings for as long as it is kept (5873 -> 7131 on its first call), where the per-call `jax.jit` it replaces cost a compile and nothing persistent, and `relax_orientation`'s `jax.clear_caches()` after every one-shot still drops it, so on that path it compiles every step until the clear is measured and removed. Observed in passing, old code and new: tetragonal cobalt relaxed from the identity returns the same free energy and torque to the last bit at steps 2 to 4 (a stationary start, presumably; not checked).
 
 Sites: `workflows/anisotropy.py:581-584`, `:1132-1134`, `:1312-1314`, `:1555-1560`, with their
 callers at `:727-734`, `:1786-1800`, `:1855-1859`; `forces/torque.py:251`.
@@ -6816,6 +6830,8 @@ against step 2 with the Davidson steps equal; step 2's energy to 1e-12 Ry.
 
 ### 16. `choose_k_batch` calls the whole `estimate_size` at every bisection step
 
+**Done 2026-10-03, `f9e8e2e`.** `SizeEstimate.at_k_batch` rebuilds the `k_live` lines from one estimate; `choose_k_batch` makes one estimate where it made up to `log2(nk) + 4` (8 -> 1 on `co-tetragonal-anisotropy-soc` at a six-point budget). Checked against the old module on 172 committed cells: 1720 estimates equal field by field and 2940 choices equal. Part III H6's memo (`fbf44d9`) removes the symmetry searches inside it as well. Test: `test_k_budget.py`.
+
 Sites: `sizing.py:1087-1163`, `:226-244`, `:545`, `:561-570`, `:697`, and the pattern at
 `:361-376`; `scf/driver.py:1897-1911`, `:3613-3628`; `calculator.py:577-593`.
 
@@ -6841,6 +6857,8 @@ where the whole mesh does not fit.
 `estimate_size`, the second of two builds; the same `k_batch` chosen.
 
 ### 17. `get_angular_momenta` builds the whole-k atomic projectors at once, and projects an unpolarized run twice
+
+**The `nspin = 1` half done 2026-10-03, `6735d1f`**: one projection where there were two, bit-identical. The per-block build on `at_rows` is not done (it moves the k sum's order, unmeasured).
 
 Sites: `projwfc/angular_momentum.py:248-252`, `:333-341`; the pattern at
 `projwfc/projections.py:349-376`.
@@ -6869,6 +6887,8 @@ timed on one CPU core.
 ## The SCF hot path
 
 ### 18. On an ultrasoft or PAW dataset the collinear Davidson computes `calbec` twice for every block it applies `H` to
+
+**Done 2026-10-03, `c8a8dc8`.** `Hamiltonian.apply_projected` returns `(H psi, becp, becq)` from one `calbec`, used for the starting block and `live_block`. Compiled `_every_k` dot instructions 62 -> 57 on `si8-us-1k` and `si8-paw-1k` (one `calbec` of a block per step and one per call), 38 -> 38 norm-conserving; the spinor operator's duplicate was already merged by XLA (59 -> 59). Energies, eigenvalues and per-iteration Davidson steps bit-identical on four cells. Test: `test_davidson_single_calbec.py`.
 
 Sites: `solvers/davidson.py:490-491`, `:714`, `:756-761`; `hamiltonian/operator.py:216-217`,
 `:238`, `:338`.
@@ -7054,6 +7074,8 @@ bit; then `benchmarks/al-slab.in`, bit-identical at the same iteration count; un
 rank 0's mix against the iteration with `tools/parallel/pool_time.py`.
 
 ### 24. The sum-over-states consumers upload a streamed store whole, with `jnp.asarray`, at twice its size on a card
+
+**First half done 2026-10-03, `7a26cdf`**: `batching.upload` (`device_put` of a contiguous array for a host store) at ten sites, the torque's two uploads among them; 53 arrays bit-identical across conductivity, absorption, SHG, shift current and the magnon response. The card peak is not measured, and the second half (walking k in the assemblies) is not done. Two `jnp.asarray(states).shape[1]` reads in `forces/torque.py` (about lines 288 and 396) upload a whole store to read a shape and are still there.
 
 Sites: `workflows/conductivity.py:156`, `shg.py:130`, `photocurrent.py:128`, `tddft.py:245-266`;
 `tddft/chi0.py:456`, `spinchi0.py:458`; `response/conductivity.py:520`, `shg.py:553`,
