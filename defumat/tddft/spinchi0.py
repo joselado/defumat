@@ -78,7 +78,7 @@ import numpy as np
 
 from defumat.basis.fft import g_to_r, r_to_g
 from defumat.basis.gvectors import refuse_gamma_storage
-from defumat.batching import map_k, resolve_k_batch, sum_bands, sum_k
+from defumat.batching import map_k, resolve_k_batch, sum_bands, sum_k, upload
 from defumat.eager import compiled
 from defumat.scf.occupations import smearing_order, w0gauss
 from defumat.system.kpoints import is_reduced
@@ -455,7 +455,7 @@ def transverse_response(
     """
     require_a_transverse_regime(calculation)
 
-    wavefunctions = jnp.asarray(wavefunctions)
+    wavefunctions = upload(wavefunctions)
     eigenvalues = jnp.asarray(eigenvalues)
     if wavefunctions.ndim != 4 or wavefunctions.shape[0] != 2:
         raise ValueError(

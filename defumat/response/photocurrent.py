@@ -130,7 +130,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from defumat.batching import resolve_k_batch, sum_k
+from defumat.batching import resolve_k_batch, sum_k, upload
 from defumat.eager import compiled
 from defumat.response.velocity import VelocityOperator
 from defumat.scf.occupations import w0gauss
@@ -512,7 +512,7 @@ def shift_current(
     require_a_shift_current_regime(calculation)
 
     eigenvalues = jnp.asarray(eigenvalues)
-    wavefunctions = jnp.asarray(wavefunctions)
+    wavefunctions = upload(wavefunctions)
     if eigenvalues.ndim == 2:
         eigenvalues, wavefunctions = eigenvalues[None], wavefunctions[None]
     if eigenvalues.shape[0] != 1:

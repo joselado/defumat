@@ -83,7 +83,7 @@ from typing import NamedTuple
 import jax.numpy as jnp
 import numpy as np
 
-from defumat.batching import resolve_k_batch, sum_k
+from defumat.batching import resolve_k_batch, sum_k, upload
 from defumat.eager import compiled
 from defumat.response.photocurrent import (
     DEGENERACY_TOL,
@@ -550,7 +550,7 @@ def second_harmonic(
     require_an_shg_regime(calculation)
 
     eigenvalues = jnp.asarray(eigenvalues)
-    wavefunctions = jnp.asarray(wavefunctions)
+    wavefunctions = upload(wavefunctions)
     if eigenvalues.ndim == 2:
         eigenvalues, wavefunctions = eigenvalues[None], wavefunctions[None]
     if eigenvalues.shape[0] != 1:

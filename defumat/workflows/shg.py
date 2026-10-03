@@ -30,6 +30,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 import numpy as np
 
+from defumat.batching import upload
 from defumat.response.shg import (
     SecondHarmonic,
     require_an_shg_regime,
@@ -127,7 +128,7 @@ def run_shg(
                - np.asarray(eigenvalues)[..., nbnd - 1])
     )
     eigenvalues = eigenvalues[..., :nbnd]
-    wavefunctions = jnp.asarray(wavefunctions[..., :nbnd, :])
+    wavefunctions = upload(wavefunctions[..., :nbnd, :])
     potential = calculation.potential(jnp.asarray(density))
     # PAW's one-centre coefficients are built from ``becsum`` and multiply
     # ``vkb(k)``, so they belong to ``dH/dk`` as much as to ``H``.
