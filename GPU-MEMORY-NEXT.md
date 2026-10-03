@@ -329,13 +329,33 @@ below:
   found a bug the Born charges could not: the constraint is weighted by the multipliers, not the
   occupations, so a padded row's `dLambda` has to be zeroed explicitly. **Found on the way and fixed
   separately** (`54654f5`): a PAW wedge's assembly counted the becsum symmetrisation twice, 4.0e-4
-  Ry/bohr^2 against the same sample whole. **Not changed**: the `3 nat` dense-grid fields the loop
-  carries (`dvscf`, the induced potential, the symmetrised response, `drhous`, the core term), about `5 P
-  nspin_mag n_grid x 8 B` on the card, which on a nosym `atoms=` subset of a large cell could be host
-  arrays walked per mode, since `symmetrize_atom_displacement` is the identity there (the Fable review's
-  estimate: 40 GB for a 57-atom molecule over a 6M-point grid); and the bare walk recomputes `newd` and
-  its tangent once per chunk and perturbation where the whole route did it once per perturbation, which
+  Ry/bohr^2 against the same sample whole. **Not changed by this entry**: the `3 nat` dense-grid
+  fields the loop carries, which are the next entry; and the bare walk recomputes `newd` and its
+  tangent once per chunk and perturbation where the whole route did it once per perturbation, which
   costs time on an ultrasoft cell and was not separated.
+* **Item 2, the phonon at `q`, and the per-mode grids** (2026-10-03, `61c71d4`, `7740ab7`,
+  `3601e96`). `dynamical_matrix_at_q` takes the same route: the `k + q` states go into a host store a
+  chunk at a time (`stream_states`), each chunk has two row-subset calculations built from the
+  calculation's own fields (so a second `q` reuses the passes), the response density's sum over k is
+  added over chunks and finished once, the electronic half of `D(q)` is one Gram product of the two host
+  stores, and the frozen half is the Gamma passes with zero tangents. Before it the phonon at `q` put a
+  streamed store back on the card whole. **And on a run without symmetry the loop's per-mode grids**
+  (`dvscf`, the response, the induced potential, `drhous`, the core term: six to seven dense grids per
+  perturbation at an iteration's peak) **are in host memory**, one mode at a time on the card, since the
+  displacement average is the identity there; the phonon at `q` always runs so. Against the whole route:
+  2.1e-14 (`q`, end to end at one k-point a chunk), 1.9e-14 (`q`, a chunk of 3 with one `k + q` store),
+  and the host grids 2.2e-16 to 5.2e-14 on four cells. **On the card** (eight-atom Si at 20 Ry,
+  `nosym`, one k-point a chunk): the phonon at `q`, all 24 perturbations, 953.7 MB -> 119.1 MB with the
+  grids on the card and 103.0 MB with them on the host, against the SCF's 35.1; the Gamma phonon of all
+  eight atoms 65.8 -> 35.1 MB (norm-conserving) and 203.9 -> 109.8 MB (ultrasoft, SCF 66.9), for under 1
+  per cent of time (`PERFORMANCE.md`, "The phonon at q a k-chunk at a time, and the per-mode grids off
+  the card"). **Found on the way and fixed separately** (`12fd7ea`): on two FFT grids the phonon at `q`
+  dropped the imaginary part of its response (every mode imaginary at `ecutrho = 8 ecutwfc`). **Still on
+  the card**: with symmetry, the per-mode grids, because `symmetrize_atom_displacement` acts on the stack;
+  the `k + q` Hamiltonians' whole-k tables beside the `k` ones; the ultrasoft global step's 43 to 50
+  MB of temporaries; and 68 MB above the SCF in the phonon at `q`, outside the walks (whose passes need
+  28.2 MB at most), in one of the eager steps around them -- the Ewald term at `q`, the kernel at `q` or
+  the `k + q` diagonalisation -- not yet separated.
 
 ## Suggested order
 
@@ -362,10 +382,12 @@ but 24 and 25 have been measured on the card, two as nulls. What is left, in ord
    chunked force and stress already run on it.
 3. **Stream the linear-response stack** (item 2) on top of it. **The dielectric tensor and
    the Born charges are done** (2026-10-02, see "Done since"): the Born charges were item 3's
-   split one derivative up, as forecast. **The `Gamma` phonon is done too** (2026-10-03, see
-   "Done since"). Next in this item is the `q` phonon (`dynamical_matrix_at_q`,
-   norm-conserving only, with a second sphere at `k + q`), then the `keep_internals`
-   consumers (Raman, electrostriction, the strain response).
+   split one derivative up, as forecast. **The `Gamma` phonon and the phonon at `q` are done
+   too** (2026-10-03, see "Done since"), and on a run without symmetry their per-mode grids
+   are in host memory. Next in this item are the `keep_internals` consumers (Raman,
+   electrostriction, the strain response); the Fable review of 2026-10-03 judged each larger
+   than an evening, because `StrainResponse.dpsi`/`ort` are read whole-k by `elastic.py`,
+   `electrostriction.py` and `piezo.py`.
 4. The small tail: a dense NSCF/DOS/PDOS mesh a block at a time (item 6's third bullet;
    the band path is done), item 14's per-`l` transform (time only), and the float32 tier's
    setup cast (item 26, its first blocker named). Items 7, 16 and 22 are closed by verdict.
@@ -401,7 +423,8 @@ an 800-point path; the difference should go from ~0.6 MB per k-point to flat.
 ### 2. Linear response holds its state whole-k and cannot stream -- priority 1, large
 
 **The dielectric tensor and the Born charges are done (2026-10-02, `0a9f317`, `bf821e7`), and
-the `Gamma` phonon (2026-10-03, `af246f1`; see "Done since"); the phonon at `q`, the strain
+the `Gamma` phonon and the phonon at `q` (2026-10-03, `af246f1`, `61c71d4`, with the per-mode grids
+in host memory on a run without symmetry, `7740ab7`, `3601e96`; see "Done since"); the strain
 response and the third derivatives are open.**
 The text below is the item as it stood, and its per-k-point estimate was low: measured on the
 card, the field response grew 5.3 MB per k-point and with the Born charges 7.6, against the

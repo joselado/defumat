@@ -9731,3 +9731,63 @@ through `response=` (Raman's). **What this does not change**: the `3 nat` dense-
 self-consistent loop carries (`dvscf`, the induced potential, the symmetrised response, `drhous`, the
 core term), about `5 P nspin_mag n_grid x 8 B` on the card, which grows with the number of atoms
 displaced and is the next lever for a subset of a large cell.
+
+## The phonon at q a k-chunk at a time, and the per-mode grids off the card (RTX A2000, 2026-10-03)
+
+**The number to carry: the phonon at `q` of eight-atom silicon at one k-point a chunk went from 953.7
+MB on the card to 103.0 MB, against the SCF's 35.1, for 3.6 per cent more time; and on a run
+without symmetry the Gamma phonon of all eight atoms at one k-point a chunk went from 65.8 MB to the
+SCF's own 35.1 (norm-conserving) and from 203.9 to 109.8 MB against 66.9 (ultrasoft), for 0.3 to 0.5 per
+cent more time.** `GPU-MEMORY-NEXT.md` item 2, its third and fourth pieces (`61c71d4` for the phonon at
+`q`, `7740ab7` and `3601e96` for the per-mode grids).
+
+**The phonon at `q`.** It put a streamed store back on the card whole (`make_sternheimer`'s
+`jnp.asarray`) and held its `k + q` states, bare perturbations and first-order states whole-k there.
+On the chunked route the `k + q` states go into a host store a chunk at a time (`stream_states`), each
+chunk is solved on two row-subset calculations built from the calculation's own fields, the response
+density's sum over k is added over chunks and finished once, the electronic half of the matrix is one
+Gram product of the two host stores, and the frozen half is the Gamma passes with zero tangents before
+the Ewald term is moved to `q`. Eight-atom Si at 20 Ry, `nosym`, the unshifted 3x3x3 grid, all 24
+perturbations at `q = (1/2, 0, 0)`, memory mode, warm cache, the second of two fresh processes per
+point, D22 (`tools/gpu/response_memory.py`'s `phonon_q` stage); before at `4241de7`, after at
+`4e2f491` (the per-mode grids on the card) and `3601e96` (in host memory):
+
+| `k_batch` | SCF alone | before | after, grids on the card | after, grids on the host | time, before | after |
+|---|---|---|---|---|---|---|
+| 1 | 35.1 MB | 953.7 MB | 119.1 MB | 103.0 MB | 493.6 s | 511.7 / 511.5 s |
+| `'fit'` | 872.9 | 1132.5 | 996.9 | -- | 526.5 | 506.0 |
+
+with `|D_xx(0,0)|` = 0.2797837367 (0.2797837357 at `'fit'`) and 45.822 mean CG iterations in every row.
+**The 68 MB left above the SCF at one k-point a chunk are outside the walks**: the compiler's `memory_analysis()` of each pass gives 28.2 MB of temporaries for the solve and 14.0 or less for the rest, so the peak is set by an eager step around them -- the Ewald term at `q` and its swap (a `jax.hessian` in the positions), the screening kernel at `q` (two eager `jvp` per mode and iteration), or the `k + q` diagonalisation. Which one was not separated.
+Against the whole route on the CPU (`tests/regression/test_streamed_phonons.py`, two-atom silicon on
+an unshifted 2x2x2 grid): 2.1e-14 end to end at one k-point a chunk, where the two `k + q`
+diagonalisations are bit-identical; 1.9e-14 at a chunk of 3 with one `k + q` store handed to both; and
+1.3e-10 at a chunk of 3 end to end, where the two routes diagonalise `k + q` with different compiled
+programs and their states agree only up to a rotation inside each degenerate multiplet. A second call
+compiles nothing, and a new `q` compiles only the `k + q` diagonalisation: the solve pass is handed the
+`k + q` Hamiltonians without their static per-k plane-wave counts, which bound only the Davidson
+subspace and differ from one `q` to the next.
+
+**The per-mode grids.** The Gamma phonon's self-consistent loop held six to seven dense grids per
+perturbation on the card at once (`dvscf`, the response, the induced potential, `drhous`, the core
+term; the Fable review counted them at an iteration's peak), which grows with the number of atoms
+displaced and not with the mesh: about 40 GB for a 57-atom molecule over a 6M-point grid, by
+arithmetic on shapes. On a run with no symmetry the displacement average is the identity and nothing
+in the loop needs the modes together, so the chunked route keeps them in host memory and puts one mode
+at a time on the card; the mixer's history was on the host already. The phonon at `q` runs without
+symmetry always, so its loop does it always. All eight atoms (24 perturbations) at one k-point a chunk,
+`nosym`, Gamma:
+
+| cell | SCF alone | grids on the card (`4e2f491`) | on the host (`7740ab7`) | time, before | after |
+|---|---|---|---|---|---|
+| norm-conserving | 35.1 MB | 65.8 MB | 35.1 MB | 421.7 s | 423.9 s |
+| ultrasoft | 66.9 | 203.9 | 109.8 | 751.5 | 754.1 |
+
+with the force constant and the iteration count the same in each row. What is left above the SCF on the
+ultrasoft cell is the global step's temporaries, flat in the mesh and in the number of atoms (49.6 MB
+for one atom, 42.9 for eight). Against the whole route the host mode agrees to 2.2e-16 / 4.3e-15 /
+5.2e-14 / 3.7e-14 on half-sphere silicon, two-atom aluminium (a metal), ultrasoft AlAs and PAW silicon
+without symmetry, with the iteration counts equal and the history equal to round-off (a numpy sum in
+place of the device's); at `q` the convergence test is a maximum, so its history is bit-identical. On a
+run with symmetry the grids stay on the card, because the displacement average acts on all of them
+together.
