@@ -478,6 +478,167 @@ below:
   stay on the card" cost: the grids are `3 nat` fields, the average was `nsym` copies of them.
 * **The augmentation chunk under a strain** (2026-10-03): measured, committed (`83ac598`) and reverted
   (`b164421`) -- see the handoff's first item.
+
+## Suggested order
+
+Cheap and certain first, then the two that decide whether the large cells run in the
+default mode:
+
+1. ~~**Retention in the relaxation loops** (item 21)~~ -- done.
+2. ~~**One misplaced line in the Sternheimer local perturbation** (item 7, first half)~~ --
+   done.
+3. ~~**Remat the radial transforms on the derivative path** (item 13)~~ -- done; it was the
+   cause of the BN stress death (A/B above).
+4. ~~**A budget for the band dial in memory mode** (item 9)~~ -- done, measured on
+   `h40-chain-lsda.in`; the NiBr2 slab itself is not measured.
+5. ~~**Stream the NSCF / band-structure solve** (item 1)~~ -- done for the eigenvalue-only
+   callers; the band path's own `Calculation` is what grows now (items 6, 20).
+6. ~~**Factor the PAW one-centre tensors** (item 18)~~ -- done, 1309.6 -> 411.3 MB.
+
+Then the rest by priority. **As of the evening of 2026-09-29** items 3, 4, 5, 7, 10, 11, 12,
+17, 18, 19, 20, 23, 24 and 25 are done or partly done (see "Done since"), and all of them
+but 24 and 25 have been measured on the card, two as nulls. What is left, in order:
+
+1. ~~**Measure the day's changes on the card**~~ -- done, including the nulls.
+2. ~~**A `Calculation` restricted to a row subset of k**~~ -- done (`at_rows`), and the
+   chunked force and stress already run on it.
+3. **Stream the linear-response stack** (item 2) on top of it. **The dielectric tensor and
+   the Born charges are done** (2026-10-02, see "Done since"): the Born charges were item 3's
+   split one derivative up, as forecast. **The `Gamma` phonon and the phonon at `q` are done
+   too** (2026-10-03, see "Done since"), and on a run without symmetry their per-mode grids
+   are in host memory. **The piezoelectric tensor, the strain response, the elastic constants
+   and the two third derivatives are done** (2026-10-03, see "Done since"), and so is the
+   vibrational spectrum; the item is closed.
+4. The small tail: a dense NSCF/DOS/PDOS mesh a block at a time (item 6's third bullet;
+   the band path is done), item 14's per-`l` transform (time only), and the float32 tier's
+   setup cast (item 26, its first blocker named). Items 7, 16 and 22 are closed by verdict.
+
+---
+
+## A. What still grows with the k-mesh
+
+Memory mode bounds the SCF. These are the places outside it -- and the resident
+bookkeeping inside it -- that still scale with `nk`.
+
+### 1. Stream the fixed-density (NSCF, bands, DOS) solve -- priority 1, medium
+
+**Done 2026-09-28 for the callers that want energies only** (`fixed_density_bands`). A
+caller that keeps the states (PDOS, STM, the sum-over-states workflows) still gets them
+stacked on the device; that is item 4's shape of problem.
+
+`workflows/nscf.py` `fixed_density_states` calls `calculation.diagonalize(...)` and gets
+the stacked `(nspin, nk, nbnd, npol*npwx)` set on the device (`nscf.py:278-281`), in
+memory mode too; `batching.py`'s own docstring records that bands and NSCF "hold a full-k
+store of their own" and "what they would want instead is to never stack the set at all".
+It scales with the mesh or the path length, and a non-finite retry holds it three times.
+nbse2 at 24x24: about 2.2 GB. `anisotropy.py:577` calls it where only energies are read.
+
+**Fix**, QE's `c_bands_nscf`: when `wfc_store` resolves to `stream`, walk `k_chunks` and
+call `eigensolver(h, nbnd, None, ethr, indices=rows)` -- `davidson_eigensolver_all`
+already accepts `psi0=None` with `indices`. Keep eigenvalues on the host; either discard
+the chunk's states (bands, DOS, nesting, the unprojected force theorem) or write them into
+a host numpy store, the same object a streamed `SCFResult.wavefunctions` is. **Risk**:
+round-off. **Measure**: `get_scf()` alone against `get_scf()` + `get_bands()` on a 200 and
+an 800-point path; the difference should go from ~0.6 MB per k-point to flat.
+
+### 2. Linear response holds its state whole-k and cannot stream -- priority 1, large
+
+**The dielectric tensor and the Born charges are done (2026-10-02, `0a9f317`, `bf821e7`), and
+the `Gamma` phonon and the phonon at `q` (2026-10-03, `af246f1`, `61c71d4`, with the per-mode grids
+in host memory on a run without symmetry, `7740ab7`, `3601e96`; see "Done since"), and the
+piezoelectric tensor, the strain response, the elastic constants and the two third derivatives,
+Raman and electrostriction, and the vibrational spectrum (2026-10-03, branch `streamed-piezo`). The
+item is closed.**
+The text below is the item as it stood, and its per-k-point estimate was low: measured on the
+card, the field response grew 5.3 MB per k-point and with the Born charges 7.6, against the
+3.7 forecast below.
+
+Its prerequisite (`Calculation.at_rows`) landed 2026-09-29. The solve itself chunks cleanly, but the
+bare perturbation does not: `VelocityOperator` takes one `jvp` of `at_kcart` over the
+*whole* k axis, so a chunked `bare` would rebuild every k-point's core once per chunk
+(`nk / k_batch` full rebuilds). What it needs first is a `Calculation` restricted to a
+row subset of k -- plane waves *selected* (`_planewaves_rows`), per-k tables sliced, core
+rows, `wfcU` rows -- which is item 6's third bullet. Build that, then this.
+
+`SternheimerSolver` does `self.psi = jnp.asarray(psi)[:, :, :keep]` (`sternheimer.py:317`)
+and stacks every block of `dpsi` on the device; `efield.py:296` and `phonon.py:383/385/
+430/440` upload the whole store, and a streamed (numpy) store is re-uploaded per call. It
+is `(1 + P) nspin nk nocc npwx npol x 16 B` with `P` = 6 for the field (+3 for US Born
+charges), `2 x 3nat` for phonons, 12 for the strain response. On eight-atom Si at 216
+k-points that is about 3.7 MB per k-point for the field response against the SCF's 0.19.
+Recorded as structural in `PERFORMANCE.md` (P24, and the Phase 5 GPU half); no audit id.
+
+**Fix**: keep `psi`, `bare` and `dpsi` as host arrays when streaming; `solve` walks
+`k_chunks` like `stream_diagonalize` (the Hamiltonian is indexed by k already); the
+response density and `becsum` become per-chunk `jvp`s of `density_at`, accumulated raw and
+finished once -- `stream_densities`' structure -- which is exact because both are linear
+in the k-sum; build bare perturbations per chunk; turn the assemblies into sums over
+chunks. **Risk**: round-off; never hand a whole host array to a `jit` (XLA computes on
+the host, silently). **Measure**: a `tools/gpu/response_memory.py`, one property per
+process, Si8 at 27/64/125/216 k: SCF only, + dielectric, + one atom's phonon column.
+
+### 3. Forces and stress put the whole k axis on one tape -- priority 2, large
+
+**Done 2026-09-29** (see "Done since"; `forces/chunked.py`).
+
+`energy_at` reads `moved.projectors.vkb` and `state.wavefunctions` whole, and the force
+and stress are single `jit(grad)` calls (`forces/autodiff.py`, `stress/autodiff.py`).
+Force tape: `nk (npwx nkb + npwx nat + nbnd npwx npol) x 16 B`; the stress adds
+`nk npwx (16 ncs + 8 kkbeta)`. `MEMORY-AUDIT.md` §8 records the mechanism (the k dial is
+inert under reverse mode) and declined it when `nk = 1` was the case that bit; memory mode
+targets many-k runs, which reopens it.
+
+**Fix**: generalise `forces/spiral.py`'s `_split_energy_and_gradient`: a forward walk for
+raw `becsum`, `ns` and the smooth density; one `value_and_grad` of the global terms
+(local, Hartree, XC with core, augmentation, one-centre, Hubbard, Ewald, dispersion) at
+the whole sums; a second walk pulling each chunk's `(e_c, b_c, ns_c)` back with cotangent
+`(1, g_b, g_ns)`. The spiral route is the working template and its test is the model.
+**Risk**: round-off, if every k-coupled term goes through the global function.
+
+### 4. Post-SCF consumers move a streamed store to the device whole -- priority 2, medium
+
+**Done 2026-09-29** for the consumers named below (see "Done since"), and the PAW
+orientation torque of the second paragraph (`_streamed_onecenter_torque`: the pairing's
+gradient in the turned `becsum` once, contracted with each chunk's forward derivative;
+1.6e-16 against the whole-set `grad` on a torque of 0.04), and the orientation stepper, which
+now turns a streamed store on the host and hands it to the chunked `becsum` and density
+(spin-orbit PAW nickel, `rotate_moments`, five iterations: 6e-10 Ry between the stores).
+
+`Calculation.density` has no stream branch (`driver.py:4098`) and `stm.py:205`,
+`sfac.py:197` call it with `result.wavefunctions`; `projwfc/projections.py:341-343`,
+`angular_momentum.py:301`, `relax.py:520` (every ultrasoft step), `anisotropy.py:780` do
+the same. On the NiBr2 slab the streamed SCF keeps 12.10 GB in host RAM and one k-point's
+2.0 GB on the card; any of these puts the 12.10 GB back. **Fix**: one helper that routes a
+numpy store through `stream_densities` (which returns `becsum`, `rho`, `tau`, `ns`
+finished), used at those sites; per-chunk loops for the projections and `<L>`.
+
+The in-loop diagnostics do the same (priority 3, narrow): the PAW orientation torque
+differentiates a whole-k `becsum(spin_turned(psi))` (`driver.py:5294-5300`) and the
+orientation stepper turns the whole store on the device. Fix: forward mode per chunk
+against a `d(pairing)/d(becsum)` computed once.
+
+### 5. The Chern number and the orbital magnetization hold the whole mesh -- priority 2, medium
+
+**Done 2026-09-29** (see "Done since"); on by default where the store streams.
+
+`chern_number` diagonalises the whole plane at once (`invariants.py:132`,
+`topology.py:271-294`) and `build_plane_wave_states` builds the whole-k `vkb` for `becp`
+on US/PAW (`states.py:752-775`); the orbital magnetization takes the whole volume mesh
+with the Hamiltonian kept. Bismuthene-soc-small at 12x12: 449 MB of solve output, 374 MB
+of occupied copies, 424 MB more; about 5.0 GB at 24x24. Wilson-loop Z2 already streams.
+**Fix**: diagonalise column by column (`indices=rows`) on one shared sphere and keep two
+columns on the device for the overlaps.
+
+### 6. The per-k basis tables stay whole on the card -- priority 2, large
+
+What memory mode leaves resident per k-point (`driver.py:1919-1955`, `:2440`):
+`npwx x (16 ncs [core columns] + 24 [kg] + 8 [kinetic] + index arrays + 1 [mask]
++ 16 npol nwfcU [DFT+U wfcU] + 24 [kplusg, meta-GGA])` bytes. Measured on Si8: 0.19 MB per
+k-point (22.5 MB of columns and 8.4 MB of `kg` at 216 k). On nbse2 (`ncs = 36`) it is
+6.1 MB per k-point, *more* than the 3.9 MB store that streaming moved off the card; with
+DFT+U, `wfcU` alone is 18.5 MB against a 44.3 MB store on `ni10-ldau`, and it enters
+every Davidson call whole through `HubbardTerm`. Three pieces, in order of cost:
+
 * **Store the projector columns as real** -- priority 2, small. **Done 2026-09-28** for the
   projectors (bit-identical, 93.6 -> 71.1 MB on eight-atom Si at 216 k-points); the atomic
   orbitals' `i^l` is not done. `_species_columns` is
