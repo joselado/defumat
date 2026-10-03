@@ -9834,7 +9834,9 @@ pass at 8 k-points gives 705.2 MB of temporaries for the global step (the `jvp` 
 terms' strain gradient on the 200 Ry dense grid, with the augmentation charge, the local and core
 terms and Ewald all moving with the cell), against 121.3 for the pull-back, 48.5 for the multipliers'
 pass, 48.4 for the field's bare walk and 30 or less for the rest. It is the same term in the whole
-route, so it is a lever of its own, sized by the dense grid and the atoms rather than the mesh.
+route, so it is a lever of its own, sized by the dense grid and the atoms rather than the mesh. (*Taken
+later the same day: with the radial chunk sized from the mesh the call reads 198.4 MB, and 169.3, the SCF's
+own, at 512 values; "The radial transforms' chunk, sized from the mesh" and its curve.*)
 **Located on the CPU**, compile only (`memory_analysis()` of the global step's `jvp` of the strain
 gradient with one term at a time, the same cell at 8 k-points, a 36^3 dense grid; two instruments on two
 backends, so the CPU's figures below and the card's 705.2 MB are not one number measured twice): Ewald 4.3 MB of
@@ -9897,8 +9899,10 @@ with `C_11` = 166.96 and 166.44 GPa at 27 and 64 k-points. What the elastic cons
 strain response grows by 10 MB from 27 to 64 k-points where the response grows by 4; which pass holds
 it, and what the ultrasoft response's 108 MB above its SCF is, were not separated. **Re-measured at
 `30c4074`**, after the radial chunk was sized from the mesh: the elastic constants 126.2 MB at 27
-k-points (126.5 before), the ultrasoft strain response 181.2 (174.8 before), so the chunk did not reach
-either, and both remain unseparated. The piezoelectric
+k-points (126.5 before), the ultrasoft strain response 181.2 (174.8 before), so the 8 MB budget did not
+reach either; the entries "The augmentation chunk under a strain" and the radial chunk's curve further on
+show what smaller chunks do to each (45.5 MB for the elastic constants at 512 values, 115.0 for the strain
+response at a 4096-vector augmentation chunk). The piezoelectric
 tensor's version of the same question was (the previous entry): there it is the global step's second
 strain derivative of the radial transforms.
 
@@ -9967,8 +9971,9 @@ to 1e-6 cm^-1 and the Raman activity of each degenerate multiplet to 1e-7 relati
 28.3 -> 8.7 MB at 27 k-points and 54.1 -> 9.6 at 64, the SCF's own both times, with the frequencies the
 same to four decimals; and slower, 29.2 -> 33.4 s and 46.7 -> 72.3 s, because a cell this small has
 little work per k-point and one k-point a chunk pays its dispatch per chunk -- what `k_batch = 'fit'`,
-the default on a card, amortises. At that default (the whole 64-point mesh in one chunk here) the walked
-spectrum is **2.1 times faster**, 28.5 -> 13.6 s, at 196.5 -> 216.7 MB. The same commit gave
+the default on a card, amortises. At the card's default chunk (the tool read `k_batch = None`, the whole
+axis, on this 12 GB card; a larger card's is its own) the walked spectrum is **2.1 times faster**, 28.5
+-> 13.6 s, at 196.5 -> 216.7 MB. The same commit gave
 the two routes one expression for the second-order energy's per-k terms and the position residual
 (`second_order_band_terms`, `position_residual`); the whole route is bit-identical to the commit before
 on ultrasoft silicon and within 1.4e-14 on 195 on norm-conserving silicon, both arms on the same cores,

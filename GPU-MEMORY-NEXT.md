@@ -67,7 +67,9 @@ identity against the whole-k route on the same states.
    with 24 operations (`review/piezo/phonon_stages.py` on D22, the warm second run): 39.0 MB after the
    SCF, 53.1 after the first iteration's solves (the 24 response densities), 72.9 after the first
    average (the stack in G and its transforms), then a creep of 1 to 5 MB an iteration to 84.7 at the
-   end, which is not located. Per orbit of equivalent atoms, or on the host, is the lever for a large
+   end, which is not located; the probe places it in the `symmetrize_atom_displacement` calls (each
+   iteration's `respond` adds nothing), so the eager `r_to_g`/`g_to_r` around the walked average are the
+   first place to look. Per orbit of equivalent atoms, or on the host, is the lever for a large
    symmetric cell; the creep is the first thing to look at.
 3. **Time**: the ultrasoft bare walks rebuild `newd` and its tangent once per chunk and perturbation
    (the phonon's, the strain's, the third derivative's chunk pass), not separated; and the walked third
