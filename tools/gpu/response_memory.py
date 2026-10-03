@@ -27,7 +27,9 @@ adds ``get_strain_response()``, the six strains' self-consistent response, and
 norm-conserving dataset without symmetry only. ``electrostriction`` adds
 ``get_electrostriction()`` (with the elastic constants on a norm-conserving
 dataset, without them otherwise) and ``raman`` adds ``get_raman_tensors()``, the
-two third derivatives. ``stress`` adds ``get_stress()``, the strain gradient.
+two third derivatives. ``stress`` adds ``get_stress()``, the strain gradient, and
+``spectrum`` ``get_vibrational_spectrum()``, the Raman tensors and the dynamical
+matrix sharing one displacement response.
 
     python3 tools/gpu/response_memory.py benchmarks/si8-ecut20-nosym-k3.in \\
         --grids 3 4 --stages scf epsilon born --k-batch 1 --json out.json
@@ -48,7 +50,7 @@ import sys
 import time
 
 STAGES = ("scf", "epsilon", "born", "phonon", "phonon_q", "piezo", "strain",
-          "elastic", "electrostriction", "raman", "stress")
+          "elastic", "electrostriction", "raman", "stress", "spectrum")
 
 
 def main() -> int:
@@ -140,7 +142,12 @@ def _measure(args, grid: int, stage: str) -> dict:
             "scf_s": round(scf_seconds, 2),
             "energy": float(result.total_energy),
         }
-        if stage == "stress":
+        if stage == "spectrum":
+            start = time.perf_counter()
+            spectrum = calculator.get_vibrational_spectrum()
+            row["response_s"] = round(time.perf_counter() - start, 2)
+            row["frequencies"] = [round(float(f), 4) for f in spectrum.frequencies]
+        elif stage == "stress":
             start = time.perf_counter()
             stress = calculator.get_stress()
             row["response_s"] = round(time.perf_counter() - start, 2)
