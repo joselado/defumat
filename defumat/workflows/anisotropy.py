@@ -1634,10 +1634,13 @@ def _drop_the_last_orientation(previous_used, used, previous_axis, axis) -> None
     and this one did not is the last orientation's own and is dropped; the
     potential's executables are dropped when the axis moved (``clear_cache``
     of that one ``jit``), which leaves this orientation's to be compiled again
-    only if the next one-shot is at the same axis. A functional without a
-    gradient correction never reads the axis, so nothing of it enters the
-    torque's trace and that program, shared by every orientation, stays; with
-    no fixed axis at all (moments not parallel) the potential stays too.
+    only if the next one-shot is at the same axis. On a norm-conserving or
+    ultrasoft dataset under a functional without a gradient correction the
+    grid potential never reads the axis, so the torque's program is the same
+    at every orientation and stays (PAW passes the axis to its one-centre
+    terms as an argument, which the torque's trace may still hold as a
+    constant); with no fixed axis at all (moments not parallel) the potential
+    stays too.
 
     Measured on tetragonal cobalt (``co-tetragonal-anisotropy-soc.in`` at
     ``ecutwfc = 12`` on a 2x2x2 mesh, from ``rotation_from_euler(0.4, 0.9,
@@ -1646,12 +1649,14 @@ def _drop_the_last_orientation(previous_used, used, previous_axis, axis) -> None
     Keeping everything, the two compiles cost 1755 mappings and 115 MB
     resident per one-shot, 55,705 mappings at the 29th, so from this
     workstation's baseline a Triton node's 65,530 end the process during its
-    35th one-shot. ``jax.clear_caches()`` after
-    every one-shot, which this replaces, held the mappings at 910 but dropped
-    the eigensolver and the Hamiltonian's build with them, 79 compilations a
-    one-shot. Dropping only these two compiles 2 a one-shot and holds the
-    mappings at 5703 after the drop and 7453 before it, resident memory
-    growing by 0.9 MB a one-shot.
+    35th one-shot. ``jax.clear_caches()`` after every one-shot, which this
+    replaces, held the mappings at 910 but dropped the eigensolver and the
+    Hamiltonian's build with them, 79 compilations a one-shot. Dropping only
+    these two compiles 2 a one-shot and holds the mappings at 5703 after the
+    drop and 7453 before it, resident memory growing by 0.9 MB a one-shot.
+    The file's own cell (``ecutwfc = 20``, 3x3x2, four steps and the
+    curvature) reads the same: 1749 mappings a one-shot kept, 79 compilations
+    cleared, and 5745 after the drop and 7487 before it with 2.
 
     The root is the static axis, and the fix there is to pass it to the
     potential as an array so that one executable serves every orientation;
