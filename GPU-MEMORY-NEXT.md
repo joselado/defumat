@@ -51,7 +51,14 @@ identity against the whole-k route on the same states.
    U, 427.7 MB at one piece, 169.3 at seven, 353.9 at fourteen, so the outer scan's cost under the
    second derivative grows with its steps: a remat that holds under forward-over-reverse would be the
    structural fix, a per-cell size the stopgap. `PERFORMANCE.md`, "The augmentation chunk under a strain:
-   a trade, measured and withdrawn", has the tables. Any default that trades time is the user's. The probe is `memory_analysis()` per pass
+   a trade, measured and withdrawn", has the tables. Any default that trades time is the user's, and the
+   choice put to the user on 2026-10-03 (Fable's framing) is: keep 8 MB; 1024 values everywhere (60 MB off
+   the elastic constants only, about 1 s on a 75 s run); 512 everywhere (the piezoelectric tensor at the
+   SCF's peak, 13 to 23 per cent on the card's strained calls, and on a CPU no slower: the stress 0.63
+   against 0.69 s and 2.64 against 2.80 on D22); or 512 under memory mode only, which needs
+   the chunk threaded from `Calculation.at_strain` through every radial kernel (`radial_chunk` is read
+   at trace time and cannot see the mode) -- a session's plumbing with a test that the chunk stays
+   invisible in results. The probe is `memory_analysis()` per pass
    (`review/piezo/pass_memory_third.py` on D22 is the shape, with `jax.jit` wrapped in the module whose
    passes are measured) and one term at a time (`global_terms.py`'s shape).
 2. **The per-mode grids with symmetry on** stay on the card, because

@@ -10132,4 +10132,7 @@ being 1261 / 1156 values for Al / As):
 with the stress, `e_14` and `C_11` the same to the printed digits in every column (the 256 column was
 taken with the 4 MB augmentation target, before it was reverted; its AlAs peaks are the SCF's either way).
 At 512 values every strained call on these cells reads its SCF's peak or the strain response's, for 13 to
-25 per cent of those calls' own time on the card; the CPU at 512 is not measured.
+25 per cent of those calls' own time on the card. **On a CPU the smaller chunks cost nothing**: D22's four
+performance cores, the CPU default (speed mode), the median of five warm stresses: `si2-us-1k` 0.692 /
+0.670 / 0.627 s and `si8-us-1k` 2.799 / 2.635 / 2.636 s at the default, 1024 and 512 values, the stress
+the same to 3e-17. So the trade is the card's alone.
