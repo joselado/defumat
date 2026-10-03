@@ -9336,6 +9336,17 @@ identically. A warm second SCF, by contrast, compiles nothing on any of six kind
 ultrasoft, PAW, noncollinear, a magnetic metal, DFT+U), nor do a second band structure, force, stress or
 DOS call: `jax_log_compiles` on the `jax` logger, checked to see 133 compilations in the cold run.
 
+**Corrected 2026-10-03: that held only at one k-point, or with the whole k axis in one batch.** With more
+than one k-point at one a step (the CPU default), three per-iteration sites were eager loops over a fresh
+closure and compiled every iteration: the collinear and spinor `becsum` (`scf/density.py`), the DFT+U
+occupation matrix (`hubbard/occupations.py`) and the tetrahedron Fermi level's bisection
+(`scf/tetrahedra.py`). Measured over a warm SCF, old against new: ultrasoft `si2-us.in` (2 k-points) 9 -> 0
+compiles and +198 -> +0 mappings, `ni-ldau-ortho.in` (10 k-points, DFT+U, `nspin = 2`) 40 -> 0, the spinor
+`ni-noncol-111.in` 14 -> 0, the ultrasoft spiral 10 -> 0, `al-tetrahedra.in` 6 -> 0, every array
+byte-identical (`a7bb0b6`, `bd611bb`, `bffddf4`; `OPEN.md` Part XXIII item 8). The six cells tried here had
+one k-point or ran the whole axis at once, so the check could not have seen it; the trap is in
+`CLAUDE.md`'s list, and the test that would have is a warm SCF at `k_batch = 1` with `nk > 1`.
+
 ## The response stack compiled its k loops again at every iteration (CPU, 2026-10-02)
 
 **The number to carry: a dielectric tensor of zincblende AlAs (`tests/data/qe/alas-berry.in`) added
