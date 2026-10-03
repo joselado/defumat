@@ -599,6 +599,11 @@ def symmetrize_magnetization(
 #: ``nsym`` of them, and so do its numbers to the last bit; above it the walk
 #: is a ``lax.scan`` whose body is one operation's term, linear in the field, so
 #: a derivative through it keeps no field-sized residual per step.
+#:
+#: Set on an RTX A2000 and a 30 GB workstation. A card with memory to spare and a
+#: real float64 rate may want it larger, for one kernel where the walk is
+#: ``nsym``: ``DEFUMAT_GATHER_BUDGET`` sets it in MB, read when an average is
+#: first traced (``0`` walks always).
 GATHER_BUDGET_BYTES = 64 * 1024**2
 
 
@@ -614,7 +619,11 @@ def _walks_operations(nsym: int, field, copies: int = 2) -> bool:
     G-vectors) stayed batched at 42.5 MB of gather and took the card from 43.7
     to 215.7 MB.
     """
-    return copies * nsym * int(np.prod(np.shape(field))) * 16 > GATHER_BUDGET_BYTES
+    import os
+
+    value = os.environ.get("DEFUMAT_GATHER_BUDGET")
+    budget = GATHER_BUDGET_BYTES if not value else float(value) * 1024**2
+    return copies * nsym * int(np.prod(np.shape(field))) * 16 > budget
 
 
 def _operation_mean(term, operations, shape, dtype):

@@ -60,6 +60,10 @@ CHUNK = 4096
 #: 1024 values 130.1, 102.8 and 293.7; at 256 values 128.0, 102.8 and 185.6. The
 #: local potential's ``jvp`` of the gradient 457.1, 135.7 and 39.6
 #: (``PERFORMANCE.md``, "The radial transforms' chunk, sized from the mesh").
+#:
+#: Chosen on an RTX A2000 (5 to 8 per cent of a strained call's time there) and a
+#: CPU (none). A float64 card may find the smaller transforms' launches cost more
+#: than that; ``DEFUMAT_RADIAL_CHUNK`` is the dial.
 RADIAL_CHUNK_BYTES = 8 * 1024**2
 
 #: The fewest q values a chunk takes, whatever the mesh.

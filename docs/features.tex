@@ -7007,7 +7007,9 @@ displacement average acts on all of them together. That average, like every
 symmetrisation here, walks the group's operations one at a time once holding
 them all at once would pass 64~MB, rather than gathering \code{nsym} copies of
 the field: on eight-atom silicon with 24 operations the $\Gamma$ phonon of every
-atom reads 89~MB on a card where it read 503, against an SCF of 39. \textbf{So do the
+atom reads 89~MB on a card where it read 503, against an SCF of 39.
+\code{DEFUMAT\_GATHER\_BUDGET} sets that threshold in MB (\code{0} walks
+always); the result moves only in its last digits either way. \textbf{So do the
 piezoelectric tensor, the strain response and the elastic constants}: the
 piezoelectric tensor's derivative of the stress along the field's response is
 assembled a block of $k$-points at a time from the field's stores in host

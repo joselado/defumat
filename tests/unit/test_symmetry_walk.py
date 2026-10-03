@@ -76,3 +76,11 @@ def test_the_budget_decides_by_the_batched_working_set():
     strain = np.zeros((3, 3, 12893))
     assert not symmetry._walks_operations(24, strain, copies=1)
     assert symmetry._walks_operations(24, strain, copies=4)
+
+
+def test_the_budget_has_a_dial(monkeypatch):
+    field = np.zeros((3, 1000))
+    monkeypatch.setenv("DEFUMAT_GATHER_BUDGET", "0")
+    assert symmetry._walks_operations(48, field)
+    monkeypatch.setenv("DEFUMAT_GATHER_BUDGET", "100000")
+    assert not symmetry._walks_operations(48, np.zeros((8, 3, 30000)))
