@@ -36,6 +36,7 @@ import functools
 import math
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -46,7 +47,85 @@ from defumat.basis.fft import (
 from defumat.batching import map_bands
 from defumat.pseudo.projectors import Projectors
 
-__all__ = ["Hamiltonian"]
+__all__ = ["Hamiltonian", "to_planes", "from_planes", "planes_inner",
+           "planes_force_real_g0", "twice"]
+
+
+# --- half-sphere states as real planes -----------------------------------------
+#
+# ``regterg`` and ``calbec_gamma`` treat a gamma-point state as a *real* array of
+# length ``2 npw`` and contract it with DGEMM, two real multiply-adds an element,
+# where a complex product spends four on a result whose imaginary half is
+# discarded (``regterg.f90:204``, ``:318-338``, ``:403-428``, ``:511``;
+# ``becmod.f90:236-241``; ``add_vuspsi.f90:115``). XLA has no free view of a
+# complex buffer as reals -- ``bitcast_convert_type`` refuses complex operands and
+# ``ndarray.view`` lowers to two scatters, a copy -- so the gamma eigensolver
+# carries its states in this layout for the whole solve instead: the real plane
+# in the first ``npwx`` entries and the imaginary plane in the next ``npwx``.
+# ``G = 0`` is then entries ``0`` and ``npwx``. Interleaving the two would put the
+# contraction on two axes and cost a transpose before every product.
+
+
+def to_planes(states: jnp.ndarray) -> jnp.ndarray:
+    """``(..., n)`` complex to ``(..., 2n)`` real: the real plane, then the imaginary one."""
+    return jnp.concatenate([states.real, states.imag], axis=-1)
+
+
+def from_planes(planes: jnp.ndarray) -> jnp.ndarray:
+    """The inverse of :func:`to_planes`: ``(..., 2n)`` real to ``(..., n)`` complex."""
+    n = planes.shape[-1] // 2
+    return jax.lax.complex(planes[..., :n], planes[..., n:])
+
+
+def twice(values: jnp.ndarray) -> jnp.ndarray:
+    """A real ``(..., n)`` quantity laid out over both planes, ``(..., 2n)``.
+
+    A mask, a kinetic energy or a preconditioner's diagonal multiplies the real
+    and the imaginary part of a coefficient alike.
+    """
+    return jnp.concatenate([values, values], axis=-1)
+
+
+def planes_zero_term(a: jnp.ndarray, b: jnp.ndarray) -> jnp.ndarray:
+    """``Re(conj(a_0) b_0)`` on planes, ``a_0 b_0`` summed over both planes, as an outer form.
+
+    ``a`` is ``(..., 2n)`` and ``b`` ``(m, 2n)``; the result is ``(..., m)``.
+    **Both planes, where ``regterg``'s ``MYDGER`` subtracts the real one alone**
+    and relies on ``Im psi(1) = 0`` (``regterg.f90:174``, ``:375``). The two
+    agree exactly while :func:`planes_force_real_g0` holds, which it does for
+    every vector the solver stores; the form kept is the one the complex code
+    applied, ``Re(conj(a_0) b_0)``, so that nothing but the representation moves.
+    """
+    n = a.shape[-1] // 2
+    return a[..., :1] * b[:, :1].T + a[..., n:n + 1] * b[:, n:n + 1].T
+
+
+def planes_inner(rows: jnp.ndarray, columns: jnp.ndarray) -> jnp.ndarray:
+    """``<rows_i|columns_j>`` over a half sphere held as planes, ``(..., m)`` real.
+
+    ``2 sum_stored - (G = 0)``, the rule :func:`~defumat.basis.fft.gamma_inner`
+    applies to complex coefficients, written as one real product over ``2 npwx``
+    -- ``regterg``'s ``DGEMM('T', 'N', ..., npw2, 2.D0, ...)`` followed by its
+    ``MYDGER(..., -1.D0, ...)``.
+    """
+    return 2.0 * (rows @ columns.T) - planes_zero_term(rows, columns)
+
+
+def planes_norm2(planes: jnp.ndarray) -> jnp.ndarray:
+    """``<x|x>`` per row of a planes block, ``(..., 1)``: ``regterg.f90:360-361``."""
+    n = planes.shape[-1] // 2
+    zero = planes[..., :1] * planes[..., :1] + planes[..., n:n + 1] * planes[..., n:n + 1]
+    return 2.0 * jnp.sum(planes * planes, axis=-1, keepdims=True) - zero
+
+
+def planes_force_real_g0(planes: jnp.ndarray) -> jnp.ndarray:
+    """:func:`~defumat.basis.fft.force_real_g0` on planes: ``Im c(0)``, entry ``npwx``, set to zero.
+
+    A select rather than a scatter, for the reason ``force_real_g0`` gives: it
+    sits inside an elementwise chain that a scatter would split.
+    """
+    n = planes.shape[-1] // 2
+    return jnp.where(jnp.arange(planes.shape[-1]) == n, 0.0, planes)
 
 
 def smallest_sphere(npw) -> int | None:
@@ -377,6 +456,125 @@ class Hamiltonian(eqx.Module):
         becp = self._becp(psi, vkb)
         return (self._applied(psi, ik, becp), becp,
                 becp @ self.projectors.qq.astype(vkb.dtype).T)
+
+    # --- the gamma eigensolver's operator, on real planes -------------------------
+    #
+    # The same three products and the same transform as :meth:`apply_projected`,
+    # :meth:`s_projections` and :meth:`s_correction`, for a half-sphere block held
+    # as real planes (:func:`to_planes`). Every plane-wave contraction here is a
+    # real product over ``2 npwx``; the complex block exists only per band chunk,
+    # inside :meth:`_local_planes`, where the transform needs it.
+
+    def _projector_planes(self, ik: int) -> jnp.ndarray:
+        """``vkb`` as ``(2 npwx, nkb)`` real planes, ``calbec_gamma``'s view of ``beta``.
+
+        **A copy of one ``vkb`` per call** where the projectors are stored, which
+        they are on a CPU by default: there is no free real view of a complex
+        buffer, and the store itself is ``pseudo/projectors.py``'s. Where they
+        are rebuilt per call the planes are the build's own output.
+        """
+        vkb = self.projectors.at_k(ik)
+        return jnp.concatenate([vkb.real, vkb.imag], axis=0)
+
+    def _becp_planes(self, planes: jnp.ndarray, vkb: jnp.ndarray) -> jnp.ndarray:
+        """``calbec_gamma`` on planes: ``2 psi^T beta - (G = 0)``, real ``(..., nkb)``.
+
+        ``becmod.f90:236-241``: ``MYDGEMM('C', 'N', nkb, m, 2*npw, 2.0_DP, ...)``
+        and ``MYDGER(..., -1.0_DP, beta, ..., psi, ...)``. The ``G = 0`` term is
+        :meth:`_becp`'s, ``Re(conj(beta_0) psi_0)``, over both planes.
+        """
+        n = planes.shape[-1] // 2
+        product = jnp.einsum("...g,gk->...k", planes, vkb)
+        zero = planes[..., :1] * vkb[0] + planes[..., n:n + 1] * vkb[n]
+        return 2.0 * product - zero
+
+    def _real_coefficients(self, matrix: jnp.ndarray, dtype) -> jnp.ndarray:
+        """A projector-space matrix in the planes' real dtype.
+
+        ``D_ij`` and ``q_ij`` of a collinear run are real; the complex dtype the
+        complex path casts them to carries a zero imaginary part.
+        """
+        return jnp.real(matrix).astype(dtype)
+
+    def _nonlocal_planes(self, planes: jnp.ndarray, vkb: jnp.ndarray,
+                         becp: jnp.ndarray) -> jnp.ndarray:
+        """``sum_ij |beta_i> D_ij <beta_j|psi>`` on planes: ``add_vuspsi_gamma``.
+
+        ``add_vuspsi.f90:115``: ``DGEMM('N', 'N', 2*n, m, nkb, 1.D0, vkb, ...)``,
+        the expansion in the stored basis, which takes no factor of two.
+        """
+        dij = self._real_coefficients(self.coefficients, planes.dtype)
+        return jnp.einsum("gk,...k->...g", vkb, becp @ dij.T)
+
+    def _local_planes(self, planes: jnp.ndarray, ik: int) -> jnp.ndarray:
+        """:meth:`_local`'s gamma branch on planes, the complex block rebuilt per band chunk.
+
+        The coefficients are reassembled and split again *inside* the body
+        :func:`~defumat.batching.map_bands` walks, so the only complex block is
+        the one chunk in flight. Reassembling the whole block before the walk
+        would materialise the ``(m, npwx)`` complex array the planes exist to
+        replace. The transform is the one :meth:`_local` applies, so each band's
+        product is the same number.
+        """
+        n = self.grid[0] * self.grid[1] * self.grid[2]
+        minus = self.fft_index_minus[ik]
+
+        def block_gamma(states):
+            field = g_to_r_gamma(from_planes(states), self.fft_index[ik], minus, self.grid)
+            box = jnp.fft.fftn(field * self.potential, axes=(-3, -2, -1)) / n
+            return to_planes(gather_from_box(box, self.fft_index[ik]))
+
+        return map_bands(block_gamma, planes, batch=self.band_batch)
+
+    def _applied_planes(self, planes: jnp.ndarray, ik: int, vkb, becp) -> jnp.ndarray:
+        """:meth:`_applied` on a masked planes block, in the same order of terms."""
+        result = twice(self.kinetic[ik]) * planes
+        result = result + self._local_planes(planes, ik)
+        if self.projectors.nkb:
+            result = result + self._nonlocal_planes(planes, vkb, becp)
+        if self.hubbard is not None:
+            # Not reached: a Hubbard run does not consume the half sphere
+            # (``gamma_storage_is_consumable``). A round trip keeps it correct.
+            result = result + to_planes(self.hubbard.apply(from_planes(planes), ik))
+        return jnp.where(twice(self.mask[ik]), result, 0.0)
+
+    def apply_projected_planes(self, planes: jnp.ndarray, ik: int):
+        """:meth:`apply_projected` for a half-sphere block held as real planes.
+
+        ``(H|psi>, <beta|psi>, q <beta|psi>)``, all real: ``H|psi>`` as planes
+        ``(..., 2 npwx)`` and the projections as ``(..., nkb)``, or zero-width
+        without an augmentation charge, as :meth:`apply_projected` returns them.
+        One ``calbec`` serves the nonlocal term and the pair.
+        """
+        if not self.gamma_only:
+            raise ValueError("planes are the half-sphere layout; this operator "
+                             "stores the whole sphere")
+        planes = jnp.where(twice(self.mask[ik]), planes, 0.0)
+        if not self.projectors.nkb:
+            return (self._applied_planes(planes, ik, None, None),
+                    *self.s_projections_planes(planes, ik))
+        vkb = self._projector_planes(ik)
+        becp = self._becp_planes(planes, vkb)
+        applied = self._applied_planes(planes, ik, vkb, becp)
+        if not self.has_overlap:
+            return (applied, *self.s_projections_planes(planes, ik))
+        qq = self._real_coefficients(self.projectors.qq, planes.dtype)
+        return applied, becp, becp @ qq.T
+
+    def s_projections_planes(self, planes: jnp.ndarray, ik: int):
+        """:meth:`s_projections` for a planes block: real, zero-width without ``S``."""
+        if not self.has_overlap:
+            empty = jnp.zeros(planes.shape[:-1] + (0,), planes.dtype)
+            return empty, empty
+        becp = self._becp_planes(planes, self._projector_planes(ik))
+        qq = self._real_coefficients(self.projectors.qq, planes.dtype)
+        return becp, becp @ qq.T
+
+    def s_correction_planes(self, becq: jnp.ndarray, ik: int) -> jnp.ndarray:
+        """:meth:`s_correction` on planes: ``(S - 1)|psi>`` from the stored ``q <beta|psi>``."""
+        if not self.has_overlap:
+            return jnp.zeros(becq.shape[:-1] + (2 * self.ndim,), dtype=becq.dtype)
+        return becq @ self._projector_planes(ik).T
 
     def _applied(self, psi: jnp.ndarray, ik: int, becp=None) -> jnp.ndarray:
         """``H|psi>`` of an already masked block; ``becp`` is its ``<beta|psi>`` if known."""
