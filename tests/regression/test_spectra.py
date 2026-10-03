@@ -592,6 +592,27 @@ def test_reusing_the_displacement_response_gives_the_same_dynamical_matrix():
     assert np.abs(fresh.frequencies - pieces_phonons.frequencies).max() < 1e-8
 
 
+def test_the_spectrum_of_an_ultrasoft_dataset_is_its_own_dynamical_matrix():
+    """The reuse above on the dataset where it can be wrong.
+
+    The test above runs on a norm-conserving cell, where the two things an
+    ultrasoft assembly needs from a handed-in response -- the bare
+    perturbations and the converged ``extras``, from which it rebuilds the
+    multipliers' response -- are identically zero, so it could not see them
+    missing. Here they were: the spectrum crashed for want of ``becsum``, and
+    with it put back, gave ultrasoft silicon's optical mode at 630.8 cm^-1
+    against 590.6 from the dynamical matrix solved directly (``da8f6cc``).
+    """
+    _, _, calculation, result = _converged("si-us-nosym")
+    spectrum = vibrational_spectrum(calculation, result)
+    eigenvalues, psi = refined_states(calculation, result)
+    fresh = dynamical_matrix(calculation, psi, eigenvalues,
+                             jnp.asarray(result.density), result.becsum)
+    assert np.abs(np.sort(spectrum.frequencies)
+                  - np.sort(fresh.frequencies)).max() < 1e-6
+    assert np.sort(fresh.frequencies)[-1] > 500.0
+
+
 def test_a_degenerate_multiplet_is_reported_as_one():
     """``by_manifold`` groups the triplets, which is the comparable form."""
     _, _, _, spectrum = _pieces("si-epsilon-unshifted")
