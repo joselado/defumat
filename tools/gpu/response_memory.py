@@ -12,7 +12,12 @@ runs the ground state alone, ``epsilon`` adds
 the Born charges. Each point runs **twice**, in two fresh processes, and the
 second is reported: the first warms the kernel cache, and a cache miss costs
 more device memory on a card (``CLAUDE.md``, "A memory figure must say what the
-cache held").
+cache held"). ``phonon`` adds ``get_phonons(atoms=...)``, the displacements of
+the atoms ``--phonon-atoms`` names (the first by default), which is the
+dynamical matrix's ``3 nat`` perturbations cut to three; a subset needs a
+``nosym`` input. ``phonon_q`` adds ``get_phonons_at_q(q=...)`` at the crystal
+wavevector ``--q`` (``(1/2, 0, 0)`` by default), every atom, which needs a
+``nosym`` norm-conserving input with no core charge.
 
     python3 tools/gpu/response_memory.py benchmarks/si8-ecut20-nosym-k3.in \\
         --grids 3 4 --stages scf epsilon born --k-batch 1 --json out.json
@@ -32,7 +37,7 @@ import subprocess
 import sys
 import time
 
-STAGES = ("scf", "epsilon", "born", "phonon")
+STAGES = ("scf", "epsilon", "born", "phonon", "phonon_q")
 
 
 def main() -> int:
@@ -52,6 +57,8 @@ def main() -> int:
                         help="fresh processes per point; the last is reported")
     parser.add_argument("--phonon-atoms", type=int, nargs="+", default=[0],
                         help="the atoms whose displacements the phonon stage solves")
+    parser.add_argument("--q", type=float, nargs=3, default=[0.5, 0.0, 0.0],
+                        help="the phonon_q stage's wavevector, crystal coordinates")
     parser.add_argument("--json", default=None)
     parser.add_argument("--point", default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -72,7 +79,8 @@ def main() -> int:
                      "--k-batch", str(args.k_batch),
                      "--memory-mode", args.memory_mode,
                      "--wfc-store", args.wfc_store,
-                     "--phonon-atoms", *map(str, args.phonon_atoms)],
+                     "--phonon-atoms", *map(str, args.phonon_atoms),
+                     "--q", *map(str, args.q)],
                     capture_output=True, text=True,
                 )
                 line = [l for l in out.stdout.splitlines() if l.startswith("__POINT__")]
@@ -121,7 +129,14 @@ def _measure(args, grid: int, stage: str) -> dict:
             "scf_s": round(scf_seconds, 2),
             "energy": float(result.total_energy),
         }
-        if stage == "phonon":
+        if stage == "phonon_q":
+            start = time.perf_counter()
+            phonons = calculator.get_phonons_at_q(q=tuple(args.q))
+            row["response_s"] = round(time.perf_counter() - start, 2)
+            row["frequencies"] = [round(float(f), 6) for f in phonons.frequencies]
+            row["d00_xx"] = round(float(abs(phonons.matrix[0, 0, 0, 0])), 10)
+            row["average_iterations"] = round(float(phonons.average_iterations), 3)
+        elif stage == "phonon":
             start = time.perf_counter()
             phonons = calculator.get_phonons(atoms=tuple(args.phonon_atoms))
             row["response_s"] = round(time.perf_counter() - start, 2)
