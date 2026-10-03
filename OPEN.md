@@ -7136,6 +7136,8 @@ smaller than the mesh: `get_optical_conductivity()` and `get_absorption()`, one 
 
 ### 25. The streamed store crosses the bus through a fancy-index copy at every pass **[confirmed in part: the copy is real, the diagnosis is not]**
 
+**The bit-identical half done 2026-10-03, `c546917`.** Every chunk that is a run of rows crosses as a view of the store (`streaming.rows_to_device`, also behind `forces/chunked._rows_of`), the padded last chunk keeps its index, and the write-backs go by slice. Host copies handed to `device_put`, before and after: 27 -> 9 a pass on silicon at `k_batch = 3` over 8 k-points, 96 -> 32 on the LSDA chain's solve, 12 -> 4 a gradient, all to 0 under two pools at `k_batch = 1`; the write side was already copy-free. Bit-identical serially and per rank under pools. **What it found**: in jax 0.11 on a CPU, `device_put` of an aligned contiguous array is zero-copy whatever `may_alias` says, so a view can be the store's own memory, a donated aliased block is copied by PjRt rather than written through, and the safety rests on one rule now in `_to_device`'s docstring: a host store's rows are written only with the output of the computation that read them (checked at every write in the walked response modules). At `nspin = 2` the density read stacks two channel views on the device, one two-channel block more of device transient than before, not measured on a card. The pinned buffer and the fused density are not done.
+
 Sites: `scf/streaming.py:65-67`, `:161-184`, `:284-297`; `forces/chunked.py:152-172`.
 
 Every pass that reads the store picks a chunk with an integer index array (`array[spin, positions]`
@@ -7169,6 +7171,8 @@ view against a pinned buffer at the si64 chunk's size. Then `DEFUMAT_WFC_STORE=s
 equal.
 
 ### 26. A pooled iteration moves the density twice in real space, the second time on the dense grid as an all-reduce of zeros
+
+**Part done 2026-10-03, `d19a211`, bit-identical per rank at two and three pools**: `Pools.layout` computes every pool's rows locally and `gather_k` makes one byte-packed all-gather of the eigenvalues, step counts and unsettled counts, so a pooled iteration makes 7 collectives where it made 15 (all-gathers 9 -> 1). **The all-reduce pack is not bit-identical beyond two pools**: on three processes gloo's CPU all-reduce adds an element in an order that depends on its position in the buffer (1839 of 25140 sums moved in the last bit), so it was not done; at two pools it would be exact. The G-space payload is not done.
 
 Sites: `parallel.py:264-292`, `:317-363`; `scf/streaming.py:298-300`; `scf/driver.py:4751-4759`,
 `:7073`, `:7223-7225`, `:7381`, `:7477`, `:7737-7742`; `basis/interpolate.py:56-72`.
