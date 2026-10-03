@@ -68,12 +68,19 @@ def _refined(case: str, k_batch: int):
         return calculation, result, eigenvalues, psi
 
 
+#: The CG held at a fixed threshold, as it was before 2026-10-03, so that the two
+#: routes differ only by the order of their sums: at the scheduled default they
+#: still stop at the same pass but a band's CG can stop a step apart near the looser
+#: threshold, which on D22 read 3.1e-11 on a strain `dpsi` of scale 1.
+ROUTE = {"threshold": 1.0e-12}
+
+
 @lru_cache(maxsize=2)
 def _response(case, k_batch, walked: bool):
     calculation, result, eigenvalues, psi = _refined(case, k_batch)
     return strain_response(calculation, np.asarray(psi) if walked else psi,
                            eigenvalues, jnp.asarray(result.density),
-                           result.becsum)
+                           result.becsum, **ROUTE)
 
 
 def _close(a, b, what):

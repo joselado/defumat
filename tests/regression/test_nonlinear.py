@@ -89,6 +89,17 @@ def _drop_compiled_code():
     jax.clear_caches()
 
 
+#: What the identities in this file need: the convergence they were measured at
+#: before 2026-10-03, when ``tr2`` became ``ph.x``'s (a raw ``sum(dV^2)`` of 1e-14
+#: is about 1e-24 in those units on these grids) and the CG threshold became
+#: scheduled. At the defaults the responses stop where ``ph.x`` would and the
+#: identities hold only to that level: the zincblende form of the Raman tensors to
+#: 5.7e-7 relative, the incomplete field derivative's symmetry checks to 1.6e-5,
+#: the wedge against the closed grid to 1.3e-5 relative and its sum rule to 6.6e-4
+#: relative (D22).
+IDENTITY = {"tr2": 1.0e-24, "threshold": 1.0e-12}
+
+
 @lru_cache(maxsize=None)
 def _converged(case: str):
     system = build_system(read_pw_input(CASES / f"{case}.in"))
@@ -104,7 +115,7 @@ def _converged(case: str):
 @lru_cache(maxsize=None)
 def _raman(case: str):
     _, _, calculation, result = _converged(case)
-    return raman_tensors(calculation, result)
+    return raman_tensors(calculation, result, **IDENTITY)
 
 
 @lru_cache(maxsize=None)
@@ -115,7 +126,7 @@ def _first_order(case: str):
     density = jnp.asarray(result.density)
     field = dielectric_tensor(
         calculation, psi, eigenvalues, density,
-        born_charges=False, keep_internals=True,
+        born_charges=False, keep_internals=True, **IDENTITY,
     )
     internals = field.internals
     solver = internals["solver"]
@@ -151,7 +162,7 @@ def _epsilon_displaced(case: str, atom: int, cart: int, step: float):
     # from it. Harmless for the norm-conserving cases, where it is ``()``.
     tensor = dielectric_tensor(
         moved, psi, eigenvalues, jnp.asarray(result.density), result.becsum,
-        born_charges=False,
+        born_charges=False, **IDENTITY,
     )
     return np.asarray(tensor.epsilon)
 
@@ -248,7 +259,7 @@ def test_the_raman_tensor_matches_a_finite_difference_with_a_moving_overlap(case
     move by a single digit.
     """
     _, _, calculation, result = _converged(case)
-    tensors = raman_tensors(calculation, result)
+    tensors = raman_tensors(calculation, result, **IDENTITY)
     coarse = (_epsilon_displaced(case, 0, 0, FD_STEP)
               - _epsilon_displaced(case, 0, 0, -FD_STEP)) / (2 * FD_STEP)
     # Between the two step sizes as well as between tests: the four geometries

@@ -69,21 +69,31 @@ def _converged(case: str, k_batch: int):
         return calculator.calculation, calculator.get_scf()
 
 
+#: The CG held at a fixed threshold, as it was before 2026-10-03, so that the two
+#: routes differ only by the order of their sums: at the scheduled default they
+#: still stop at the same pass but a band's CG can stop a step apart near the looser
+#: threshold, which on D22 read 1.5e-6 relative on the electrostriction and the Raman tensors and 3.5e-6 on a
+#: vibrational spectrum's activities.
+ROUTE = {"threshold": 1.0e-12}
+
+
 def _strain_derivatives(case, k_batch):
     calculation, result = _converged(case, k_batch)
     eigenvalues, psi = refined_states(calculation, result)
     density = jnp.asarray(result.density)
-    strain = strain_response(calculation, psi, eigenvalues, density, result.becsum)
+    strain = strain_response(calculation, psi, eigenvalues, density, result.becsum,
+                             **ROUTE)
 
     whole_field = dielectric_tensor(calculation, psi, eigenvalues, density,
                                     result.becsum, born_charges=False,
-                                    keep_internals=True)
+                                    keep_internals=True, **ROUTE)
     _, solver, _, b, u, stored = field_blocks(whole_field)
     whole = susceptibility_strain_derivative(calculation, solver, density, b, u,
                                              strain, stored=stored)
 
     walked_field = dielectric_tensor(calculation, np.asarray(psi), eigenvalues,
                                      density, result.becsum, born_charges=False,
+                                     **ROUTE,
                                      keep_internals=True, streamed_internals=True)
     tangents = [(strain_tangent(k, l), strain.dpsi[k, l],
                  None if strain.ort is None else strain.ort[k, l],
@@ -109,9 +119,9 @@ def test_the_walked_electrostriction_is_the_whole_route():
     """End to end: the route is chosen by the store, and the two
     re-diagonalisations agree only to their threshold."""
     calculation, result = _converged(*CASES[0])
-    whole = electrostriction(calculation, result)
+    whole = electrostriction(calculation, result, **ROUTE)
     hosted = dataclasses.replace(result, wavefunctions=np.asarray(result.wavefunctions))
-    walked = electrostriction(calculation, hosted)
+    walked = electrostriction(calculation, hosted, **ROUTE)
     scale = float(np.abs(whole.depsilon_dstrain).max())
     assert float(np.abs(walked.depsilon_dstrain - whole.depsilon_dstrain).max()) < 1e-7 * scale
     np.testing.assert_allclose(walked.elastic.voigt, whole.elastic.voigt, rtol=0,
@@ -123,9 +133,9 @@ def test_the_walked_electrostriction_is_the_whole_route():
                           ("si-paw-nosym", 3)])
 def test_the_walked_raman_tensors_are_the_whole_route(case, k_batch):
     calculation, result = _converged(case, k_batch)
-    whole = raman_tensors(calculation, result)
+    whole = raman_tensors(calculation, result, **ROUTE)
     hosted = dataclasses.replace(result, wavefunctions=np.asarray(result.wavefunctions))
-    walked = raman_tensors(calculation, hosted)
+    walked = raman_tensors(calculation, hosted, **ROUTE)
     scale = float(np.abs(whole.raman).max())
     assert scale > 1e-2, "a tensor of zeros agreeing with another"
     assert float(np.abs(walked.raman - whole.raman).max()) < 1e-7 * scale
@@ -148,9 +158,9 @@ def _multiplet_sums(frequencies, values, tolerance=1e-3):
 @pytest.mark.parametrize("case, k_batch", [("si-us-nosym", 3)])
 def test_the_walked_vibrational_spectrum_is_the_whole_route(case, k_batch):
     calculation, result = _converged(case, k_batch)
-    whole = vibrational_spectrum(calculation, result)
+    whole = vibrational_spectrum(calculation, result, **ROUTE)
     hosted = dataclasses.replace(result, wavefunctions=np.asarray(result.wavefunctions))
-    walked = vibrational_spectrum(calculation, hosted)
+    walked = vibrational_spectrum(calculation, hosted, **ROUTE)
     np.testing.assert_allclose(np.sort(walked.frequencies),
                                np.sort(whole.frequencies), rtol=0, atol=1e-6)
     _, whole_sums = _multiplet_sums(whole.frequencies, whole.raman_activity)

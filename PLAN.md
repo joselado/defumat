@@ -23459,3 +23459,71 @@ to 1.20x a run, and memory mode 1.97x speed mode at 64 atoms, which is the new o
 "The stall check on a data-centre card"). Before that, all of it on a float64 card, which `tools/gpu/stall-check.sbatch`
 measures and which needs a submission. Record: `PERFORMANCE.md`, "A k-chunk sized to the card" and
 "The band side in single precision"; guide: `docs/features.tex`, the batching section.
+
+### P127 -- The response converges where `ph.x`'s does: `ph.x`'s `dr2`, its CG schedule and a warm start. ✅ DONE for the field, the phonon at `Gamma` and at `q`, and the strain; the default `tr2` on a vacuum cell is open (below), and the timings against `ph.x` are owed.
+
+**What was wrong.** The four self-consistent response loops (`response/efield.py`, `phonon.py`,
+`strain.py`, `phononq.py`) stopped on the raw `sum((induced - dvscf)**2)` over the grid, against
+`tr2 = 1e-14`, and printed it under `ph.x`'s label. `ph.x`'s `|ddv_scf|^2` is that sum divided by
+`ndimtot^2`, the square of the vector's length in reals (`LR_Modules/mix_pot.f90:83`), tested against
+`npert tr2 / npol` and printed divided by `npert` (`dfpt_kernels.f90:434-439`, `:519-523`). The two are
+eleven decades apart on the AlAs spinor cell and ten on silicon, which is the whole of the factor of two
+in passes `PERFORMANCE.md` P98 had put on the mixer: on `si-epsilon` the raw history divided by
+`ndimtot^2 npert` reproduces `ph.x`'s four first passes times a constant 2.00, the direction convention
+(`ph.x` perturbs along `at(:, ipol)`, of length `1/sqrt(2)` on fcc; this code along Cartesian axes), and
+under `ph.x`'s test the run stops at pass 5 where `ph.x` does instead of 8. The CG threshold was fixed
+(1e-12, and 1e-14 at `q`) where `dfpt_kernels.f90:277-281` schedules `1e-2` and then
+`min(0.1 sqrt(dr2), 1e-2)`, and every solve started from zero where `ph.x` reads the previous pass's
+`dpsi` (`response_kernels.f90:240-251`). The q-phonon's test was `max |dV|^2`, about five decades tighter.
+
+**What is here now**, each piece reviewed by a fable subagent against the code and the Fortran before it
+was written (it found the `alat^2` claim false, the plan's joint test wrong for the phonon, and two
+compile traps in the plumbing):
+
+- `response/mixing.py:ddv_scf`, `ph.x`'s quantity written once. The field tests its three directions
+  together, as `solve_e` does; the phonon, the phonon at `q` and the strain test the **largest
+  single-perturbation** value, which is `ph.x`'s test for a one-dimensional representation and never
+  looser than its test for a larger one (a joint test over `3 nat` modes would loosen the per-mode one by
+  `(3 nat)^2`); the strain over its six independent components. PAW's one-centre block is in the sum and
+  the count, as `dbecsum` is in `ph.x`'s. **Tested before mixing, and the input returned on convergence**,
+  as `mix_potential` returns it (`mix_pot.f90:85-113`), so `dvscf`, `dpsi` and the one-centre potential
+  leave the loop consistent with each other; the loops used to return one Anderson step past what `dpsi`
+  was solved at.
+- `sternheimer.py:pass_threshold`, the schedule, used when an entry point is given `threshold=None` (the
+  default); a number holds the CG there on every pass, as before. The bare solves keep their fixed
+  threshold. The threshold and the start reach the compiled solve as arrays (`SternheimerSolver.solve`'s
+  `start` and `threshold`, and `scalars_at` on the walked routes), so a schedule is one program: a Python
+  float closed over is printed into `defumat.eager`'s key and would compile one per value.
+- Each solve starts from the previous pass's `dpsi`, zeros on the first, on the whole-k and walked routes
+  alike (one more chunk uploaded per solve on the walked ones).
+- Three smaller ones in the same loops: `S|psi_occ>` built once per solve for the level shift instead of
+  `S` applied to the lifted vector every CG step (`bee24f3`, past `ch_psi_all`; bit-identical
+  norm-conserving, every printed digit on ultrasoft); the strain's six independent components screened
+  (`055da69`, which is what `OPEN.md` Part III H2 had been closed for on a commit that changed a different
+  loop) and mixed (`fa1c8c1`), where nine were; and the mixer's history at `ph.x`'s `nmix_ph = 4`, half
+  the host memory, with the same passes on four silicon responses.
+
+**The numbers** (passes and CG steps a solve are load-independent; D22's CPU, one core):
+
+| cell | passes before -> after (`ph.x`) | CG steps a solve before -> after (`ph.x` late passes) | result before -> after (`ph.x`) |
+|---|---|---|---|
+| `si-epsilon`, field | 8 -> 5 (5) | 28.0 -> 12.6 (9) | 13.8066461 -> 13.8066540 (13.8066895) |
+| `si-epsilon-us`, field | 9 -> 5 (5) | 31.7 -> 13.7 (11) | 14.3253103 -> 14.3253186 (14.3252696) |
+| `si-epsilon`, `Gamma` phonon | 10 -> 6 | 27.7 -> 10.8 | 510.1024 -> 510.104 cm^-1 (510.152) |
+| `si-electrostriction`, strain | 11 -> 7 | 22.0 -> 6.7 | |
+
+**What it costs, and the open question.** At the defaults every quantity is converged where `ph.x`'s
+is, and an identity between two separate runs holds only to that level: from 3e-11 between the walked
+and whole-k strain `dpsi`, through 1e-7 to 1e-5 relative across the wedge identities, the crystal-form
+checks and the third derivatives, to 0.29 cm^-1 on a two-atom cell's near-zero acoustic triplet. Those
+tests now ask for the convergence they were measured at (`tr2 = 1e-24`, which is about where the raw
+1e-14 sat on these grids, and a fixed CG at 1e-12), each with what it reads at the defaults written beside
+it. **One `ph.x` comparison fails at the default, and it is the open question**: on triplet O2 in a vacuum
+box (`test_lsda_response.py::test_the_lsda_born_charges_match_ph_x`) this code's history tracks `ph.x`'s
+pass for pass (4.71e-8, 1.85e-7, 1.35e-9, 2.31e-11, 3.18e-12, 1.43e-14 against 4.709e-8, 1.850e-7,
+1.354e-9, 2.287e-11, 3.013e-12, 2.171e-14) and then reads 4.56e-15 at pass 7 where `ph.x` read 1.14e-14,
+so it stops there while `ph.x` ran an eighth pass to 4e-17; at pass 7 `Z*_zz` is 0.19766 where it converges
+to 0.20042 and `ph.x` prints 0.20023. So a fixed `tr2` in `ph.x`'s units can leave a vacuum cell's Born
+charge a per cent short, as it can `ph.x`'s (the `1/N^2` makes the test weak where `N` is large), and the
+reference agrees only because `ph.x` happened to need one more pass. Whether the default stays `ph.x`'s
+1e-14 is put to a fable subagent; the decision and what it rests on go here.
