@@ -10115,3 +10115,21 @@ values, so a table chunk of 2048 is walked inside the radial transform as two re
 backward pass then recomputes the same large block at once. So what bounds a second derivative is the
 size of the radial piece, not whether it is rematted, and the radial budget of 8 MB an integrand is the
 dial that matters -- at a time cost, measured above at 256 values. The checkpoint was tried and not kept.
+
+**The radial chunk's curve on the card** (current code, the augmentation target at 16 MB, memory mode at
+one k-point a chunk, warm, the second of two processes, D22; `DEFUMAT_RADIAL_CHUNK` set, the default
+being 1261 / 1156 values for Al / As):
+
+| call | default | 1024 | 512 | 256 |
+|---|---|---|---|---|
+| ultrasoft AlAs stress, peak | 169.3 MB | 169.3 | 169.3 | 169.3 |
+| its time | 4.10 s | 4.13 | 4.62 | 4.53 |
+| ultrasoft AlAs piezoelectric tensor, peak | 198.2 | 198.9 | 169.3 | 169.3 |
+| its time | 15.2 | 15.3 | 18.7 | 18.1 |
+| eight-atom NC Si elastic constants (27 k-points), peak | 126.4 | 66.5 | 45.5 | 45.9 |
+| their own time, beside a 70 s strain response | 5.14 | 6.22 | 6.42 | 6.47 |
+
+with the stress, `e_14` and `C_11` the same to the printed digits in every column (the 256 column was
+taken with the 4 MB augmentation target, before it was reverted; its AlAs peaks are the SCF's either way).
+At 512 values every strained call on these cells reads its SCF's peak or the strain response's, for 13 to
+25 per cent of those calls' own time on the card; the CPU at 512 is not measured.
