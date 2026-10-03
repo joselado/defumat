@@ -184,7 +184,12 @@ def _measure(args, grid: int, stage: str) -> dict:
             row["average_iterations"] = round(float(phonons.average_iterations), 3)
         elif stage == "phonon":
             start = time.perf_counter()
-            phonons = calculator.get_phonons(atoms=tuple(args.phonon_atoms))
+            # Every atom listed is the whole cell, which a run with symmetry
+            # needs asked for as such: a subset is refused there.
+            atoms = tuple(args.phonon_atoms)
+            nat = calculator.calculation.system.structure.nat
+            phonons = calculator.get_phonons(
+                atoms=None if sorted(atoms) == list(range(nat)) else atoms)
             row["response_s"] = round(time.perf_counter() - start, 2)
             row["frequencies"] = [round(float(f), 6) for f in phonons.frequencies]
             row["d00_xx"] = round(float(phonons.matrix[0, 0, 0, 0]), 10)

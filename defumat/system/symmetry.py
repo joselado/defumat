@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 import math
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -586,6 +587,95 @@ def symmetrize_magnetization(
     return symmetrize_vector_density(mag_g, permutations, phases, rotations)
 
 
+#: The most the group averages below may hold as one ``(nsym, ...)`` gathered
+#: array before they walk the operations one at a time instead.
+#:
+#: **The gather is nsym copies of the field.** Every average here gathers the
+#: field at ``S^T G`` for all operations at once and then takes the mean, which
+#: on eight atoms' displacement responses (``(8, 3, 30000)``, 48 operations)
+#: holds **1054.7 MB** of compiled temporaries for an 11 MB input, against 22.0
+#: walked (``memory_analysis()``, CPU; the same numbers to 1.1e-15). Below this
+#: budget the batched gather stays, because it is one kernel where a walk is
+#: ``nsym`` of them, and so do its numbers to the last bit; above it the walk
+#: is a ``lax.scan`` whose body is one operation's term, linear in the field, so
+#: a derivative through it keeps no field-sized residual per step.
+GATHER_BUDGET_BYTES = 64 * 1024**2
+
+
+def _walks_operations(nsym: int, field, copies: int = 2) -> bool:
+    """Whether the batched average's working set passes :data:`GATHER_BUDGET_BYTES`.
+
+    ``copies`` is how many ``nsym``-fold complex copies of ``field`` the batched
+    expression holds at once: the gather and the per-operation result, two, for
+    a scalar, a vector or a displacement field; **four** for a field carrying two
+    rotated indices (a strain, a spin vector), whose contraction materialises an
+    intermediate three times the gather. Counted from the gather alone, the
+    strain response of eight-atom silicon at 20 Ry (24 operations, 12893
+    G-vectors) stayed batched at 42.5 MB of gather and took the card from 43.7
+    to 215.7 MB.
+    """
+    return copies * nsym * int(np.prod(np.shape(field))) * 16 > GATHER_BUDGET_BYTES
+
+
+def _operation_mean(term, operations, shape, dtype):
+    """``(1/N) sum_s term(op_s)`` as a scan over the operations' arrays."""
+    nsym = jax.tree_util.tree_leaves(operations)[0].shape[0]
+
+    def body(total, op):
+        return total + term(op), None
+
+    total, _ = jax.lax.scan(body, jnp.zeros(shape, dtype), operations)
+    return total / nsym
+
+
+@jax.jit
+def _walked_scalar(rho_g, permutations, phases):
+    return _operation_mean(lambda op: op[1] * rho_g[op[0]],
+                           (permutations, phases), rho_g.shape,
+                           jnp.result_type(rho_g, phases))
+
+
+@jax.jit
+def _walked_vector(field_g, permutations, phases, rotations):
+    def term(op):
+        perm, phase, rotation = op
+        return rotation @ (phase[None, :] * field_g[:, perm])
+    return _operation_mean(term, (permutations, phases, rotations), field_g.shape,
+                           jnp.result_type(field_g, phases, rotations))
+
+
+@jax.jit
+def _walked_spin_vector(field_g, permutations, phases, rotations, spin_rotations):
+    def term(op):
+        perm, phase, rotation, spin = op
+        gathered = phase[None, None, :] * field_g[:, :, perm]
+        return jnp.einsum("ab,ij,bjg->aig", rotation, spin, gathered)
+    return _operation_mean(term, (permutations, phases, rotations, spin_rotations),
+                           field_g.shape,
+                           jnp.result_type(field_g, phases, rotations))
+
+
+@jax.jit
+def _walked_atom_displacement(field_g, permutations, phases, rotations, inverse):
+    def term(op):
+        perm, phase, rotation, inv = op
+        gathered = phase[None, None, :] * field_g[inv][:, :, perm]
+        return jnp.einsum("ij,ajg->aig", rotation, gathered)
+    return _operation_mean(term, (permutations, phases, rotations, inverse),
+                           field_g.shape,
+                           jnp.result_type(field_g, phases, rotations))
+
+
+@jax.jit
+def _walked_tensor(field_g, permutations, phases, rotations):
+    def term(op):
+        perm, phase, rotation = op
+        gathered = phase[None, None, :] * field_g[:, :, perm]
+        return jnp.einsum("ik,jl,klg->ijg", rotation, rotation, gathered)
+    return _operation_mean(term, (permutations, phases, rotations), field_g.shape,
+                           jnp.result_type(field_g, phases, rotations))
+
+
 def symmetrize_vector_density(
     field_g: jnp.ndarray, permutations, phases, rotations: jnp.ndarray
 ) -> jnp.ndarray:
@@ -605,6 +695,8 @@ def symmetrize_vector_density(
         field_g: ``(3, ngm)`` in cartesian components.
         rotations: ``(nsym, 3, 3)``, signs already folded in if there are any.
     """
+    if _walks_operations(permutations.shape[0], field_g):
+        return _walked_vector(field_g, permutations, phases, rotations)
     gathered = phases[:, None, :] * field_g[:, permutations].transpose(1, 0, 2)
     return jnp.mean(jnp.einsum("sij,sjg->sig", rotations, gathered), axis=0)
 
@@ -640,6 +732,9 @@ def symmetrize_spin_vector_density(
         spin_rotations: ``(nsym, 3, 3)``, the same with the axial signs folded
             in -- what :func:`symmetrize_magnetization` is handed.
     """
+    if _walks_operations(permutations.shape[0], field_g, copies=4):
+        return _walked_spin_vector(field_g, permutations, phases, rotations,
+                                   spin_rotations)
     gathered = (
         phases[:, None, None, :] * field_g[:, :, permutations].transpose(2, 0, 1, 3)
     )
@@ -704,6 +799,9 @@ def symmetrize_atom_displacement_density(
     # :func:`atom_mapping`'s table unchanged and the reason sits by the
     # derivation above.
     inverse = jnp.asarray(np.argsort(np.asarray(mapping), axis=1))
+    if _walks_operations(permutations.shape[0], field_g):
+        return _walked_atom_displacement(field_g, permutations, phases, rotations,
+                                         inverse)
     # (nsym, nat, 3, ngm) by broadcasting three index arrays against each other:
     # ``gathered[s, a, j, g] = phase[s, g] * field_g[irt^-1[s, a], j, S^T G_g]``.
     # The atom gather and the G-vector gather are independent, so they are one
@@ -748,6 +846,8 @@ def symmetrize_tensor_density(
             strain is built from two polar vectors, so it carries no sign of its
             own even under an improper operation.
     """
+    if _walks_operations(permutations.shape[0], field_g, copies=4):
+        return _walked_tensor(field_g, permutations, phases, rotations)
     flat = field_g.reshape((9,) + field_g.shape[2:])
     gathered = (phases[:, None, :] * flat[:, permutations].transpose(1, 0, 2))
     gathered = gathered.reshape((-1, 3, 3) + field_g.shape[2:])
@@ -844,6 +944,8 @@ def apply_symmetry_maps(rho_g: jnp.ndarray, permutations, phases) -> jnp.ndarray
     :class:`Symmetries` object, whose rotations are static NumPy arrays and so
     cannot cross a ``jit`` boundary.
     """
+    if _walks_operations(permutations.shape[0], rho_g):
+        return _walked_scalar(rho_g, permutations, phases)
     return jnp.mean(phases * rho_g[permutations], axis=0)
 
 
