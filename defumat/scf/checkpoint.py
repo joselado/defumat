@@ -575,6 +575,11 @@ _MIXER_DERIVED = frozenset({
     # carry across a resume is its evolved per-component state (``_betas``,
     # ``_previous``), which is stored like any other array.
     "beta", "beta_max", "history", "condition_limit", "precondition", "metric",
+    # Installed by the driver from the G-vectors and the density's shape, as the
+    # preconditioner is. What the stored vectors' layout *was* is evolving state
+    # and is written: ``_history_space``, a string, which a resume compares with
+    # the layout it installs and drops the history on a mismatch.
+    "layout", "shape",
 })
 
 

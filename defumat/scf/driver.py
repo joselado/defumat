@@ -132,9 +132,13 @@ from defumat.scf.mixing import (
     DENSITY_DEPENDENT,
     PRECONDITIONED,
     AndersonMixer,
+    SphereLayout,
     get_mixer,
     kerker_preconditioner,
+    kerker_preconditioner_g,
     local_tf_preconditioner,
+    local_tf_preconditioner_g,
+    resolve_mixing_space,
 )
 from defumat.scf.residual import make_residual
 from defumat.scf.solvers import get_scf_solver
@@ -522,7 +526,7 @@ FIT_BECSUM = False
 RHO_DDOT_FIT = False
 
 
-def _rho_ddot_metric(calculation):
+def _rho_ddot_metric(calculation, layout=None):
     """``(drho, dns, dtau) -> F`` whose dot products are ``rho_ddot``, for :attr:`Mixer.metric`.
 
     The same three terms, in the same order, as the residual solver's
@@ -531,6 +535,13 @@ def _rho_ddot_metric(calculation):
     and ``tauk_ddot`` under a meta-GGA. ``F(r) . F(r)`` is that ``accuracy`` to
     round-off, which ``tests/unit/test_rho_ddot_fit.py`` holds for each vector
     and for this assembly (``test_the_assembled_metric_is_the_loops_accuracy``).
+
+    With a :class:`~defumat.scf.mixing.SphereLayout`, ``drho`` is the stored
+    residual and its part is :meth:`~defumat.scf.mixing.SphereLayout.rho_ddot_vector`,
+    over the smooth sphere alone as ``mix_rho``'s ``rho_ddot(..., ngm0)`` is,
+    so it is no longer the loop's ``accuracy`` (which stays over the dense set)
+    by the shell's ``1/G^2``-weighted share. ``tau`` keeps its dense-set vector,
+    being packed in real space.
     """
     gvectors, cell = calculation.basis.dense, calculation.system.cell
     u_metric = None
@@ -544,6 +555,13 @@ def _rho_ddot_metric(calculation):
             )
 
     def metric(drho, dns, dtau):
+        if layout is not None:
+            parts = [layout.rho_ddot_vector(drho)]
+            if dns is not None:
+                parts.append(np.asarray(_ns_ddot_vector(dns, u_metric)))
+            if dtau is not None:
+                parts.append(np.asarray(_tau_ddot_vector(dtau, gvectors, cell)))
+            return np.concatenate(parts)
         parts = [_rho_ddot_vector(drho, gvectors, cell)]
         if dns is not None:
             parts.append(_ns_ddot_vector(dns, u_metric))
@@ -595,9 +613,35 @@ def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None,
     is already unmodelled), and the checkpointed mixer doubles with it. And
     ``tau`` makes one more host round trip per iteration, which this function
     already pays for the density.
+
+    **Where the density sits in the packed vector is the mixer's layout**
+    (:attr:`~defumat.scf.mixing.Mixer.layout`). Without one it is the whole
+    dense box in real space, which is what a bare mixer gets. ``run_scf``
+    installs a :class:`~defumat.scf.mixing.SphereLayout` by default, and then
+    the density block is ``pw.x``'s ``mix_type``: the smooth sphere in G, fitted
+    and kept, with the shell between ``ngms`` and ``ngm`` mixed here linearly at
+    ``beta`` and never handed to the mixer (``high_frequency_mixing``). Each
+    density is transformed once on the way in and the mixed one once on the way
+    out, per channel; ``becsum``, ``ns`` and ``tau`` are packed as before.
     """
-    flat = [np.asarray(rho).ravel()]
-    flat_out = [np.asarray(rho_out).ravel()]
+    layout = getattr(mixer, "layout", None)
+    shell_mixed = None
+    if layout is None:
+        flat = [np.asarray(rho).ravel()]
+        flat_out = [np.asarray(rho_out).ravel()]
+        head_size = int(np.size(rho))
+    else:
+        # Both transforms are dispatched before either is read, and read in one
+        # ``device_get``: the copy is the half dense sphere, not the box.
+        coefficients_in, coefficients_out = jax.device_get(
+            (layout.forward(rho), layout.forward(rho_out)))
+        head_in, shell_in = layout.pack(coefficients_in)
+        head_out, shell_out = layout.pack(coefficients_out)
+        shell_mixed = shell_in + layout.shell_step(
+            shell_out - shell_in, mixer.beta, getattr(mixer, "beta_mag", None))
+        flat = [head_in.ravel()]
+        flat_out = [head_out.ravel()]
+        head_size = int(head_in.size)
     for old, new in zip(becsum_in, becsum_out):
         if old is None:
             continue
@@ -632,7 +676,7 @@ def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None,
     # ``np.size`` reads the shape; ``np.asarray(b).size`` converted the array
     # first, a second host read of a block already packed above.
     becsum_size = sum(np.size(b) for b in becsum_in if b is not None)
-    exclude = (slice(rho.size, rho.size + becsum_size)
+    exclude = (slice(head_size, head_size + becsum_size)
                if becsum_size and not FIT_BECSUM else None)
     metric = getattr(mixer, "metric", None)
     fit = None
@@ -641,16 +685,23 @@ def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None,
         # parts rather than off the packed vector, so no offset can disagree
         # with the packing above. ``becsum`` has no term in it, which is what
         # ``exclude`` was approximating, so ``FIT_BECSUM`` does nothing here.
+        # Under a layout the density's part is the stored smooth sphere, which
+        # is what ``pw.x`` fits on (:func:`_rho_ddot_metric`).
         fit = metric(
-            jnp.asarray(rho_out) - jnp.asarray(rho),
+            jnp.asarray(rho_out) - jnp.asarray(rho) if layout is None
+            else head_out - head_in,
             None if ns_in is None else jnp.asarray(ns_out) - jnp.asarray(ns_in),
             None if tau_in is None else jnp.asarray(tau_out) - jnp.asarray(tau_in),
         )
     mixed = mixer.mix(np.concatenate(flat), np.concatenate(flat_out), exclude=exclude,
                       fit=fit)
 
-    offset = rho.size
-    rho_mixed = jnp.asarray(mixed[:offset].reshape(rho.shape))
+    offset = head_size
+    if layout is None:
+        rho_mixed = jnp.asarray(mixed[:offset].reshape(rho.shape))
+    else:
+        # The density's own dtype, as ``tau``'s below: the combination promotes.
+        rho_mixed = layout.field(mixed[:offset], shell_mixed).astype(rho.dtype)
     becsum_mixed = []
     for old in becsum_in:
         if old is None:
@@ -6555,6 +6606,7 @@ def run_scf(
     max_seconds: float | None = None,
     residual_split: bool = False,
     mixing_beta_mag: float | None = None,
+    mixing_space: str | None = None,
     rotate_moments: bool = False,
     torque_conv_thr: float = 1.0e-8,
     rotation_trust: float = 0.1,
@@ -6686,6 +6738,19 @@ def run_scf(
     occupation matrix diagonally by **Hund's rule**, so the default start is
     strongly spin-polarised however small ``starting_magnetization`` is. A run
     meant to begin near the unpolarised solution has to say so here.
+
+    ``mixing_space`` is where the mixer keeps the density, and this code's own
+    knob rather than ``pw.x``'s. ``'g'`` (also ``'reciprocal'``) is ``pw.x``'s
+    ``mix_type``: the Anderson history holds the density's coefficients on the
+    smooth sphere ``|G|^2 < 4 ecutwfc``, one G of each ``(G, -G)`` pair, and the
+    shell between it and ``ecutrho`` is mixed linearly at ``mixing_beta`` and
+    never stored, so above dual 4 the history is a fraction of what it was
+    (:class:`~defumat.scf.mixing.SphereLayout`). ``'r'`` (also ``'real'``) is
+    the whole dense grid in real space. ``None`` is
+    :data:`~defumat.scf.mixing.DEFAULT_MIXING_SPACE`. Both reach the same fixed
+    point; the path, and on a cell with more than one self-consistent state the
+    state reached, can differ. The adaptive mixer is pointwise in real space
+    and is always ``'r'``.
 
     ``mixing_fixed_ns`` is QE's ``&electrons`` variable of the same name: for
     that many iterations the Hubbard occupation matrix is held at its starting
@@ -7081,33 +7146,81 @@ def run_scf(
         )
         mixer.shape = tuple(np.shape(rho))
 
+    # **Where the history keeps the density** (``mixing_space``), installed
+    # beside the preconditioner because it too needs the G-vectors. ``'g'`` is
+    # ``pw.x``'s ``mix_type`` (:class:`SphereLayout`); its density block is
+    # ``(nspin, ngms)`` reals, and ``mixer.shape`` says so, so that a
+    # ``beta_mag`` finds the magnetization in the stored vector.
+    space = resolve_mixing_space(mixing_space, mixer)
+    layout = None
+    if space == "g":
+        layout = SphereLayout(calculation.basis.dense, calculation.basis.ngms,
+                              calculation.system.cell, tuple(np.shape(rho)))
+        mixer.layout = layout
+        mixer.shape = layout.stored_shape
+    restored_space = getattr(mixer, "_history_space", None) or "r"
+    if restored_space != space and getattr(mixer, "_residuals", None):
+        # A history written in the other layout -- every checkpoint from before
+        # the layout existed is real space and carries no tag -- is not a set of
+        # vectors this run can combine with its own, so it is dropped here, said
+        # beside "mixer history restored", which would otherwise be the last
+        # word on it.
+        warnings.warn(
+            f"the mixer history restored from {mixing_from} keeps the density in "
+            f"{'real space' if restored_space == 'r' else 'G on the smooth sphere'}"
+            f" and this run mixes it "
+            f"{'in real space' if space == 'r' else 'in G on the smooth sphere'} "
+            f"(mixing_space = {space!r}), so it is dropped. The density is "
+            f"unaffected -- this costs the iterations the saved history would have "
+            f"saved, and nothing else; resume with mixing_space = "
+            f"{restored_space!r} to keep it",
+            RuntimeWarning, stacklevel=2,
+        )
+        mixer.reset()
+    # Written with the history (``save_mixer`` stores a string), so a resume can
+    # tell which layout its vectors are in.
+    mixer._history_space = space
+
     if mixing_mode.lower() in PRECONDITIONED:
         # A preconditioner's ``beta`` is an operator on the grid, so it cannot
         # be built inside ``get_mixer``, which knows only a number. It is
         # installed here, where the density's shape and the dense G-vectors are
         # both in hand. ``local-TF`` differs from the other two only in reading
         # the density it is handed at each step (``Mixer.step``).
-        build = (
-            local_tf_preconditioner if mixing_mode.lower() in DENSITY_DEPENDENT
-            else kerker_preconditioner
-        )
-        mixer.precondition = build(
-            calculation.basis.dense, calculation.system.cell, tuple(np.shape(rho)),
-            # ``mixer.beta`` rather than ``mixing_beta``: the latter is ``None``
-            # when the caller left it unset, and which number that resolves to is
-            # the *mixer's* to decide -- 0.7 for the QE family, 0.05 for Elk's
-            # adaptive scheme, where the parameter is an increment rather than a
-            # step length.
-            beta=mixer.beta,
-            **({} if mixing_mode.lower() in DENSITY_DEPENDENT
-               else {"nelec": calculation.nelec}),
-        )
+        #
+        # ``mixer.beta`` rather than ``mixing_beta``: the latter is ``None``
+        # when the caller left it unset, and which number that resolves to is
+        # the *mixer's* to decide -- 0.7 for the QE family, 0.05 for Elk's
+        # adaptive scheme, where the parameter is an increment rather than a
+        # step length.
+        density_dependent = mixing_mode.lower() in DENSITY_DEPENDENT
+        if layout is not None:
+            # On the stored smooth sphere, as ``approx_screening`` and
+            # ``approx_screening2`` act on ``of_g(:ngm0)``: Kerker is a
+            # multiplication there, and local-TF reuses its own solver.
+            mixer.precondition = (
+                local_tf_preconditioner_g(layout, calculation.basis.dense,
+                                          calculation.system.cell, beta=mixer.beta)
+                if density_dependent else
+                kerker_preconditioner_g(layout, calculation.system.cell,
+                                        beta=mixer.beta, nelec=calculation.nelec)
+            )
+        else:
+            build = (
+                local_tf_preconditioner if density_dependent
+                else kerker_preconditioner
+            )
+            mixer.precondition = build(
+                calculation.basis.dense, calculation.system.cell, tuple(np.shape(rho)),
+                beta=mixer.beta,
+                **({} if density_dependent else {"nelec": calculation.nelec}),
+            )
 
     if RHO_DDOT_FIT and isinstance(mixer, AndersonMixer):
         # Beside the preconditioner and for the same reason: it needs the
         # G-vectors, which ``get_mixer`` does not have. Only Anderson fits
         # coefficients, so only it is handed one; ``_mix`` evaluates it.
-        mixer.metric = _rho_ddot_metric(calculation)
+        mixer.metric = _rho_ddot_metric(calculation, layout)
         if mixer._residuals and len(mixer._fits) != len(mixer._residuals):
             # A history restored from a flat-fit checkpoint has no fit vectors,
             # and the first ``mix`` drops it (``AndersonMixer.mix``). Said here,
@@ -8201,9 +8314,19 @@ def run_scf(
                               - np.asarray(rotate_texture(rho_out, turn))] + [
                         np.asarray(t) - np.asarray(rotate_texture(o, turn))
                         for t, o in zip(turned_becsum, becsum_out) if o is not None]
+                # The history's density block is in the mixer's layout: on the
+                # smooth sphere in G it is ``(nspin, ngms)`` stored reals, which
+                # a spin rotation turns as it turns the field (it acts on the
+                # channel axis alone and commutes with the transform), and the
+                # shift goes in as its smooth part; the shell has no entry.
+                history_shapes, history_shifts = list(shapes), list(shifts)
+                if mixer.layout is not None:
+                    history_shapes[0] = mixer.layout.stored_shape
+                    if shifts[0] is not None:
+                        history_shifts[0] = mixer.layout.stored_of(shifts[0])
 
-                def turn_packed(vector, turn=turn, shapes=shapes, shifts=shifts,
-                                shifted=True):
+                def turn_packed(vector, turn=turn, shapes=history_shapes,
+                                shifts=history_shifts, shifted=True):
                     vector = np.array(vector, copy=True)
                     offset = 0
                     for shape, shift in zip(shapes, shifts):

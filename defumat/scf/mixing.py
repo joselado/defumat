@@ -51,13 +51,21 @@ from __future__ import annotations
 import dataclasses
 import warnings
 from dataclasses import dataclass, field
+from functools import partial
 
 import jax
+import jax.numpy as jnp
 import numpy as np
+
+from defumat.basis.fft import g_to_r_gamma
+from defumat.basis.gvectors import GVectors, _half_sphere
+from defumat.units import E2, FPI
 
 __all__ = ["Mixer", "LinearMixer", "AndersonMixer", "AdaptiveMixer", "get_mixer",
            "MIXERS", "PRECONDITIONED", "kerker_preconditioner",
-           "local_tf_preconditioner", "thomas_fermi_screening"]
+           "local_tf_preconditioner", "thomas_fermi_screening", "SphereLayout",
+           "MIXING_SPACES", "DEFAULT_MIXING_SPACE", "resolve_mixing_space",
+           "kerker_preconditioner_g", "local_tf_preconditioner_g"]
 
 
 class Mixer:
@@ -92,6 +100,20 @@ class Mixer:
     #: that fits coefficients reads it; the driver's ``_mix`` evaluates it and
     #: hands the vector to :meth:`mix` as ``fit``.
     metric = None
+
+    #: Where the density part of the packed vector lives: ``None`` is the whole
+    #: dense box in real space, and a :class:`SphereLayout` is ``pw.x``'s
+    #: ``mix_type``, the smooth sphere in G with the shell above it mixed
+    #: linearly and never stored. Installed by the driver beside the
+    #: preconditioner, for the same reason: it needs the G-vectors. The driver's
+    #: ``_mix`` reads it; the mixer itself only ever sees a flat vector.
+    layout = None
+
+    #: Whether :attr:`layout` may be a :class:`SphereLayout`. False for a scheme
+    #: that is pointwise in real space by construction, where the components of
+    #: a vector of Fourier coefficients are not the components it was designed
+    #: to adapt.
+    accepts_layout = True
 
     def mix(self, rho_in: np.ndarray, rho_out: np.ndarray, exclude: slice | None = None,
             fit: np.ndarray | None = None) -> np.ndarray:
@@ -171,12 +193,7 @@ class Mixer:
         stepped = np.array(stepped, copy=True)
         size = int(np.prod(shape))
         head = stepped[:size].reshape(shape)
-        if nspin == 2:
-            charge, moment = head[0] + head[1], head[0] - head[1]
-            moment = ratio * moment
-            head[0], head[1] = 0.5 * (charge + moment), 0.5 * (charge - moment)
-        else:
-            head[1:] *= ratio
+        _scale_magnetization(head, ratio)
         stepped[:size] = head.reshape(-1)
         return stepped
 
@@ -197,6 +214,24 @@ class Mixer:
 
     def reset(self) -> None:
         pass
+
+
+def _scale_magnetization(head: np.ndarray, ratio: float) -> None:
+    """Multiply the magnetization of ``head`` by ``ratio`` in place, the charge kept.
+
+    ``head`` is ``(nspin, ...)``: at ``nspin = 2`` the ``(up, down)`` pair is
+    turned into ``(charge, moment)``, scaled and turned back, and at four the
+    channels after the first are the moment already. Linear and channel by
+    channel, so it is the same operator on a real-space field and on its
+    Fourier coefficients, which is why the step of the shell
+    (:meth:`SphereLayout.shell_step`) shares it with :meth:`Mixer.magnetic_step`.
+    """
+    if head.shape[0] == 2:
+        charge, moment = head[0] + head[1], head[0] - head[1]
+        moment = ratio * moment
+        head[0], head[1] = 0.5 * (charge + moment), 0.5 * (charge - moment)
+    else:
+        head[1:] *= ratio
 
 
 @dataclass
@@ -320,9 +355,10 @@ class AndersonMixer(Mixer):
         flat magnetization and ``tau`` terms, ``U/2`` on ``ns`` and nothing on
         ``becsum``. That is ``pw.x``'s inner product (``mix_rho.f90:403-425``),
         and the fit differs from ``pw.x``'s in three ways that are stated rather
-        than hidden: it runs over the whole dense set, where ``pw.x`` fits only
-        ``G < ngms`` and mixes the rest linearly (``mix_rho.f90:132``,
-        ``scf_mod.f90:549-552``); at ``nspin = 2`` the ``tau`` weight is four
+        than hidden: without a :class:`SphereLayout` it runs over the whole
+        dense set, where ``pw.x`` fits only ``G < ngms`` and mixes the rest
+        linearly (``mix_rho.f90:132``, ``scf_mod.f90:549-552``), which the
+        layout reproduces; at ``nspin = 2`` the ``tau`` weight is four
         times ``tauk_ddot``'s, deliberately (:func:`~defumat.scf.potential.tau_accuracy`);
         and the combination is Anderson's rather than modified Broyden's. The
         paragraphs below describe the flat path, which is what runs when no
@@ -688,6 +724,11 @@ class AdaptiveMixer(Mixer):
     """
 
     accepts_precondition = False
+    #: Pointwise in real space, as Elk's ``mixadapt`` is: a step length per grid
+    #: point, steered by the sign of that point's residual. The sign of the real
+    #: or imaginary part of a Fourier coefficient is not that, so this mixer
+    #: keeps the density on the box and refuses ``mixing_space = 'g'``.
+    accepts_layout = False
 
     #: Elk's ``beta0``: the increment, the initial value and the floor at once.
     beta: float = 0.05
@@ -1086,6 +1127,317 @@ def local_tf_preconditioner(gvectors, cell, shape, beta=0.7):
         return np.asarray(
             jnp.concatenate([beta * out[0], beta * flat[size:]])
         )
+
+    return preconditioner
+
+
+#: ``run_scf``'s ``mixing_space``, spelled either way, to the layout it selects:
+#: ``'g'`` is :class:`SphereLayout`, ``'r'`` the whole dense box in real space.
+MIXING_SPACES = {"g": "g", "reciprocal": "g", "r": "r", "real": "r"}
+
+#: What an unset ``mixing_space`` resolves to, for every mixer that accepts a
+#: layout (:attr:`Mixer.accepts_layout`); the adaptive mixer always gets ``'r'``.
+DEFAULT_MIXING_SPACE = "r"
+
+
+def resolve_mixing_space(space, mixer) -> str:
+    """``'g'`` or ``'r'`` for ``mixer``, from ``run_scf``'s ``mixing_space``.
+
+    ``None`` is the default for a mixer that takes a layout and real space for
+    one that does not; asking a real-space mixer for ``'g'`` is refused rather
+    than ignored, since the run would otherwise not be the one asked for.
+    """
+    if space is None:
+        return DEFAULT_MIXING_SPACE if mixer.accepts_layout else "r"
+    try:
+        resolved = MIXING_SPACES[str(space).lower()]
+    except KeyError as error:
+        raise ValueError(
+            f"mixing_space = {space!r} is not a place to mix the density in; it "
+            f"takes 'g' (the smooth sphere in reciprocal space, as pw.x's "
+            f"mix_type does) or 'r' (the whole dense grid in real space)"
+        ) from error
+    if resolved == "g" and not mixer.accepts_layout:
+        raise ValueError(
+            f"mixing_space = {space!r} is not defined for {type(mixer).__name__}: "
+            "it keeps one step length per grid point and steers each by the sign "
+            "of that point's residual, which a Fourier coefficient does not have. "
+            "Leave mixing_space unset, or set it to 'r'"
+        )
+    return resolved
+
+
+@partial(jax.jit, static_argnames=("grid",))
+def _to_half_sphere(field, index, grid):
+    """A real field on the box -> its coefficients on the listed half sphere (QE's fwfft)."""
+    points = grid[0] * grid[1] * grid[2]
+    box = jnp.fft.fftn(field, axes=(-3, -2, -1)) / points
+    return box.reshape(field.shape[:-3] + (points,))[..., index]
+
+
+@partial(jax.jit, static_argnames=("grid",))
+def _from_half_sphere(coefficients, index, index_minus, grid):
+    """Half-sphere coefficients -> the real field, ``c(-G) = conj(c(G))`` filled in."""
+    return g_to_r_gamma(coefficients, index, index_minus, grid)
+
+
+class SphereLayout:
+    """The density in the mixer's state as ``pw.x`` keeps it: the smooth sphere, in G.
+
+    **What ``pw.x`` stores and what this code stored.** ``mix_rho`` works on
+    ``mix_type`` objects whose density is ``of_g(1:ngms, nspin)``
+    (``scf_mod.f90:216``, ``:316``): the coefficients inside the **smooth**
+    cutoff ``4 ecutwfc`` and no others. It fits its Broyden coefficients there
+    (``ngm0 = ngms``, ``mix_rho.f90:132``) and mixes the shell between ``ngms``
+    and ``ngm`` linearly with the same ``alphamix``, without ever storing it
+    (``high_frequency_mixing``, ``scf_mod.f90:549-553``, called at
+    ``mix_rho.f90:548``). This code stored the whole dense box in real space,
+    ``n1 n2 n3`` reals a channel, so above dual 4 each history entry was larger
+    than ``pw.x``'s by about ``(dual/4)^1.5`` (``OPEN.md`` Part XXIII item 22).
+
+    **Half of the smooth sphere, and why that is exact.** Every channel of the
+    density is a real field -- the charge, and each component of the
+    magnetization -- so ``c(-G) = conj(c(G))`` and one G of each pair carries all
+    of it (:func:`~defumat.basis.gvectors._half_sphere`, ``ggen``'s
+    ``gamma_only`` selection). The mixer combines entries with real
+    coefficients, which preserves that symmetry exactly, so the stored half is a
+    real field before and after every step, and the other half is put back by
+    conjugation only on the way out (:func:`~defumat.basis.fft.g_to_r_gamma`).
+    Nothing is lost on the way in either: the density this driver builds is
+    band-limited to the dense sphere (``|psi|^2`` lies inside ``2 sqrt(ecutwfc)``,
+    and the augmentation charge and ``sym_rho`` are put in G), measured at
+    4.5e-35 of its norm outside it on ``benchmarks/si8-us-1k.in``. A pair
+    ``(G, -G)`` has one ``|G|^2``, so it never straddles ``ngms``. So a channel
+    is ``(ngms + 1)/2`` complex numbers, stored as ``ngms`` reals (``Im c(0)``
+    is zero and is not kept): half of ``pw.x``'s complex ``of_g(ngms)``.
+
+    **The stored reals are scaled so that their flat dot is the real-space one.**
+    With ``c = fwfft(f)``, ``sqrt(N)`` on ``Re c(0)`` and ``sqrt(2N)`` on the real
+    and imaginary parts of every other stored G make ``u . v`` equal
+    ``sum_r f(r) g(r)`` over the box for the smooth parts of two fields
+    (Parseval, the pair counted twice). Two things rest on that. The flat
+    Anderson fit keeps weighing the density against ``ns`` and ``tau`` exactly as
+    before, so moving the history into G does not also change how much say
+    each block has. And at dual 4, where the shell is empty, the fit is the
+    old real-space one to round-off, which is what tests the packing.
+
+    **The shell is mixed and not stored** (:meth:`shell_step`), with the plain
+    ``beta`` and no preconditioner, which is ``high_frequency_mixing``: Kerker's
+    ``approx_screening`` and ``approx_screening2`` act on ``of_g(:ngm0)`` only.
+
+    The transforms run where the density lives, compiled once per grid
+    (:func:`_to_half_sphere`, :func:`_from_half_sphere`), and everything after the
+    gather is host NumPy: one forward transform of each of the two densities and
+    one inverse of the mixed one, per channel per iteration, and the host copy
+    is the half dense sphere rather than the box.
+    """
+
+    #: The tag the mixer's history is written under (:mod:`~defumat.scf.checkpoint`).
+    name = "g"
+
+    def __init__(self, dense: GVectors, ngms: int, cell, shape):
+        shape = tuple(int(n) for n in shape)
+        if len(shape) != 4 or shape[1:] != tuple(dense.grid):
+            raise ValueError(
+                f"the density's shape {shape} is not (nspin,) + the dense grid "
+                f"{tuple(dense.grid)}"
+            )
+        miller = np.asarray(dense.miller)
+        ngm = int(miller.shape[0])
+        ngms = int(ngms)
+        if not 0 < ngms <= ngm:
+            raise ValueError(f"ngms = {ngms} is not inside the dense set of {ngm}")
+        if np.any(miller[0] != 0):
+            raise AssertionError("G = 0 must be the first dense G-vector")
+        half = _half_sphere(miller)
+        smooth = np.flatnonzero(half[:ngms])
+        shell = ngms + np.flatnonzero(half[ngms:])
+        if 2 * smooth.size - 1 != ngms or 2 * shell.size != ngm - ngms:
+            # A pair split by the cutoff, or a dense list that is already a half.
+            raise AssertionError(
+                f"the smooth sphere ({ngms}) and the shell ({ngm - ngms}) do not "
+                f"each hold whole (G, -G) pairs"
+            )
+        order = np.concatenate([smooth, shell])
+        self.shape = shape
+        self.nspin = shape[0]
+        self.grid = tuple(int(n) for n in dense.grid)
+        self.points = int(np.prod(self.grid))
+        self.ngm, self.ngms = ngm, ngms
+        #: Complex coefficients a channel keeps (G = 0 first) and the shell's.
+        self.nsmooth, self.nshell = int(smooth.size), int(shell.size)
+        #: ``(nspin, ngms)``: the density block of the packed vector, and what
+        #: :attr:`Mixer.shape` is set to so :meth:`Mixer.magnetic_step` finds it.
+        self.stored_shape = (self.nspin, ngms)
+        self._index = jnp.asarray(np.asarray(dense.fft_index)[order])
+        self._index_minus = jnp.asarray(np.asarray(dense.fft_index_minus)[order])
+        g2 = np.asarray(dense.kinetic(cell))[smooth]
+        #: ``|G|^2`` in 1/bohr^2 for each stored real, in the stored order.
+        self.kinetic = np.concatenate([g2[:1], g2[1:], g2[1:]])
+        self._volume = float(cell.volume)
+        self._w0 = float(np.sqrt(self.points))
+        self._w = float(np.sqrt(2.0 * self.points))
+
+    def history_bytes(self, depth: int, itemsize: int = 8) -> int:
+        """Resident bytes of a full history's density blocks: densities and residuals."""
+        return 2 * int(depth) * self.nspin * self.ngms * int(itemsize)
+
+    def forward(self, field):
+        """A real field ``(nspin, n1, n2, n3)`` -> ``(nspin, nsmooth + nshell)`` complex."""
+        return _to_half_sphere(jnp.asarray(field), self._index, self.grid)
+
+    def pack(self, coefficients):
+        """Half-sphere coefficients -> ``(stored, shell)``, host arrays.
+
+        ``stored`` is ``(nspin, ngms)`` real: ``Re c(0)``, then the real and then
+        the imaginary parts of the rest of the smooth half, scaled as the class
+        docstring says. ``shell`` is the shell's half, complex and unscaled.
+        """
+        c = np.asarray(coefficients)
+        n = self.nsmooth
+        stored = np.concatenate(
+            [c[:, :1].real * self._w0, c[:, 1:n].real * self._w,
+             c[:, 1:n].imag * self._w], axis=1)
+        return stored, c[:, n:]
+
+    def unpack(self, stored):
+        """``(nspin, ngms)`` stored reals -> ``(nspin, nsmooth)`` complex coefficients."""
+        stored = np.asarray(stored).reshape(self.stored_shape)
+        n = self.nsmooth
+        real = np.concatenate([stored[:, :1] / self._w0, stored[:, 1:n] / self._w],
+                              axis=1)
+        imag = np.concatenate([np.zeros_like(stored[:, :1]), stored[:, n:] / self._w],
+                              axis=1)
+        return real + 1j * imag
+
+    def field(self, stored, shell=None):
+        """The real field of ``stored`` and ``shell`` (zero if ``None``), on the device."""
+        smooth = self.unpack(stored)
+        if shell is None:
+            shell = np.zeros((self.nspin, self.nshell), dtype=smooth.dtype)
+        coefficients = np.concatenate([smooth, np.asarray(shell, dtype=smooth.dtype)],
+                                      axis=1)
+        return _from_half_sphere(jnp.asarray(coefficients), self._index,
+                                 self._index_minus, self.grid)
+
+    def stored_of(self, field) -> np.ndarray:
+        """The stored reals of a real-space field's smooth part, ``(nspin, ngms)``."""
+        return self.pack(jax.device_get(self.forward(field)))[0]
+
+    def shell_step(self, residual, beta: float, beta_mag: float | None = None):
+        """``beta`` times the shell's residual, the magnetization at ``beta_mag``.
+
+        ``high_frequency_mixing``: ``alphamix`` on every component and nothing
+        else, so the shell converges as plain linear mixing does. ``beta_mag``
+        is :attr:`Mixer.beta_mag`, given the shell too so that it means one step
+        for the magnetization at every wavelength, which is what it meant when
+        the whole box went through :meth:`Mixer.magnetic_step`.
+        """
+        stepped = beta * np.asarray(residual)
+        if beta_mag is None or self.nspin == 1:
+            return stepped
+        stepped = np.array(stepped, copy=True)
+        _scale_magnetization(stepped, float(beta_mag) / float(beta))
+        return stepped
+
+    def rho_ddot_vector(self, stored_residual) -> np.ndarray:
+        """``F`` with ``F(a) . F(b) = rho_ddot(a, b)`` over the smooth sphere, ``ngm0 = ngms``.
+
+        :func:`~defumat.scf.potential.rho_ddot_vector`'s weights on the stored
+        reals: ``0.5 Omega e2 4 pi / G^2`` on the charge with ``G = 0`` dropped
+        and ``0.5 Omega e2 4 pi / (2 pi)^2`` on the magnetization with it kept,
+        each divided by the ``N`` the stored scaling put in (whose doubling of
+        the pair is already the full sphere's sum). Over ``ngms`` and not the
+        dense set, which is ``mix_rho.f90:403-425``'s ``rho_ddot(..., ngm0)``.
+        """
+        head = np.asarray(stored_residual).reshape(self.stored_shape)
+        g2 = self.kinetic
+        inverse = np.where(g2 > 1e-12, 1.0 / np.where(g2 > 1e-12, g2, 1.0), 0.0)
+        charge = head[0] if self.nspin == 4 else np.sum(head, axis=0)
+        parts = [np.sqrt(0.5 * self._volume * E2 * FPI * inverse / self.points) * charge]
+        if self.nspin > 1:
+            moment = head[1:] if self.nspin == 4 else (head[0] - head[1])[None]
+            weight = 0.5 * self._volume * E2 * FPI / (2.0 * np.pi) ** 2 / self.points
+            parts.append(np.sqrt(weight) * moment)
+        return np.concatenate([np.ravel(p) for p in parts])
+
+
+def kerker_preconditioner_g(layout: SphereLayout, cell, beta=0.7, screening=None,
+                            nelec=None):
+    """:func:`kerker_preconditioner` on a :class:`SphereLayout`: a multiplication.
+
+    ``approx_screening`` as ``pw.x`` applies it, on ``drho%of_g(:ngm0, 1)``: the
+    charge on the smooth sphere times ``beta |G|^2 / (|G|^2 + q_TF^2)``, the
+    magnetization and everything after the density at the plain ``beta``. No
+    transform, because the coefficients are what is stored; the real-space form
+    above is still what the residual solver's Krylov preconditioner and its
+    warm-up mixer use, on a packed vector that is not in this layout. ``G = 0``
+    has ``|G|^2 = 0`` and is annihilated, so a step never moves the electron
+    count. The shell takes ``beta`` from :meth:`SphereLayout.shell_step`.
+    """
+    if screening is None:
+        if nelec is None:
+            raise ValueError("kerker_preconditioner_g needs either screening or nelec")
+        screening = thomas_fermi_screening(float(cell.volume), float(nelec))
+    factor = beta * layout.kinetic / (layout.kinetic + screening)
+    shape = layout.stored_shape
+    size = int(np.prod(shape))
+    nspin = layout.nspin
+
+    def preconditioner(residual, density=None):
+        # ``density`` is ignored, as in the real-space form: Kerker's screening
+        # length is a property of the cell.
+        residual = np.asarray(residual).ravel()
+        scale = factor.astype(residual.dtype, copy=False)
+        out = beta * residual
+        head = residual[:size].reshape(shape)
+        if nspin == 1:
+            out[:size] = scale * head[0]
+        elif nspin == 2:
+            # Only the charge is screened; the pair is turned into
+            # ``(charge, moment)`` and back, as in the real-space form.
+            charge, moment = head[0] + head[1], head[0] - head[1]
+            charge, moment = scale * charge, beta * moment
+            out[:size] = np.concatenate([0.5 * (charge + moment),
+                                         0.5 * (charge - moment)])
+        else:
+            out[:shape[1]] = scale * head[0]
+        return out
+
+    return preconditioner
+
+
+def local_tf_preconditioner_g(layout: SphereLayout, dense: GVectors, cell, beta=0.7):
+    """:func:`local_tf_preconditioner` on a :class:`SphereLayout`, on ``pw.x``'s sphere.
+
+    ``approx_screening2(drho, rhobest)`` works on ``mix_type`` objects, so both
+    the residual it screens and the density it reads ``r_s(r)`` from are their
+    ``of_g(:ngm0)``: the smooth sphere, the shell included in neither. The
+    real-space solver is reused unchanged with its own transforms, built on the
+    smooth sphere's G-vectors placed in the dense box, so its Krylov space and
+    its Coulomb metric run over ``ngm0`` as ``pw.x``'s do; the residual and the
+    density go to the box from their stored smooth halves, and the screened
+    charge comes back the same way. Everything after the density takes ``beta``.
+    """
+    smooth = GVectors(miller=dense.miller[:layout.ngms], grid=dense.grid,
+                      ecut=dense.ecut, gamma_only=dense.gamma_only)
+    screen = local_tf_preconditioner(smooth, cell, layout.shape, beta)
+    size = int(np.prod(layout.stored_shape))
+
+    def preconditioner(residual, density=None):
+        if density is None:
+            raise ValueError(
+                "local-TF is a density-dependent preconditioner and was called "
+                "without one; Mixer.step passes it"
+            )
+        residual = np.asarray(residual).ravel()
+        density = np.asarray(density).ravel()
+        head = np.asarray(layout.field(residual[:size])).ravel()
+        rho = np.asarray(layout.field(density[:size])).ravel()
+        screened = np.asarray(screen(head, rho)).reshape(layout.shape)
+        out = beta * residual
+        out[:size] = layout.stored_of(screened).ravel()
+        return out
 
     return preconditioner
 
