@@ -666,12 +666,30 @@ def _self_consistent_response(
         if change < tr2 / calculation.system.npol:
             converged = True
             break
+        # **The six independent components are mixed, not nine**: ``[b, a]``
+        # is ``[a, b]`` exactly (the six screenings above are shared), and
+        # mixing both would weight the off-diagonal strains twice in one
+        # Anderson fit.
+        def independent_of(field):
+            return jnp.stack([field[a, b] for a, b in independent])
+
+        def symmetric_from(pieces):
+            index = {pair: n for n, pair in enumerate(independent)}
+            return jnp.stack([
+                jnp.stack([pieces[index[min(a, b), max(a, b)]] for b in range(3)])
+                for a in range(3)
+            ])
+
         if onecentre is None:
-            dvscf = mixer.mix(dvscf, induced)
+            dvscf = symmetric_from(
+                mixer.mix(independent_of(dvscf), independent_of(induced)))
         else:
-            dvscf, onecentre = mixer.mix(
-                [dvscf, onecentre], [induced, induced_onecentre]
+            mixed, mixed_onecentre = mixer.mix(
+                [independent_of(dvscf), independent_of(onecentre)],
+                [independent_of(induced), independent_of(induced_onecentre)],
             )
+            dvscf = symmetric_from(mixed)
+            onecentre = symmetric_from(mixed_onecentre)
 
     return symmetrised, dvscf, history, converged
 

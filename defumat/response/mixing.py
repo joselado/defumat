@@ -45,7 +45,7 @@ import numpy as np
 
 from defumat.scf.mixing import get_mixer
 
-__all__ = ["ResponseMixer", "DEFAULT_RESPONSE_MIXING", "ddv_scf"]
+__all__ = ["ResponseMixer", "DEFAULT_RESPONSE_MIXING", "NMIX_PH", "ddv_scf"]
 
 
 def _squared_norm(array) -> float:
@@ -114,6 +114,15 @@ def ddv_scf(changes, onecentre_changes=None, *, joint: bool) -> float:
 #: which is the same quasi-Newton idea with a different history update.
 DEFAULT_RESPONSE_MIXING = "anderson"
 
+#: How many previous steps the response's mixer fits over: ``ph.x``'s
+#: ``nmix_ph`` default (``phq_readin.f90:258``). Each kept step is two whole
+#: vectors of every perturbation's potential in host memory, ``3 nat`` grids for a
+#: phonon, so the depth is the history's memory. Measured 2026-10-03 against the
+#: SCF mixer's 8 it took over before: the same passes on silicon's field,
+#: phonon and strain responses and ultrasoft silicon's field, with the phonon at
+#: 510.104 cm^-1 against 510.097 (``ph.x`` 510.152).
+NMIX_PH = 4
+
 
 class ResponseMixer:
     """One mixing step over however many arrays the loop carries.
@@ -123,8 +132,9 @@ class ResponseMixer:
     gets one Anderson problem rather than two, and a loop with one is unaffected.
     """
 
-    def __init__(self, name: str = DEFAULT_RESPONSE_MIXING, beta: float = 0.7):
-        self.mixer = get_mixer(name, beta=beta)
+    def __init__(self, name: str = DEFAULT_RESPONSE_MIXING, beta: float = 0.7,
+                 history: int = NMIX_PH):
+        self.mixer = get_mixer(name, beta=beta, history=history)
         self.name = name
 
     def mix(self, current, proposed, host: bool = False):
