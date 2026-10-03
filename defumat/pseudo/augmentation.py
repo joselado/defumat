@@ -672,7 +672,14 @@ def _aug_max_bytes() -> int:
 #: ``charge`` + ``integrals`` on ``si8-us-1k`` are 0.144 s at the old chunk and
 #: 0.116 s at 1024 on one CPU core, and on the GTX 1060 0.346 s at 8192 against
 #: 0.312 s at 1024 for spin-orbit bismuthene (``nh = 34``).
-AUG_CHUNK_BYTES = 16 * 1024**2
+#:
+#: **4 MB since 2026-10-03, and the reason is the strain's forward derivatives**,
+#: which a stress's tape did not show: the walked strain response of ultrasoft
+#: eight-atom silicon (``nh = 8``) rebuilds the table under a ``jvp`` in two
+#: passes, and at 16384 G-vectors a chunk those held 116.3 and 122.9 MB of
+#: temporaries on the RTX A2000, at 4096 45.0 and 42.9, the call 181.0 MB against
+#: 115.0 (``PERFORMANCE.md``, "The augmentation chunk under a strain").
+AUG_CHUNK_BYTES = 4 * 1024**2
 
 
 def _aug_chunk(nh_max: int, ngm: int) -> int:
