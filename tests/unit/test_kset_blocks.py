@@ -86,7 +86,7 @@ def test_a_path_in_blocks_is_the_path_whole(pseudo_dir, monkeypatch):
     assert shapes[0][0][1] == widths[0] and shapes[0][1][1] == widths[1]
     # The eigensolver's static plane-wave counts too: the whole path's minimum,
     # which is the cap the path taken whole has.
-    assert shapes[0][2] == (widths[2],) * 3
+    assert shapes[0][2] == widths[2]
     np.testing.assert_allclose(blocked.eigenvalues, whole.eigenvalues,
                                rtol=0, atol=1e-8)
     np.testing.assert_allclose(np.asarray(blocked.kpoints.coords),

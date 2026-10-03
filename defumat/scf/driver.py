@@ -3804,20 +3804,23 @@ class Calculation:
         return moved
 
     @property
-    def hamiltonian_npw(self) -> tuple[int, ...]:
-        """The per-k plane-wave counts a Hamiltonian is built with.
+    def hamiltonian_npw(self) -> int | None:
+        """The smallest sphere's plane-wave count a Hamiltonian is built with.
 
-        The sphere's own, except on a block of a longer k-list
-        (:meth:`at_kpoints` with ``widths``), where every entry is the whole
-        list's smallest. A Hamiltonian reads the counts only for the
-        eigensolver's cap, ``npol min_k npw``, and holds them **static**, so a
-        block's own counts would recompile the solve once per block; the whole
-        list's minimum is also exactly the cap the unblocked list has.
+        The sphere's own ``min_k npw``, except on a block of a longer list
+        (:meth:`at_kpoints` or :meth:`at_spiral_q` with ``widths``), where it is
+        the whole list's. A Hamiltonian reads it only for the eigensolver's cap,
+        ``npol min_k npw``, and holds it **static**, so a block's own minimum
+        would recompile the solve once per block; the whole list's minimum is
+        also exactly the cap the unblocked list has. ``None`` for a sphere that
+        carries no counts (a chunk of a force pass), which leaves the cap at
+        ``npwx``.
         """
         floor = getattr(self, "npw_floor", None)
-        if floor is None:
-            return self.basis.planewaves.npw
-        return (int(floor),) * len(self.basis.planewaves.npw)
+        if floor is not None:
+            return int(floor)
+        npw = self.basis.planewaves.npw
+        return int(min(npw)) if npw else None
 
     def band_count(self, nbnd: int | None = None) -> int:
         """``nbnd`` if given, else the system's, else QE's default for this run."""
@@ -4110,7 +4113,8 @@ class Calculation:
         moved._kcart = kcart
         return moved
 
-    def at_spiral_q(self, q_crystal, rebuild_basis: bool = True) -> "Calculation":
+    def at_spiral_q(self, q_crystal, rebuild_basis: bool = True,
+                    widths: tuple[int, int, int] | None = None) -> "Calculation":
         """The same calculation at a different spin-spiral wavevector.
 
         :meth:`at_kpoints` in the one direction a spiral moves: ``q`` changes
@@ -4119,6 +4123,15 @@ class Calculation:
         augmentation charge, the Ewald sum and the radial tables are all
         independent of it, and an ``E(q)`` scan is a loop over this method for
         that reason (:mod:`defumat.workflows.spiral`).
+
+        ``widths`` is ``(npwx, nsticks, npw_min)`` over every wavevector of a
+        scan at once (:func:`~defumat.workflows.spiral.scan_widths`), and it is
+        :meth:`at_kpoints`' argument of the same name: the spheres are padded to
+        the first two and the Hamiltonians are told the third, so that every
+        point of the scan has one shape and the SCF compiles once rather than
+        once for every padded width the wavevectors happen to give. Without it
+        the spheres are padded to this wavevector's own widths. Only a rebuilt
+        basis takes it.
 
         ``rebuild_basis = False`` is the counterpart of :meth:`at_positions`:
         it keeps *this* calculation's plane-wave spheres -- which plane waves
@@ -4142,6 +4155,12 @@ class Calculation:
             raise ValueError(
                 "at_spiral_q needs a calculation that is already a spiral: "
                 "spiral_q decides the basis, which is built once"
+            )
+        if widths is not None and not rebuild_basis:
+            raise ValueError(
+                "at_spiral_q pads a rebuilt basis to widths; with "
+                "rebuild_basis=False the sphere is this calculation's own and "
+                "keeps its own widths"
             )
         smooth, cell = self.basis.smooth, self.system.cell
         moved = copy.copy(self)
@@ -4240,15 +4259,20 @@ class Calculation:
                 shift=-moved.spiral_qcart,
             )
         moved.basis_kpoints = spiral_kpoints(system.kpoints, system.spiral_q, cell)
+        # Set in both cases, as ``at_kpoints`` sets it: ``copy.copy`` would
+        # otherwise carry a scan's floor to a later move that asked for none.
+        npwx, nsticks, npw_floor = widths if widths is not None else (None,) * 3
+        moved.npw_floor = npw_floor
         planewaves = build_plane_wave_basis(
-            smooth, moved.basis_kpoints, cell, system.ecutwfc
+            smooth, moved.basis_kpoints, cell, system.ecutwfc, npwx=npwx
         )
         moved.basis = Basis(
             dense=self.basis.dense, smooth=smooth, planewaves=planewaves
         )
         moved.kinetic = planewaves.kinetic(smooth, moved.basis_kpoints, cell)
         moved.fft_index = planewaves.fft_index(smooth)
-        moved.sticks = moved._build_sticks(moved.fft_index, planewaves.mask, smooth.grid)
+        moved.sticks = moved._build_sticks(moved.fft_index, planewaves.mask, smooth.grid,
+                                           nsticks=nsticks)
         _adopt_rebuilt_sphere(
             moved, self, planewaves, smooth, moved.basis_kpoints, cell
         )

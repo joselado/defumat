@@ -677,7 +677,8 @@ def test_the_subspace_is_capped_at_the_smallest_k_point_and_not_at_npwx():
         a half-made one would tie this test to equinox's internals."""
 
         npol = 1
-        npw = (169, 180, 192)
+        # what the field holds: the smallest of the spheres (169, 180, 192)
+        npw = 169
         ndim = 192
 
     assert Hamiltonian.space.fget(_Spheres()) == 169

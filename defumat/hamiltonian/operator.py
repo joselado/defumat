@@ -32,8 +32,12 @@ when there is not.
 
 from __future__ import annotations
 
+import functools
+import math
+
 import equinox as eqx
 import jax.numpy as jnp
+import numpy as np
 
 from defumat.basis.fft import (
     g_to_r, g_to_r_gamma, gamma_inner, gather_from_box, r_to_sticks, sticks_local,
@@ -43,6 +47,106 @@ from defumat.batching import map_bands
 from defumat.pseudo.projectors import Projectors
 
 __all__ = ["Hamiltonian"]
+
+
+def smallest_sphere(npw) -> int | None:
+    """The one plane-wave count an operator keeps: ``min_k npw``, or ``None``.
+
+    The converter of both operators' ``npw`` field. A per-k list is reduced to
+    its minimum, because that minimum is all the eigensolver reads, and an
+    empty list or ``None`` -- a chunk of a force pass carries ``()`` -- is
+    ``None``, which leaves the bound at the padded width.
+    """
+    if npw is None:
+        return None
+    if isinstance(npw, (int, np.integer)):
+        return int(npw)
+    npw = tuple(npw)
+    return int(min(npw)) if npw else None
+
+
+def conjugated_contraction(projectors, states, subscripts: str) -> jnp.ndarray:
+    """``einsum(subscripts, conj(projectors), states)``, conjugating the smaller operand.
+
+    ``<beta|psi>`` needs one of its two operands conjugated, and conjugating
+    ``vkb`` materialises an ``(npwx, nkb)`` copy of it at every call: XLA does
+    not fold an elementwise op into a dot's operand on a CPU, and in the
+    compiled Davidson the copy sits inside the loop body, once for each rung of
+    the band ladder (``OPEN.md`` Part III M4).
+    ``conj(einsum(projectors, conj(states)))`` is the same number **to the last
+    bit**: each product in the sum has both factors' imaginary parts negated,
+    which negates its imaginary part exactly and leaves its real part alone,
+    the operands keep their places in the dot, and round-to-nearest is
+    symmetric under negation. So which one is conjugated is decided by size
+    alone, from static shapes: the band block where it is the smaller -- a
+    Davidson block of at most ``nbnd`` states against ``nkb`` projector
+    channels -- and the projectors where they are.
+    """
+    if math.prod(states.shape) < math.prod(projectors.shape):
+        return jnp.einsum(subscripts, projectors, states.conj()).conj()
+    return jnp.einsum(subscripts, projectors.conj(), states)
+
+
+@functools.lru_cache(maxsize=64)
+def atom_blocks(atom_of_channel: tuple[int, ...]) -> tuple[np.ndarray, ...]:
+    """The projector channels grouped by atom: one ``(n_atoms, nh)`` index array per ``nh``.
+
+    Row ``a`` of a group lists the channels of one atom, in order, and the
+    atoms of one group are those with the same number of channels, so each
+    group is one batched block of a matrix that is block-diagonal over atoms.
+    Host arithmetic on the static ``atom_of_channel``, cached on it.
+    """
+    channels: dict[int, list[int]] = {}
+    for channel, atom in enumerate(atom_of_channel):
+        channels.setdefault(atom, []).append(channel)
+    groups: dict[int, list[list[int]]] = {}
+    for indices in channels.values():
+        groups.setdefault(len(indices), []).append(indices)
+    return tuple(np.asarray(group, dtype=np.int64) for group in groups.values())
+
+
+def block_diagonal_form(left, matrix, right, atom_of_channel) -> jnp.ndarray:
+    """``sum_ij left_gi M_ij right_gj`` for an ``M`` that is block-diagonal over atoms.
+
+    ``left`` and ``right`` are ``(..., nkb)``, one column per projector channel,
+    and the result is ``(...)``: the diagonal ``<k+G|sum |beta> M <beta||k+G>``
+    a preconditioner is built from (``usnldiag``), with the side that carries
+    the conjugate left to the caller, since the spinor operator's is the other
+    one.
+
+    **Contracted block by block over atoms** (``OPEN.md`` Part III M5). As a
+    dense ``(nkb, nkb)`` contraction, ``einsum("gi,ij,gj->g")`` multiplies
+    ``nat`` times more zeros than entries and materialises an ``(npwx, nkb)``
+    intermediate before it reduces; here every atom's channels meet only that
+    atom's block, ``npwx nkb nh`` products against ``npwx nkb^2``, and the
+    products are written as one broadcast and one sum so that XLA fuses them
+    into a single reduction with no intermediate at all. A batched
+    ``einsum("gai,aij,gaj->g")`` would save the flops and keep the buffer, since
+    a dot is never fused on a CPU: the compiled Davidson of ``si8-us-1k`` holds
+    8,373,024 temp bytes with the dense form, 8,010,784 with that one and
+    6,490,656 with this. The order of the sum is not the dense form's, so the
+    result moves at round-off: 6e-14 Ry in the total energy at most on
+    ``si8-us-1k``, ``si8-paw-1k``, ``si16-1k-ecut30`` and ``pt-so-1k``, with
+    every per-k Davidson step count unchanged.
+    """
+    total = None
+    for index in atom_blocks(tuple(atom_of_channel)):
+        n_atoms, nh = index.shape
+        flat = index.reshape(-1)
+        start = int(flat[0])
+        if np.array_equal(flat, np.arange(start, start + flat.size)):
+            columns_left = left[..., start:start + flat.size]
+            columns_right = right[..., start:start + flat.size]
+        else:
+            columns_left = jnp.take(left, flat, axis=-1)
+            columns_right = jnp.take(right, flat, axis=-1)
+        columns_left = columns_left.reshape(left.shape[:-1] + (n_atoms, nh))
+        columns_right = columns_right.reshape(right.shape[:-1] + (n_atoms, nh))
+        blocks = matrix[index[:, :, None], index[:, None, :]]
+        term = jnp.sum(columns_left[..., :, :, None] * blocks
+                       * columns_right[..., :, None, :], axis=(-3, -2, -1))
+        total = term if total is None else total + term
+    return total
 
 
 class Hamiltonian(eqx.Module):
@@ -81,16 +185,24 @@ class Hamiltonian(eqx.Module):
     #: ``None`` unless this is a gamma-only run. Its presence *is* the switch:
     #: see :attr:`gamma_only`.
     fft_index_minus: jnp.ndarray | None = None
-    #: ``(nk,)`` how many plane waves each k-point's sphere actually holds, as
-    #: against ``npwx``, which is the padded maximum over k. **Static, because
-    #: it bounds an array's length**: the Davidson subspace cannot be larger
-    #: than the smallest space it is built in, and the k-points that go singular
-    #: are precisely the ones *below* ``npwx`` -- see
+    #: How many plane waves the *smallest* k-point's sphere holds, ``min_k
+    #: npw``, as against ``npwx``, which is the padded maximum over k. **Static,
+    #: because it bounds an array's length**: the Davidson subspace cannot be
+    #: larger than the smallest space it is built in, and the k-points that go
+    #: singular are precisely the ones *below* ``npwx`` -- see
     #: :func:`~defumat.solvers.davidson.davidson_eigensolver_all`. ``None``
     #: leaves the bound at ``npwx``, which is QE's own ``ipw``
     #: (``c_bands.f90:286``) and is what a Hamiltonian built without its basis
     #: gets.
-    npw: tuple[int, ...] | None = eqx.field(static=True, default=None)
+    #:
+    #: **One number and not the per-k list**, which is what it held until
+    #: ``OPEN.md`` Part XXIII item 9: a static field is part of the treedef, so
+    #: two spheres with the same padded width and the same smallest sphere --
+    #: two wavevectors of a spin-spiral scan, typically -- were two treedefs,
+    #: and the Davidson solve and the Rayleigh-Ritz start compiled again at
+    #: every wavevector for counts nothing read. A list passed in is reduced to
+    #: its minimum by :func:`smallest_sphere`.
+    npw: int | None = eqx.field(static=True, default=None, converter=smallest_sphere)
     #: How many bands :meth:`_local` puts through the grid at once --
     #: :func:`~defumat.batching.map_bands`'s dial, carried here so that the
     #: value the :class:`~defumat.scf.driver.Calculation` resolved (from the
@@ -152,10 +264,11 @@ class Hamiltonian(eqx.Module):
         oversized subspace goes singular at: on silicon at ``ecutwfc = 12``
         folded to a 32 k-point ultracell the spheres run from 169 to 192, so a
         bound at ``npwx`` would leave every k-point below 192 oversubscribed.
+        :attr:`npw` already holds that minimum.
         """
         if self.npw is None:
             return self.ndim
-        return self.npol * min(self.npw)
+        return self.npol * self.npw
 
     @property
     def dtype(self):
@@ -192,8 +305,10 @@ class Hamiltonian(eqx.Module):
         ``|beta> D <beta|psi>`` is an expansion in the stored basis, not a sum
         over it, and doubling it too is the classic way to get an energy that
         is nearly right.
+
+        The conjugate goes on the smaller operand (:func:`conjugated_contraction`).
         """
-        product = jnp.einsum("gk,...g->...k", vkb.conj(), vectors)
+        product = conjugated_contraction(vkb, vectors, "gk,...g->...k")
         if not self.gamma_only:
             return product
         zero = vkb[0].conj() * vectors[..., :1]
@@ -289,7 +404,8 @@ class Hamiltonian(eqx.Module):
             return jnp.where(self.mask[ik], 1.0, 0.0)
         vkb = self.projectors.at_k(ik)
         qq = self.projectors.qq.astype(vkb.dtype)
-        diagonal = 1.0 + jnp.real(jnp.einsum("gi,ij,gj->g", vkb.conj(), qq, vkb))
+        diagonal = 1.0 + jnp.real(block_diagonal_form(
+            vkb.conj(), qq, vkb, self.projectors.atom_of_channel))
         return jnp.where(self.mask[ik], diagonal, 0.0)
 
     def _local(self, psi: jnp.ndarray, ik: int) -> jnp.ndarray:
@@ -382,9 +498,8 @@ class Hamiltonian(eqx.Module):
         if self.projectors.nkb:
             vkb = self.projectors.at_k(ik)
             dij = self.coefficients.astype(vkb.dtype)
-            diagonal = diagonal + jnp.real(
-                jnp.einsum("gi,ij,gj->g", vkb.conj(), dij, vkb)
-            )
+            diagonal = diagonal + jnp.real(block_diagonal_form(
+                vkb.conj(), dij, vkb, self.projectors.atom_of_channel))
         return jnp.where(self.mask[ik], diagonal, 0.0)
 
     def overlap_matrix(self, ik: int) -> jnp.ndarray:
