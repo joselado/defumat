@@ -821,7 +821,7 @@ def davidson_eigensolver(
     return out
 
 
-def starting_vectors(psi0, nbnd, ndim, kinetic, mask, dtype):
+def starting_vectors(psi0, nbnd, ndim, kinetic, mask, dtype, npol=1, width=None):
     """The trial vectors: the caller's, or QE's random guess.
 
     ``wfcinit``'s ``starting_wfc = 'random'`` draws random coefficients damped by
@@ -829,14 +829,28 @@ def starting_vectors(psi0, nbnd, ndim, kinetic, mask, dtype):
     plane waves where the occupied states live. The damping is what matters; the
     particular random numbers are not, so a fixed key is used and the result is
     reproducible.
+
+    ``width`` is the sphere's own ``npwx`` where the arrays are padded past it
+    (a spiral scan's common shape, a band path's): the numbers are drawn at
+    ``(nbnd, npol * width)``, exactly as the unpadded run draws them, and each of
+    the ``npol`` components is padded with zeros to ``ndim / npol``, so a padded
+    run starts from the unpadded run's vectors rather than from a draw whose
+    every row but the first changes with the width. ``None``, or the padded
+    width itself, is the draw as it always was.
     """
     if psi0 is not None:
         return jnp.where(mask, psi0.astype(dtype), 0.0)
 
+    padded = ndim // npol
+    own = padded if width is None else int(width)
     keys = jax.random.split(jax.random.PRNGKey(0), 2)
-    real = jax.random.uniform(keys[0], (nbnd, ndim)) - 0.5
-    imaginary = jax.random.uniform(keys[1], (nbnd, ndim)) - 0.5
-    guess = (real + 1j * imaginary).astype(dtype) / (1.0 + kinetic)
+    real = jax.random.uniform(keys[0], (nbnd, npol * own)) - 0.5
+    imaginary = jax.random.uniform(keys[1], (nbnd, npol * own)) - 0.5
+    draw = real + 1j * imaginary
+    if own != padded:
+        draw = jnp.pad(draw.reshape(nbnd, npol, own),
+                       ((0, 0), (0, 0), (0, padded - own))).reshape(nbnd, ndim)
+    guess = draw.astype(dtype) / (1.0 + kinetic)
     return jnp.where(mask, guess, 0.0)
 
 

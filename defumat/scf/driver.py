@@ -5669,12 +5669,18 @@ class Calculation:
             )
             if rows is not None:
                 kinetic, mask = kinetic[rows], mask[rows]
+            # Drawn at the sphere's own width, which padding (a spiral scan's
+            # ``widths``) leaves unchanged since it only appends columns, so a
+            # padded run tops up with the unpadded run's numbers. For every
+            # unpadded basis the two widths are one and the draw is unchanged.
+            own = int(np.asarray(self.basis.planewaves.mask).sum(-1).max())
             # Called once per SCF outside any trace, so compiled by its
             # structure rather than once per run (:mod:`defumat.eager`).
             extra = compiled(
                 lambda arrays: map_k(
                     lambda one: starting_vectors(
-                        None, missing, ndim, one[0], one[1], atomic.dtype
+                        None, missing, ndim, one[0], one[1], atomic.dtype,
+                        npol=self.npol, width=own,
                     ),
                     arrays,
                     batch=self.k_batch,
