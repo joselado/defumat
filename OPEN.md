@@ -7205,7 +7205,18 @@ What the agents of this sweep's follow-up found outside their items, recorded ra
   band cut (0.62 to 0.63 for `nbnd` 8 to 16) and the threshold. A cut multiplet is far worse: `nbnd = 12`
   there (`band_cut_gap` 2e-14 eV) gives 1095 pm/V. `photocurrent.py`'s refusal text sent users to exactly
   the incommensurate case, and the silicon floors quoted in `test_shg.py` (0.10, 0.055 pm/V) are this
-  grid effect. A warning for both conditions is being added by a separate agent.
+  grid effect. **Both warnings landed the same night** (`263b6a3`, `569df06`): the grid one fires on
+  `si2-nosym` (15^3 against factors of 4) and on no committed AlAs input (factors of 1); the cut one
+  compares `band_cut_gap` with `DEGENERACY_TOL` (1e-8 Ry), not the broadening, which would have fired
+  on clean gaps. **It fires on committed inputs at their own `nbnd`, and rightly**: AlAs SHG at 22
+  bands (the three Elk comparisons, notebook 33 and the guide's `get_shg` snippet) cuts doublets at 13
+  of 216 k-points and moves chi by up to 4.7e-4 of its peak under a rotation of the cut multiplets
+  (the forbidden components 2.5e-4 of the allowed at 22 bands against 1.5e-9 at 23); ultrasoft AlAs at
+  24 bands rests its zincblende bound (3e-3) on the rotation, 6.6e-4 measured and draws up to 1.05e-3,
+  against 3e-8 at 23 or 27, and that test's docstring had put the 6.6e-4 down to the radial
+  interpolation (corrected). Whether to move those tests to a clean `nbnd` and re-measure the Elk
+  figures, the A/B and the notebook is put to a fable subagent. On supercells `find_symmetries` drops the
+  fractional translations, so the grid warning stays silent there.
 - **Tetragonal cobalt relaxed from the identity returns the same free energy and torque to the last bit
   at steps 2 to 4**, in the old code and the new. Presumably a stationary start; not checked.
 - **Two failures that predate tonight**, both reproduced on master: `test_retention.py::
