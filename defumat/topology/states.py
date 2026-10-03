@@ -737,6 +737,29 @@ def _pair_overlaps(coefficients, kets, becp, ket_becp, factors, index_i, index_j
                  batch=batch)
 
 
+@partial(jax.jit, static_argnames=("npol", "batch"))
+def _lazy_becp(coefficients, projectors, npol: int, batch):
+    """``becp`` on a lazy projector set, compiled once per shape.
+
+    :func:`build_plane_wave_states`'s projection when the projectors are rebuilt
+    per k-point (memory mode's ``projectors = 'rebuild'``). It was a ``map_k``
+    over a closure built inside the call, which with a chunk smaller than the
+    call's k-points is an eager ``lax.map`` whose body was a new function every
+    time, so JAX compiled the loop again for every string, column or row: 16
+    compilations in a second Berry-phase polarization of zincblende AlAs in
+    memory mode with one k-point a chunk, and 550 more mappings in the
+    process's address space (``OPEN.md`` Part XXIII item 10). The fix is
+    :func:`_pair_overlaps`'s: the states and the projector set are arguments,
+    and the scan body takes one k-point's rows as it took them from the
+    closure.
+    """
+    from defumat.batching import map_k
+
+    return map_k(
+        lambda ik: _project(coefficients[ik], projectors.at_k(ik), npol),
+        jnp.arange(coefficients.shape[0]), batch=batch)
+
+
 def _cached_augmentation(calculation, qcart):
     """``q_ij(b)``, memoised on ``b`` for as long as the calculation lives."""
     from defumat.topology.augmentation import augmentation_at_q
@@ -854,13 +877,9 @@ def build_plane_wave_states(
     if calculation.augmentation is not None:
         projectors = calculation.projectors
         if projectors.is_lazy and not keep_projectors:
-            from defumat.batching import map_k
-
             # One k-point's projectors built at a time rather than the whole-k
             # ``vkb`` stacked (``GPU-MEMORY-NEXT.md`` item 7).
-            becp = map_k(
-                lambda ik: _project(coefficients[ik], projectors.at_k(ik), npol),
-                jnp.arange(coefficients.shape[0]), batch=calculation.k_batch)
+            becp = _lazy_becp(coefficients, projectors, npol, calculation.k_batch)
         else:
             becp = jax.vmap(lambda c, v: _project(c, v, npol))(
                 coefficients, projectors.vkb)
