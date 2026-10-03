@@ -429,9 +429,10 @@ def davidson_eigensolver(
         return_steps: also return how many Davidson steps the solve took and
             how many bands were still unsettled when it stopped. Both are
             already computed inside the loop -- they are its trip counter and
-            its ``notcnv`` -- so this only widens the return, and it is
-            *static*, read at trace time, so the two-value form compiles to
-            exactly what it did. The count is the number of passes of the
+            its ``notcnv`` -- so this only widens the return. It is *static*,
+            read at trace time, which is why :func:`davidson_eigensolver_all`
+            always asks for the pair and drops it itself: two values of a
+            static argument are two executables. The count is the number of passes of the
             step function, and the initial subspace solve happens outside the
             loop, so a solve that arrives already converged reports 0. Read the
             pair together: a count at ``max_iterations`` with a small
@@ -1058,7 +1059,10 @@ def davidson_eigensolver_all(
 
     ``return_steps`` adds the per-k step count and unsettled-band count to the
     return, ``(nk,)`` each. It is off by default so that every existing caller
-    still unpacks two values.
+    still unpacks two values, and it is applied **here, on the host**: the
+    compiled unit returns the pair whatever was asked, so an SCF, which asks,
+    and a residual map or a topology workflow at the same shapes, which do not,
+    run one executable rather than two.
 
     ``psi0_again`` is a callable that returns ``psi0`` afresh, and passing it
     **donates** ``psi0`` to the fast pass: the states are written into its
@@ -1102,9 +1106,20 @@ def davidson_eigensolver_all(
     # exactly as it always has -- ``tools/gpu``'s memory tool and the tests'
     # stand-ins for it are written against that signature.
     chunk = {} if indices is None else {"indices": jnp.asarray(indices)}
+    # **The compiled unit always returns the step counts, and they are dropped
+    # here when they were not asked for** (``OPEN.md`` Part III M6). As a static
+    # argument, ``return_steps`` made ``True`` and ``False`` two compilations of
+    # the whole solver at the same shapes, so a process that ran an SCF, which
+    # asks for them, and then a residual map, a topology workflow or
+    # electrostriction, which do not, compiled Davidson twice. The two counters
+    # are loop carries the solve has anyway, so carrying them out costs two
+    # ``(nk,)`` integer arrays.
+    def wanted(out):
+        return out if return_steps else out[:2]
+
     if not robust_retry:
-        return _every_k(*arguments, robust=False, return_steps=return_steps,
-                        **chunk)
+        return wanted(_every_k(*arguments, robust=False, return_steps=True,
+                               **chunk))
     # Both halves, not just the eigenvalues. A Cholesky factor that has gone
     # non-finite does not necessarily poison every root -- the first regression
     # test written for the 64-atom NaN passed on the *unfixed* code precisely
@@ -1143,12 +1158,12 @@ def davidson_eigensolver_all(
     # retry below starts from instead (see the note above ``arguments``).
     donate = psi0_again is not None and psi0 is not None
     fast = (_every_k_donating if donate else _every_k)(
-        *arguments, robust=False, return_steps=return_steps,
+        *arguments, robust=False, return_steps=True,
         return_finite=True, **chunk)
     fast, per_k = fast[:-1], fast[-1]
     failed = ~np.asarray(per_k)
     if not failed.any():
-        return fast
+        return wanted(fast)
     # Named by their index in the whole set, which on a streamed chunk is not
     # their position in it.
     named = (np.flatnonzero(failed) if indices is None
@@ -1164,16 +1179,15 @@ def davidson_eigensolver_all(
     )
     if donate:
         arguments = (hamiltonian, nbnd, psi0_again(), *arguments[3:])
-    robust = _every_k(*arguments, robust=True, return_steps=return_steps,
-                      **chunk)
+    robust = _every_k(*arguments, robust=True, return_steps=True, **chunk)
     # Keep what the fast route already converged. The robust pass still runs
     # over the whole k-set -- the shapes are static, so it must -- but its
     # answer is taken only where the fast one has none.
     take = jnp.asarray(failed)
-    return tuple(
+    return wanted(tuple(
         jnp.where(take.reshape((-1,) + (1,) * (jnp.ndim(quick) - 1)), sturdy, quick)
         for quick, sturdy in zip(fast, robust)
-    )
+    ))
 
 
 davidson_eigensolver_all.clear_cache = _clear_every_k
