@@ -30,6 +30,7 @@ import numpy as np
 
 __all__ = ["simpson", "mesh_cutoff_index", "spherical_bessel",
            "spherical_bessel_derivative", "spherical_bessel_derivative_pair",
+           "value_and_slope",
            "simpson_weights"]
 
 #: QE truncates the radial mesh here before integrating (``rcut`` in read_pseudo).
@@ -189,17 +190,30 @@ DERIVATIVE_SERIES_BELOW = 2.0
 DERIVATIVE_SERIES_TERMS = 16
 
 
-def _bessel_series(l: int, x: jnp.ndarray) -> jnp.ndarray:
-    """``j_l(x) = x^l sum_k (-x^2/2)^k / (k! (2l+2k+1)!!)``, to :data:`DERIVATIVE_SERIES_TERMS` terms."""
-    coefficients = []
+def _series_derivative(l: int, n: int, x: jnp.ndarray) -> jnp.ndarray:
+    """``d^n/dx^n`` of ``j_l``'s series to :data:`DERIVATIVE_SERIES_TERMS` terms, as a polynomial.
+
+    ``j_l(x) = sum_k c_k x^(l+2k)`` with ``c_k = (-1/2)^k / (k! (2l+2k+1)!!)``,
+    so its ``n``-th derivative is ``sum_k c_k (l+2k)!/(l+2k-n)! x^(l+2k-n)``,
+    written out here with its coefficients and evaluated by Horner's rule in
+    ``x^2``: one multiply-add a term, where differentiating the series in
+    forward mode doubled the work at every order -- the difference that shows
+    on a card running float64 at 1/70 of its float32 rate.
+    """
+    powers, coefficients = [], []
     for k in range(DERIVATIVE_SERIES_TERMS):
+        p = l + 2 * k
+        if p < n:
+            continue
         double_factorial = float(np.prod(np.arange(2 * l + 2 * k + 1, 0, -2)))
-        coefficients.append((-0.5) ** k / (math.factorial(k) * double_factorial))
+        c = (-0.5) ** k / (math.factorial(k) * double_factorial)
+        powers.append(p - n)
+        coefficients.append(c * math.factorial(p) / math.factorial(p - n))
     x2 = x * x
     total = coefficients[-1]
     for c in reversed(coefficients[:-1]):
         total = total * x2 + c
-    return x**l * total
+    return x ** powers[0] * total if powers[0] else total
 
 
 def _nth_derivative(f, n: int):
@@ -220,23 +234,23 @@ def spherical_bessel_derivative(l: int, n: int, x: jnp.ndarray) -> jnp.ndarray:
     digits to the cancellation of its ``x^-(l+1)`` terms, which differentiating
     amplifies. Measured against ``mpmath`` at 50 digits for ``x`` from 1e-4 to
     25, the first to fourth derivatives JAX takes of :func:`spherical_bessel`
-    are off by up to 3.5e-10 absolute in ``j_0'`` and 3.5e-8 in ``j_0''`` (both
-    just below 0.05), 1.2e-8 in ``j_3''`` and 4.8e-6 in ``j_3'''``, where these
-    are off by at most **5.5e-14** for every ``l`` and ``n`` up to 4.
+    are off by up to 3.5e-10 absolute in the first derivative of ``j_0`` and
+    3.5e-8 in its second (both just below 0.05), 1.2e-8 in the second of
+    ``j_3`` and 4.8e-6 in its third, where these are off by at most
+    **5.5e-14** for every ``l`` and ``n`` up to 4.
 
     The values of the transforms themselves stay :func:`spherical_bessel`'s, so
-    they remain QE's; only their derivatives come from here. Each derivative is
-    taken by nested forward-mode differentiation of the two forms, which is
-    exact arithmetic on a polynomial below the switch and on the closed form
-    above it, and the switch is a ``where`` on a sanitised argument as in
-    :func:`spherical_bessel`.
+    they remain QE's; only their derivatives come from here. Below the switch
+    the derivative is the series' own, written out as a polynomial
+    (:func:`_series_derivative`); above it, forward-mode differentiation of the
+    closed form, which is exact arithmetic on it, and the switch is a ``where``
+    on a sanitised argument as in :func:`spherical_bessel`.
     """
     if n < 1:
         raise ValueError(f"spherical_bessel_derivative wants n >= 1, got {n}")
     x = jnp.asarray(x)
     small = x < DERIVATIVE_SERIES_BELOW
-    series = _nth_derivative(partial(_bessel_series, l), n)(
-        jnp.where(small, x, 0.0))
+    series = _series_derivative(l, n, jnp.where(small, x, 0.0))
     exact = _nth_derivative(partial(spherical_bessel, l), n)(
         jnp.where(small, DERIVATIVE_SERIES_BELOW, x))
     return jnp.where(small, series, exact)
@@ -245,19 +259,34 @@ def spherical_bessel_derivative(l: int, n: int, x: jnp.ndarray) -> jnp.ndarray:
 def spherical_bessel_derivative_pair(l: int, n: int, x: jnp.ndarray):
     """``(d^n j_l/dx^n, d^(n+1) j_l/dx^(n+1))`` for ``n >= 1``, from one evaluation.
 
-    :func:`spherical_bessel_derivative` at ``n`` and ``n + 1``, to the bit,
-    for the price of one more forward derivative rather than of a second
-    nested evaluation: what a transform and its slope want together.
+    :func:`spherical_bessel_derivative` at ``n`` and ``n + 1``, the closed
+    form's two from one forward derivative: what a transform and its slope want
+    together.
     """
     if n < 1:
         raise ValueError(f"spherical_bessel_derivative_pair wants n >= 1, got {n}")
     x = jnp.asarray(x)
     small = x < DERIVATIVE_SERIES_BELOW
+    inner = jnp.where(small, x, 0.0)
+    outer = jnp.where(small, DERIVATIVE_SERIES_BELOW, x)
+    exact = jax.jvp(_nth_derivative(partial(spherical_bessel, l), n), (outer,),
+                    (jnp.ones_like(outer),))
+    return (jnp.where(small, _series_derivative(l, n, inner), exact[0]),
+            jnp.where(small, _series_derivative(l, n + 1, inner), exact[1]))
 
-    def both(f, y):
-        return jax.jvp(_nth_derivative(f, n), (y,), (jnp.ones_like(y),))
 
-    series = both(partial(_bessel_series, l), jnp.where(small, x, 0.0))
-    exact = both(partial(spherical_bessel, l), jnp.where(small, DERIVATIVE_SERIES_BELOW, x))
-    return (jnp.where(small, series[0], exact[0]),
-            jnp.where(small, series[1], exact[1]))
+def value_and_slope(value, l: int, x: jnp.ndarray):
+    """``(value(x), j_l'(x))``, the slope's closed form from the value's own forward pass.
+
+    ``value`` is the transform's own ``j_l``: :func:`spherical_bessel`, or
+    ``sin(x)/x`` for the local potential. Above :data:`DERIVATIVE_SERIES_BELOW`
+    its forward derivative is the closed form's, the one
+    :func:`spherical_bessel_derivative` takes there, so differentiating the
+    value once gives both and their sines and cosines are computed once; below
+    it the slope is the series'. The value is ``value(x)`` as written.
+    """
+    x = jnp.asarray(x)
+    small = x < DERIVATIVE_SERIES_BELOW
+    primal, closed = jax.jvp(value, (x,), (jnp.ones_like(x),))
+    series = _series_derivative(l, 1, jnp.where(small, x, 0.0))
+    return primal, jnp.where(small, series, closed)

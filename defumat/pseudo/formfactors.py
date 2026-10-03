@@ -30,7 +30,7 @@ from jax.scipy.special import erf
 
 from defumat.pseudo.radial import (
     simpson_weights, spherical_bessel, spherical_bessel_derivative,
-    spherical_bessel_derivative_pair)
+    spherical_bessel_derivative_pair, value_and_slope)
 from defumat.pseudo.upf import Pseudopotential
 from defumat.units import E2, FPI
 
@@ -155,10 +155,10 @@ def _kernels(argument, l: int, orders: tuple, sinc: bool) -> tuple:
     """
     first = orders[0]
     if first == 0:
-        value = _sinc(argument) if sinc else spherical_bessel(l, argument)
+        value = _sinc if sinc else partial(spherical_bessel, l)
         if len(orders) == 1:
-            return (value,)
-        return value, spherical_bessel_derivative(l, 1, argument)
+            return (value(argument),)
+        return value_and_slope(value, l, argument)
     if len(orders) == 1:
         return (spherical_bessel_derivative(l, first, argument),)
     return spherical_bessel_derivative_pair(l, first, argument)
