@@ -63,8 +63,9 @@ identity against the whole-k route on the same states.
    factored body's `(nat_t, 2L+1, chunk)` intermediate is about the old block's size (72 against 64
    complex values a G vector), so what it bought there (180.8 -> 140.7 MB) is fewer arrays alive at once,
    not smaller ones, and the 16384-vector chunk sized for the old block sets what is left: 71.4 / 42.8 / 71.5 MB at 16384 / 4096 / 1024 vectors, not monotonic, the same U the
-   stress showed, so part of it is XLA's scheduling of the scan. Two levers, neither tried: contract one
-   atom at a time inside the block, and re-key the chunk on what the body now holds.
+   stress showed. Contracting one atom at a time inside the block was tried and is a null (74.1 and 43.7
+   MB against 71.4 and 42.8), so the arrays that make up the rest are not located; re-keying the chunk is
+   the lever left, a time trade.
 2. **The per-mode grids with symmetry on** stay on the card, because
    `symmetrize_atom_displacement` acts on the whole `(3 nat, ...)` stack; the average's `nsym`-fold
    transient over them is gone (`90ed76a`). What is left, measured by a stage probe on eight-atom silicon

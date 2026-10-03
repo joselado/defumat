@@ -10341,8 +10341,8 @@ pass (82.9 MB of temporaries on the card, per pass by `memory_analysis()`; the `
 it the augmentation charge's forward derivative along the strain, 71.4 of the pass's 86.1 MB compile only on
 D22's CPU (the strained G set 0.8, `to_dense` 2.8, the charge along `becsum` unstrained 5.8). With eight
 atoms of one species and `nh = 8` the factored body's `(nat_t, 2L+1, chunk)` intermediate is about the old
-block's size, 72 against 64 complex values a G vector, so what the radial basis bought on this cell (180.8
--> 140.7 MB on the card) is fewer such arrays alive at once rather than smaller ones, and the chunk sized for
-the old block (16384 vectors) sets what is left: 71.4 / 42.8 / 71.5 MB at 16384 / 4096 / 1024 vectors, not
-monotonic, the U the stress showed in "The augmentation chunk under a strain", so part of it is how XLA
-schedules the scan.
+block's size, 72 against 64 complex values a G vector, so the obvious suspect was that intermediate: it is
+not. Contracting one atom at a time inside each block (a scan over atoms, intermediate `(2L+1, chunk)`) reads
+74.1 MB at the default chunk and 43.7 at 4096 against 71.4 and 42.8, a null, and not kept. What the chunk
+does move is the total, 71.4 / 42.8 / 71.5 MB at 16384 / 4096 / 1024 vectors, not monotonic, the U the stress
+showed in "The augmentation chunk under a strain"; which arrays make it up is not located.
