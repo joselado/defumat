@@ -373,7 +373,9 @@ model describes the surface. `calc.get_spiral_scan(wavevectors)`, notebook
   [38](notebooks/38_magnons.ipynb).
 
 **Getting a hard calculation to converge.** Anderson or Broyden mixing with
-Kerker or local Thomas-Fermi preconditioning, Elk's adaptive scheme for an SCF
+Kerker or local Thomas-Fermi preconditioning, a preconditioner built from the
+local density of states at the Fermi level (`mixing_mode = 'ldos'`), whose
+iteration count on a metal film does not grow with the vacuum, Elk's adaptive scheme for an SCF
 that crawls rather than oscillates, or a residual solver with its own Jacobian
 that reaches magnetic solutions no mixer does, are all options of
 `calc.get_scf()` (`mixing_mode`, `scf_solver`), and a long run checkpoints

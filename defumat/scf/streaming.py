@@ -350,7 +350,7 @@ def stream_becsum(calculation, store: np.ndarray, weights) -> tuple:
 
 def stream_densities(calculation, store, weights, *,
                      kinetic: bool = False, hubbard: bool = False,
-                     becsum_=None, reduce=None):
+                     becsum_=None, reduce=None, ldos_weights=None):
     """``(becsum, rho, tau, ns)`` from the streamed store, each finished once.
 
     ``tau`` and ``ns`` are ``None`` unless asked for. ``becsum`` is ``()`` on a
@@ -360,18 +360,41 @@ def stream_densities(calculation, store, weights, *,
     accumulated again. The values are those of the whole-set calls to
     round-off: the chunks change only the order the k contributions are added
     in.
+
+    With ``ldos_weights`` (:meth:`~defumat.scf.driver.Calculation.ldos_weights`)
+    the LDOS at the Fermi level comes back as a fifth member, the charge channel
+    on the dense grid, from the same walk of the store: each chunk's states are
+    read once and the two weight sets go through them under ``jax.vmap``, as
+    :meth:`~defumat.scf.driver.Calculation.density_and_ldos` does for the whole
+    set, and the pools' ``reduce`` carries the two extra sums with the rest.
     """
     weights = np.asarray(weights)
+    with_ldos = ldos_weights is not None
+    if with_ldos:
+        ldos_weights = np.asarray(ldos_weights)
     array, store_rows = _unwrap(store)
     accumulate = becsum_ is None
-    rho = tau = ns = None
+    rho = tau = ns = ldos = ldos_becsum = None
     for positions, rows, live in _local_chunks(store_rows, calculation.k_batch):
         w = _chunk_weights(weights, rows, live)
         psi = rows_to_device(array, positions)
-        if accumulate:
-            becsum_ = _add(becsum_, calculation.becsum(psi, w, rows=rows,
-                                                       symmetrize=False))
-        rho = _add(rho, calculation.smooth_density(psi, w, rows=rows))
+        if with_ldos:
+            stacked = jnp.stack([w, _chunk_weights(ldos_weights, rows, live)])
+            smooth = jax.vmap(
+                lambda ws: calculation.smooth_density(psi, ws, rows=rows))(stacked)
+            rho, ldos = _add(rho, smooth[0]), _add(ldos, smooth[1])
+            if calculation.is_ultrasoft:
+                raw = jax.vmap(lambda ws: calculation.becsum(
+                    psi, ws, rows=rows, symmetrize=False))(stacked)
+                if accumulate:
+                    becsum_ = _add(becsum_, jax.tree_util.tree_map(lambda a: a[0], raw))
+                ldos_becsum = _add(ldos_becsum,
+                                   jax.tree_util.tree_map(lambda a: a[1], raw))
+        else:
+            if accumulate:
+                becsum_ = _add(becsum_, calculation.becsum(psi, w, rows=rows,
+                                                           symmetrize=False))
+            rho = _add(rho, calculation.smooth_density(psi, w, rows=rows))
         if kinetic:
             tau = _add(tau, calculation.kinetic_energy_density(
                 psi, w, rows=rows, finish=False))
@@ -380,8 +403,13 @@ def stream_densities(calculation, store, weights, *,
                 psi, w, rows=rows, symmetrize=False))
         del psi
     if reduce is not None:
-        raw_becsum, rho, tau, ns = reduce(
-            (becsum_ if accumulate else (), rho, tau, ns))
+        if with_ldos:
+            raw_becsum, rho, tau, ns, ldos, ldos_becsum = reduce(
+                (becsum_ if accumulate else (), rho, tau, ns, ldos,
+                 ldos_becsum if ldos_becsum is not None else ()))
+        else:
+            raw_becsum, rho, tau, ns = reduce(
+                (becsum_ if accumulate else (), rho, tau, ns))
         if accumulate:
             becsum_ = raw_becsum
     if accumulate and becsum_:
@@ -391,4 +419,9 @@ def stream_densities(calculation, store, weights, *,
         tau = calculation.finish_kinetic_energy_density(tau)
     if hubbard:
         ns = calculation.finish_occupation_matrix(ns)
-    return becsum_, rho, tau, ns
+    if not with_ldos:
+        return becsum_, rho, tau, ns
+    if ldos_becsum:
+        ldos_becsum = calculation.finish_becsum(ldos_becsum)
+    ldos = calculation.finish_density(ldos, ldos_becsum if ldos_becsum else ())
+    return becsum_, rho, tau, ns, calculation.charge_channel(ldos)

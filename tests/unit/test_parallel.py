@@ -319,6 +319,25 @@ def test_pools_reproduce_one_on_a_noncollinear_magnet():
         assert result["iterations"] == serial["iterations"] == 8
 
 
+LDOS_SCRIPT = SCF_SCRIPT.replace("max_iterations=iterations)",
+                                 "max_iterations=iterations, mixing_mode='ldos')")
+
+
+@pytest.mark.slow
+def test_pools_reproduce_one_under_the_ldos_mixer():
+    """``mixing_mode = 'ldos'`` on the noncollinear iron: the LDOS at ``e_F`` comes out
+    of each pool's share of the density pass and is all-reduced with it, so a pool
+    that dropped or double-counted it would mix differently from the first step.
+    One process takes the whole-set pass (``Calculation.density_and_ldos``) and two
+    take the streamed one, so this also pins the two passes to each other."""
+    assert LDOS_SCRIPT != SCF_SCRIPT
+    serial = _run_pools(LDOS_SCRIPT, 1, IRON_NONCOLLINEAR_8K, 0, 8)[0]
+    pooled = _run_pools(LDOS_SCRIPT, 2, IRON_NONCOLLINEAR_8K, 0, 8)
+    for result in pooled:
+        assert abs(result["energy"] - serial["energy"]) < 1e-10
+        assert result["iterations"] == serial["iterations"] == 8
+
+
 SILICON_DISPLACED_8K = SILICON_8K.replace(" Si 0.25 0.25 0.25", " Si 0.27 0.25 0.24")
 
 

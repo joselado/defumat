@@ -204,6 +204,11 @@ new phase is started. Each entry names the missing term rather than the missing 
 because that is what decides whether it is a session or a phase.
 
 - **Wyckoff input** (P6, the one part of that phase not done).
+- **Converging a magnetic slab or a metal on a semiconductor** (P129): `mixing_mode = 'ldos'`
+  screens the charge from the states at `e_F` and is flat in the vacuum on metal films, but the
+  magnetization takes `beta` (a Stoner-like term, arXiv:2606.26693, is the next piece), an
+  insulating region gets no screening (Herbst and Levitt's LDOS+dielectric hybrid), and
+  tetrahedra are refused for want of a smooth delta.
 - **A switch from single to double precision that pays** (P126): `'mixed'` converges to the double
   state and loses the superlinear mixing step a bulk cell converges by, 0.72x on 64-atom silicon on
   the card; and **`k_batch = 'fit'` as memory mode's default on a card**, which the user decided on
@@ -23829,3 +23834,88 @@ nothing since `2d4c14b` on any run without the fixed-spin-moment warning (`ad95a
 because it keeps `3 nat` accumulators alive at once where the walk exists to bound that; XXIII 20,
 `notconv`-wide Davidson rows, 1 to 2 per cent at sixteen atoms; the second halves of 13 and 25;
 the all-reduce pack and the G-space payload of 26; and 22's default.
+
+### P129 -- Cells with vacuum: a monolayer needs no preconditioner, a metal film needs one built from the states at the Fermi level, and `mixing_mode = 'ldos'` is that one. ✅ DONE on the CPU for the aluminium slab, the cobalt film and three monolayers; a metal on a semiconductor, a magnetic slab's soft direction and any GPU number are not measured.
+
+**The question** (the user, 2026-10-04): cells with a lot of vacuum, a 2D material or a slab, are
+hard to converge; is there a better mixer than `pw.x`'s? The literature survey, the measurement
+on D22 and the proposal are `VACUUM-MIXING-NEXT.md`; the user chose its P-A and P-B.
+
+**What the measurement found.** Each cell held fixed in bohr and only `c` varied, at each input's
+own `conv_thr` and `mixing_beta`, one thread a run. A monolayer has no vacuum problem: NbSe2 (a
+2D metal) takes 9 Anderson iterations at every vacuum from 16 to 64 bohr, graphene 8, hBN 11.
+**`TF` and `local-TF` slow every monolayer down linearly in the cell length**: Kerker damps the
+vacuum's own long wavelength, whose dielectric eigenvalue is 1, so the preconditioned Jacobian
+gains an eigenvalue `~(2 pi/c)^2/q_TF^2` and the count grows as `c` (`TF`'s count over `c` is
+0.43 to 0.48 on the aluminium slab; slopes 0.44 to 0.60 iterations a bohr). A metal film does
+have a problem: five Al(100) layers, plain Anderson 25 to 34 from 16 to 64 bohr; three Co(0001)
+layers at `beta = 0.7`, not converged in 150 at any of 21, 40, 59 bohr.
+
+**What was built** (branch `ldos-precond`). Herbst and Levitt's preconditioner,
+arXiv:2009.01665: the step is `beta eps~^-1 R` on the charge, `eps~ = 1 - chi0~ v`,
+`chi0~ dV = -D dV + D <D,dV>/<D,1>`, `D` the LDOS at `e_F`.
+
+- **The LDOS from the density's own pass** (`Calculation.density_and_ldos`): `smooth_density`
+  and the raw `becsum` under `jax.vmap` over the two weight sets with the states unbatched, so the
+  transforms and `<beta|psi>` are done once (the plan's reviewer measured 0.4 of a density pass
+  fused against 1.0 separate on a synthetic set, and found every FFT unbatched on all five paths);
+  each set finished by the unbatched `finish_becsum`/`finish_density`. The streamed store and the
+  pools carry it through `stream_densities(ldos_weights=)` and the existing `reduce`.
+- **A Gaussian delta whatever the run smears with** (`Calculation.ldos_weights`), at the run's
+  own `degauss`: cold and Methfessel-Paxton derivatives go negative (to -0.094 and -0.096 of the
+  peak), and the solve needs `D >= 0`. `D` is also clamped to `D >= 0` and the clamp counted,
+  because the augmentation charge at `e_F` is signed: 1.7e-4 to 7.0e-4 of the LDOS on the cobalt
+  film. Each channel at its own level under `two_fermi_energies`. **The minimum width does not
+  matter on the cobalt film** (20 iterations at 0.005, 0.01, 0.02 Ry), so `LDOS_SIGMA_MIN = 0`.
+- **The inner solve is preconditioned conjugate gradients** on `A = v^1/2 eps~ v^-1/2 =
+  1 - v^1/2 chi0~ v^1/2`, Hermitian and `>= 1` because `chi0~` is negative semidefinite by
+  Cauchy-Schwarz with weight `D`; the dense sphere's coefficients, one FFT pair an application,
+  Kerker at `<D>` as preconditioner and first guess, a `lax.while_loop` returning its count. It
+  solves the equation projected onto the sphere: `D v x` has components outside it, which the
+  test against `eps~` in numpy had to project away (3.7e-3 of the residual on a `D` with
+  grid-scale noise). **Tolerance 1e-3** in the `1/|G|` (Hartree) norm: the same SCF count as 1e-4
+  on all nine cells tried, with 12 to 25 per cent fewer applications. The prototype's GMRES,
+  stopped in a Kerker-weighted norm loosest on the long wavelengths, lost seven iterations on
+  NbSe2 at 1e-2.
+- `ldos_preconditioner_g` for `mixing_space = 'g'`. Refused by name where a mixer is built with
+  no LDOS to hand it (the Newton-Krylov warm-up, the ultracell, the response loops) and with
+  tetrahedra, on which neither `'ldos'` (with a Gaussian of 0.01 Ry) nor plain Anderson converged
+  the aluminium slab in 200. `run_scf` warns for `'ldos'`, `TF` or `local-TF` with fixed or
+  `from_input` occupations.
+
+**The numbers, production code** (iterations, flat fit; `rho_ddot`'s within one):
+
+| cell | `anderson` | `TF` | `local-TF` | `ldos` | `pw.x` |
+|---|---|---|---|---|---|
+| Al(100), 5 layers, vacuum 16 / 32 / 48 / 64 bohr | 25 / 27 / 33 / 34 | 15 / 21 / 27 / 36 | 13 / 14 / 17 / 20 | **10 / 11 / 10 / 10** | 16 plain, 14 `TF`, 14 `local-TF` at 16 |
+| Co(0001), 3 layers, vacuum 21 / 40 / 59 bohr | n.c. / n.c. / n.c. | 37 / 51 / 74 | 24 / 30 / 35 | **22 / 20 / 22** | 24 `local-TF` at 40 |
+| NbSe2, vacuum 16 / 28 / 48 / 64 | 12 / 9 / 9 / 9 | 14 / 24 / 33 / 43 | 11 / 13 / 16 / 18 | 10 / 10 / 10 / 10 | |
+| graphene, `c` = 20 / 40 / 60 | 8 / 8 / 8 | 16 / 31 / 37 | 12 / 16 / 22 | 8 / 8 / 8 | |
+| hBN, fixed occupations, `c` = 20 / 40 / 60 | 11 / 11 / 11 | 19 / 34 / 39 | 15 / 18 / 24 | 11 / 11 / 11 | |
+
+Every converged arm of a cell lands on one state (at most 6.8e-8 Ry apart on the aluminium slab
+at `conv_thr = 1e-8`; the cobalt film's moment to 6.4e-6 mu_B). On hBN `'ldos'` is plain Anderson to
+the bit. `mixing_space = 'g'` gives the same counts (cobalt 20 at dual 8, aluminium 10).
+
+**Wall clock against `pw.x`**, the cobalt film as committed, alone on one performance core of
+D22, the second of two runs: `pw.x` 7.5 serial **40.9 s** (24 iterations, `local-TF`, its own
+report); this code's `local-TF` 106.0 s (30), `TF` 152.2 s (51), `'ldos'` **76.1 s** (20), so
+1.86x `pw.x` and 28 per cent faster than the input's own mode here. `'ldos'` costs 0.83 s an
+iteration over `TF`'s 2.98, not decomposed. `pw.x`'s whole `mix_rho`, `local-TF` included, is
+31 ms a call, where one call of this code's `local-TF` is 255 ms on the 59-bohr film's grid, 1.4
+times the input's: `OPEN.md` Part VIII item 4.
+
+**The checks that share no code with the solve**: the operator against `eps~` written again in
+numpy, to 1e-13, with a `D` that varies and a field for which the rank-one term fires; the
+electron count; the solve at 1e-10; the LDOS integral against `dN/de_F` from the eigenvalues
+alone (37.29653813 against 37.29653799 states/Ry on the prototype); the LDOS in the metal and at
+4.2e-3 of its maximum in the middle of the 16-bohr gap. `tests/unit/test_ldos_mixing.py` (14, 22 s),
+`tests/regression/test_ldos_mixing_runs.py` (3, slow, 201 s), and two pools against one in
+`tests/unit/test_parallel.py`.
+
+**Not done.** `'ldos'` is not the default. Not measured: a metal on a semiconductor (Herbst and
+Levitt: Kerker 26, LDOS 26 on Al on GaAs, where their LDOS+dielectric hybrid takes 13); a magnetic
+slab, whose soft direction is the magnetization the scheme does not screen (Barat, Levitt and
+Torrent, arXiv:2606.26693, add a Stoner-like term); a large in-plane supercell of a 2D metal; any
+GPU number, where the band dial's `(nbnd, 2, n1, n2, n3)` temporary under the weight vmap wants
+one `memory_analysis()` on a card.

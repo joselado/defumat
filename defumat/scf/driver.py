@@ -128,8 +128,10 @@ from defumat.scf.density import (
     sum_band,
 )
 from defumat.scf.ewald import build_ewald
+import defumat.scf.mixing as mixing_module
 from defumat.scf.mixing import (
     DENSITY_DEPENDENT,
+    LDOS_DEPENDENT,
     PRECONDITIONED,
     AndersonMixer,
     SphereLayout,
@@ -138,6 +140,8 @@ from defumat.scf.mixing import (
     kerker_preconditioner_g,
     local_tf_preconditioner,
     local_tf_preconditioner_g,
+    ldos_preconditioner,
+    ldos_preconditioner_g,
     resolve_mixing_space,
 )
 from defumat.scf.residual import make_residual
@@ -590,6 +594,7 @@ def _augmentation_of(calculation):
         return calculation.symmetrize(calculation.augmented(base, becsum_))
 
     return augmentation
+
 
 
 def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None,
@@ -5094,6 +5099,78 @@ class Calculation:
             becsum_ = self.becsum(wavefunctions, weights)
         return self.finish_density(rho, becsum_)
 
+    def ldos_weights(self, eigenvalues, levels):
+        """The weights that turn the density routine into the LDOS at the Fermi level.
+
+        ``w_k delta_sigma(e_F - e_nk)`` in place of the occupations, so that the
+        density routine returns ``D(r)``, the local density of states at ``e_F``
+        in states per Ry per bohr^3, summed over spin at ``nspin = 1`` because the
+        k-weights carry the two. It integrates to ``dN/de_F``.
+
+        **A Gaussian, whatever the run smears with**, of width
+        ``max(degauss, LDOS_SIGMA_MIN)``: Methfessel-Paxton's and cold smearing's
+        derivatives go negative, and :func:`~defumat.scf.mixing.ldos_preconditioner`
+        needs ``D >= 0``. Each channel at its own level when the magnetization is
+        constrained (``two_fermi_energies``). ``None`` where there are no states
+        at the Fermi level to weight: fixed occupations and ``from_input``. A
+        tetrahedron run has no width to build the delta with and is refused.
+        """
+        scheme = self.system.occupations
+        if scheme in ("fixed", "from_input"):
+            return None
+        if scheme.startswith("tetrahedra"):
+            raise NotImplementedError(
+                "the LDOS at the Fermi level needs a smooth delta, and the tetrahedron "
+                "method has none; run_scf refuses mixing_mode = 'ldos' with it")
+        sigma = max(float(self.system.degauss), mixing_module.LDOS_SIGMA_MIN)
+        eigenvalues = jnp.asarray(eigenvalues)
+        if eigenvalues.shape[0] == 2 and "fermi_energy_up" in levels:
+            level = jnp.asarray([levels["fermi_energy_up"],
+                                 levels["fermi_energy_down"]])[:, None, None]
+        else:
+            level = levels["fermi_energy"]
+        x = (level - eigenvalues) / sigma
+        delta = jnp.exp(-x * x) / (sigma * np.sqrt(np.pi))
+        return jnp.asarray(self.system.kpoints.weights)[None, :, None] * delta
+
+    def charge_channel(self, field) -> jnp.ndarray:
+        """The charge of a density-shaped field: channel 0, or up plus down."""
+        field = jnp.asarray(field)
+        if field.shape[0] == 2 and not self.noncolin:
+            return field[0] + field[1]
+        return field[0]
+
+    def density_and_ldos(self, wavefunctions, weights, ldos_weights):
+        """``(becsum, rho, D)``: the density and the LDOS at ``e_F`` from one pass.
+
+        Both are the density routine, which is linear in its weights, so the part
+        that reads the states (:meth:`smooth_density`, and :meth:`becsum` before
+        its symmetrisation) runs once under ``jax.vmap`` over the two weight sets
+        with the states unbatched. JAX leaves every operation that depends on the
+        states alone unbatched -- the transforms, ``<beta|psi>`` -- so they are
+        done once; only the weighted sums gain the axis. Each set is then
+        finished by the unbatched :meth:`finish_becsum` and :meth:`finish_density`,
+        so the density is the one :meth:`density` returns, to round-off. ``D`` is
+        :meth:`charge_channel` of the finished LDOS, on the dense grid. The
+        augmentation charge is part of it, and on a d-metal it is about half of
+        it.
+        """
+        if is_host_store(wavefunctions):
+            becsum_, rho, _, _, ldos = stream_densities(
+                self, wavefunctions, weights, ldos_weights=ldos_weights)
+            return becsum_, rho, ldos
+        stacked = jnp.stack([jnp.asarray(weights), jnp.asarray(ldos_weights)])
+        smooth = jax.vmap(lambda w: self.smooth_density(wavefunctions, w))(stacked)
+        becsums = [(), ()]
+        if self.is_ultrasoft:
+            raw = jax.vmap(
+                lambda w: self.becsum(wavefunctions, w, symmetrize=False))(stacked)
+            becsums = [self.finish_becsum(jax.tree_util.tree_map(lambda a: a[i], raw))
+                       for i in (0, 1)]
+        rho = self.finish_density(smooth[0], becsums[0])
+        ldos = self.finish_density(smooth[1], becsums[1])
+        return becsums[0], rho, self.charge_channel(ldos)
+
     def smooth_density(self, wavefunctions, weights, *, rows=None) -> jnp.ndarray:
         """``sum_band``'s ``|psi|^2`` on the smooth grid, before anything else.
 
@@ -6293,6 +6370,12 @@ def _solve_residual(
         # a bad one, and the superposition of atomic charges is a bad one for
         # exactly the systems this solver is worth using on.
         warmup_mixing = options.pop("warmup_mixing", "kerker")
+        if warmup_mixing.lower() in LDOS_DEPENDENT:
+            raise ValueError(
+                "warmup_mixing = 'ldos' is not implemented: the Newton-Krylov "
+                "warm-up has no LDOS to hand the preconditioner, and without one it "
+                "would run plain anderson under the name. Use 'kerker' or 'anderson'"
+            )
         warm_mixer = get_mixer(warmup_mixing, beta=mixing_beta)
         if warmup_mixing.lower() in PRECONDITIONED:
             # Its own preconditioner at ``mixing_beta``, *not* the Krylov
@@ -7294,6 +7377,51 @@ def run_scf(
                 **({} if density_dependent else {"nelec": calculation.nelec}),
             )
 
+    scheme = calculation.system.occupations
+    if mixing_mode.lower() in PRECONDITIONED and scheme in ("fixed", "from_input"):
+        # ``VACUUM-MIXING-NEXT.md``: a Thomas-Fermi screening length derived from
+        # the charge is a property an insulator does not have, and the screened
+        # long wavelengths are then slowed rather than helped.
+        warnings.warn(
+            f"mixing_mode = {mixing_mode!r} screens the residual as a metal would, "
+            f"and with occupations = {scheme!r} this run has no states at the Fermi "
+            f"level to screen with: on an hBN monolayer it measured 15 to 24 "
+            f"iterations against plain anderson's 11, growing with the vacuum. "
+            f"'anderson' is the mode for an insulator",
+            RuntimeWarning, stacklevel=2,
+        )
+
+    if mixing_mode.lower() in LDOS_DEPENDENT and scheme.startswith("tetrahedra"):
+        # Measured and not settled (``VACUUM-MIXING-NEXT.md``): with a Gaussian of
+        # 0.01 Ry in place of a width the method does not have, the aluminium slab
+        # under tetrahedra_opt did not converge in 200 iterations, and neither did
+        # plain anderson, so the combination has no number behind it.
+        raise ValueError(
+            f"mixing_mode = 'ldos' with occupations = {scheme!r} is not implemented: "
+            f"the LDOS at the Fermi level needs a smooth delta, which the tetrahedron "
+            f"method does not have, and building it with a Gaussian is unmeasured. "
+            f"Use smearing, or another mixing_mode"
+        )
+
+    if mixing_mode.lower() in LDOS_DEPENDENT:
+        # Herbst and Levitt's preconditioner reads the LDOS at the Fermi level,
+        # which the loop below builds in the density's own pass and hands it at
+        # every iteration (``Calculation.density_and_ldos``).
+        mixer.precondition = (
+            ldos_preconditioner_g(layout, calculation.basis.dense,
+                                  calculation.system.cell, beta=mixer.beta)
+            if layout is not None else
+            ldos_preconditioner(calculation.basis.dense, calculation.system.cell,
+                                tuple(np.shape(rho)), beta=mixer.beta)
+        )
+        if scheme in ("fixed", "from_input"):
+            warnings.warn(
+                f"mixing_mode = 'ldos' with occupations = {scheme!r}: there are no "
+                f"states at the Fermi level, so every step is the plain one, beta R, "
+                f"and the run is plain anderson",
+                RuntimeWarning, stacklevel=2,
+            )
+
     if RHO_DDOT_FIT and isinstance(mixer, AndersonMixer):
         # Beside the preconditioner and for the same reason: it needs the
         # G-vectors, which ``get_mixer`` does not have. Only Anderson fits
@@ -7754,23 +7882,42 @@ def run_scf(
                     hamiltonians, nbnd, wavefunctions, thresholds, return_steps=True
                 )
             wg, levels = calculation.occupations(eigenvalues)
+            wants_ldos = getattr(getattr(mixer, "precondition", None),
+                                 "needs_ldos", False)
+            ldos_weights = (calculation.ldos_weights(eigenvalues, levels)
+                            if wants_ldos else None)
             if streaming:
                 # One walk of the store for every sum over k the iteration
                 # needs, each finished once; ``ns`` is picked up below where
                 # the whole-set path computes it.
-                becsum_out, rho_out, streamed_tau, streamed_ns = stream_densities(
+                streamed = stream_densities(
                     calculation, wavefunctions, wg,
                     kinetic=tau_state is not None,
                     hubbard=calculation.is_hubbard,
                     reduce=pools.allreduce_sum if pooled else None,
+                    ldos_weights=ldos_weights,
                 )
+                becsum_out, rho_out, streamed_tau, streamed_ns = streamed[:4]
+                if ldos_weights is not None:
+                    ldos = streamed[4]
                 if tau_state is not None:
                     tau_out = streamed_tau
             else:
-                becsum_out = calculation.becsum(wavefunctions, wg)
-                rho_out = calculation.density(wavefunctions, wg, becsum_out)
+                if ldos_weights is None:
+                    becsum_out = calculation.becsum(wavefunctions, wg)
+                    rho_out = calculation.density(wavefunctions, wg, becsum_out)
+                else:
+                    becsum_out, rho_out, ldos = calculation.density_and_ldos(
+                        wavefunctions, wg, ldos_weights)
                 if tau_state is not None:
                     tau_out = calculation.kinetic_energy_density(wavefunctions, wg)
+            if wants_ldos:
+                # Every iteration, from this iteration's states, before the mix
+                # that uses it; zero where there are no states at ``e_F``, which
+                # makes the step the plain one.
+                mixer.precondition.update_ldos(
+                    ldos if ldos_weights is not None
+                    else jnp.zeros(int(np.prod(calculation.basis.dense.grid))))
             # **The last read of the store in this iteration**, so back to the
             # buffer it goes. Everything between here and the fetch above --
             # the energy terms, ``v_of_rho`` on the dense grid, the mixer's

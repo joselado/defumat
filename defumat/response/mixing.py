@@ -45,7 +45,7 @@ import dataclasses
 import jax.numpy as jnp
 import numpy as np
 
-from defumat.scf.mixing import MIXERS, get_mixer
+from defumat.scf.mixing import LDOS_DEPENDENT, MIXERS, get_mixer
 
 __all__ = ["ResponseMixer", "DEFAULT_RESPONSE_MIXING", "NMIX_PH", "ddv_scf"]
 
@@ -136,6 +136,12 @@ class ResponseMixer:
 
     def __init__(self, name: str = DEFAULT_RESPONSE_MIXING, beta: float = 0.7,
                  history: int = NMIX_PH):
+        if name.lower() in LDOS_DEPENDENT:
+            raise ValueError(
+                "mixing_mode = 'ldos' is a ground-state mixer and is not implemented "
+                "for a response loop, which has no LDOS to hand it; it would run "
+                "plain anderson under the name"
+            )
         # Only a mixer with a history takes a depth; linear mixing has none.
         takes_history = "history" in {
             entry.name for entry in dataclasses.fields(MIXERS[name.lower()])}
