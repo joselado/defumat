@@ -338,7 +338,7 @@ __all__ = ["DEFAULT_K_BATCH", "resolve_k_batch", "map_k", "sum_k",
            "sum_bands", "map_axis", "map_windows",
            "PROJECTOR_STORES", "resolve_projectors",
            "WFC_STORES", "resolve_wfc_store", "resolve_scf_wfc_store", "park_wavefunctions",
-           "fetch_wavefunctions",
+           "fetch_wavefunctions", "upload",
            "MEMORY_MODES", "resolve_memory_mode", "memory_preset",
            "k_chunks", "K_BATCH_FIT", "k_batch_fit_requested", "whole_axis_vmap"]
 
@@ -1234,3 +1234,23 @@ def fetch_wavefunctions(psi):
         return psi
     sharding = _device_sharding()
     return psi if sharding is None else jax.device_put(psi, sharding)
+
+
+def upload(array):
+    """A host array onto the device at its own size; anything else as ``jnp.asarray``.
+
+    For a consumer that takes a streamed store, or a band slice of one, whole.
+    On a card ``jnp.asarray`` of a host array peaks at twice its size on the
+    device and ``jax.device_put`` of a contiguous one at once
+    (``GPU-MEMORY-NEXT.md``, 2026-09-29), so a numpy array goes through
+    ``device_put`` after ``np.ascontiguousarray``, which is a host copy only
+    where the array is a strided view such as ``store[..., :nbnd, :]``. The
+    values are the same bytes either way. A JAX array or a tracer goes through
+    ``jnp.asarray`` untouched, since ``np.ascontiguousarray`` would bring a
+    device array to the host and cannot take a tracer at all.
+    """
+    import numpy as np
+
+    if isinstance(array, np.ndarray):
+        return jax.device_put(np.ascontiguousarray(array))
+    return jnp.asarray(array)

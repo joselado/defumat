@@ -375,6 +375,37 @@ class SizeEstimate:
             if self.start_vectors else 0,
         )
 
+    def at_k_batch(self, k_batch: int | None) -> "SizeEstimate":
+        """The same estimate with ``k_batch`` k-points in flight instead.
+
+        ``None`` is the whole mesh. The lines that move are the ones
+        :func:`_k_live_arrays` names, the eigensolver's two parts and the
+        start's, each linear in the k-points in flight and each evaluated by
+        the expression :func:`estimate_size` evaluates, so the result equals a
+        fresh estimate at that chunk field by field. Nothing is counted again:
+        this is what lets :func:`choose_k_batch` bisect on one estimate.
+        """
+        k_live = self.nk if k_batch is None else min(k_batch, self.nk)
+        nvecx = self.davidson_basis * self.nbnd
+        ndim = self.npwx * self.npol
+        zc = _COMPLEX_BYTES.get(self.precision, 16)
+        in_flight = _k_live_arrays(k_live, self.nbnd, nvecx, ndim, self.npwx,
+                                   self.nkb, zc)
+        band_box_bytes, eigensolver_fixed = _k_live_buffers(
+            k_live, self.nbnd, nvecx, ndim, self.npol, self.smooth_points, zc)
+        start_fixed = _k_live_start(k_live, self.nk, self.start_vectors, ndim, zc,
+                                    self.wfc_store)
+        return replace(
+            self,
+            k_batch=k_live,
+            # By name, so the lines this estimate's dials left out stay out and
+            # the order the report breaks ties in is kept.
+            arrays={name: in_flight.get(name, size) for name, size in self.arrays.items()},
+            eigensolver_fixed=float(eigensolver_fixed),
+            start_fixed=float(start_fixed),
+            band_box_bytes=float(band_box_bytes),
+        ).at_band_batch(self.band_batch)
+
     @property
     def dense_points(self) -> int:
         return int(np.prod(self.dense_grid))
@@ -641,6 +672,9 @@ def estimate_size(
     # 90 GB of phantom on the cell this module was written for.
     k_live = nk if k_batch is None else min(k_batch, nk)
     nvecx = davidson_basis * nbnd
+    # Every line that holds ``k_live`` k-points' worth, written once for this
+    # function and :meth:`SizeEstimate.at_k_batch`.
+    in_flight = _k_live_arrays(k_live, nbnd, nvecx, ndim, npwx, nkb, zc)
 
     arrays = {
         # **Streamed, the set is not on the device**: one chunk of it is, put
@@ -648,8 +682,7 @@ def estimate_size(
         # one channel at a time.
         **({"wavefunctions (nspin,nk,nbnd,ndim)": wf_spin * nk * nbnd * ndim * zc}
            if wfc_store != "stream" else
-           {"wavefunctions, one streamed chunk (k,nbnd,ndim)":
-                k_live * nbnd * ndim * zc}),
+           {_STREAMED_CHUNK: in_flight[_STREAMED_CHUNK]}),
         # **The core is resident under BOTH routes**, and putting it inside the
         # conditional below was this model's second wrong turn about the same
         # object. ``Calculation.__init__`` assigns ``projector_core``
@@ -670,20 +703,15 @@ def estimate_size(
         # rebuilt from the core above and freed again. Nothing else moves.
         **({"projectors vkb (nk,npwx,nkb)": nk * npwx * nkb * zc}
            if projectors == "store" else
-           {"projectors rebuilt, one chunk (npwx,nkb)": k_live * npwx * nkb * zc}),
-        # ``psi`` and ``hpsi``, both ``(nvecx, ndim)`` -- the subspace and H
-        # applied to it. ``S|psi>`` is deliberately not stored (the Ritz
-        # vector's projections are a rotation of ``becq``), which is why this
-        # is two and not three.
-        "Davidson subspace psi+hpsi": 2 * k_live * nvecx * ndim * zc,
-        # ``evc``, ``hevc``, ``sevc`` and ``residual``, each ``(nbnd, ndim)``,
-        # live at once inside ``solve``.
-        "Davidson Ritz block": 4 * k_live * nbnd * ndim * zc,
+           {_REBUILT_CHUNK: in_flight[_REBUILT_CHUNK]}),
+        # The subspace and the Ritz block, :func:`_k_live_arrays` says what each is.
+        _SUBSPACE: in_flight[_SUBSPACE],
+        _RITZ: in_flight[_RITZ],
         "density+potential (nspin_mag,ngm)": 2 * nspin_mag * ngm * zc,
         "fields on dense grid": 3 * nspin_mag * int(np.prod(dense_grid)) * zr,
     }
     if nkb:
-        arrays["Davidson becp+becq (nvecx,nkb)"] = 2 * k_live * nvecx * nkb * zc
+        arrays[_BEC] = in_flight[_BEC]
     # **The per-k basis bookkeeping every Hamiltonian reads** (``GPU-MEMORY-NEXT.md``
     # item 24): ``|k+G|^2`` (real), the FFT index (int32) and the sphere's mask,
     # and the gamma trick's ``-(k+G)`` index where the half sphere is consumed.
@@ -902,11 +930,11 @@ def estimate_size(
     # the executable holds both (the ``band_batch = 16`` point above, 24 bands
     # as a 16-block and an 8-tail) -- so the boxes in flight are ``b + n % b``,
     # :func:`_boxes_in_flight`.
-    band_box_bytes = k_live * _FFT_COEFFICIENT * npol * int(np.prod(smooth_grid)) * zc
-    eigensolver_fixed = k_live * (
-        _SUBSPACE_COEFFICIENT * nvecx * ndim * zc
-        + _RITZ_COEFFICIENT * nbnd * ndim * zc
-    )
+    #
+    # The terms that carry ``k_live`` are :func:`_k_live_buffers`'s, so that
+    # :meth:`SizeEstimate.at_k_batch` evaluates the same expressions.
+    band_box_bytes, eigensolver_fixed = _k_live_buffers(
+        k_live, nbnd, nvecx, ndim, npol, int(np.prod(smooth_grid)), zc)
     eigensolver_buffer = int(
         eigensolver_fixed + _boxes_in_flight(band_batch, nbnd) * band_box_bytes
     )
@@ -930,8 +958,7 @@ def estimate_size(
     else:
         natomwfc = npol * count_atomic_wavefunctions(pseudos, structure)
     start_vectors = max(int(natomwfc), int(nbnd))
-    span_k = k_live if wfc_store == "stream" else nk
-    start_fixed = (span_k + 2 * k_live) * start_vectors * ndim * zc
+    start_fixed = _k_live_start(k_live, nk, start_vectors, ndim, zc, wfc_store)
     start_buffer = int(
         start_fixed + _boxes_in_flight(band_batch, start_vectors) * band_box_bytes
     )
@@ -952,6 +979,56 @@ def estimate_size(
         eigensolver_fixed=float(eigensolver_fixed),
         start_fixed=float(start_fixed), band_box_bytes=float(band_box_bytes),
     )
+
+
+#: The names of the ``arrays`` lines that hold ``k_live`` k-points' worth.
+_STREAMED_CHUNK = "wavefunctions, one streamed chunk (k,nbnd,ndim)"
+_REBUILT_CHUNK = "projectors rebuilt, one chunk (npwx,nkb)"
+_SUBSPACE = "Davidson subspace psi+hpsi"
+_RITZ = "Davidson Ritz block"
+_BEC = "Davidson becp+becq (nvecx,nkb)"
+
+
+def _k_live_arrays(k_live, nbnd, nvecx, ndim, npwx, nkb, zc) -> dict:
+    """Every ``arrays`` line that holds ``k_live`` k-points' worth, by name.
+
+    The caller keeps the ones its dials put in the estimate: the streamed chunk
+    only when the store streams, the rebuilt projectors only when they are
+    rebuilt, the two ``bec`` blocks only when there are projectors.
+    """
+    return {
+        _STREAMED_CHUNK: k_live * nbnd * ndim * zc,
+        _REBUILT_CHUNK: k_live * npwx * nkb * zc,
+        # ``psi`` and ``hpsi``, both ``(nvecx, ndim)`` -- the subspace and H
+        # applied to it. ``S|psi>`` is deliberately not stored (the Ritz
+        # vector's projections are a rotation of ``becq``), which is why this
+        # is two and not three.
+        _SUBSPACE: 2 * k_live * nvecx * ndim * zc,
+        # ``evc``, ``hevc``, ``sevc`` and ``residual``, each ``(nbnd, ndim)``,
+        # live at once inside ``solve``.
+        _RITZ: 4 * k_live * nbnd * ndim * zc,
+        _BEC: 2 * k_live * nvecx * nkb * zc,
+    }
+
+
+def _k_live_buffers(k_live, nbnd, nvecx, ndim, npol, smooth_points, zc):
+    """``(band_box_bytes, eigensolver_fixed)`` at ``k_live`` k-points in flight.
+
+    The eigensolver buffer's two parts, :func:`estimate_size`'s comment above
+    their use says where each comes from.
+    """
+    band_box_bytes = k_live * _FFT_COEFFICIENT * npol * smooth_points * zc
+    eigensolver_fixed = k_live * (
+        _SUBSPACE_COEFFICIENT * nvecx * ndim * zc
+        + _RITZ_COEFFICIENT * nbnd * ndim * zc
+    )
+    return band_box_bytes, eigensolver_fixed
+
+
+def _k_live_start(k_live, nk, start_vectors, ndim, zc, wfc_store):
+    """The start's band-independent part: the span whole-k unless the store streams."""
+    span_k = k_live if wfc_store == "stream" else nk
+    return (span_k + 2 * k_live) * start_vectors * ndim * zc
 
 
 def _boxes_in_flight(band_batch: int | None, n: int) -> int:
@@ -1130,20 +1207,23 @@ def choose_k_batch(system, pseudos, nbnd: int | None = None,
                                 available=None, headroom=headroom)
         available = int(stats["bytes_limit"]) - int(stats["bytes_in_use"])
     budget = headroom * available
+    # One estimate, re-evaluated at every chunk the bisection tries
+    # (:meth:`SizeEstimate.at_k_batch`, arithmetic only): it used to be a whole
+    # :func:`estimate_size` per step, each counting both spheres and ``npw`` at
+    # every k-point again for terms that are linear in the chunk.
+    base = estimate_size(
+        system, pseudos, nbnd=nbnd, k_batch=None, davidson_basis=davidson_basis,
+        band_batch=band_batch, projectors=projectors, wfc_store=wfc_store,
+    )
 
     def peak(chunk):
-        return estimate_size(
-            system, pseudos, nbnd=nbnd, k_batch=chunk, davidson_basis=davidson_basis,
-            band_batch=band_batch, projectors=projectors, wfc_store=wfc_store,
-        ).peak_bytes
+        return base.at_k_batch(chunk).peak_bytes
 
-    whole = peak(None)
+    whole = base.peak_bytes
     if whole <= budget:
         return KBatchChoice(k_batch=None, fits=True, estimate=int(whole),
                             available=int(available), headroom=headroom)
-    nk = estimate_size(system, pseudos, nbnd=nbnd, k_batch=1,
-                       davidson_basis=davidson_basis, band_batch=band_batch,
-                       projectors=projectors, wfc_store=wfc_store).nk
+    nk = base.nk
     # The peak grows with the chunk, so the largest that fits is found by
     # bisection, and among the chunks no larger that need the same number of
     # calls the one with the least padding is ceil(nk / calls).

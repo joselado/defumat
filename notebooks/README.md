@@ -284,12 +284,18 @@ order of magnitude it is rather than as current to the second.
 | `03` | 100 | `21` | 30 | `45` | 85 | `17` | 203 |
 | `05` | 10 | `15` | 31 | `14` | 89 | `38` | 242 |
 | `04` | 122 | `24` | 31 | `26` | 109 | `19` | 243 |
-| `22` | 12 | `28` | 90 | `33` | 115 | `36` | 244 |
+| `22` | 12 | `28` | 90 | `33` | 401 | `36` | 244 |
 | `42` | 13 | `31` | 34 | `13` | 131 | `35` | 276 |
 | `16` | 18 | `40` | 34 | `30` | 232 | `20` | 282 |
 | `00` | 22 | `23` | 35 | `39` | 151 |  |  |
-| `07` | 22 | `32` | 35 | `41` | 164 |  |  |
+| `07` | 22 | `32` | 84 | `41` | 164 |  |  |
 | `46` | 61 | `47` | 260 | `48` | 121 |  |  |
+
+`32` and `33` read **84 s** and **401 s** on 2026-10-04, through
+`tools/export_notebooks.sh` on a machine carrying other work at a load of about 11, so
+both are upper bounds; the run before it, on the same kind of load, gave `33` 444 s. Both
+now converge their silicon control with symmetry kept and sum it over the whole mesh,
+and `33` runs AlAs at 23 bands.
 
 `48` reads **121 s** on 2026-09-27, its first measurement, unpinned through
 `tools/export_notebooks.sh`: one spiral SCF of the nickel-iodine chain and one

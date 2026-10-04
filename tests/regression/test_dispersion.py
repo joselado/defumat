@@ -476,17 +476,28 @@ def test_linear_mixing_diverges_on_a_slab_and_is_refused():
     )
 
 
+#: The slab's symmetry identities relate columns assembled from independent
+#: solves, so their floor is the solves' convergence: at the defaults (``tr2``
+#: in ``ph.x``'s units and a scheduled CG, since 2026-10-03) the elastic tensor
+#: is symmetric under pair exchange to 4.4e-7 relative and the point group holds
+#: to 7.3e-8, both runs stopping where ``ph.x`` would (measured on D22). These
+#: are the convergence they were measured at before: 1e-24 per strain component
+#: is about where the raw ``sum(dV^2) < 1e-14`` sat on this grid, and the CG was
+#: held at 1e-12.
+SLAB_IDENTITY = {"tr2": 1.0e-24, "threshold": 1.0e-12}
+
+
 @lru_cache(maxsize=None)
 def _graphene_electrostriction():
     system, pseudos, calculation, result = _converged(GRAPHENE_ES, 1e-12)
     eigenvalues, psi = refined_states(calculation, result)
     response = strain_response(
         calculation, psi, eigenvalues, jnp.asarray(result.density),
-        alpha_mix=SLAB_ALPHA_MIX, max_iterations=120,
+        alpha_mix=SLAB_ALPHA_MIX, max_iterations=120, **SLAB_IDENTITY,
     )
     return system, calculation, result, response, electrostriction(
         calculation, result, strain=response,
-        alpha_mix=SLAB_ALPHA_MIX, max_iterations=120,
+        alpha_mix=SLAB_ALPHA_MIX, max_iterations=120, **SLAB_IDENTITY,
     )
 
 

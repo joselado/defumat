@@ -192,7 +192,13 @@ def test_the_velocity_at_gamma_matches_a_frozen_sphere_difference(pseudo_dir):
     calculation, _, _, psi, density = _gamma_states(pseudo_dir)
     code, difference = _jvp_against_difference(
         calculation, jnp.asarray(psi), jnp.asarray(density), None)
-    assert np.abs(difference).max() > 1.0, "the scale the comparison is against"
+    # The scale is read as a norm, which a rotation inside a multiplet leaves
+    # alone: one entry of the Gamma_15 triplet's rows is the eigensolver's
+    # choice of basis (rule D4), and read as the largest entry this guard was
+    # 1.0775 when written and 0.987 on 2026-10-04 on this workstation (D22
+    # failed the same guard at master and at the integration head), with the
+    # comparison itself at 1.2e-8. The norm reads 5.35.
+    assert np.linalg.norm(difference) > 1.0, "the scale the comparison is against"
     np.testing.assert_allclose(code, difference, atol=1e-7)
 
 

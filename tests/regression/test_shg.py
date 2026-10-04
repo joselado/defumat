@@ -155,6 +155,15 @@ def test_silicon_has_no_second_harmonic_at_all():
     eigensolver's arbitrary rotation made it (rule D4). With the multiplet's
     block average they fall to 0.10 and 0.055.
 
+    **That level is the FFT grid and not a floor of the assembly.** This cell
+    is ``nosym``, which chooses its 15^3 grid without the factor of 4 that
+    diamond's quarter-lattice translation needs, so the potential breaks
+    inversion at the grid's sampling error and the run warns. Measured again on
+    this call, ``max|chi|`` is 3.2e-2 pm/V as committed and 3.0e-5 with
+    symmetry kept for the SCF (a commensurate 16^3 grid) and the same mesh
+    passed as ``kpoints=``. The cut at 14 bands is a real gap, 5.7e-2 Ry, so
+    none of it is a multiplet cut.
+
     A number that is small has to be shown to be small *for the right reason*,
     which is what running the opposite symmetry through the same machinery is
     for: AlAs and silicon differ by one species and are otherwise the same
@@ -184,14 +193,22 @@ def test_the_absorption_turns_on_at_half_the_gap():
     ten widths below the true edge and 5 per cent about two. A 1 per cent
     threshold therefore cannot locate an edge better than ``10 eta`` no matter
     how right the code is, which is what the first version of this test
-    discovered. Measured here on a 6x6x6 mesh, with the smallest direct gap
-    0.20971 Ry: the 5 per cent crossing sits **0.12 eta** above ``E_gap / 2``
-    and the 10 per cent crossing 2.13 eta, while the gap itself is **21 eta**
-    away. Two thresholds are checked so that neither is load-bearing.
+    discovered. Measured here on a 6x6x6 mesh at 23 bands, with the smallest
+    direct gap 0.20971 Ry: the 5 per cent crossing sits **0.89 eta** below
+    ``E_gap / 2`` and the 10 per cent crossing 2.13 eta above it, while the gap
+    itself is **21 eta** away. Two thresholds are checked so that neither is
+    load-bearing.
+
+    **23 bands because 22 cut a multiplet**: ``band_cut_gap`` is 3.1e-15 Ry at
+    22 and 1.3e-2 at 23, and the crossings are the same at both. The 5 per cent
+    one read **0.12 eta above** when this was written, before ``27eeaa2`` put
+    back the ``l = 1`` projector's tangent at ``k + G = 0``, which is Gamma's
+    row of ``dH/dk``: with ``origin_tangent=False`` it reads +0.12 again, so the
+    move is the stronger dipoles at Gamma and not the band count.
     """
     system, pseudos, result = converged("alas-raman.in")
     mesh = full_mesh(system, 6)
-    chi = run_shg(system, pseudos, result.density, kpoints=mesh, nbnd=22,
+    chi = run_shg(system, pseudos, result.density, kpoints=mesh, nbnd=23,
                   window=0.6, nw=240, broadening=0.005)
 
     import equinox as eqx
@@ -200,7 +217,7 @@ def test_the_absorption_turns_on_at_half_the_gap():
 
     _, _, eigenvalues, _ = fixed_density_states(
         eqx.tree_at(lambda s: s.kpoints, system, mesh),
-        pseudos, result.density, nbnd=22, conv_thr=1.0e-10,
+        pseudos, result.density, nbnd=23, conv_thr=1.0e-10,
     )
     eigenvalues = np.asarray(eigenvalues)
     if eigenvalues.ndim == 3:
@@ -255,7 +272,8 @@ def test_a_spinor_run_gives_the_same_tensor_as_an_unpolarized_one():
 
 @pytest.mark.slow
 def test_the_tensor_agrees_with_elk_on_the_same_crystal():
-    """Against ``nonlinopt.f90``, on the same AlAs cell and the same 6x6x6 mesh.
+    """Against ``nonlinopt.f90``, on the same AlAs cell and the same 6x6x6 mesh,
+    and not the same band count.
 
     **What is comparable and what is not**, stated rather than discovered.
     Elk is all-electron LAPW and this is a norm-conserving pseudopotential at
@@ -266,18 +284,35 @@ def test_the_tensor_agrees_with_elk_on_the_same_crystal():
     0.005 Ha -- getting that wrong makes every peak twice too tall and nothing
     else, which is exactly how it was found.
 
-    Measured on the committed reference: the **resonance position** agrees to
-    **0.5%** (2.152 eV against 2.163), the **peak height** to **7%** (672.5
-    pm/V against 628.0), and the **static value** to **11%** (-75.8 against
-    -85.4). The static number is the one that moves with the basis and it moves
-    the right way -- ``alas-raman.in``'s ``ecutwfc = 10`` gives -66.3 -- and
-    then **stops moving**: 45 Ry gives -76.6 against 30 Ry's -75.8, so the
-    remaining 11% is the pseudopotential against the all-electron answer and
-    not an unconverged basis. That is why the assertion below is loose and the
-    measured numbers rather than the tolerance are what is recorded.
+    **The band count is not Elk's, and the comparison cannot tell.** Elk's run
+    holds 37 states, 12 of them occupied, because Al 2p and As 3d are valence
+    in its species (``nempty`` is per atom, so 24 empty, and ``nstfv`` is
+    12 + 24 + 1); this one holds 23 with 4 occupied. 23 is where the cut here
+    falls in a gap, ``band_cut_gap`` 9.0e-3 Ry, where 22 cut doublets at 13 of
+    the 216 k-points, and Elk's own top state is degenerate with the next at 3
+    of its 22 reduced k-points, so Elk cuts inside a multiplet at its count.
+    Rotating the multiplets a 22-band cut splits moves chi by at most
+    **4.7e-4** of its peak, 100 to 1000 times below every tolerance asserted
+    here, so the comparison is indifferent to the cut on either side.
+
+    Measured on the committed reference at 23 bands: the **resonance
+    position** agrees to **0.5%** (2.152 eV against 2.163), the **peak height**
+    to **0.8%** (632.9 pm/V against 628.0) and the **static value** to **8%**
+    (-78.5 against -85.4). **These read 7% (672.5) and 11% (-75.8) when this
+    was written**, at 22 bands and before ``27eeaa2`` put back the ``l = 1``
+    projector's tangent at ``k + G = 0``, Gamma's row of ``dH/dk``, which
+    ``ph.x`` zeroes and an all-electron code has no reason to: on today's code
+    at 22 bands the default gives 632.5 and ``origin_tangent=False`` 672.5, so
+    the tangent is the whole of that move and the band count is 0.4 pm/V of the
+    rest. The static number is the one that moves with the basis, and the sweep
+    was taken before the tangent: ``alas-raman.in``'s ``ecutwfc = 10`` gave
+    -66.3, 30 Ry -75.8 and 45 Ry -76.6, so the residue is the pseudopotential
+    against the all-electron answer and not an unconverged basis. That is why
+    the assertion below is loose and the measured numbers rather than the
+    tolerance are what is recorded.
     """
     frequencies, elk = read_elk_chi(ELK / "alas-chi2-123.elk.out")
-    chi = spectrum("alas-shg.in", 6, 22, window=0.6, nw=240, broadening=0.010)
+    chi = spectrum("alas-shg.in", 6, 23, window=0.6, nw=240, broadening=0.010)
     ours = np.asarray(chi.chi)[:, 0, 1, 2]
 
     # The static limit, in Elk's own atomic units.
@@ -317,19 +352,23 @@ def test_the_scissors_shift_moves_the_two_photon_resonance_by_half_of_itself():
     is left alone. A scissors correction is a statement about energies and not
     about wavefunctions.
 
-    Measured against ``alas-chi2-123-scissor.elk.out`` at ``Delta = 0.05`` Ha:
-    the peak moves **0.0502 Ry** against a half-scissor of 0.0500, lands at
-    0.1042 Ha against Elk's 0.1035, and its height falls to **0.60** of the
-    unscissored value against Elk's 0.58. The static value collapses in both
-    codes (-3.10 to -1.14 here, -3.50 to -1.00 in Elk) and is the loosest of
-    the three, because a near-cancellation amplifies the 11% the two codes
-    already differ by.
+    Measured against ``alas-chi2-123-scissor.elk.out`` at ``Delta = 0.05`` Ha,
+    at 23 bands, the same mesh and not the same band count as Elk (the test
+    above says why that is indifferent here): the peak moves **0.0502 Ry**
+    against a half-scissor of 0.0500, lands at 0.1042 Ha against Elk's 0.1035,
+    and its height falls to **0.62** of the unscissored value against Elk's
+    0.58. The static value collapses in both codes (-3.21 to -1.17 a.u. here,
+    -3.50 to -1.00 in Elk) and is the loosest of the three, because a
+    near-cancellation amplifies the 8% the two codes already differ by. At 22
+    bands and before the ``l = 1`` tangent at ``k + G = 0`` (``27eeaa2``) the
+    same run read a height ratio of 0.60 and a static value of -3.10 to -1.14,
+    with the same shift.
     """
     from defumat.response.shg import CHI2_AU_TO_PM_PER_V
 
     scissor = 0.1  # Ry, which is Elk's 0.05 Ha
-    plain = spectrum("alas-shg.in", 6, 22, window=0.6, nw=240, broadening=0.010)
-    shifted = spectrum("alas-shg.in", 6, 22, window=0.6, nw=240,
+    plain = spectrum("alas-shg.in", 6, 23, window=0.6, nw=240, broadening=0.010)
+    shifted = spectrum("alas-shg.in", 6, 23, window=0.6, nw=240,
                        broadening=0.010, scissor=scissor)
 
     def peak(result):
@@ -364,13 +403,20 @@ def test_the_three_parts_agree_with_elks_three_parts():
     same matrix elements, so agreeing on all three is a much stronger statement
     than agreeing on one number.
 
-    The tolerance is the same 25% the total carries, and for the same reason:
-    LAPW against a norm-conserving pseudopotential with a different gap.
-    ``sigma_II`` is the smallest of the three and the loosest.
+    The tolerance is 35%, looser than the 25% the total carries, for the same
+    reason: LAPW against a norm-conserving pseudopotential with a different
+    gap. ``sigma_II`` is the smallest of the three and the loosest.
+
+    Measured at 23 bands, the same mesh and not the same band count as Elk:
+    ``chi_II`` 36.08 a.u. against 30.81 (+17%), ``eta_II`` 53.95 against 45.35
+    (+19%) and ``sigma_II`` 21.33 against 17.31 (+23%). At 22 bands and before
+    the ``l = 1`` tangent at ``k + G = 0`` (``27eeaa2``) they read 34.70, 54.04
+    and 21.32, so the tangent moves ``chi_II``, the part with the intermediate
+    state, by 4% and the other two by 0.2% or less.
     """
     from defumat.response.shg import CHI2_AU_TO_PM_PER_V
 
-    result = spectrum("alas-shg.in", 6, 22, window=0.6, nw=240, broadening=0.010)
+    result = spectrum("alas-shg.in", 6, 23, window=0.6, nw=240, broadening=0.010)
     ours = {
         "chi_II": np.asarray(result.chi_ii)[:, 0, 1, 2],
         "eta_II": np.asarray(result.eta_ii)[:, 0, 1, 2],
@@ -420,29 +466,31 @@ def test_an_augmented_second_harmonic_is_still_exactly_zincblende():
     the assembly runs and not evidence about the term. What is evidence about
     the term is the test below.
 
-    Measured on ``alas-us.in``, the whole 4x4x4 grid, 24 bands: the peak is
-    **1577.3 pm/V** at 2.74 eV, the six allowed components agree to
-    **3.5e-6** of it and the largest forbidden one is **6.6e-4** of it.
+    Measured on ``alas-us.in``, the whole 4x4x4 grid, 23 bands, a cut in a
+    gap (``band_cut_gap`` 1.57e-2 Ry): the peak is **1578.3 pm/V** at 2.74 eV,
+    the six allowed components agree to **5.5e-9** of it and the largest
+    forbidden one is **3.7e-8** of it, the same order as the norm-conserving
+    ``alas-raman.in`` at 14 bands on the same grid (2.3e-9 and 1.5e-8). Both
+    bounds below are 1e-6, which is 180 times the spread and 27 times the
+    forbidden component.
 
-    **Three orders looser than the norm-conserving cell above**, whose own
-    spread is 2.3e-9, and that gap is the augmentation's floor rather than a
-    defect of the assembly: the same order shows in every quantity here that
-    has to interpolate a radial table, and the symmetry is imposed by nothing
-    on either cell.
+    **Why 23.** At 24 bands the case cut a doublet or a triplet at 7 of the 64
+    k-points (``band_cut_gap`` 5.3e-15 Ry), which members were kept was the
+    eigensolver's arbitrary choice, and the forbidden components read 6.6e-4 of
+    the allowed ones and the spread 3.5e-6; rotating the cut multiplets before
+    cutting moved the tensor by 6.8e-4 and 1.05e-3 of its peak in two draws.
+    So a bound tight enough to say anything about this tensor is also one a
+    cut through a multiplet fails.
     """
-    chi = np.asarray(spectrum("alas-us.in", 4, 24, **SHG_OPTIONS).chi)
+    chi = np.asarray(spectrum("alas-us.in", 4, 23, **SHG_OPTIONS).chi)
     peak = {(a, b, c): float(np.max(np.abs(chi[:, a, b, c])))
             for a in range(3) for b in range(3) for c in range(3)}
     allowed = [peak[t] for t in ZINCBLENDE]
     forbidden = [v for t, v in peak.items() if t not in ZINCBLENDE]
 
     assert min(allowed) > 100.0
-    assert max(allowed) - min(allowed) < 1.0e-4 * max(allowed)   # 3.5e-6
-    # Looser than the norm-conserving cell's 1e-3 above, and the margin is
-    # thin: the measured 6.6e-4 is what an augmented run's radial
-    # interpolation leaves, so this bound is about a factor of five and not
-    # about an order of magnitude.
-    assert max(forbidden) < 3.0e-3 * max(allowed)
+    assert max(allowed) - min(allowed) < 1.0e-6 * max(allowed)   # 5.5e-9
+    assert max(forbidden) < 1.0e-6 * max(allowed)                # 3.7e-8
 
 
 @pytest.mark.slow
@@ -456,18 +504,24 @@ def test_the_augmentation_dipole_reaches_the_second_harmonic_tensor():
     it reaches *this* assembly, which the symmetry above cannot see: deleting
     it must move the tensor, and by more than the eigensolver's own scatter.
 
-    Measured: **40.8 pm/V** on a peak of 1577.3, which is 2.6 per cent, against
-    0.5 per cent for the same deletion in the linear conductivity. That ratio
-    is what it should be: ``chi^(2)`` carries the velocity matrix element three
-    times where ``sigma`` carries it twice.
+    Measured at 23 bands: **34.1 pm/V** on a peak of 1578.3, which is 2.2 per
+    cent, against 0.5 per cent for the same deletion in the linear
+    conductivity. That ratio is what it should be: ``chi^(2)`` carries the
+    velocity matrix element three times where ``sigma`` carries it twice.
+
+    It read **40.8 pm/V on 1577.3, 2.6 per cent**, when this was written, at 24
+    bands and before ``27eeaa2`` put back the ``l = 1`` projector's tangent at
+    ``k + G = 0``. At 23 bands with ``origin_tangent=False`` it reads 40.2 on
+    1578.2, so the tangent is worth 6.2 pm/V of the deletion and 0.13 of the
+    peak, and the band count 0.6 and 0.8.
     """
     from defumat.response.velocity import VelocityOperator
 
-    chi = np.asarray(spectrum("alas-us.in", 4, 24, **SHG_OPTIONS).chi)
+    chi = np.asarray(spectrum("alas-us.in", 4, 23, **SHG_OPTIONS).chi)
     original = VelocityOperator.augmentation_connection
     VelocityOperator.augmentation_connection = lambda self, psi, direction: None
     try:
-        dropped = np.asarray(spectrum("alas-us.in", 4, 24, **SHG_OPTIONS).chi)
+        dropped = np.asarray(spectrum("alas-us.in", 4, 23, **SHG_OPTIONS).chi)
     finally:
         VelocityOperator.augmentation_connection = original
 

@@ -59,7 +59,7 @@ import numpy as np
 
 from defumat.basis.fft import g_to_r, r_to_g
 from defumat.eager import compiled
-from defumat.response.sternheimer import SternheimerSolver
+from defumat.response.sternheimer import SternheimerSolver, pass_threshold
 from defumat.system.cell import Cell
 from defumat.system.kpoints import KPoints
 
@@ -200,8 +200,13 @@ class TwoSphereSolver(SternheimerSolver):
 
     # -- the three pieces that move to the second sphere -------------------
 
-    def _operator(self, vectors, ik, spin):
-        """``ch_psi_all`` with ``H`` and ``S`` at ``k+q`` and ``eps`` at ``k``."""
+    def _occupied_overlapped(self, ik, spin):
+        """``S_{k+q}|psi_occ(k+q)>``, the level shift's fixed half on the second sphere."""
+        return self.hamiltonians[spin].apply_s(self.psi_kq[spin][ik], ik)
+
+    def _operator(self, vectors, ik, spin, s_occupied=None):
+        """``ch_psi_all`` with ``H`` and ``S`` at ``k+q`` and ``eps`` at ``k``;
+        ``s_occupied`` as :meth:`SternheimerSolver._operator` takes it."""
         hamiltonian = self.hamiltonians[spin]
         occupied = self.psi_kq[spin][ik]
         eps = self.eigenvalues[spin][ik][:, None]
@@ -212,6 +217,8 @@ class TwoSphereSolver(SternheimerSolver):
 
         overlaps = jnp.einsum("mg,ng->mn", jnp.conj(occupied), s)
         overlaps = jnp.where(self.projector_mask_kq[spin][ik][:, None], overlaps, 0.0)
+        if s_occupied is not None:
+            return out + self.alpha_pv * jnp.einsum("mn,mg->ng", overlaps, s_occupied)
         lifted = jnp.einsum("mn,mg->ng", overlaps, occupied)
         return out + self.alpha_pv * hamiltonian.apply_s(lifted, ik)
 
@@ -641,8 +648,12 @@ class _WholeDisplacementsAtQ:
         self.iterations = 0
         self.solves = 0
 
-    def respond(self, dvscf, include_induced: bool):
-        """One iteration's solves: the complex response density per mode."""
+    def respond(self, dvscf, include_induced: bool, threshold=None):
+        """One iteration's solves: the complex response density per mode.
+
+        Each solve starts from the previous pass's ``dpsi``, zeros on the first
+        (``iudwf``); ``threshold`` is this pass's CG threshold.
+        """
         solver = self.solver
         response = []
         for atom in range(self.nat):
@@ -659,7 +670,11 @@ class _WholeDisplacementsAtQ:
                         lambda psi, ik, spin, b=self.bare[atom, cart], f=induced:
                         b[spin][ik] + f(psi, ik, spin)
                     )
-                solution = solver.solve(perturbation)
+                previous = self.dpsi[atom, cart]
+                start = (jnp.zeros_like(self.bare[atom, cart]) if previous is None
+                         else previous)
+                solution = solver.solve(perturbation, start=start,
+                                        threshold=threshold)
                 self.dpsi[atom, cart] = solution.dpsi
                 self.iterations += solution.iterations
                 self.solves += 1
@@ -679,7 +694,7 @@ def screening_loop_at_q(
     (:mod:`defumat.response.chunked_phonon`) -- and everything here acts on
     whole-grid objects: the kernel at ``q``, the convergence test and the mixer.
     """
-    from defumat.response.mixing import ResponseMixer
+    from defumat.response.mixing import ResponseMixer, ddv_scf
 
     nat = displacements.nat
     grid_shape = tuple(np.shape(density))
@@ -687,8 +702,8 @@ def screening_loop_at_q(
     # device, where the displacements ask for it (the k-chunked route, which at
     # ``q`` always runs without symmetry): every operation here is per mode
     # except the mixer, whose history is in host memory already. The
-    # convergence test is a maximum, which does not depend on the order, so
-    # the history is the device route's to the bit.
+    # convergence test sums each mode's change, in numpy here and on the device
+    # on the other route, so the two histories agree to round-off.
     host = bool(getattr(displacements, "host_fields", False))
     stack = np.stack if host else jnp.stack
     xp = np if host else jnp
@@ -704,7 +719,9 @@ def screening_loop_at_q(
 
     mixer = ResponseMixer(mixing_mode, beta=alpha_mix)
     for iteration in range(max_iterations):
-        response = displacements.respond(dvscf, iteration > 0)
+        response = displacements.respond(
+            dvscf, iteration > 0,
+            threshold=pass_threshold(displacements.solver, history))
 
         drho = stack(response).reshape((nat, 3) + grid_shape)
         induced = stack([
@@ -712,12 +729,23 @@ def screening_loop_at_q(
             for atom in range(nat) for cart in range(3)
         ]).reshape(dvscf.shape)
 
-        change = float(xp.max(xp.abs(induced - dvscf)) ** 2)
+        # ``ph.x``'s ``|ddv_scf|^2`` of the worst single mode, as the Gamma
+        # loop tests it (:data:`defumat.response.phonon.TR2`); the potential is
+        # complex, and ``ndimtot`` counts its entries as two reals each, as at
+        # ``Gamma``. Until 2026-10-03 this was ``max |dV|^2`` over the grid,
+        # about five decades tighter than ``ph.x``'s test on 20^3 silicon.
+        difference = induced - dvscf
+        change = ddv_scf(
+            [difference[atom, cart] for atom in range(nat) for cart in range(3)],
+            joint=False,
+        )
         history.append(change)
         if verbose:
-            print(f"  response iteration {iteration + 1}: |ddV|^2 = {change:.3e}")
-        if change < tr2:
-            dvscf = induced
+            print(f"  response iteration {iteration + 1}: |ddv_scf|^2 = {change:.3e}")
+        # Tested before mixing, and on convergence the input is kept, as
+        # ``mix_potential`` keeps it; ``drho`` is this pass's output density,
+        # which is ``ph.x``'s ``drhop`` too.
+        if change < tr2 / calculation.system.npol:
             converged = True
             break
 
@@ -1123,7 +1151,7 @@ def require_a_two_sphere_regime(calculation, q_crystal) -> None:
 def dynamical_matrix_at_q(
     calculation, wavefunctions, eigenvalues, density, becsum=(),
     q=(0.0, 0.0, 0.0), q_cartesian: bool = False, nbnd: int | None = None,
-    threshold: float = 1.0e-14, alpha_mix: float = 0.7, tr2: float = 1.0e-14,
+    threshold: float | None = None, alpha_mix: float = 0.7, tr2: float = 1.0e-14,
     max_iterations: int = 100, verbose: bool = False,
 ):
     """``D(q)``: the dynamical matrix at one wavevector.
@@ -1179,8 +1207,12 @@ def dynamical_matrix_at_q(
     streamed = _streams(calculation, wavefunctions, keep_internals=False,
                         what="the dynamical matrix at q")
     result = _GroundState(wavefunctions, eigenvalues, density, becsum)
-    solver = make_sternheimer(calculation, result, threshold=threshold,
-                              host_store=streamed)
+    # The bare solves stay at the fixed 1e-14 this entry always used; the
+    # loop's are scheduled unless a number is given (``pass_threshold``).
+    solver = make_sternheimer(
+        calculation, result, threshold=1.0e-14 if threshold is None else threshold,
+        host_store=streamed)
+    solver.schedule = threshold is None
     potential = calculation.potential(density)
 
     kq, hamiltonians_kq, eigenvalues_kq, psi_kq = states_at_k_plus_q(

@@ -89,7 +89,7 @@ from defumat.forces.energy import (
     _spinor_constraint_energy, _spinor_projector_energies, hoisted, with_hoisted,
 )
 from defumat.scf.potential import total_charge
-from defumat.response.sternheimer import SternheimerSolver, local_perturbation
+from defumat.response.sternheimer import SternheimerSolver, local_perturbation, scalars_at
 from defumat.response.velocity import VelocityOperator
 
 __all__ = ["StreamedField"]
@@ -146,9 +146,10 @@ def _passes(calculation, key) -> dict:
         ), position, projector_velocity
 
     def respond(big, rowset, hamiltonians, psi, arrays, scalars, v_scf, ddd_paw,
-                bare_c, dv, coefficients):
+                bare_c, dv, coefficients, start_c):
         """``dpsi`` on one chunk, its worst iteration count and residual per
-        channel, and the tangent of the chunk's raw ``(rho_smooth, becsum)``."""
+        channel, and the tangent of the chunk's raw ``(rho_smooth, becsum)``.
+        ``start_c`` is the chunk's previous solution, the CG's first iterate."""
         solver = solver_on(big, rowset, hamiltonians, psi, arrays, scalars,
                            v_scf, ddd_paw)
         induced = local_perturbation(solver.calculation, dv, v_scf, ddd_paw,
@@ -157,7 +158,7 @@ def _passes(calculation, key) -> dict:
         def perturbation(states, ik, spin):
             return bare_c[spin][ik] + induced(states, ik, spin)
 
-        dpsi, steps, residual = solver.solve_arrays(perturbation)
+        dpsi, steps, residual = solver.solve_arrays(perturbation, start=start_c)
         _, parts = jax.jvp(solver.density_parts, (solver.psi,), (dpsi,))
         return dpsi, steps, residual, parts
 
@@ -208,12 +209,14 @@ class StreamedField:
         self.iterations = 0
         self.solves = 0
 
-    def _arguments(self, rows, live):
-        """The leading arguments of both passes, for one chunk."""
+    def _arguments(self, rows, live, threshold=None):
+        """The leading arguments of both passes, for one chunk. ``threshold``
+        replaces the solver's in the traced scalars, so a schedule reaches the
+        compiled pass without recompiling it."""
         return (self.big, row_leaves(self.calculation, rows), self.hamiltonians,
                 _rows_of(self.solver.psi, rows),
-                self.solver.chunk_arrays(rows, live), self.scalars, self.v_scf,
-                self.ddd_paw)
+                self.solver.chunk_arrays(rows, live),
+                scalars_at(self.scalars, threshold), self.v_scf, self.ddd_paw)
 
     def prepare(self) -> None:
         """``P_c^+ r_a|psi>`` for the three directions, into the host store."""
@@ -231,14 +234,17 @@ class StreamedField:
                     self.commutators[axis][:, written] = (
                         np.asarray(commutator)[:, :live])
 
-    def respond(self, dvscf, onecentre, include_induced: bool):
+    def respond(self, dvscf, onecentre, include_induced: bool, threshold=None):
         """One iteration's three solves: ``(drho, dbecsum)`` per direction.
 
         ``drho`` is finished (on the dense grid, augmented) and not
         symmetrised; ``dbecsum`` is the raw response, and is returned only for
         PAW, whose one-centre potential is built from it -- the same two
         objects the whole-k route's ``response_density`` and
-        ``response_becsum`` return.
+        ``response_becsum`` return. Each chunk's solve starts from its previous
+        solution in the host store, which is zero before the first pass, so one
+        program serves every pass at the cost of one more ``(nspin, live, nocc,
+        npwx)`` upload per solve; ``threshold`` is this pass's CG threshold.
         """
         solver = self.solver
         fields, coefficients = [], []
@@ -256,12 +262,12 @@ class StreamedField:
         parts = [None, None, None]
         worst = [0, 0, 0]
         for rows, live in self.chunks:
-            arguments = self._arguments(rows, live)
+            arguments = self._arguments(rows, live, threshold)
             written = rows[:live]
             for axis in range(3):
                 dpsi, steps, _, chunk_parts = self.passes["respond"](
                     *arguments, _rows_of(self.bare[axis], rows), fields[axis],
-                    coefficients[axis],
+                    coefficients[axis], _rows_of(self.dpsi[axis], rows),
                 )
                 self.dpsi[axis][:, written] = np.asarray(dpsi)[:, :live]
                 parts[axis] = _add(parts[axis], chunk_parts)

@@ -109,6 +109,13 @@ stated trade the previous paragraph records rather than an oversight. It is
 also the smaller of the two by the ratio of ``nm`` to the FFT box, which is
 where the two hundred separating 100 MB from 26 GB comes from.
 
+**The k axis is walked a chunk at a time** (:mod:`defumat.response.walk`): a
+chunk's states cross to the device, its velocity matrix elements and pair
+vectors are built on its own rows and contracted into the matrix, and the next
+chunk follows, so the states are never on the device for the whole k axis. The
+chunk is the calculation's ``k_batch`` and moves the matrix at round-off, through
+the order of the k sum.
+
 Refused by name: finite ``q``, ultrasoft and PAW, metals, ``nspin != 1``,
 noncollinear magnetism and spin-orbit coupling, and a **reduced k-set** -- see
 :func:`require_a_sum_over_states_regime`.
@@ -123,11 +130,12 @@ import numpy as np
 from defumat.basis.fft import g_to_r, r_to_g
 from defumat.basis.gvectors import refuse_gamma_storage
 from defumat.batching import (
-    map_axis, map_windows, resolve_k_batch, resolve_pair_batch,
-    resolve_w_batch, sum_k,
+    map_axis, map_windows, resolve_pair_batch, resolve_w_batch, sum_k,
 )
-from defumat.eager import compiled
 from defumat.response.velocity import VelocityOperator
+from defumat.response.walk import (
+    chunk_size, padded, row_leaves, store_rows, walk, with_rows,
+)
 from defumat.units import E2, FPI
 from defumat.system.kpoints import is_reduced
 
@@ -427,7 +435,9 @@ def independent_response(
             built there.
         scissor: a rigid shift (Ry) of the empty states, PRL 107, 186401's
             Eq. (3). The velocity matrix elements are renormalised with it.
-        k_batch: how many k-points are in flight, as everywhere else.
+        k_batch: how many k-points each chunk of the walk over k holds;
+            ``"default"`` is the calculation's own ``k_batch`` and ``None`` the
+            whole axis in one chunk (:func:`~defumat.response.walk.chunk_size`).
         pair_batch: how many occupied-empty **pair densities** are in flight
             inside one k-point. One of them is a whole complex field on the
             smooth grid, so this is the dial that decides whether the phase's
@@ -453,7 +463,8 @@ def independent_response(
     """
     require_a_sum_over_states_regime(calculation)
 
-    wavefunctions = jnp.asarray(wavefunctions)
+    # The states stay where they are, a streamed store in host memory or a
+    # device array, and cross to the device a k-chunk at a time below.
     if wavefunctions.ndim == 3:
         wavefunctions = wavefunctions[None]
     eigenvalues = jnp.asarray(eigenvalues)
@@ -470,14 +481,13 @@ def independent_response(
     # renormalised consistently -- the two are one approximation, not two.
     shifted = eigenvalues.at[..., nocc:].add(precision.as_real(scissor))
 
-    # ``dH/dk``, the head's ingredient and the reason this is not a pure
-    # transcription. One jvp per cartesian direction over the whole k axis.
-    velocity = VelocityOperator(calculation, v_scf)
-    elements = velocity.matrix_elements(wavefunctions)  # (3, nspin, nk, nb, nb)
-    elements = jnp.moveaxis(elements[:, 0], 0, 1)  # (nk, 3, nbnd, nbnd)
+    # Built on the whole set for its refusals and for the point it
+    # differentiates around; each chunk's operator is handed its rows of
+    # ``kcart`` (:mod:`defumat.response.walk`).
+    kcart = np.asarray(VelocityOperator(calculation, v_scf).kcart)
 
     weights, _ = calculation.occupations(eigenvalues)
-    weights = jnp.asarray(weights)[0]  # (nk, nbnd), summing to nelec
+    weights = np.asarray(weights)[0]  # (nk, nbnd), summing to nelec
 
     rows, columns = _pairs(nocc, nbnd)
     zomega = jnp.asarray(frequencies) + 1j * precision.as_real(broadening)
@@ -485,8 +495,7 @@ def independent_response(
 
     grid = calculation.basis.smooth.grid
     volume = calculation.system.cell.volume
-    mask = jnp.asarray(calculation.basis.planewaves.mask)
-    batch = resolve_k_batch(k_batch)
+    batch = chunk_size(calculation, k_batch)
     itemsize = np.dtype(precision.complex).itemsize
     pairs = resolve_pair_batch(
         pair_batch, npairs=int(rows.size),
@@ -507,11 +516,39 @@ def independent_response(
         # contracted away. This is the whole frequency cost of the phase.
         return _assemble(scalars, vectors, chunk)
 
-    x = compiled(
-        lambda a: sum_k(one_k, a, batch=batch),
-        (wavefunctions[0], calculation.fft_index, mask,
-         shifted[0], weights, elements),
-    )
+    # The potential on the smooth grid, k-independent, built once here rather
+    # than in every chunk and direction.
+    terms = calculation.local_terms(v_scf)
+
+    def elements_of(rowset, psi, kcart):
+        """One chunk's ``<m|dH/dk_a|n>``, ``(chunk, 3, nbnd, nbnd)``."""
+        # ``dH/dk``, the head's ingredient and the reason this is not a pure
+        # transcription. One jvp per cartesian direction over the chunk's rows.
+        velocity = VelocityOperator(with_rows(calculation, rowset), v_scf, kcart=kcart,
+                                    local_terms=terms)
+        elements = velocity.matrix_elements(psi, sequential=True)  # (3, 1, chunk, nb, nb)
+        return jnp.moveaxis(elements[:, 0], 0, 1)
+
+    def contract(elements, psi, fft_index, mask, energies, occupation):
+        """One chunk's share of ``(nw, nm, nm)``."""
+        return sum_k(one_k, (psi[0], fft_index, mask, energies, occupation,
+                             elements), batch=batch)
+
+    shifted = np.asarray(shifted[0])
+    fft_index = np.asarray(calculation.fft_index)
+    mask = np.asarray(calculation.basis.planewaves.mask)
+
+    def arguments(chunk_rows, live):
+        # The padded rows are a repeat of a real one and carry zero ``wg``,
+        # which every pair's weight ``(wg_i - wg_j)/Omega`` is linear in.
+        psi = store_rows(wavefunctions, chunk_rows)
+        return ((row_leaves(calculation, chunk_rows), psi,
+                 jnp.asarray(kcart[chunk_rows])),
+                (psi, jnp.asarray(fft_index[chunk_rows]), jnp.asarray(mask[chunk_rows]),
+                 jnp.asarray(shifted[chunk_rows]),
+                 jnp.asarray(padded(weights, chunk_rows, live))))
+
+    x = walk(int(weights.shape[0]), batch, arguments, elements_of, contract)
     return ChiZero(
         x=x,
         frequencies=zomega,

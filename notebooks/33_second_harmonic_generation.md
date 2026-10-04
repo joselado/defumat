@@ -29,14 +29,14 @@ PSEUDO, CASES = Path("../tests/data/pseudo"), Path("../tests/data/qe")
 
 alas = Calculator.from_file(CASES / "alas-shg.in", PSEUDO, announce=False)
 mesh = KPoints.automatic((6, 6, 6), (0, 0, 0), alas.system.cell)
-chi = alas.get_shg(kpoints=mesh, nbnd=22, window=0.6, nw=240, broadening=0.010)
+chi = alas.get_shg(kpoints=mesh, nbnd=23, window=0.6, nw=240, broadening=0.010)
 
 xyz = chi.component(0, 1, 2)
 print("AlAs chi_xyz at low frequency = %.1f pm/V  (d = %.1f pm/V)"
       % (xyz[0].real, xyz[0].real / 2))
 ```
 
-    AlAs chi_xyz at low frequency = -75.8 pm/V  (d = -37.9 pm/V)
+    AlAs chi_xyz at low frequency = -78.5 pm/V  (d = -39.2 pm/V)
 
 
 ## Zincblende leaves exactly one number
@@ -64,26 +64,28 @@ print("\nlargest of the other %d components: %.2e of the peak"
       % (27 - len(survive), max(v for k, v in peaks.items() if k not in survive) / largest))
 ```
 
-    chi^xyz     672.4 pm/V
-    chi^xzy     672.4 pm/V
-    chi^yxz     672.4 pm/V
-    chi^yzx     672.4 pm/V
-    chi^zxy     672.6 pm/V
-    chi^zyx     672.6 pm/V
+    chi^xyz     632.9 pm/V
+    chi^xzy     632.9 pm/V
+    chi^yxz     632.9 pm/V
+    chi^yzx     632.9 pm/V
+    chi^zxy     632.9 pm/V
+    chi^zyx     632.9 pm/V
     
-    largest of the other 21 components: 4.07e-04 of the peak
+    largest of the other 21 components: 2.41e-09 of the peak
 
 
 ## The control: silicon has to give nothing
 
 A number that comes out small has to be shown to be small for the right reason. Silicon is
 diamond structure, which has an inversion centre, so every component of $\chi^{abc}$ is
-forbidden. It differs from AlAs by one species and is otherwise the same calculation, which
-makes it the sharpest test of the whole machinery that exists here.
+forbidden. It is one species away from AlAs and goes through the same calculation, which
+makes it the sharpest test of the whole machinery that exists here. Its ground state is
+converged with the crystal's symmetry kept, so the density has the inversion centre exactly,
+and the tensor is then summed over the whole mesh, as AlAs's is.
 
 
 ```python
-silicon = Calculator.from_file(CASES / "si2-nosym.in", PSEUDO, announce=False)
+silicon = Calculator.from_file(CASES / "si2-symmetric.in", PSEUDO, announce=False)
 si_mesh = KPoints.automatic((6, 6, 6), (0, 0, 0), silicon.system.cell)
 si_chi = silicon.get_shg(kpoints=si_mesh, nbnd=14, window=0.6, nw=120, broadening=0.010)
 
@@ -92,9 +94,9 @@ print("silicon peak |chi| = %9.4f pm/V" % np.abs(si_chi.chi).max())
 print("ratio              = %.1e" % (np.abs(si_chi.chi).max() / np.abs(chi.chi).max()))
 ```
 
-    AlAs    peak |chi| =    672.58 pm/V
-    silicon peak |chi| =    0.0120 pm/V
-    ratio              = 1.8e-05
+    AlAs    peak |chi| =    632.90 pm/V
+    silicon peak |chi| =    0.0000 pm/V
+    ratio              = 8.4e-09
 
 
 ## The spectrum, and where its absorption starts
@@ -163,8 +165,8 @@ print("chi(0)     (pm/V)   %8.1f  %8.1f" % (xyz[0].real, chi_elk[0].real * 24.43
 
                         defumat     Elk
     resonance (eV)         2.152     2.163
-    peak |chi| (pm/V)      672.4     628.0
-    chi(0)     (pm/V)      -75.8     -85.4
+    peak |chi| (pm/V)      632.9     628.0
+    chi(0)     (pm/V)      -78.5     -85.4
 
 
 ## What the number means
@@ -188,8 +190,8 @@ print("chi = %.1f pm/V   ->   d = %.1f pm/V" % (xyz[0].real, xyz[0].real / 2))
 print("band truncation diagnostic: %.1e of the peak" % chi.truncation)
 ```
 
-    chi = -75.8 pm/V   ->   d = -37.9 pm/V
-    band truncation diagnostic: 2.9e-03 of the peak
+    chi = -78.5 pm/V   ->   d = -39.2 pm/V
+    band truncation diagnostic: 3.6e-03 of the peak
 
 
 ---

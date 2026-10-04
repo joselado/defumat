@@ -22,6 +22,9 @@ on the traced structure instead: the closure is traced to a jaxpr with every
 array it closes over hoisted to an argument, the jaxpr's printed form is hashed,
 and one ``jit`` of that jaxpr is kept per hash and handed the hoisted arrays.
 Two calls whose closures differ only in the arrays they hold share one program.
+:func:`compiled_function` is the same kept program handed back as a callable,
+for a loop that calls one closure many times and should trace it once
+(the torque's chunked derivative).
 
 **When it engages, and why each refusal is there.**
 
@@ -48,15 +51,27 @@ Two calls whose closures differ only in the arrays they hold share one program.
   arithmetic on constants needs a value, a second trace evaluates it
   (``jax.ensure_compile_time_eval``), as it was evaluated eagerly.
 
-The cache is the one piece of module-level mutable state in the package that
-outlives a call. It holds the open jaxpr and its compiled program, never the
-arrays, and it is bounded (``CACHE_SIZE``) because every entry pins an
-executable.
+The cache is module-level mutable state that outlives a call, and unlike the
+package's memos of host-side tables it holds executables. It holds the open
+jaxpr and its compiled program, never the arrays, and it is bounded
+(``CACHE_SIZE``) because every entry pins an executable.
+
+**A loop whose programs are not all reused** bounds what it keeps with
+:func:`tracking` and :func:`forget` rather than with ``jax.clear_caches``, which
+drops every executable in the process. ``relax_orientation`` was the case: its
+torque was keyed on the quantization axis, which turns with every step, so one
+step's torque program was never used again while the Hamiltonian's and the band
+sum's are used at every step. Dropping what one step used and the next did not
+keeps the second kind and bounds the first. The axis is an argument of the
+kept program now (``Calculation._axis_argument``), so on that relaxation the
+drop finds nothing, and it stays as the bound for anything else keyed on what
+a loop moves.
 """
 
 from __future__ import annotations
 
 import collections
+import contextlib
 import hashlib
 import warnings
 
@@ -74,6 +89,9 @@ NESTED_LIMIT = 1 << 24
 
 _PROGRAMS: collections.OrderedDict = collections.OrderedDict()
 
+#: The sets :func:`tracking` is filling, innermost last.
+_TRACKERS: list = []
+
 _NEEDS_VALUES = (jax.errors.ConcretizationTypeError, jax.errors.TracerArrayConversionError,
                  jax.errors.TracerBoolConversionError, jax.errors.TracerIntegerConversionError)
 
@@ -88,8 +106,72 @@ def compiled(fn, *args):
     """
     if not _core.trace_state_clean():
         return fn(*args)
+    traced = _trace(fn, args)
+    if traced is None:
+        # ``fn`` reads a value that depends on its arguments, which an eager
+        # call allows and a trace does not: ``map_axis`` with one entry calls
+        # its body on concrete values.
+        return fn(*args)
+    closed, shape = traced
+    flat, _ = jax.tree_util.tree_flatten(args)
+    out_tree = jax.tree_util.tree_structure(shape)
+    jaxpr, consts = closed.jaxpr, list(closed.consts)
+    nested = _nested_digest(jaxpr)
+    if nested is None:
+        # The traced jaxpr evaluated eagerly is what calling ``fn`` would have
+        # done, and it does not run ``fn``'s Python a second time.
+        return jax.tree_util.tree_unflatten(
+            out_tree, jax.core.eval_jaxpr(jaxpr, consts, *flat))
+    program = _kept(jaxpr, nested, flat, consts)
+    return jax.tree_util.tree_unflatten(out_tree, program(consts, flat))
+
+
+def compiled_function(fn, *args):
+    """``fn`` as a callable, traced once here at ``args`` and kept as :func:`compiled` keeps it.
+
+    For a Python loop that calls one closure many times with arguments of one
+    structure, a derivative taken a k-chunk at a time being the case it was
+    written for (``forces.torque``): :func:`compiled` would trace ``fn`` at
+    every call, which for the ``value_and_grad`` of a Hamiltonian's build is a
+    large part of the call, while this traces it once and returns ``run`` with
+    ``run(*args)`` equal to ``fn(*args)``. The program behind ``run`` is the one
+    :func:`compiled` keeps under the same key, so a later loop over another
+    closure of the same structure, such as one built around a new
+    ``Calculation`` with arrays of the same shapes, compiles nothing.
+
+    A call of ``run`` whose arguments differ from ``args`` in structure, shape
+    or dtype goes through :func:`compiled`. Where a guard of the module
+    docstring refuses, the callable is ``jax.jit(fn)``, the program such a loop
+    compiled at every call before this existed.
+    """
+    if not _core.trace_state_clean():
+        return jax.jit(fn)
+    traced = _trace(fn, args)
+    if traced is None:
+        return jax.jit(fn)
+    closed, shape = traced
+    flat, in_tree = jax.tree_util.tree_flatten(args)
+    jaxpr, consts = closed.jaxpr, list(closed.consts)
+    nested = _nested_digest(jaxpr)
+    if nested is None:
+        return jax.jit(fn)
+    program = _kept(jaxpr, nested, flat, consts)
+    out_tree = jax.tree_util.tree_structure(shape)
+    signature = (in_tree, tuple(_aval(x) for x in flat))
+
+    def run(*call_args):
+        call_flat, call_tree = jax.tree_util.tree_flatten(call_args)
+        if (call_tree, tuple(_aval(x) for x in call_flat)) != signature:
+            return compiled(fn, *call_args)
+        return jax.tree_util.tree_unflatten(out_tree, program(consts, call_flat))
+
+    return run
+
+
+def _trace(fn, args):
+    """``(closed jaxpr, output shape)`` of ``fn(*args)``, or ``None`` where it needs values."""
     try:
-        closed, shape = jax.make_jaxpr(fn, return_shape=True)(*args)
+        return jax.make_jaxpr(fn, return_shape=True)(*args)
     except _NEEDS_VALUES:
         try:
             # A setup step such as ``augmentation_dipole``'s
@@ -100,21 +182,13 @@ def compiled(fn, *args):
             # (a density from frozen states under a ``jvp`` in ``becsum``), and
             # that compiles its own loops again at every call.
             with jax.ensure_compile_time_eval():
-                closed, shape = jax.make_jaxpr(fn, return_shape=True)(*args)
+                return jax.make_jaxpr(fn, return_shape=True)(*args)
         except _NEEDS_VALUES:
-            # ``fn`` reads a value that depends on its arguments, which an eager
-            # call allows and a trace does not: ``map_axis`` with one entry calls
-            # its body on concrete values.
-            return fn(*args)
-    flat, _ = jax.tree_util.tree_flatten(args)
-    out_tree = jax.tree_util.tree_structure(shape)
-    jaxpr, consts = closed.jaxpr, list(closed.consts)
-    nested = _nested_digest(jaxpr)
-    if nested is None:
-        # The traced jaxpr evaluated eagerly is what calling ``fn`` would have
-        # done, and it does not run ``fn``'s Python a second time.
-        return jax.tree_util.tree_unflatten(
-            out_tree, jax.core.eval_jaxpr(jaxpr, consts, *flat))
+            return None
+
+
+def _kept(jaxpr, nested, flat, consts):
+    """The program kept for this jaxpr and these argument types, compiled on first use."""
     key = (hashlib.sha256(str(jaxpr).encode()).hexdigest(), nested,
            tuple(_aval(x) for x in flat), tuple(_aval(c) for c in consts))
     program = _PROGRAMS.get(key)
@@ -126,7 +200,43 @@ def compiled(fn, *args):
             _warn_evicted()
     else:
         _PROGRAMS.move_to_end(key)
-    return jax.tree_util.tree_unflatten(out_tree, program(consts, flat))
+    for used in _TRACKERS:
+        used.add(key)
+    return program
+
+
+@contextlib.contextmanager
+def tracking():
+    """The key of every program kept or reused inside the block, collected into a set.
+
+    What one pass of a loop used and the next did not can then be dropped with
+    :func:`forget`, which keeps the programs every pass shares.
+    """
+    used: set = set()
+    _TRACKERS.append(used)
+    try:
+        yield used
+    finally:
+        # By identity: two trackers that collected the same keys are equal.
+        for index, tracker in enumerate(_TRACKERS):
+            if tracker is used:
+                del _TRACKERS[index]
+                break
+
+
+def forget(keys) -> int:
+    """Drop the programs kept under ``keys``; how many of them were still kept.
+
+    A dropped program is compiled again on its next use, exactly as one past
+    ``CACHE_SIZE`` is. Its executable is freed once nothing else holds the
+    callable, which a :func:`compiled_function` caller's ``run`` does until it
+    goes out of scope.
+    """
+    dropped = 0
+    for key in keys:
+        if _PROGRAMS.pop(key, None) is not None:
+            dropped += 1
+    return dropped
 
 
 def compiled_jvp(fun, primals, tangents):

@@ -86,7 +86,7 @@ from defumat.forces.energy import (
     _constraint_energy, _kinetic_energy, _projector_energies, hoisted, with_hoisted,
 )
 from defumat.response.chunked import _add, _passes as _field_passes
-from defumat.response.sternheimer import SternheimerSolver, local_perturbation
+from defumat.response.sternheimer import SternheimerSolver, local_perturbation, scalars_at
 from defumat.response.velocity import over_kpoints
 from defumat.scf.potential import total_charge
 
@@ -169,12 +169,13 @@ class StreamedDisplacements:
         tangent[atom, cart] = 1.0
         return jnp.asarray(tangent, dtype=self.positions.dtype)
 
-    def _arguments(self, rows, live):
-        """The leading arguments of the solver passes, for one chunk."""
+    def _arguments(self, rows, live, threshold=None):
+        """The leading arguments of the solver passes, for one chunk, with
+        ``threshold`` in the traced scalars when a schedule sets one."""
         return (self.big, row_leaves(self.calculation, rows), self.hamiltonians,
                 _rows_of(self.solver.psi, rows),
-                self.solver.chunk_arrays(rows, live), self.scalars, self.v_scf,
-                self.ddd_paw)
+                self.solver.chunk_arrays(rows, live),
+                scalars_at(self.scalars, threshold), self.v_scf, self.ddd_paw)
 
     def _states(self, rows, live):
         """Every band of one chunk, with ``wg`` and the eigenvalues; padding zeroed."""
@@ -277,21 +278,24 @@ class StreamedDisplacements:
                 if self.ultrasoft else None)
         return fields, coefficients
 
-    def respond(self, dvscf, onecentre, include_induced: bool):
+    def respond(self, dvscf, onecentre, include_induced: bool, threshold=None):
         """One iteration's solves: the finished, unsymmetrised response density
-        per mode, and for PAW the raw ``becsum`` response."""
+        per mode, and for PAW the raw ``becsum`` response. Each chunk starts
+        from its previous solution in the host store (zero before the first
+        pass); ``threshold`` is this pass's CG threshold."""
         solver = self.solver
         fields, coefficients = self._coefficients(dvscf, onecentre, include_induced)
         parts = [None] * len(self.modes)
         worst = [0] * len(self.modes)
         add = _add_host if self.host_fields else _add
         for rows, live in self.chunks:
-            arguments = self._arguments(rows, live)
+            arguments = self._arguments(rows, live, threshold)
             written = rows[:live]
             for index, (row, _, cart) in enumerate(self.modes):
                 dpsi, steps, _, chunk_parts = self.field_passes["respond"](
                     *arguments, _rows_of(self.bare[row, cart], rows),
-                    self._on_device(fields[index]), coefficients[index])
+                    self._on_device(fields[index]), coefficients[index],
+                    _rows_of(self.dpsi[row, cart], rows))
                 self.dpsi[row, cart][:, written] = np.asarray(dpsi)[:, :live]
                 # In host mode each mode's share of the two raw sums is added on
                 # the host, in the same order, so the ``P`` accumulators are not
@@ -741,10 +745,11 @@ class StreamedDisplacementsAtQ:
         self.calculation_kq = calculation_kq
         self.solver = solver
         self.hamiltonians = solver.hamiltonians
-        # **Without the per-k plane-wave counts**, which are static and bound
-        # only the Davidson subspace (``Hamiltonian.npw``): they differ from one
-        # ``q`` to the next, and kept they would compile the solve pass again at
-        # every ``q`` of a dispersion for nothing the solve reads.
+        # **Without the smallest sphere's plane-wave count**, ``min_k npw`` of
+        # the ``k + q`` spheres, which is static and bounds only the Davidson
+        # subspace (``Hamiltonian.npw``): it can differ from one ``q`` to the
+        # next, and kept it would compile the solve pass again at every ``q`` of
+        # a dispersion for nothing the solve reads.
         self.hamiltonians_kq = tuple(dataclasses.replace(h, npw=None)
                                      for h in hamiltonians_kq)
         keep = solver.psi.shape[2]
@@ -782,14 +787,16 @@ class StreamedDisplacementsAtQ:
         tangent[atom, cart] = 1.0
         return jnp.asarray(tangent, dtype=self.positions.dtype)
 
-    def _arguments(self, rows, live):
-        """The leading arguments of the solve pass, for one chunk."""
+    def _arguments(self, rows, live, threshold=None):
+        """The leading arguments of the solve pass, for one chunk, with
+        ``threshold`` in the traced scalars when a schedule sets one."""
         return (self.big, row_leaves(self.calculation, rows),
                 row_leaves(self.calculation_kq, rows), self.hamiltonians,
                 self.hamiltonians_kq, _rows_of(self.solver.psi, rows),
                 _rows_of(self.states_kq[:, :, :self.keep], rows),
                 jnp.asarray(self.eigenvalues_kq[:, rows]),
-                self.solver.chunk_arrays(rows, live), self.scalars)
+                self.solver.chunk_arrays(rows, live),
+                scalars_at(self.scalars, threshold))
 
     def prepare(self) -> None:
         """``dV_bare_q/du |psi_k>`` per mode, on the ``k + q`` sphere, into the host store."""
@@ -804,19 +811,22 @@ class StreamedDisplacementsAtQ:
                     self._tangent(atom, cart), self.q_cart, self.dij)
                 self.bare[atom, cart][:, written] = np.asarray(bare)[:, :live]
 
-    def respond(self, dvscf, include_induced: bool):
-        """One iteration's solves: the complex response density per mode, finished."""
+    def respond(self, dvscf, include_induced: bool, threshold=None):
+        """One iteration's solves: the complex response density per mode,
+        finished. Each chunk starts from its previous solution in the host
+        store (zero before the first pass); ``threshold`` is this pass's CG
+        threshold."""
         totals = [None] * len(self.modes)
         worst = [0] * len(self.modes)
         for rows, live in self.chunks:
-            arguments = self._arguments(rows, live)
+            arguments = self._arguments(rows, live, threshold)
             written = rows[:live]
             for index, (atom, cart) in enumerate(self.modes):
                 dv = (dvscf[atom, cart] if include_induced
                       else np.zeros_like(dvscf[atom, cart]))
                 dpsi, steps, total = self.passes["respond"](
                     *arguments, _rows_of(self.bare[atom, cart], rows),
-                    jax.device_put(dv))
+                    jax.device_put(dv), _rows_of(self.dpsi[atom, cart], rows))
                 self.dpsi[atom, cart][:, written] = np.asarray(dpsi)[:, :live]
                 # Each mode's share of the sum over k is added on the host, in
                 # the same order, so the ``P`` accumulators stay off the device.
@@ -898,9 +908,10 @@ def _phonon_q_passes(calculation, key) -> dict:
             (x,), (dx,))[1]
 
     def respond(big, rowset, rowset_kq, hamiltonians, hamiltonians_kq, psi,
-                psi_kq, eigenvalues_kq, arrays, scalars, bare_c, dv):
+                psi_kq, eigenvalues_kq, arrays, scalars, bare_c, dv, start_c):
         """``dpsi`` on one chunk, the worst iteration count per channel, and the
-        chunk's share of the response density's sum over k."""
+        chunk's share of the response density's sum over k. ``start_c`` is the
+        chunk's previous solution, the CG's first iterate."""
         sub, sub_kq = local(big, rowset), local(big, rowset_kq)
         base = SternheimerSolver.on_chunk(
             sub, sub.restricted_hamiltonians(hamiltonians), psi, arrays, scalars,
@@ -912,7 +923,7 @@ def _phonon_q_passes(calculation, key) -> dict:
         def perturbation(states, ik, spin):
             return bare_c[spin][ik] + induced(states, ik, spin)
 
-        dpsi, steps, _ = two.solve_arrays(perturbation)
+        dpsi, steps, _ = two.solve_arrays(perturbation, start=start_c)
         return dpsi, steps, two.response_parts_at_q(dpsi)
 
     passes = {name: jax.jit(fn) for name, fn in (

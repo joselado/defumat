@@ -117,6 +117,14 @@ class _Overlapping:
         becp = vectors @ self._beta.conj()
         return becp, becp @ self._q.T
 
+    def apply_projected(self, psi, ik):
+        """``apply`` and ``s_projections`` of one block, as the real operators pair them.
+
+        Written as the two calls so that the callback counts one projection
+        per block exactly as it did when the solver called them separately.
+        """
+        return (self.apply(psi, ik), *self.s_projections(psi, ik))
+
     def s_correction(self, becq, ik):
         return becq @ self._beta.T
 

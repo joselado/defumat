@@ -122,6 +122,17 @@ def _converged(case: str):
     return system, pseudos, calculation, result
 
 
+#: What the identities in this file need: the convergence they were measured at
+#: before 2026-10-03, when ``tr2`` became ``ph.x``'s (a raw ``sum(dV^2)`` of 1e-14
+#: is about 1e-24 in those units on these grids) and the CG threshold became
+#: scheduled. At the defaults the responses stop where ``ph.x`` would and the
+#: identities hold only to that level: zincblende's forbidden components to 3.3e-7,
+#: the transcribed contraction against the differentiated one to 5.3e-9, the inert
+#: constraint term to 1.1e-8 and the mixed derivative contracted both ways to 4.4e-6
+#: relative (D22).
+IDENTITY = {"tr2": 1.0e-24, "threshold": 1.0e-12}
+
+
 @lru_cache(maxsize=2)
 def _field(case: str):
     """The field response and the states it was solved at."""
@@ -130,7 +141,7 @@ def _field(case: str):
     density = jnp.asarray(result.density)
     field = dielectric_tensor(
         calculation, psi, eigenvalues, density, result.becsum,
-        born_charges=True, keep_internals=True,
+        born_charges=True, keep_internals=True, **IDENTITY,
     )
     return calculation, result, eigenvalues, psi, density, field
 
@@ -280,7 +291,7 @@ def test_the_same_mixed_derivative_contracted_the_other_way_round():
     """
     calculation, result, eigenvalues, psi, density, field = _field("alas-raman")
     strain = strain_response(
-        calculation, psi, eigenvalues, density, result.becsum,
+        calculation, psi, eigenvalues, density, result.becsum, **IDENTITY,
     )
     assert strain.converged
     swapped = piezoelectric_from_strain_response(
@@ -320,7 +331,10 @@ def test_the_same_assembly_in_the_position_coordinate_is_the_born_charge():
 def test_the_driver_reports_the_dielectric_constant_it_already_solved():
     """One field response serves both, which is what makes this NSCF-scale."""
     _, _, calculation, result = _converged("alas-raman")
-    tensor = piezoelectric_tensor(calculation, result)
+    # The driver against the file's own helper, which runs at :data:`IDENTITY`:
+    # the two must be at one convergence to agree at 1e-8 (at the defaults
+    # against the pinned helper they read 4.9e-6 apart, on D22).
+    tensor = piezoelectric_tensor(calculation, result, **IDENTITY)
     assert tensor.converged
     assert abs(tensor.e14 - to_voigt(_piezo("alas-raman"))[0, 3] * E_BOHR2_TO_C_M2) < 1e-8
     assert abs(np.trace(tensor.dielectric.epsilon) / 3 - 12.9674) < 1e-3

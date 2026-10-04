@@ -27,6 +27,7 @@ from pathlib import Path
 import numpy as np
 
 from defumat import Calculator
+from defumat.system.kpoints import KPoints
 from defumat.units import RY_TO_EV
 
 PSEUDO, CASES = Path("../tests/data/pseudo"), Path("../tests/data/qe")
@@ -73,8 +74,8 @@ print("the twenty-one that must vanish reach %.1e of them"
       % (max(forbidden.values()) / max(allowed.values())))
 ```
 
-    the six that survive spread by 4.6e-10 of themselves
-    the twenty-one that must vanish reach 1.0e-09 of them
+    the six that survive spread by 8.1e-10 of themselves
+    the twenty-one that must vanish reach 4.0e-09 of them
 
 
 ## The control: the same calculation on a centrosymmetric crystal
@@ -82,14 +83,17 @@ print("the twenty-one that must vanish reach %.1e of them"
 A number that comes out small has to be shown to be small for the right reason. Silicon is
 diamond structure, which is zincblende with the two sites made identical, and that
 identification is exactly what adds the inversion centre. So the two runs differ by one
-species and by nothing else, and the second one must give zero.
+species and by nothing else, and the second one must give zero. The silicon ground state is
+converged with the crystal's symmetry kept, so its density has the inversion centre exactly,
+and the tensor is then summed over the whole mesh, as AlAs's is.
 
 
 ```python
 import matplotlib.pyplot as plt
 
-silicon = Calculator.from_file(CASES / "si2-nosym.in", PSEUDO, announce=False)
-si_sigma = silicon.get_shift_current(nbnd=14, window=0.9, nw=180)
+silicon = Calculator.from_file(CASES / "si2-symmetric.in", PSEUDO, announce=False)
+si_mesh = KPoints.automatic((4, 4, 4), (0, 0, 0), silicon.system.cell)
+si_sigma = silicon.get_shift_current(kpoints=si_mesh, nbnd=14, window=0.9, nw=180)
 
 bands = alas.get_nscf(nbnd=8).eigenvalues
 direct = float(np.min(bands[:, 4] - bands[:, 3])) * RY_TO_EV
@@ -148,7 +152,7 @@ print("%-40s %8.0f" % ("AlSb, largest of the family", 83))
 print("%-40s %8.0f" % ("AlAs, converged, quoted", 35))
 print("%-40s %8.1f" % ("AlAs, this cell", first * 1e6))
 print("%-40s %8.0f" % ("CdSe, smallest of the family", 14))
-print("%-40s %8.0f" % ("silicon, this cell", 0))
+print("%-40s %8.0f" % ("silicon, this cell", np.abs(si_sigma.component(0, 1, 2)).max() * 1e6))
 ```
 
                                              peak, uA/V^2

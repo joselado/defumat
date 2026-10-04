@@ -67,10 +67,10 @@ def test_the_chunked_force_and_stress_are_the_single_pass():
     positions = calculation.system.structure.positions
     zero = jnp.zeros((3, 3))
 
-    force = np.asarray(force_gradient(calculation)(positions, state,
-                                                   hoisted(calculation)))
-    strain = np.asarray(strain_gradient(calculation)(zero, state,
-                                                     hoisted(calculation)))
+    compiled, geometry = force_gradient(calculation)
+    force = np.asarray(compiled(positions, state, hoisted(calculation), geometry))
+    compiled, geometry = strain_gradient(calculation)
+    strain = np.asarray(compiled(zero, state, hoisted(calculation), geometry))
     energy, chunked_force = chunked_gradient(calculation, state, "positions",
                                              positions, k_batch=3)
     _, chunked_strain = chunked_gradient(calculation, state, "strain", zero,
@@ -101,25 +101,34 @@ def test_a_streamed_state_takes_the_chunked_route_without_being_asked():
 
 
 def test_a_moved_calculation_reuses_the_compiled_force_passes():
-    """A relaxation step does not recompile the chunked force.
+    """A relaxation step does not recompile the chunked force or stress.
 
-    ``at_positions`` copies the instance dict and the force's passes depend on
-    the geometry only through their argument, so the moved calculation reuses
-    them -- and the gradient there is still the single pass's at the new
-    positions. A strain changes what they close over, so it drops them.
+    ``at_positions`` and ``at_cell`` copy the instance dict and the passes take
+    the geometry as arguments (`OPEN.md` Part XXIII item 7), so a moved
+    calculation -- the atoms or the cell -- reuses them, and the gradient there
+    is still the single pass's at the new geometry.
     """
     calculator, result = _converged()
     calculation = calculator.calculation
     state = state_from_result(result)
     positions = calculation.system.structure.positions
+    zero = jnp.zeros((3, 3))
     chunked_gradient(calculation, state, "positions", positions, k_batch=3)
-    passes = calculation._chunked_gradient[1]["positions"]
+    chunked_gradient(calculation, state, "strain", zero, k_batch=3)
+    passes = dict(calculation._chunked_gradient[1])
 
     nudged = positions + jnp.asarray([[0.01, 0.0, 0.0], [0.0, 0.0, 0.0]])
     moved = calculation.at_positions(nudged)
     _, gradient = chunked_gradient(moved, state, "positions", nudged, k_batch=3)
-    assert moved._chunked_gradient[1]["positions"] is passes
-    single = force_gradient(moved)(nudged, state, hoisted(moved))
+    assert moved._chunked_gradient[1]["positions"] is passes["positions"]
+    compiled, geometry = force_gradient(moved)
+    single = compiled(nudged, state, hoisted(moved), geometry)
     np.testing.assert_allclose(np.asarray(gradient), np.asarray(single), atol=1e-12)
-    assert "_chunked_gradient" not in calculation.at_strain(
-        jnp.zeros((3, 3))).__dict__
+
+    at = np.asarray(calculation.system.cell.at) @ (np.eye(3) + np.diag([-0.01, 0.0, 0.005])).T
+    cell = calculation.at_cell(jnp.asarray(at))
+    _, strained = chunked_gradient(cell, state, "strain", zero, k_batch=3)
+    assert cell._chunked_gradient[1]["strain"] is passes["strain"]
+    compiled, geometry = strain_gradient(cell)
+    single = compiled(zero, state, hoisted(cell), geometry)
+    np.testing.assert_allclose(np.asarray(strained), np.asarray(single), atol=1e-12)

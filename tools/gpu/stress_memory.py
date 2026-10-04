@@ -82,8 +82,9 @@ def _measure(args):
         )
 
     state = _frozen_state_shapes(calculation, args.nbnd)
-    compiled = _energy_gradient(calculation).lower(
-        _zero(), state, hoisted(calculation)
+    gradient, geometry = _energy_gradient(calculation)
+    compiled = gradient.lower(
+        _zero(), state, hoisted(calculation), geometry
     ).compile()
     analysis = compiled.memory_analysis()
     return {

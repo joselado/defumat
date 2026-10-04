@@ -97,6 +97,16 @@ THIRD_DERIVATIVE_TOLERANCE = 5e-3
 ELASTIC_TOLERANCE = 5e-3
 
 
+#: What the identities in this file need: the convergence they were measured at
+#: before 2026-10-03, when ``tr2`` became ``ph.x``'s (a raw ``sum(dV^2)`` of 1e-14
+#: is about 1e-24 in those units on these grids) and the CG threshold became
+#: scheduled. At the defaults the responses stop where ``ph.x`` would, and the
+#: variational energy and the dielectric assembly agree to 2.7e-7 relative (3.7e-7
+#: and 2.4e-8 with a moving overlap, ultrasoft and PAW), the susceptibility
+#: derivative is cubic to 1.2e-6 relative (D22).
+IDENTITY = {"tr2": 1.0e-24, "threshold": 1.0e-12}
+
+
 @lru_cache(maxsize=None)
 def _converged(case: str):
     system = build_system(read_pw_input(CASES / f"{case}.in"))
@@ -117,14 +127,14 @@ def _strain(case: str):
         calculation, psi, eigenvalues, jnp.asarray(result.density),
         # ``becsum`` is what a PAW dataset's one-centre coefficients are built
         # from, and an ultrasoft one needs it for the same ``deeq``.
-        result.becsum,
+        result.becsum, **IDENTITY,
     )
 
 
 @lru_cache(maxsize=None)
 def _electrostriction(case: str):
     _, _, calculation, result, _, _ = _converged(case)
-    return electrostriction(calculation, result, strain=_strain(case))
+    return electrostriction(calculation, result, strain=_strain(case), **IDENTITY)
 
 
 def _reconverged(case: str, strain):
@@ -278,7 +288,7 @@ def test_the_variational_energy_reproduces_the_dielectric_assembly():
     density = jnp.asarray(result.density)
     field = dielectric_tensor(
         calculation, psi, eigenvalues, density,
-        born_charges=False, keep_internals=True,
+        born_charges=False, keep_internals=True, **IDENTITY,
     )
     solver = field.internals["solver"]
     b = _project_conduction(solver.psi, jnp.stack(field.internals["bare"]))
@@ -316,7 +326,7 @@ def test_the_variational_energy_is_the_dielectric_assembly_with_a_moving_overlap
     density = jnp.asarray(result.density)
     field = dielectric_tensor(
         calculation, psi, eigenvalues, density, result.becsum,
-        born_charges=False, keep_internals=True,
+        born_charges=False, keep_internals=True, **IDENTITY,
     )
     solver = field.internals["solver"]
     ours = np.asarray(_epsilon_at(
@@ -373,7 +383,7 @@ def test_the_third_derivative_matches_a_finite_difference(component):
         eigenvalues, psi = refined_states(moved, result)
         field = dielectric_tensor(
             moved, psi, eigenvalues, result.density,
-            born_charges=False, keep_internals=True,
+            born_charges=False, keep_internals=True, **IDENTITY,
         )
         # ``dielec.f90``'s expression **without** ``symmatrix``: the strained
         # crystal is not cubic, and averaging over the undeformed crystal's 48

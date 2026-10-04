@@ -140,6 +140,8 @@ import jax.numpy as jnp
 import numpy as np
 from jax import lax
 
+import math
+
 import jax
 
 from defumat.basis.fft import force_real_g0, g_to_r, g_to_r_gamma
@@ -167,11 +169,57 @@ __all__ = [
     "occupied_counts",
     "paw_response",
     "require_a_sternheimer_regime",
+    "scalars_at",
+    "pass_threshold",
+    "FIRST_PASS_THRESHOLD",
     "smearing_of",
 ]
 
 #: ``cgsolve_all``'s own ceiling on the CG iterations.
 MAX_ITERATIONS = 400
+
+
+#: ``dfpt_kernels.f90:277-281``'s first-pass threshold, which is also its cap.
+FIRST_PASS_THRESHOLD = 1.0e-2
+
+
+def pass_threshold(solver, history):
+    """This pass's CG threshold in a self-consistent response, or ``None``.
+
+    ``dfpt_kernels.f90:277-281``: ``1e-2`` on the first pass and
+    ``min(0.1 sqrt(dr2), 1e-2)`` after, with ``dr2`` the previous pass's
+    ``|ddv_scf|^2`` as it is printed (divided by ``npert``, ``:519``) -- here
+    ``history[-1]``, from :func:`defumat.response.mixing.ddv_scf`. The solve
+    need be no tighter than the potential it is solving at is converged, so the
+    early passes cost a few CG steps and the late ones what the end needs. The
+    last pass is at the schedule too, which is ``ph.x``'s accuracy: its final
+    ``dpsi`` carry a residual of order ``0.1 sqrt`` of the pass before.
+
+    ``None`` -- the solver's own fixed :attr:`~SternheimerSolver.threshold` --
+    unless the solver was built to be scheduled (:attr:`SternheimerSolver.
+    schedule`), which the response entry points do when they are given
+    ``threshold=None``. The schedule is not monotone and is not meant to be:
+    the loose first pass can make the second pass's ``dr2`` the larger of the
+    two, as it does in ``ph.x`` (``reference.out.ph-al2-metal:167-172``).
+    """
+    if not getattr(solver, "schedule", False):
+        return None
+    if not history:
+        return FIRST_PASS_THRESHOLD
+    return min(0.1 * math.sqrt(max(float(history[-1]), 0.0)), FIRST_PASS_THRESHOLD)
+
+
+def scalars_at(scalars: dict, threshold=None) -> dict:
+    """:meth:`SternheimerSolver.scalars` with this pass's ``threshold`` in it.
+
+    The scalars are arguments of the walked routes' compiled passes, so a value
+    written here reaches the device without a new program; ``None`` leaves the
+    solver's own.
+    """
+    if threshold is None:
+        return scalars
+    return {**scalars, "threshold": jnp.asarray(
+        threshold, dtype=jnp.asarray(scalars["threshold"]).dtype)}
 
 #: The default target for the preconditioned residual norm of one band. QE
 #: schedules this against the self-consistency of the response (``dfpt_kernels``:
@@ -271,6 +319,13 @@ class SternheimerSolver:
     perturbations as the caller has: the operator, the projector and the
     preconditioner all depend on the ground state alone.
     """
+
+    #: Whether a self-consistent loop schedules this solver's CG threshold pass
+    #: by pass (:func:`pass_threshold`) rather than holding :attr:`threshold`.
+    #: Set by the response entry points when called with ``threshold=None``;
+    #: :attr:`threshold` stays the tight fixed value every other solve uses (the
+    #: bare ``P_c r|psi>``, which ``ph.x`` solves at its own fixed ``eth_rps``).
+    schedule: bool = False
 
     def __init__(
         self,
@@ -466,8 +521,21 @@ class SternheimerSolver:
 
     # -- the pieces of ``ch_psi_all`` -------------------------------------
 
-    def _operator(self, vectors, ik, spin):
-        """``(H - eps S + alpha_pv S P_occ S) |h>`` -- ``ch_psi_all``."""
+    def _occupied_overlapped(self, ik, spin):
+        """``S|psi_occ>`` at one k-point, the level shift's fixed half."""
+        return self.hamiltonians[spin].apply_s(self.psi[spin][ik], ik)
+
+    def _operator(self, vectors, ik, spin, s_occupied=None):
+        """``(H - eps S + alpha_pv S P_occ S) |h>`` -- ``ch_psi_all``.
+
+        ``s_occupied`` is :meth:`_occupied_overlapped`, which a solve builds once:
+        ``S`` is linear, so ``S (sum_m o_mn psi_m) = sum_m o_mn (S psi_m)``, and
+        the level shift then costs a contraction instead of a ``calbec`` and an
+        expansion every CG step. ``ch_psi_all.f90:216-227`` applies ``S`` to the
+        lifted vector at every step; this is past QE, exact in arithmetic and
+        round-off in practice, and on a norm-conserving dataset, where ``S`` is
+        the identity, the same numbers to the bit.
+        """
         hamiltonian = self.hamiltonians[spin]
         occupied = self.psi[spin][ik]
         eps = self.eigenvalues[spin][ik][:, None]
@@ -486,6 +554,8 @@ class SternheimerSolver:
             jnp.conj(occupied[:, :1]) * s[:, :1].T,
         )
         overlaps = jnp.where(self.projector_mask[spin][ik][:, None], overlaps, 0.0)
+        if s_occupied is not None:
+            return out + self.alpha_pv * jnp.einsum("mn,mg->ng", overlaps, s_occupied)
         lifted = jnp.einsum("mn,mg->ng", overlaps, occupied)
         return out + self.alpha_pv * hamiltonian.apply_s(lifted, ik)
 
@@ -601,19 +671,31 @@ class SternheimerSolver:
 
     # -- the solver -------------------------------------------------------
 
-    def solve_at(self, rhs, ik, spin):
+    def solve_at(self, rhs, ik, spin, start=None, threshold=None):
         """``cgsolve_all`` for one k-point: the projected CG, masked by band.
 
         ``rhs`` is the *already projected* right-hand side -- what
-        :meth:`project` returns. Returns ``(dpsi, iterations, residual)``.
+        :meth:`project` returns. ``start`` is the first iterate, zero when
+        ``None``: ``cgsolve_all`` applies ``ch_psi`` to whatever ``dpsi`` it is
+        handed and subtracts ``d0psi`` for the first gradient
+        (``cgsolve_all.f90:153-159``), with no projection of the start, and
+        ``solve_linter`` hands it the previous pass's solution
+        (``response_kernels.f90:240-251``); the level shift in the operator
+        keeps the solution out of the occupied manifold whatever the start
+        carries. ``threshold`` overrides :attr:`threshold` for this solve,
+        which is how a self-consistent loop schedules it. Returns
+        ``(dpsi, iterations, residual)``.
         """
         hamiltonian = self.hamiltonians[spin]
         mask = hamiltonian.state_mask[ik]
         precondition = self._preconditioner(ik, spin)
-        threshold = self.threshold
+        threshold = self.threshold if threshold is None else threshold
+
+        s_occupied = self._occupied_overlapped(ik, spin)
 
         def operator(vectors):
-            return jnp.where(mask, self._operator(vectors, ik, spin), 0.0)
+            return jnp.where(
+                mask, self._operator(vectors, ik, spin, s_occupied), 0.0)
 
         def dot(a, b):
             """``MYDDOTV3``: the real part of the Hermitian product, per band.
@@ -629,7 +711,8 @@ class SternheimerSolver:
             return 2.0 * product - jnp.real(jnp.conj(a[:, 0]) * b[:, 0])
 
         rhs = jnp.where(mask, rhs, 0.0)
-        dpsi = jnp.zeros_like(rhs)
+        dpsi = (jnp.zeros_like(rhs) if start is None
+                else jnp.where(mask, start, 0.0).astype(rhs.dtype))
         gradient = operator(dpsi) - rhs
 
         # **The two real slots take their dtype from the data, not from a
@@ -691,7 +774,7 @@ class SternheimerSolver:
         dpsi, _, _, _, rho, iterations, _ = final
         return jnp.where(mask, dpsi, 0.0), iterations, jnp.sqrt(jnp.max(jnp.abs(rho)))
 
-    def solve(self, perturbation) -> SternheimerResult:
+    def solve(self, perturbation, start=None, threshold=None) -> SternheimerResult:
         """Solve at every k-point and spin channel.
 
         ``perturbation(psi, ik, spin)`` returns ``dV|psi>`` for the occupied
@@ -699,23 +782,49 @@ class SternheimerSolver:
         here. It is a function rather than an array because the perturbations
         this module serves are not all local potentials: an electric field is a
         commutator (:mod:`defumat.response.efield`).
+
+        ``start``, ``(nspin, nk, nocc, ndim)`` like the result's ``dpsi``, is
+        the first iterate (:meth:`solve_at`); a self-consistent loop hands it
+        the previous pass's solution and zeros on the first pass, so that one
+        program serves every pass. ``threshold`` overrides :attr:`threshold`,
+        and both reach the compiled loop as arguments: a Python float closed
+        over would be printed into :mod:`defumat.eager`'s key and compile a new
+        program for every distinct value a schedule takes.
         """
         batch = self.calculation.k_batch
+        level = jnp.asarray(self.threshold if threshold is None else threshold)
         blocks, iterations, residuals = [], [], []
         for spin in range(self.nspin):
-            def one_k(ik, spin=spin):
-                rhs = self.project(
-                    perturbation(self.psi[spin][ik], ik, spin), ik, spin
-                )
-                return self.solve_at(rhs, ik, spin)
+            if start is None:
+                def one_k(ik, level, spin=spin):
+                    rhs = self.project(
+                        perturbation(self.psi[spin][ik], ik, spin), ik, spin
+                    )
+                    return self.solve_at(rhs, ik, spin, threshold=level)
 
-            # ``one_k`` is a new closure at every call, around a new
-            # ``perturbation``, so the loop is compiled by its structure
-            # (:mod:`defumat.eager`) rather than once per call.
-            dpsi, steps, residual = compiled(
-                lambda indices, one_k=one_k: map_k(one_k, indices, batch=batch),
-                jnp.arange(self.psi.shape[1]),
-            )
+                # ``one_k`` is a new closure at every call, around a new
+                # ``perturbation``, so the loop is compiled by its structure
+                # (:mod:`defumat.eager`) rather than once per call.
+                dpsi, steps, residual = compiled(
+                    lambda indices, level, one_k=one_k: map_k(
+                        lambda ik: one_k(ik, level), indices, batch=batch),
+                    jnp.arange(self.psi.shape[1]), level,
+                )
+            else:
+                def one_k(ik, initial, level, spin=spin):
+                    rhs = self.project(
+                        perturbation(self.psi[spin][ik], ik, spin), ik, spin
+                    )
+                    return self.solve_at(rhs, ik, spin, start=initial[ik],
+                                         threshold=level)
+
+                dpsi, steps, residual = compiled(
+                    lambda indices, initial, level, one_k=one_k: map_k(
+                        lambda ik: one_k(ik, initial, level), indices,
+                        batch=batch),
+                    jnp.arange(self.psi.shape[1]), jnp.asarray(start[spin]),
+                    level,
+                )
             blocks.append(dpsi)
             iterations.append(int(jnp.max(steps)))
             residuals.append(float(jnp.max(residual)))
@@ -725,7 +834,7 @@ class SternheimerSolver:
             residual=max(residuals),
         )
 
-    def solve_arrays(self, perturbation):
+    def solve_arrays(self, perturbation, start=None):
         """:meth:`solve` for a caller that is itself being traced.
 
         Returns ``(dpsi, iterations, residual)`` as arrays -- the worst band's
@@ -733,6 +842,8 @@ class SternheimerSolver:
         reads them back to the host, which a trace cannot do. Used inside the
         compiled passes of a response walked a k-chunk at a time
         (:mod:`defumat.response.chunked`), where the whole chunk is one program.
+        ``start`` is the chunk's first iterate (:meth:`solve`); the threshold is
+        the chunk solver's own, a traced scalar from :meth:`scalars`.
         """
         batch = self.calculation.k_batch
         blocks, iterations, residuals = [], [], []
@@ -741,7 +852,9 @@ class SternheimerSolver:
                 rhs = self.project(
                     perturbation(self.psi[spin][ik], ik, spin), ik, spin
                 )
-                return self.solve_at(rhs, ik, spin)
+                return self.solve_at(
+                    rhs, ik, spin,
+                    start=None if start is None else start[spin][ik])
 
             dpsi, steps, residual = map_k(
                 one_k, jnp.arange(self.psi.shape[1]), batch=batch)

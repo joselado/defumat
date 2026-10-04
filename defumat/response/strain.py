@@ -98,11 +98,12 @@ import numpy as np
 from defumat.basis.interpolate import to_dense
 from defumat.batching import map_k
 from defumat.response.efield import require_a_symmetrisable_response
-from defumat.response.mixing import DEFAULT_RESPONSE_MIXING, ResponseMixer
+from defumat.response.mixing import DEFAULT_RESPONSE_MIXING, ResponseMixer, ddv_scf
 from defumat.response.sternheimer import (
     paw_response,
     SternheimerSolver,
     occupied_counts,
+    pass_threshold,
     require_a_sternheimer_regime,
     _NO_METAL_YET,
 )
@@ -122,10 +123,18 @@ __all__ = ["StrainResponse", "strain_response", "strain_tangent",
 #: rather than a value each system has to be tuned to.
 ALPHA_MIX = 0.7
 
-#: Convergence on ``|ddv_scf|^2``.
+#: ``ph.x``'s ``tr2_ph``, in its units (:data:`defumat.response.efield.TR2` says
+#: what they are), tested as the phonon tests it: the largest ``|ddv_scf|^2`` of
+#: one strain component below ``tr2 / npol``, over the six independent
+#: components, since ``[a, b]`` and ``[b, a]`` are one object.
 TR2 = 1.0e-14
 
 MAX_ITERATIONS = 60
+
+#: The CG threshold of every solve that is not scheduled: the bare
+#: perturbation's always, and the loop's when a caller asks for a fixed one.
+#: It was the loop's too until 2026-10-03.
+FIXED_THRESHOLD = 1.0e-12
 
 
 def strain_tangent(a: int, b: int) -> jnp.ndarray:
@@ -234,7 +243,7 @@ def strain_response(
     alpha_mix: float = ALPHA_MIX,
     tr2: float = TR2,
     max_iterations: int = MAX_ITERATIONS,
-    threshold: float = 1.0e-12,
+    threshold: float | None = None,
     mixing_mode: str = DEFAULT_RESPONSE_MIXING,
     verbose: bool = False,
 ) -> StrainResponse:
@@ -251,6 +260,12 @@ def strain_response(
         density: the converged density the fixed potential is built from.
         becsum: accepted so the signature matches the other two perturbations;
             a nonempty one is refused with the dataset it comes from.
+        threshold: the CG threshold of the linear solves. ``None``, the
+            default, is ``ph.x``'s schedule (:func:`~defumat.response.
+            sternheimer.pass_threshold`); a number holds that threshold on every
+            pass (:func:`~defumat.response.efield.dielectric_tensor` says when
+            that is wanted).
+        tr2: ``ph.x``'s ``tr2_ph``, in its units (:data:`TR2`).
     """
     eigenvalues = jnp.asarray(eigenvalues)
     if eigenvalues.ndim == 2:
@@ -282,8 +297,10 @@ def strain_response(
     hamiltonians = calculation.hamiltonian(potential.v_scf, ddd_paw)
     solver = SternheimerSolver(
         calculation, hamiltonians, wavefunctions, eigenvalues, weights,
-        nocc, threshold, v_scf=potential.v_scf, becsum=becsum,
+        nocc, FIXED_THRESHOLD if threshold is None else threshold,
+        v_scf=potential.v_scf, becsum=becsum,
     )
+    solver.schedule = threshold is None
     density = jnp.asarray(density)
 
     if streamed:
@@ -520,10 +537,12 @@ class _WholeStrains:
         self.solves = 0
 
     def respond(self, dvscf, onecentre, include_induced: bool,
-                frozen_becsum=None):
+                frozen_becsum=None, threshold=None):
         """One iteration's six solves: the unsymmetrised response density and
         (PAW) the raw ``becsum`` response plus its frozen-state part, as
-        ``(3, 3)`` object arrays."""
+        ``(3, 3)`` object arrays. Each solve starts from the previous pass's
+        ``dpsi``, zeros on the first (``iudwf``); ``threshold`` is this pass's
+        CG threshold."""
         solver = self.solver
         response = np.empty((3, 3), dtype=object)
         becsum_response = np.empty((3, 3), dtype=object)
@@ -533,7 +552,11 @@ class _WholeStrains:
                     solver, self.bare[a, b], dvscf[a, b], include_induced,
                     None if onecentre is None else onecentre[a, b],
                 )
-                solution = solver.solve(perturbation)
+                previous = self.dpsi[a, b]
+                start = (jnp.zeros_like(self.bare[a, b]) if previous is None
+                         else previous)
+                solution = solver.solve(perturbation, start=start,
+                                        threshold=threshold)
                 self.dpsi[a, b] = self.dpsi[b, a] = solution.dpsi
                 self.iterations += solution.iterations
                 self.solves += 1
@@ -579,21 +602,28 @@ def _self_consistent_response(
 
     for iteration in range(max_iterations):
         response, becsum_response = strains.respond(
-            dvscf, onecentre, iteration > 0, frozen_becsum)
+            dvscf, onecentre, iteration > 0, frozen_becsum,
+            threshold=pass_threshold(solver, history))
 
         stacked = jnp.stack([
             jnp.stack([response[a, b] for b in range(3)]) for a in range(3)
         ]) + frozen_drho
         symmetrised = calculation.symmetrize_strain_response(stacked)
 
-        induced = jnp.stack([
-            jnp.stack([
-                compiled_jvp(
+        # **Six screenings, not nine.** ``[a, b]`` and ``[b, a]`` are one strain
+        # and the response is symmetric in them (``strain_tangent`` is
+        # ``(E_ab + E_ba)/2``), so ``[b, a]`` takes ``[a, b]``'s kernel; the
+        # symmetriser's sums run in a different order for the two, so what
+        # this drops is a round-off difference and nothing else.
+        screened = {}
+        for a in range(3):
+            for b in range(a, 3):
+                screened[a, b] = compiled_jvp(
                     lambda r: calculation.potential(r).v_scf,
                     (jnp.asarray(density),), (symmetrised[a, b],),
                 )[1]
-                for b in range(3)
-            ])
+        induced = jnp.stack([
+            jnp.stack([screened[min(a, b), max(a, b)] for b in range(3)])
             for a in range(3)
         ])
 
@@ -605,28 +635,61 @@ def _self_consistent_response(
             symmetrised_becsum = _symmetrize_becsum_strain(
                 calculation, becsum_response
             )
+            onecentre_of = {
+                (a, b): paw_response(calculation, symmetrised_becsum[a, b],
+                                     solver.becsum)
+                for a in range(3) for b in range(a, 3)
+            }
             induced_onecentre = jnp.stack([
-                jnp.stack([
-                    paw_response(calculation, symmetrised_becsum[a, b],
-                                 solver.becsum)
-                    for b in range(3)
-                ])
+                jnp.stack([onecentre_of[min(a, b), max(a, b)] for b in range(3)])
                 for a in range(3)
             ])
 
-        change = float(jnp.sum((induced - dvscf) ** 2))
+        independent = [(a, b) for a in range(3) for b in range(a, 3)]
+        difference = induced - dvscf
+        onecentre_difference = (None if onecentre is None
+                                else induced_onecentre - onecentre)
+        change = ddv_scf(
+            [difference[a, b] for a, b in independent],
+            None if onecentre is None else [
+                onecentre_difference[a, b] for a, b in independent
+            ],
+            joint=False,
+        )
         history.append(change)
         if verbose:
             print(f"  iter {iteration + 1}: |ddv_scf|^2 = {change:.3e}")
-        if onecentre is None:
-            dvscf = mixer.mix(dvscf, induced)
-        else:
-            dvscf, onecentre = mixer.mix(
-                [dvscf, onecentre], [induced, induced_onecentre]
-            )
-        if change < tr2:
+        # Tested before mixing, and on convergence the *input* is kept, as
+        # ``mix_potential`` returns it: the potential the states were solved at,
+        # which ``eigenvalue_response`` and the piezoelectric assembly rebuild
+        # their perturbation from.
+        if change < tr2 / calculation.system.npol:
             converged = True
             break
+        # **The six independent components are mixed, not nine**: ``[b, a]``
+        # is ``[a, b]`` exactly (the six screenings above are shared), and
+        # mixing both would weight the off-diagonal strains twice in one
+        # Anderson fit.
+        def independent_of(field):
+            return jnp.stack([field[a, b] for a, b in independent])
+
+        def symmetric_from(pieces):
+            index = {pair: n for n, pair in enumerate(independent)}
+            return jnp.stack([
+                jnp.stack([pieces[index[min(a, b), max(a, b)]] for b in range(3)])
+                for a in range(3)
+            ])
+
+        if onecentre is None:
+            dvscf = symmetric_from(
+                mixer.mix(independent_of(dvscf), independent_of(induced)))
+        else:
+            mixed, mixed_onecentre = mixer.mix(
+                [independent_of(dvscf), independent_of(onecentre)],
+                [independent_of(induced), independent_of(induced_onecentre)],
+            )
+            dvscf = symmetric_from(mixed)
+            onecentre = symmetric_from(mixed_onecentre)
 
     return symmetrised, dvscf, history, converged
 

@@ -129,6 +129,9 @@ def _measure(args, david, nbnd, band_batch):
                 kw.get("david", davidson.DAVID_NDIM),
                 kw.get("max_iterations", davidson.MAX_ITERATIONS),
                 kw.get("k_batch", "default"), robust=False, return_finite=True,
+                # and the step counts, which every call now carries out of the
+                # unit (``davidson_eigensolver_all`` drops them on the host).
+                return_steps=True,
             )
         analysis = lowered.compile().memory_analysis()
         captured.update(

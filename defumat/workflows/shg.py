@@ -127,7 +127,10 @@ def run_shg(
                - np.asarray(eigenvalues)[..., nbnd - 1])
     )
     eigenvalues = eigenvalues[..., :nbnd]
-    wavefunctions = jnp.asarray(wavefunctions[..., :nbnd, :])
+    # The band slice is handed on where it is, a view of a streamed store in
+    # host memory or a device array: the assembly walks the k axis and takes
+    # one chunk's rows to the device at a time (``OPEN.md`` Part XXIII item 24).
+    wavefunctions = wavefunctions[..., :nbnd, :]
     potential = calculation.potential(jnp.asarray(density))
     # PAW's one-centre coefficients are built from ``becsum`` and multiply
     # ``vkb(k)``, so they belong to ``dH/dk`` as much as to ``H``.

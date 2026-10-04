@@ -44,6 +44,7 @@ from defumat.basis.fft import (
     g_to_r, gather_from_box, r_to_sticks, sticks_local, sticks_to_r,
 )
 from defumat.batching import map_bands
+from defumat.hamiltonian.operator import conjugated_contraction, smallest_sphere
 from defumat.pseudo.projectors import Projectors
 
 __all__ = ["SpinorHamiltonian", "spin_multiply"]
@@ -124,16 +125,13 @@ class SpinorHamiltonian(eqx.Module):
     #: projector columns that are themselves spinors, so it applies to the
     #: ``2 npwx`` vector exactly as the collinear one applies to ``npwx``.
     hubbard: object | None = None
-    #: ``(nk,)`` how many plane waves each k-point's sphere actually holds, as
-    #: against ``npwx``, which is the padded maximum over k. **Static, because
-    #: it bounds an array's length**: the Davidson subspace cannot be larger
-    #: than the smallest space it is built in, and the k-points that go singular
-    #: are precisely the ones *below* ``npwx`` -- see
-    #: :func:`~defumat.solvers.davidson.davidson_eigensolver_all`. ``None``
-    #: leaves the bound at ``npwx``, which is QE's own ``ipw``
-    #: (``c_bands.f90:286``) and is what a Hamiltonian built without its basis
-    #: gets.
-    npw: tuple[int, ...] | None = eqx.field(static=True, default=None)
+    #: How many plane waves the smallest sphere holds, over every row of the
+    #: k-indexed arrays -- both components' rows, for a spiral -- as the
+    #: collinear operator's :attr:`~defumat.hamiltonian.operator.Hamiltonian.npw`
+    #: holds it, and for the same reason: it is the one number the Davidson
+    #: subspace cap reads, so it is the one number in the treedef. A per-k list
+    #: is reduced to its minimum. ``None`` leaves the bound at ``npwx``.
+    npw: int | None = eqx.field(static=True, default=None, converter=smallest_sphere)
     #: The band dial, as :attr:`Hamiltonian.band_batch
     #: <defumat.hamiltonian.operator.Hamiltonian.band_batch>` carries it.
     band_batch: int | None | str = eqx.field(static=True, default="default")
@@ -198,13 +196,14 @@ class SpinorHamiltonian(eqx.Module):
 
         What the Davidson subspace has to fit inside; see the collinear
         operator's own ``space``. On a **spiral** the two components sit on
-        different spheres and ``npw`` has ``2 nk`` entries, so this takes twice
-        the smallest of either component's rather than one from each: a lower
-        bound on the true space, which is the safe direction for a bound.
+        different spheres and ``npw`` is the smallest over all ``2 nk`` of them,
+        so this takes twice the smallest of either component's rather than one
+        from each: a lower bound on the true space, which is the safe direction
+        for a bound.
         """
         if self.npw is None:
             return self.ndim
-        return 2 * min(self.npw)
+        return 2 * self.npw
 
     @property
     def nspin_mag(self) -> int:
@@ -257,10 +256,41 @@ class SpinorHamiltonian(eqx.Module):
 
     def apply(self, psi: jnp.ndarray, ik: int) -> jnp.ndarray:
         """``H|psi>`` for ``psi`` of shape ``(..., 2 npwx)``."""
+        return self._applied(psi, self._split(psi, ik), ik)
+
+    def apply_projected(self, psi: jnp.ndarray, ik: int):
+        """``(H|psi>, <beta|psi>, q <beta|psi>)`` from one projection.
+
+        The collinear operator's :meth:`~defumat.hamiltonian.operator.Hamiltonian.apply_projected`,
+        and the same contract: :meth:`apply` and :meth:`s_projections` in one
+        call. **Here it saves nothing in the compiled program**, and it exists
+        so that the solver has one surface: both methods split and mask the
+        block by the same expression before projecting it, so the two
+        projections were already one expression and XLA merged them (the
+        compiled Davidson of ``alas-epsilon-us-soc.in`` holds four products per
+        expansion block either way, 2026-10-03). Writing it once states what
+        the compiler had already found.
+        """
+        if not self.has_overlap:
+            return (self.apply(psi, ik), *self.s_projections(psi, ik))
         components = self._split(psi, ik)
+        becp = self._project(components, ik)
+        becq = jnp.einsum("abij,...bj->...ai", self.qq.astype(self.dtype), becp)
+        return (
+            self._applied(psi, components, ik, becp),
+            becp.reshape(becp.shape[:-2] + (2 * becp.shape[-1],)),
+            becq.reshape(becq.shape[:-2] + (2 * becq.shape[-1],)),
+        )
+
+    def _applied(self, psi: jnp.ndarray, components: jnp.ndarray, ik: int,
+                 becp=None) -> jnp.ndarray:
+        """``H|psi>`` from the split, masked ``components`` of ``psi``.
+
+        ``becp``, when given, is their ``<beta_i|psi^a>``.
+        """
         result = self._pair(self.kinetic, ik) * components
         result = result + self._local(components, ik)
-        result = result + self._nonlocal(components, ik)
+        result = result + self._nonlocal(components, ik, becp)
         result = self._join(jnp.where(self._pair(self.mask, ik), result, 0.0))
         if self.hubbard is not None:
             # Applied to the whole spinor rather than component by component:
@@ -287,12 +317,11 @@ class SpinorHamiltonian(eqx.Module):
         nonlocal term differs from the ordinary noncollinear one.
         """
         if not self.spiral:
-            return jnp.einsum(
-                "gk,...ag->...ak", self.projectors.at_k(ik).conj(), components
-            )
+            return conjugated_contraction(
+                self.projectors.at_k(ik), components, "gk,...ag->...ak")
         up, down = self._rows(ik)
         vkb = jnp.stack([self.projectors.at_k(up), self.projectors.at_k(down)])
-        return jnp.einsum("agk,...ag->...ak", vkb.conj(), components)
+        return conjugated_contraction(vkb, components, "agk,...ag->...ak")
 
     def _unproject(self, coefficients: jnp.ndarray, ik: int) -> jnp.ndarray:
         """``sum_i |beta_i> c^a_i``, shaped ``(..., 2, npwx)``."""
@@ -388,15 +417,17 @@ class SpinorHamiltonian(eqx.Module):
         ], axis=-2)
 
 
-    def _nonlocal(self, components: jnp.ndarray, ik: int) -> jnp.ndarray:
+    def _nonlocal(self, components: jnp.ndarray, ik: int, becp=None) -> jnp.ndarray:
         """``sum_{ab,ij} |beta_i a> D^{ab}_ij <beta_j b|psi>``.
 
         ``add_vuspsi_nc``: four matrix products where the collinear case has
         one, and the two off-diagonal ones are what spin-orbit coupling adds.
+        ``becp`` is :meth:`_project` of ``components`` when the caller has it.
         """
         if self.projectors.nkb == 0:
             return jnp.zeros_like(components)
-        becp = self._project(components, ik)
+        if becp is None:
+            becp = self._project(components, ik)
         ps = jnp.einsum("abij,...bj->...ai", self.deeq.astype(self.dtype), becp)
         return self._unproject(ps, ik)
 

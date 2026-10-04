@@ -66,7 +66,12 @@ spectrum instead of computing it.
 **Cost.** One transform per band pair per k-point, and the matrix is
 ``nw nm^2`` complex. With the pair axis walked one *up* band at a time the
 working set is ``nbnd`` grid-sized fields rather than ``nbnd^2`` of them, which
-is what makes an eighteen-band transition metal fit.
+is what makes an eighteen-band transition metal fit. **The k axis is walked a
+chunk at a time** (:mod:`defumat.response.walk`): a chunk's majority states at
+``k`` and minority states at ``k + q`` cross to the device, with their
+projections on an augmented dataset built on their own rows, and the next chunk
+follows. The chunk is the calculation's ``k_batch`` and moves the matrix at
+round-off, through the order of the k sum.
 """
 
 from __future__ import annotations
@@ -78,8 +83,10 @@ import numpy as np
 
 from defumat.basis.fft import g_to_r, r_to_g
 from defumat.basis.gvectors import refuse_gamma_storage
-from defumat.batching import map_k, resolve_k_batch, sum_bands, sum_k
-from defumat.eager import compiled
+from defumat.batching import map_k, sum_bands, sum_k
+from defumat.response.walk import (
+    chunk_size, padded, row_leaves, store_rows, walk, with_rows,
+)
 from defumat.scf.occupations import smearing_order, w0gauss
 from defumat.system.kpoints import is_reduced
 
@@ -455,7 +462,8 @@ def transverse_response(
     """
     require_a_transverse_regime(calculation)
 
-    wavefunctions = jnp.asarray(wavefunctions)
+    # The states stay where they are, a streamed store in host memory or a
+    # device array, and cross to the device a k-chunk at a time below.
     eigenvalues = jnp.asarray(eigenvalues)
     if wavefunctions.ndim != 4 or wavefunctions.shape[0] != 2:
         raise ValueError(
@@ -473,8 +481,8 @@ def transverse_response(
 
     grid = calculation.basis.smooth.grid
     volume = calculation.system.cell.volume
-    mask = jnp.asarray(calculation.basis.planewaves.mask)
-    fft_index = jnp.asarray(calculation.fft_index)
+    mask = np.asarray(calculation.basis.planewaves.mask)
+    fft_index = np.asarray(calculation.fft_index)
 
     # The gather index of the *shifted* sphere, one per k-point: the matrix
     # element reads the pair density at ``G + G0`` rather than at ``G``, and
@@ -485,9 +493,7 @@ def transverse_response(
     miller = np.asarray(sphere.miller)
     box = np.asarray(grid)
     shifted = (miller[None, :, :] + umklapp[:, None, :]) % box
-    flat = jnp.asarray(
-        (shifted[..., 0] * box[1] + shifted[..., 1]) * box[2] + shifted[..., 2]
-    )
+    flat = (shifted[..., 0] * box[1] + shifted[..., 1]) * box[2] + shifted[..., 2]
 
     zomega = jnp.asarray(frequencies) + 1j * precision.as_real(broadening)
     zomega = zomega.astype(precision.complex)
@@ -496,20 +502,13 @@ def transverse_response(
     # ``q^a_ij(q + G)``, once for the whole run: it depends on the wavevector
     # and the geometry and on nothing that varies with k or with the band.
     factors = augmentation_factors(calculation, q, sphere)
-    if factors is None:
+    augmented = factors is not None
+    if not augmented:
         # A norm-conserving run carries no augmentation, and the projections it
         # would contract are not built either -- there is nothing to project on.
         # The placeholder keeps the k and band axes the walkers scan over, and
         # ``augmented`` is static so nothing is contracted with it.
-        nk, nbnd = wavefunctions.shape[1], wavefunctions.shape[2]
-        becp_up = becp_dn = jnp.zeros((nk, nbnd, 1, 1),
-                                      dtype=wavefunctions.dtype)
         factors = jnp.zeros((sphere.nm, 1, 1), dtype=wavefunctions.dtype)
-        augmented = False
-    else:
-        becp_up = state_projections(calculation, wavefunctions[majority])
-        becp_dn = state_projections(calculation, wavefunctions[minority])[index]
-        augmented = True
 
     def one_k(arrays):
         (psi_up, index_up, mask_up, eig_up, occ_up, slope_up, bec_up,
@@ -520,17 +519,49 @@ def transverse_response(
             gather, grid, volume, zomega, factors, augmented,
         )
 
-    batch = resolve_k_batch(k_batch)
-    x = compiled(
-        lambda a: sum_k(one_k, a, batch=batch),
-        (
-            wavefunctions[majority], fft_index, mask,
-            eigenvalues[majority], weights[majority], slope[majority], becp_up,
-            wavefunctions[minority][index], fft_index[index], mask[index],
-            eigenvalues[minority][index], weights[minority][index], becp_dn,
-            flat,
-        ),
-    )
+    batch = chunk_size(calculation, k_batch)
+
+    def share(psi_up, index_up, mask_up, eig_up, occ_up, slope_up,
+              psi_dn, index_dn, mask_dn, eig_dn, occ_dn, gather, *rowsets):
+        """One chunk's share of ``(nw, nm, nm)``: majority at ``k``, minority at ``k + q``."""
+        if augmented:
+            # ``<beta|psi>`` on each channel's own rows, the minority's at
+            # ``k + q``, from the chunk's own projectors.
+            up, down = rowsets
+            bec_up = state_projections(with_rows(calculation, up), psi_up)
+            bec_dn = state_projections(with_rows(calculation, down), psi_dn)
+        else:
+            bec_up = bec_dn = jnp.zeros(psi_up.shape[:2] + (1, 1), dtype=psi_up.dtype)
+        return sum_k(one_k, (
+            psi_up, index_up, mask_up, eig_up, occ_up, slope_up, bec_up,
+            psi_dn, index_dn, mask_dn, eig_dn, occ_dn, bec_dn, gather,
+        ), batch=batch)
+
+    eig_up, eig_dn = (np.asarray(eigenvalues[spin]) for spin in (majority, minority))
+    occ_up, occ_dn = (np.asarray(weights[spin]) for spin in (majority, minority))
+    slope_up = np.asarray(slope[majority])
+
+    def arguments(rows, live):
+        # ``rows`` are the majority's k-points and ``index[rows]`` the
+        # minority's at ``k + q``, a padded chunk's repeat carried through both.
+        # Its rows carry zero occupation in **both** channels and zero slope:
+        # the pair weight is ``f_up - f_dn``, or the slope where the pair is
+        # degenerate, so zeroing one channel alone would leave ``-f_dn``.
+        down = index[rows]
+        args = (
+            store_rows(wavefunctions, rows, majority), jnp.asarray(fft_index[rows]),
+            jnp.asarray(mask[rows]), jnp.asarray(eig_up[rows]),
+            jnp.asarray(padded(occ_up, rows, live)),
+            jnp.asarray(padded(slope_up, rows, live)),
+            store_rows(wavefunctions, down, minority), jnp.asarray(fft_index[down]),
+            jnp.asarray(mask[down]), jnp.asarray(eig_dn[down]),
+            jnp.asarray(padded(occ_dn, down, live)), jnp.asarray(flat[rows]),
+        )
+        if augmented:
+            args = args + (row_leaves(calculation, rows), row_leaves(calculation, down))
+        return (args,)  # one stage: the projections are a chunk's few numbers
+
+    x = walk(int(index.shape[0]), batch, arguments, share)
     return SpinChiZero(
         x=2.0 * x,
         frequencies=zomega,

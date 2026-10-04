@@ -230,3 +230,87 @@ def test_the_position_tolerance_has_room_on_every_committed_cell():
         closest = min(closest, float(separation.min()))
     assert closest > 1.0e-3, f"closest pair {closest:.3e} in crystal coordinates"
     assert closest / _POSITION_TOLERANCE > 1.0e3
+
+
+# --- the search is memoised on what it reads ----------------------------------
+
+
+def _diamond_on(cell, kinds=(0, 0), species=SI, second=(0.25, 0.25, 0.25)):
+    positions = np.array([[0.0, 0.0, 0.0], second])
+    return Structure.from_card_units(positions, list(kinds), species, "alat", cell)
+
+
+def _counting_searches(monkeypatch):
+    """Every lattice search :func:`find_symmetries` starts, counted, from an empty memo."""
+    from defumat.system import symmetry
+
+    find_symmetries.cache_clear()
+    calls = []
+    real = symmetry.lattice_point_group
+
+    def counted(at):
+        calls.append(1)
+        return real(at)
+
+    monkeypatch.setattr(symmetry, "lattice_point_group", counted)
+    return calls
+
+
+def test_one_crystal_is_searched_once(monkeypatch):
+    """``build_basis``, ``Calculation`` and the sizing each ask for the group.
+
+    They ask on objects built separately, so what is shared is the content and
+    not the object; a lattice constant no other test uses keeps the memo cold
+    whatever ran before. Before the memo the second call searched again.
+    """
+    calls = _counting_searches(monkeypatch)
+    celldm = [10.2 + 1.0e-3, 0, 0, 0, 0, 0]
+    first_cell, second_cell = Cell.from_ibrav(2, celldm), Cell.from_ibrav(2, celldm)
+    first = find_symmetries(first_cell, _diamond_on(first_cell))
+    second = find_symmetries(second_cell, _diamond_on(second_cell))
+    assert len(calls) == 1
+    assert second is first and first.nsym == 48
+    # Shared, so it must be immutable: a frozen module of tuples.
+    import dataclasses
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        first.rotations = ()
+
+
+def test_the_memo_tells_apart_crystals_that_differ_in_one_input(monkeypatch):
+    """One position, one species label, the cell alone: each is a different group."""
+    calls = _counting_searches(monkeypatch)
+    cell = Cell.from_ibrav(2, [10.2 + 2.0e-3, 0, 0, 0, 0, 0])
+    assert find_symmetries(cell, _diamond_on(cell)).nsym == 48
+    assert find_symmetries(cell, _diamond_on(cell, second=(0.30, 0.25, 0.25))).nsym < 48
+    two = SI + (Species(name="Ge", mass=72.63, pseudo_file="Ge.UPF"),)
+    assert find_symmetries(cell, _diamond_on(cell, kinds=(0, 1), species=two)).nsym == 24
+    # The same crystal coordinates on a cell stretched along z.
+    stretched = Cell.from_vectors(np.asarray(cell.at) @ np.diag([1.0, 1.0, 1.05]),
+                                  alat=cell.alat)
+    crystal = np.asarray(_diamond_on(cell).positions_crystal(cell))
+    moved = Structure.from_card_units(crystal, [0, 0], SI, "crystal", stretched)
+    np.testing.assert_allclose(np.asarray(moved.positions_crystal(stretched)), crystal,
+                               atol=1e-14)
+    assert find_symmetries(stretched, moved).nsym < 48
+    assert len(calls) == 4
+
+
+def test_a_tolerance_is_part_of_the_key(monkeypatch):
+    """A group found at one ``_POSITION_TOLERANCE`` is not handed back at another.
+
+    The six-decimal hexagonal cobalt of ``test_hcp_cobalt_finds_the_group_pw_x_finds``
+    keeps its non-symmorphic half at QE's 1e-5 and loses it at 1e-6.
+    """
+    from defumat.system import symmetry
+
+    cell = Cell.from_ibrav(4, [4.74 + 1.0e-3, 0, 1.62, 0, 0, 0])
+    species = (Species(name="Co", mass=58.933, pseudo_file="Co.UPF"),)
+    hcp = Structure.from_card_units(
+        np.array([[0.0, 0.0, 0.0], [0.333333, 0.666667, 0.5]]), [0, 0], species,
+        "crystal", cell)
+    assert find_symmetries(cell, hcp).nsym == 24
+    monkeypatch.setattr(symmetry, "_POSITION_TOLERANCE", 1.0e-6)
+    assert find_symmetries(cell, hcp).nsym < 24
+    monkeypatch.undo()
+    assert find_symmetries(cell, hcp).nsym == 24

@@ -26,6 +26,17 @@ from defumat.calculator import Calculator
 from defumat.forces import compute_forces
 
 
+#: What an identity between two runs of the response needs: the convergence it
+#: was measured at before 2026-10-03, when ``tr2`` became ``ph.x``'s (a raw
+#: ``sum(dV^2)`` of 1e-14 is about 1e-24 in those units on these grids) and the
+#: CG threshold became scheduled. At the defaults both runs stop where ``ph.x``
+#: would and agree only to that level: the gamma-only and full-sphere frequencies
+#: differ by up to 0.29 cm^-1 in the near-zero acoustic triplet, where the square
+#: root magnifies the matrix's difference, 6e-5 in the optical modes, and 2.7e-3 on
+#: the one-atom subset's (D22).
+IDENTITY = {"tr2": 1.0e-24, "threshold": 1.0e-12}
+
+
 @pytest.fixture(autouse=True)
 def _drop_compiled_code():
     """``jax.clear_caches()`` between tests, for ``CLAUDE.md``'s reason.
@@ -297,7 +308,9 @@ def test_the_dynamical_matrix_agrees_with_the_full_sphere(pseudo_dir, regime):
             calculator = Calculator.from_text(
                 _undisplaced(kpoints, extra), pseudo_dir, announce=False
             )
-            return calculator, calculator.get_phonons()
+            # Two storages of one calculation, compared at 1e-10: both at the
+            # old convergence (:data:`IDENTITY`).
+            return calculator, calculator.get_phonons(**IDENTITY)
 
     whole, full = phonons("automatic\n 1 1 1 0 0 0")
     half, gamma = phonons("gamma")
@@ -321,7 +334,7 @@ def test_a_partial_dynamical_matrix_works_under_gamma(pseudo_dir):
             calculator = Calculator.from_text(
                 _undisplaced(kpoints), pseudo_dir, announce=False
             )
-            return calculator.get_phonons(atoms=(0,))
+            return calculator.get_phonons(atoms=(0,), **IDENTITY)
 
     full = subset("automatic\n 1 1 1 0 0 0")
     gamma = subset("gamma")

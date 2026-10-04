@@ -352,8 +352,15 @@ def test_time_reversal_conjugates_the_matrix():
     the sharper of the two identities, and the tolerances are set to match
     rather than left at a round number the residue clears by four orders.
     """
-    plus = _phonons("si-epsilon-unshifted-nosym", (0.25, 0.25, 0.0))
-    minus = _phonons("si-epsilon-unshifted-nosym", (-0.25, -0.25, 0.0))
+    # Two runs whose agreement is the check, so both converged past ``ph.x``'s
+    # level: at the defaults (``tr2`` in ``ph.x``'s units and a scheduled CG,
+    # since 2026-10-03) the asymmetry reads 5.5e-7, both runs' residue where
+    # ``ph.x`` stops. 1e-22 is about the old ``max |dV|^2 < 1e-14`` on this
+    # 20^3 grid, and 1e-14 the fixed CG threshold this entry held until then.
+    plus = _phonons("si-epsilon-unshifted-nosym", (0.25, 0.25, 0.0),
+                    tr2=1.0e-22, threshold=1.0e-14)
+    minus = _phonons("si-epsilon-unshifted-nosym", (-0.25, -0.25, 0.0),
+                     tr2=1.0e-22, threshold=1.0e-14)
     assert plus.asymmetry < 1e-8, plus.asymmetry
     difference = np.abs(
         np.asarray(minus.matrix) - np.conj(np.asarray(plus.matrix))

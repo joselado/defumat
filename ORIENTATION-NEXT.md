@@ -169,14 +169,16 @@ usual rate, so unlike Route A the canting the coupling adds on each site is in t
   lacks the one-centre torque, which needs either that term written or a backward pass
   every few iterations.
 - **The quantization axis does not turn at every iteration, and must not.** The GGA's
-  axis is a static argument of the compiled SCF body (`Calculation.quantization_axis`, a
-  tuple, `driver.py:2048`), so turning it per iteration would recompile per iteration and
-  fill the kernel cache with one executable per angle, the same class of trap as P21's
-  compiled gradient closing over its sphere. It does not need to turn: for a collinear
+  axis was a static argument of the compiled SCF body (`Calculation.quantization_axis`, a
+  tuple), so turning it per iteration would have recompiled per iteration and filled the
+  kernel cache with one executable per angle, the same class of trap as P21's compiled
+  gradient closing over its sphere. Since 2026-10-04 it reaches the potential as an array
+  (`Calculation._axis_argument`, `OPEN.md` Part XXIII item 14), so a turn no longer
+  recompiles the potential. It still does not need to turn: for a collinear
   texture `m(r) = s(r) |m(r)| n`, the sign `sign(m . u) = s(r) sign(n . u)` is the correct
   signed projection, up to a global sign the functional is even under, for any axis `u`
   not perpendicular to `n`, and the 36.8 meV trap was a moment turned exactly 90 degrees
-  away from its axis. So the axis stays put and is reset, with one recompilation, only when
+  away from its axis. So the axis stays put and is reset only when
   the orientation has moved past a threshold angle from it (60 degrees, say); a
   noncollinear texture has no axis at all (`lsign = .FALSE.`) and none of this applies.
 - **Noise, and why "does nothing without the coupling" has to be enforced rather than

@@ -2376,6 +2376,40 @@ print(spectrum.raman_activity, spectrum.depolarisation)
 \code{dynmat.x}'s \code{RamanIR}, kept a pure function of arrays so it is
 testable without a self-consistent run.
 
+\textbf{The loop stops where \code{ph.x}'s does, and its linear solves are no
+tighter than the pass needs.} \code{tr2} is \code{ph.x}'s \code{tr2\_ph}, in its
+units: the loop stops when $|\Delta\Delta V_{\mathrm{scf}}|^2$, the summed square
+of a pass's change in the potential divided by the square of the number of reals
+it holds and by the number of perturbations, falls below \code{tr2}/\code{npol}.
+The field's three directions are tested together, as \code{solve\_e} tests them;
+a phonon's modes and a strain's six components are tested one at a time and the
+worst one decides, which is \code{ph.x}'s test for a one-dimensional
+representation. The default, $10^{-14}$, is what the committed \code{ph.x}
+references use. Two things come with \code{ph.x}'s formula: a fixed \code{tr2}
+admits a larger residual per grid point on a finer grid, and on an fcc cell the
+number in \code{history} is twice \code{ph.x}'s, because \code{ph.x} perturbs
+along the lattice vectors and this code along Cartesian axes. What the criterion
+admits at the threshold is a residual of $\sqrt{N_{\mathrm{tot}}\,n_{\mathrm{pert}}\,
+\mathtt{tr2}}$ per real in the RMS, $3.8\times10^{-5}$~Ry on silicon's $20^3$ grid
+and $1.8\times10^{-4}$~Ry on an O$_2$ molecule's $45^3$ vacuum box at
+\code{nspin = 2}, so a quantity that is a small residue of large terms, such as
+the raw Born charge of a homonuclear molecule, can be a per cent short at the
+default, as it can be in \code{ph.x}; ask for a smaller \code{tr2} there. The CG threshold
+follows \code{ph.x}'s schedule, $10^{-2}$ on the first pass and
+$\min\big(0.1\sqrt{|\Delta\Delta V_{\mathrm{scf}}|^2},\,10^{-2}\big)$ after, and
+each solve starts from the previous pass's solution. A number for
+\code{threshold} holds the CG at that value on every pass instead, which together
+with a smaller \code{tr2} is what a comparison of two routes below \code{ph.x}'s
+own convergence needs.
+
+\begin{pycode}
+calc = Calculator.from_file("si-epsilon.in", pseudo_dir="pseudo")
+eps = calc.get_dielectric_tensor()          # ph.x's tr2 and CG schedule
+print(len(eps.history), eps.average_iterations)   # 5 passes, as ph.x; 12.6
+tight = calc.get_dielectric_tensor(tr2=1e-24, threshold=1e-12)
+print(eps.isotropic - tight.isotropic)      # 7.9e-6, the scheduled CG's residue
+\end{pycode}
+
 \textbf{At $\Gamma$ this code carries a term \code{ph.x} does not, and
 \code{origin\_tangent} is the knob that puts \code{ph.x}'s convention back.}
 The plane wave with $\mathbf k+\mathbf G=0$ exists only at $\Gamma$ exactly, and
@@ -3614,13 +3648,13 @@ which shares nothing with it: no second derivative, no intermediate sum, only
 the phases of neighbouring $\mathbf k$-points fixed to one another. That
 comparison is decisive in exactly one form, because the sum rule is an
 \emph{identity over a complete basis}: held on a frozen sphere of 158 plane
-waves, AlAs agrees to \textbf{1.8e-4} at 158 bands against 4.3e-2 at 120 and
-6.0e-2 at 20. A residue that falls off a cliff at completeness is a correct
+waves, AlAs agrees to \textbf{2.6e-3} at 158 bands against 0.52 at 120 and
+0.69 at 20. A residue that falls off a cliff at completeness is a correct
 assembly with a truncated sum; one that plateaus is a bug. Then the
 \textbf{crystal class}: AlAs comes out exactly $\bar 43m$ on a \code{nosym}
 grid, only the components with all three labels different surviving, while
 centrosymmetric silicon gives zero from the same machinery. And the
-\textbf{absorption edge}: $\sigma^{xyz}$ is 6.9e-25 A/V$^2$ at 2 eV against a
+\textbf{absorption edge}: $\sigma^{xyz}$ is 4.3e-24 A/V$^2$ at 2 eV against a
 peak of 1.1e-4 near 4.4 eV, which is the one check no index bookkeeping can pass
 by accident --- no absorption, no photocurrent.
 
@@ -3629,11 +3663,11 @@ rather than leaving it to be discovered: a $\sigma$ wrong by a factor of two is
 still exactly $\bar 43m$, still zero on silicon and still zero below the gap.
 Two further checks close that gap. The \textbf{spin sum} --- the same cell run
 \code{nspin} = 1 and as a two-component spinor gives the same tensor to
-\textbf{4.6e-9}, peak ratio 1.000000. And the \textbf{overall scale against the
+\textbf{4.5e-9}, peak ratio 1.000000. And the \textbf{overall scale against the
 published literature}, where the \emph{ordering} is what makes the comparison
 sharp rather than merely consistent. AlAs's first peak converges to
-\textbf{35.0} $\mu$A/V$^2$ at 4.17 eV (33.9 at \code{ecutwfc} = 16, then 33.7,
-34.8 and 35.0 at 22 with 14, 22 and 30 bands), where calculations across the
+\textbf{35.1} $\mu$A/V$^2$ at 4.17 eV (33.9 at \code{ecutwfc} = 16, then 33.7,
+34.9 and 35.1 at 22 with 14, 22 and 30 bands), where calculations across the
 fourteen III--V and II--VI zincblende semiconductors span 14 $\mu$A/V$^2$ (CdSe,
 smallest) to 83 (AlSb, largest) and find the aluminium compounds the strongest of
 the family. A factor of two either way breaks that ordering rather than moving
@@ -3641,8 +3675,8 @@ the number: 17 would put AlAs at the bottom of the family, below the cadmium
 chalcogenides, and 70 would put it beside AlSb, the heaviest and narrowest-gap
 member. The number to compare is the peak below about 6 eV, which is the range
 published spectra cover. That sweep also showed \code{truncation} to be
-\emph{predictive} rather than merely indicative: it falls 3.5\% to 1.0\% over the
-band sweep while the value moves 3.9\%.
+\emph{predictive} rather than merely indicative: it reads 3.5\% at 14 bands, where
+the value is 4.0\% from its 30-band one, and 1.0\% and 1.3\% at 22 and 30.
 
 \textbf{The convention is declared, because the literature has two.} What is
 implemented is $j^a = 2\sigma^{abc}(0;\omega,-\omega)\,
@@ -3712,7 +3746,7 @@ expansion of the generalised derivative written out rather than collapsed.
 \begin{pycode}
 calc = Calculator.from_file("alas-shg.in", pseudo_dir="pseudo")
 
-shg = calc.get_shg(nbnd=22, window=0.6, nw=240, broadening=0.010)
+shg = calc.get_shg(nbnd=23, window=0.6, nw=240, broadening=0.010)
 print(shg.chi.shape)                  # (240, 3, 3, 3), complex, in pm/V
 print(shg.component(0, 1, 2)[0])       # chi^xyz at the lowest frequency
 print(shg.d_coefficient(0, 1, 2)[0])   # d = chi/2, what the literature quotes
@@ -3732,13 +3766,18 @@ broken in the vendored 7.5.
 What the comparison is \emph{not} is digit-for-digit, and saying so is part of
 quoting it: an all-electron LAPW basis is not a norm-conserving pseudopotential
 one, and a second-order susceptibility carries two energy denominators, so a gap
-difference is not a scale factor. On the same crystal and the same $6^3$ mesh:
-the \textbf{resonance position} agrees to \textbf{0.5\%} (2.152 eV against
-2.163), the \textbf{peak height} to \textbf{7\%} (27.52 a.u.\ against 25.70),
-and the \textbf{static value} to \textbf{11\%} ($-3.10$ a.u.\ against $-3.50$).
-The last is the one that moves with the basis, and it is shown converged:
-\code{ecutwfc} 10, 30 and 45 give $-2.71$, $-3.10$ and $-3.13$, so the residue is
-the pseudopotential rather than the cutoff.
+difference is not a scale factor. On the same crystal and the same $6^3$ mesh,
+at 23 bands where Elk ran 37 states with Al 2p and As 3d among them: the
+\textbf{resonance position} agrees to \textbf{0.5\%} (2.152 eV against 2.163),
+the \textbf{peak height} to \textbf{0.8\%} (25.90 a.u.\ against 25.70), and the
+\textbf{static value} to \textbf{8\%} ($-3.21$ a.u.\ against $-3.50$). With
+\code{origin\_tangent=False}, \code{ph.x}'s zero at $\mathbf k+\mathbf G=0$
+described in the response section, the height reads 7\% and the static value
+11\%, so $\Gamma$'s row of $\mathrm{d}H/\mathrm{d}\mathbf k$ is worth 6\% of this
+tensor on a $6^3$ mesh. The static value is the one that moves with the basis,
+and it was shown converged on that convention: \code{ecutwfc} 10, 30 and 45 give
+$-2.71$, $-3.10$ and $-3.13$, so the residue is the pseudopotential rather than
+the cutoff.
 
 Four internal checks close what the reference cannot. \textbf{$\bar 43m$}: AlAs
 comes out exactly zincblende on a \code{nosym} grid with nothing imposing it.
@@ -3766,7 +3805,7 @@ built from the \emph{unshifted} gaps --- a scissors correction is a statement
 about energies, not about wavefunctions --- which is what Elk reaches by scaling
 its momentum matrix elements instead. Validated against Elk's own scissored run:
 at $\Delta = 0.05$~Ha the $2\omega$ peak moves \textbf{0.0502}~Ry against a
-half-scissor of 0.0500, and its height falls to \textbf{0.60} of the unscissored
+half-scissor of 0.0500, and its height falls to \textbf{0.62} of the unscissored
 value against Elk's 0.58.
 
 \begin{refuses}
@@ -3785,8 +3824,8 @@ derivative's sum-rule expansion written out, so what an augmented dataset needs
 here is the velocity matrix element and nothing beyond it. That element is
 $\langle n|\partial_a H - \varepsilon_m\partial_a S|m\rangle + (\varepsilon_m -
 \varepsilon_n)K^a_{nm}$, whose last piece is the augmentation dipole of the
-Kubo section, and deleting it moves $|\chi^{(2)}|$ on ultrasoft AlAs by \textbf{40.8}~pm/V on a
-peak of \textbf{1577.3} --- 2.6\,\%, where the same deletion is worth 0.5\,\% in
+Kubo section, and deleting it moves $|\chi^{(2)}|$ on ultrasoft AlAs by \textbf{34.1}~pm/V on a
+peak of \textbf{1578.3} at 23 bands --- 2.2\,\%, where the same deletion is worth 0.5\,\% in
 the linear conductivity, because $\chi^{(2)}$ carries the velocity matrix
 element three times rather than twice.
 
@@ -3801,6 +3840,18 @@ static $\chi^{(2)}$ are still refused for the same missing term.
 current and for the same reason: the sum over the intermediate state is an
 identity only over a complete basis. \code{truncation} is the in-run estimate,
 taken over the top quarter of the bands.
+
+\textbf{Two warnings, here and in the shift current, mark a part of the tensor
+the crystal does not have}: a \code{nosym} run whose dense FFT grid is not a
+multiple of the factors the fractional translations need breaks the dropped
+operations at the grid's sampling error (0.72~pm/V on two-atom silicon, where
+inversion forbids every component, against 0.00074 with symmetry kept for the
+SCF and the whole unshifted mesh passed as \code{kpoints}), and a
+\code{band\_cut\_gap} below $10^{-8}$~Ry means the band set was cut inside a
+degenerate multiplet, so which of its members were kept is the eigensolver's
+arbitrary choice. On AlAs 22 bands do that, on the $4^3$ grid the snippet
+above runs on as on the $6^3$ mesh (at 13 of its 216 points), and 23 do not,
+which is why the snippet asks for 23.
 \end{refuses}
 
 % =====================================================================

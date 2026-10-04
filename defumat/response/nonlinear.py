@@ -407,6 +407,18 @@ def translational_residue(raman: np.ndarray) -> float:
 # -- the driver --------------------------------------------------------------
 
 
+def _loop_options(response_options: dict) -> dict:
+    """The options a displacement loop takes, from the ones the field took.
+
+    The displacements are solved with the field response's own solver, whose
+    CG threshold (``threshold``) was decided when the field built it, fixed or
+    scheduled (:func:`~defumat.response.sternheimer.pass_threshold`); the loop
+    has no ``threshold`` of its own and reads that decision off the solver.
+    """
+    return {key: value for key, value in response_options.items()
+            if key != "threshold"}
+
+
 def raman_tensors(
     calculation,
     result,
@@ -525,7 +537,8 @@ def raman_tensors(
         )
     dpsi, drho, history, _, phonon_converged, extras = self_consistent_response(
         calculation, solver, bare, density, positions=positions,
-        becsumort=becsumort, drhous=drhous, verbose=verbose, **response_options,
+        becsumort=becsumort, drhous=drhous, verbose=verbose,
+        **_loop_options(response_options),
     )
     # The displacements' bare perturbations drive that solve and nothing after
     # it here: ``3 nat`` wavefunction-sized blocks, 7.4 GB on the P25
@@ -607,7 +620,7 @@ def _walked_raman(calculation, streamed, v_scf, psi, eigenvalues, density,
     dpsi, drho, history, _, converged, extras = screening_loop(
         calculation, displacements, density, positions=positions,
         becsumort=displacements.becsumort, drhous=displacements.drhous,
-        verbose=verbose, **response_options)
+        verbose=verbose, **_loop_options(response_options))
     occupied = np.asarray(solver.psi)
     tangents = []
     for atom in range(nat):

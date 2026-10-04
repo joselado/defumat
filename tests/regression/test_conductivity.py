@@ -267,7 +267,8 @@ def test_the_plasma_frequency_of_aluminium_is_of_the_free_electron_scale():
     the Fermi surface, and on a cubic crystal run with ``nosym`` nothing makes
     it diagonal but the physics.
 
-    **512 k-points is not generosity.** On 4x4x4 the same cell gives 13.78 eV:
+    **512 k-points is not generosity.** On 4x4x4 the same cell gives 20.49 eV
+    (13.78 before the delta's argument below was corrected):
     a Fermi-surface integral needs the grid where a total energy does not.
 
     **The number was 12.9796 until 2026-09-21** and the Fermi-surface delta was
@@ -335,7 +336,9 @@ def test_nickel_has_a_hall_conductivity_and_a_kerr_angle():
 
     # **The Drude weight is a Fermi-surface quantity and must not move with the
     # band count**, which is what says the delta function is being sampled and
-    # not the band set. Measured: 0.5973 eV at both 30 and 36 bands, where the
+    # not the band set. Measured before 2026-09-21's correction of the delta's
+    # argument: 0.5973 eV at both 30 and 36 bands (0.852 at 36 after it, the
+    # 30-band value not taken again), where the
     # Hall conductivity itself moves by 0.25 per cent between them (a genuine
     # truncation of the sum over empty states).
     fewer = run_conductivity(system, pseudos, result.density, nbnd=30,

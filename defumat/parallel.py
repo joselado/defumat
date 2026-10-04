@@ -25,15 +25,31 @@ compiles the executables a serial run compiles and the Davidson cap is the
 whole set's.
 
 **What crosses, per SCF iteration.** An all-reduce of the raw ``becsum``,
-smooth-grid density, ``tau`` and ``ns``; a gather of the eigenvalues (and of
-the Davidson step counts, for the printed average), since the Fermi level and
-the tetrahedra read every k-point and the occupations are then evaluated on the
+smooth-grid density, ``tau`` and ``ns``; one all-gather of the eigenvalues
+together with the Davidson step counts and unsettled counts (for the printed
+average), packed as bytes into one buffer, since the Fermi level and the
+tetrahedra read every k-point and the occupations are then evaluated on the
 whole set by every pool; and broadcasts from rank 0 of every value a decision
 is taken on (``accuracy``, the final ``converged``, the deadline) and of the
 mixed state, so that pools with unequal thread counts, whose floating-point
 reductions can differ in the last bit, cannot drift apart. An insulator's
 occupations need no eigenvalues from other pools; the gather is kept for both
-cases because it is ``nk x nbnd`` numbers and it keeps one code path.
+cases because it is ``nk x nbnd`` numbers and it keeps one code path. **The
+gather asks the others for nothing but the data**: every pool computes every
+pool's rows from the same costs (:meth:`Pools.layout`), where it used to
+gather the shares and the positions too, three all-gathers for each of three
+arrays.
+
+**The all-reduce stays one collective per leaf, and packing the leaves into
+one buffer would move numbers.** The CPU all-reduce does not sum an element in
+an order fixed by the element alone: the order depends on where the element
+sits in the buffer, which is what a ring all-reduce does when it reduces each
+segment of the buffer starting from a different rank. Measured 2026-10-04 on
+three processes with random leaves of 7, 1000, 4096, 37 and 20000 numbers,
+packed against one collective per leaf: 1839 of the 25140 sums differ in the
+last bit, and no single order of the three ranks reproduces every element of
+the per-leaf result. At two pools the two agree exactly, because one addition
+commutes, so the pack would be bit-identical there and nowhere beyond.
 
 **A pool's store cannot be read as a whole-set store.** :class:`PoolStore`
 holds the pool's rows and the global row index of each, and it is deliberately
@@ -314,53 +330,78 @@ class Pools:
         base, extra = divmod(nk, self.size)
         return [base + (1 if pool < extra else 0) for pool in range(self.size)]
 
-    def rows(self, nk: int, costs=None) -> np.ndarray:
-        """The global k indices this pool owns.
+    def layout(self, nk: int, costs=None) -> list[np.ndarray]:
+        """Every pool's global k indices, in rank order.
 
         Without ``costs``, contiguous blocks (:meth:`counts`). With them, the
         longest-processing-time assignment of :func:`balance`, so that a pool
         holding an expensive k-point takes fewer others; either way every pool
         computes the same answer from the same numbers, which is what lets each
-        one work out its own rows without asking the others.
+        one work out every pool's rows without asking the others.
         """
         if costs is None:
             counts = self.counts(nk)
-            start = sum(counts[: self.rank])
-            return np.arange(start, start + counts[self.rank])
-        return balance(np.asarray(costs, dtype=float), self.size)[self.rank]
+            starts = np.cumsum([0] + counts[:-1])
+            return [np.arange(start, start + count)
+                    for start, count in zip(starts, counts)]
+        return balance(np.asarray(costs, dtype=float), self.size)
 
-    def gather_k(self, local, nk: int, axis: int = 1, rows=None) -> np.ndarray:
+    def rows(self, nk: int, costs=None) -> np.ndarray:
+        """The global k indices this pool owns: its entry of :meth:`layout`."""
+        return self.layout(nk, costs)[self.rank]
+
+    def gather_k(self, local, nk: int, axis: int = 1, rows=None, layout=None):
         """Every pool's ``local`` rows along ``axis``, in global k order.
 
-        ``rows`` is this pool's global k indices, which is what lets the rows be
-        any set (:func:`balance`); without it the pools are taken to hold the
-        contiguous blocks of :meth:`counts`. Uneven shares are padded to the
-        largest for the transport and trimmed after it.
+        ``local`` is one array, or a tuple of arrays that share the k axis,
+        which then travel together and come back as a tuple. ``layout`` is
+        every pool's global k indices (:meth:`layout`); without it and without
+        ``rows`` the pools are taken to hold the contiguous blocks of
+        :meth:`counts`. Either way each pool knows every pool's share and
+        positions already, and the gather is **one** all-gather of the arrays'
+        bytes, packed into one buffer. ``rows`` alone, this pool's indices with
+        the others' unknown, costs two all-gathers more, for the shares and
+        the positions. Uneven shares are padded to the largest for the
+        transport and trimmed after it; the values cross as their bytes, so
+        nothing is converted.
         """
-        local = np.asarray(local)
+        single = not isinstance(local, tuple)
+        arrays = [np.asarray(local)] if single else [np.asarray(a) for a in local]
         if self.size == 1:
-            return local
-        if rows is None:
-            counts = self.counts(nk)
-            start = sum(counts[: self.rank])
-            rows = np.arange(start, start + counts[self.rank])
-        rows = np.asarray(rows)
-        shares = np.asarray(self.communicator.allgather(np.asarray([len(rows)])))[:, 0]
-        width = int(shares.max())
-        pad = [(0, 0)] * local.ndim
-        pad[axis] = (0, width - local.shape[axis])
-        gathered = self.communicator.allgather(np.pad(local, pad))
-        where = self.communicator.allgather(np.pad(rows, (0, width - len(rows)),
-                                                   constant_values=-1))
-        shape = list(local.shape)
-        shape[axis] = nk
-        whole = np.empty(shape, local.dtype)
-        for pool in range(self.size):
-            held = np.asarray(where[pool])[: int(shares[pool])]
-            index = [slice(None)] * local.ndim
-            index[axis] = held
-            whole[tuple(index)] = np.take(gathered[pool], np.arange(len(held)), axis=axis)
-        return whole
+            return arrays[0] if single else tuple(arrays)
+        if layout is None and rows is not None:
+            rows = np.asarray(rows)
+            shares = np.asarray(self.communicator.allgather(np.asarray([len(rows)])))[:, 0]
+            width = int(shares.max())
+            where = self.communicator.allgather(np.pad(rows, (0, width - len(rows)),
+                                                       constant_values=-1))
+            layout = [np.asarray(where[pool])[: int(shares[pool])]
+                      for pool in range(self.size)]
+        elif layout is None:
+            layout = self.layout(nk)
+        width = max(len(held) for held in layout)
+        padded = []
+        for array in arrays:
+            pad = [(0, 0)] * array.ndim
+            pad[axis] = (0, width - array.shape[axis])
+            padded.append(np.ascontiguousarray(np.pad(array, pad)))
+        sizes = [p.nbytes for p in padded]
+        gathered = np.asarray(self.communicator.allgather(
+            np.concatenate([p.reshape(-1).view(np.uint8) for p in padded])))
+        offsets = np.cumsum([0] + sizes)
+        wholes = []
+        for i, (array, block) in enumerate(zip(arrays, padded)):
+            shape = list(array.shape)
+            shape[axis] = nk
+            whole = np.empty(shape, array.dtype)
+            for pool, held in enumerate(layout):
+                part = np.ascontiguousarray(gathered[pool, offsets[i]:offsets[i + 1]])
+                part = part.view(array.dtype).reshape(block.shape)
+                index = [slice(None)] * array.ndim
+                index[axis] = np.asarray(held)
+                whole[tuple(index)] = np.take(part, np.arange(len(held)), axis=axis)
+            wholes.append(whole)
+        return wholes[0] if single else tuple(wholes)
 
     def allreduce_sum(self, tree):
         return self.communicator.allreduce_sum(tree)

@@ -58,12 +58,17 @@ __all__ = ["DFTSource", "run_berry_curvature", "run_z2", "run_z2_3d"]
 class DFTSource:
     """A state source: Kohn-Sham states anywhere in the zone, density fixed.
 
-    Each call freezes the potential from ``density`` at the k-points asked for
-    and diagonalises. The setup those k-points do *not* affect -- both G-vector
+    Each call diagonalises at the k-points asked for, in the potential frozen
+    from ``density``. The setup those k-points do *not* affect -- both G-vector
     sets, the local potential, the augmentation charge, the Ewald sum, the
     symmetry group, the radial tables -- is built once and shared between calls
     through :meth:`~defumat.scf.driver.Calculation.at_kpoints`; only the
     plane-wave spheres, ``|k+G|^2``, the stick layout and ``vkb(k)`` are rebuilt.
+    The frozen potential itself, ``newd``'s ``D_ij`` and the smooth-grid copy
+    of the potential (:meth:`~defumat.scf.driver.Calculation.local_terms`) are
+    built on the first call and kept, as PAW's one-centre coefficients are, and
+    so is the augmentation charge between two k-points, ``q_ij(b)``, which is
+    cached on the shared setup rather than on each call's copy.
 
     That is what makes streaming the cheap option rather than the expensive one.
     Rebuilding a whole ``Calculation`` per call cost ~1 GB and seconds each time,
@@ -277,14 +282,28 @@ class DFTSource:
                 "scheme had already changed, which shifts every eigenvalue and "
                 "still leaves an invariant looking like an integer"
             )
-        potential = calculation.potential(
-            self.density,
-            1.0 if self.field_scale is None else float(self.field_scale),
-            self.field,
-        )
-        hamiltonians = calculation.hamiltonian(
-            potential.v_scf, self._ddd_paw(), hubbard_terms
-        )
+        # The frozen potential and the k-independent half of the Hamiltonian
+        # (``newd``'s ``D_ij`` and the smooth-grid potential), built on the
+        # first call and kept, as ``_ddd_paw`` is: a polarization calls this
+        # once per string and a streamed Wilson loop once per pumping step, and
+        # none of the three depends on the k-points (``OPEN.md`` Part XXIII
+        # item 12). Only what carries a ``k`` index is built per call. They are
+        # built on the first call's copy rather than on ``_base()``, because
+        # the band side's dtype is read off the projector core and
+        # ``at_kpoints`` rebuilds that in the cell's precision: every copy
+        # agrees with every other, and a single-precision base would not.
+        if getattr(self, "_frozen", None) is None:
+            potential = calculation.potential(
+                self.density,
+                1.0 if self.field_scale is None else float(self.field_scale),
+                self.field,
+            )
+            object.__setattr__(self, "_frozen", (
+                potential.v_scf,
+                calculation.local_terms(potential.v_scf, self._ddd_paw()),
+            ))
+        v_scf, terms = self._frozen
+        hamiltonians = calculation.hamiltonian_from(terms, hubbard_terms)
         ethr = max(
             ETHR_MIN,
             0.1 * min(1.0e-2, self.conv_thr / max(1.0, calculation.nelec)),
@@ -302,7 +321,7 @@ class DFTSource:
             # no other: the frozen potential, PAW's one-centre coefficients and
             # the Hubbard occupation matrix.
             velocity = VelocityOperator(
-                calculation, potential.v_scf, self._ddd_paw(), self.ns
+                calculation, v_scf, self._ddd_paw(), self.ns
             )
         return build_plane_wave_states(
             calculation,
@@ -312,6 +331,7 @@ class DFTSource:
             energies=eigenvalues[0],
             velocity=velocity,
             hamiltonian=hamiltonians[0] if keep_hamiltonian else None,
+            setup=self._base(),
         )
 
     def _check_gap(self, eigenvalues: np.ndarray, points: np.ndarray) -> None:

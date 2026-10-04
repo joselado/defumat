@@ -82,6 +82,7 @@ import warnings
 
 import numpy as np
 
+from defumat.basis.planewaves import sphere_widths
 from defumat.forces.spiral import (SpiralGradient, compute_spiral_gradient,
                                     _require_a_differentiable_spiral)
 from defumat.pseudo.upf import Pseudopotential
@@ -89,6 +90,8 @@ from defumat.relax import get_ion_dynamics
 from defumat.relax.bfgs import BFGSSettings
 from defumat.scf.driver import Calculation, SCFResult, run_scf
 from defumat.system.builder import System
+from defumat.system.kpoints import KPoints
+from defumat.system.spiral import spiral_kpoints
 from defumat.system.symmetry import lattice_point_group
 from defumat.workflows.relax import (_scf_loop_options, site_magnetization,
                                      site_moment_report)
@@ -303,18 +306,21 @@ def run_spiral_scan(
     base = (calculation if calculation is not None
             else Calculation(system, pseudos, k_batch=k_batch))
     calculation = None
+    # Every point padded to the widths of all of them, so that the SCF stack
+    # compiles once for the scan rather than once per padded width.
+    widths = scan_widths(base, wavevectors)
     if gradients:
         # Ask before the first SCF rather than after it. The refusals live on
         # the gradient, not the scan, so an unsupported spiral would otherwise
         # converge a state and then throw it away along with the whole run.
-        _require_a_differentiable_spiral(base.at_spiral_q(wavevectors[0]))
+        _require_a_differentiable_spiral(base.at_spiral_q(wavevectors[0], widths=widths))
     energies, moments, converged, results, slopes = [], [], [], [], []
     for q in wavevectors:
         # The last point's result and Calculation must not be live under this
         # point's setup and SCF (`MEMORY-AUDIT.md` A2); ``results`` keeps the
         # result when it was asked for, and nothing else reads either.
         calculation = result = None
-        calculation = base.at_spiral_q(q)
+        calculation = base.at_spiral_q(q, widths=widths)
         result = run_scf(
             calculation.system, pseudos, calculation=calculation, **scf_options
         )
@@ -337,6 +343,48 @@ def run_spiral_scan(
         results=tuple(results),
         gradients=np.array(slopes) if gradients else None,
     )
+
+
+def scan_widths(calculation: Calculation, wavevectors) -> tuple[int, int, int]:
+    """``(npwx, nsticks, npw_min)`` over both spheres of every wavevector at once.
+
+    What :meth:`~defumat.scf.driver.Calculation.at_spiral_q` pads each point of
+    a scan to. Each wavevector centres its two spheres on ``k + q/2`` and
+    ``k - q/2``, so each one's widest sphere and stick count differ a little
+    from the next one's -- 1532 to 1544 plane waves over eight wavevectors of
+    the hydrogen chain -- and every new width compiled the whole SCF stack
+    again. Taken over the union of every point's shifted list, the widths are
+    one shape for the whole scan, which is what a band path walked in blocks
+    does (:func:`~defumat.basis.planewaves.sphere_widths`).
+
+    **It moves an energy within the SCF's stopping slack and not at round-off**
+    wherever the starting wavefunctions are topped up with random vectors,
+    since those are drawn at the padded width with a fixed key: the same
+    wavevector padded wider starts from different random vectors, takes a
+    different path to the same state and stops at a different point inside
+    ``conv_thr``. Measured on the hydrogen chain over eight wavevectors at
+    ``conv_thr = 1e-11`` (``OPEN.md`` Part XXIII item 9): the four whose own
+    widths are the union's give the same energy bit for bit; three move by 2 to
+    3e-12 Ry; and ``q = 5/16`` moves by 1.75e-10, because the padded run
+    stopped one iteration earlier, at an estimated accuracy of 7.4e-12, where
+    the unpadded one had run on to 5.0e-14. Converged further, the two widths
+    agree to 5.6e-13 at ``conv_thr = 1e-13`` and to 9.5e-15 at 1e-14, so they
+    reach the same state, and the slack is the threshold's own: the unpadded
+    run's previous iteration, at an estimated accuracy of 1.2e-11, was 2.9e-6
+    Ry from where it ended. The smallest sphere ``npw_min`` caps the Davidson
+    subspace at ``2 npw_min``, which moves nothing unless ``david nbnd`` is
+    larger than that -- 12 against 3016 on that cell.
+    """
+    system = calculation.system
+    cell = system.cell
+    lists = [spiral_kpoints(system.kpoints, q, cell)
+             for q in np.asarray(wavevectors, dtype=float).reshape(-1, 3)]
+    union = KPoints.from_cartesian(
+        np.concatenate([np.asarray(k.coords) for k in lists]),
+        np.concatenate([np.asarray(k.weights) for k in lists]),
+        precision=system.kpoints.precision,
+    )
+    return sphere_widths(calculation.basis.smooth, union, cell, system.ecutwfc)
 
 
 def heisenberg_exchange(scan: SpiralScan, cell, shells, *, point_group=None) -> np.ndarray:
@@ -678,7 +726,12 @@ def relax_spiral_q(
 
         # The spheres are rebuilt here -- ``rebuild_basis`` defaults to True --
         # because this is a real move of ``q`` and the frozen sphere the
-        # gradient was taken on belongs to the point that was just left.
+        # gradient was taken on belongs to the point that was just left. They
+        # are padded to their own widths, unlike a scan's (``scan_widths``):
+        # the steps are not known in advance, so a step compiles the SCF again
+        # wherever its padded width, its stick count or its smallest sphere is
+        # new, and only there, since the operators hold the smallest sphere
+        # rather than every k-point's count.
         density = result.density if warm_start else None
         calculation = calculation.at_spiral_q(optimizer.to_crystal(moved).reshape(3))
 

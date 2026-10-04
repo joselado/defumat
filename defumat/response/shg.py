@@ -73,6 +73,13 @@ expansion. What an augmentation charge does change is the velocity matrix
 element, and
 :meth:`~defumat.response.velocity.VelocityOperator.generalised_matrix_elements`
 is the one that carries it.
+
+**The k axis is walked a chunk at a time** (:mod:`defumat.response.walk`): a
+chunk's states cross to the device, its velocity matrix elements are built on its
+own rows and contracted at both band counts the truncation estimate compares,
+and the next chunk follows, so neither the states nor the matrix elements are on
+the device for the whole k axis. The chunk is the calculation's ``k_batch`` and
+moves the tensor at round-off, through the order of the k sum.
 """
 
 from __future__ import annotations
@@ -83,12 +90,13 @@ from typing import NamedTuple
 import jax.numpy as jnp
 import numpy as np
 
-from defumat.batching import resolve_k_batch, sum_k
-from defumat.eager import compiled
+from defumat.batching import sum_k
 from defumat.response.photocurrent import (
     DEGENERACY_TOL,
     _kpoints_are_reduced,
     _safe_ratio,
+    _warn_about_the_cut,
+    _warn_about_the_grid,
     # Defined there rather than here because the shift current needs the same
     # multiplet average for the same reason, and ``shg`` imports from
     # ``photocurrent`` and not the other way round. It stays in this module's
@@ -96,7 +104,10 @@ from defumat.response.photocurrent import (
     band_velocity_difference,
     dipole_matrix,
 )
-from defumat.response.velocity import VelocityOperator
+from defumat.response.velocity import VelocityOperator, with_connections
+from defumat.response.walk import (
+    chunk_size, padded, row_leaves, store_rows, walk, with_rows,
+)
 
 __all__ = [
     "SecondHarmonic",
@@ -144,6 +155,28 @@ OCCUPATION_TOL = 1.0e-8
 #: literature more often quotes ``d^abc = chi^abc / 2``, so a number compared
 #: against a ``d`` coefficient without halving it is wrong by exactly two.
 CHI2_AU_TO_PM_PER_V = 24.4377
+
+#: What the grid warning quotes for this tensor: the residue on two-atom
+#: silicon, where inversion forbids every component, against the two ways out.
+_GRID_RESIDUE_SHG = (
+    "on two-atom silicon, whose inversion carries a quarter-lattice "
+    "translation, chi^(2) on the whole unshifted 2x2x2 mesh at 8 bands reads "
+    "0.72 pm/V on the 15^3 grid ecutwfc = 12 gives under nosym, where "
+    "inversion requires zero, against 0.0018 on the commensurate 20^3 grid of "
+    "ecutwfc = 16 and 0.00074 with symmetry kept for the SCF"
+)
+
+#: What the cut warning quotes for this tensor: how far it moves when the
+#: multiplet straddling the cut is rotated before the cut is made, and what a
+#: cut inside one leaves where inversion forbids everything.
+_CUT_RESIDUE_SHG = (
+    "on AlAs (alas-shg.in, the whole 6x6x6 mesh), cut at 22 bands through "
+    "doublets at 13 of the 216 k-points, rotating each doublet before the cut "
+    "moves chi^(2) by up to 4.7e-4 of its peak, and the components zincblende "
+    "forbids read 2.5e-4 of the allowed ones against 1.5e-9 at 23 bands, a "
+    "clean cut; on two-atom silicon a cut at 12 bands leaves 1095 pm/V where "
+    "inversion forbids any"
+)
 
 
 class _Shared(NamedTuple):
@@ -382,7 +415,9 @@ class SecondHarmonic:
             under-reports by orders of magnitude. **Read it before believing a
             number.**
         band_cut_gap: ``min_k (e_(nbnd+1) - e_nbnd)`` in Ry when the caller
-            diagonalised one extra band to measure it, else ``nan``.
+            diagonalised one extra band to measure it, else ``nan``. Below
+            :data:`~defumat.response.photocurrent.DEGENERACY_TOL` the cut fell
+            inside a degenerate multiplet and :func:`second_harmonic` warns.
     """
 
     frequencies: np.ndarray
@@ -546,11 +581,28 @@ def second_harmonic(
 
     The frequency axis carries the **fundamental** ``hbar omega`` in Ry, so a
     semiconductor's two-photon absorption edge sits at half its gap.
+
+    **Warns**, rather than refuses, in two cases where the tensor carries a
+    part the crystal does not have. The run is ``nosym`` on a dense FFT grid
+    the crystal's fractional translations do not map onto itself
+    (:func:`~defumat.response.photocurrent._incommensurate_grid`), which leaves
+    0.72 pm/V on two-atom silicon where inversion forbids every component. And
+    ``band_cut_gap`` is below :data:`~defumat.response.photocurrent.
+    DEGENERACY_TOL`, a band set cut inside a degenerate multiplet
+    (:func:`~defumat.response.photocurrent._warn_about_the_cut`), which leaves
+    1095 pm/V on the same silicon cut at 12 bands.
     """
     require_an_shg_regime(calculation)
+    _warn_about_the_grid(
+        calculation, "the second-harmonic tensor chi^abc", _GRID_RESIDUE_SHG
+    )
+    _warn_about_the_cut(
+        band_cut_gap, "the second-harmonic tensor chi^abc", _CUT_RESIDUE_SHG
+    )
 
     eigenvalues = jnp.asarray(eigenvalues)
-    wavefunctions = jnp.asarray(wavefunctions)
+    # The states stay where they are, a streamed store in host memory or a
+    # device array, and cross to the device a k-chunk at a time below.
     if eigenvalues.ndim == 2:
         eigenvalues, wavefunctions = eigenvalues[None], wavefunctions[None]
     if eigenvalues.shape[0] != 1:
@@ -564,15 +616,19 @@ def second_harmonic(
     volume = float(calculation.system.cell.volume)
     nbnd = int(eigenvalues.shape[-1])
 
-    velocity = VelocityOperator(calculation, v_scf, ddd_paw)
-    # ``<n|dH_a - e_m dS_a|m> + (e_m - e_n) K^a_{nm}``: the velocity matrix
-    # element of a *generalised* eigenproblem, which is ``<n|dH_a|m>``
-    # unchanged when the overlap is the identity. Every expression below is a
-    # sum over the true eigenstates and their energies, so the only thing an
-    # augmentation charge changes here is which matrix element goes in.
-    v = velocity.generalised_matrix_elements(
-        wavefunctions, eigenvalues
-    )[:, 0]                                            # (3, nk, nb, nb)
+    # Built on the whole set for its refusals and for the point it
+    # differentiates around; each chunk's operator is handed its rows of
+    # ``kcart`` (:mod:`defumat.response.walk`).
+    kcart = np.asarray(VelocityOperator(calculation, v_scf, ddd_paw).kcart)
+    # ``dpqq``, k-independent, built here once: the chunk's operator is traced
+    # inside a compiled pass, where it cannot be built (``None`` without an
+    # augmentation charge).
+    from defumat.response.efield import _augmentation_dipole
+
+    dipole = _augmentation_dipole(calculation)
+    # The potential on the smooth grid and ``newd``'s ``D_ij``, k-independent,
+    # built once here rather than in every chunk and direction.
+    terms = calculation.local_terms(v_scf, ddd_paw)
 
     wg, _ = calculation.occupations(eigenvalues)
     wg = jnp.asarray(wg)[0]
@@ -587,6 +643,8 @@ def second_harmonic(
         shifted = bare + jnp.where(empty, precision.as_real(scissor), 0.0)
     else:
         shifted = bare
+    # On the host, where each chunk takes its rows from.
+    wk, filling, bare, shifted = (np.asarray(a) for a in (wk, filling, bare, shifted))
 
     if frequencies is None:
         frequencies = np.linspace(0.0, float(window), int(nw))
@@ -595,32 +653,89 @@ def second_harmonic(
     eta = precision.as_real(broadening)
     if degeneracy_tol is None:
         degeneracy_tol = max(float(broadening), DEGENERACY_TOL)
-    batch = resolve_k_batch(k_batch)
+    batch = chunk_size(calculation, k_batch)
 
     scale = (RYDBERG_TO_HARTREE_SQUARED / volume)
 
-    def total(bands: int):
-        def one_k(arrays):
+    # The band sum truncated a quarter short, which is what ``truncation``
+    # compares against. It is accumulated in the same walk as the whole sum,
+    # from the same matrix elements, rather than in a second walk that would
+    # build them again; it is dropped below when the whole sum is zero.
+    dropped = max(1, nbnd // 4)
+    band_counts = (nbnd, nbnd - dropped) if nbnd - dropped > 1 else (nbnd,)
+
+    def one_k(bands: int):
+        def term(arrays):
             e_k, e0_k, v_k, f_k, wk_k = arrays
             return _chi_at_k(
                 e_k[:bands], e0_k[:bands], v_k[:, :bands, :bands],
                 f_k[:bands], wk_k, frequencies, eta, degeneracy_tol,
                 OCCUPATION_TOL,
             )
+        return term
 
-        arrays = (shifted, bare, jnp.moveaxis(v, 0, 1), filling, wk)
-        return np.asarray(compiled(
-            lambda a: sum_k(one_k, a, batch=batch), arrays)) * scale
+    # ``<n|dH_a - e_m dS_a|m> + (e_m - e_n) K^a_{nm}``: the velocity matrix
+    # element of a *generalised* eigenproblem, which is ``<n|dH_a|m>``
+    # unchanged when the overlap is the identity. Every expression below is a
+    # sum over the true eigenstates and their energies, so the only thing an
+    # augmentation charge changes here is which matrix element goes in. Built a
+    # chunk at a time in stages, each its own program: the two tangents' share,
+    # the connection where there is an augmentation charge, then the join and
+    # the contraction.
+    augmented = getattr(calculation, "augmentation", None) is not None
 
-    parts = total(nbnd)
+    def velocity_on(rowset, kcart):
+        return VelocityOperator(with_rows(calculation, rowset), v_scf, ddd_paw,
+                                kcart=kcart, dipole=dipole, local_terms=terms)
+
+    def tangents_of(rowset, psi, energies, kcart):
+        """``<n|dH_a - e_m dS_a|m>`` on one chunk, ``(3, 1, chunk, nb, nb)``."""
+        return velocity_on(rowset, kcart).tangent_elements(
+            psi, energies[None], sequential=True)
+
+    def connections_of(tangents, rowset, psi, kcart):
+        """The augmentation dipole's connection on one chunk, the same shape."""
+        return velocity_on(rowset, kcart).connections(psi, sequential=True)
+
+    # One contraction stage per band count, each its own program: the
+    # truncated sum is as large a contraction as the whole one, and in one
+    # program the two held their temporaries side by side.
+    head = 2 if augmented else 1  # the tangents, and the connections
+
+    def contraction(bands: int, position: int):
+        def stage(*args):
+            """One chunk's share of the three parts, summed over ``bands`` bands."""
+            connections = args[1] if augmented else None
+            energies, moved, fill, weight = args[position:]
+            v = with_connections(args[0], energies[None], connections)[:, 0]
+            arrays = (moved, energies, jnp.moveaxis(v, 0, 1), fill, weight)
+            return sum_k(one_k(bands), arrays, batch=batch)
+        return stage
+
+    def arguments(rows, live):
+        # The padded rows are a repeat of a real one and carry zero ``w_k``,
+        # which multiplies the whole of a k-point's term.
+        rowset, psi = row_leaves(calculation, rows), store_rows(wavefunctions, rows)
+        energies, kc = jnp.asarray(bare[rows]), jnp.asarray(kcart[rows])
+        last = (energies, jnp.asarray(shifted[rows]), jnp.asarray(filling[rows]),
+                jnp.asarray(padded(wk, rows, live)))
+        first = ((rowset, psi, energies, kc),) + (((rowset, psi, kc),) if augmented else ())
+        return first + (last,) * len(band_counts)
+
+    stages = ((tangents_of,) + ((connections_of,) if augmented else ())
+              + tuple(contraction(bands, head + index)
+                      for index, bands in enumerate(band_counts)))
+    sums = walk(int(wk.shape[0]), batch, arguments, *stages,
+                shares=len(band_counts))
+    sums = sums if len(band_counts) > 1 else (sums,)
+    parts = np.asarray(sums[0]) * scale
     chi_au = parts.sum(axis=0)
     chi = chi_au * CHI2_AU_TO_PM_PER_V
 
     reference = float(np.max(np.abs(chi)))
     truncation = float("nan")
-    dropped = max(1, nbnd // 4)
-    if nbnd - dropped > 1 and reference > 0.0:
-        coarse = total(nbnd - dropped).sum(axis=0) * CHI2_AU_TO_PM_PER_V
+    if len(band_counts) > 1 and reference > 0.0:
+        coarse = (np.asarray(sums[1]) * scale).sum(axis=0) * CHI2_AU_TO_PM_PER_V
         truncation = float(np.max(np.abs(coarse - chi)) / reference)
 
     return SecondHarmonic(

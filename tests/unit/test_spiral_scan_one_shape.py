@@ -1,0 +1,93 @@
+"""Every wavevector of a spin-spiral scan is one shape, so the SCF compiles once.
+
+``OPEN.md`` Part XXIII item 9, half (b). Moving a spiral to a new ``q`` rebuilds
+both plane-wave spheres, ``k + q/2`` and ``k - q/2``, and each wavevector padded
+them to its own widest sphere and its own stick count: on the hydrogen chain the
+padded width runs from 1532 to 1544 over eight wavevectors, and every new width
+compiled the whole SCF stack again. The scan now pads every point to the widths
+of all of them at once, as a band path does block by block.
+"""
+
+from pathlib import Path
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+import pytest
+
+from defumat import Calculator
+from defumat.workflows import spiral
+
+pytestmark = pytest.mark.unit
+
+H_CHAIN = Path(__file__).resolve().parents[1] / "data" / "qe" / "h-chain-spiral.in"
+WAVEVECTORS = [(0.0, 0.0, 0.0), (0.0, 0.0, 1 / 16), (0.0, 0.0, 1 / 4)]
+
+
+def _hamiltonian(calculation):
+    potential = jnp.zeros((calculation.nspin_mag,) + tuple(calculation.basis.dense.grid))
+    return calculation.hamiltonian(potential)[0]
+
+
+def test_the_wavevectors_of_a_scan_share_one_shape(pseudo_dir):
+    calculation = Calculator.from_file(H_CHAIN, pseudo_dir=pseudo_dir).calculation
+
+    # The control: alone, each wavevector pads to its own sphere.
+    alone = [calculation.at_spiral_q(q) for q in WAVEVECTORS]
+    assert len({moved.basis.npwx for moved in alone}) > 1
+
+    widths = spiral.scan_widths(calculation, WAVEVECTORS)
+    scanned = [calculation.at_spiral_q(q, widths=widths) for q in WAVEVECTORS]
+    shapes = {(moved.basis.planewaves.indices.shape, moved.sticks.columns.shape,
+               moved.hamiltonian_npw) for moved in scanned}
+    nk = 2 * calculation.system.kpoints.nk
+    assert shapes == {((nk, widths[0]), (nk, widths[1]), widths[2])}
+
+    # One treedef and one set of leaf shapes for the operator every compiled
+    # unit of the SCF takes, which is what "compiles once" rests on.
+    hamiltonians = [_hamiltonian(moved) for moved in scanned]
+    structures = {jax.tree_util.tree_structure(h) for h in hamiltonians}
+    leaf_shapes = {tuple(np.shape(leaf) for leaf in jax.tree_util.tree_leaves(h))
+                   for h in hamiltonians}
+    assert len(structures) == 1 and len(leaf_shapes) == 1
+
+    # Each sphere is still the one its wavevector asks for, padded and nothing more.
+    for own, padded in zip(alone, scanned):
+        width = own.basis.npwx
+        assert np.array_equal(np.asarray(own.basis.planewaves.indices),
+                              np.asarray(padded.basis.planewaves.indices)[:, :width])
+        assert not np.asarray(padded.basis.planewaves.mask)[:, width:].any()
+
+    # A later move without widths does not inherit the scan's floor.
+    again = scanned[0].at_spiral_q(WAVEVECTORS[1])
+    assert again.hamiltonian_npw == alone[1].hamiltonian_npw
+    assert again.basis.npwx == alone[1].basis.npwx
+
+
+@pytest.mark.slow
+def test_a_padded_wavevector_converges_to_the_unpadded_one(pseudo_dir):
+    """The scan's padding changes the shape and nothing the SCF starts from.
+
+    The hydrogen chain tops up five of its six bands with random vectors, and
+    the draw at the padded width changed every row but the first: at
+    ``q = 5/16``, ``conv_thr = 1e-11``, the padded run read 1.75e-10 Ry from the
+    unpadded one where it stopped an iteration earlier, and 1.1e-12 on the tree
+    this test was written on, both the threshold's slack and neither one a
+    difference a check at the ``conv_thr`` level could tell from a defect. The
+    top-up is drawn at the sphere's own width since 2026-10-03, so the padded run
+    starts from the unpadded run's vectors: 2.2e-16 apart, nine iterations each.
+    """
+    from defumat.scf import run_scf
+
+    base = Calculator.from_file(H_CHAIN, pseudo_dir=pseudo_dir).calculation
+    scan = [(0.0, 0.0, n / 16) for n in range(8)]
+    q = (0.0, 0.0, 5 / 16)
+    widths = spiral.scan_widths(base, scan)
+    runs = []
+    for calculation in (base.at_spiral_q(q), base.at_spiral_q(q, widths=widths)):
+        result = run_scf(calculation.system, calculation.pseudos,
+                         calculation=calculation, conv_thr=1e-11)
+        runs.append(result)
+    alone, padded = runs
+    assert len(padded.history) == len(alone.history)
+    assert abs(float(padded.total_energy) - float(alone.total_energy)) < 1e-14

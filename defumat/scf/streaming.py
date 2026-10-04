@@ -37,6 +37,22 @@ the part that still grows with the mesh.
 The weights of a padded chunk's repeated rows are **zero**, so the padding
 contributes nothing to a sum; a padded solve is computed and discarded.
 
+**How a chunk crosses** (:func:`rows_to_device`, ``OPEN.md`` Part XXIII item
+25). Every chunk :func:`~defumat.batching.k_chunks` yields is a run of
+consecutive rows except a padded last one, so every other chunk is taken as a
+slice of the store, a view, and handed to ``device_put`` as it is, where an
+integer index array made NumPy copy the chunk first. The padded chunk repeats a
+row, which no view expresses, and keeps the index. A solve reads one channel at
+a time, which is always contiguous; the density pass reads both, and at
+``nspin = 2`` with fewer rows than the store the pair is strided, so each
+channel's rows cross on their own and are stacked on the device. That stack is
+a device copy, and for its duration the two halves and the stacked block are
+all live, one more two-channel block than a single transfer holds; on a CPU
+backend the stack is a copy in host memory, so there the two-channel read costs
+what the index did. The new states go back by slice assignment, since the rows
+a chunk writes (``positions[:live]``) are always a run; an indexed assignment
+made no extra copy either, so the gain is on the reads.
+
 **A k-point pool walks only its own rows** (:mod:`defumat.parallel`). Its
 store is a :class:`~defumat.parallel.PoolStore`, whose ``rows`` name the global
 k index of each of its rows: :func:`stream_start` builds one when handed
@@ -59,12 +75,78 @@ from defumat.parallel import PoolStore
 
 __all__ = ["stream_start", "stream_diagonalize", "stream_densities",
            "stream_eigenvalues", "stream_states", "stream_becsum",
-           "is_host_store"]
+           "is_host_store", "rows_to_device"]
 
 
 def _to_device(array):
-    """One chunk across: a numpy slice made contiguous, then ``device_put``."""
+    """One chunk across: a numpy array made contiguous, then ``device_put``.
+
+    ``np.ascontiguousarray`` copies only an array that is not contiguous
+    already; a run of rows of one channel, or of every channel at
+    ``nspin = 1``, is a contiguous view of the store and crosses as it is.
+
+    **On a CPU backend the device array can be the store itself.** jax 0.11.0's
+    ``device_put`` of a contiguous numpy array whose data is 64-byte aligned
+    is zero-copy there, whatever ``may_alias`` says (``False`` included,
+    measured 2026-10-04), so a chunk taken as a view aliases the store's rows
+    whenever their address happens to be aligned; before, it aliased the
+    index's private copy on the same condition. That is safe for three
+    reasons, and they are the rule any walk that reads a host store this way
+    (here, :func:`~defumat.forces.chunked._rows_of`, and through it the chunked
+    responses) has to keep. A store's rows are written only with the output of
+    the computation that read them, after ``np.asarray`` of that output, so
+    the read has finished: the solve's write-back follows its own eigenvalues'
+    fetch, every response pass writes its ``dpsi`` the same way, and a density
+    pass, which writes nothing, feeds the Hamiltonian that the next solve, the
+    next writer, needs first. A solve's starting block is donated, and PjRt
+    **copies** a donated zero-copy buffer rather than writing through it, so
+    the store still holds the block a retry starts from
+    (``tests/unit/test_stream_chunk_views.py`` pins it). And nothing keeps a
+    chunk's device array past its walk. A walk that wrote rows while a
+    computation reading them was still in flight would race on a CPU, where
+    the index's private copy never could.
+    """
     return jax.device_put(np.ascontiguousarray(array))
+
+
+def _run(positions):
+    """``slice(a, b)`` when ``positions`` is the run ``a, a + 1, ..., b - 1``, else ``None``."""
+    positions = np.asarray(positions)
+    if positions.ndim != 1 or positions.size == 0:
+        return None
+    start = int(positions[0])
+    if np.array_equal(positions, np.arange(start, start + positions.size)):
+        return slice(start, start + positions.size)
+    return None
+
+
+def _rows(positions):
+    """``positions`` as a slice where it is a run, for an index that is a view."""
+    run = _run(positions)
+    return positions if run is None else run
+
+
+def rows_to_device(array: np.ndarray, positions, spin: int | None = None):
+    """One chunk of a host store on the device: ``array[spin, positions]``, or ``array[:, positions]``.
+
+    The rows cross as a view of the store wherever they are a run (module
+    docstring, "How a chunk crosses"), and through an index, which copies, only
+    for a padded chunk. The values are the same bytes either way.
+    """
+    run = _run(positions)
+    if run is None:
+        return _to_device(array[:, positions] if spin is None
+                          else array[spin, positions])
+    if spin is not None:
+        return _to_device(array[spin, run])
+    block = array[:, run]
+    if block.flags.c_contiguous or not array[0, run].flags.c_contiguous:
+        # Contiguous as it stands; or a store that is itself strided (a band
+        # slice, as the response stores are read), whose channels are no more
+        # contiguous than the pair, so one packing copy is the least there is.
+        return _to_device(block)
+    return jnp.stack([_to_device(array[channel, run])
+                      for channel in range(array.shape[0])])
 
 
 def is_host_store(wavefunctions) -> bool:
@@ -116,7 +198,7 @@ def stream_start(calculation, hamiltonians, nbnd: int, span=None, rows=None):
             hamiltonians, nbnd, span=span, rows=chunk_rows))
         if store is None:
             store = np.empty((chunk.shape[0], len(rows)) + chunk.shape[2:], chunk.dtype)
-        store[:, positions[:live]] = chunk[:, :live]
+        store[:, _rows(positions[:live])] = chunk[:, :live]
     return PoolStore(store, rows, nk) if pooled else store
 
 
@@ -164,11 +246,11 @@ def stream_diagonalize(calculation, hamiltonians, nbnd: int, store: np.ndarray,
             # block, which is what a robust retry is handed instead
             # (``GPU-MEMORY-NEXT.md`` item 11).
             energies, states, taken, stuck = calculation.eigensolver(
-                hamiltonian, nbnd, _to_device(array[spin, positions]), threshold,
+                hamiltonian, nbnd, rows_to_device(array, positions, spin), threshold,
                 k_batch=calculation.k_batch, return_steps=True,
                 indices=jnp.asarray(chunk_rows),
-                psi0_again=lambda spin=spin, positions=positions: _to_device(
-                    array[spin, positions]),
+                psi0_again=lambda spin=spin, positions=positions: rows_to_device(
+                    array, positions, spin),
                 **extra,
             )
             energies = np.asarray(energies)
@@ -177,7 +259,9 @@ def stream_diagonalize(calculation, hamiltonians, nbnd: int, store: np.ndarray,
                     energies.dtype, calculation.system.cell.precision.real))
                 steps = np.empty((nspin, nlocal), np.asarray(taken).dtype)
                 unsettled = np.empty((nspin, nlocal), np.asarray(stuck).dtype)
-            written = positions[:live]
+            # A run in every chunk, the padded last one included: the padding
+            # follows the live rows.
+            written = _rows(positions[:live])
             array[spin, written] = np.asarray(states)[:live]
             eigenvalues[spin, written] = energies[:live]
             steps[spin, written] = np.asarray(taken)[:live]
@@ -234,7 +318,7 @@ def _stream_from_scratch(calculation, hamiltonians, nbnd, ethr, *, keep):
                 eigenvalues = np.empty((nspin, nk, nbnd), energies.dtype)
                 steps = np.empty((nspin, nk), np.asarray(taken).dtype)
                 unsettled = np.empty((nspin, nk), np.asarray(stuck).dtype)
-            live_rows = rows[:live]
+            live_rows = _rows(rows[:live])
             if keep:
                 states = np.asarray(states)
                 if store is None:
@@ -259,7 +343,7 @@ def stream_becsum(calculation, store: np.ndarray, weights) -> tuple:
     total = None
     for rows, live in k_chunks(store.shape[1], calculation.k_batch):
         total = _add(total, calculation.becsum(
-            _to_device(store[:, rows]), _chunk_weights(weights, rows, live),
+            rows_to_device(store, rows), _chunk_weights(weights, rows, live),
             rows=rows, symmetrize=False))
     return calculation.finish_becsum(total)
 
@@ -283,7 +367,7 @@ def stream_densities(calculation, store, weights, *,
     rho = tau = ns = None
     for positions, rows, live in _local_chunks(store_rows, calculation.k_batch):
         w = _chunk_weights(weights, rows, live)
-        psi = _to_device(array[:, positions])
+        psi = rows_to_device(array, positions)
         if accumulate:
             becsum_ = _add(becsum_, calculation.becsum(psi, w, rows=rows,
                                                        symmetrize=False))

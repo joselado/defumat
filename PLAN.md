@@ -204,6 +204,11 @@ new phase is started. Each entry names the missing term rather than the missing 
 because that is what decides whether it is a session or a phase.
 
 - **Wyckoff input** (P6, the one part of that phase not done).
+- **The mixer's history in G as memory mode's default** (P128, `OPEN.md` Part XXIII item 22): the
+  layout is built and its shell rebuilt from the mixed `becsum`, and every cell on record converges in
+  it in at most three iterations more than real space (and ten fewer on DFT+U nickel), at 4 to 5 per
+  cent more a CPU iteration; what stands between it and the default is the DFT+U basins it chooses
+  differently (the user's decision).
 - **A switch from single to double precision that pays** (P126): `'mixed'` converges to the double
   state and loses the superlinear mixing step a bulk cell converges by, 0.72x on 64-atom silicon on
   the card; and **`k_batch = 'fit'` as memory mode's default on a card**, which the user decided on
@@ -9705,6 +9710,58 @@ frequencies is 13 MB per chunk against 5 MB of matrix elements: **the frequency
 axis is free and the band count is what has to be watched**, since it enters
 squared and is also the truncation the f-sum measures.
 
+**Re-measured 2026-10-04 for `27eeaa2`'s `l = 1` tangent at `k + G = 0` (P54),
+and no figure in this entry moves with it at the precision it is recorded to.**
+Every case runs on an unshifted mesh that holds `Gamma`, and on today's code and
+with `Calculation(..., origin_tangent=False)` on one SCF, after a control that the
+switch reaches `dH/dk` through `calculation=` (`27eeaa2`'s own
+`Gamma_1`-by-`Gamma_15` block on `si2-nosym`, 0.45892 against 0.16956): silicon's spectral
+weight reads 1.1852, 0.9853 and 0.9340 of `pi n_e/2` on 4x4x4, 6x6x6 and 8x8x8
+against 1.1853, 0.9853 and 0.9340, its diamagnetic weight 0.9423 and 0.9432 on
+both legs to every digit (the stencil sits at `|k + G| = 1e-3` and never reaches
+the row), the identity with P37 3.2e-14 against 3.0e-14 (the two share the
+velocity, so it is blind to the row), aluminium's plasma frequency, a
+Fermi-surface quantity that `Gamma` does not reach, 11.886697 and 20.485233 eV on
+both legs, and nickel's Hall conductivity -1101.58 and -77.10 S/cm on both legs
+to 1e-7. `Gamma` is one point in 64 or more, and the largest move is 1.4e-4 of
+silicon's 4x4x4 spectral weight.
+
+**Five figures here reproduce on neither leg, and none of them is the tangent.**
+
+* Nickel's plasma frequency is **0.852 eV** where the table and the Drude
+  paragraph record 0.597 and 0.5971, because `ni-soc-nosym.in` smears with `mv`,
+  the cold smearing, and `33936f2`'s correction of the Drude delta's argument
+  moved it too; that commit re-measured aluminium only. Today's code with
+  `w0gauss` handed `-x` gives 0.5973 back on the 4x4x4 mesh at 36 bands, and the
+  Hall conductivity does not move with it. It is still the same at 30 and 36
+  bands, 0.8517 eV, which is what the test asserts.
+* The nonmagnetic nickel of the degeneracy-guard section reads `sigma_xx`
+  1.289876e5 S/cm and a plasma frequency of 0.628511 eV on its frequency route
+  where 1.290657e5 and 0.688568 were recorded, for the same reason: the mirror
+  gives 1.290658e5 and 0.688568 back. Its `sigma_xy`, zero by time reversal,
+  reads 2.8e-7 S/cm where 8.5e-6 was, under either argument. Each is still the
+  same at 5.56e-13 and at the default guard, which is the claim.
+* The guard table's curvature route reads 4.504e-4 S/cm at 1e-5, 1e-8 and 1e-10
+  where 4.669e-4 and 4.668e-4 were recorded, `sigma_xy` 4.95e-5 and 4.97e-5, and
+  **2.140** S/cm at 5.56e-13 where 1.2576 was, so the 2700x of that paragraph is
+  4750x today. The counts, 102 and 42, are as recorded; the tight guard's value
+  is round-off inverted and moves with the rotation the eigensolver returns.
+* The Hall conductivity of the 4x4x4 row, -77.4 and -1101.7 S/cm when written,
+  reads -77.10 and -1101.58, a few parts in a thousand of a number the table
+  already shows changing sign with the mesh. Notebook 30 printed 1101.74 when
+  executed on 2026-09-02 and 1101.90 on 2026-09-21, so it has moved between
+  executions by more than a thousand times what the tangent is worth here (9e-5
+  S/cm). The 6x6x6 row was not re-run, about 25 minutes on two legs for a row
+  that is not compared with anything.
+* Silicon's antisymmetric `sigma` reads 1.8e-12 at 20 bands where 4.0e-13 was
+  recorded, and 6.3e-6, 1.4e-6 and 6.6e-7 at 12, 24 and 32 where 1.0e-5, 2.3e-6
+  and 8.3e-7 were, on both legs. The clean cut is round-off and the other three
+  cut a multiplet (`band_cut_gap` 7e-15, 4e-15 and 6e-15 Ry), so all four are
+  residues that move with any change of rounding, and the six orders of
+  magnitude between the two kinds of cut stand. The off-diagonals of the P37
+  identity at that clean cut are 9.7e-9 and 9.6e-9 where 1e-9 was written (at 36
+  bands 8.7e-10 and 1.9e-9, agreeing to 1.8e-9, as recorded).
+
 ### P52 — The Fermi-surface nesting function. ✅ DONE.
 
 `defumat/response/nesting.py` and `defumat/workflows/nesting.py`. Elk's task
@@ -10088,12 +10145,15 @@ The **spin sum**: the same AlAs cell run `nspin = 1` (14 bands) and as a
 two-component spinor (28) gives the same tensor to **4.6e-9**, peak ratio
 1.000000 -- P52's construction, where the same factor of two is a factor of four
 and invisible in the shape. It is also the only test behind the README row's
-claim that a spinor run works at all.
+claim that a spinor run works at all. Since `27eeaa2` the residue reads 4.5e-9,
+and 4.6e-9 with `origin_tangent=False` (the 2026-10-04 paragraph below).
 
 The **published literature, with the ordering doing the work**. AlAs's first
 peak converges to **35.0 uA/V^2 at 4.17 eV** -- 33.9 at `ecutwfc = 16`, then
 33.7, 34.8 and 35.0 at 22 with 14, 22 and 30 bands, so about 1% in both
-parameters. Calculations across the fourteen III-V and II-VI zincblende
+parameters. That is the sweep as written; since `27eeaa2` it reads 33.9, 33.7,
+34.9 and **35.1**, and 35.0 is what `origin_tangent=False` gives (the 2026-10-04
+paragraph below). Calculations across the fourteen III-V and II-VI zincblende
 semiconductors span **14 uA/V^2** (CdSe, smallest) to **83** (AlSb, largest),
 and find the *aluminium* compounds the strongest responders of the family and
 the II-VI compounds the weakest (Opt. Quantum Electron. **58**,
@@ -10124,7 +10184,62 @@ factor of two, and this one is against the first convention.
 at 5 eV**, stable across 4x4x4, 6x6x6 and 8x8x8 meshes, with a peak of about
 1.1e-4 near 4.4 eV — the published range for a zincblende semiconductor. Below
 the absorption edge it is **6.9e-25** at 2 eV. Silicon, the centrosymmetric
-control run through the same machinery, gives zero.
+control run through the same machinery, gives zero. (The stability across
+meshes and the 2 eV figure are not what the committed code gives; see the next
+paragraph.)
+
+**Re-measured 2026-10-04 for `27eeaa2`'s `l = 1` tangent at `k + G = 0` (P54),
+which moves two recorded figures in their last printed digit, the converged peak
+and the spin sum's residue, and the 2 eV tail by a factor of 2.5.** Every AlAs
+figure in this entry is on an unshifted mesh, so each was run on today's code and with `Calculation(..., origin_tangent=False)` on one
+SCF, and `db41c61`, the commit that wrote the entry, was run with its own test
+helpers beside them: it returns the `origin_tangent=False` leg to every printed
+digit on the 4x4x4, 6x6x6 and 8x8x8 meshes, which says the switch is the whole
+of the difference. At `ecutwfc = 22` on the 64-point mesh the first peak reads
+33.73, 34.90 and 35.08 uA/V^2 at 4.17 eV for 14, 22 and 30 bands, against 33.66,
+34.83 and 35.02 with the switch off, and at `ecutwfc = 16` it reads 33.93 at 4.17
+eV against 33.89 at 3.90, where two neighbouring maxima trade places; so the
+sweep as written is QE's leg, and 35.1 sits in the 14 to 83 range exactly where
+35.0 did. The tangent acts at the absorption edge, which is at `Gamma` in AlAs
+(the direct gap is smallest there, 2.85 eV at `ecutwfc = 10` and 2.44 at 22): the
+two legs differ most at the grid point nearest it, by 10 per cent of the peak on
+4x4x4, 1.2 on 6x6x6 and 0.8 on 8x8x8, falling as `Gamma`'s weight does, and they
+are bit-identical at the sum-rule harness's generic point, which holds no
+`k + G = 0` row. The spin sum holds on both legs, at 4.5e-9 today and 4.6e-9,
+the recorded figure, with the switch off, the peak ratio 1.000000 on both.
+Notebook 32's 44.2 uA/V^2 at 3.56 eV, its 4.5 per cent truncation and its
+forbidden components (4.0e-9 of the allowed), the 6x6x6 peak (1.145e-4 against
+1.143e-4, at 4.38 eV on both legs) and silicon's control (2.0e-5 of AlAs's peak
+on both) do not move at the precision recorded. The truncation reads
+3.5, 1.0 and 1.3 per cent at 14, 22 and 30 bands on both legs, and 22 and 30 cut
+a degenerate multiplet (`band_cut_gap` 4e-15 and 4e-16 Ry), which `569df06`'s
+warning now reports on both runs.
+
+**Four figures in this entry reproduce on neither leg nor at `db41c61`**, so they
+are not what the committed code gave when they were written, and none of them is
+the tangent:
+
+* the sum-rule sweep, recorded as 6.0e-2, 4.8e-2, 4.3e-2 and 1.8e-4 at 20, 80,
+  120 and 158 bands, reads 0.69, 0.54, 0.52 and 2.6e-3 with the committed
+  harness, bit-identical on both legs. The fall at completeness is there, a
+  factor of 200, and the test's bound of 3e-3 holds with 13 per cent to spare;
+  normalising the residue by the window's largest element, taking the median
+  rather than the largest relative error, or taking the Frobenius norm gives
+  1.2e-2 to 1.5e-2 at 20 bands and 3.0e-4 to 1.5e-3 at 158, which is not the
+  recorded sweep either;
+* `sigma^xyz` at 4 and 5 eV is not stable across meshes: at the grid point
+  nearest each it is -3.42e-5 and -2.8e-7 on 4x4x4, -1.48e-5 and -9.6e-6 on
+  6x6x6, and -1.771e-5 and -2.756e-5 on 8x8x8, on both legs, so the recorded pair
+  is the 8x8x8 mesh's alone;
+* the 2 eV tail, recorded as 6.9e-25 on the 6x6x6 mesh of
+  `test_photocurrent.py`, reads 1.7e-24 there (7.3e-25 on 8x8x8) with the switch
+  off and at `db41c61`, and 4.3e-24 (1.8e-24) today. It is a Gaussian tail 6.3
+  broadening widths below the edge at `Gamma`, so it carries the tangent's
+  factor of 2.5 and says no more than that the current vanishes, which is what
+  the test's relative bounds assert;
+* the forbidden components that `test_photocurrent.py`'s comment gives as 4.0e-4
+  of the allowed on 6x6x6 and 1.0e-5 on 4x4x4 are 2.3e-9 and 6.0e-9 on both legs
+  and at `db41c61`, which is this entry's "exactly `-43m`, to five figures".
 
 **Refused by name**: ultrasoft and PAW (the `dS/dk` and `d^2S/dk dk` terms are
 identically zero for a norm-conserving dataset, so nothing here can see their
@@ -10186,18 +10301,76 @@ comparable stated rather than discovered — all-electron LAPW against a
 norm-conserving pseudopotential, and a second-order susceptibility carries two
 energy denominators, so a gap difference is not a scale factor:
 
-* the **resonance position** to **0.5%**: 2.152 eV against 2.163;
-* the **peak height** to **7%**: 27.52 a.u. against 25.70;
-* the **static value** to **11%**: -3.10 a.u. against -3.50 — and the basis is
-  shown converged there, `ecutwfc` 10 → 30 → 45 giving -2.71 → -3.10 → -3.13,
-  so the residue is the pseudopotential and not the cutoff;
+* the **resonance position** to **0.5%**: 2.152 eV against 2.163, at 22 bands
+  when written and at 23 since 2026-10-04;
+* the **peak height** to **7%** when written, 27.52 a.u. against 25.70 at 22
+  bands; **0.8%** since, 25.90 a.u. (632.9 pm/V) at 23 bands, and the move is
+  not the band count (the 2026-10-04 paragraph below);
+* the **static value** to **11%** when written, -3.10 a.u. against -3.50 at 22
+  bands; **8%** since, -3.21 a.u. (-78.5 pm/V) at 23. The basis is
+  shown converged there, `ecutwfc` 10 → 30 → 45 giving -2.71 → -3.10 → -3.13
+  on the code of the time, so the residue is the pseudopotential and not the
+  cutoff;
 * the **three parts separately**, because Elk writes `chi_II`, `eta_II` and
   `i/2w sigma_II` to three files and comparing only their sum would let two
-  errors cancel — P43's lesson;
+  errors cancel, which is P43's lesson. At 23 bands they read 36.08, 53.95 and 21.33
+  a.u. against Elk's 30.81, 45.35 and 17.31 (+17, +19 and +23 per cent, under
+  a 35 per cent tolerance); at 22 bands on the code of the time, 34.70, 54.04
+  and 21.32;
 * and the **scissors branch**, which Elk's own GaAs example is built around: at
   `Delta = 0.05` Ha the 2w peak moves **0.0502 Ry** against a half-scissor of
   0.0500, and its height falls to **0.60** of the unscissored value against
-  Elk's 0.58.
+  Elk's 0.58 (0.62 at 23 bands since 2026-10-04, the static value going -3.21
+  to -1.17 a.u. where it went -3.10 to -1.14, and Elk's -3.50 to -1.00).
+
+**Revisited 2026-10-04: the band count, and a 6 per cent that was not the band
+count.** The cut warning (`569df06`) fires on every 22-band run of this phase:
+on `alas-shg.in`'s 6x6x6 mesh 22 bands cut doublets at 13 of the 216 k-points,
+`band_cut_gap` exactly 0, so which member of each doublet is summed is the
+eigensolver's arbitrary rotation. Rotating them moves chi by up to **4.7e-4** of
+its peak, and the components zincblende forbids read 2.2e-4 of the allowed ones
+at 22 bands against **3.8e-9** at 23, the allowed spread 1.7e-4 against 5.7e-10.
+A scan over band counts by the session that decided the move found 23 the one
+count that is a clean cut on every cell and mesh in use (`alas-raman` 4^3
+1.8e-3 Ry and 6^3 1.3e-2, `alas-shg` 4^3 4.1e-3 and 6^3 9.0e-3, `alas-us` 4^3
+1.57e-2), so `tests/regression/test_shg.py`, notebook 33 and the guide's
+`get_shg` snippet now run 23. **Elk cuts inside a multiplet too, at its own
+count.** Its run holds 37 states, 12 of them occupied, because Al 2p and As 3d
+are valence in its species (`spcore` false for both in `Al.in` and `As.in`, so
+`chgval = 24`; `nempty 12` is per atom, so `init1.f90:316-319` gives
+`nstfv = 12 + 24 + 1`), and its top state is degenerate with the next at 3 of
+its 22 reduced k-points (that session's measurement; Elk was not re-run here).
+The comparison's tolerances, 25 per cent on the static value, 5 on the peak
+position, 20 on its height and 35 on the parts, are 100 to 1000 times the cut's
+effect, so it is indifferent to the cut on either side: the tests run the same
+mesh as Elk and not the same band count.
+
+**The re-measurement did not reproduce the recorded figures at 22 bands, and
+the reason is `27eeaa2`.** Today's code at 22 bands gives 632.49 pm/V (25.88
+a.u.) and -78.33 pm/V (-3.205 a.u.) where this entry recorded 672.5 and -75.8,
+and the band count is worth +0.41 and -0.14 of that (632.90 and -78.47 at 23).
+`cff88a4`, the code of 2026-09-02, reproduces 672.5048 and -75.799; `d75c1b4`,
+the code of 2026-10-03 before the cut warning, gives 632.4902, bit-identical to
+today's. Bisected over the 807 mainline commits between them on a 2x2x2 proxy
+(2339 against 2456 pm/V), the move is `27eeaa2` (2026-09-20), the `l = 1`
+projector's tangent at `k + G = 0` put back on Gamma's row of `dH/dk` (P28,
+"The repair is a `custom_jvp`"), and the switch it added says so on its own:
+today's code at 22 bands with `origin_tangent=False` gives **672.5008** and
+-75.807, the recorded figures to 6e-6 of the peak, which is inside what the
+22-band cut's rotation moves. The tangent moves
+`chi_II`, the part with the intermediate state, by 4 per cent and the other two
+by 0.2 or less. P28's rule for which leg a test takes does not put these tests
+on `origin_tangent=False`: their anchor is Elk, an all-electron code with no
+reason to zero that row, and the default agrees with Elk's peak height to 0.8
+per cent where `ph.x`'s convention agreed to 7. `OPEN.md` had listed "SHG's and
+the shift current's three-band terms" among the consumers of that row before it
+was repaired; nothing re-measured this entry's figures when it was. The
+absorption edge moved with it: on `alas-raman.in`'s 6x6x6 mesh the 5 per cent
+crossing of `Im chi` reads 0.89 eta *below* `E_gap / 2` at 22 and at 23 bands
+alike, against the 0.12 eta above it recorded in the test, which
+`origin_tangent=False` gives back; the 10 per cent crossing is 2.13 eta above
+on both legs. The `truncation` diagnostic reads 2.73e-3 at 22 bands on the old
+code, 3.37e-3 at 22 on today's and 3.56e-3 at 23.
 
 **Four findings, and the first two are the phase.**
 
@@ -20388,13 +20561,28 @@ by **40.832 pm/V**, 2.59 per cent, against 0.5 per cent in the linear conductivi
 is what a quantity carrying the velocity matrix element three times rather than twice
 should do. The zincblende symmetry is *not* evidence about the term, and the test says so:
 a wrong augmentation term respects the point group exactly as a right one does.
+**Re-measured 2026-10-04 at 23 bands**, a cut in a gap (below), on code that carries
+`27eeaa2`'s `l = 1` tangent at `k + G = 0` (P28): **1578.3015 pm/V** at 2.744 eV, and the
+deletion moves it by **34.0576 pm/V**, 2.16 per cent. With `origin_tangent=False` at 23
+bands the two read 1578.1755 and 40.2403 (2.55 per cent), so the tangent is worth 6.2 pm/V
+of the deletion and 0.13 of the peak, and the rest, 0.6 and 0.8, is going from 24 bands to 23.
 
-**What the symmetry is evidence for is the augmentation's own floor**, and it is three
-orders worse than the norm-conserving cell's. The six allowed components agree to
+~~**What the symmetry is evidence for is the augmentation's own floor**, and it is three
+orders worse than the norm-conserving cell's.~~ The six allowed components agree to
 **3.5e-6** of the peak and the largest forbidden one is **6.6e-4** of it, where
-`alas-raman.in` on the same grid gives **2.3e-9** for the first. Nothing imposes the
+`alas-raman.in` on the same grid gives **2.3e-9** for the first. ~~Nothing imposes the
 symmetry on either cell, so the gap is the radial interpolation of `Q_ij(G)` and `dpqq`,
-the same order the project has measured for it elsewhere (P39a's carbon, 2.3e-4).
+the same order the project has measured for it elsewhere (P39a's carbon, 2.3e-4).~~
+**Corrected 2026-10-04: the 6.6e-4 was the 24-band cut and not the augmentation.** 24 bands
+cut a doublet or a triplet at 7 of the 64 k-points (`band_cut_gap` 5.3e-15 Ry), so which
+members were summed was the eigensolver's arbitrary rotation, and rotating the cut
+multiplets moved the tensor by 6.8e-4 and 1.05e-3 of its peak in two draws, against the
+test's bound of 3e-3. At 23 bands, a cut in a gap of 1.57e-2 Ry, the largest forbidden
+component is **3.65e-8** of the allowed ones and their spread **5.5e-9**, the same order as
+the norm-conserving cell's (`alas-raman.in`, 4x4x4 at 14 bands, re-measured the same night:
+1.49e-8 and 2.3e-9), so at the level the symmetry can see this cell shows no augmentation
+floor at all. `test_shg.py` now runs the pair at 23 bands with both zincblende bounds at
+1e-6, 27 and 180 times the measurements.
 
 **What is outstanding.**
 
@@ -23459,3 +23647,190 @@ to 1.20x a run, and memory mode 1.97x speed mode at 64 atoms, which is the new o
 "The stall check on a data-centre card"). Before that, all of it on a float64 card, which `tools/gpu/stall-check.sbatch`
 measures and which needs a submission. Record: `PERFORMANCE.md`, "A k-chunk sized to the card" and
 "The band side in single precision"; guide: `docs/features.tex`, the batching section.
+
+### P127 -- The response converges where `ph.x`'s does: `ph.x`'s `dr2`, its CG schedule and a warm start. ✅ DONE for the field, the phonon at `Gamma` and at `q`, and the strain; timed against `ph.x` on three cells (`PERFORMANCE.md`, "The response against `ph.x`").
+
+**What was wrong.** The four self-consistent response loops (`response/efield.py`, `phonon.py`,
+`strain.py`, `phononq.py`) stopped on the raw `sum((induced - dvscf)**2)` over the grid, against
+`tr2 = 1e-14`, and printed it under `ph.x`'s label. `ph.x`'s `|ddv_scf|^2` is that sum divided by
+`ndimtot^2`, the square of the vector's length in reals (`LR_Modules/mix_pot.f90:83`), tested against
+`npert tr2 / npol` and printed divided by `npert` (`dfpt_kernels.f90:434-439`, `:519-523`). The two are
+eleven decades apart on the AlAs spinor cell and ten on silicon, which is the whole of the factor of two
+in passes `PERFORMANCE.md` P98 had put on the mixer: on `si-epsilon` the raw history divided by
+`ndimtot^2 npert` reproduces `ph.x`'s four first passes times a constant 2.00, the direction convention
+(`ph.x` perturbs along `at(:, ipol)`, of length `1/sqrt(2)` on fcc; this code along Cartesian axes), and
+under `ph.x`'s test the run stops at pass 5 where `ph.x` does instead of 8. The CG threshold was fixed
+(1e-12, and 1e-14 at `q`) where `dfpt_kernels.f90:277-281` schedules `1e-2` and then
+`min(0.1 sqrt(dr2), 1e-2)`, and every solve started from zero where `ph.x` reads the previous pass's
+`dpsi` (`response_kernels.f90:240-251`). The q-phonon's test was `max |dV|^2`, about five decades tighter.
+
+**What is here now**, each piece reviewed by a fable subagent against the code and the Fortran before it
+was written (it found the `alat^2` claim false, the plan's joint test wrong for the phonon, and two
+compile traps in the plumbing):
+
+- `response/mixing.py:ddv_scf`, `ph.x`'s quantity written once. The field tests its three directions
+  together, as `solve_e` does; the phonon, the phonon at `q` and the strain test the **largest
+  single-perturbation** value, which is `ph.x`'s test for a one-dimensional representation and never
+  looser than its test for a larger one (a joint test over `3 nat` modes would loosen the per-mode one by
+  `(3 nat)^2`); the strain over its six independent components. PAW's one-centre block is in the sum and
+  the count, as `dbecsum` is in `ph.x`'s. **Tested before mixing, and the input returned on convergence**,
+  as `mix_potential` returns it (`mix_pot.f90:85-113`), so `dvscf`, `dpsi` and the one-centre potential
+  leave the loop consistent with each other; the loops used to return one Anderson step past what `dpsi`
+  was solved at.
+- `sternheimer.py:pass_threshold`, the schedule, used when an entry point is given `threshold=None` (the
+  default); a number holds the CG there on every pass, as before. The bare solves keep their fixed
+  threshold. The threshold and the start reach the compiled solve as arrays (`SternheimerSolver.solve`'s
+  `start` and `threshold`, and `scalars_at` on the walked routes), so a schedule is one program: a Python
+  float closed over is printed into `defumat.eager`'s key and would compile one per value.
+- Each solve starts from the previous pass's `dpsi`, zeros on the first, on the whole-k and walked routes
+  alike (one more chunk uploaded per solve on the walked ones).
+- Three smaller ones in the same loops: `S|psi_occ>` built once per solve for the level shift instead of
+  `S` applied to the lifted vector every CG step (`bee24f3`, past `ch_psi_all`; bit-identical
+  norm-conserving, every printed digit on ultrasoft); the strain's six independent components screened
+  (`055da69`, which is what `OPEN.md` Part III H2 had been closed for on a commit that changed a different
+  loop) and mixed (`fa1c8c1`), where nine were; and the mixer's history at `ph.x`'s `nmix_ph = 4`, half
+  the host memory, with the same passes on four silicon responses.
+
+**The numbers** (passes and CG steps a solve are load-independent; D22's CPU, one core):
+
+| cell | passes before -> after (`ph.x`) | CG steps a solve before -> after (`ph.x` late passes) | result before -> after (`ph.x`) |
+|---|---|---|---|
+| `si-epsilon`, field | 8 -> 5 (5) | 28.0 -> 12.6 (9) | 13.8066461 -> 13.8066540 (13.8066895) |
+| `si-epsilon-us`, field | 9 -> 5 (5) | 31.7 -> 13.7 (11) | 14.3253103 -> 14.3253186 (14.3252696) |
+| `si-epsilon`, `Gamma` phonon | 10 -> 6 | 27.7 -> 10.8 | 510.1024 -> 510.104 cm^-1 (510.152) |
+| `si-electrostriction`, strain | 11 -> 7 | 22.0 -> 6.7 | |
+
+**What it costs, and the open question.** At the defaults every quantity is converged where `ph.x`'s
+is, and an identity between two separate runs holds only to that level: from 3e-11 between the walked
+and whole-k strain `dpsi`, through 1e-7 to 1e-5 relative across the wedge identities, the crystal-form
+checks and the third derivatives, to 0.29 cm^-1 on a two-atom cell's near-zero acoustic triplet. Those
+tests now ask for the convergence they were measured at (`tr2 = 1e-24`, which is about where the raw
+1e-14 sat on these grids, and a fixed CG at 1e-12), each with what it reads at the defaults written beside
+it. **One `ph.x` comparison fails at the default, and it is the open question**: on triplet O2 in a vacuum
+box (`test_lsda_response.py::test_the_lsda_born_charges_match_ph_x`) this code's history tracks `ph.x`'s
+pass for pass (4.71e-8, 1.85e-7, 1.35e-9, 2.31e-11, 3.18e-12, 1.43e-14 against 4.709e-8, 1.850e-7,
+1.354e-9, 2.287e-11, 3.013e-12, 2.171e-14) and then reads 4.56e-15 at pass 7 where `ph.x` read 1.14e-14,
+so it stops there while `ph.x` ran an eighth pass to 4e-17; at pass 7 `Z*_zz` is 0.19766 where it converges
+to 0.20042 and `ph.x` prints 0.20023. So a fixed `tr2` in `ph.x`'s units can leave a vacuum cell's Born
+charge a per cent short, as it can `ph.x`'s (the `1/N^2` makes the test weak where `N` is large), and the
+reference agrees only because `ph.x` happened to need one more pass. **Decided by a fable subagent (the
+user's delegation): the default stays `ph.x`'s 1e-14**, and the O2 test names the `tr2` its reference
+reached:
+
+| `tr2` | passes | last passes | `Z*_zz` | largest deviation from `ph.x` |
+|---|---|---|---|---|
+| 1e-14 (the default) | 7 | 1.43e-14, 4.56e-15 | 0.19766 | 2.57e-3 |
+| 1e-16 | 8 (`ph.x`'s count) | 4.557e-15, 6.523e-17 | 0.200082 | 1.51e-4 |
+| 1e-18 | 10 | 1.768e-18, 8.989e-21 | 0.200414 | 1.84e-4 |
+| 1e-24, CG fixed at 1e-12 | 14 | | 0.200415 | 1.85e-4 |
+
+1.84e-4 at 1e-18 is `ph.x`'s own distance from converged (it prints 0.20023), and 1e-16 reads closer only
+because both codes stop short in the same direction at about the same `dr2`; 1e-16 is the test's value
+because it is the convergence `ph.x` reached, not because its number is smaller. What `ph.x`'s criterion
+admits at the threshold is an RMS residual per real of `sqrt(ndimtot npert tr2)`: 3.8e-5 Ry on silicon's
+20^3 grid (`ndimtot` 48000) and 1.8e-4 on O2's 45^3 box at `nspin = 2` (1,093,500), and a homonuclear
+molecule's raw Born charge is a residue (0.2 left of an electronic 5.8 against an ionic 6), which is why a
+per cent shows there and 6e-7 on silicon's epsilon. A tighter default was rejected because it costs a pass
+where `ph.x` takes none (`si-epsilon`'s pass 5 reads 4.94e-16, above 1e-16) and loses the pass-for-pass
+agreement; a grid-independent normalisation because `tr2` would stop meaning `tr2_ph`. Pass counts at the
+default are where a trajectory lands, in `ph.x` as here: its own references hover over the threshold
+before dropping under it (`si10-epsilon` three passes at 1.51e-14, 1.46e-14, 1.46e-14 before 1.8e-17;
+`al2-metal` 2.9e-14, 1.68e-14 before 2.15e-16), so no comparison test may rest on one.
+
+### P128 -- The second optimisation sweep: work done twice, compiled twice, or held twice, and the trajectories it moved. ✅ DONE for 20 of `OPEN.md` Part XXIII's 26 items (1 to 5 are P127) and three of Part III's (M5 reverted); four are done in part and two are not done, each with its reason in the item.
+
+**What it was.** A read-only sweep on 2026-10-03 (two agents re-reading the 122 items already listed
+against the code, five sweeping one subsystem each, two verifying every candidate sceptically) wrote
+`OPEN.md` Part XXIII, 26 items with a site, a fix, a bound and a measurement each, and re-marked
+Part III. Items 1 to 5 are the response loops and are P127. The rest were taken the same night, one
+agent an item or a pair of items, each in a worktree and merged into an integration branch; every one
+was asked for a number that would have caught it and a test that fails on the old code. The detail of
+each, with its sites, is in its `OPEN.md` entry; this is the index and what the night taught.
+
+**Bit-identical, and what each one bought:**
+
+| item | what | the number | commit |
+|---|---|---|---|
+| XXIII 7 | the geometry an argument of the force and stress gradients, the compiled function cached under everything else | `vc-relax4` steps 2 to 10 compile neither gradient (one each a step before); not bit-identical, 1.8e-16 Ry/bohr a call, carried by BFGS to 3.6e-9 bohr | `a7668a7` |
+| XXIII 8 | the DFT+U occupation matrix and `becsum`'s per-k scan through `defumat.eager` | a warm SCF on `ni-ldau-ortho.in` at `k_batch = 1`: 40 compiled programs -> 0; `ni-noncol-111` 14 -> 0, the ultrasoft spiral 10 -> 0, `al-tetrahedra` 6 -> 0 | `bffddf4`, `a7bb0b6`, `bd611bb` |
+| XXIII 9 | a spiral scan's static `npw` the smallest sphere, every point padded to the scan's widths | 298 -> 184 compilations over eight wavevectors, every one after the first compiling none; the random top-up drawn at the sphere's own width, 2.2e-16 Ry from the unpadded run | `dbef30b`, `2322684`, `f8ae017` |
+| XXIII 10 | the lazy projector set's `becp` loop jitted once | a second polarization on `alas-epsilon-us`: 16 programs -> 0 | `da7fce5` |
+| XXIII 12 | a state source's k-independent terms built once a workflow | potentials, `newd`s and `q_ij(b)` 2 -> 1 on two strings | `2bb51bf` |
+| XXIII 13, half | the ultracell's wider solve on the basis calculation | constructors 2 -> 1 | `2b34b2e` |
+| XXIII 14 | `Calculation.with_texture` for a turned system | `run_anisotropy('xyz')` 3 -> 1 calculations, `relax_orientation(curvature=True)` 10 -> 1 | `9f84fde` |
+| XXIII 14, the clear | the orientation relaxation's global `jax.clear_caches()` replaced by a drop of what the last one-shot alone used, then the quantization axis passed to the potential and PAW's one-centre terms as an array rather than a static key | compiles a one-shot 79 -> 2 -> 0, the mappings flat at 6566 (deleting the clear alone grows 1755 a one-shot, 34 one-shots to a Triton node's cap); bit-identical on the relaxation, a noncollinear PBE and a PAW PBE SCF | `5d7bc18`, `31c4689` |
+| XXIII 15 | `at_cell` builds the augmentation as the constructor does | the radial kernel 171 -> 0 times in a memory-mode step-2 SCF on `si8-us-1k`; 1.4e-14 Ry | `a411147` |
+| XXIII 16 | `choose_k_batch` from one size estimate | 8 estimates -> 1; 1720 estimates and 2940 choices equal on 172 cells | `f9e8e2e` |
+| XXIII 17 | one projection at `nspin = 1`, and the projectors a block at a time in memory mode | 2 -> 1; a forced block's compiled temporaries 5.28 against 9.62 MB on silicon, the k sum's order kept | `6735d1f`, `39e1f1f` |
+| XXIII 18 | one `calbec` a block for `H` and `S` | `_every_k` dots 62 -> 57 on `si8-us-1k` and `si8-paw-1k` | `c8a8dc8` |
+| XXIII 21 | one `device_get` an attempt | blocking reads a steady iteration 15 -> 5 (`si8-1k`) to 27 -> 16 (DFT+U); time not measured | `2430c11` |
+| XXIII 23 | Anderson's history through views, the mix accumulated in place | whole vectors touched a call 26 -> 5; tracemalloc's peak 12.1 -> 4.1 vectors | `5f232bd` |
+| XXIII 24 | `batching.upload` for a host store, then the five sum-over-states assemblies walking k (`response/walk.py`) | at a chunk of one the conductivity's largest program 1.45 MB of temporaries against 22.97, within 1.8e-15 of the old route; worse on a small norm-conserving SHG at a chunk of seven; the card peak not measured | `7a26cdf`, `ed72649` |
+| XXIII 24, the rest | of the eight leftover `jnp.asarray` sites, the five a host store reaches: the band velocities and `keep_internals`' field response through `batching.upload`, the frozen expectations and the projected band energy through `walk.store_rows` | 21 arrays bit-identical under `wfc_store='stream'`; the other three are reached by device states only, read rather than assumed | `f5c95a6` |
+| XXIII 25, half | a run of rows crosses as a view of the store | host copies 27 -> 9 a pass on silicon at `k_batch = 3`, 0 under two pools | `c546917` |
+| XXIII 26, part | one byte-packed all-gather of the eigenvalues and counts | collectives a pooled iteration 15 -> 7 | `d19a211` |
+| III H6 | `find_symmetries` memoised | 5 searches -> 1 a system, calculation and estimate; groups equal on 246 inputs | `fbf44d9` |
+| III M4 | `calbec` conjugates the smaller operand | loop-body copies 5 -> 0 on `si8-us-1k`; temp 10.0 -> 8.4 MB | `32b5605` |
+| III M5, **reverted** | the preconditioner's `D` and `q` atom block by atom block | temp 8.4 -> 6.5 MB on silicon, and **3.6 -> 12.7 GB** on `bi10-soc`, where the broadcast is not fused; reverted with the Hubbard diagonal built on it | `680e01a`, `dacdd8b` |
+| III M6 | one Davidson executable whether or not the steps are asked for | an SCF and a residual solve share one `_every_k`, 2 compiles -> 1 | `920bf31` |
+
+**Three that move a number on purpose:**
+
+- **XXIII 11, each ionic step starts from the previous step's states at `ethr = 1e-6`** (`1729c2a`), as
+  `run_pwscf.f90:331-334` does. Davidson steps over whole relaxations, old / new / `pw.x`: `relax.in`
+  105.0 / 102.0 / 84.0, `relax2.in` 512.3 / 470.0 / 363.6, `vc-relax4.in` 148.4 / 122.5 / 144.3. Bare
+  carried states would give 86.0 / 456.3 / 115.9, and they are not what ships, because **they locked into
+  the wrong occupied manifold** on two-atom silicon with `nosym` and `nbnd = 4`: step 2 at -15.56894534 Ry
+  against -15.59544593, the new geometry's fourth occupied state below 5e-9 inside the span of the carried
+  four, a symmetry sector crossing at `Gamma` that a Davidson seeded with the old sector cannot leave.
+  `pw.x`'s own `1 + 0.05 rr1 exp(2 pi i rr2)` factor from a fixed key restores the right state and the
+  six steps `pw.x` takes; a fable subagent kept it at `pw.x`'s amplitude (0.01 finds the state only at the
+  fourth SCF iteration, 0.001 never). The same blind spot binds any seeded Davidson where a sector crosses
+  the Fermi level, item 13's second half among them.
+- **XXIII 19, the gamma Davidson in real planes** (`0ed526b`): its work arrays are `(nvecx, 2 npwx)` with
+  the real plane first, so the projected rows, both Ritz rotations, `calbec_gamma` and the unproject are
+  real products, as `regterg` has them. Real-arithmetic dot flops in the loop 1.20e9 -> 6.00e8 on the new
+  `benchmarks/si16-gamma-ecut30.in`; energies within 1.4e-14 Ry, every Davidson step count identical on
+  four cells. XLA has no free real view of a complex array (a `.view` lowers to scatters, 15.0 MB of temp).
+  The time is not measured.
+- **XXIII 22, the mixer's history in G on the smooth sphere**, as `pw.x`'s `mix_rho` keeps it, built as
+  `run_scf(mixing_space='g')` with the shell above `ngms` rebuilt from the mixed `becsum`
+  (`5e6befe`, `78dce02`, `5654db2`, `46d1bf3`). The history's density block falls to 0.141 of the old
+  on the dual-8 benchmarks. Iterations real space / G / `pw.x`: `fe-mag-1k` 11 / 11 / 12,
+  `fe-noncolin-pbe-stress` 15 / 17 / 19, the cobalt film with local-TF 30 / 33 / 24, `fe-unstable`
+  23 / 20 / 23, the DFT+U nickel benchmark 92 / 82 / 98, the dual-4 cells byte-identical. **The
+  default stays `'r'`**: on DFT+U nickel the layout chooses the basin, twice (the benchmark lands
+  1.09e-6 Ry above real space's state on none of P113's four, and a seeded promotion source 2.0e-3
+  above), and one G iteration costs 3.8 to 4.8 per cent more than one in real space on one core
+  (0.244 against 0.235 s on `si8-us-1k`, 0.065 against 0.062 on `fe-mag-1k`, D22, medians of six).
+
+**One item was a regression and is reverted**: Part III M5, found by the slow set killing `test_ten_site.py` at its 12 GB cap and settled by a cache-off A/B on that file's spin-orbit test. The lesson is the memory rule of `CLAUDE.md` one level down: a compile-only temp figure on a small cell says what XLA fused *there*, and an elementwise broadcast whose fusion is the whole saving has to be measured on the cell where it would not fit.
+
+**Two defects found by doing the items, fixed:** `at_cell` did not move `basis_kpoints`, so a DFT+U
+vc-relax rebuilt `wfcU` at the starting cell's Cartesian k-points (1.8e-2 on 0.94 at a 3 per cent
+change on `ni-ldau-stress.in`; `e65a2e4`, with `basis_kpoints` in `GEOMETRY_FIELDS` so the compiled
+gradients key on it, `23f5178`), as `pw.x`'s `scale_h` moves `xk`; and `mixing_beta_mag` had done
+nothing since `2d4c14b` on any run without the fixed-spin-moment warning (`ad95aee`).
+
+**What the night taught, each a sentence a later session would otherwise have to rediscover:**
+
+- **Above dual 4 this code's `conv_thr` is not `pw.x`'s.** `pw.x`'s `dr2` runs over the smooth sphere
+  (`mix_rho.f90`, "this used to be ngm NOT ngms"), this code's over the whole dense set, so on every
+  ultrasoft and PAW run it waits for the shell too. Kept, as a fable subagent decided: on the
+  real-space layout the shell is 0.3 per cent of the residual at the stop, so no stopping point moves,
+  and `pw.x`'s test would stop the G layout 1.13e-4 Ry short on `fe-mag-1k`.
+- **On a CPU in jax 0.11, `device_put` of an aligned contiguous host array is zero-copy whatever
+  `may_alias` says**, so a view handed to it can be the store's own memory; the rule that keeps the
+  streamed store safe is that a host store's rows are written only with the output of the computation
+  that read them (`_to_device`'s docstring).
+- **gloo's CPU all-reduce is not bit-identical beyond two pools when leaves are packed**: it adds an
+  element in an order that depends on its position in the buffer (1839 of 25140 sums moved in the last
+  bit on three processes), which is why item 26's all-reduce pack was not done.
+- **A geometry-keyed compiled gradient must key on every field that moves with the geometry.** The
+  DFT+U fix moved a field the key did not hold, and the gate's three vc-relax failures were every step
+  missing the key rather than a wrong number.
+
+**Not done, and why** (each in its item): XXIII 6, the walked third derivative chunk-outer, deferred
+because it keeps `3 nat` accumulators alive at once where the walk exists to bound that; XXIII 20,
+`notconv`-wide Davidson rows, 1 to 2 per cent at sixteen atoms; the second halves of 13 and 25;
+the all-reduce pack and the G-space payload of 26; and 22's default.

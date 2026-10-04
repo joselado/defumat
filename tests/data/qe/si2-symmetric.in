@@ -1,0 +1,34 @@
+! Silicon as the centrosymmetric control for a second-order tensor.
+!
+! QE's own two-atom cell on a 4x4x4 unshifted grid with symmetry **kept**, which
+! is the one difference from `si2-nosym.in` and the whole reason for this file.
+! Diamond's inversion carries a quarter-lattice translation, so a grid it maps
+! onto itself is a multiple of 4 along each axis. With symmetry on, the FFT grid
+! is chosen that way (16^3 at ecutwfc = 12, where `nosym` gives 15^3), and the
+! density carries the inversion centre exactly. Under `nosym` the
+! exchange-correlation potential, evaluated pointwise on 15^3, breaks it at the
+! grid's sampling error, and chi^(2) and the shift current, which inversion
+! forbids outright, pick that up: chi^(2) on the whole 2x2x2 mesh at 8 bands
+! reads 0.72 pm/V on 15^3 under `nosym` against 0.00074 with symmetry kept
+! (`defumat/response/photocurrent.py`, `_incommensurate_grid`).
+!
+! A polar rank-3 tensor still needs the whole Brillouin zone, so the tensor is
+! evaluated on the complete unshifted mesh passed as `kpoints=`; the grid below
+! is only the density's.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.2, nat = 2, ntyp = 1,
+    ecutwfc = 12.0
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Si 28.086 Si.pz-vbc.UPF
+ATOMIC_POSITIONS crystal
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS (automatic)
+ 4 4 4 0 0 0

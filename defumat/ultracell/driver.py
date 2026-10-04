@@ -1107,11 +1107,19 @@ def run_ultracell(
     # bands unconverged at two k-points after 100 steps and moved the tiled
     # null from one iteration to seven. The extra band is a diagnostic, so its
     # own convergence warning is not the basis's and is not repeated.
+    #
+    # **The wider solve runs on the calculation the basis was solved on**, which
+    # is already on the folded k-set: built again, it was a second constructor
+    # per run, both G sets, the grids, the symmetry search, the local potential,
+    # the projector core and the augmentation tables (``OPEN.md`` Part XXIII
+    # item 13). ``kpoints`` is therefore left out, as a threaded calculation
+    # requires.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         _, _, wider = fixed_density_bands(
-            system, pseudos, jnp.asarray(reference.density), nbnd=kept + 1,
-            **frozen,
+            folded_system, pseudos, jnp.asarray(reference.density), nbnd=kept + 1,
+            calculation=calculation,
+            **{name: value for name, value in frozen.items() if name != "kpoints"},
         )
 
     cells = ultracell.cells

@@ -3813,7 +3813,7 @@ item below against the code, and the dated marks on items 1, 4, 7, 8, 10 and 11 
 6. **Shell-based radial evaluation** for quantities depending only on `|G|` (~100
    shells vs 1459 G-vectors for Si). Note this is *not* strain-safe: shells split
    under strain, so it must stay off the stress path.
-7. **Stop closing over the cell in the stress gradient** (P29). `at_strain`
+7. *(done, 2026-10-03, `a7668a7`)* **Stop closing over the cell in the stress gradient** (P29). `at_strain`
    drops `_energy_gradient` on every call, because the compiled gradient closes
    over the cell it was traced at, so a variable-cell relaxation compiles the
    strain derivative again at every ionic step: **0.6 s of retracing for 0.57 s
@@ -3829,8 +3829,10 @@ item below against the code, and the dated marks on items 1, 4, 7, 8, 10 and 11 
    So a vc-relax recompiles **both** gradients every step, and removing the pop fixes
    neither. The fix is the cell and the other geometry-dependent leaves as arguments of
    both, with the Ewald list padded over the trajectory; the force's retrace on a moved cell
-   is unmeasured.
-8. **Schedule the response solver's threshold** (P25). `dfpt_kernels.f90` uses
+   is unmeasured. **Done the same night**: the geometry's arrays are arguments of both
+   gradients, and `vc-relax4`'s steps 2 to 10 compile neither (`OPEN.md` Part XXIII item 7,
+   `PLAN.md` P128).
+8. *(done, 2026-10-03, `PLAN.md` P127)* **Schedule the response solver's threshold** (P25). `dfpt_kernels.f90` uses
    `thresh = min(0.1 sqrt(dr2), 1e-2)` where `response/phonon.py` holds a fixed
    1e-12, and the cost is `av.it. = 27.7` against `ph.x`'s 9.3 — a factor of
    three, on the stage that is 96% of the run. It is `electrons.f90`'s `ethr`
@@ -3845,6 +3847,10 @@ item below against the code, and the dated marks on items 1, 4, 7, 8, 10 and 11 
    the factor of two in passes on its own; this item is the factor of three in CG steps.
    A warm start of each solve from the previous pass, as `ph.x` reads `dpsi` from `iudwf`,
    is the third piece (Part XXIII item 2).
+   **Done, all three pieces**: on `si-epsilon` the `Gamma` phonon takes 6 passes at 10.8 CG
+   steps a solve where it took 10 at 27.7, and the field 5 passes at 12.6 where it took 8 at
+   28.0 (`ph.x` 5 at 9 in its late passes). The wall-clock pair against `ph.x` is in "The
+   response against `ph.x`".
 9. *(done, 2026-08-22)* **A mixer in the response loop.** Was: 17 linear-mixing
    iterations against `ph.x`'s 5, whose mixer is `LR_Modules/mix_pot.f90`. It
    turned out not to be a speed item at all -- linear mixing of a map whose
@@ -4852,6 +4858,11 @@ AlAs, `a = 10.575` bohr, `ecutwfc = 30` (`npwx = 869`), the whole unshifted
 All of these were taken on an idle machine and repeated: two runs agree to 8
 per cent and a third, taken while a second test suite was running, is 20 per
 cent slower across the board. The numbers below are the quiet ones.
+
+They are 22-band timings and stay as what they were. Since 2026-10-04 the tests,
+notebook 33 and the guide's snippet run 23 bands, the count at which the band set
+is cut in a gap rather than inside a doublet (`PLAN.md` P54), and nothing here was
+re-timed at 23.
 
 | stage | s |
 |---|---|
@@ -9336,6 +9347,19 @@ identically. A warm second SCF, by contrast, compiles nothing on any of six kind
 ultrasoft, PAW, noncollinear, a magnetic metal, DFT+U), nor do a second band structure, force, stress or
 DOS call: `jax_log_compiles` on the `jax` logger, checked to see 133 compilations in the cold run.
 
+**Corrected 2026-10-03: that held only at one k-point, or with the whole k axis in one batch.** With more
+than one k-point at one a step (the CPU default), three per-iteration sites were eager loops over a fresh
+closure and compiled every iteration: the collinear and spinor `becsum` (`scf/density.py`), the DFT+U
+occupation matrix (`hubbard/occupations.py`) and the tetrahedron Fermi level's bisection
+(`scf/tetrahedra.py`). Measured over a warm SCF, old against new: ultrasoft `si2-us.in` (2 k-points) 9 -> 0
+compiles and +198 -> +0 mappings, `ni-ldau-ortho.in` (10 k-points, DFT+U, `nspin = 2`) 40 -> 20 with either
+of its two fixes alone and 40 -> 0 with both (+24 mappings, the energy the same; measured on the merged
+branch), the spinor
+`ni-noncol-111.in` 14 -> 0, the ultrasoft spiral 10 -> 0, `al-tetrahedra.in` 6 -> 0, every array
+byte-identical (`a7bb0b6`, `bd611bb`, `bffddf4`; `OPEN.md` Part XXIII item 8). The six cells tried here had
+one k-point or ran the whole axis at once, so the check could not have seen it; the trap is in
+`CLAUDE.md`'s list, and the test that would have is a warm SCF at `k_batch = 1` with `nk > 1`.
+
 ## The response stack compiled its k loops again at every iteration (CPU, 2026-10-02)
 
 **The number to carry: a dielectric tensor of zincblende AlAs (`tests/data/qe/alas-berry.in`) added
@@ -10399,3 +10423,42 @@ not. Contracting one atom at a time inside each block (a scan over atoms, interm
 74.1 MB at the default chunk and 43.7 at 4096 against 71.4 and 42.8, a null, and not kept. What the chunk
 does move is the total, 71.4 / 42.8 / 71.5 MB at 16384 / 4096 / 1024 vectors, not monotonic, the U the stress
 showed in "The augmentation chunk under a strain"; which arrays make it up is not located.
+
+## The response against `ph.x`: its `dr2`, its CG schedule and a warm start (CPU, 2026-10-04)
+
+**The number to carry: the field response on `si-epsilon` takes 5 passes at 12.6 CG steps a solve where
+it took 8 at 28.0, and `ph.x` takes 5 at 9 in its late passes.** The three changes are `PLAN.md` P127:
+the loops stop on `ph.x`'s `|ddv_scf|^2` (the raw sum divided by `ndimtot^2`, ten decades looser on
+silicon than what they stopped on), the CG threshold follows `dfpt_kernels.f90`'s
+`min(0.1 sqrt(dr2), 1e-2)`, and each solve starts from the previous pass's `dpsi`. Passes and steps
+are counts and do not depend on the machine's load:
+
+| response | passes before -> after (`ph.x`) | CG steps a solve before -> after |
+|---|---|---|
+| `si-epsilon`, field | 8 -> 5 (5) | 28.0 -> 12.6 |
+| `si-epsilon-us`, field | 9 -> 5 (5) | 31.7 -> 13.7 |
+| `si-epsilon`, `Gamma` phonon | 10 -> 6 | 27.7 -> 10.8 |
+| `si-electrostriction`, strain | 11 -> 7 | 22.0 -> 6.7 |
+
+**The wall clock against `ph.x`**, on `D22-0161` because this workstation carried another session's test
+suite that night: one performance core each (`taskset -c 0`, `OMP_NUM_THREADS=1`, `DEFUMAT_THREADS=1`),
+nothing else on the machine, `ph.x` the serial 7.5 build copied from this workstation (the same binary
+`tools/compare_qe.py` uses here), defumat the second call of `get_dielectric_tensor()` in its process
+after the SCF, which includes its own setup and excludes the ground state. `ph.x`'s figure is its
+cumulative CPU clock at the last pass of the field response, which likewise includes its setup
+(0.39, 0.88 and 1.94 s of it, printed as `PHONON` before "Electric Fields Calculation") and excludes
+`pw.x`. Before is master (`7f6fef2`), after is the integration head:
+
+| cell | defumat before | defumat after | `ph.x` | after / `ph.x` | passes after (`ph.x`) | CG steps a solve after (`ph.x`) |
+|---|---|---|---|---|---|---|
+| `si-epsilon` | 4.82 s | 2.78 s | owed | | 5 (5) | 12.6 |
+| `si-epsilon-us` | 12.62 s | 6.79 s | 1.8 s | 3.8 | 5 (5) | 13.7 (10.7) |
+| `alas-epsilon-us` | 23.69 s | 13.74 s | 3.0 s | 4.6 | 6 (5) | 12.2 (10.6) |
+| `alas-epsilon-us-soc` | 60.62 s | 27.51 s | 11.1 s | 2.5 | 6 (6) | 12.4 (10.4) |
+
+So the change is worth 1.7 to 2.2 times on its own stage, and the gap to `ph.x` that is left is a factor of
+2.5 to 4.6 at the same pass count to within one and 15 to 28 per cent more CG steps a solve; before it,
+the same cells read 7.0, 7.9 and 5.5 times `ph.x`. The `si-epsilon` `ph.x` run failed on the night:
+`si-epsilon.in` sets `prefix = 'silicon'` and `si-epsilon.ph.in` sets no prefix, so `ph.x` read
+`pwscf.save`. The first calls, compile included,
+read 6.11 -> 4.00, 14.59 -> 11.67, 26.67 -> 19.51 and 63.65 -> 33.14 s.

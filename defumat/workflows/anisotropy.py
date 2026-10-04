@@ -100,11 +100,10 @@ from __future__ import annotations
 import warnings
 from dataclasses import dataclass, field
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 
-from defumat.batching import k_chunks
+from defumat.batching import k_chunks, upload
 from defumat.pseudo.projectors import projector_channels
 from defumat.pseudo.upf import Pseudopotential
 from defumat.scf.continuation import (
@@ -537,6 +536,23 @@ def run_force_theorem(
     only real bug (:func:`_with_quantization_axis`), so it is an option rather
     than something only a test can reach by calling internals.
     """
+    return _force_theorem(
+        system, pseudos, density, direction, nbnd, conv_thr, k_batch, ef_0,
+        projected, require_spin_orbit, soc_scale, becsum,
+    )[0]
+
+
+def _force_theorem(system, pseudos, density, direction, nbnd, conv_thr, k_batch,
+                   ef_0, projected, require_spin_orbit, soc_scale, becsum,
+                   calculation=None):
+    """:func:`run_force_theorem`, and the calculation it diagonalised in.
+
+    ``calculation`` is one an earlier direction of the same scan returned: it is
+    turned to this direction with
+    :meth:`~defumat.scf.driver.Calculation.with_texture` rather than built
+    again, so a scan builds one (``OPEN.md`` Part XXIII item 14). ``None``
+    builds it, which is what the first direction does.
+    """
     if soc_scale is not None:
         system = system.with_soc_scale(soc_scale)
     becsum = _checked_becsum(becsum, pseudos)
@@ -581,6 +597,7 @@ def run_force_theorem(
     calculation, system, eigenvalues, wavefunctions = fixed_density_states(
         system, pseudos, rotated, nbnd=nbnd, conv_thr=conv_thr, k_batch=k_batch,
         becsum=rotated_becsum, keep_states=bool(projected),
+        calculation=None if calculation is None else calculation.with_texture(system),
     )
 
     wg, levels = calculation.occupations(jnp.asarray(eigenvalues))
@@ -613,7 +630,7 @@ def run_force_theorem(
         result.projected = _project_band_energy(
             calculation, system, eigenvalues, wg, wavefunctions, ef_0,
         )
-    return result
+    return result, calculation
 
 
 def sphere_cover(n: int) -> tuple:
@@ -724,14 +741,17 @@ def run_anisotropy(
     """
     directions = _direction_set(system, directions)
 
-    results = tuple(
-        run_force_theorem(
-            system, pseudos, density, direction=direction, nbnd=nbnd,
-            conv_thr=conv_thr, k_batch=k_batch, projected=projected,
-            soc_scale=soc_scale, becsum=becsum,
+    # One calculation for the whole scan: the first direction builds it and
+    # every later one turns it (``Calculation.with_texture``), since only the
+    # texture moves between them.
+    results, calculation = [], None
+    for direction in directions:
+        result, calculation = _force_theorem(
+            system, pseudos, density, direction, nbnd, conv_thr, k_batch, None,
+            projected, True, soc_scale, becsum, calculation,
         )
-        for direction in directions
-    )
+        results.append(result)
+    results = tuple(results)
     return MagneticAnisotropy(
         directions=tuple(r.direction for r in results), results=results
     )
@@ -782,7 +802,9 @@ def _project_band_energy(calculation, system, eigenvalues, wg, wavefunctions, ef
     spinors = calculation._as_spinors(atomic)  # (nk, 2 n, 2 npwx)
 
     # One k-point's states on the device at a time: a streamed store is a host
-    # array and is not moved across whole (``GPU-MEMORY-NEXT.md`` item 4).
+    # array and is not moved across whole (``GPU-MEMORY-NEXT.md`` item 4), and
+    # each k-point crosses through ``device_put`` at its own size
+    # (:func:`~defumat.batching.upload`).
     psi = wavefunctions[0]  # (nk, nbnd, 2 npwx)
     eigenvalues = np.asarray(eigenvalues)[0]
     wg = np.asarray(wg)[0]
@@ -795,8 +817,7 @@ def _project_band_energy(calculation, system, eigenvalues, wg, wavefunctions, ef
         overlap = jnp.conj(phi) @ sphi.T
         transform = lowdin_transform(overlap)
         projectors = _apply_transform(transform, jnp.transpose(sphi, (1, 0)))
-        proj0 = jnp.einsum("gi,bg->ib", jnp.conj(projectors),
-                           jnp.asarray(psi[ik]))
+        proj0 = jnp.einsum("gi,bg->ib", jnp.conj(projectors), upload(psi[ik]))
         # ``lsym`` is refused with ``lforcet`` (``projwfc.f90:152``) and the run
         # is ``nosym`` anyway, so there is no ``sym_proj_k`` average here.
         total += np.asarray(jnp.abs(proj0) ** 2 @ jnp.asarray(weight[ik]))
@@ -1120,6 +1141,7 @@ def frozen_expectation(
     ``soc_scale`` too (``build_paw``'s small component) and are not in ``E1``.
     """
     from defumat.forces.energy import _spinor_projector_energies
+    from defumat.response.walk import store_rows
     from defumat.scf.potential import as_potential_components
 
     _refuse_system(system, pseudos)
@@ -1146,14 +1168,15 @@ def frozen_expectation(
     delta_d, delta_qq = _first_order_operator(calculation, total)
     # A sum over k, walked a chunk at a time: one chunk's projectors and states
     # on the device, never the whole-k ``vkb`` or a streamed store stacked
-    # (``GPU-MEMORY-NEXT.md`` items 4 and 7). Padded rows carry zero weight.
+    # (``GPU-MEMORY-NEXT.md`` items 4 and 7), a host store's rows crossing as a
+    # view (``store_rows``). Padded rows carry zero weight.
     wg, eigenvalues = np.asarray(wg), np.asarray(eigenvalues)
     energy = 0.0
     for rows, live in k_chunks(wg.shape[1], calculation.k_batch):
         weights = wg[:, rows].copy()
         weights[:, live:] = 0.0
         nonlocal_, overlap = _spinor_projector_energies(
-            jnp.asarray(wavefunctions[:, rows]),
+            store_rows(wavefunctions, rows),
             calculation.projectors_at(rows), delta_d, delta_qq,
             jnp.asarray(weights), jnp.asarray(eigenvalues[:, rows]),
         )
@@ -1531,6 +1554,20 @@ def run_orientation_torque(
     coefficients are rebuilt from the turned ``becsum`` inside the energy the
     torque is the gradient of, so their share of the torque is in it.
     """
+    return _orientation_torque(
+        system, pseudos, density, rotation, nbnd, conv_thr, k_batch, soc_scale,
+        becsum,
+    )[0]
+
+
+def _orientation_torque(system, pseudos, density, rotation, nbnd, conv_thr,
+                        k_batch, soc_scale, becsum, calculation=None):
+    """:func:`run_orientation_torque`, and the calculation it diagonalised in.
+
+    ``calculation`` is one an earlier step of the same relaxation returned, turned
+    to this orientation with :meth:`~defumat.scf.driver.Calculation.with_texture`
+    rather than built again (``OPEN.md`` Part XXIII item 14); ``None`` builds it.
+    """
     from defumat.forces.torque import (
         band_energy_at_rotation,
         orientation_torque,
@@ -1557,6 +1594,7 @@ def run_orientation_torque(
         conv_thr=conv_thr, k_batch=k_batch,
         becsum=tuple(None if values is None else rotate_texture(values, rotation)
                      for values in reference_becsum),
+        calculation=None if calculation is None else calculation.with_texture(turned),
     )
     wg, levels = calculation.occupations(jnp.asarray(eigenvalues))
 
@@ -1577,7 +1615,44 @@ def run_orientation_torque(
         band_energy_check=check,
         entropy=float(levels.get("smearing", 0.0)),
         fermi_energy=levels.get("fermi_energy"),
-    )
+    ), calculation
+
+
+def _drop_the_last_orientation(previous_used, used) -> None:
+    """Free the kept programs the last one-shot of :func:`relax_orientation` used and this one did not.
+
+    ``previous_used`` and ``used`` are the kept programs (:mod:`defumat.eager`)
+    the last and this one-shot reached (:func:`defumat.eager.tracking`), so
+    what the last one used and this one did not belonged to the last
+    orientation alone, and is dropped. It replaced a ``jax.clear_caches()``
+    after every one-shot, which also dropped the eigensolver, the Hamiltonian's
+    build and the band sum that every one-shot shares: 79 compilations a
+    one-shot on tetragonal cobalt (``co-tetragonal-anisotropy-soc.in`` at
+    ``ecutwfc = 12`` on a 2x2x2 mesh, from ``rotation_from_euler(0.4, 0.9,
+    -0.3)``, 23 steps and six curvature one-shots).
+
+    **On that relaxation it now drops nothing.** Two programs used to be new
+    at every orientation of a gradient-corrected run: the potential, which
+    took the quantization axis (``compute_ux``,
+    :func:`~defumat.scf.potential.fixed_quantization_axis`) as a static
+    argument while the axis turns with the texture, and the torque's
+    derivative, which traced that potential and held the axis as a nested
+    constant. Kept, the two cost 1755 mappings and 115 MB resident a
+    one-shot, so a Triton node's 65,530 mappings would have ended the process
+    during its 35th; this drop, with a ``clear_cache`` of the potential when
+    the axis moved, held them at 5700 after it and 7451 before it and
+    compiled the two again every time. The axis is an array argument now
+    (:meth:`~defumat.scf.driver.Calculation._axis_argument`), one potential
+    executable and one torque program serve every orientation, and no
+    one-shot after the first compiles anything: 6566 mappings at every
+    one-shot, the persistent cache warm, and every torque, free energy, band
+    energy and the curvature bit-identical to the static axis's. The drop
+    stays as the bound for whatever else a later change keys on the texture,
+    at the cost of one set difference a one-shot.
+    """
+    from defumat import eager
+
+    eager.forget(previous_used - used)
 
 
 #: Trust radii of the orientation relaxation, in **radians**: the rotation
@@ -1762,6 +1837,7 @@ def relax_orientation(
     from defumat.relax.registry import get_ion_dynamics
     from defumat.workflows.spiral import _first_step_scale
 
+    from defumat import eager
     from defumat.forces.torque import frozen_generators, project_out
 
     start = _checked_rotation(rotation)
@@ -1783,20 +1859,28 @@ def relax_orientation(
         )
         return optimizer, settings
 
+    # One calculation for the whole relaxation: the first one-shot builds it
+    # and every later one turns it (``Calculation.with_texture``), since only
+    # the texture moves between them.
+    shared = [None]
+    # What the last one-shot used, so that the next can drop what it did not.
+    # A gradient-corrected run used to compile its potential and its torque
+    # again at every orientation, and kept they accumulated: on the four-cell
+    # cobalt helix 16 GB in eight steps (Triton job 20478664), when every
+    # orientation was also a new calculation. This used to be a
+    # ``jax.clear_caches()`` after every one-shot, which also dropped
+    # everything every step shares; :func:`_drop_the_last_orientation` drops
+    # only a kept program the last orientation alone used.
+    last = {"used": set()}
+
     def one_shot(orientation):
-        result = run_orientation_torque(
-            system, pseudos, density, rotation=orientation, nbnd=nbnd,
-            conv_thr=conv_thr, k_batch=k_batch, soc_scale=soc_scale,
-            becsum=becsum,
-        )
-        # **Every orientation is a new calculation**, since the system's angles
-        # turn with it, so every one-shot compiles afresh and XLA keeps each
-        # executable for the life of the process. On the four-cell cobalt helix
-        # that accumulation reached 16 GB in eight steps and the curvature's
-        # one-shots were killed for it (Triton job 20478664); a step's own peak
-        # is a fraction of that. Dropping the compiled code costs nothing a new
-        # calculation was not going to pay anyway.
-        jax.clear_caches()
+        with eager.tracking() as used:
+            result, shared[0] = _orientation_torque(
+                system, pseudos, density, orientation, nbnd, conv_thr, k_batch,
+                soc_scale, becsum, shared[0],
+            )
+        _drop_the_last_orientation(last["used"], used)
+        last["used"] = used
         return result
 
     optimizer, settings = fresh_optimizer()

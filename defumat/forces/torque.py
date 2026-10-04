@@ -69,8 +69,8 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.scf.continuation import _axis, _collinear_axis
-from defumat.batching import sum_k
-from defumat.eager import compiled
+from defumat.batching import sum_k, upload
+from defumat.eager import compiled, compiled_function
 
 __all__ = [
     "band_energy_at_angle",
@@ -182,7 +182,7 @@ def _band_energy(calculation, states, weights, density, becsum=()):
     """``sum_n w_n <psi_n | H[density, becsum] | psi_n>`` over every k-point at once."""
     hamiltonian = _hamiltonian_of(calculation, density, becsum)
 
-    psi = jnp.asarray(states)[0]
+    psi = upload(states)[0]
     occupation = jnp.asarray(weights)[0]
 
     def one(ik):
@@ -234,7 +234,7 @@ def _chunked_value_and_grad(calculation, states, weights, build, parameter,
     k-point at **zero weight**, so all chunks share one shape and therefore one
     compilation, and the padding contributes nothing to either number.
     """
-    psi = jnp.asarray(states)[0]
+    psi = upload(states)[0]
     occupation = jnp.asarray(weights)[0]
     nk = int(psi.shape[0])
 
@@ -248,14 +248,21 @@ def _chunked_value_and_grad(calculation, states, weights, build, parameter,
             total = total + live[slot] * jnp.sum(occupation[ik] * bands)
         return total
 
-    compiled = jax.jit(jax.value_and_grad(chunk))
+    # Traced once a call and kept once a process (:mod:`defumat.eager`): a
+    # ``jax.jit`` built here was a new program at every call, and every call
+    # builds a new ``calculation`` (``run_torque``, ``run_orientation_torque``),
+    # so a scan of directions or a relaxation compiled it once per step.
+    value_and_grad = jax.value_and_grad(chunk)
+    program = None
     energy, slope = 0.0, 0.0
     for start in range(0, nk, k_batch):
         ks = np.arange(start, min(start + k_batch, nk))
         pad = k_batch - len(ks)
         indices = jnp.asarray(np.concatenate([ks, np.full(pad, ks[0], dtype=int)]))
         live = jnp.asarray(np.concatenate([np.ones(len(ks)), np.zeros(pad)]))
-        value, derivative = compiled(parameter, indices, live)
+        if program is None:
+            program = compiled_function(value_and_grad, parameter, indices, live)
+        value, derivative = program(parameter, indices, live)
         energy = energy + float(value)
         slope = slope + np.asarray(derivative)
     return energy, slope
@@ -285,7 +292,7 @@ def torque_at_angle(calculation, states, weights, density, plane, angle,
     from defumat.batching import resolve_k_batch
 
     resolved = resolve_k_batch(k_batch)
-    nk = int(jnp.asarray(states).shape[1])
+    nk = int(np.shape(states)[1])
     if resolved is None or resolved >= nk:
         def energy(value):
             return band_energy_at_angle(
@@ -393,7 +400,7 @@ def orientation_torque(calculation, states, weights, texture, base,
     base = jnp.asarray(base, dtype=texture.real.dtype)
     origin = jnp.zeros(3, dtype=texture.real.dtype)
     resolved = resolve_k_batch(k_batch)
-    nk = int(jnp.asarray(states).shape[1])
+    nk = int(np.shape(states)[1])
     if resolved is None or resolved >= nk:
         def energy(value):
             return band_energy_at_rotation(

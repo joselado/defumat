@@ -76,9 +76,11 @@ a test passes.
 **How large it is, measured rather than assumed.** On AlAs at a generic
 k-point, held on a frozen sphere of 158 plane waves so that the band set can be
 run all the way to completeness, the valence-to-conduction block of
-``r^{c;a}`` agrees with a parallel-transport finite difference to **6e-2 at 20
-bands, 4.8e-2 at 80, 4.3e-2 at 120 -- and 1.8e-4 at 158**, which is the
-complete basis. The sum rule is an *identity* once ``p`` runs over the whole
+``r^{c;a}`` agrees with a parallel-transport finite difference to **0.69 at 20
+bands, 0.54 at 80, 0.52 at 120 -- and 2.6e-3 at 158**, which is the complete
+basis (measured 2026-10-04; the 6e-2, 4.8e-2, 4.3e-2 and 1.8e-4 written here
+before are reproduced neither by today's code nor by ``db41c61``, which wrote
+them). The sum rule is an *identity* once ``p`` runs over the whole
 space, and that is what the last number is; the slow approach to it is the tail
 of a sum whose terms fall off like ``1/E_p``. So a shift current at a
 production band count carries a few per cent from this and no symmetry check
@@ -120,21 +122,32 @@ Scope
 Norm-conserving, ``nspin = 1`` or a spinor run, an **insulator** with fixed
 occupations, on a k-grid closed under the point group. Refused by name, each
 for its own missing term, in :func:`require_a_shift_current_regime`.
+
+**The k axis is walked a chunk at a time** (:mod:`defumat.response.walk`): a
+chunk's states cross to the device, its first and second velocity matrix
+elements are built on its own rows and contracted at both band counts the
+truncation estimate compares, and the next chunk follows. The chunk is the
+calculation's ``k_batch`` and moves the tensor at round-off, through the order
+of the k sum.
 """
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
-from defumat.batching import resolve_k_batch, sum_k
-from defumat.eager import compiled
+from defumat.batching import sum_k
 from defumat.response.velocity import VelocityOperator
+from defumat.response.walk import (
+    chunk_size, padded, row_leaves, store_rows, walk, with_rows,
+)
 from defumat.scf.occupations import w0gauss
 from defumat.system.kpoints import is_reduced
+from defumat.system.symmetry import find_symmetries
 
 __all__ = [
     "ShiftCurrent",
@@ -185,8 +198,9 @@ DEGENERACY_TOL = 1.0e-8
 #:
 #: **The overall scale is anchored against the published literature, and the
 #: ordering is what makes that sharp.** AlAs's first peak converges to
-#: **35.0 uA/V^2 at 4.17 eV**: 33.9 at ``ecutwfc = 16``, then 33.7, 34.8 and 35.0
-#: at 22 with 14, 22 and 30 bands. First-principles calculations across the
+#: **35.1 uA/V^2 at 4.17 eV**: 33.9 at ``ecutwfc = 16``, then 33.7, 34.9 and 35.1
+#: at 22 with 14, 22 and 30 bands (35.0 before ``27eeaa2`` restored Gamma's
+#: ``l = 1`` tangent, ``PLAN.md`` P53). First-principles calculations across the
 #: fourteen III-V and II-VI zincblende semiconductors span **14 uA/V^2** (CdSe,
 #: the smallest) to **83** (AlSb, the largest), and find the *aluminium*
 #: compounds the strongest responders of the family and the II-VI compounds the
@@ -201,8 +215,9 @@ DEGENERACY_TOL = 1.0e-8
 #: maximum of a wider window sits at 8.69 eV, where a band count of this size is
 #: least trustworthy, and it is not a quantity anyone quotes. And
 #: :attr:`ShiftCurrent.truncation` turned out to be **predictive of the real
-#: error rather than merely indicative**: it falls 3.5% -> 1.0% over that band
-#: sweep while the value moves 3.9%, so reading it is worth what it claims.
+#: error rather than merely indicative**: it reads 3.5% at 14 bands, where the
+#: value is 4.0% from its 30-band one, and 1.0% and 1.3% at 22 and 30, so
+#: reading it is worth what it claims.
 #:
 #: **The convention is declared because the literature has two of them.** What is
 #: implemented is IATS18's Eq. (1),
@@ -213,6 +228,25 @@ DEGENERACY_TOL = 1.0e-8
 #: its normalisation is worth nothing to better than a factor of two. The
 #: comparison above is against the first convention.
 SIGMA_SI = 1.4049e-5
+
+#: What :func:`_warn_about_the_grid` quotes for this tensor: the residue on
+#: two-atom silicon, where inversion forbids every component, against the two
+#: ways out.
+_GRID_RESIDUE_SHIFT = (
+    "on two-atom silicon, whose inversion carries a quarter-lattice "
+    "translation, sigma^abc on the whole unshifted 2x2x2 mesh at 8 bands reads "
+    "1.2e-8 A/V^2 on the 15^3 grid ecutwfc = 12 gives under nosym, where "
+    "inversion requires zero, against 1.1e-11 on the commensurate 20^3 grid of "
+    "ecutwfc = 16 and 5.3e-12 with symmetry kept for the SCF"
+)
+
+#: What :func:`_warn_about_the_cut` quotes for this tensor: how far it moves
+#: when the multiplet straddling the cut is rotated before the cut is made.
+_CUT_RESIDUE_SHIFT = (
+    "on AlAs (alas-raman.in, the whole 6x6x6 mesh), cut at 22 bands through "
+    "doublets at 13 of the 216 k-points, rotating each doublet before the cut "
+    "moves sigma^abc by 1.6e-8 A/V^2, 1.4e-4 of its peak"
+)
 
 
 def _safe_ratio(numerator, denominator, tol: float):
@@ -260,11 +294,22 @@ def band_velocity_difference(energies, velocity, tol: float):
     the bare diagonal the two ``Delta`` terms -- Eqs. (B12a) and (B16b), the
     only two places ``Delta`` appears -- come out at **1499** and **238** on a
     4x4x4 mesh where the other three sit at 0.09, and with the multiplet
-    average they fall to **0.10** and **0.055**, which is the same floor. The
-    high-symmetry points of the mesh are what does it: at ``Gamma`` silicon's
-    valence top is threefold degenerate, its block trace of ``v`` is zero by
-    symmetry, and an arbitrary basis inside it gives three nonzero diagonal
-    entries that cancel only in that sum.
+    average they fall to **0.10** and **0.055**, the level of the other three.
+    The high-symmetry points of the mesh are what does it: at ``Gamma``
+    silicon's valence top is threefold degenerate, its block trace of ``v`` is
+    zero by symmetry, and an arbitrary basis inside it gives three nonzero
+    diagonal entries that cancel only in that sum.
+
+    **That level is the FFT grid, not a floor of the assembly.** The silicon
+    cell is ``si2-nosym.in``, and ``nosym`` chooses its 15^3 grid without the
+    factor of 4 that diamond's quarter-lattice translation needs, so the
+    potential breaks inversion at the grid's sampling error and every term of
+    the tensor carries it. Measured again on the same call (the whole 4x4x4
+    mesh, 14 bands, broadening 0.005): ``max|chi|`` is **3.2e-2** pm/V as
+    committed, its three parts 3.5e-2, 4.2e-2 and 2.1e-2, and **3.0e-5** with
+    symmetry kept for the SCF (a commensurate 16^3 grid) and the same mesh
+    passed as ``kpoints=``. :func:`~defumat.response.shg.second_harmonic` warns
+    in the first case.
 
     Elk does not need this at 42x42x42 with a shifted mesh that misses the
     symmetry points, which is why ``nonlinopt.f90`` has no counterpart to it
@@ -415,7 +460,8 @@ class ShiftCurrent:
             diagonalised one extra band to measure it, else ``nan``. The same
             warning :class:`~defumat.response.conductivity.
             OpticalConductivity` carries: cutting inside a degenerate multiplet
-            keeps some members and drops others.
+            keeps some members and drops others. Below :data:`DEGENERACY_TOL`
+            :func:`shift_current` warns.
     """
 
     frequencies: np.ndarray
@@ -508,11 +554,25 @@ def shift_current(
 
     The frequency axis carries ``hbar omega`` in Ry, so a visible-light photon
     is around 0.15-0.25.
+
+    **Warns**, rather than refuses, in two cases where the tensor carries a
+    part the crystal does not have: the run is ``nosym`` on a dense FFT grid
+    the crystal's fractional translations do not map onto itself
+    (:func:`_incommensurate_grid`), and ``band_cut_gap`` is below
+    :data:`DEGENERACY_TOL`, a band set cut inside a degenerate multiplet
+    (:func:`_warn_about_the_cut`).
     """
     require_a_shift_current_regime(calculation)
+    _warn_about_the_grid(
+        calculation, "the shift-current tensor sigma^abc", _GRID_RESIDUE_SHIFT
+    )
+    _warn_about_the_cut(
+        band_cut_gap, "the shift-current tensor sigma^abc", _CUT_RESIDUE_SHIFT
+    )
 
     eigenvalues = jnp.asarray(eigenvalues)
-    wavefunctions = jnp.asarray(wavefunctions)
+    # The states stay where they are, a streamed store in host memory or a
+    # device array, and cross to the device a k-chunk at a time below.
     if eigenvalues.ndim == 2:
         eigenvalues, wavefunctions = eigenvalues[None], wavefunctions[None]
     if eigenvalues.shape[0] != 1:
@@ -526,14 +586,18 @@ def shift_current(
     volume = float(calculation.system.cell.volume)
     nbnd = int(eigenvalues.shape[-1])
 
-    velocity = VelocityOperator(calculation, v_scf)
-    v = velocity.matrix_elements(wavefunctions)[:, 0]  # (3, nk, nb, nb)
-    w = velocity.second_matrix_elements(wavefunctions)[:, :, 0]  # (3,3,nk,nb,nb)
+    # Built on the whole set for its refusals and for the point it
+    # differentiates around; each chunk's operator is handed its rows of
+    # ``kcart`` (:mod:`defumat.response.walk`).
+    kcart = np.asarray(VelocityOperator(calculation, v_scf).kcart)
 
     wg, _ = calculation.occupations(eigenvalues)
     wg = jnp.asarray(wg)[0]
     wk = jnp.asarray(calculation.system.kpoints.weights)
     filling = wg / wk[:, None]  # in [0, 1] per spin channel
+    # On the host, where each chunk takes its rows from.
+    energies = np.asarray(eigenvalues[0])
+    wk, filling = np.asarray(wk), np.asarray(filling)
 
     if frequencies is None:
         frequencies = np.linspace(0.0, float(window), int(nw))
@@ -545,33 +609,75 @@ def shift_current(
     eta = precision.as_real(broadening)
     if degeneracy_tol is None:
         degeneracy_tol = max(float(broadening), DEGENERACY_TOL)
-    batch = resolve_k_batch(k_batch)
+    batch = chunk_size(calculation, k_batch)
 
-    def total(bands: int):
-        def one_k(arrays):
+    # The band sum truncated a quarter short, which is what ``truncation``
+    # compares against, accumulated in the same walk from the same matrix
+    # elements rather than in a second walk that would build them again.
+    dropped = max(1, nbnd // 4)
+    band_counts = (nbnd, nbnd - dropped) if nbnd - dropped > 1 else (nbnd,)
+
+    def one_k(bands: int):
+        def term(arrays):
             e_k, v_k, w_k, f_k, wk_k = arrays
             return _sigma_at_k(
                 e_k[:bands], v_k[:, :bands, :bands],
                 w_k[:, :, :bands, :bands], f_k[:bands], wk_k,
                 frequencies, eta, ngauss, degeneracy_tol,
             )
+        return term
 
-        arrays = (
-            eigenvalues[0],
-            jnp.moveaxis(v, 0, 1),
-            jnp.moveaxis(w, 2, 0),
-            filling,
-            wk,
-        )
-        return np.asarray(compiled(
-            lambda a: sum_k(one_k, a, batch=batch), arrays)) * (SIGMA_SI / volume)
+    # Three stages per chunk, each its own program: the first derivatives, the
+    # second ones and the contraction, with each stage's directions walked one
+    # ``jvp`` at a time, so no two of them hold their temporaries together.
+    # The potential on the smooth grid, k-independent, built once here rather
+    # than in every chunk and direction.
+    terms = calculation.local_terms(v_scf)
 
-    sigma = total(nbnd)
+    def first_of(rowset, psi, kcart):
+        """One chunk's ``<m|dH/dk_a|n>``, ``(3, chunk, nbnd, nbnd)``."""
+        velocity = VelocityOperator(with_rows(calculation, rowset), v_scf, kcart=kcart,
+                                    local_terms=terms)
+        return velocity.matrix_elements(psi, sequential=True)[:, 0]
+
+    def second_of(v, rowset, psi, kcart):
+        """One chunk's ``<m|d2H/dk_a dk_b|n>``, ``(3, 3, chunk, nbnd, nbnd)``."""
+        velocity = VelocityOperator(with_rows(calculation, rowset), v_scf, kcart=kcart,
+                                    local_terms=terms)
+        return velocity.second_matrix_elements(psi, sequential=True)[:, :, 0]
+
+    def contraction(bands: int, position: int):
+        def stage(*args):
+            """One chunk's share of ``sigma^abc``, summed over ``bands`` bands."""
+            v, w = args[0], args[1]
+            energies, fill, weight = args[position:]
+            arrays = (energies, jnp.moveaxis(v, 0, 1), jnp.moveaxis(w, 2, 0),
+                      fill, weight)
+            return sum_k(one_k(bands), arrays, batch=batch)
+        return stage
+
+    def arguments(rows, live):
+        # The padded rows are a repeat of a real one and carry zero ``w_k``,
+        # which multiplies the whole of a k-point's term.
+        states = (row_leaves(calculation, rows), store_rows(wavefunctions, rows),
+                  jnp.asarray(kcart[rows]))
+        last = (jnp.asarray(energies[rows]), jnp.asarray(filling[rows]),
+                jnp.asarray(padded(wk, rows, live)))
+        return (states, states) + (last,) * len(band_counts)
+
+    # One contraction stage per band count, each its own program, as the two
+    # derivatives are.
+    stages = (first_of, second_of) + tuple(
+        contraction(bands, 2 + index) for index, bands in enumerate(band_counts))
+    sums = walk(int(wk.shape[0]), batch, arguments, *stages,
+                shares=len(band_counts))
+    sums = sums if len(band_counts) > 1 else (sums,)
+    sigma = np.asarray(sums[0]) * (SIGMA_SI / volume)
     scale = float(np.max(np.abs(sigma)))
     truncation = float("nan")
-    dropped = max(1, nbnd // 4)
-    if nbnd - dropped > 1 and scale > 0.0:
-        truncation = float(np.max(np.abs(total(nbnd - dropped) - sigma)) / scale)
+    if len(band_counts) > 1 and scale > 0.0:
+        coarse = np.asarray(sums[1]) * (SIGMA_SI / volume)
+        truncation = float(np.max(np.abs(coarse - sigma)) / scale)
 
     return ShiftCurrent(
         frequencies=np.asarray(frequencies),
@@ -643,9 +749,17 @@ def require_a_velocity_sum_regime(calculation) -> None:
             "the cell's until it is averaged over the point group, which this "
             "assembly does not do (defumat.system.symmetry."
             "symmetrize_cartesian_tensor would, and lifting this is a "
-            "separate piece of work). Run with nosym = .true. and "
-            "noinv = .true. on an *unshifted* grid, which is closed under the "
-            "point group where a shifted one is not"
+            "separate piece of work). Keep symmetry for the SCF and pass the "
+            "whole unshifted grid as kpoints= (KPoints.automatic((n, n, n), "
+            "(0, 0, 0), cell) with no rotations), which is closed under the "
+            "point group where a shifted one is not. Running the SCF with "
+            "nosym = .true. instead is not the same escape: a nosym run's FFT "
+            "grid is chosen without the factors the fractional translations "
+            "need, so on a crystal whose operations carry one (diamond, not "
+            "zincblende) the potential breaks them at the grid's sampling "
+            "error, and two-atom silicon's tensor, which inversion forbids, "
+            "then comes out three to four orders of magnitude larger than "
+            "with symmetry kept"
         )
     if calculation.is_hubbard:
         raise NotImplementedError(
@@ -682,3 +796,113 @@ def _kpoints_are_reduced(calculation) -> bool:
     group acts freely on it, which is what a shift arranges.
     """
     return is_reduced(calculation.system.kpoints)
+
+
+# -- the warnings --------------------------------------------------------------
+
+
+def _incommensurate_grid(calculation):
+    """``(grid, factors)`` when a ``nosym`` grid misses a translation, else ``None``.
+
+    ``factors`` are what :meth:`~defumat.system.symmetry.Symmetries.
+    fft_factors` asks of the dense FFT grid for the crystal's fractional
+    translations to map it onto itself, and a run that keeps its symmetry is
+    given a grid that is a multiple of them. A ``nosym`` run is not:
+    ``build_basis`` follows ``pw.x`` there (``setup.f90`` sets ``fft_fact = 1``
+    under ``nosym``), which is right for a run that wants no symmetry and
+    leaves the operations it dropped broken by the grid itself. The
+    exchange-correlation potential is evaluated pointwise on that grid, so it
+    breaks them at the grid's sampling error, and the density follows it
+    self-consistently.
+
+    That is invisible in a total energy and visible in a second-order tensor,
+    which inversion forbids outright and which is a cancellation of large
+    terms. Diamond's inversion carries a quarter-lattice translation, so
+    two-atom silicon at ``ecutwfc = 12`` (15^3 against a factor of 4) is the
+    case: ``get_shg(nbnd=8)`` on the whole unshifted 2x2x2 mesh reads
+    **0.7157 pm/V** where inversion requires zero, **0.0018** at
+    ``ecutwfc = 16`` (20^3, commensurate) and **0.00074** with symmetry kept for
+    the SCF and the same mesh passed as ``kpoints=``; the shift current on the
+    same three runs reads **1.2e-8**, 1.1e-11 and 5.3e-12 A/V^2. A symmorphic
+    crystal (zincblende AlAs, whose factors are all 1) is not affected whatever
+    its grid.
+    """
+    system = calculation.system
+    if not system.nosym:
+        return None
+    grid = tuple(int(g) for g in calculation.basis.dense.grid)
+    factors = tuple(find_symmetries(system.cell, system.structure).fft_factors())
+    if not any(g % f for g, f in zip(grid, factors)):
+        return None
+    return grid, factors
+
+
+def _warn_about_the_grid(calculation, quantity: str, measured: str) -> None:
+    """Say so when :func:`_incommensurate_grid` finds the case it describes.
+
+    A warning and not a refusal, because the residue is the size of the
+    grid's sampling error and is harmless wherever the tensor is not being
+    read for a component a dropped operation forbids. ``quantity`` names the
+    tensor and ``measured`` is the measurement on it that says how large the
+    residue is.
+    """
+    found = _incommensurate_grid(calculation)
+    if found is None:
+        return
+    grid, factors = found
+    warnings.warn(
+        f"the dense FFT grid of this nosym run, {grid}, is not a multiple of "
+        f"{factors}, which the crystal's fractional translations need, so "
+        f"{quantity} carries a residue the crystal does not have. The "
+        "operations nosym dropped do not map this grid onto itself, the "
+        "exchange-correlation potential evaluated pointwise on it breaks them "
+        "at the grid's sampling error, and a second-order tensor picks that up "
+        f"in every component one of those operations forbids: {measured}. "
+        "Keep symmetry for the SCF and pass the whole unshifted mesh as "
+        "kpoints= (KPoints.automatic((n, n, n), (0, 0, 0), cell), given no "
+        "rotations, is the complete grid), or choose a cutoff whose dense grid "
+        f"is a multiple of {factors}",
+        RuntimeWarning,
+        stacklevel=3,
+    )
+
+
+def _warn_about_the_cut(band_cut_gap: float, quantity: str, measured: str) -> None:
+    """Say so when the band set was cut inside a degenerate multiplet.
+
+    ``band_cut_gap`` is ``min_k (e_(nbnd+1) - e_nbnd)``, which the workflows
+    measure by diagonalising one band more than the sum uses. Below
+    :data:`DEGENERACY_TOL` the last band kept and the first one dropped are one
+    level, and which members of it the eigensolver put below the cut is
+    arbitrary, since any rotation inside a multiplet is an equally good set of
+    eigenvectors. Every quantity built from the kept bands then depends on that
+    rotation, the intermediate sums of both tensors among them, and no
+    multiplet average inside the assembly can repair it, because the members
+    it would average with are not in the set.
+
+    **The threshold is the floor and not the broadening**:
+    :data:`DEGENERACY_TOL`, where the sums use the broadening for their own
+    denominators. The broadening is where a spectrum stops
+    resolving a splitting, not where the eigenvectors stop being determined:
+    AlAs's cut at 14 bands on the whole 6x6x6 mesh is 9.66e-3 Ry wide, below
+    the shift current's default broadening of 0.01, and it is a real gap. A cut
+    inside a multiplet comes out at round-off instead: 3.1e-15 Ry for
+    ``alas-raman.in`` at 22 bands on 6x6x6, exactly 0 for ``alas-shg.in`` at 22
+    on 6x6x6 and 5.3e-15 for ``alas-us.in`` at 24 on 4x4x4.
+
+    ``nan``, which is what the assembly carries when nobody measured the cut,
+    compares false and says nothing.
+    """
+    if not band_cut_gap < DEGENERACY_TOL:
+        return
+    warnings.warn(
+        f"the band set is cut inside a degenerate multiplet: band_cut_gap = "
+        f"{band_cut_gap:.2e} Ry, below DEGENERACY_TOL = {DEGENERACY_TOL:g} Ry, "
+        "the splitting under which two bands are one level. Which members of "
+        "the multiplet fall below the cut is arbitrary, since any rotation "
+        "inside it is an equally good set of eigenvectors, so "
+        f"{quantity} carries a part that is not a property of the crystal: "
+        f"{measured}. Choose an nbnd at which band_cut_gap is a real gap",
+        RuntimeWarning,
+        stacklevel=3,
+    )

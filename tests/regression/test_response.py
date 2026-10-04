@@ -720,8 +720,18 @@ BORN_TOLERANCE = {
 CUBIC_TOLERANCE = 1e-9
 
 
+#: The convergence an identity between two routes needs, where each route
+#: alone is compared with ``ph.x`` at ``ph.x``'s own. ``tr2`` is in ``ph.x``'s
+#: units since 2026-10-03, and 1e-24 is where the loop stopped before then on the
+#: 20^3 grid of these cells (a raw ``sum(dV^2)`` of 1e-14, divided by ``ndimtot^2
+#: npert = 6.9e9``); the threshold is the fixed one the loop held until then.
+#: At the defaults, which stop where ``ph.x`` does, the wedge and the closed grid
+#: agree to 6.2e-8 on an epsilon of 23.6 (2.6e-9 relative, measured on D22).
+IDENTITY = {"tr2": 1.0e-24, "threshold": 1.0e-12}
+
+
 @lru_cache(maxsize=None)
-def _dielectric(case: str):
+def _dielectric(case: str, **options):
     """The electric-field response of one of the committed inputs."""
     from defumat.response.efield import dielectric_tensor
     from defumat.scf import Calculation
@@ -741,6 +751,7 @@ def _dielectric(case: str):
         # The transcribed ``zstar_eu`` cross-check reads ``dpsi`` and the solver
         # back out of the same run rather than paying for a second one.
         keep_internals=True,
+        **options,
     )
     return result, response
 
@@ -892,8 +903,8 @@ def test_the_symmetrised_wedge_and_the_closed_grid_give_one_answer():
     ``symmetrize_directional`` -- and it is the only check there is, since QE
     computes only the first of them.
     """
-    reduced, wedge = _dielectric("si-epsilon-unshifted")
-    whole, closed = _dielectric("si-epsilon-unshifted-nosym")
+    reduced, wedge = _dielectric("si-epsilon-unshifted", **IDENTITY)
+    whole, closed = _dielectric("si-epsilon-unshifted-nosym", **IDENTITY)
 
     assert reduced.total_energy == pytest.approx(whole.total_energy, abs=1e-9)
     assert wedge.isotropic == pytest.approx(closed.isotropic, abs=1e-8)

@@ -50,6 +50,7 @@ import warnings
 from pathlib import Path
 from dataclasses import dataclass, field
 from functools import partial
+from typing import NamedTuple
 
 import equinox as eqx
 import os
@@ -131,9 +132,13 @@ from defumat.scf.mixing import (
     DENSITY_DEPENDENT,
     PRECONDITIONED,
     AndersonMixer,
+    SphereLayout,
     get_mixer,
     kerker_preconditioner,
+    kerker_preconditioner_g,
     local_tf_preconditioner,
+    local_tf_preconditioner_g,
+    resolve_mixing_space,
 )
 from defumat.scf.residual import make_residual
 from defumat.scf.solvers import get_scf_solver
@@ -176,6 +181,7 @@ from defumat.solvers.davidson import (
 )
 from defumat.solvers.subspace import rayleigh_ritz
 from defumat.system.builder import System
+from defumat.system.cell import fold_radius, pair_separation_bound
 from defumat.system.kpoints import KPoints
 from defumat.system.spiral import spiral_cartesian, spiral_kcart, spiral_kpoints
 from defumat.system.symmetry import (
@@ -209,11 +215,59 @@ def _field_potential(field, rho_r, cell, scale):
     return field.potential(rho_r, cell, scale)
 
 
-#: ``quantization_axis`` is a fixed three-vector or ``None``, so it is static:
-#: it comes from the *input* magnetization and cannot change during a run.
-#: ``source_free`` is Elk's ``nosource`` and is an input flag, so it is
-#: static beside ``quantization_axis``.
-_potential_of_rho = jax.jit(v_of_rho, static_argnums=(6, 8))
+class LocalTerms(NamedTuple):
+    """What a Hamiltonian takes from the frozen potential, none of it k-dependent.
+
+    Built by :meth:`Calculation.local_terms` and consumed by
+    :meth:`Calculation.hamiltonian_from`. ``potentials`` holds one smooth-grid
+    potential per Hamiltonian -- one per channel of a collinear run, or the one
+    ``(nspin_mag, ...)`` stack of a spinor run -- and ``waves`` the same fields
+    with their ``xy`` plane contiguous. ``deeq`` is ``newd``'s ``D_ij``, or
+    ``None`` on a norm-conserving scalar run.
+    """
+
+    potentials: tuple
+    waves: tuple
+    deeq: object
+
+
+#: The :class:`System` fields a rigid turn of the magnetic texture changes, and
+#: the only ones :meth:`Calculation.with_texture` lets differ.
+_TEXTURE_FIELDS = ("angle1", "angle2", "starting_moments")
+
+
+def _same_value(first, second) -> bool:
+    """Whether two values are the same pytree with bitwise-equal leaves.
+
+    Static fields are in the tree structure and are compared there; array
+    leaves are compared exactly, shape and dtype included.
+    """
+    if first is second:
+        return True
+    leaves, structure = jax.tree_util.tree_flatten(first)
+    others, other_structure = jax.tree_util.tree_flatten(second)
+    if structure != other_structure or len(leaves) != len(others):
+        return False
+    for a, b in zip(leaves, others):
+        if isinstance(a, (np.ndarray, jax.Array)) or isinstance(b, (np.ndarray, jax.Array)):
+            a, b = np.asarray(a), np.asarray(b)
+            if a.shape != b.shape or a.dtype != b.dtype or not np.array_equal(a, b):
+                return False
+        elif a != b:
+            return False
+    return True
+
+
+#: ``source_free`` is Elk's ``nosource`` and is an input flag, so it is static.
+#: ``quantization_axis`` is **not**, although it cannot change during one SCF:
+#: :meth:`Calculation.with_texture` turns it with the texture, and as a static
+#: argument it made every orientation of a scan or a relaxation a new executable
+#: here and, since the torque's derivative traces this function, a new kept
+#: program there (``OPEN.md`` Part XXIII item 14). It is passed as an array
+#: (:meth:`Calculation._axis_argument`), or as ``None`` when there is no fixed
+#: axis, and that difference is in the pytree's structure, so the branch it
+#: selects is still taken at trace time.
+_potential_of_rho = jax.jit(v_of_rho, static_argnums=(8,))
 _accuracy = jax.jit(scf_accuracy)
 _accuracy_split = jax.jit(scf_accuracy_split)
 #: ``tauk_ddot``, added to ``accuracy`` the way ``ns_ddot`` is rather than fused
@@ -477,7 +531,7 @@ FIT_BECSUM = False
 RHO_DDOT_FIT = False
 
 
-def _rho_ddot_metric(calculation):
+def _rho_ddot_metric(calculation, layout=None):
     """``(drho, dns, dtau) -> F`` whose dot products are ``rho_ddot``, for :attr:`Mixer.metric`.
 
     The same three terms, in the same order, as the residual solver's
@@ -486,6 +540,13 @@ def _rho_ddot_metric(calculation):
     and ``tauk_ddot`` under a meta-GGA. ``F(r) . F(r)`` is that ``accuracy`` to
     round-off, which ``tests/unit/test_rho_ddot_fit.py`` holds for each vector
     and for this assembly (``test_the_assembled_metric_is_the_loops_accuracy``).
+
+    With a :class:`~defumat.scf.mixing.SphereLayout`, ``drho`` is the stored
+    residual and its part is :meth:`~defumat.scf.mixing.SphereLayout.rho_ddot_vector`,
+    over the smooth sphere alone as ``mix_rho``'s ``rho_ddot(..., ngm0)`` is,
+    so it is no longer the loop's ``accuracy`` (which stays over the dense set)
+    by the shell's ``1/G^2``-weighted share. ``tau`` keeps its dense-set vector,
+    being packed in real space.
     """
     gvectors, cell = calculation.basis.dense, calculation.system.cell
     u_metric = None
@@ -499,6 +560,13 @@ def _rho_ddot_metric(calculation):
             )
 
     def metric(drho, dns, dtau):
+        if layout is not None:
+            parts = [layout.rho_ddot_vector(drho)]
+            if dns is not None:
+                parts.append(np.asarray(_ns_ddot_vector(dns, u_metric)))
+            if dtau is not None:
+                parts.append(np.asarray(_tau_ddot_vector(dtau, gvectors, cell)))
+            return np.concatenate(parts)
         parts = [_rho_ddot_vector(drho, gvectors, cell)]
         if dns is not None:
             parts.append(_ns_ddot_vector(dns, u_metric))
@@ -507,6 +575,21 @@ def _rho_ddot_metric(calculation):
         return np.asarray(jnp.concatenate(parts))
 
     return metric
+
+
+def _augmentation_of(calculation):
+    """``(base, becsum) -> sym_rho(addusdens(base, becsum))``, for :attr:`SphereLayout.augmentation`.
+
+    The two operators :meth:`Calculation.finish_density` applies after the lift
+    to the dense grid, in the same order and through the same kernels, so the
+    shell this rebuilds from a ``becsum`` is the one an output density built
+    from that ``becsum`` has, to round-off: the spiral's displaced table and the
+    axial-vector symmetrisation of a noncollinear magnetization come with them.
+    """
+    def augmentation(base, becsum_):
+        return calculation.symmetrize(calculation.augmented(base, becsum_))
+
+    return augmentation
 
 
 def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None,
@@ -550,9 +633,44 @@ def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None,
     is already unmodelled), and the checkpointed mixer doubles with it. And
     ``tau`` makes one more host round trip per iteration, which this function
     already pays for the density.
+
+    **Where the density sits in the packed vector is the mixer's layout**
+    (:attr:`~defumat.scf.mixing.Mixer.layout`). Without one it is the whole
+    dense box in real space, which is what a bare mixer gets and what
+    ``run_scf`` installs by default. Under ``mixing_space = 'g'`` it installs a
+    :class:`~defumat.scf.mixing.SphereLayout`, and then the density block is
+    ``pw.x``'s ``mix_type``: the smooth sphere in G, fitted and kept, with the
+    shell between ``ngms`` and ``ngm`` never handed to the mixer. ``run_scf``
+    gives such a layout the augmentation charge, and the mixed density's shell
+    is then rebuilt from the mixed ``becsum``, which is the Anderson step on the
+    shell exactly because the shell of every output density is that charge; a
+    bare layout mixes the shell linearly at ``beta`` (``high_frequency_mixing``).
+    Each density is transformed once on the way in and the mixed one once on
+    the way out, per channel, and the rebuilt shell costs one more forward
+    transform beside the augmentation charge itself; ``becsum``, ``ns`` and
+    ``tau`` are packed as before.
     """
-    flat = [np.asarray(rho).ravel()]
-    flat_out = [np.asarray(rho_out).ravel()]
+    layout = getattr(mixer, "layout", None)
+    shell_mixed = None
+    if layout is None:
+        flat = [np.asarray(rho).ravel()]
+        flat_out = [np.asarray(rho_out).ravel()]
+        head_size = int(np.size(rho))
+    else:
+        # Both transforms are dispatched before either is read, and read in one
+        # ``device_get``: the copy is the half dense sphere, not the box.
+        coefficients_in, coefficients_out = jax.device_get(
+            (layout.forward(rho), layout.forward(rho_out)))
+        head_in, shell_in = layout.pack(coefficients_in)
+        head_out, shell_out = layout.pack(coefficients_out)
+        if layout.augmentation is None:
+            # ``high_frequency_mixing``; with the augmentation charge installed
+            # the shell is rebuilt below from the mixed ``becsum`` instead.
+            shell_mixed = shell_in + layout.shell_step(
+                shell_out - shell_in, mixer.beta, getattr(mixer, "beta_mag", None))
+        flat = [head_in.ravel()]
+        flat_out = [head_out.ravel()]
+        head_size = int(head_in.size)
     for old, new in zip(becsum_in, becsum_out):
         if old is None:
             continue
@@ -584,8 +702,10 @@ def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None,
     # ``becsum`` is mixed with the density's coefficients and kept out of the
     # fit that chooses them, which is ``rho_ddot``'s rule (see
     # :meth:`~defumat.scf.mixing.AndersonMixer.mix` for the measurement).
-    becsum_size = sum(np.asarray(b).size for b in becsum_in if b is not None)
-    exclude = (slice(rho.size, rho.size + becsum_size)
+    # ``np.size`` reads the shape; ``np.asarray(b).size`` converted the array
+    # first, a second host read of a block already packed above.
+    becsum_size = sum(np.size(b) for b in becsum_in if b is not None)
+    exclude = (slice(head_size, head_size + becsum_size)
                if becsum_size and not FIT_BECSUM else None)
     metric = getattr(mixer, "metric", None)
     fit = None
@@ -594,16 +714,18 @@ def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None,
         # parts rather than off the packed vector, so no offset can disagree
         # with the packing above. ``becsum`` has no term in it, which is what
         # ``exclude`` was approximating, so ``FIT_BECSUM`` does nothing here.
+        # Under a layout the density's part is the stored smooth sphere, which
+        # is what ``pw.x`` fits on (:func:`_rho_ddot_metric`).
         fit = metric(
-            jnp.asarray(rho_out) - jnp.asarray(rho),
+            jnp.asarray(rho_out) - jnp.asarray(rho) if layout is None
+            else head_out - head_in,
             None if ns_in is None else jnp.asarray(ns_out) - jnp.asarray(ns_in),
             None if tau_in is None else jnp.asarray(tau_out) - jnp.asarray(tau_in),
         )
     mixed = mixer.mix(np.concatenate(flat), np.concatenate(flat_out), exclude=exclude,
                       fit=fit)
 
-    offset = rho.size
-    rho_mixed = jnp.asarray(mixed[:offset].reshape(rho.shape))
+    offset = head_size
     becsum_mixed = []
     for old in becsum_in:
         if old is None:
@@ -611,6 +733,18 @@ def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None,
             continue
         becsum_mixed.append(jnp.asarray(mixed[offset : offset + old.size].reshape(old.shape)))
         offset += old.size
+    if layout is None:
+        rho_mixed = jnp.asarray(mixed[:head_size].reshape(rho.shape))
+    else:
+        if layout.augmentation is not None:
+            # The shell of the mixed density is the augmentation charge of the
+            # mixed ``becsum``, symmetrised as ``rho_out``'s is: the Anderson
+            # combination of every history entry's shell, which is pure
+            # augmentation charge, at the step ``becsum`` takes
+            # (:class:`~defumat.scf.mixing.SphereLayout`).
+            shell_mixed = layout.rebuilt_shell(becsum_mixed, rho.dtype)
+        # The density's own dtype, as ``tau``'s below: the combination promotes.
+        rho_mixed = layout.field(mixed[:head_size], shell_mixed).astype(rho.dtype)
     ns_mixed = None
     if ns_in is not None:
         ns_dtype, ns_real = _ns_dtypes(ns_in)
@@ -859,8 +993,13 @@ CORE_CHUNK_BYTES = 8 * 1024**2
 
 
 def _projector_core(pseudos, structure, cell, smooth, planewaves, kpoints,
-                    origin_tangent, chunked):
+                    origin_tangent, chunked, kcart=None):
     """:func:`build_projector_core`, in k-chunks when ``chunked``.
+
+    ``kcart`` is :func:`build_projector_core`'s, the k-points in 1/bohr at this
+    cell, and is sliced with each chunk: :meth:`Calculation.at_cell` passes it,
+    because a moved cell's ``kpoints`` still hold the starting cell's cartesian
+    coordinates.
 
     **The one-shot build is the setup's peak in memory mode**: every
     intermediate -- ``k + G``, its modulus, the harmonics, the radial table,
@@ -878,20 +1017,22 @@ def _projector_core(pseudos, structure, cell, smooth, planewaves, kpoints,
     """
     if not chunked:
         return build_projector_core(pseudos, structure, cell, smooth, planewaves,
-                                    kpoints, origin_tangent=origin_tangent)
+                                    kpoints, kcart, origin_tangent=origin_tangent)
     nk = planewaves.nk
     ncs = sum(len(projector_channels(p)) for p in pseudos) or 1
     per_k = planewaves.npwx * (ncs + 3) * 8
     batch = max(1, CORE_CHUNK_BYTES // max(1, per_k))
     if batch >= nk:
         return build_projector_core(pseudos, structure, cell, smooth, planewaves,
-                                    kpoints, origin_tangent=origin_tangent)
+                                    kpoints, kcart, origin_tangent=origin_tangent)
     columns = kg = None
     piece = None
     for rows, live in k_chunks(nk, batch):
         piece = build_projector_core(
             pseudos, structure, cell, smooth, _planewaves_rows(planewaves, rows),
-            _kpoints_rows(kpoints, rows), origin_tangent=origin_tangent,
+            _kpoints_rows(kpoints, rows),
+            None if kcart is None else jnp.asarray(kcart)[np.asarray(rows)],
+            origin_tangent=origin_tangent,
         )
         block_columns = np.asarray(piece.columns)[:live]
         block_kg = np.asarray(piece.kg)[:live]
@@ -909,6 +1050,47 @@ def _projector_core(pseudos, structure, cell, smooth, planewaves, kpoints,
         lambda core: (core.columns, core.kg, core.mask),
         piece, (jax.device_put(columns), jax.device_put(kg), planewaves.mask),
     )
+
+
+def _padded_translations(neighbours, count: int, cell, structure):
+    """``neighbours`` (an Ewald or dispersion sum) with its translation list padded to ``count`` rows.
+
+    **What a variable-cell step needs and the starting cell does not.** The
+    compiled force and stress take the list as an argument, so its length is a
+    shape, and :meth:`Calculation.at_cell` rebuilds it at every step: an image
+    count that changes from one step to the next would compile both gradients
+    again. Padding to the count of the calculation ``at_cell`` was called on --
+    the starting one, throughout :func:`~defumat.workflows.vc_relax.run_vc_relax`
+    -- removes that wherever the count fell. Where it grew, the list is longer
+    and that one shape compiles once.
+
+    The rows added are one lattice vector, a multiple of the longest lattice
+    vector at least twice ``cutoff + separation`` long, so every pair it forms
+    lies past the kernels' ``rmax`` or ``rcut`` mask and adds an exact zero --
+    and, being a lattice vector, it deforms under a strain as the real rows
+    do. They go at the end, after the real rows in their own order, so what
+    changes is only the length the kernel reduces over, which moves its sum at
+    round-off when the sum has live pairs at all: on QE's ``vc-relax4`` cell
+    with ``alpha`` lowered to 0.1, so that it does, 4.4e-16 Ry on 2.2 Ry, 7.8e-17
+    in the position derivative and 7.7e-16 in the strain derivative. At the
+    ``alpha`` a run takes, that cell and two-atom silicon have no pair inside
+    ``rmax`` and the padding changes nothing.
+    """
+    translations = getattr(neighbours, "translations", None)
+    if translations is None or translations.shape[0] >= count:
+        return neighbours
+    at = np.asarray(cell.at)
+    tau = np.asarray(structure.positions)
+    cutoff = float(getattr(neighbours, "rmax", None) or getattr(neighbours, "rcut"))
+    separation = max(pair_separation_bound(at, tau), fold_radius(at))
+    longest = at[int(np.argmax(np.linalg.norm(at, axis=1)))]
+    multiple = int(np.ceil(2.0 * (cutoff + separation) / np.linalg.norm(longest))) + 1
+    filler = jnp.asarray(multiple * longest, dtype=translations.dtype)
+    padded = jnp.concatenate([
+        translations,
+        jnp.broadcast_to(filler, (count - translations.shape[0], 3)),
+    ])
+    return eqx.tree_at(lambda n: n.translations, neighbours, padded)
 
 
 def _kpoints_rows(kpoints, rows):
@@ -1332,13 +1514,21 @@ def _without_gamma_storage(system: System) -> System:
     return eqx.tree_at(lambda s: s.kpoints, system, replacement)
 
 
-def _meta_c(potential):
+def _meta_c(potential, is_meta: bool = True):
     """The Tran-Blaha ``c`` a potential was built with, or ``None``.
 
     ``Potential.meta_c`` is ``0`` for every functional that is not a meta-GGA,
     and the PAW one-centre terms want ``None`` there rather than a coefficient
     that means nothing.
+
+    ``is_meta`` is the functional's own flag, and ``False`` answers ``None``
+    without reading ``c``: ``v_of_rho`` sets it to exactly ``0.0`` outside its
+    meta branch, so the answer is the same, and the read it saves is a blocking
+    fetch of a device scalar at the top of every SCF iteration, which waited for
+    the whole potential before the Hamiltonian could be dispatched.
     """
+    if not is_meta:
+        return None
     c = potential.meta_c
     return None if np.ndim(c) == 0 and float(c) == 0.0 else c
 
@@ -2416,9 +2606,9 @@ class Calculation:
         # takes the sign of the magnetization along. ``None`` -- QE's
         # ``lsign = .FALSE.`` -- whenever the starting moments are not all
         # parallel; the uniform field's direction when there is no starting
-        # moment at all and the field alone made the run magnetic. A tuple
-        # rather than an array because it crosses a ``jit`` boundary as a
-        # static argument.
+        # moment at all and the field alone made the run magnetic. Kept as a
+        # tuple, which compares and hashes on the host; what crosses a ``jit``
+        # boundary is the array :meth:`_axis_argument` builds from it.
         axis = (
             fixed_quantization_axis(system.local_moments, system.b_field)
             if self.nspin_mag == 4 and not self.spiral else None
@@ -3132,11 +3322,12 @@ class Calculation:
         # The spiral gradient's compiled kernel closes over *this* calculation --
         # its local potential, its Ewald sum, its projector positions -- so it
         # cannot follow the atoms, and would otherwise be evaluated in silence at
-        # the geometry it was built at. The analytic force's and the stress's
-        # kernels close over the calculation the same way; they do not need a pop
-        # here because they are keyed on the calculation they captured and the
-        # copy below is a different object, which is the invalidation this one
-        # gets by name.
+        # the geometry it was built at. The analytic force's kernel closes over
+        # the calculation the same way; it needs no pop here because it is keyed
+        # on the calculation it captured and the copy below is a different
+        # object. The autodiff force's and stress's take the geometry as
+        # arguments and are keyed on what they still close over
+        # (:class:`~defumat.forces.energy.GeometryKey`), so they follow the move.
         moved.__dict__.pop("_spiral_gradient", None)
         moved.__dict__.pop("_spiral_gradient_chunk", None)
         moved.system = eqx.tree_at(
@@ -3218,23 +3409,47 @@ class Calculation:
         else. That is what lets a whole variable-cell relaxation be a single
         setup, with the basis rebuilt once at the end
         (:mod:`defumat.workflows.vc_relax`).
+
+        **The augmentation charge and the projector core are built the
+        constructor's way, not the strain derivative's.** :meth:`at_strain`
+        chooses both for a tape: in memory mode the augmentation charge is the
+        exact scanned table, which evaluates the radial transforms of ``Q_ij``
+        inside every chunk of ``charge()`` and ``integrals()``, twice an SCF
+        iteration, and the core is built whole. A moved cell runs SCF
+        iterations rather than one derivative, so here the table is stored, or
+        knot-tabulated above :data:`~defumat.pseudo.augmentation.AUG_MAX_BYTES`,
+        and the core is built in k-chunks in memory mode, as the constructor
+        builds both (`OPEN.md` Part XXIII item 15). The trade is one stored
+        real ``(nh, nh, ngm)`` table for the moved calculation. The stress, a
+        derivative, still calls :meth:`at_strain` inside its trace and keeps the
+        scanned route.
         """
         at = jnp.asarray(at)
         current = self.system.cell.at
         # ``at_strain`` deforms by ``a_i -> D a_i``, i.e. ``at -> at @ D.T``.
         deformation = jnp.asarray(at).T @ jnp.linalg.inv(jnp.asarray(current)).T
-        moved = self.at_strain(deformation - jnp.eye(3, dtype=deformation.dtype))
+        moved = self.at_strain(deformation - jnp.eye(3, dtype=deformation.dtype),
+                               _moving=True)
 
         cell, structure = moved.system.cell, moved.system.structure
         dense = moved.basis.dense
-        moved.ewald_sum = build_ewald(cell, structure, dense, moved.charges)
+        # Both lists are padded to at least the length this calculation's own
+        # had, so that a step whose count of images fell does not hand the
+        # compiled force and stress a new shape (:func:`_padded_translations`).
+        moved.ewald_sum = _padded_translations(
+            build_ewald(cell, structure, dense, moved.charges),
+            self.ewald_sum.translations.shape[0], cell, structure,
+        )
         moved.ewald = float(
             moved.ewald_sum.energy(cell, structure.positions, dense)
         )
         if moved.dispersion_sum is not None:
-            moved.dispersion_sum = build_vdw_correction(
-                moved.system.vdw_corr, cell, structure,
-                **vdw_options(moved.system),
+            moved.dispersion_sum = _padded_translations(
+                build_vdw_correction(
+                    moved.system.vdw_corr, cell, structure,
+                    **vdw_options(moved.system),
+                ),
+                self.dispersion_sum.translations.shape[0], cell, structure,
             )
             moved.dispersion = float(
                 moved.dispersion_sum.energy(structure.positions)
@@ -3260,6 +3475,17 @@ class Calculation:
                 np.asarray(self._kcrystal) @ np.asarray(cell.bg) / float(cell.tpiba)
             ),
         )
+        # ``basis_kpoints`` is the same list for every calculation that is not a
+        # spiral (and ``at_strain`` refuses a spiral before this line), and
+        # ``at_positions`` rebuilds ``wfcU`` and the atomic start from it with
+        # no ``kcart``. Left at the starting cell's object, a DFT+U vc-relax ran
+        # every step's SCF, energy and force on Hubbard projectors at the
+        # starting cell's Cartesian k-points while the stress, which passes
+        # ``kcart``, used the moved ones: 1.82e-2 on a largest entry of 0.944 at
+        # a 3 per cent expansion of ``ni-ldau-stress.in``. ``pw.x`` moves ``xk``
+        # with the new ``bg`` (``scale_h.f90:47-48``) and rebuilds the projectors
+        # after every move (``hinit1.f90:130-134``).
+        moved.basis_kpoints = moved.system.kpoints
         # The integration spheres are measured in the cell's own metric, so a
         # cell that has *moved* remeasures them -- the same rule
         # :meth:`_moved_magnetic_field` states for the atoms, and ``at_cell``
@@ -3271,7 +3497,7 @@ class Calculation:
         moved._reporting_regions = None
         return moved
 
-    def at_strain(self, strain: jnp.ndarray) -> "Calculation":
+    def at_strain(self, strain: jnp.ndarray, *, _moving: bool = False) -> "Calculation":
         """The same calculation in a cell deformed by ``h -> (1 + epsilon) h``.
 
         The third member of the family, after :meth:`at_positions` and
@@ -3314,6 +3540,11 @@ class Calculation:
         The atomic starting charge is deliberately *not* rebuilt: nothing in the
         energy being differentiated uses it (only the SCF's first guess and
         ``force_corr`` do).
+
+        ``_moving`` is for :meth:`at_cell` alone, which calls this for a cell
+        that has moved rather than one being differentiated: the augmentation
+        charge, the projector core and the projectors are then built as the
+        constructor builds them rather than for a tape.
         """
         if self.spiral:
             raise NotImplementedError(
@@ -3328,11 +3559,14 @@ class Calculation:
 
         strained = copy.copy(self)
         # As in ``at_positions`` and ``at_spiral_q``: any compiled kernel that
-        # closed over *this* cell cannot follow one that has been deformed.
+        # closed over *this* cell cannot follow one that has been deformed. The
+        # force's and the stress's gradients are not among them: they take the
+        # geometry as arguments and are keyed on what they still close over
+        # (:class:`~defumat.forces.energy.GeometryKey`), so a moved cell reuses
+        # them, which is what keeps a variable-cell relaxation from compiling
+        # both again at every step (`OPEN.md` Part XXIII item 7).
         strained.__dict__.pop("_spiral_gradient", None)
         strained.__dict__.pop("_spiral_gradient_chunk", None)
-        strained.__dict__.pop("_energy_gradient", None)
-        strained.__dict__.pop("_chunked_gradient", None)
         strained.__dict__.pop("_analytic_terms", None)
         strained.__dict__.pop("_tetrahedra", None)
 
@@ -3372,15 +3606,44 @@ class Calculation:
         # The projectors: rebuilt whole, radial integrals included. Unlike a
         # change of position, ``|k+G|`` itself moves, so the form factors are
         # part of the derivative rather than a cached table it multiplies.
-        strained.projector_core = build_projector_core(
-            self.pseudos, structure, cell, smooth, self.basis.planewaves,
-            self.basis_kpoints, kcart, origin_tangent=self.origin_tangent,
-        )
-        strained.projectors = strained.projector_core.at_positions(
-            positions, qq=self.projectors.qq
-        )
+        # ``_moving`` is :meth:`at_cell`'s: a cell that has moved and will run
+        # SCF iterations, so the core and the projectors are built the
+        # constructor's way -- in k-chunks in memory mode, in the band side's
+        # dtype, lazy or pool-restricted as the run stores them.
+        if _moving:
+            strained.projector_core = _projector_core(
+                self.pseudos, structure, cell, smooth, self.basis.planewaves,
+                self.basis_kpoints, self.origin_tangent,
+                chunked=self.memory_mode == "memory", kcart=kcart,
+            )
+            if self.band_precision.complex != strained.projector_core.complex_dtype:
+                strained.projector_core = dataclasses.replace(
+                    strained.projector_core,
+                    complex_dtype=self.band_precision.complex)
+            strained.projectors = strained.projector_core.at_positions(
+                positions, qq=self.projectors.qq,
+                lazy=self.projector_storage == "rebuild", rows=self.projector_rows,
+            )
+        else:
+            strained.projector_core = build_projector_core(
+                self.pseudos, structure, cell, smooth, self.basis.planewaves,
+                self.basis_kpoints, kcart, origin_tangent=self.origin_tangent,
+            )
+            strained.projectors = strained.projector_core.at_positions(
+                positions, qq=self.projectors.qq
+            )
 
-        if self.augmentation is not None:
+        if self.augmentation is not None and _moving:
+            # The constructor's rule for a cell that has moved: stored below
+            # ``AUG_MAX_BYTES``, knot-tabulated above it, and never the exact
+            # scanned table, whose radial transforms would be evaluated again
+            # inside every ``charge()`` and ``integrals()`` of every SCF
+            # iteration at a ``|G|`` that no longer changes (`OPEN.md` Part
+            # XXIII item 15).
+            strained.augmentation = build_augmentation(
+                self.pseudos, structure, cell, dense,
+            )
+        elif self.augmentation is not None:
             # **Scanned in memory mode, stored in speed mode**, on the stored
             # route's numbers either way (to round-off). Stored, the whole
             # ``(nh, nh, ngm)`` array and its per-``L`` blocks are on the
@@ -3562,21 +3825,100 @@ class Calculation:
             moved.wfcU = moved._build_hubbard_projectors()
         return moved
 
-    @property
-    def hamiltonian_npw(self) -> tuple[int, ...]:
-        """The per-k plane-wave counts a Hamiltonian is built with.
+    def with_texture(self, system: System) -> "Calculation":
+        """The same calculation with its magnetic texture turned, every table shared.
 
-        The sphere's own, except on a block of a longer k-list
-        (:meth:`at_kpoints` with ``widths``), where every entry is the whole
-        list's smallest. A Hamiltonian reads the counts only for the
-        eigensolver's cap, ``npol min_k npw``, and holds them **static**, so a
-        block's own counts would recompile the solve once per block; the whole
-        list's minimum is also exactly the cap the unblocked list has.
+        ``system`` is this calculation's own with ``angle1``/``angle2`` and a
+        ``STARTING_MOMENTS`` card turned rigidly, which is what the force
+        theorem and the orientation torque diagonalise one leg at, once per
+        direction or orientation step (:mod:`defumat.workflows.anisotropy`).
+        Turning requires ``nosym``, so the k-set does not move, and neither do
+        the G sets, the grids, the projectors, the local potential or the
+        augmentation and PAW tables. What a constructor reads off the texture
+        is three things, and they are rebuilt here: the system itself, the
+        quantization axis a gradient-corrected noncollinear functional takes
+        the sign of the magnetization along (``compute_ux``), and the magnetic
+        symmetry group, which a ``nosym`` run never applies but which is
+        recomputed so that this object says what a fresh one would. The field
+        and the constraint are rebuilt too, from the turned system, as the
+        constructor builds them. On tetragonal cobalt turned from ``z`` to
+        ``x``, a fresh build differs from the unturned one in exactly those
+        attributes, bitwise (``OPEN.md`` Part XXIII item 14).
+
+        Returns ``self`` for this calculation's own system or one equal to it.
+        Refused: a turn on a run with symmetry, a spin spiral, and a system
+        that differs from this one's in anything but the texture, the k-set
+        included, compared bitwise.
+        """
+        if system is self.system:
+            return self
+        if self.spiral:
+            raise NotImplementedError(
+                "with_texture on a spin spiral is not implemented: the moments' "
+                "angle to the spiral axis is checked when the calculation is "
+                "built, and a new texture means a new calculation"
+            )
+        if not self.gamma_only:
+            system = _without_gamma_storage(system)
+        for field_ in dataclasses.fields(system):
+            if field_.name in _TEXTURE_FIELDS:
+                continue
+            if not _same_value(getattr(system, field_.name),
+                               getattr(self.system, field_.name)):
+                raise ValueError(
+                    f"with_texture turns the magnetic texture and nothing else, "
+                    f"and this system differs from the calculation's in "
+                    f"{field_.name}: build a calculation of it instead"
+                )
+        if all(_same_value(getattr(system, name), getattr(self.system, name))
+               for name in _TEXTURE_FIELDS):
+            # An equal system rebuilt rather than the same object, which a
+            # ``with_soc_scale`` on every call of a scan gives: nothing turned.
+            return self
+        if not system.nosym:
+            raise ValueError(
+                "with_texture needs nosym = .true.: a magnetic noncollinear run "
+                "reduces its k-set with a group that depends on where the "
+                "moments point, so a turned texture is a different k-set and a "
+                "new calculation"
+            )
+        moved = copy.copy(self)
+        # Everything cached lazily that reads the system: the compiled
+        # gradients close over it, and the tetrahedra and the reporting spheres
+        # are built from it on demand.
+        for name in ("_spiral_gradient", "_spiral_gradient_chunk", "_energy_gradient",
+                     "_chunked_gradient", "_analytic_terms", "_tetrahedra"):
+            moved.__dict__.pop(name, None)
+        moved._reporting_regions = None
+        moved.system = system
+        # The constructor's three readings of the texture, in its words.
+        axis = (
+            fixed_quantization_axis(system.local_moments, system.b_field)
+            if self.nspin_mag == 4 and not self.spiral else None
+        )
+        moved.quantization_axis = None if axis is None else tuple(float(v) for v in axis)
+        moved.symmetries = system.symmetry_group()
+        moved.magnetic_field = moved._build_magnetic_field()
+        return moved
+
+    @property
+    def hamiltonian_npw(self) -> int | None:
+        """The smallest sphere's plane-wave count a Hamiltonian is built with.
+
+        The sphere's own ``min_k npw``, except on a block of a longer list
+        (:meth:`at_kpoints` or :meth:`at_spiral_q` with ``widths``), where it is
+        the whole list's. A Hamiltonian reads it only for the eigensolver's cap,
+        ``npol min_k npw``, and holds it **static**, so a block's own minimum
+        would recompile the solve once per block; the whole list's minimum is
+        also exactly the cap the unblocked list has. ``None`` for a sphere that
+        carries no counts (a chunk of a force pass), which leaves the cap at
+        ``npwx``.
         """
         floor = getattr(self, "npw_floor", None)
-        if floor is None:
-            return self.basis.planewaves.npw
-        return (int(floor),) * len(self.basis.planewaves.npw)
+        if floor is not None:
+            return int(floor)
+        npw = self.basis.planewaves.npw
+        return int(min(npw)) if npw else None
 
     def band_count(self, nbnd: int | None = None) -> int:
         """``nbnd`` if given, else the system's, else QE's default for this run."""
@@ -3869,7 +4211,8 @@ class Calculation:
         moved._kcart = kcart
         return moved
 
-    def at_spiral_q(self, q_crystal, rebuild_basis: bool = True) -> "Calculation":
+    def at_spiral_q(self, q_crystal, rebuild_basis: bool = True,
+                    widths: tuple[int, int, int] | None = None) -> "Calculation":
         """The same calculation at a different spin-spiral wavevector.
 
         :meth:`at_kpoints` in the one direction a spiral moves: ``q`` changes
@@ -3878,6 +4221,15 @@ class Calculation:
         augmentation charge, the Ewald sum and the radial tables are all
         independent of it, and an ``E(q)`` scan is a loop over this method for
         that reason (:mod:`defumat.workflows.spiral`).
+
+        ``widths`` is ``(npwx, nsticks, npw_min)`` over every wavevector of a
+        scan at once (:func:`~defumat.workflows.spiral.scan_widths`), and it is
+        :meth:`at_kpoints`' argument of the same name: the spheres are padded to
+        the first two and the Hamiltonians are told the third, so that every
+        point of the scan has one shape and the SCF compiles once rather than
+        once for every padded width the wavevectors happen to give. Without it
+        the spheres are padded to this wavevector's own widths. Only a rebuilt
+        basis takes it.
 
         ``rebuild_basis = False`` is the counterpart of :meth:`at_positions`:
         it keeps *this* calculation's plane-wave spheres -- which plane waves
@@ -3901,6 +4253,12 @@ class Calculation:
             raise ValueError(
                 "at_spiral_q needs a calculation that is already a spiral: "
                 "spiral_q decides the basis, which is built once"
+            )
+        if widths is not None and not rebuild_basis:
+            raise ValueError(
+                "at_spiral_q pads a rebuilt basis to widths; with "
+                "rebuild_basis=False the sphere is this calculation's own and "
+                "keeps its own widths"
             )
         smooth, cell = self.basis.smooth, self.system.cell
         moved = copy.copy(self)
@@ -3999,15 +4357,20 @@ class Calculation:
                 shift=-moved.spiral_qcart,
             )
         moved.basis_kpoints = spiral_kpoints(system.kpoints, system.spiral_q, cell)
+        # Set in both cases, as ``at_kpoints`` sets it: ``copy.copy`` would
+        # otherwise carry a scan's floor to a later move that asked for none.
+        npwx, nsticks, npw_floor = widths if widths is not None else (None,) * 3
+        moved.npw_floor = npw_floor
         planewaves = build_plane_wave_basis(
-            smooth, moved.basis_kpoints, cell, system.ecutwfc
+            smooth, moved.basis_kpoints, cell, system.ecutwfc, npwx=npwx
         )
         moved.basis = Basis(
             dense=self.basis.dense, smooth=smooth, planewaves=planewaves
         )
         moved.kinetic = planewaves.kinetic(smooth, moved.basis_kpoints, cell)
         moved.fft_index = planewaves.fft_index(smooth)
-        moved.sticks = moved._build_sticks(moved.fft_index, planewaves.mask, smooth.grid)
+        moved.sticks = moved._build_sticks(moved.fft_index, planewaves.mask, smooth.grid,
+                                           nsticks=nsticks)
         _adopt_rebuilt_sphere(
             moved, self, planewaves, smooth, moved.basis_kpoints, cell
         )
@@ -4049,7 +4412,7 @@ class Calculation:
             self.rho_core,
             self.functional,
             self.rho_core_g,
-            self.quantization_axis,
+            self._axis_argument(),
             tau,
             self.source_free,
         )
@@ -4097,9 +4460,30 @@ class Calculation:
                 "the same one. Potential.meta_c is where it comes from"
             )
         energy, blocks = _paw_onecenter(
-            self.paw, becsum_, meta_c, self.quantization_axis
+            self.paw, becsum_, meta_c, self._axis_argument()
         )
         return energy, _paw_block_matrices(self.augmentation, blocks, self.nspin_mag)
+
+    def _axis_argument(self):
+        """:attr:`quantization_axis` as the array the compiled potentials take, or ``None``.
+
+        A host array rather than the tuple, for two reasons. Static, the tuple
+        made every orientation :meth:`with_texture` turns to a new executable of
+        the grid potential. Handed to a ``jit`` as it is, three Python floats,
+        it is three dynamic scalars to that ``jit`` but three *literals* in the
+        jaxpr of anything tracing around it, so the torque's derivative
+        (:mod:`defumat.eager` keys on the printed jaxpr) was a new program at
+        every orientation on PAW as well. A NumPy array is one dynamic argument
+        to the ``jit`` and a hoisted constant of an enclosing trace, whose value
+        is never printed. Built from the tuple at each call rather than kept
+        beside it, so that the two cannot disagree after a ``copy.copy``; it is
+        three numbers. In the grid's real dtype, which is the dtype of the
+        magnetization it is projected on.
+        """
+        axis = self.quantization_axis
+        if axis is None:
+            return None
+        return np.asarray(axis, dtype=self.system.cell.precision.real)
 
     def becsum(self, wavefunctions, weights, *, rows=None,
                symmetrize: bool = True) -> tuple:
@@ -4840,11 +5224,24 @@ class Calculation:
         problem to solve -- which is also how QE sees it, its ``2 nks`` k-list
         differing only in which ``vrs(:, isk)`` each point reads.
         """
+        return self.hamiltonian_from(self.local_terms(v_scf, ddd_paw), hubbard)
+
+    def local_terms(self, v_scf: jnp.ndarray, ddd_paw=None) -> LocalTerms:
+        """The half of :meth:`hamiltonian` that does not depend on the k-points.
+
+        The total local potential on the smooth grid, in both layouts, and
+        ``D_ij`` from ``newd``. A caller that builds Hamiltonians at many k-sets
+        from one frozen potential -- a Berry phase walks one string at a time --
+        builds these once and hands them to :meth:`hamiltonian_from` on each
+        :meth:`at_kpoints` copy, which shares the grids, ``vltot`` and the
+        augmentation charge they are made from.
+        """
         # ``set_vrs`` adds the fixed local pseudopotential to the self-consistent
         # part on the dense grid, and ``interpolate`` hands the wavefunction
         # transforms a smooth-grid copy. ``newd`` reads the *dense* one, since
         # the augmentation charge it integrates against is only representable
         # there.
+        #
         # ``set_vrs``: the local pseudopotential is felt in full by both
         # channels of an (up, down) potential and only by the charge component
         # of an (n, m) one. That is *not* the rule an unpolarized density
@@ -4853,7 +5250,35 @@ class Calculation:
         total = v_scf + as_potential_components(self.vltot, self.nspin_mag)
         deeq = self.coefficients(total, ddd_paw)
         if self.noncolin:
-            return (self._spinor_hamiltonian(total, deeq, hubbard),)
+            potential = jnp.stack([
+                to_smooth(component, self.basis.dense, self.basis.smooth)
+                for component in total
+            ])
+            potentials = (potential,)
+        else:
+            potentials = tuple(
+                to_smooth(total[spin], self.basis.dense, self.basis.smooth)
+                .astype(self._band_real())
+                for spin in range(self.nspin)
+            )
+        return LocalTerms(
+            potentials=potentials,
+            # the same potentials with their xy plane contiguous, which is the
+            # layout the stick transforms hold the field in
+            waves=tuple(jnp.moveaxis(p, -1, -3) for p in potentials),
+            deeq=deeq,
+        )
+
+    def hamiltonian_from(self, terms: LocalTerms, hubbard=None) -> tuple:
+        """:meth:`hamiltonian` from its k-independent half, built by :meth:`local_terms`.
+
+        ``terms`` may come from another calculation of the same cell and
+        datasets on another k-set (:meth:`at_kpoints`); everything with a ``k``
+        index is read off this one.
+        """
+        deeq = terms.deeq
+        if self.noncolin:
+            return (self._spinor_hamiltonian(terms, hubbard),)
         hamiltonians = []
         for spin in range(self.nspin):
             # ``vhpsi`` is a separate term, not a contribution to ``deeq``: it
@@ -4862,14 +5287,10 @@ class Calculation:
             # ``Hubbard_projectors = 'pseudo'``, where the Hubbard projectors
             # *are* the beta functions and the two terms therefore share a
             # separable form. That projector set is refused here.
-            potential = to_smooth(total[spin], self.basis.dense, self.basis.smooth)
-            potential = potential.astype(self._band_real())
             hamiltonians.append(Hamiltonian(
                 kinetic=self.kinetic.astype(self._band_real()),
-                potential=potential,
-                # the same potential with its xy plane contiguous, which is the
-                # layout the stick transforms hold the field in
-                potential_wave=jnp.moveaxis(potential, -1, -3),
+                potential=terms.potentials[spin],
+                potential_wave=terms.waves[spin],
                 sticks=self.sticks,
                 fft_index=self.fft_index,
                 fft_index_minus=self.fft_index_minus,
@@ -4885,30 +5306,24 @@ class Calculation:
             ))
         return tuple(hamiltonians)
 
-    def _spinor_hamiltonian(
-        self, total: jnp.ndarray, deeq, hubbard=None
-    ) -> SpinorHamiltonian:
-        """The single noncollinear Hamiltonian, at the given total potential.
+    def _spinor_hamiltonian(self, terms: LocalTerms, hubbard=None) -> SpinorHamiltonian:
+        """The single noncollinear Hamiltonian, at the given local terms.
 
         ``hubbard`` is a one-tuple: a spinor has one Hamiltonian on a space
         twice as large, so the DFT+U term's four spin blocks are one operator
         over spinor projector columns rather than one operator per channel.
         """
-        potential = jnp.stack([
-            to_smooth(component, self.basis.dense, self.basis.smooth)
-            for component in total
-        ])
         return SpinorHamiltonian(
             kinetic=self.kinetic,
-            potential=potential,
-            potential_wave=jnp.moveaxis(potential, -1, -3),
+            potential=terms.potentials[0],
+            potential_wave=terms.waves[0],
             spiral=self.spiral,
             sticks=self.sticks,
             fft_index=self.fft_index,
             mask=self.basis.planewaves.mask,
             npw=self.hamiltonian_npw,
             projectors=self.projectors,
-            deeq=deeq,
+            deeq=terms.deeq,
             grid=self.basis.smooth.grid,
             resolves_differences=self.resolves_differences,
             qq=self.qq_so,
@@ -5362,12 +5777,18 @@ class Calculation:
             )
             if rows is not None:
                 kinetic, mask = kinetic[rows], mask[rows]
+            # Drawn at the sphere's own width, which padding (a spiral scan's
+            # ``widths``) leaves unchanged since it only appends columns, so a
+            # padded run tops up with the unpadded run's numbers. For every
+            # unpadded basis the two widths are one and the draw is unchanged.
+            own = int(np.asarray(self.basis.planewaves.mask).sum(-1).max())
             # Called once per SCF outside any trace, so compiled by its
             # structure rather than once per run (:mod:`defumat.eager`).
             extra = compiled(
                 lambda arrays: map_k(
                     lambda one: starting_vectors(
-                        None, missing, ndim, one[0], one[1], atomic.dtype
+                        None, missing, ndim, one[0], one[1], atomic.dtype,
+                        npol=self.npol, width=own,
                     ),
                     arrays,
                     batch=self.k_batch,
@@ -6248,6 +6669,7 @@ def run_scf(
     max_seconds: float | None = None,
     residual_split: bool = False,
     mixing_beta_mag: float | None = None,
+    mixing_space: str | None = None,
     rotate_moments: bool = False,
     torque_conv_thr: float = 1.0e-8,
     rotation_trust: float = 0.1,
@@ -6255,6 +6677,7 @@ def run_scf(
     rotation_freeze_phase: bool = True,
     rotation_flat_curvature: float | None = None,
     pools=None,
+    diago_thr_init: float | None = None,
 ) -> SCFResult:
     """Run the self-consistent field loop to convergence.
 
@@ -6306,6 +6729,21 @@ def run_scf(
     than a set of wavefunctions -- see
     :meth:`Calculation.starting_wavefunctions`. It replaces the pseudo-atomic
     orbitals, and it is ignored by a residual solver, which starts its own.
+
+    ``diago_thr_init`` is ``pw.x``'s variable of the same name, the eigenvalue
+    threshold ``ethr`` of the first iteration, and ``None`` is ``ETHR_INIT``
+    (1e-2), the value for a start from atomic orbitals. The second iteration
+    resets it to 1e-2 and tightens it from ``dr2`` as always (``next_ethr``),
+    and the first iteration's redo test reads it, so a first diagonalisation
+    whose density turns out better than ``diago_thr_init * nelec`` is redone at
+    ``0.1 dr2 / nelec``, which is ``tr2_min`` in ``electrons.f90:677``,
+    ``:898-906``. It is floored at the band side's ``ethr`` floor. What it is
+    for is a start from states that are already nearly converged: a relaxation
+    passes 1e-6 with the previous ionic step's wavefunctions, which is what
+    ``run_pwscf.f90:331-334`` sets for every step after the first. It is **not**
+    read from an input file's ``&electrons``, and two things override it: a
+    residual solver, which sets the threshold from its own converged ``dr2``,
+    and a checkpoint resume, which restores the one it left with.
 
     ``starting_from`` is all four at once, taken from another run's
     :class:`SCFResult` **and promoted into this run's spin regime**: a converged
@@ -6363,6 +6801,19 @@ def run_scf(
     occupation matrix diagonally by **Hund's rule**, so the default start is
     strongly spin-polarised however small ``starting_magnetization`` is. A run
     meant to begin near the unpolarised solution has to say so here.
+
+    ``mixing_space`` is where the mixer keeps the density, and this code's own
+    knob rather than ``pw.x``'s. ``'g'`` (also ``'reciprocal'``) is ``pw.x``'s
+    ``mix_type``: the Anderson history holds the density's coefficients on the
+    smooth sphere ``|G|^2 < 4 ecutwfc``, one G of each ``(G, -G)`` pair, and the
+    shell between it and ``ecutrho`` is mixed linearly at ``mixing_beta`` and
+    never stored, so above dual 4 the history is a fraction of what it was
+    (:class:`~defumat.scf.mixing.SphereLayout`). ``'r'`` (also ``'real'``) is
+    the whole dense grid in real space. ``None`` is
+    :data:`~defumat.scf.mixing.DEFAULT_MIXING_SPACE`. Both reach the same fixed
+    point; the path, and on a cell with more than one self-consistent state the
+    state reached, can differ. The adaptive mixer is pointwise in real space
+    and is always ``'r'``.
 
     ``mixing_fixed_ns`` is QE's ``&electrons`` variable of the same name: for
     that many iterations the Hubbard occupation matrix is held at its starting
@@ -6430,8 +6881,11 @@ def run_scf(
     # The rows this pool holds, fixed for the run and computed before a resume
     # needs them: longest-first on each k-point's estimated cost, so that a pool
     # holding the Gamma point takes fewer others (``parallel.balance``).
-    pool_rows = (pools.rows(calculation.system.kpoints.nk, costs=_k_costs(calculation))
-                 if pooled else None)
+    # Every pool's rows, which every pool computes alike, so the gather of the
+    # eigenvalues below needs no shares or positions from the others.
+    pool_layout = (pools.layout(calculation.system.kpoints.nk, costs=_k_costs(calculation))
+                   if pooled else None)
+    pool_rows = pool_layout[pools.rank] if pooled else None
     if pooled:
         # Every pool has built its calculation before the first collective, so
         # gloo's context is made with all of them present (``Pools.barrier``).
@@ -6756,7 +7210,54 @@ def run_scf(
             "Elk's beta0 and holds a canted iron pair to 0.001 degrees",
             RuntimeWarning, stacklevel=2,
         )
+    if getattr(mixer, "beta_mag", None) is not None:
+        # :meth:`Mixer.magnetic_step` finds the magnetization through the
+        # density's shape and does nothing without one. This line sat inside the
+        # warning's branch above from ``2d4c14b`` on, so ``mixing_beta_mag`` was
+        # inert on every run that did not also trigger that warning. A layout
+        # below replaces it with its own stored shape.
         mixer.shape = tuple(np.shape(rho))
+
+    # **Where the history keeps the density** (``mixing_space``), installed
+    # beside the preconditioner because it too needs the G-vectors. ``'g'`` is
+    # ``pw.x``'s ``mix_type`` (:class:`SphereLayout`); its density block is
+    # ``(nspin, ngms)`` reals, and ``mixer.shape`` says so, so that a
+    # ``beta_mag`` finds the magnetization in the stored vector. Where there is
+    # a shell (above dual 4) the layout is handed the augmentation charge, and
+    # the shell of each mixed density is rebuilt from the mixed ``becsum``
+    # rather than mixed linearly; at dual 4 nothing is installed, so the run is
+    # the bare layout's bit for bit.
+    space = resolve_mixing_space(mixing_space, mixer)
+    layout = None
+    if space == "g":
+        layout = SphereLayout(calculation.basis.dense, calculation.basis.ngms,
+                              calculation.system.cell, tuple(np.shape(rho)))
+        if layout.nshell:
+            layout.augmentation = _augmentation_of(calculation)
+        mixer.layout = layout
+        mixer.shape = layout.stored_shape
+    restored_space = getattr(mixer, "_history_space", None) or "r"
+    if restored_space != space and getattr(mixer, "_residuals", None):
+        # A history written in the other layout -- every checkpoint from before
+        # the layout existed is real space and carries no tag -- is not a set of
+        # vectors this run can combine with its own, so it is dropped here, said
+        # beside "mixer history restored", which would otherwise be the last
+        # word on it.
+        warnings.warn(
+            f"the mixer history restored from {mixing_from} keeps the density in "
+            f"{'real space' if restored_space == 'r' else 'G on the smooth sphere'}"
+            f" and this run mixes it "
+            f"{'in real space' if space == 'r' else 'in G on the smooth sphere'} "
+            f"(mixing_space = {space!r}), so it is dropped. The density is "
+            f"unaffected -- this costs the iterations the saved history would have "
+            f"saved, and nothing else; resume with mixing_space = "
+            f"{restored_space!r} to keep it",
+            RuntimeWarning, stacklevel=2,
+        )
+        mixer.reset()
+    # Written with the history (``save_mixer`` stores a string), so a resume can
+    # tell which layout its vectors are in.
+    mixer._history_space = space
 
     if mixing_mode.lower() in PRECONDITIONED:
         # A preconditioner's ``beta`` is an operator on the grid, so it cannot
@@ -6764,27 +7265,40 @@ def run_scf(
         # installed here, where the density's shape and the dense G-vectors are
         # both in hand. ``local-TF`` differs from the other two only in reading
         # the density it is handed at each step (``Mixer.step``).
-        build = (
-            local_tf_preconditioner if mixing_mode.lower() in DENSITY_DEPENDENT
-            else kerker_preconditioner
-        )
-        mixer.precondition = build(
-            calculation.basis.dense, calculation.system.cell, tuple(np.shape(rho)),
-            # ``mixer.beta`` rather than ``mixing_beta``: the latter is ``None``
-            # when the caller left it unset, and which number that resolves to is
-            # the *mixer's* to decide -- 0.7 for the QE family, 0.05 for Elk's
-            # adaptive scheme, where the parameter is an increment rather than a
-            # step length.
-            beta=mixer.beta,
-            **({} if mixing_mode.lower() in DENSITY_DEPENDENT
-               else {"nelec": calculation.nelec}),
-        )
+        #
+        # ``mixer.beta`` rather than ``mixing_beta``: the latter is ``None``
+        # when the caller left it unset, and which number that resolves to is
+        # the *mixer's* to decide -- 0.7 for the QE family, 0.05 for Elk's
+        # adaptive scheme, where the parameter is an increment rather than a
+        # step length.
+        density_dependent = mixing_mode.lower() in DENSITY_DEPENDENT
+        if layout is not None:
+            # On the stored smooth sphere, as ``approx_screening`` and
+            # ``approx_screening2`` act on ``of_g(:ngm0)``: Kerker is a
+            # multiplication there, and local-TF reuses its own solver.
+            mixer.precondition = (
+                local_tf_preconditioner_g(layout, calculation.basis.dense,
+                                          calculation.system.cell, beta=mixer.beta)
+                if density_dependent else
+                kerker_preconditioner_g(layout, calculation.system.cell,
+                                        beta=mixer.beta, nelec=calculation.nelec)
+            )
+        else:
+            build = (
+                local_tf_preconditioner if density_dependent
+                else kerker_preconditioner
+            )
+            mixer.precondition = build(
+                calculation.basis.dense, calculation.system.cell, tuple(np.shape(rho)),
+                beta=mixer.beta,
+                **({} if density_dependent else {"nelec": calculation.nelec}),
+            )
 
     if RHO_DDOT_FIT and isinstance(mixer, AndersonMixer):
         # Beside the preconditioner and for the same reason: it needs the
         # G-vectors, which ``get_mixer`` does not have. Only Anderson fits
         # coefficients, so only it is handed one; ``_mix`` evaluates it.
-        mixer.metric = _rho_ddot_metric(calculation)
+        mixer.metric = _rho_ddot_metric(calculation, layout)
         if mixer._residuals and len(mixer._fits) != len(mixer._residuals):
             # A history restored from a flat-fit checkpoint has no fit vectors,
             # and the first ``mix`` drops it (``AndersonMixer.mix``). Said here,
@@ -6854,8 +7368,12 @@ def run_scf(
     # ``wg`` either -- the occupations are rebuilt from the first
     # diagonalisation, as ``scf/continuation.py`` says. The deviation is one
     # iteration of extra accuracy on the empty bands of a seeded run, which is
-    # the conservative direction and is bounded because such a run starts at
-    # ``ETHR_INIT``.
+    # the conservative direction, and its size is set by the first threshold:
+    # at ``ETHR_INIT`` the empty bands are held to 1e-2 where ``max(5 ethr,
+    # 1e-5)`` would be 5e-2, which is loose either way, and at the 1e-6 a
+    # relaxation's later steps pass as ``diago_thr_init`` they are held to 1e-6
+    # where ``pw.x``, with the previous geometry's ``btype``, holds them to
+    # 1e-5, for that one iteration.
     #
     # **A checkpoint resume overwrites this below**, where the rest of the loop
     # state comes back: it re-enters with a converged ``ethr``, where a flat
@@ -6866,6 +7384,11 @@ def run_scf(
     converged = False
     wavefunctions = None
     ethr, accuracy = ETHR_INIT, None
+    if diago_thr_init is not None:
+        # Set before the residual solver's and the resume's assignments below,
+        # so that both still win (see the docstring).
+        ethr = max(float(diago_thr_init),
+                   resolve_ethr_floor(getattr(calculation, "ethr_floor", ETHR_MIN)))
     # The two halves of ``accuracy``, set together with it inside the loop. Named
     # here so a resumed run that never reaches the retry block still has them.
     charge_accuracy = magnetic_accuracy = 0.0
@@ -7122,7 +7645,8 @@ def run_scf(
                       f"precision at ethr = {ethr:.2e}")
 
         potential = calculation.potential(rho, field_scale, field, tau=tau_state)
-        epaw, ddd_paw = calculation.onecenter(becsum_state, _meta_c(potential))
+        epaw, ddd_paw = calculation.onecenter(
+            becsum_state, _meta_c(potential, calculation.functional.is_meta))
         hubbard_terms = v_ns = None
         eth = 0.0
         if calculation.is_hubbard:
@@ -7218,54 +7742,17 @@ def run_scf(
                 if pooled:
                     # The occupations read every k-point (a Fermi level, the
                     # tetrahedra), so every pool evaluates them on the whole
-                    # set; the step counts come along for the printed average.
+                    # set; the step counts come along for the printed average,
+                    # all three in one all-gather.
                     nk_all = calculation.system.kpoints.nk
-                    eigenvalues = pools.gather_k(eigenvalues, nk_all, rows=pool_rows)
-                    steps = pools.gather_k(steps, nk_all, rows=pool_rows)
-                    unsettled = pools.gather_k(unsettled, nk_all, rows=pool_rows)
+                    eigenvalues, steps, unsettled = pools.gather_k(
+                        (eigenvalues, steps, unsettled), nk_all, layout=pool_layout)
                 eigenvalues = jnp.asarray(eigenvalues)
             else:
                 wavefunctions = fetch_wavefunctions(wavefunctions)
                 eigenvalues, wavefunctions, steps, unsettled = calculation.diagonalize(
                     hamiltonians, nbnd, wavefunctions, thresholds, return_steps=True
                 )
-            # ``c_bands.f90:159``: ``avg_iter / nkstot``, and ``nkstot`` counts
-            # spin channels, so the mean over both axes is the same quantity.
-            # One line per attempt, as ``pw.x`` prints one per ``c_bands``
-            # call; the history entry below sums them, since that is what the
-            # SCF iteration paid.
-            steps_here = float(np.mean(np.asarray(steps)))
-            davidson_steps += steps_here
-            davidson_unconverged = int(np.max(np.asarray(unsettled)))
-            if (not budget_warned and davidson_unconverged > 0
-                    and int(np.max(np.asarray(steps))) >= MAX_ITERATIONS):
-                # ``c_bands`` prints "eigenvalues not converged" here; a quiet run
-                # that spent most of its time in one call gave no sign of it.
-                budget_warned = True
-                warnings.warn(
-                    f"SCF iteration {iteration}: the eigensolver used its whole budget of "
-                    f"{MAX_ITERATIONS} steps and left up to {davidson_unconverged} of {nbnd} "
-                    f"bands unsettled at ethr = {ethr:.2e}. The step count is what the run paid "
-                    "for this iteration (history['davidson_iterations']). At a threshold this "
-                    "tight the stopping test, a change in an eigenvalue between two steps, "
-                    "can be decided by round-off; DEFUMAT_ETHR_MIN raises the floor under "
-                    "the threshold at some cost in accuracy.",
-                    RuntimeWarning, stacklevel=2,
-                )
-            if verbose:
-                # **The unsettled count is printed and not only recorded.** A
-                # step count says how hard the solve worked; it does not say
-                # whether it gave up, and the two look the same in a log --
-                # ``avg # of iterations = 100.0`` is the budget exactly, which
-                # means every k-point was cut off mid-flight rather than that
-                # the last one took a hundred steps. It is appended only when
-                # something is actually unsettled, so a healthy run's line is
-                # byte for byte ``pw.x``'s.
-                stalled = ("" if davidson_unconverged == 0 else
-                           f",  up to {davidson_unconverged} of {nbnd} bands "
-                           "unsettled")
-                print(f"     ethr = {ethr:9.2E},  avg # of iterations = "
-                      f"{steps_here:4.1f}{stalled}")
             wg, levels = calculation.occupations(eigenvalues)
             if streaming:
                 # One walk of the store for every sum over k the iteration
@@ -7307,11 +7794,111 @@ def run_scf(
             # eigensolver's threshold and with it the last digits of every
             # eigenvalue. A diagnostic must not change the run it is diagnosing,
             # and it must not pay for a second FFT of the residual either.
-            accuracy, charge_accuracy, magnetic_accuracy = (
-                float(term) for term in _accuracy_split(
-                    rho_out - rho, calculation.basis.dense, calculation.system.cell
-                )
+            accuracy_terms = _accuracy_split(
+                rho_out - rho, calculation.basis.dense, calculation.system.cell
             )
+            # Which density each energy term is evaluated at is QE's
+            # convention, and it is not uniform (``electrons.f90``, and the
+            # comment there justifying ``descf``):
+            #
+            #   * ``eband``  -- the eigenvalues, hence the potential of the
+            #     *input* density, the one the Hamiltonian was built from;
+            #   * ``deband`` -- ``delta_e()``, which runs *before* ``v_of_rho``
+            #     is called again, so it pairs the **output** density with the
+            #     **input** potential;
+            #   * ``ehart``/``etxc`` -- ``v_of_rho`` on the density that will be
+            #     used next, which at convergence is the unmixed **output** one.
+            #
+            # ``descf`` is QE's first-order correction for that mismatch, and it
+            # is identically zero at convergence, which is the only iteration
+            # whose terms are compared. Evaluating all of them at the input
+            # density instead leaves each one ~1e-5 Ry away from QE's while the
+            # total -- being variational -- still agrees to 1e-9.
+            #
+            # Dispatched here, inside the attempt, so that its three numbers
+            # come back in the one fetch below; an attempt that is redone throws
+            # them away, which happens at most once a run, at iteration 1.
+            iteration_terms = _iteration_scalars(
+                eigenvalues, wg, rho, rho_out, potential.v_scf,
+                # ``calculation.system``, never the ``system`` argument. They are
+                # the same object for every ordinary call and *not* for one that
+                # supplies its own ``calculation`` -- which is exactly what a run
+                # on a deformed cell does (:meth:`Calculation.at_strain`). With
+                # the caller's volume here, ``deband`` is scaled wrongly and the
+                # reported total energy acquires a slope in the strain of
+                # **3.9 Ry per unit strain** on two-atom silicon, against a true
+                # ``dE/d(eps)`` of 0.09. The density, the potential and every
+                # response are unaffected, which is why it survived: only the
+                # number printed at the end is wrong.
+                calculation.system.cell.volume
+            )
+            # PAW's contribution to ``deband``: ``delta_e`` subtracts
+            # ``sum ddd_paw * becsum`` for the same reason it subtracts
+            # ``int rho v_scf`` -- the one-centre potential is already inside
+            # every eigenvalue through ``deeq``, and ``eband`` would
+            # double-count it. Neither input changes after this attempt (the
+            # converged branch below refreshes ``epaw`` and deliberately not
+            # ``ddd_paw``), so it is dispatched here with the others.
+            paw_deband = (_paw_deband(ddd_paw, calculation.augmentation, becsum_out)
+                          if calculation.is_paw else None)
+            # **One fetch for the iteration's scalars** (``OPEN.md`` Part XXIII
+            # item 21). They were read one ``float()`` or ``np.asarray`` at a
+            # time, ten blocking reads on the simplest path (eleven when the
+            # eigensolver used its budget), each waiting for its own producer;
+            # here every copy is started before any is waited for. Every
+            # expression above is the one that was there and each is still its
+            # own ``jit``: fusing ``_accuracy_split`` with ``_iteration_scalars``
+            # could reassociate ``dr2``, and one ulp there moves the ``ethr``
+            # schedule. The Hartree and
+            # exchange-correlation energies are the *input* potential's, which
+            # is what the total reports unless the run converges, and the
+            # converged branch reads its rebuilt ones again.
+            (steps, unsettled, accuracy_terms, iteration_terms,
+             (ehart, etxc, epaw_value, paw_deband)) = jax.device_get((
+                 steps, unsettled, accuracy_terms, iteration_terms,
+                 (potential.ehart, potential.etxc,
+                  epaw if calculation.is_paw else None, paw_deband),
+             ))
+            accuracy, charge_accuracy, magnetic_accuracy = (
+                float(term) for term in accuracy_terms
+            )
+            # ``c_bands.f90:159``: ``avg_iter / nkstot``, and ``nkstot`` counts
+            # spin channels, so the mean over both axes is the same quantity.
+            # One line per attempt, as ``pw.x`` prints one per ``c_bands``
+            # call; the history entry below sums them, since that is what the
+            # SCF iteration paid.
+            steps_here = float(np.mean(steps))
+            davidson_steps += steps_here
+            davidson_unconverged = int(np.max(unsettled))
+            if (not budget_warned and davidson_unconverged > 0
+                    and int(np.max(steps)) >= MAX_ITERATIONS):
+                # ``c_bands`` prints "eigenvalues not converged" here; a quiet run
+                # that spent most of its time in one call gave no sign of it.
+                budget_warned = True
+                warnings.warn(
+                    f"SCF iteration {iteration}: the eigensolver used its whole budget of "
+                    f"{MAX_ITERATIONS} steps and left up to {davidson_unconverged} of {nbnd} "
+                    f"bands unsettled at ethr = {ethr:.2e}. The step count is what the run paid "
+                    "for this iteration (history['davidson_iterations']). At a threshold this "
+                    "tight the stopping test, a change in an eigenvalue between two steps, "
+                    "can be decided by round-off; DEFUMAT_ETHR_MIN raises the floor under "
+                    "the threshold at some cost in accuracy.",
+                    RuntimeWarning, stacklevel=2,
+                )
+            if verbose:
+                # **The unsettled count is printed and not only recorded.** A
+                # step count says how hard the solve worked; it does not say
+                # whether it gave up, and the two look the same in a log --
+                # ``avg # of iterations = 100.0`` is the budget exactly, which
+                # means every k-point was cut off mid-flight rather than that
+                # the last one took a hundred steps. It is appended only when
+                # something is actually unsettled, so a healthy run's line is
+                # byte for byte ``pw.x``'s.
+                stalled = ("" if davidson_unconverged == 0 else
+                           f",  up to {davidson_unconverged} of {nbnd} bands "
+                           "unsettled")
+                print(f"     ethr = {ethr:9.2E},  avg # of iterations = "
+                      f"{steps_here:4.1f}{stalled}")
             # **The half `accuracy` cannot see**, reported every iteration and
             # fed to nothing. What reaches `accuracy` from `becsum` is only what
             # `addusdens` put on the grid; PAW's one-centre piece is not in it
@@ -7388,40 +7975,9 @@ def run_scf(
                 print(f"  iteration {iteration:3d}   ethr was too large; "
                       f"diagonalising again at {ethr:.2e}")
 
-        # Which density each term is evaluated at is QE's convention, and it is
-        # not uniform (``electrons.f90``, and the comment there justifying
-        # ``descf``):
-        #
-        #   * ``eband``  -- the eigenvalues, hence the potential of the *input*
-        #     density, the one the Hamiltonian was built from;
-        #   * ``deband`` -- ``delta_e()``, which runs *before* ``v_of_rho`` is
-        #     called again, so it pairs the **output** density with the
-        #     **input** potential;
-        #   * ``ehart``/``etxc`` -- ``v_of_rho`` on the density that will be
-        #     used next, which at convergence is the unmixed **output** one.
-        #
-        # ``descf`` is QE's first-order correction for that mismatch, and it is
-        # identically zero at convergence, which is the only iteration whose
-        # terms are compared. Evaluating all of them at the input density
-        # instead leaves each one ~1e-5 Ry away from QE's while the total --
-        # being variational -- still agrees to 1e-9.
-        eband, deband, residual = (
-            float(x) for x in
-            _iteration_scalars(
-                eigenvalues, wg, rho, rho_out, potential.v_scf,
-                # ``calculation.system``, never the ``system`` argument. They are
-                # the same object for every ordinary call and *not* for one that
-                # supplies its own ``calculation`` -- which is exactly what a run
-                # on a deformed cell does (:meth:`Calculation.at_strain`). With
-                # the caller's volume here, ``deband`` is scaled wrongly and the
-                # reported total energy acquires a slope in the strain of
-                # **3.9 Ry per unit strain** on two-atom silicon, against a true
-                # ``dE/d(eps)`` of 0.09. The density, the potential and every
-                # response are unaffected, which is why it survived: only the
-                # number printed at the end is wrong.
-                calculation.system.cell.volume
-            )
-        )
+        # ``eband``, ``deband`` and ``|drho|``, read in the attempt's one fetch;
+        # the comment there says which density each is evaluated at.
+        eband, deband, residual = (float(x) for x in iteration_terms)
 
         if track_orientation:
             # ``potential`` is still the input's here, which is the field the
@@ -7432,7 +7988,8 @@ def run_scf(
                                 calculation.system.cell).total)
             if calculation.is_paw:
                 torque_now = torque_now + _onecenter_torque(
-                    calculation, becsum_state, becsum_out, _meta_c(potential),
+                    calculation, becsum_state, becsum_out,
+                    _meta_c(potential, calculation.functional.is_meta),
                     wavefunctions=fetch_wavefunctions(wavefunctions), weights=wg)
             if pooled:
                 # The stepper keeps a quasi-Newton history of the torques it is
@@ -7489,7 +8046,11 @@ def run_scf(
             # ... and the one-centre energy with it. ``ddd_paw`` is deliberately
             # *not* refreshed: ``deband`` below pairs it with the output becsum
             # exactly as ``delta_e`` does, which runs before QE recomputes it.
-            epaw, _ = calculation.onecenter(becsum_out, _meta_c(potential))
+            epaw, _ = calculation.onecenter(
+                becsum_out, _meta_c(potential, calculation.functional.is_meta))
+            ehart, etxc, epaw_value = jax.device_get((
+                potential.ehart, potential.etxc,
+                epaw if calculation.is_paw else None))
             if calculation.is_hubbard:
                 # ``eth`` is recomputed by ``v_of_rho`` on the density that will
                 # be used next, which at convergence is the unmixed output one.
@@ -7497,12 +8058,10 @@ def run_scf(
                 # not: ``deband`` pairs it with the output occupations.
                 eth = hubbard_energy(ns_out, calculation.hubbard_coefficients)
 
-        # PAW's contribution to ``deband``: ``delta_e`` subtracts
-        # ``sum ddd_paw * becsum`` for the same reason it subtracts
-        # ``int rho v_scf`` -- the one-centre potential is already inside every
-        # eigenvalue through ``deeq``, and ``eband`` would double-count it.
+        # PAW's contribution to ``deband``, computed and fetched with the
+        # attempt's other scalars (the comment there gives the reason for it).
         if calculation.is_paw:
-            deband -= float(_paw_deband(ddd_paw, calculation.augmentation, becsum_out))
+            deband -= float(paw_deband)
         if calculation.is_hubbard:
             # ``delta_e``'s ``- SUM(rho%ns * v%ns)``, doubled when there is one
             # spin channel. Same pairing as every other term there: the
@@ -7520,8 +8079,8 @@ def run_scf(
 
         terms = {
             "one-electron": eband + deband,
-            "hartree": float(potential.ehart),
-            "xc": float(potential.etxc),
+            "hartree": float(ehart),
+            "xc": float(etxc),
             "ewald": float(calculation.ewald),
         }
         if calculation.dispersion_sum is not None:
@@ -7531,7 +8090,7 @@ def run_scf(
             # ``electrons.f90`` adds ``elondon``.
             terms["dispersion"] = float(calculation.dispersion)
         if calculation.is_paw:
-            terms["one_center_paw"] = float(epaw)
+            terms["one_center_paw"] = float(epaw_value)
         if calculation.is_hubbard:
             terms["hubbard"] = float(eth)
         if "smearing" in levels:
@@ -7833,9 +8392,19 @@ def run_scf(
                               - np.asarray(rotate_texture(rho_out, turn))] + [
                         np.asarray(t) - np.asarray(rotate_texture(o, turn))
                         for t, o in zip(turned_becsum, becsum_out) if o is not None]
+                # The history's density block is in the mixer's layout: on the
+                # smooth sphere in G it is ``(nspin, ngms)`` stored reals, which
+                # a spin rotation turns as it turns the field (it acts on the
+                # channel axis alone and commutes with the transform), and the
+                # shift goes in as its smooth part; the shell has no entry.
+                history_shapes, history_shifts = list(shapes), list(shifts)
+                if mixer.layout is not None:
+                    history_shapes[0] = mixer.layout.stored_shape
+                    if shifts[0] is not None:
+                        history_shifts[0] = mixer.layout.stored_of(shifts[0])
 
-                def turn_packed(vector, turn=turn, shapes=shapes, shifts=shifts,
-                                shifted=True):
+                def turn_packed(vector, turn=turn, shapes=history_shapes,
+                                shifts=history_shifts, shifted=True):
                     vector = np.array(vector, copy=True)
                     offset = 0
                     for shape, shift in zip(shapes, shifts):

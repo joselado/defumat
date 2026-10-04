@@ -81,9 +81,14 @@ def _converged(case: str, k_batch: int):
 
 
 def _response(calculation, result, wavefunctions, born_charges=True):
+    # The CG held at a fixed threshold, as it was before 2026-10-03: at the
+    # scheduled default the two routes still stop at the same pass, and agree to
+    # 2.4e-11 on an epsilon of 40.3 (6e-13 relative, AlAs on D22), which is a
+    # band's CG stopping one step apart near a looser threshold rather than
+    # anything the chunking does.
     return dielectric_tensor(
         calculation, wavefunctions, result.eigenvalues, result.density,
-        result.becsum, born_charges=born_charges,
+        result.becsum, born_charges=born_charges, threshold=1.0e-12,
     )
 
 

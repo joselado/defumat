@@ -84,7 +84,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from defumat.batching import map_k
+from defumat.batching import map_k, upload
 from defumat.eager import compiled
 
 __all__ = ["VelocityOperator", "BandVelocities", "band_velocities",
@@ -137,7 +137,8 @@ class VelocityOperator:
     approximation: it is what ``dH/dk`` at fixed density means.
     """
 
-    def __init__(self, calculation, v_scf, ddd_paw=None, ns=None, kcart=None):
+    def __init__(self, calculation, v_scf, ddd_paw=None, ns=None, kcart=None,
+                 dipole=None, local_terms=None):
         if calculation.spiral:
             raise NotImplementedError(
                 "the velocity operator on a spin spiral is not implemented: the "
@@ -184,6 +185,26 @@ class VelocityOperator:
         if kcart is None:
             kcart = calculation.system.kpoints.cartesian(calculation.system.cell)
         self.kcart = jnp.asarray(kcart)
+        # ``dpqq`` for :meth:`augmentation_connection`, when the caller has built
+        # it already (:func:`~defumat.response.efield._augmentation_dipole`). It
+        # is k-independent, and an operator built inside a compiled walk over
+        # k-chunks cannot build it there: its radial weights pass through the
+        # host. ``None`` builds it where it is needed, as before.
+        self.dipole = dipole
+        # The k-independent half of every Hamiltonian this builds
+        # (``Calculation.local_terms``: the smooth-grid potential and ``newd``'s
+        # ``D_ij``), when the caller has it already. Neither moves with ``k``, so
+        # it is the same at every ``at_kcart`` copy; an operator built once per
+        # k-chunk would otherwise integrate ``V Q_ij`` over the dense grid again
+        # in every chunk and every direction. ``None`` builds it each time, as
+        # before.
+        self.local_terms = local_terms
+
+    def _hamiltonians(self, calculation, hubbard):
+        """``calculation.hamiltonian`` at this operator's potential, from :attr:`local_terms` when given."""
+        if self.local_terms is None:
+            return calculation.hamiltonian(self.v_scf, self.ddd_paw, hubbard)
+        return calculation.hamiltonian_from(self.local_terms, hubbard)
 
     # -- the two operators ------------------------------------------------
 
@@ -294,7 +315,7 @@ class VelocityOperator:
         hubbard = (
             None if self.ns is None else moved.hubbard_terms(self.ns)[2]
         )
-        hamiltonians = moved.hamiltonian(self.v_scf, self.ddd_paw, hubbard)
+        hamiltonians = self._hamiltonians(moved, hubbard)
         batch = self.calculation.k_batch
         walk = _elements_over_kpoints if contract else over_kpoints
 
@@ -310,7 +331,7 @@ class VelocityOperator:
 
     # -- what is built from them ------------------------------------------
 
-    def matrix_elements(self, psi: jnp.ndarray) -> jnp.ndarray:
+    def matrix_elements(self, psi: jnp.ndarray, sequential: bool = False) -> jnp.ndarray:
         """``<psi_m| dH/dk_a |psi_n>``, ``(3, nspin, nk, nbnd, nbnd)`` in Ry bohr.
 
         The whole block, not its diagonal, because this is what survives a
@@ -321,12 +342,19 @@ class VelocityOperator:
         It is ``einsum("skmg,skng->skmn", psi.conj(), self.apply(psi, a))``
         with the contraction moved inside the k map, which is the same product
         and never holds ``dH/dk|psi>`` for more than the k-points in flight.
+
+        ``sequential`` walks the three directions with ``lax.map``
+        (:func:`_one_direction_at_a_time`), for a caller tracing this inside
+        one compiled program.
         """
         psi = jnp.asarray(psi)
-        return jnp.stack([
-            self._tangent(psi, axis, overlap=False, contract=True)
-            for axis in _CARTESIAN
-        ])
+
+        def one(axis):
+            return self._tangent(psi, axis, overlap=False, contract=True)
+
+        if sequential:
+            return _one_direction_at_a_time(one, _CARTESIAN)
+        return jnp.stack([one(axis) for axis in _CARTESIAN])
 
     def augmentation_connection(self, psi: jnp.ndarray, direction):
         """``K^a_{nm} = <psi_n|T^dag dT/dk_a|psi_m>``, or ``None`` with no ``T``.
@@ -374,20 +402,22 @@ class VelocityOperator:
             return None
         psi = jnp.asarray(psi)
         direction = jnp.asarray(direction)
-        dipole = _augmentation_dipole(calculation)
+        dipole = (_augmentation_dipole(calculation) if self.dipole is None
+                  else self.dipole)
         along = jnp.einsum("a,a...->...", direction.astype(dipole.dtype), dipole)
         hubbard = (
             None if self.ns is None
             else calculation.hubbard_terms(self.ns)[2]
         )
-        hamiltonians = calculation.hamiltonian(self.v_scf, self.ddd_paw, hubbard)
+        hamiltonians = self._hamiltonians(calculation, hubbard)
         added = ultrasoft_position(
             calculation, hamiltonians, psi, jnp.zeros_like(psi), along,
             self.projectors(direction),
         )
         return -1j * jnp.einsum("skmg,skng->skmn", psi.conj(), added)
 
-    def generalised_matrix_elements(self, psi: jnp.ndarray, energies) -> jnp.ndarray:
+    def generalised_matrix_elements(self, psi: jnp.ndarray, energies,
+                                    sequential: bool = False) -> jnp.ndarray:
         """``<Psi_n|v_a|Psi_m>`` of a **generalised** eigenproblem, ``(3, nspin, nk, nb, nb)``.
 
         :meth:`matrix_elements` is ``<n|dH/dk_a|m>``, which is the velocity only
@@ -404,13 +434,19 @@ class VelocityOperator:
         On the **diagonal** the correction is the generalised Hellmann-Feynman
         band velocity, ``<n|dH_a - e_n dS_a|n>``, since ``e_m - e_n`` kills the
         connection there. A norm-conserving dataset gets :meth:`matrix_elements`
-        back unchanged.
+        back unchanged. ``sequential`` is :meth:`matrix_elements`', and walks
+        the two pieces one after the other (:meth:`tangent_elements`, then
+        :meth:`connections`).
         """
         psi = jnp.asarray(psi)
         energies = jnp.asarray(energies)
+        if sequential:
+            return with_connections(
+                self.tangent_elements(psi, energies, sequential=True), energies,
+                self.connections(psi, sequential=True))
         gap = energies[..., None, :] - energies[..., :, None]   # [n, m] = e_m - e_n
-        blocks = []
-        for axis in _CARTESIAN:
+
+        def one(axis):
             # :meth:`both`'s pair, contracted inside the k map as
             # :meth:`matrix_elements` is.
             element, moving = self._tangent(
@@ -420,8 +456,48 @@ class VelocityOperator:
             connection = self.augmentation_connection(psi, axis)
             if connection is not None:
                 element = element + gap * connection
-            blocks.append(element)
-        return jnp.stack(blocks)
+            return element
+
+        return jnp.stack([one(axis) for axis in _CARTESIAN])
+
+    def tangent_elements(self, psi: jnp.ndarray, energies,
+                         sequential: bool = False) -> jnp.ndarray:
+        """``<n|dH_a - e_m dS_a|m>``, ``(3, nspin, nk, nb, nb)``: the two tangents' share.
+
+        :meth:`generalised_matrix_elements` without the augmentation dipole's
+        connection, for a caller that builds the two pieces as separate programs
+        (:mod:`defumat.response.walk`) and joins them with
+        :func:`with_connections`. Measured compile only on ultrasoft AlAs at a
+        chunk of one k-point, one direction's tangent held 58.7 MB of
+        temporaries and its connection 58.4 MB, and one program holding both
+        112.7 MB, whether the two were walked together or one after the other.
+        """
+        psi = jnp.asarray(psi)
+        energies = jnp.asarray(energies)
+
+        def one(axis):
+            element, moving = self._tangent(psi, axis, overlap=None, contract=True)
+            return element - energies[..., None, :] * moving
+
+        if sequential:
+            return _one_direction_at_a_time(one, _CARTESIAN)
+        return jnp.stack([one(axis) for axis in _CARTESIAN])
+
+    def connections(self, psi: jnp.ndarray, sequential: bool = False):
+        """:meth:`augmentation_connection` along the three directions, ``(3, ...)``, or ``None``.
+
+        ``None`` for a norm-conserving dataset, where there is no connection.
+        """
+        if getattr(self.calculation, "augmentation", None) is None:
+            return None
+        psi = jnp.asarray(psi)
+
+        def one(axis):
+            return self.augmentation_connection(psi, axis)
+
+        if sequential:
+            return _one_direction_at_a_time(one, _CARTESIAN)
+        return jnp.stack([one(axis) for axis in _CARTESIAN])
 
     def apply_second(self, psi: jnp.ndarray, first, second) -> jnp.ndarray:
         """``d^2H/dk_a dk_b |psi>``, one ``jvp`` differentiated by another.
@@ -463,24 +539,33 @@ class VelocityOperator:
         return compiled(nested, jnp.asarray(psi), self.kcart, broadcast(first),
                         broadcast(second))
 
-    def second_matrix_elements(self, psi: jnp.ndarray) -> jnp.ndarray:
+    def second_matrix_elements(self, psi: jnp.ndarray,
+                               sequential: bool = False) -> jnp.ndarray:
         """``w^ab_nm = <psi_m| d^2H/dk_a dk_b |psi_n>``, ``(3, 3, nspin, nk, nbnd, nbnd)``.
 
         Ry bohr^2. The six independent pairs are computed and the tensor is
         filled symmetrically, which costs half of the nine and is exact rather
         than imposed -- the equality of ``w^ab`` and ``w^ba`` is measured in
         ``tests/unit/test_photocurrent_machinery.py`` on the operator itself
-        before it is used to save the work.
+        before it is used to save the work. ``sequential`` walks the six pairs
+        as :meth:`matrix_elements` walks its three directions.
         """
         psi = jnp.asarray(psi)
-        blocks: dict[tuple[int, int], jnp.ndarray] = {}
-        for a in range(3):
-            for b in range(a, 3):
-                # :meth:`apply_second` contracted inside the k map, so neither
-                # ``jvp`` stacks an output as wide as the states.
-                blocks[(a, b)] = self._second_tangent(
-                    psi, _CARTESIAN[a], _CARTESIAN[b], contract=True
-                )
+        pairs = [(a, b) for a in range(3) for b in range(a, 3)]
+
+        def one(directions):
+            # :meth:`apply_second` contracted inside the k map, so neither
+            # ``jvp`` stacks an output as wide as the states.
+            first, second = directions
+            return self._second_tangent(psi, first, second, contract=True)
+
+        if sequential:
+            stacked = _one_direction_at_a_time(one, (
+                _CARTESIAN[np.array([a for a, _ in pairs])],
+                _CARTESIAN[np.array([b for _, b in pairs])]))
+            blocks = {pair: stacked[i] for i, pair in enumerate(pairs)}
+        else:
+            blocks = {(a, b): one((_CARTESIAN[a], _CARTESIAN[b])) for a, b in pairs}
         return jnp.stack([
             jnp.stack([blocks[(min(a, b), max(a, b))] for b in range(3)])
             for a in range(3)
@@ -492,8 +577,14 @@ class VelocityOperator:
         ``<psi_n| dH/dk - eps_n dS/dk |psi_n>``. The second term is identically
         zero for a norm-conserving dataset and is not skipped for one -- the
         ``jvp`` is what decides that, not a branch here.
+
+        ``psi`` may be a streamed store, a numpy array in host memory, which a
+        streamed ground state or a streamed NSCF hands over (the effective
+        mass's included): it crosses whole through ``device_put``
+        (:func:`~defumat.batching.upload`), at its own size on a card where
+        ``jnp.asarray`` peaks at twice it.
         """
-        psi = jnp.asarray(psi)
+        psi = upload(psi)
         eigenvalues = jnp.asarray(eigenvalues)
         if eigenvalues.ndim == 2:  # (nk, nbnd) -- the squeezed unpolarized shape
             eigenvalues = eigenvalues[None]
@@ -511,6 +602,36 @@ class VelocityOperator:
             eigenvalues_by_spin=np.asarray(eigenvalues),
             nspin=self.calculation.nspin,
         )
+
+
+def with_connections(elements, energies, connections):
+    """``elements + (e_m - e_n) K``: :meth:`VelocityOperator.tangent_elements` and
+    :meth:`VelocityOperator.connections` joined into the generalised velocity.
+
+    ``connections`` is ``None`` on a norm-conserving dataset, which returns
+    ``elements`` unchanged.
+    """
+    if connections is None:
+        return elements
+    energies = jnp.asarray(energies)
+    gap = energies[..., None, :] - energies[..., :, None]   # [n, m] = e_m - e_n
+    return elements + gap * connections
+
+
+def _one_direction_at_a_time(one, directions):
+    """``one`` at every direction of ``directions``, stacked, through ``lax.map``.
+
+    For a caller that traces the matrix elements inside one compiled program --
+    a walk over k-chunks (:mod:`defumat.response.walk`). There the directions'
+    ``jvp`` calls are independent pieces of one program, and XLA holds their
+    temporaries side by side rather than one after another: measured compile
+    only on AlAs's shift current at a chunk of one k-point, the three first
+    derivatives held 12.0 MB as written out and 5.1 MB mapped, against 5.0 MB
+    for one, and the six second ones 39.3 MB against 7.2 MB. Called eagerly each
+    direction is its own program and runs after the last, which is the same
+    bound, so the default leaves the eager route as it was.
+    """
+    return jax.lax.map(one, directions)
 
 
 def over_kpoints(hamiltonian, states, batch, overlap: bool = False):
