@@ -23648,7 +23648,7 @@ to 1.20x a run, and memory mode 1.97x speed mode at 64 atoms, which is the new o
 measures and which needs a submission. Record: `PERFORMANCE.md`, "A k-chunk sized to the card" and
 "The band side in single precision"; guide: `docs/features.tex`, the batching section.
 
-### P127 -- The response converges where `ph.x`'s does: `ph.x`'s `dr2`, its CG schedule and a warm start. ✅ DONE for the field, the phonon at `Gamma` and at `q`, and the strain; timed against `ph.x` on three cells (`PERFORMANCE.md`, "The response against `ph.x`").
+### P127 -- The response converges where `ph.x`'s does: `ph.x`'s `dr2`, its CG schedule and a warm start. ✅ DONE for the field, the phonon at `Gamma` and at `q`, and the strain; timed against `ph.x` on four cells (`PERFORMANCE.md`, "The response against `ph.x`").
 
 **What was wrong.** The four self-consistent response loops (`response/efield.py`, `phonon.py`,
 `strain.py`, `phononq.py`) stopped on the raw `sum((induced - dvscf)**2)` over the grid, against

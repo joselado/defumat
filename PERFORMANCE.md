@@ -10446,19 +10446,20 @@ nothing else on the machine, `ph.x` the serial 7.5 build copied from this workst
 `tools/compare_qe.py` uses here), defumat the second call of `get_dielectric_tensor()` in its process
 after the SCF, which includes its own setup and excludes the ground state. `ph.x`'s figure is its
 cumulative CPU clock at the last pass of the field response, which likewise includes its setup
-(0.39, 0.88 and 1.94 s of it, printed as `PHONON` before "Electric Fields Calculation") and excludes
+(0.09, 0.39, 0.88 and 1.94 s of it, printed as `PHONON` before "Electric Fields Calculation") and excludes
 `pw.x`. Before is master (`7f6fef2`), after is the integration head:
 
 | cell | defumat before | defumat after | `ph.x` | after / `ph.x` | passes after (`ph.x`) | CG steps a solve after (`ph.x`) |
 |---|---|---|---|---|---|---|
-| `si-epsilon` | 4.82 s | 2.78 s | owed | | 5 (5) | 12.6 |
+| `si-epsilon` | 4.82 s | 2.78 s | 0.6 s | 4.6 | 5 (5) | 12.6 (9.0) |
 | `si-epsilon-us` | 12.62 s | 6.79 s | 1.8 s | 3.8 | 5 (5) | 13.7 (10.7) |
 | `alas-epsilon-us` | 23.69 s | 13.74 s | 3.0 s | 4.6 | 6 (5) | 12.2 (10.6) |
 | `alas-epsilon-us-soc` | 60.62 s | 27.51 s | 11.1 s | 2.5 | 6 (6) | 12.4 (10.4) |
 
 So the change is worth 1.7 to 2.2 times on its own stage, and the gap to `ph.x` that is left is a factor of
 2.5 to 4.6 at the same pass count to within one and 15 to 28 per cent more CG steps a solve; before it,
-the same cells read 7.0, 7.9 and 5.5 times `ph.x`. The `si-epsilon` `ph.x` run failed on the night:
-`si-epsilon.in` sets `prefix = 'silicon'` and `si-epsilon.ph.in` sets no prefix, so `ph.x` read
-`pwscf.save`. The first calls, compile included,
+the same cells read 8.0, 7.0, 7.9 and 5.5 times `ph.x`. The `si-epsilon` `ph.x` figure was taken
+later, once D22 was idle, three times alike, with `prefix = 'silicon'` added to the copy of
+`si-epsilon.ph.in`: the committed pair disagree (the `.in` sets it and the `.ph.in` does not), so
+`ph.x` run on them as committed stops reading `pwscf.save`. The first calls, compile included,
 read 6.11 -> 4.00, 14.59 -> 11.67, 26.67 -> 19.51 and 63.65 -> 33.14 s.
