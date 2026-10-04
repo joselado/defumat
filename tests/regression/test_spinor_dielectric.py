@@ -142,7 +142,7 @@ WEDGE = 5e-12
 #: would and agree only to that level: the dielectric constant to 5.8e-7 on
 #: norm-conserving silicon, 3.3e-8 and 5.7e-8 on ultrasoft and PAW, and the
 #: spinor's wedge against its closed grid to 3.9e-7 (D22).
-IDENTITY = {"tr2": 1.0e-24, "threshold": 1.0e-12}
+CONVERGED = {"tr2": 1.0e-24, "threshold": 1.0e-12}
 
 
 @lru_cache(maxsize=2)
@@ -176,7 +176,7 @@ def _silicon(noncolin: bool, conv_thr: float, nbnd=None):
     assert result.converged
     response = dielectric_tensor(
         calculation, result.wavefunctions, result.eigenvalues, result.density,
-        result.becsum, born_charges=True, **IDENTITY,
+        result.becsum, born_charges=True, **CONVERGED,
     )
     assert response.converged
     return calculation, result, response
@@ -274,7 +274,7 @@ def test_the_symmetrised_wedge_and_the_closed_grid_agree_for_a_spinor():
         assert result.converged
         response = dielectric_tensor(
             calculation, result.wavefunctions, result.eigenvalues,
-            result.density, result.becsum, born_charges=False, **IDENTITY,
+            result.density, result.becsum, born_charges=False, **CONVERGED,
         )
         assert response.converged
         tensors.append(np.asarray(response.epsilon))
@@ -352,7 +352,7 @@ def _augmented(case: str, noncolin: bool):
     assert result.converged
     response = dielectric_tensor(
         calculation, result.wavefunctions, result.eigenvalues, result.density,
-        result.becsum, born_charges=False, **IDENTITY,
+        result.becsum, born_charges=False, **CONVERGED,
     )
     assert response.converged
     return calculation, result, response
