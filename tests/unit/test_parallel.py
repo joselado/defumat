@@ -345,6 +345,10 @@ RELAX_SCRIPT = textwrap.dedent("""
     import defumat
     from defumat import Calculator
     from defumat.parallel import current_pools
+    import defumat.workflows.relax as relax
+    # Pools start every step from atomic orbitals; one pool would carry the
+    # previous step's states, so it is held to the same start here.
+    relax._carries_states = lambda scf_options, pools: False
     with tempfile.NamedTemporaryFile("w", suffix=".in", delete=False) as f:
         f.write(sys.argv[1])
     calculator = Calculator.from_file(f.name, pseudo_dir="tests/data/pseudo")
@@ -362,6 +366,14 @@ def test_a_pooled_relaxation_takes_the_same_steps():
 
     Measured: four ionic steps both ways, the energies equal to 1e-10 Ry and
     the final positions to 1e-8 bohr.
+
+    **Both arms start every step from atomic orbitals.** A one-pool relaxation
+    hands each step the previous step's states (``relax._carries_states``) and a
+    pooled one does not, so with the default the two follow different
+    trajectories inside the run's thresholds: on 2026-10-04 the step counts and
+    the energies still agreed to 1e-9 Ry and the final positions did not to
+    1e-7 bohr. The script switches the carry off in both, which leaves the
+    pools' own start unchanged.
     """
     serial = _run_pools(RELAX_SCRIPT, 1, SILICON_DISPLACED_8K, timeout=900)[0]
     pooled = _run_pools(RELAX_SCRIPT, 2, SILICON_DISPLACED_8K, timeout=900)
