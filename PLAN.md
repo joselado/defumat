@@ -23646,6 +23646,7 @@ each, with its sites, is in its `OPEN.md` entry; this is the index and what the 
 | XXIII 12 | a state source's k-independent terms built once a workflow | potentials, `newd`s and `q_ij(b)` 2 -> 1 on two strings | `2bb51bf` |
 | XXIII 13, half | the ultracell's wider solve on the basis calculation | constructors 2 -> 1 | `2b34b2e` |
 | XXIII 14 | `Calculation.with_texture` for a turned system | `run_anisotropy('xyz')` 3 -> 1 calculations, `relax_orientation(curvature=True)` 10 -> 1 | `9f84fde` |
+| XXIII 14, the clear | the orientation relaxation's global `jax.clear_caches()` replaced by a drop of what the last one-shot alone used | compiles a one-shot 79 -> 2 with the mappings flat (deleting the clear instead grows 1755 a one-shot, 34 one-shots to a Triton node's cap) | `5d7bc18` |
 | XXIII 15 | `at_cell` builds the augmentation as the constructor does | the radial kernel 171 -> 0 times in a memory-mode step-2 SCF on `si8-us-1k`; 1.4e-14 Ry | `a411147` |
 | XXIII 16 | `choose_k_batch` from one size estimate | 8 estimates -> 1; 1720 estimates and 2940 choices equal on 172 cells | `f9e8e2e` |
 | XXIII 17, half | one projection at `nspin = 1` | 2 -> 1 | `6735d1f` |
