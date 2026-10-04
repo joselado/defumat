@@ -26,7 +26,6 @@ from __future__ import annotations
 import jax.numpy as jnp
 import numpy as np
 
-from defumat.batching import upload
 from defumat.response.photocurrent import (
     ShiftCurrent,
     require_a_shift_current_regime,
@@ -126,7 +125,10 @@ def run_shift_current(
                - np.asarray(eigenvalues)[..., nbnd - 1])
     )
     eigenvalues = eigenvalues[..., :nbnd]
-    wavefunctions = upload(wavefunctions[..., :nbnd, :])
+    # The band slice is handed on where it is, a view of a streamed store in
+    # host memory or a device array: the assembly walks the k axis and takes
+    # one chunk's rows to the device at a time (``OPEN.md`` Part XXIII item 24).
+    wavefunctions = wavefunctions[..., :nbnd, :]
     potential = calculation.potential(jnp.asarray(density))
 
     return shift_current(

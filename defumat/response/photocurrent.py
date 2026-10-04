@@ -120,6 +120,13 @@ Scope
 Norm-conserving, ``nspin = 1`` or a spinor run, an **insulator** with fixed
 occupations, on a k-grid closed under the point group. Refused by name, each
 for its own missing term, in :func:`require_a_shift_current_regime`.
+
+**The k axis is walked a chunk at a time** (:mod:`defumat.response.walk`): a
+chunk's states cross to the device, its first and second velocity matrix
+elements are built on its own rows and contracted at both band counts the
+truncation estimate compares, and the next chunk follows. The chunk is the
+calculation's ``k_batch`` and moves the tensor at round-off, through the order
+of the k sum.
 """
 
 from __future__ import annotations
@@ -131,9 +138,11 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from defumat.batching import resolve_k_batch, sum_k, upload
-from defumat.eager import compiled
+from defumat.batching import sum_k
 from defumat.response.velocity import VelocityOperator
+from defumat.response.walk import (
+    chunk_size, padded, row_leaves, store_rows, walk, with_rows,
+)
 from defumat.scf.occupations import w0gauss
 from defumat.system.kpoints import is_reduced
 from defumat.system.symmetry import find_symmetries
@@ -558,7 +567,8 @@ def shift_current(
     )
 
     eigenvalues = jnp.asarray(eigenvalues)
-    wavefunctions = upload(wavefunctions)
+    # The states stay where they are, a streamed store in host memory or a
+    # device array, and cross to the device a k-chunk at a time below.
     if eigenvalues.ndim == 2:
         eigenvalues, wavefunctions = eigenvalues[None], wavefunctions[None]
     if eigenvalues.shape[0] != 1:
@@ -572,14 +582,18 @@ def shift_current(
     volume = float(calculation.system.cell.volume)
     nbnd = int(eigenvalues.shape[-1])
 
-    velocity = VelocityOperator(calculation, v_scf)
-    v = velocity.matrix_elements(wavefunctions)[:, 0]  # (3, nk, nb, nb)
-    w = velocity.second_matrix_elements(wavefunctions)[:, :, 0]  # (3,3,nk,nb,nb)
+    # Built on the whole set for its refusals and for the point it
+    # differentiates around; each chunk's operator is handed its rows of
+    # ``kcart`` (:mod:`defumat.response.walk`).
+    kcart = np.asarray(VelocityOperator(calculation, v_scf).kcart)
 
     wg, _ = calculation.occupations(eigenvalues)
     wg = jnp.asarray(wg)[0]
     wk = jnp.asarray(calculation.system.kpoints.weights)
     filling = wg / wk[:, None]  # in [0, 1] per spin channel
+    # On the host, where each chunk takes its rows from.
+    energies = np.asarray(eigenvalues[0])
+    wk, filling = np.asarray(wk), np.asarray(filling)
 
     if frequencies is None:
         frequencies = np.linspace(0.0, float(window), int(nw))
@@ -591,33 +605,75 @@ def shift_current(
     eta = precision.as_real(broadening)
     if degeneracy_tol is None:
         degeneracy_tol = max(float(broadening), DEGENERACY_TOL)
-    batch = resolve_k_batch(k_batch)
+    batch = chunk_size(calculation, k_batch)
 
-    def total(bands: int):
-        def one_k(arrays):
+    # The band sum truncated a quarter short, which is what ``truncation``
+    # compares against, accumulated in the same walk from the same matrix
+    # elements rather than in a second walk that would build them again.
+    dropped = max(1, nbnd // 4)
+    band_counts = (nbnd, nbnd - dropped) if nbnd - dropped > 1 else (nbnd,)
+
+    def one_k(bands: int):
+        def term(arrays):
             e_k, v_k, w_k, f_k, wk_k = arrays
             return _sigma_at_k(
                 e_k[:bands], v_k[:, :bands, :bands],
                 w_k[:, :, :bands, :bands], f_k[:bands], wk_k,
                 frequencies, eta, ngauss, degeneracy_tol,
             )
+        return term
 
-        arrays = (
-            eigenvalues[0],
-            jnp.moveaxis(v, 0, 1),
-            jnp.moveaxis(w, 2, 0),
-            filling,
-            wk,
-        )
-        return np.asarray(compiled(
-            lambda a: sum_k(one_k, a, batch=batch), arrays)) * (SIGMA_SI / volume)
+    # Three stages per chunk, each its own program: the first derivatives, the
+    # second ones and the contraction, with each stage's directions walked one
+    # ``jvp`` at a time, so no two of them hold their temporaries together.
+    # The potential on the smooth grid, k-independent, built once here rather
+    # than in every chunk and direction.
+    terms = calculation.local_terms(v_scf)
 
-    sigma = total(nbnd)
+    def first_of(rowset, psi, kcart):
+        """One chunk's ``<m|dH/dk_a|n>``, ``(3, chunk, nbnd, nbnd)``."""
+        velocity = VelocityOperator(with_rows(calculation, rowset), v_scf, kcart=kcart,
+                                    local_terms=terms)
+        return velocity.matrix_elements(psi, sequential=True)[:, 0]
+
+    def second_of(v, rowset, psi, kcart):
+        """One chunk's ``<m|d2H/dk_a dk_b|n>``, ``(3, 3, chunk, nbnd, nbnd)``."""
+        velocity = VelocityOperator(with_rows(calculation, rowset), v_scf, kcart=kcart,
+                                    local_terms=terms)
+        return velocity.second_matrix_elements(psi, sequential=True)[:, :, 0]
+
+    def contraction(bands: int, position: int):
+        def stage(*args):
+            """One chunk's share of ``sigma^abc``, summed over ``bands`` bands."""
+            v, w = args[0], args[1]
+            energies, fill, weight = args[position:]
+            arrays = (energies, jnp.moveaxis(v, 0, 1), jnp.moveaxis(w, 2, 0),
+                      fill, weight)
+            return sum_k(one_k(bands), arrays, batch=batch)
+        return stage
+
+    def arguments(rows, live):
+        # The padded rows are a repeat of a real one and carry zero ``w_k``,
+        # which multiplies the whole of a k-point's term.
+        states = (row_leaves(calculation, rows), store_rows(wavefunctions, rows),
+                  jnp.asarray(kcart[rows]))
+        last = (jnp.asarray(energies[rows]), jnp.asarray(filling[rows]),
+                jnp.asarray(padded(wk, rows, live)))
+        return (states, states) + (last,) * len(band_counts)
+
+    # One contraction stage per band count, each its own program, as the two
+    # derivatives are.
+    stages = (first_of, second_of) + tuple(
+        contraction(bands, 2 + index) for index, bands in enumerate(band_counts))
+    sums = walk(int(wk.shape[0]), batch, arguments, *stages,
+                shares=len(band_counts))
+    sums = sums if len(band_counts) > 1 else (sums,)
+    sigma = np.asarray(sums[0]) * (SIGMA_SI / volume)
     scale = float(np.max(np.abs(sigma)))
     truncation = float("nan")
-    dropped = max(1, nbnd // 4)
-    if nbnd - dropped > 1 and scale > 0.0:
-        truncation = float(np.max(np.abs(total(nbnd - dropped) - sigma)) / scale)
+    if len(band_counts) > 1 and scale > 0.0:
+        coarse = np.asarray(sums[1]) * (SIGMA_SI / volume)
+        truncation = float(np.max(np.abs(coarse - sigma)) / scale)
 
     return ShiftCurrent(
         frequencies=np.asarray(frequencies),
