@@ -55,11 +55,20 @@ The cache is module-level mutable state that outlives a call, and unlike the
 package's memos of host-side tables it holds executables. It holds the open
 jaxpr and its compiled program, never the arrays, and it is bounded
 (``CACHE_SIZE``) because every entry pins an executable.
+
+**A loop whose programs are not all reused** bounds what it keeps with
+:func:`tracking` and :func:`forget` rather than with ``jax.clear_caches``, which
+drops every executable in the process. ``relax_orientation`` is the case: its
+torque is keyed on the quantization axis, which turns with every step, so one
+step's torque program is never used again while the Hamiltonian's and the band
+sum's are used at every step. Dropping what one step used and the next did not
+keeps the second kind and bounds the first.
 """
 
 from __future__ import annotations
 
 import collections
+import contextlib
 import hashlib
 import warnings
 
@@ -76,6 +85,9 @@ CACHE_SIZE = 128
 NESTED_LIMIT = 1 << 24
 
 _PROGRAMS: collections.OrderedDict = collections.OrderedDict()
+
+#: The sets :func:`tracking` is filling, innermost last.
+_TRACKERS: list = []
 
 _NEEDS_VALUES = (jax.errors.ConcretizationTypeError, jax.errors.TracerArrayConversionError,
                  jax.errors.TracerBoolConversionError, jax.errors.TracerIntegerConversionError)
@@ -185,7 +197,43 @@ def _kept(jaxpr, nested, flat, consts):
             _warn_evicted()
     else:
         _PROGRAMS.move_to_end(key)
+    for used in _TRACKERS:
+        used.add(key)
     return program
+
+
+@contextlib.contextmanager
+def tracking():
+    """The key of every program kept or reused inside the block, collected into a set.
+
+    What one pass of a loop used and the next did not can then be dropped with
+    :func:`forget`, which keeps the programs every pass shares.
+    """
+    used: set = set()
+    _TRACKERS.append(used)
+    try:
+        yield used
+    finally:
+        # By identity: two trackers that collected the same keys are equal.
+        for index, tracker in enumerate(_TRACKERS):
+            if tracker is used:
+                del _TRACKERS[index]
+                break
+
+
+def forget(keys) -> int:
+    """Drop the programs kept under ``keys``; how many of them were still kept.
+
+    A dropped program is compiled again on its next use, exactly as one past
+    ``CACHE_SIZE`` is. Its executable is freed once nothing else holds the
+    callable, which a :func:`compiled_function` caller's ``run`` does until it
+    goes out of scope.
+    """
+    dropped = 0
+    for key in keys:
+        if _PROGRAMS.pop(key, None) is not None:
+            dropped += 1
+    return dropped
 
 
 def compiled_jvp(fun, primals, tangents):

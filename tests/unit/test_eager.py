@@ -101,6 +101,36 @@ def test_a_nested_constant_is_part_of_the_key():
     assert len(eager._PROGRAMS) == 2
 
 
+def test_forget_drops_what_the_next_pass_did_not_use_and_keeps_the_rest():
+    """``tracking`` and ``forget``, as an orientation relaxation uses them.
+
+    Each pass reaches one program shared by every pass and one keyed on a
+    nested constant that changes between passes (the quantization axis, in
+    the relaxation). Dropping what the first pass used and the second did not
+    must drop the first pass's own program and nothing else: the shared one is
+    then reused without a compile, and the dropped one compiles again.
+    """
+    def one_pass(arr):
+        inner = jax.jit(lambda y: y + arr)
+        compiled(lambda xs: lax.map(inner, xs), jnp.arange(4.0))
+        _loop(jnp.arange(4.0))
+
+    with eager.tracking() as first:
+        one_pass(jnp.arange(4.0))
+    with eager.tracking() as second:
+        one_pass(jnp.ones(4))
+    assert len(first) == len(second) == 2 and len(first & second) == 1
+    assert eager.forget(first - second) == 1
+    assert len(eager._PROGRAMS) == 2
+    with counting_compiles() as names:
+        _loop(jnp.linspace(1.0, 2.0, 4))
+    assert names == []
+    with counting_compiles() as names:
+        one_pass(jnp.arange(4.0))
+    assert len(names) == 1
+    assert eager._TRACKERS == []
+
+
 def test_a_nested_constant_past_the_limit_is_not_kept(monkeypatch):
     monkeypatch.setattr(eager, "NESTED_LIMIT", 8)
     arr = jnp.arange(4.0)

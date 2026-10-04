@@ -22,8 +22,12 @@ The cell is the cubic one-atom cobalt of ``tests/regression/test_anisotropy.py``
 noncollinear with the fully-relativistic dataset and ``nosym``.
 """
 
+import contextlib
 import functools
+import logging
+import re
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -128,9 +132,6 @@ def test_an_orientation_relaxation_builds_one_calculation(cobalt, monkeypatch):
                         lambda *args, **kwargs: np.zeros(3))
     monkeypatch.setattr("defumat.forces.torque.band_energy_at_rotation",
                         lambda *args, **kwargs: 0.0)
-    # The relaxation drops the compiled code after every one-shot, which here
-    # would only recompile the potential seven times.
-    monkeypatch.setattr("jax.clear_caches", lambda: None)
 
     with pytest.warns(UserWarning, match="already has a torque below"):
         relax_orientation(system, pseudos, density, curvature=True)
@@ -138,3 +139,101 @@ def test_an_orientation_relaxation_builds_one_calculation(cobalt, monkeypatch):
     assert len(solved) == 7, "the relaxation needs more than one one-shot to count"
     assert len(built) == 1, f"{len(built)} Calculation objects built, not 1"
     assert all(s.basis is solved[0].basis for s in solved)
+
+
+@contextlib.contextmanager
+def _per_one_shot(monkeypatch):
+    """Each one-shot's XLA compilations by name, and the kept programs before it.
+
+    The names are read off the ``jax`` logger, which sees a persistent-cache
+    hit as well as a fresh compile. The count of :mod:`defumat.eager`'s kept
+    programs is read as each one-shot starts, so after whatever the one
+    before it dropped.
+    """
+    from defumat import eager
+    from defumat.workflows import anisotropy
+
+    names, shots = [], {"compiled": [], "kept": []}
+
+    class Grab(logging.Handler):
+        def emit(self, record):
+            found = re.search(r"Finished XLA compilation of (.+?) in", record.getMessage())
+            if found:
+                names.append(found.group(1))
+
+    original = anisotropy._orientation_torque
+
+    def shot(*args, **kwargs):
+        shots["kept"].append(len(eager._PROGRAMS))
+        start = len(names)
+        result = original(*args, **kwargs)
+        shots["compiled"].append(names[start:])
+        return result
+
+    monkeypatch.setattr(anisotropy, "_orientation_torque", shot)
+    handler, logger = Grab(), logging.getLogger("jax")
+    before = jax.config.jax_log_compiles
+    jax.config.update("jax_log_compiles", True)
+    logger.addHandler(handler)
+    try:
+        yield shots
+    finally:
+        logger.removeHandler(handler)
+        jax.config.update("jax_log_compiles", before)
+
+
+def test_an_orientation_relaxation_keeps_what_every_one_shot_shares(cobalt, monkeypatch):
+    """No global clear, nothing shared compiled twice, and the rest bounded.
+
+    The relaxation used to call ``jax.clear_caches()`` after every one-shot,
+    which on tetragonal cobalt meant 79 compilations a one-shot, the
+    eigensolver's and the Hamiltonian's among them, where only two programs
+    are new at a new orientation: the potential, whose quantization axis is
+    static, and the torque's derivative, which holds that axis as a nested
+    constant (:func:`~defumat.workflows.anisotropy._drop_the_last_orientation`).
+    Without the clear they accumulated, 1755 mappings a one-shot. The stand-in
+    torque here is keyed on the axis the way the real one is, through a nested
+    ``jit`` that closes over it, and the stand-in band sum is one program at
+    every orientation, the way the real one is, so the relaxation's seven
+    one-shots must compile the band sum once and the potential and the torque
+    at most once each per one-shot, keep no more programs from the third
+    one-shot on than after the first, and hold at most one potential.
+    """
+    from defumat import eager
+    from defumat.scf.driver import _potential_of_rho
+
+    system, pseudos, density = cobalt
+    _stand_ins(monkeypatch)
+    cleared = []
+    monkeypatch.setattr("jax.clear_caches", lambda: cleared.append(True))
+
+    def band_sum(*args, **kwargs):
+        return float(eager.compiled(lambda x: jnp.sum(x * x), jnp.ones(3)))
+
+    def torque(calculation, *args, **kwargs):
+        axis = calculation.quantization_axis
+        turn = jax.jit(lambda y: y * jnp.asarray(axis))
+        return 0.0 * np.asarray(eager.compiled(lambda x: turn(x), jnp.ones(3)))
+
+    monkeypatch.setattr("defumat.forces.torque.orientation_torque", torque)
+    monkeypatch.setattr("defumat.forces.torque.band_energy_at_rotation", band_sum)
+    eager.clear()
+    with _per_one_shot(monkeypatch) as shots:
+        with pytest.warns(UserWarning, match="already has a torque below"):
+            relax_orientation(system, pseudos, density, curvature=True)
+    kept = shots["kept"] + [len(eager._PROGRAMS)]
+    eager.clear()
+
+    assert len(shots["compiled"]) == 7, "the relaxation needs more than one one-shot"
+    assert cleared == [], "the relaxation dropped every compiled program"
+    for index, names in enumerate(shots["compiled"][1:], start=2):
+        assert set(names) <= {"jit(run)", "jit(v_of_rho)"}, (
+            f"one-shot {index} compiled {names}, beyond the potential and the torque")
+        assert names.count("jit(run)") <= 1 and names.count("jit(v_of_rho)") <= 1
+    assert max(kept[2:]) <= kept[1], f"kept programs per one-shot {kept}"
+    assert _potential_of_rho._cache_size() <= 1
+    # The axes all differ but the last two (+-z turns nothing on a moment
+    # along z), and the sixth is the first's, whose torque was dropped, so
+    # the torque is compiled again at five of six; the potential at all six,
+    # since the clear after the sixth also drops its own.
+    assert sum("jit(run)" in names for names in shots["compiled"][1:]) == 5
