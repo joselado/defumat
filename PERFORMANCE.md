@@ -10457,7 +10457,7 @@ cumulative CPU clock at the last pass of the field response, which likewise incl
 | `alas-epsilon-us-soc` | 60.62 s | 27.51 s | 11.1 s | 2.5 | 6 (6) | 12.4 (10.4) |
 
 So the change is worth 1.7 to 2.2 times on its own stage, and the gap to `ph.x` that is left is a factor of
-2.5 to 4.6 at the same pass count to within one and 15 to 28 per cent more CG steps a solve; before it,
+2.5 to 4.6 at the same pass count to within one and 15 to 40 per cent more CG steps a solve; before it,
 the same cells read 8.0, 7.0, 7.9 and 5.5 times `ph.x`. The `si-epsilon` `ph.x` figure was taken
 later, once D22 was idle, three times alike, with `prefix = 'silicon'` added to the copy of
 `si-epsilon.ph.in`: the committed pair disagree (the `.in` sets it and the `.ph.in` does not), so
