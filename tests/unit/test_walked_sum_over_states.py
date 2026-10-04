@@ -151,6 +151,7 @@ def _insulator(text=None):
     return calculation, v_scf, np.array(states)[..., :7, :], eigenvalues[..., :7]
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("dataset", ["norm-conserving", "ultrasoft"])
 def test_the_second_harmonic_walks_to_the_whole_axis(dataset):
     from defumat.response.shg import second_harmonic
