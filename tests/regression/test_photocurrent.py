@@ -15,8 +15,9 @@ comparison is decisive in one particular form and vacuous in every other, and
 the reason is the whole point of this file: *the sum rule is an identity over a
 complete basis*. Held on a frozen plane-wave sphere, the basis is finite -- 158
 plane waves for AlAs at this cutoff -- so running the band set out to 158 makes
-the intermediate sum complete and the identity exact. It agrees to **1.8e-4**
-there, against 4.3e-2 at 120 bands and 6.0e-2 at 20. The sweep is the test: a
+the intermediate sum complete and the identity exact. It agrees to **2.6e-3**
+there, against 0.52 at 120 bands and 0.69 at 20 (2026-10-04; 1.8e-4, 4.3e-2 and
+6.0e-2 were written here and were never what the code gave). The sweep is the test: a
 residue that falls off a cliff at completeness is a correct assembly with a
 truncated sum, and one that plateaus is a bug.
 
@@ -166,9 +167,9 @@ def test_the_sum_rule_is_an_identity_over_a_complete_basis():
     """``r^{c;a}`` against a parallel-transport difference, swept to completeness.
 
     The sweep is the assertion. Truncated at 20, 80 or 120 of AlAs's 158 plane
-    waves the sum rule is a few per cent from the difference; at 158, where the
-    intermediate sum runs over the whole space it is an identity over, it is
-    1.8e-4 -- two to three orders down in one step. Nothing but a correct
+    waves the sum rule is 0.69, 0.54 and 0.52 of the difference; at 158, where
+    the intermediate sum runs over the whole space it is an identity over, it is
+    2.6e-3 -- two orders down in one step. Nothing but a correct
     assembly does that, and nothing that is merely close does it either: a
     wrong index would not become right at completeness.
 
@@ -259,7 +260,8 @@ def test_alas_comes_out_exactly_zincblende():
     survives = max(peaks[i] for i in allowed)
     forbidden = max(v for i, v in peaks.items() if i not in allowed)
     assert survives > 1.0e-5, "the case is vacuous: nothing survives"
-    # Measured: 4.0e-4 on the 6x6x6 grid and 1.0e-5 on the 4x4x4. It is the
+    # Measured 2026-10-04: 2.3e-9 on the 6x6x6 grid and 6.0e-9 on the 4x4x4
+    # (4.0e-4 and 1.0e-5 were written here; neither reproduces). It is the
     # residue of the zone sum itself -- the grid is closed under the point
     # group, so nothing forces the forbidden components to cancel except the
     # arithmetic doing so k-point by k-point.
@@ -277,7 +279,7 @@ def test_the_shift_current_vanishes_below_the_absorption_edge():
     sign or a transposition leaves it untouched while a wrong occupation factor
     or a wrong resonance condition destroys it.
 
-    Measured on AlAs: ``sigma^xyz`` is 6.9e-25 A/V^2 at 2 eV against a peak of
+    Measured on AlAs: ``sigma^xyz`` is 4.3e-24 A/V^2 at 2 eV (2026-10-04) against a peak of
     1.1e-4 around 4.4 eV. What is left below the edge is the Gaussian's own
     tail, which is why the bound is read well inside the gap.
     """

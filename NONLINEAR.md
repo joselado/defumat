@@ -355,10 +355,10 @@ triples, and it has its own unit test on random matrices.
 **Three findings, and two of them are older findings arriving again.**
 
 * **The truncation is the real cost and it is severe.** The intermediate sum over `p` is
-  an *identity* only over a complete basis; truncated it is a few per cent and no
+  an *identity* only over a complete basis; truncated it is off by half and no
   symmetry check sees it. Measured on AlAs on a frozen sphere of 158 plane waves, where
-  the band set can be run all the way out: 6.0e-2 at 20 bands, 4.8e-2 at 80, 4.3e-2 at
-  120 — and **1.8e-4 at 158**. IATS18 avoid this with `k.p` inside a closed Wannier
+  the band set can be run all the way out: 0.69 at 20 bands, 0.54 at 80, 0.52 at
+  120 — and **2.6e-3 at 158** (2026-10-04; the 6.0e-2 to 1.8e-4 first written here never reproduced). IATS18 avoid this with `k.p` inside a closed Wannier
   subspace and there is no closed subspace here. **The route that removes it is
   identified**: the two sums are exactly `-<u_n|dH/dk_c|u_m^{;a}> - <u_n^{;a}|dH/dk_c|u_m>`
   minus the same `D^c` term, which is a Sternheimer solve in place of a spectral sum —
@@ -384,7 +384,7 @@ triples, and it has its own unit test on random matrices.
 
 **The overall scale is pinned against the literature and the convention is
 declared.** Every other check is blind to a constant, which is P50's trap here.
-AlAs's first peak converges to **35.0 uA/V^2 at 4.17 eV** (about 1% in both the
+AlAs's first peak converges to **35.1 uA/V^2 at 4.17 eV** (35.0 before `27eeaa2`) (about 1% in both the
 cutoff and the band count), where published
 calculations across the fourteen III-V and II-VI zincblende semiconductors span
 14 (CdSe, smallest) to 83 (AlSb, largest) and find the aluminium compounds the
