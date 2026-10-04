@@ -206,7 +206,7 @@ because that is what decides whether it is a session or a phase.
 - **Wyckoff input** (P6, the one part of that phase not done).
 - **The mixer's history in G as memory mode's default** (P128, `OPEN.md` Part XXIII item 22): the
   layout is built and its shell rebuilt from the mixed `becsum`, and every cell on record converges in
-  it to within three iterations of real space; what stands between it and the default is the time of
+  it in at most three iterations more than real space (and ten fewer on DFT+U nickel); what stands between it and the default is the time of
   one G iteration against one real-space one, and the DFT+U basins it chooses differently (the user's
   decision).
 - **A switch from single to double precision that pays** (P126): `'mixed'` converges to the double
