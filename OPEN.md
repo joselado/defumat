@@ -7291,12 +7291,45 @@ What the agents of this sweep's follow-up found outside their items, recorded ra
 - **Small leftovers** (the first three done 2026-10-04 in `6f366df`: the torque reads `np.shape`, the Hubbard
   diagonal goes by atom block through a static `atom_of_column`, bit-identical on `ni-ldau-ortho` and within the
   SCF's round-off sensitivity on QE's FeO, and the comment is corrected; the uploads in the last clause are
-  not done): `forces/torque.py` reads a whole store's shape through `jnp.asarray(states).shape[1]`
+  done 2026-10-04 in `f5c95a6`, where a host store reaches them, and the rest are left with the reason
+  below): `forces/torque.py` reads a whole store's shape through `jnp.asarray(states).shape[1]`
   in two places (`np.shape` would do); `hubbard/operator.py` contracts `v_ns` as a dense `gi,ij,gj->g`, the
   sibling of M5; `response/chunked_phonon.py` still describes the Hamiltonian's `npw` as the per-k counts,
   stale since item 9 (a); and the `jnp.asarray` uploads of a possibly host store that item 24 did not
-  reach are listed in that item's agent report (`efield.py`, `elastic.py`, `phonon.py`, `sternheimer.py`,
-  `velocity.py`, `phononq.py`, `anisotropy.py`, `spiral_soc.py`).
+  reach, in `efield.py`, `elastic.py`, `phonon.py`, `sternheimer.py`, `velocity.py`, `phononq.py`,
+  `anisotropy.py` and `spiral_soc.py`. **Which of them a host store reaches, traced by reading the
+  callers.** Two whole-k consumers, now through `batching.upload`: `VelocityOperator.band_velocities`,
+  from `band_velocities` on a streamed ground state or on a streamed NSCF, the effective mass's `kcart`
+  stencil included; and `dielectric_tensor`'s whole-k branch, which `keep_internals` takes whatever the
+  store, so that `get_dielectric_tensor(keep_internals=True)` on a streamed run uploaded the store whole.
+  Three walkers that took a chunk, or one k-point, through `jnp.asarray` of a host index copy, which is
+  item 25's cost at a chunk's size rather than a whole store: `frozen_expectation` and
+  `spiral_expectation` now read a chunk with `walk.store_rows`, and the force theorem's
+  `_project_band_energy` uploads its k-point with `batching.upload`. Against `c6e4f79`, with
+  `DEFUMAT_MEMORY_MODE=memory` and `DEFUMAT_WFC_STORE=stream` on this CPU, both arms on cores 0 to 3 and
+  every store reaching the five sites checked to be a numpy array: 21 arrays bit-identical over two-atom
+  silicon (`nosym`, unshifted 2x2x2: the band velocities on the ground grid and on a three-point path,
+  the effective mass at `Gamma`, `epsilon` with its `bare` and `dpsi`), the iodine spiral's
+  `spiral_spin_orbit_energy`, and the noncollinear iodine cell's `frozen_expectation` and projected
+  `run_force_theorem`; the iodine cells' 7 arrays bit-identical on a device store too
+  (`DEFUMAT_WFC_STORE=device`, the default route on a CPU, where `store_rows` gathers in place of the
+  numpy index). `tests/unit/test_host_store_uploads.py` fails on the old code at all five sites.
+  **Left, because no host store reaches them through any entry point**: `efield.py`'s second upload, in
+  `_WholeField.born_charges`, which runs only after the first has made the states a device array;
+  `elastic.py:182`, `make_sternheimer` (`sternheimer.py:1686`) and `phonon.py:418`, which
+  `efield._streams` sends to the walk for any host store unless the calculation carries `_kcart`, which
+  only `at_strain` and `at_kcart` set and only `band_velocities` pairs with a host store, and
+  `phonon.py:418` needs besides a whole-k `DisplacementResponse` handed in beside host states, which
+  `spectra.py` never does (its other branch passes `refined_states`' device array); `phononq.py:186`,
+  whose `psi_kq` is `diagonalize`'s output on the branch that does not stream; and the other
+  `jnp.asarray(psi)` in `velocity.py`, which receive a walked chunk, a whole-k solver's device states or
+  `diagonalize`'s. **The band velocities keep the whole-k route.** A walk by `k_chunks`, each chunk's
+  calculation from `row_leaves` and its `kcart` rows handed in, is not bit-identical: 1.1e-16 on
+  velocities of at most 4.3e-10 on the silicon grid (every point a TRIM, so every velocity is zero by
+  symmetry and the difference is round-off of zero), bitwise on a five-point path, and 3.5e-18 on 0.87
+  Ry bohr on that path at `kcart` with a chunk of two or three (bitwise at one). Walked, the whole-k `vkb`,
+  its tangent and the two state-sized outputs would be one chunk's; whether that is worth a round-off
+  difference in the velocities is left to decide. The card peak is not measured for any of this.
 - **Item 6 is deferred, deliberately.** Reordering the walked third derivative chunk-outer is
   bit-identical, but it keeps one accumulator per tangent alive at once, `3 nat` of them for a
   displacement, where the walked route exists to bound exactly that; the gain is at most the 6 to 8 per

@@ -103,7 +103,7 @@ from dataclasses import dataclass, field
 import jax.numpy as jnp
 import numpy as np
 
-from defumat.batching import k_chunks
+from defumat.batching import k_chunks, upload
 from defumat.pseudo.projectors import projector_channels
 from defumat.pseudo.upf import Pseudopotential
 from defumat.scf.continuation import (
@@ -802,7 +802,9 @@ def _project_band_energy(calculation, system, eigenvalues, wg, wavefunctions, ef
     spinors = calculation._as_spinors(atomic)  # (nk, 2 n, 2 npwx)
 
     # One k-point's states on the device at a time: a streamed store is a host
-    # array and is not moved across whole (``GPU-MEMORY-NEXT.md`` item 4).
+    # array and is not moved across whole (``GPU-MEMORY-NEXT.md`` item 4), and
+    # each k-point crosses through ``device_put`` at its own size
+    # (:func:`~defumat.batching.upload`).
     psi = wavefunctions[0]  # (nk, nbnd, 2 npwx)
     eigenvalues = np.asarray(eigenvalues)[0]
     wg = np.asarray(wg)[0]
@@ -815,8 +817,7 @@ def _project_band_energy(calculation, system, eigenvalues, wg, wavefunctions, ef
         overlap = jnp.conj(phi) @ sphi.T
         transform = lowdin_transform(overlap)
         projectors = _apply_transform(transform, jnp.transpose(sphi, (1, 0)))
-        proj0 = jnp.einsum("gi,bg->ib", jnp.conj(projectors),
-                           jnp.asarray(psi[ik]))
+        proj0 = jnp.einsum("gi,bg->ib", jnp.conj(projectors), upload(psi[ik]))
         # ``lsym`` is refused with ``lforcet`` (``projwfc.f90:152``) and the run
         # is ``nosym`` anyway, so there is no ``sym_proj_k`` average here.
         total += np.asarray(jnp.abs(proj0) ** 2 @ jnp.asarray(weight[ik]))
@@ -1140,6 +1141,7 @@ def frozen_expectation(
     ``soc_scale`` too (``build_paw``'s small component) and are not in ``E1``.
     """
     from defumat.forces.energy import _spinor_projector_energies
+    from defumat.response.walk import store_rows
     from defumat.scf.potential import as_potential_components
 
     _refuse_system(system, pseudos)
@@ -1166,14 +1168,15 @@ def frozen_expectation(
     delta_d, delta_qq = _first_order_operator(calculation, total)
     # A sum over k, walked a chunk at a time: one chunk's projectors and states
     # on the device, never the whole-k ``vkb`` or a streamed store stacked
-    # (``GPU-MEMORY-NEXT.md`` items 4 and 7). Padded rows carry zero weight.
+    # (``GPU-MEMORY-NEXT.md`` items 4 and 7), a host store's rows crossing as a
+    # view (``store_rows``). Padded rows carry zero weight.
     wg, eigenvalues = np.asarray(wg), np.asarray(eigenvalues)
     energy = 0.0
     for rows, live in k_chunks(wg.shape[1], calculation.k_batch):
         weights = wg[:, rows].copy()
         weights[:, live:] = 0.0
         nonlocal_, overlap = _spinor_projector_energies(
-            jnp.asarray(wavefunctions[:, rows]),
+            store_rows(wavefunctions, rows),
             calculation.projectors_at(rows), delta_d, delta_qq,
             jnp.asarray(weights), jnp.asarray(eigenvalues[:, rows]),
         )

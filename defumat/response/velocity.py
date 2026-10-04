@@ -84,7 +84,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from defumat.batching import map_k
+from defumat.batching import map_k, upload
 from defumat.eager import compiled
 
 __all__ = ["VelocityOperator", "BandVelocities", "band_velocities",
@@ -577,8 +577,14 @@ class VelocityOperator:
         ``<psi_n| dH/dk - eps_n dS/dk |psi_n>``. The second term is identically
         zero for a norm-conserving dataset and is not skipped for one -- the
         ``jvp`` is what decides that, not a branch here.
+
+        ``psi`` may be a streamed store, a numpy array in host memory, which a
+        streamed ground state or a streamed NSCF hands over (the effective
+        mass's included): it crosses whole through ``device_put``
+        (:func:`~defumat.batching.upload`), at its own size on a card where
+        ``jnp.asarray`` peaks at twice it.
         """
-        psi = jnp.asarray(psi)
+        psi = upload(psi)
         eigenvalues = jnp.asarray(eigenvalues)
         if eigenvalues.ndim == 2:  # (nk, nbnd) -- the squeezed unpolarized shape
             eigenvalues = eigenvalues[None]

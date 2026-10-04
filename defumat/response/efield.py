@@ -130,7 +130,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.basis.fft import g_to_r, r_to_g
-from defumat.batching import map_k
+from defumat.batching import map_k, upload
 from defumat.eager import compiled, compiled_jvp
 from defumat.pseudo.augmentation import augmentation_dipole
 from defumat.response.born import born_effective_charges, require_born_charges
@@ -340,7 +340,11 @@ def dielectric_tensor(
     streamed = _streams(calculation, wavefunctions,
                         keep_internals and not streamed_internals)
     if not streamed:
-        wavefunctions = jnp.asarray(wavefunctions)
+        # The whole-k route, which ``keep_internals`` asks for whatever the
+        # store: a streamed one crosses whole here, through ``device_put`` at
+        # its own size rather than ``jnp.asarray`` at twice it on a card
+        # (:func:`~defumat.batching.upload`).
+        wavefunctions = upload(wavefunctions)
         if wavefunctions.ndim == 3:
             wavefunctions = wavefunctions[None]
     weights, _ = calculation.occupations(eigenvalues)
