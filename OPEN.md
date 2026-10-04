@@ -7280,6 +7280,23 @@ What the agents of this sweep's follow-up found outside their items, recorded ra
   test_the_field_keeps_its_commutators_only_for_a_reader` (`KeyError: 'commutators'`), and
   `test_spinor_response.py::test_the_spinor_density_weights_are_the_ground_state_s` (4.2e-17 against a
   bound of 1e-18, below the rounding; `GPU-MEMORY-NEXT.md` already lists it).
+- **The slow set on `D22-0161`, 2026-10-04, at the integration head and against master.** 247 files at
+  `30cffd2`; every file that failed was run again at the later head (`381e4fd`) and the unexplained ones
+  at master (`7f6fef2`). One failure was tonight's and is fixed: `test_parallel.py::
+  test_a_pooled_relaxation_takes_the_same_steps`, because item 11 carries a step's states on one pool
+  and not under pools (`a510fe8`; **carrying the states under pools is open**: `_carries_states`'
+  docstring says `starting_wavefunctions` can address a pool's share, the random factor is keyed by the
+  block's index and would have to be the global k index, and the pooled checkpoint test would need what
+  the serial one got). One was mine (`6a4b391` shadowed a tolerance named `IDENTITY` in
+  `test_spinor_dielectric.py`; fixed). The rest fail at master too: the inexact-Newton root (below);
+  `test_parallel.py::test_a_sigterm_stops_every_pool_at_the_same_iteration`, both victims, whose SCF
+  converges before the one-second timer lands on D22 (the docstring's witness is `not converged`, and an
+  SCF that reaches a zero residual at iteration 63 inside a second makes the test a race, not a check);
+  `test_velocity_locality.py::test_the_velocity_at_gamma_matches_a_frozen_sphere_difference`, whose scale
+  guard read the largest entry of a degenerate triplet's rows (0.987 against a bound of 1.0, the
+  comparison itself at 1.2e-8), now read as a norm (`01910a9`); and the two recorded before
+  (`test_retention`, `test_spinor_response`). `test_ten_site.py` was killed at the 12 GB cap and passes
+  whole at 20 GB with a peak of 12.85 GB at the head.
 - **`test_scf_solvers.py::test_an_inexact_newton_is_only_as_stability_blind_as_its_inner_solve` picks
   its root by round-off on `D22-0161`, the kicked start notwithstanding.** Its docstring says both
   arithmetics give M = -3.405 from the kicked state, measured on this workstation. On D22's CPU, 2026-10-04,
