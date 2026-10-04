@@ -235,6 +235,8 @@ def spiral_expectation(calculation, wavefunctions, weights, delta_d) -> tuple:
     :func:`spiral_spin_orbit_energy` so that the contraction can be held
     against the operator's blocks without a diagonalisation in between.
     """
+    from defumat.response.walk import store_rows
+
     delta = np.asarray(delta_d)
     # ``dD^a = (1/2) sum_st (sigma_a)_ts dD^{st}``, Hermitian in ``(i, j)``.
     parts = jnp.asarray(0.5 * np.einsum("ats,stij->aij", _PAULI, delta))
@@ -266,7 +268,9 @@ def spiral_expectation(calculation, wavefunctions, weights, delta_d) -> tuple:
         # after them (:meth:`~defumat.scf.driver.Calculation.basis_rows`).
         vkb = jnp.asarray(calculation.projectors_at(rows))
         npwx = vkb.shape[1]
-        psi = jnp.asarray(wavefunctions[:, rows])
+        # A streamed store's rows cross as a view (``store_rows``), not as
+        # an index copy handed to ``jnp.asarray``.
+        psi = store_rows(wavefunctions, rows)
         components = psi.reshape(psi.shape[:-1] + (2, npwx))
         # ``<beta_i(k + q/2)|u_up>`` and ``<beta_i(k - q/2)|u_dn>``: each
         # component on the projectors of its own sphere, which is what
