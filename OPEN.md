@@ -6882,9 +6882,11 @@ where the whole mesh does not fit.
 `XLA_CLIENT_MEM_FRACTION=0.35` to force the chooser, a call counter and a clock on
 `estimate_size`, the second of two builds; the same `k_batch` chosen.
 
-### 17. `get_angular_momenta` builds the whole-k atomic projectors at once, and projects an unpolarized run twice
+### 17. `get_angular_momenta` builds the whole-k atomic projectors at once, and projects an unpolarized run twice **[done 2026-10-04, both halves]**
 
 **The `nspin = 1` half done 2026-10-03, `6735d1f`**: one projection where there were two, bit-identical. The per-block build on `at_rows` is not done (it moves the k sum's order, unmeasured).
+
+**The per-block build done 2026-10-04, `39e1f1f`.** Memory mode, and a streamed store in either mode, builds the projectors one block at a time on `calculation.at_rows(rows)` at the PDOS block size, keeps the coefficients in host arrays and contracts once at the end, so the k sum's order is the old one; speed mode on a device store keeps the one-shot build. At the default `PROJECTOR_BLOCK_BYTES` all three cells measured fit one block, so the blocks were forced small (three on silicon, seven on nickel): silicon `<L>` 2.2e-16 on a zero and the charge 1.8e-15 apart, ultrasoft nickel at `nspin = 2` `<S>` 3.9e-16 of 0.316, the spin-orbit nickel spinor bit-identical; a block's compiled arguments and temporaries 74 KB and 5.28 MB against the whole build's 917 KB and 9.62 MB on silicon, 2.38 and 8.83 MB against 20.9 and 32.3 on the spinor. The whole build is bit-identical to the old code. Test: `test_angular_momenta.py::test_the_block_build_is_the_whole_build`.
 
 Sites: `projwfc/angular_momentum.py:248-252`, `:333-341`; the pattern at
 `projwfc/projections.py:349-376`.
@@ -7109,9 +7111,11 @@ is unsized, and the dense-grid vector a slab mixes was never timed.
 bit; then `benchmarks/al-slab.in`, bit-identical at the same iteration count; under pools,
 rank 0's mix against the iteration with `tools/parallel/pool_time.py`.
 
-### 24. The sum-over-states consumers upload a streamed store whole, with `jnp.asarray`, at twice its size on a card
+### 24. The sum-over-states consumers upload a streamed store whole, with `jnp.asarray`, at twice its size on a card **[done 2026-10-04, both halves; the card peak not measured]**
 
 **First half done 2026-10-03, `7a26cdf`**: `batching.upload` (`device_put` of a contiguous array for a host store) at ten sites, the torque's two uploads among them; 53 arrays bit-identical across conductivity, absorption, SHG, shift current and the magnon response. The card peak is not measured, and the second half (walking k in the assemblies) is not done. Two `jnp.asarray(states).shape[1]` reads in `forces/torque.py` (about lines 288 and 396) upload a whole store to read a shape and are still there.
+
+**The second half done 2026-10-04, `ed72649`.** `response/walk.py` walks `k_chunks` through a chain of stages, each its own program kept by `compiled_function` (one trace per stage per call, none per chunk), waits on the accumulator after every chunk so one chunk is in flight, and reads a chunk's rows through `rows_to_device`; the conductivity, SHG, shift-current, `chi_0` and transverse-response assemblies walk, and the three workflows hand the band slice on rather than upload it. `VelocityOperator` gained `sequential=True` (the three first derivatives 12.0 -> 5.1 MB of temporaries, the six second ones 39.3 -> 7.2), the ultrasoft connection as its own stage (112.7 MB together, 59.2 and 58.7 apart), `dipole=` (`_augmentation_dipole` cannot be traced) and `local_terms=` (without it each chunk recomputed `newd`). Against the old route at `k_batch` 1, 7 (a padded last chunk) and `None`: the conductivity's interband 4.5e-16 of 0.497, Drude 1.8e-15 of 3.04 and plasma diagonal 2.2e-16 of 0.874 Ry; SHG 1.4e-12 of 1391 pm/V (`alas-raman`) and 6.9e-12 of 1252 (`alas-us`, 24 bands); the shift current 4.1e-20 of 4.06e-5 A/V^2; `chi_0` 4.3e-14 of 93.0; the magnons 8.3e-17 of 0.278 (`h-fcc-magnon`) and 6.0e-16 of 1.39 (`ni-fcc-magnon-us`) at three `q`. Compile-only on the CPU at a chunk of one, the largest stage against the old route's largest program (arguments, temporaries): the conductivity 44.8 KB, 1.45 MB against 11.44, 22.97 MB; SHG on `alas-us` 817 KB, 59.2 MB against 61.5, 86.3 MB; `chi_0` at 60 bands 530 KB, 128.0 MB against 33.4, 128.1 MB, its peak being the pair contraction that `w_batch` and `pair_batch` govern. **Not a win on the small norm-conserving cells at a chunk of seven**: the SHG and shift-current velocity stages hold 35.2 and 50.2 MB of temporaries against 27.7 and 32.6, the whole store being 2.4 MB there. The card peak is not measured. A `PoolStore` still fails, now in `store_rows`. Tests: `test_walked_sum_over_states.py` (the conductivity case asserts the host store never crosses whole, which fails on the old code), `test_upload_host_store.py` rewritten.
 
 Sites: `workflows/conductivity.py:156`, `shg.py:130`, `photocurrent.py:128`, `tddft.py:245-266`;
 `tddft/chi0.py:456`, `spinchi0.py:458`; `response/conductivity.py:520`, `shg.py:553`,
@@ -7266,7 +7270,10 @@ What the agents of this sweep's follow-up found outside their items, recorded ra
   from tonight; the unpreconditioned Newton step here is a damped-mixing step whose root the reduction
   order chooses on that machine. The test needs a start further from the saddle, or a statement of which
   machines it is a claim about.
-- **Small leftovers**: `forces/torque.py` reads a whole store's shape through `jnp.asarray(states).shape[1]`
+- **Small leftovers** (the first three done 2026-10-04 in `6f366df`: the torque reads `np.shape`, the Hubbard
+  diagonal goes by atom block through a static `atom_of_column`, bit-identical on `ni-ldau-ortho` and within the
+  SCF's round-off sensitivity on QE's FeO, and the comment is corrected; the uploads in the last clause are
+  not done): `forces/torque.py` reads a whole store's shape through `jnp.asarray(states).shape[1]`
   in two places (`np.shape` would do); `hubbard/operator.py` contracts `v_ns` as a dense `gi,ij,gj->g`, the
   sibling of M5; `response/chunked_phonon.py` still describes the Hamiltonian's `npw` as the per-k counts,
   stale since item 9 (a); and the `jnp.asarray` uploads of a possibly host store that item 24 did not

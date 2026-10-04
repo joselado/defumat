@@ -23627,7 +23627,7 @@ default are where a trajectory lands, in `ph.x` as here: its own references hove
 before dropping under it (`si10-epsilon` three passes at 1.51e-14, 1.46e-14, 1.46e-14 before 1.8e-17;
 `al2-metal` 2.9e-14, 1.68e-14 before 2.15e-16), so no comparison test may rest on one.
 
-### P128 -- The second optimisation sweep: work done twice, compiled twice, or held twice, and the trajectories it moved. ✅ DONE for 18 of `OPEN.md` Part XXIII's 26 items (1 to 5 are P127) and four of Part III's; six are done in part and two are not done, each with its reason in the item.
+### P128 -- The second optimisation sweep: work done twice, compiled twice, or held twice, and the trajectories it moved. ✅ DONE for 20 of `OPEN.md` Part XXIII's 26 items (1 to 5 are P127) and four of Part III's; four are done in part and two are not done, each with its reason in the item.
 
 **What it was.** A read-only sweep on 2026-10-03 (two agents re-reading the 122 items already listed
 against the code, five sweeping one subsystem each, two verifying every candidate sceptically) wrote
@@ -23651,11 +23651,11 @@ each, with its sites, is in its `OPEN.md` entry; this is the index and what the 
 | XXIII 14, the clear | the orientation relaxation's global `jax.clear_caches()` replaced by a drop of what the last one-shot alone used | compiles a one-shot 79 -> 2 with the mappings flat (deleting the clear instead grows 1755 a one-shot, 34 one-shots to a Triton node's cap) | `5d7bc18` |
 | XXIII 15 | `at_cell` builds the augmentation as the constructor does | the radial kernel 171 -> 0 times in a memory-mode step-2 SCF on `si8-us-1k`; 1.4e-14 Ry | `a411147` |
 | XXIII 16 | `choose_k_batch` from one size estimate | 8 estimates -> 1; 1720 estimates and 2940 choices equal on 172 cells | `f9e8e2e` |
-| XXIII 17, half | one projection at `nspin = 1` | 2 -> 1 | `6735d1f` |
+| XXIII 17 | one projection at `nspin = 1`, and the projectors a block at a time in memory mode | 2 -> 1; a forced block's compiled temporaries 5.28 against 9.62 MB on silicon, the k sum's order kept | `6735d1f`, `39e1f1f` |
 | XXIII 18 | one `calbec` a block for `H` and `S` | `_every_k` dots 62 -> 57 on `si8-us-1k` and `si8-paw-1k` | `c8a8dc8` |
 | XXIII 21 | one `device_get` an attempt | blocking reads a steady iteration 15 -> 5 (`si8-1k`) to 27 -> 16 (DFT+U); time not measured | `2430c11` |
 | XXIII 23 | Anderson's history through views, the mix accumulated in place | whole vectors touched a call 26 -> 5; tracemalloc's peak 12.1 -> 4.1 vectors | `5f232bd` |
-| XXIII 24, half | `batching.upload` for a host store | ten sites, 53 arrays bit-identical; the card peak not measured | `7a26cdf` |
+| XXIII 24 | `batching.upload` for a host store, then the five sum-over-states assemblies walking k (`response/walk.py`) | at a chunk of one the conductivity's largest program 1.45 MB of temporaries against 22.97, within 1.8e-15 of the old route; worse on a small norm-conserving SHG at a chunk of seven; the card peak not measured | `7a26cdf`, `ed72649` |
 | XXIII 25, half | a run of rows crosses as a view of the store | host copies 27 -> 9 a pass on silicon at `k_batch = 3`, 0 under two pools | `c546917` |
 | XXIII 26, part | one byte-packed all-gather of the eigenvalues and counts | collectives a pooled iteration 15 -> 7 | `d19a211` |
 | III H6 | `find_symmetries` memoised | 5 searches -> 1 a system, calculation and estimate; groups equal on 246 inputs | `fbf44d9` |
@@ -23718,5 +23718,5 @@ nothing since `2d4c14b` on any run without the fixed-spin-moment warning (`ad95a
 
 **Not done, and why** (each in its item): XXIII 6, the walked third derivative chunk-outer, deferred
 because it keeps `3 nat` accumulators alive at once where the walk exists to bound that; XXIII 20,
-`notconv`-wide Davidson rows, 1 to 2 per cent at sixteen atoms; the second halves of 13, 17, 24 and 25;
+`notconv`-wide Davidson rows, 1 to 2 per cent at sixteen atoms; the second halves of 13 and 25;
 the all-reduce pack and the G-space payload of 26; and 22's default.
