@@ -292,7 +292,7 @@ def torque_at_angle(calculation, states, weights, density, plane, angle,
     from defumat.batching import resolve_k_batch
 
     resolved = resolve_k_batch(k_batch)
-    nk = int(jnp.asarray(states).shape[1])
+    nk = int(np.shape(states)[1])
     if resolved is None or resolved >= nk:
         def energy(value):
             return band_energy_at_angle(
@@ -400,7 +400,7 @@ def orientation_torque(calculation, states, weights, texture, base,
     base = jnp.asarray(base, dtype=texture.real.dtype)
     origin = jnp.zeros(3, dtype=texture.real.dtype)
     resolved = resolve_k_batch(k_batch)
-    nk = int(jnp.asarray(states).shape[1])
+    nk = int(np.shape(states)[1])
     if resolved is None or resolved >= nk:
         def energy(value):
             return band_energy_at_rotation(

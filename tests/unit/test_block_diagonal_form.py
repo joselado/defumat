@@ -76,3 +76,35 @@ def test_what_lies_off_the_atom_blocks_never_enters():
     assert np.array_equal(
         np.asarray(block_diagonal_form(vkb.conj(), with_off, vkb, ATOM_OF_CHANNEL)),
         np.asarray(clean))
+
+
+def test_the_hubbard_diagonal_is_its_dense_form():
+    """The Hubbard term's share of ``h_diag``, block by block over its atoms.
+
+    ``v_ns`` is block-diagonal over the Hubbard atoms -- ``lda_plus_u_kind = 0``
+    has no off-site terms -- and each atom's ``npol ldim`` columns of ``wfcU``
+    are one run, so :class:`~defumat.hubbard.operator.HubbardTerm` contracts it
+    with :func:`block_diagonal_form` where it knows which atom each column is
+    (``OPEN.md`` Part XXIII, "Found in passing"). Two ``d`` manifolds and a
+    ``p`` one, so that the atoms form two groups.
+    """
+    from defumat.hubbard.operator import HubbardTerm
+
+    rng = np.random.default_rng(11)
+    ldims = (5, 3, 5)
+    atom_of_column = tuple(slot for slot, ldim in enumerate(ldims) for _ in range(ldim))
+    nwfc = len(atom_of_column)
+    vns = np.zeros((nwfc, nwfc))
+    start = 0
+    for ldim in ldims:
+        block = rng.standard_normal((ldim, ldim))
+        vns[start:start + ldim, start:start + ldim] = block + block.T
+        start += ldim
+    wfcU = jnp.asarray(rng.standard_normal((2, NPWX, nwfc))
+                       + 1j * rng.standard_normal((2, NPWX, nwfc)))
+    dense = HubbardTerm(wfcU=wfcU, vns=jnp.asarray(vns))
+    blocks = HubbardTerm(wfcU=wfcU, vns=jnp.asarray(vns), atom_of_column=atom_of_column)
+    for ik in range(2):
+        reference = np.asarray(dense.diagonal(ik))
+        assert np.max(np.abs(np.asarray(blocks.diagonal(ik)) - reference)) \
+            < 1e-14 * np.max(np.abs(reference))
