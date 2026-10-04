@@ -182,6 +182,7 @@ def _per_one_shot(monkeypatch):
         jax.config.update("jax_log_compiles", before)
 
 
+@pytest.mark.slow
 def test_an_orientation_relaxation_keeps_what_every_one_shot_shares(cobalt, monkeypatch):
     """No global clear, nothing shared compiled twice, and the rest bounded.
 
