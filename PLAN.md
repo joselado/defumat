@@ -23913,6 +23913,16 @@ alone (37.29653813 against 37.29653799 states/Ry on the prototype); the LDOS in 
 `tests/regression/test_ldos_mixing_runs.py` (3, slow, 201 s), and two pools against one in
 `tests/unit/test_parallel.py`.
 
+**Measured after the merge, 2026-10-04 evening: a bulk d-metal is worse under `'ldos'`.**
+Nonmagnetic bcc Fe on 4x4x4 (`fe-noncolin-nonmagnetic.in`) 28 iterations against `anderson`'s
+10; `fe-mag-1k` 20 against 11, and 20 again with the LDOS smeared at 0.1 and 0.2 Ry, where `TF`
+takes 13. The local model screens the d-band at `e_F` as a free-electron metal four times denser
+(`8 pi <D>` = 7.8 bohr^-2 against Thomas-Fermi's 1.9), which Barat, Levitt and Torrent also report for
+bcc Fe ("the LDOS preconditioner happens to worsen the condition number"). On `fe-unstable.in` it
+lands on a moment of 0.42 mu_B, 6.2e-4 Ry below the nonmagnetic state `anderson` stops at, in 27
+iterations against 23. Neither magnet is slow in the magnetization under `'ldos'` (the magnetic
+half of `dr2` the larger in 0 of 20 iterations on the cobalt film, 0 of 15 on `fe-noncolin-pbe-stress`).
+
 **Not done.** `'ldos'` is not the default. Not measured: a metal on a semiconductor (Herbst and
 Levitt: Kerker 26, LDOS 26 on Al on GaAs, where their LDOS+dielectric hybrid takes 13); a magnetic
 slab, whose soft direction is the magnetization the scheme does not screen (Barat, Levitt and

@@ -934,6 +934,19 @@ cases it does not help: a \textbf{metal on a semiconductor} (Kerker 26, \code{ld
 on their Al on GaAs), and \textbf{localized orbitals at $\varepsilon_F$}, where it is
 ``as ineffective as homogeneous schemes'', which is a $d$-electron magnet's case.
 
+\textbf{On a bulk $d$-metal it is worse than plain \code{anderson}}, measured: bcc iron
+on a $4\times4\times4$ grid, nonmagnetic (\code{benchmarks/fe-noncolin-nonmagnetic.in}),
+takes 28 iterations against 10, and the one-$k$-point noncollinear magnet
+\code{benchmarks/fe-mag-1k.in} 20 against 11. It is not the sampling (an LDOS smeared at
+0.1 and 0.2 Ry takes 20 as well) and not the magnetization: a $d$-band at
+$\varepsilon_F$ gives $8\pi\langle D\rangle = 7.8$ bohr$^{-2}$ where the free-electron
+Thomas--Fermi value is 1.9, so the local model screens every wavelength of a small
+bulk cell four times too hard, and \code{TF} costs only 13 against 11. A bulk cell has
+no sloshing to cure; leave it at \code{anderson}. Near a magnetic transition the mode
+can also change the state found: on \code{benchmarks/fe-unstable.in} it lands on a
+moment of $0.42\,\mu_B$, $6.2\times10^{-4}$ Ry below the nonmagnetic state plain
+\code{anderson} stops at.
+
 \textbf{Tetrahedra are refused}: the LDOS needs a smooth delta at $\varepsilon_F$, and
 with a Gaussian in its place the aluminium slab under \code{tetrahedra\_opt} converged
 under neither \code{ldos} nor plain \code{anderson} in 200 iterations, so the combination
@@ -982,8 +995,10 @@ measurement says so: on bcc iron with its moment in the plane
 (\code{tests/data/qe/fe-noncolin-pbe-stress.in}, ultrasoft, PBE, noncollinear)
 $\beta_0 = 0.2$ converges in \textbf{16} iterations where $\beta_0 = 0.05$ takes
 24, because the soft directions want the step to grow faster than Elk's default
-lets it. Anderson on the same cell takes 43 at the input's own
-\code{mixing\_beta} and 24 at the best one for it, and \code{pw.x} takes 19; all
+lets it. Anderson on the same cell took 43 at the input's own
+\code{mixing\_beta} when this was measured (2026-09-14; it takes 15 on the code of
+2026-10-04, measured on another machine, the adaptive counts not re-measured) and 24 at
+the best one for it, and \code{pw.x} takes 19; all
 of them reach the same energy within $3\times10^{-10}$ Ry and the same moment
 \emph{length} within $3\times10^{-5}\,\mu_B$, with the transverse components
 that symmetry makes zero coming out below $2.4\times10^{-4}\,\mu_B$. So raising $\beta_0$ is the knob to try on a
