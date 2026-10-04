@@ -205,8 +205,10 @@ because that is what decides whether it is a session or a phase.
 
 - **Wyckoff input** (P6, the one part of that phase not done).
 - **The mixer's history in G as memory mode's default** (P128, `OPEN.md` Part XXIII item 22): the
-  layout is built and its shell rebuilt from the mixed `becsum`; four cells under the rebuild and one
-  DFT+U test whose basin the layout decides stand between it and the default.
+  layout is built and its shell rebuilt from the mixed `becsum`, and every cell on record converges in
+  it to within three iterations of real space; what stands between it and the default is the time of
+  one G iteration against one real-space one, and the DFT+U basins it chooses differently (the user's
+  decision).
 - **A switch from single to double precision that pays** (P126): `'mixed'` converges to the double
   state and loses the superlinear mixing step a bulk cell converges by, 0.72x on 64-atom silicon on
   the card; and **`k_batch = 'fit'` as memory mode's default on a card**, which the user decided on
@@ -23684,9 +23686,11 @@ each, with its sites, is in its `OPEN.md` entry; this is the index and what the 
   `run_scf(mixing_space='g')` with the shell above `ngms` rebuilt from the mixed `becsum`
   (`5e6befe`, `78dce02`, `5654db2`, `46d1bf3`). The history's density block falls to 0.141 of the old
   on the dual-8 benchmarks. Iterations real space / G / `pw.x`: `fe-mag-1k` 11 / 11 / 12,
-  `fe-noncolin-pbe-stress` 15 / 17 / 19, the dual-4 cells byte-identical. **The default stays `'r'`**:
-  four cells are not yet measured under the rebuild and a seeded nickel DFT+U source lands in a
-  different basin under G.
+  `fe-noncolin-pbe-stress` 15 / 17 / 19, the cobalt film with local-TF 30 / 33 / 24, `fe-unstable`
+  23 / 20 / 23, the DFT+U nickel benchmark 92 / 82 / 98, the dual-4 cells byte-identical. **The
+  default stays `'r'`**: on DFT+U nickel the layout chooses the basin, twice (the benchmark lands
+  1.09e-6 Ry above real space's state on none of P113's four, and a seeded promotion source 2.0e-3
+  above), and one G iteration has not been timed against one real-space iteration.
 
 **Two defects found by doing the items, fixed:** `at_cell` did not move `basis_kpoints`, so a DFT+U
 vc-relax rebuilt `wfcU` at the starting cell's Cartesian k-points (1.8e-2 on 0.94 at a 3 per cent
