@@ -146,6 +146,14 @@ sixty-four k-points, forty bands and five hundred frequencies that is 13 MB per
 chunk against 5 MB of matrix elements: the frequency axis is free and the band
 count is what has to be watched, since it enters squared and is also the
 truncation the f-sum rule measures.
+
+**The k axis is walked a chunk at a time** (:mod:`defumat.response.walk`): a
+chunk's states cross to the device, its matrix elements are built on its own
+rows and contracted into the interband sum and the raw plasma tensor, and the
+next chunk follows, so neither the states nor the matrix elements are on the
+device for the whole k axis at once. The chunk is the calculation's
+``k_batch``, and it moves the result at round-off only, through the order of the
+k sum.
 """
 
 from __future__ import annotations
@@ -156,9 +164,11 @@ from dataclasses import dataclass
 import jax.numpy as jnp
 import numpy as np
 
-from defumat.batching import resolve_k_batch, sum_k, upload
-from defumat.eager import compiled
-from defumat.response.velocity import VelocityOperator
+from defumat.batching import sum_k
+from defumat.response.velocity import VelocityOperator, with_connections
+from defumat.response.walk import (
+    chunk_size, padded, row_leaves, store_rows, walk, with_rows,
+)
 from defumat.scf.occupations import smearing_order, w0gauss
 from defumat.solvers.davidson import EMPTY_ETHR_FLOOR
 from defumat.units import AU_TO_S_PER_CM, FPI, RY_TO_EV
@@ -502,7 +512,9 @@ def optical_conductivity(
             looser than an SCF's own empty bands; there is little reason to
             lower it, since below the round-off an eigensolver leaves on a
             symmetry-degenerate pair the guard stops absorbing what it is for.
-        k_batch: the batching dial.
+        k_batch: how many k-points each chunk of the walk over k holds;
+            ``"default"`` is the calculation's own ``k_batch`` and ``None`` the
+            whole axis in one chunk (:func:`~defumat.response.walk.chunk_size`).
 
     Returns:
         An :class:`OpticalConductivity`. Nothing is symmetrised: the refusal
@@ -517,7 +529,8 @@ def optical_conductivity(
     eigenvalues = jnp.asarray(eigenvalues)
     if eigenvalues.ndim == 2:
         eigenvalues = eigenvalues[None]
-    wavefunctions = upload(wavefunctions)
+    # The states stay where they are, a streamed store in host memory or a
+    # device array, and cross to the device a k-chunk at a time below.
     if wavefunctions.ndim == 3:
         wavefunctions = wavefunctions[None]
     if eigenvalues.shape[0] != 1:
@@ -543,24 +556,27 @@ def optical_conductivity(
         shifted = jnp.where(above, eigenvalues + precision.as_real(scissor),
                             eigenvalues)
 
-    velocity = VelocityOperator(calculation, v_scf, ddd_paw, ns)
-    # ``<n|dH_a - e_m dS_a|m> + (e_m - e_n) K^a_{nm}``, which is
-    # ``<n|dH_a|m>`` unchanged on a norm-conserving dataset and the whole
-    # generalised velocity on one with an augmentation charge. The *unshifted*
-    # eigenvalues, because those are the ones the eigenproblem was solved with;
-    # the scissors is applied to the matrix element afterwards.
-    elements = velocity.generalised_matrix_elements(
-        wavefunctions, eigenvalues
-    )                                               # (3, nspin, nk, nb, nb)
-    elements = jnp.moveaxis(elements[:, 0], 0, 1)  # (nk, 3, nbnd, nbnd)
+    # Built on the whole set for its refusals and for the point it
+    # differentiates around, which a chunk's own calculation no longer carries
+    # (``at_rows`` drops a strained ``_kcart``): each chunk's operator is handed
+    # its rows of this ``kcart`` rather than recomputing them.
+    kcart = np.asarray(VelocityOperator(calculation, v_scf, ddd_paw, ns).kcart)
+    # ``dpqq``, k-independent, built here once: the chunk's operator is traced
+    # inside a compiled pass, where it cannot be built (``None`` without an
+    # augmentation charge).
+    from defumat.response.efield import _augmentation_dipole
 
-    if scissor:
-        elements = _renormalise(elements, eigenvalues[0], shifted[0])
+    dipole = _augmentation_dipole(calculation)
+    # The potential on the smooth grid and ``newd``'s ``D_ij``, k-independent,
+    # built once here rather than in every chunk and direction.
+    terms = calculation.local_terms(v_scf, ddd_paw)
 
     wg, _ = calculation.occupations(shifted)
     wg = jnp.asarray(wg)[0]  # (nk, nbnd), summing to nelec
     wk = jnp.asarray(calculation.system.kpoints.weights)  # (nk,)
     filling = wg / wk[:, None]  # in [0, 1]
+    # On the host, where each chunk takes its rows from.
+    wg, wk, filling = np.asarray(wg), np.asarray(wk), np.asarray(filling)
 
     if frequencies is None:
         frequencies = np.linspace(0.0, float(window), int(nw))
@@ -568,7 +584,7 @@ def optical_conductivity(
     if method == "curvature":
         frequencies = np.zeros(1)
 
-    batch = resolve_k_batch(k_batch)
+    batch = chunk_size(calculation, k_batch)
     eta = precision.as_real(broadening)
     zomega = (jnp.asarray(frequencies) + 1j * eta).astype(precision.complex)
 
@@ -582,21 +598,82 @@ def optical_conductivity(
             element, energy, weight, fill = arrays
             return _curvature_sum(element, energy, weight, fill, tol)
 
-    # ``sum_k`` tree-maps its accumulator, so the pair count adds over k the
-    # same way the tensor does.
-    inter, dropped = compiled(lambda a: sum_k(one_k, a, batch=batch),
-                              (elements, shifted[0], wg, filling))
-    inter = np.asarray(inter) * (1.0 / volume)
-    dropped = int(np.asarray(dropped))
-
-    plasma, intra = _drude(
-        calculation, fermi_energy, elements, shifted[0], wk, frequencies,
-        volume, broadening if relaxation is None else relaxation, tol,
+    # The Fermi-surface delta of the Drude term, ``(nk, nbnd)``, or ``None``
+    # when there is no intraband term to build.
+    delta = _fermi_surface_delta(
+        calculation, fermi_energy, shifted[0],
         enabled=intraband and method == "frequency",
     )
-    # The same test ``_drude`` makes, and for the neighbouring reason: what
-    # both turn on is whether the occupation is a smooth function of energy.
-    # A tetrahedron run is *not* smeared by this test, which is right -- it
+    bare = np.asarray(eigenvalues[0])
+    moved_host = np.asarray(shifted[0])
+
+    # ``<n|dH_a - e_m dS_a|m> + (e_m - e_n) K^a_{nm}``, which is ``<n|dH_a|m>``
+    # unchanged on a norm-conserving dataset and the whole generalised velocity
+    # on one with an augmentation charge, built a chunk at a time in stages,
+    # each its own program: the two tangents' share, the connection where there
+    # is an augmentation charge, then the join and the contraction. The
+    # *unshifted* eigenvalues, because those are the ones the eigenproblem was
+    # solved with; the scissors is applied to the matrix element afterwards.
+    augmented = getattr(calculation, "augmentation", None) is not None
+
+    def velocity_on(rowset, kcart):
+        return VelocityOperator(with_rows(calculation, rowset), v_scf, ddd_paw, ns,
+                                kcart=kcart, dipole=dipole, local_terms=terms)
+
+    def tangents_of(rowset, psi, energies, kcart):
+        """``<n|dH_a - e_m dS_a|m>`` on one chunk, ``(3, 1, chunk, nb, nb)``."""
+        return velocity_on(rowset, kcart).tangent_elements(
+            psi, energies[None], sequential=True)
+
+    def connections_of(tangents, rowset, psi, kcart):
+        """The augmentation dipole's connection on one chunk, the same shape."""
+        return velocity_on(rowset, kcart).connections(psi, sequential=True)
+
+    def contract(tangents, *rest):
+        """One chunk's ``(interband, dropped pairs[, raw plasma tensor])``."""
+        connections = rest[0] if augmented else None
+        energies, moved, weight, fill, *drude = rest[1:] if augmented else rest
+        elements = with_connections(tangents, energies[None], connections)
+        elements = jnp.moveaxis(elements[:, 0], 0, 1)  # (chunk, 3, nb, nb)
+        if scissor:
+            elements = _renormalise(elements, energies, moved)
+        # ``sum_k`` tree-maps its accumulator, so the pair count adds over k
+        # the same way the tensor does.
+        inter, dropped = sum_k(one_k, (elements, moved, weight, fill), batch=batch)
+        if not drude:
+            return inter, dropped
+        wk_chunk, delta_chunk = drude
+        return inter, dropped, _plasma_sum(wk_chunk, delta_chunk, moved,
+                                           elements, tol)
+
+    def arguments(rows, live):
+        # The padded rows carry zero ``wg`` (and zero ``w_k`` in the Drude
+        # term): every pair weight is ``W_n (1 - f_m)``, so they add nothing
+        # and the pair guard does not count them. ``filling`` is taken from the
+        # unzeroed arrays, since ``wg / 0`` there would be ``nan``.
+        rowset, psi = row_leaves(calculation, rows), store_rows(wavefunctions, rows)
+        energies, kc = jnp.asarray(bare[rows]), jnp.asarray(kcart[rows])
+        last = (energies, jnp.asarray(moved_host[rows]),
+                jnp.asarray(padded(wg, rows, live)), jnp.asarray(filling[rows]))
+        if delta is not None:
+            last = last + (jnp.asarray(padded(wk, rows, live)),
+                           jnp.asarray(delta[rows]))
+        if augmented:
+            return (rowset, psi, energies, kc), (rowset, psi, kc), last
+        return (rowset, psi, energies, kc), last
+
+    stages = ((tangents_of, connections_of, contract) if augmented
+              else (tangents_of, contract))
+    total = walk(int(wk.shape[0]), batch, arguments, *stages)
+    inter = np.asarray(total[0]) * (1.0 / volume)
+    dropped = int(np.asarray(total[1]))
+    plasma, intra = _drude(
+        None if delta is None else total[2], frequencies, volume,
+        broadening if relaxation is None else relaxation,
+    )
+    # The same test ``_fermi_surface_delta`` makes, and for the neighbouring
+    # reason: what both turn on is whether the occupation is a smooth function
+    # of energy. A tetrahedron run is *not* smeared by this test, which is right -- it
     # integrates the step function, so a degenerate pair straddling ``E_F``
     # cancels nothing there either.
     scheme = str(getattr(calculation.system, "occupations", "fixed")).lower()
@@ -821,17 +898,17 @@ def _curvature_sum(element, energies, wg, filling, tol):
     return (2.0 * jnp.einsum("nm,nmij->ij", weight, jnp.imag(z)))[None], dropped
 
 
-def _drude(calculation, fermi_energy, elements, energies, wk, frequencies,
-           volume, relaxation, tol, *, enabled: bool):
-    """The plasma frequency tensor and the Drude conductivity it generates.
+def _fermi_surface_delta(calculation, fermi_energy, energies, *, enabled: bool):
+    """The Drude term's delta function at the Fermi level, ``(nk, nbnd)`` in 1/Ry, or ``None``.
 
     ``dielectric.f90``'s intraband branch. The delta function is the smearing
     the SCF itself used, so a fixed-occupation run has no Fermi surface here
     and the whole term is zero -- which is the statement that an insulator has
-    no free carriers, not an approximation.
+    no free carriers, not an approximation. ``None`` says so, and is what a
+    disabled term returns too; the tensor itself is a sum over k of matrix
+    elements, accumulated chunk by chunk (:func:`_plasma_sum`) and finished by
+    :func:`_drude`.
     """
-    nw = len(frequencies)
-    zero = np.zeros((nw, 3, 3), dtype=complex)
     scheme = str(getattr(calculation.system, "occupations", "fixed")).lower()
     degauss = float(getattr(calculation.system, "degauss", 0.0) or 0.0)
     if enabled and scheme.startswith("tetrahedra"):
@@ -850,7 +927,7 @@ def _drude(calculation, fermi_energy, elements, energies, wk, frequencies,
             "interband part alone"
         )
     if not enabled or degauss <= 0.0 or "smearing" not in scheme:
-        return np.zeros((3, 3)), zero
+        return None
 
     ngauss = smearing_order(getattr(calculation.system, "smearing", "gaussian"))
     # **``(E_F - e)`` and not ``(e - E_F)``.** ``w0gauss``'s own docstring fixes
@@ -868,8 +945,17 @@ def _drude(calculation, fermi_energy, elements, energies, wk, frequencies,
     # of the occupation function the SCF converged with, and the flip breaks
     # that identity rather than merely reweighting.
     x = (float(fermi_energy) - energies) / degauss
-    delta = w0gauss(x, ngauss) / degauss  # (nk, nbnd), 1/Ry
+    return np.asarray(w0gauss(x, ngauss) / degauss)  # (nk, nbnd), 1/Ry
 
+
+def _plasma_sum(wk, delta, energies, elements, tol):
+    """``sum_k w_k sum_nm delta_n [|e_nm| <= tol] v_a^nm v_b^mn``, over the k-points given.
+
+    The raw plasma tensor of one chunk, complex, before the ``4 pi/Omega`` and
+    the real part :func:`_drude` takes of the whole sum. ``elements`` is
+    ``(nk, 3, nbnd, nbnd)`` and ``energies`` the (shifted) eigenvalues the
+    delta was built from.
+    """
     # **The multiplet block, not the diagonal.** ``dielectric.f90`` writes the
     # Drude weight as ``sum_n v_a^nn v_b^nn``, which is what the semiclassical
     # picture asks for and what is **not invariant** under the unitary rotation
@@ -903,13 +989,26 @@ def _drude(calculation, fermi_energy, elements, energies, wk, frequencies,
     # pairs exactly: a gap of precisely ``tol`` belongs to one of them rather
     # than to neither.
     multiplet = (jnp.abs(gap) <= tol).astype(delta.dtype)
-    plasma2 = FPI / volume * jnp.real(jnp.einsum(
+    return jnp.einsum(
         "k,kn,knm,kanm,kbmn->ab", wk, delta, multiplet, elements, elements
-    ))
+    )
+
+
+def _drude(raw, frequencies, volume, relaxation):
+    """The plasma frequency tensor and the Drude conductivity it generates.
+
+    ``raw`` is :func:`_plasma_sum` over every k-point, or ``None`` where
+    :func:`_fermi_surface_delta` found no Fermi surface to build the term on, in
+    which case both are zero.
+    """
+    nw = len(frequencies)
+    if raw is None:
+        return np.zeros((3, 3)), np.zeros((nw, 3, 3), dtype=complex)
+    plasma2 = FPI / volume * np.real(np.asarray(raw))
     # In Hartree units: the matrix element halves twice and the delta doubles,
     # so ``4 pi/Omega sum w v_a v_b delta`` in Rydberg quantities is
     # ``wp^2`` in Hartree^2 up to one factor of two.
-    plasma2 = np.asarray(plasma2) / 2.0
+    plasma2 = plasma2 / 2.0
     plasma = np.sqrt(np.abs(plasma2)) * 2.0  # back to Ry, which is what is reported
 
     gamma = _hartree(relaxation)

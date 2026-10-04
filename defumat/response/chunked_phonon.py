@@ -745,10 +745,11 @@ class StreamedDisplacementsAtQ:
         self.calculation_kq = calculation_kq
         self.solver = solver
         self.hamiltonians = solver.hamiltonians
-        # **Without the per-k plane-wave counts**, which are static and bound
-        # only the Davidson subspace (``Hamiltonian.npw``): they differ from one
-        # ``q`` to the next, and kept they would compile the solve pass again at
-        # every ``q`` of a dispersion for nothing the solve reads.
+        # **Without the smallest sphere's plane-wave count**, ``min_k npw`` of
+        # the ``k + q`` spheres, which is static and bounds only the Davidson
+        # subspace (``Hamiltonian.npw``): it can differ from one ``q`` to the
+        # next, and kept it would compile the solve pass again at every ``q`` of
+        # a dispersion for nothing the solve reads.
         self.hamiltonians_kq = tuple(dataclasses.replace(h, npw=None)
                                      for h in hamiltonians_kq)
         keep = solver.psi.shape[2]

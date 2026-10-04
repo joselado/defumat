@@ -23,6 +23,8 @@ from __future__ import annotations
 import equinox as eqx
 import jax.numpy as jnp
 
+from defumat.hamiltonian.operator import block_diagonal_form
+
 __all__ = ["HubbardTerm", "block_potential"]
 
 
@@ -63,6 +65,13 @@ class HubbardTerm(eqx.Module):
 
     wfcU: jnp.ndarray
     vns: jnp.ndarray  # (nwfcU, nwfcU), real
+    #: Which Hubbard atom (slot) each column of ``wfcU`` belongs to, ``nwfcU``
+    #: long. ``vns`` is block-diagonal over these -- there are no off-site
+    #: terms -- and each slot's columns are one contiguous run, so
+    #: :meth:`diagonal` contracts it block by block
+    #: (:func:`~defumat.hamiltonian.operator.block_diagonal_form`). ``None``
+    #: contracts it as a dense matrix, as a term built by hand gets it.
+    atom_of_column: tuple | None = eqx.field(static=True, default=None)
 
     @property
     def nwfcU(self) -> int:
@@ -80,8 +89,18 @@ class HubbardTerm(eqx.Module):
         return columns @ self.vns.astype(columns.dtype) @ jnp.conj(columns).T
 
     def diagonal(self, ik: int) -> jnp.ndarray:
-        """``<k+G|V_U|k+G>``, the preconditioner's share of the term."""
+        """``<k+G|V_U|k+G>``, the preconditioner's share of the term.
+
+        Block by block over the Hubbard atoms where :attr:`atom_of_column` is
+        known, which is the nonlocal term's ``usnldiag`` contraction with two
+        names changed (``OPEN.md`` Part III M5): the dense ``gi,ij,gj->g``
+        multiplies every off-site zero of ``vns`` and materialises an
+        ``(npwx, nwfcU)`` intermediate before it reduces. The order of the sum
+        is not the dense form's, so the preconditioner moves at round-off.
+        """
         columns = self.wfcU[ik]
-        return jnp.real(
-            jnp.einsum("gi,ij,gj->g", jnp.conj(columns), self.vns.astype(columns.dtype), columns)
-        )
+        vns = self.vns.astype(columns.dtype)
+        if self.atom_of_column is not None:
+            return jnp.real(block_diagonal_form(
+                jnp.conj(columns), vns, columns, self.atom_of_column))
+        return jnp.real(jnp.einsum("gi,ij,gj->g", jnp.conj(columns), vns, columns))

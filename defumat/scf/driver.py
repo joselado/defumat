@@ -2895,6 +2895,7 @@ class Calculation:
             self.hubbard_symmetry = None
             self._hubbard_columns = self._hubbard_mask = None
             self._hubbard_blocks = None
+            self._hubbard_atom_of_column = None
             return
 
         setup = self.hubbard
@@ -2943,6 +2944,12 @@ class Calculation:
             jnp.asarray(row), jnp.asarray(column),
             jnp.asarray(block_row), jnp.asarray(block_column), setup.nwfcU,
         )
+        # Each slot's ``npol ldim`` columns are one run of ``wfcU``, in slot
+        # order, which is the block structure the operator's diagonal is
+        # contracted over (``HubbardTerm.atom_of_column``).
+        self._hubbard_atom_of_column = tuple(
+            slot for slot, ldim in enumerate(setup.ldims)
+            for _ in range(setup.npol * ldim))
         self.hubbard_symmetry = (
             build_ns_symmetry(
                 setup, self.system.cell, self.system.structure, self.symmetries
@@ -3053,7 +3060,9 @@ class Calculation:
         # three different numbers).
         channels = 1 if self.noncolin else ns.shape[0]
         return energy, v_ns, tuple(
-            HubbardTerm(wfcU=self.wfcU, vns=blocks[spin]) for spin in range(channels)
+            HubbardTerm(wfcU=self.wfcU, vns=blocks[spin],
+                        atom_of_column=getattr(self, "_hubbard_atom_of_column", None))
+            for spin in range(channels)
         )
 
     def starting_ns(self) -> jnp.ndarray:
