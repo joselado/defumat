@@ -7293,7 +7293,9 @@ What the agents of this sweep's follow-up found outside their items, recorded ra
   silicon (`nosym`, unshifted 2x2x2: the band velocities on the ground grid and on a three-point path,
   the effective mass at `Gamma`, `epsilon` with its `bare` and `dpsi`), the iodine spiral's
   `spiral_spin_orbit_energy`, and the noncollinear iodine cell's `frozen_expectation` and projected
-  `run_force_theorem`. `tests/unit/test_host_store_uploads.py` fails on the old code at all five sites.
+  `run_force_theorem`; the iodine cells' 7 arrays bit-identical on a device store too
+  (`DEFUMAT_WFC_STORE=device`, the default route on a CPU, where `store_rows` gathers in place of the
+  numpy index). `tests/unit/test_host_store_uploads.py` fails on the old code at all five sites.
   **Left, because no host store reaches them through any entry point**: `efield.py`'s second upload, in
   `_WholeField.born_charges`, which runs only after the first has made the states a device array;
   `elastic.py:182`, `make_sternheimer` (`sternheimer.py:1686`) and `phonon.py:418`, which
