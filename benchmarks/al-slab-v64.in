@@ -1,0 +1,36 @@
+! benchmarks/al-slab.in with 64 bohr of vacuum in place of 16: the same five Al(100)
+! layers, held fixed in bohr, in a cell 79 bohr long. It is the cell on which the
+! measurement in VACUUM-MIXING-NEXT.md separates the mixers: plain Anderson takes 34
+! iterations, Kerker ('TF') 36 and local-TF 20, growing with the vacuum, where
+! mixing_mode = 'ldos' takes 10, as it does at 16 bohr. Positions are in bohr so that
+! the slab does not stretch with the cell.
+&control
+  calculation = 'scf'
+/
+&system
+  ibrav = 0
+  nat = 5
+  ntyp = 1
+  ecutwfc = 12.0
+  occupations = 'smearing'
+  smearing = 'gaussian'
+  degauss = 0.05
+/
+&electrons
+  conv_thr = 1.0d-8
+  electron_maxstep = 200
+/
+ATOMIC_SPECIES
+  Al 26.98 Al.pz-vbc.UPF
+CELL_PARAMETERS bohr
+  5.3033010000 0.0000000000 0.0
+  0.0000000000 5.3033010000 0.0
+  0.0 0.0 79.0000000000
+ATOMIC_POSITIONS bohr
+  Al 0.0000000000 0.0000000000 32.0000150000
+  Al 2.6516505000 2.6516505000 35.7499920000
+  Al 0.0000000000 0.0000000000 39.5000000000
+  Al 2.6516505000 2.6516505000 43.2500080000
+  Al 0.0000000000 0.0000000000 46.9999850000
+K_POINTS automatic
+  2 2 1 0 0 0

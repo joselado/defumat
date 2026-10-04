@@ -1145,16 +1145,19 @@ LDOS_DEPENDENT = {"ldos"}
 #: The inner solve's stopping rule: the relative 2-norm of the residual of
 #: ``A y = b`` (:func:`ldos_preconditioner`), which weights the density residual
 #: by ``1/|G|``, the Hartree norm, and is therefore strictest on the long
-#: wavelengths the preconditioner exists for; and its iteration cap.
-LDOS_TOL, LDOS_MAXITER = 1.0e-4, 200
+#: wavelengths the preconditioner exists for; and its iteration cap. 1e-3 and
+#: 1e-4 gave the same SCF count on all nine cells measured (the aluminium slab at
+#: 32 and 64 bohr of vacuum, the cobalt film at three, NbSe2 at two, graphene),
+#: 1e-3 with 12 to 25 per cent fewer applications (``VACUUM-MIXING-NEXT.md``).
+#: The prototype's GMRES, stopped in a Kerker-weighted norm that is loosest on the
+#: long wavelengths, lost seven iterations on NbSe2 at 1e-2.
+LDOS_TOL, LDOS_MAXITER = 1.0e-3, 200
 
 #: The smallest width of the Gaussian the LDOS is built with, in Ry
-#: (``Calculation.ldos_weights``): ``max(degauss, LDOS_SIGMA_MIN)``.
+#: (``Calculation.ldos_weights``): ``max(degauss, LDOS_SIGMA_MIN)``. Zero, so the
+#: run's own width: the cobalt film of ``VACUUM-MIXING-NEXT.md`` (cold smearing at
+#: ``degauss = 0.005`` on 12x12) took 20 iterations at 0.005, 0.01 and 0.02 alike.
 LDOS_SIGMA_MIN = 0.0
-
-#: The Gaussian's width for a tetrahedron run, which has no ``degauss`` of its
-#: own to build the LDOS with, in Ry.
-LDOS_TETRAHEDRA_SIGMA = 0.01
 
 #: Below this ``integral D dV`` (states per Ry in the cell) there are no states
 #: at the Fermi level and the step is ``beta R`` exactly, the plain one.

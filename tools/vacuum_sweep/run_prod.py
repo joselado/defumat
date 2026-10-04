@@ -33,6 +33,11 @@ record = {"input": path, "mode": mode, "fit": fit, "tol": mixing.LDOS_TOL,
           "sigma_min": mixing.LDOS_SIGMA_MIN}
 start = time.perf_counter()
 try:
+    if os.environ.get("MIXING_SPACE"):
+        # Calculator does not forward mixing_space; the module default is what
+        # an unset one resolves to.
+        mixing.DEFAULT_MIXING_SPACE = os.environ["MIXING_SPACE"]
+    record["mixing_space"] = mixing.DEFAULT_MIXING_SPACE
     result = calc.get_scf(mixing_mode=mode)
     record.update(converged=bool(result.converged), iterations=int(result.iterations),
                   energy=float(result.total_energy),
