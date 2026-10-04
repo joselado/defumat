@@ -23883,7 +23883,7 @@ arXiv:2009.01665: the step is `beta eps~^-1 R` on the charge, `eps~ = 1 - chi0~ 
   the aluminium slab in 200. `run_scf` warns for `'ldos'`, `TF` or `local-TF` with fixed or
   `from_input` occupations.
 
-**The numbers, production code** (iterations, flat fit; `rho_ddot`'s within one):
+**The numbers, production code** (iterations, flat fit; `rho_ddot`'s within two, 12 against 10 on the 48-bohr slab and within one elsewhere):
 
 | cell | `anderson` | `TF` | `local-TF` | `ldos` | `pw.x` |
 |---|---|---|---|---|---|
