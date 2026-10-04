@@ -58,11 +58,14 @@ jaxpr and its compiled program, never the arrays, and it is bounded
 
 **A loop whose programs are not all reused** bounds what it keeps with
 :func:`tracking` and :func:`forget` rather than with ``jax.clear_caches``, which
-drops every executable in the process. ``relax_orientation`` is the case: its
-torque is keyed on the quantization axis, which turns with every step, so one
-step's torque program is never used again while the Hamiltonian's and the band
+drops every executable in the process. ``relax_orientation`` was the case: its
+torque was keyed on the quantization axis, which turns with every step, so one
+step's torque program was never used again while the Hamiltonian's and the band
 sum's are used at every step. Dropping what one step used and the next did not
-keeps the second kind and bounds the first.
+keeps the second kind and bounds the first. The axis is an argument of the
+kept program now (``Calculation._axis_argument``), so on that relaxation the
+drop finds nothing, and it stays as the bound for anything else keyed on what
+a loop moves.
 """
 
 from __future__ import annotations

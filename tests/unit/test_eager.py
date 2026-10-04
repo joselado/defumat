@@ -105,8 +105,9 @@ def test_forget_drops_what_the_next_pass_did_not_use_and_keeps_the_rest():
     """``tracking`` and ``forget``, as an orientation relaxation uses them.
 
     Each pass reaches one program shared by every pass and one keyed on a
-    nested constant that changes between passes (the quantization axis, in
-    the relaxation). Dropping what the first pass used and the second did not
+    nested constant that changes between passes (the quantization axis was
+    one, in the relaxation, until it became an argument). Dropping what the
+    first pass used and the second did not
     must drop the first pass's own program and nothing else: the shared one is
     then reused without a compile, and the dropped one compiles again.
     """

@@ -142,6 +142,119 @@ def test_an_orientation_relaxation_builds_one_calculation(cobalt, monkeypatch):
 
 
 @contextlib.contextmanager
+def _compiles():
+    """The name of every XLA compilation inside the block, persistent-cache hits included."""
+    names = []
+
+    class Grab(logging.Handler):
+        def emit(self, record):
+            found = re.search(r"Finished XLA compilation of (.+?) in", record.getMessage())
+            if found:
+                names.append(found.group(1))
+
+    handler, logger = Grab(), logging.getLogger("jax")
+    before = jax.config.jax_log_compiles
+    jax.config.update("jax_log_compiles", True)
+    logger.addHandler(handler)
+    try:
+        yield names
+    finally:
+        logger.removeHandler(handler)
+        jax.config.update("jax_log_compiles", before)
+
+
+def test_a_turned_texture_compiles_the_potential_once(cobalt):
+    """Two orientations of a gradient-corrected spinor run, one potential executable.
+
+    The quantization axis turns with the texture (:func:`_with_quantization_axis`)
+    and the potential reads it for the sign of ``m . u_x``. It used to be a
+    static argument of the compiled potential, so every orientation of a scan
+    or a relaxation compiled the potential again; it is an array argument now.
+    """
+    from defumat.scf.driver import _potential_of_rho
+
+    system, pseudos, _ = cobalt
+    first = Calculation(_with_quantization_axis(system, (1.0, 0.0, 0.0)), pseudos)
+    second = first.with_texture(_with_quantization_axis(system, (0.0, 1.0, 0.0)))
+    assert first.functional.is_gradient
+    assert first.quantization_axis != second.quantization_axis
+    # A texture whose x component changes sign along the first lattice vector
+    # and whose y component changes sign along the second, so that the sign of
+    # m . u_x has a different pattern of nodes along the two axes. (A uniform
+    # flip would not do: the functional is even under a global sign.)
+    density = first.starting_density()
+    size_a, size_b = density.shape[1], density.shape[2]
+    along_a = jnp.cos(2.0 * jnp.pi * jnp.arange(size_a) / size_a)[:, None, None]
+    along_b = jnp.cos(2.0 * jnp.pi * jnp.arange(size_b) / size_b)[None, :, None]
+    moment = density[1]
+    density = density.at[1].set(moment * along_a).at[2].set(moment * along_b)
+
+    _potential_of_rho.clear_cache()
+    with _compiles() as names:
+        one = first.potential(density).v_scf
+        other = second.potential(density).v_scf
+    assert names.count("jit(v_of_rho)") == 1, names
+    # The axis is an argument the executable reads rather than one it lost.
+    assert not np.array_equal(np.asarray(one), np.asarray(other))
+
+
+_OXYGEN_PAW = """
+&control
+   calculation = 'scf'
+/
+&system
+   ibrav = 1, celldm(1) = 6.0, nat = 1, ntyp = 1,
+   noncolin = .true., nosym = .true.,
+   ecutwfc = 10.0, ecutrho = 40.0,
+   occupations = 'smearing', smearing = 'gaussian', degauss = 0.05,
+   starting_magnetization(1) = 0.5,
+/
+&electrons
+/
+ATOMIC_SPECIES
+O 16.0 O.pbe-kjpaw.UPF
+ATOMIC_POSITIONS crystal
+O 0.0 0.0 0.0
+K_POINTS automatic
+1 1 1 0 0 0
+"""
+
+
+@pytest.mark.slow
+def test_a_turned_texture_traces_to_the_same_program(pseudo_dir):
+    """What traces the potential and the one-centre terms holds no axis in its program.
+
+    The torque's derivative is a program :mod:`defumat.eager` keeps by the
+    printed jaxpr and the bytes of every constant nested in it, and it traces
+    both potentials. The axis used to reach the grid potential as a static
+    argument, a constant nested in that jaxpr, and the PAW one-centre terms as
+    three Python floats, which print as literals: so the kept torque differed
+    at every orientation, on PAW for the second reason as well as the first.
+    Both are a hoisted array now, an argument of the kept program, and the two
+    orientations trace to one key.
+    """
+    from defumat import eager
+
+    calculator = Calculator.from_text(_OXYGEN_PAW, pseudo_dir, announce=False)
+    system, pseudos = calculator.system, calculator.pseudos
+    first = Calculation(_with_quantization_axis(system, (1.0, 0.0, 0.0)), pseudos)
+    second = first.with_texture(_with_quantization_axis(system, (0.0, 1.0, 0.0)))
+    assert first.is_paw and first.functional.is_gradient
+    assert first.quantization_axis != second.quantization_axis
+    density, becsum = first.starting_density(), first.starting_becsum()
+
+    def key(calculation):
+        def both(rho, values):
+            return (calculation.potential(rho).v_scf,
+                    calculation.onecenter(values)[1])
+
+        closed = jax.make_jaxpr(both)(density, becsum)
+        return str(closed.jaxpr), eager._nested_digest(closed.jaxpr)
+
+    assert key(first) == key(second)
+
+
+@contextlib.contextmanager
 def _per_one_shot(monkeypatch):
     """Each one-shot's XLA compilations by name, and the kept programs before it.
 
@@ -153,52 +266,37 @@ def _per_one_shot(monkeypatch):
     from defumat import eager
     from defumat.workflows import anisotropy
 
-    names, shots = [], {"compiled": [], "kept": []}
-
-    class Grab(logging.Handler):
-        def emit(self, record):
-            found = re.search(r"Finished XLA compilation of (.+?) in", record.getMessage())
-            if found:
-                names.append(found.group(1))
-
+    shots = {"compiled": [], "kept": []}
     original = anisotropy._orientation_torque
 
-    def shot(*args, **kwargs):
-        shots["kept"].append(len(eager._PROGRAMS))
-        start = len(names)
-        result = original(*args, **kwargs)
-        shots["compiled"].append(names[start:])
-        return result
+    with _compiles() as names:
+        def shot(*args, **kwargs):
+            shots["kept"].append(len(eager._PROGRAMS))
+            start = len(names)
+            result = original(*args, **kwargs)
+            shots["compiled"].append(names[start:])
+            return result
 
-    monkeypatch.setattr(anisotropy, "_orientation_torque", shot)
-    handler, logger = Grab(), logging.getLogger("jax")
-    before = jax.config.jax_log_compiles
-    jax.config.update("jax_log_compiles", True)
-    logger.addHandler(handler)
-    try:
+        monkeypatch.setattr(anisotropy, "_orientation_torque", shot)
         yield shots
-    finally:
-        logger.removeHandler(handler)
-        jax.config.update("jax_log_compiles", before)
 
 
 @pytest.mark.slow
 def test_an_orientation_relaxation_keeps_what_every_one_shot_shares(cobalt, monkeypatch):
-    """No global clear, nothing shared compiled twice, and the rest bounded.
+    """No global clear, and nothing compiled again after the first one-shot.
 
     The relaxation used to call ``jax.clear_caches()`` after every one-shot,
     which on tetragonal cobalt meant 79 compilations a one-shot, the
-    eigensolver's and the Hamiltonian's among them, where only two programs
-    are new at a new orientation: the potential, whose quantization axis is
-    static, and the torque's derivative, which holds that axis as a nested
-    constant (:func:`~defumat.workflows.anisotropy._drop_the_last_orientation`).
-    Without the clear they accumulated, 1755 mappings a one-shot. The stand-in
-    torque here is keyed on the axis the way the real one is, through a nested
-    ``jit`` that closes over it, and the stand-in band sum is one program at
-    every orientation, the way the real one is, so the relaxation's seven
-    one-shots must compile the band sum once and the potential and the torque
-    at most once each per one-shot, keep no more programs from the third
-    one-shot on than after the first, and hold at most one potential.
+    eigensolver's and the Hamiltonian's among them. Without it two programs
+    were still new at every orientation: the potential, whose quantization
+    axis was a static argument, and the torque's derivative, which traced
+    that potential and held the axis as a nested constant, so kept they
+    accumulated, 1755 mappings a one-shot. The axis is an array argument now.
+    The torque and the band sum here are the real ones, evaluated on the
+    stand-in's zero states, which give a zero torque and stop the relaxation
+    at its first step: the seven one-shots, at six different axes, must
+    compile at the first one-shot only, keep the same programs after every
+    one-shot, and hold one potential executable.
     """
     from defumat import eager
     from defumat.scf.driver import _potential_of_rho
@@ -207,18 +305,8 @@ def test_an_orientation_relaxation_keeps_what_every_one_shot_shares(cobalt, monk
     _stand_ins(monkeypatch)
     cleared = []
     monkeypatch.setattr("jax.clear_caches", lambda: cleared.append(True))
-
-    def band_sum(*args, **kwargs):
-        return float(eager.compiled(lambda x: jnp.sum(x * x), jnp.ones(3)))
-
-    def torque(calculation, *args, **kwargs):
-        axis = calculation.quantization_axis
-        turn = jax.jit(lambda y: y * jnp.asarray(axis))
-        return 0.0 * np.asarray(eager.compiled(lambda x: turn(x), jnp.ones(3)))
-
-    monkeypatch.setattr("defumat.forces.torque.orientation_torque", torque)
-    monkeypatch.setattr("defumat.forces.torque.band_energy_at_rotation", band_sum)
     eager.clear()
+    _potential_of_rho.clear_cache()
     with _per_one_shot(monkeypatch) as shots:
         with pytest.warns(UserWarning, match="already has a torque below"):
             relax_orientation(system, pseudos, density, curvature=True)
@@ -227,14 +315,8 @@ def test_an_orientation_relaxation_keeps_what_every_one_shot_shares(cobalt, monk
 
     assert len(shots["compiled"]) == 7, "the relaxation needs more than one one-shot"
     assert cleared == [], "the relaxation dropped every compiled program"
+    assert "jit(run)" in shots["compiled"][0], "the first one-shot kept no torque"
     for index, names in enumerate(shots["compiled"][1:], start=2):
-        assert set(names) <= {"jit(run)", "jit(v_of_rho)"}, (
-            f"one-shot {index} compiled {names}, beyond the potential and the torque")
-        assert names.count("jit(run)") <= 1 and names.count("jit(v_of_rho)") <= 1
-    assert max(kept[2:]) <= kept[1], f"kept programs per one-shot {kept}"
-    assert _potential_of_rho._cache_size() <= 1
-    # The axes all differ but the last two (+-z turns nothing on a moment
-    # along z), and the sixth is the first's, whose torque was dropped, so
-    # the torque is compiled again at five of six; the potential at all six,
-    # since the clear after the sixth also drops its own.
-    assert sum("jit(run)" in names for names in shots["compiled"][1:]) == 5
+        assert names == [], f"one-shot {index} compiled {names}"
+    assert kept[1:] == [kept[1]] * (len(kept) - 1), f"kept programs per one-shot {kept}"
+    assert _potential_of_rho._cache_size() == 1
