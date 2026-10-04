@@ -92,6 +92,13 @@ def test_the_compiled_gamma_solve_holds_no_complex_product(calculator, hamiltoni
     Compile only: nothing runs. The Ritz rotation is the real ``(nbnd, 2 npwx)``
     product and the projection rows the ``(nbnd, m)`` ones; on the complex route
     the same program has the same dots with a complex type.
+
+    **One complex dot is left out by name**: the preconditioner's diagonal,
+    ``usnldiag``'s ``gi,ij,gj->g`` of ``vkb`` and ``D``, built once per call
+    before the loop, ``(npwx, nkb)``. It passed this test while Part III M5's
+    block form wrote it as a broadcast and a sum, and came back with M5's
+    revert (``dacdd8b``: the broadcast was not fused on a ten-atom spinor cell,
+    3.6 against 12.7 GB).
     """
     psi0 = jnp.zeros((hamiltonian.nk, NBND, hamiltonian.ndim), hamiltonian.dtype)
     ethr = jnp.full((hamiltonian.nk, NBND), 1e-10, hamiltonian.kinetic.dtype)
@@ -101,7 +108,8 @@ def test_the_compiled_gamma_solve_holds_no_complex_product(calculator, hamiltoni
         return_steps=True, return_finite=True,
     ).compile().as_text()
 
-    dots = DOT.findall(text)
+    dots = [found for line in text.splitlines() if " dot(" in line
+            and "gi,ij,gj->g" not in line for found in DOT.findall(line)]
     real = HLO_REAL[np.dtype(jnp.finfo(hamiltonian.dtype).dtype)]
     kinds = sorted({kind for kind, _ in dots})
     assert dots, "no dot in the compiled solve: the pattern no longer reads the HLO"
