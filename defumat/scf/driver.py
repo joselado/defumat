@@ -130,6 +130,7 @@ from defumat.scf.density import (
 from defumat.scf.ewald import build_ewald
 from defumat.scf.mixing import (
     DENSITY_DEPENDENT,
+    LDOS_DEPENDENT,
     PRECONDITIONED,
     AndersonMixer,
     SphereLayout,
@@ -138,6 +139,7 @@ from defumat.scf.mixing import (
     kerker_preconditioner_g,
     local_tf_preconditioner,
     local_tf_preconditioner_g,
+    ldos_preconditioner,
     resolve_mixing_space,
 )
 from defumat.scf.residual import make_residual
@@ -590,6 +592,31 @@ def _augmentation_of(calculation):
         return calculation.symmetrize(calculation.augmented(base, becsum_))
 
     return augmentation
+
+
+
+def _fermi_ldos(calculation, eigenvalues, wavefunctions, levels):
+    """The local density of states at the Fermi level, summed over spin, on the dense grid.
+
+    ``sum_nk w_k delta(e_F - e_nk) |psi_nk(r)|^2`` with the run's own smearing
+    as the delta, in states per Ry per bohr^3: the density built with the
+    occupations' derivative as the weights. Zero for fixed occupations.
+    """
+    from defumat.scf.occupations import _wgauss_prime, smearing_order
+
+    system = calculation.system
+    if "smearing" not in levels:
+        # Fixed occupations (or tetrahedra, not handled here): no states at e_F.
+        return jnp.zeros(int(np.prod(calculation.basis.dense.grid)))
+    degauss = float(system.degauss)
+    x = (levels["fermi_energy"] - jnp.asarray(eigenvalues)) / degauss
+    # The k-weights already carry the factor two at nspin = 1.
+    weights = jnp.asarray(system.kpoints.weights)[None, :, None] * \
+        _wgauss_prime(x, smearing_order(system.smearing)) / degauss
+    becsum = calculation.becsum(wavefunctions, weights)
+    ldos = calculation.density(wavefunctions, weights, becsum)
+    return jnp.sum(jnp.asarray(ldos)[:1] if calculation.nspin_mag == 4 else
+                   jnp.asarray(ldos), axis=0)
 
 
 def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None,
@@ -7294,6 +7321,14 @@ def run_scf(
                 **({} if density_dependent else {"nelec": calculation.nelec}),
             )
 
+    if mixing_mode.lower() in LDOS_DEPENDENT:
+        if layout is not None:
+            raise NotImplementedError("the LDOS preconditioner is written for mixing_space='r'")
+        mixer.precondition = ldos_preconditioner(
+            calculation.basis.dense, calculation.system.cell, tuple(np.shape(rho)),
+            beta=mixer.beta,
+        )
+
     if RHO_DDOT_FIT and isinstance(mixer, AndersonMixer):
         # Beside the preconditioner and for the same reason: it needs the
         # G-vectors, which ``get_mixer`` does not have. Only Anderson fits
@@ -7771,6 +7806,11 @@ def run_scf(
                 rho_out = calculation.density(wavefunctions, wg, becsum_out)
                 if tau_state is not None:
                     tau_out = calculation.kinetic_energy_density(wavefunctions, wg)
+            if getattr(getattr(mixer, "precondition", None), "needs_ldos", False):
+                if streaming:
+                    raise NotImplementedError("the LDOS preconditioner needs the whole store")
+                mixer.precondition.update_ldos(
+                    _fermi_ldos(calculation, eigenvalues, wavefunctions, levels))
             # **The last read of the store in this iteration**, so back to the
             # buffer it goes. Everything between here and the fetch above --
             # the energy terms, ``v_of_rho`` on the dense grid, the mixer's

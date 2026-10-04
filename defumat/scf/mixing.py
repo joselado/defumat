@@ -838,6 +838,8 @@ MIXERS = {
     "kerker": AndersonMixer,
     "tf": AndersonMixer,
     "local-tf": AndersonMixer,
+    # Herbst and Levitt's, from the LDOS at the Fermi level (``ldos_preconditioner``).
+    "ldos": AndersonMixer,
     # QE's own default name, so an unedited pw.x input reaches a mixer here.
     "default": AndersonMixer,
     # **Elk's, and deliberately not aliased to any QE name.** ``pw.x`` has no
@@ -1129,6 +1131,133 @@ def local_tf_preconditioner(gvectors, cell, shape, beta=0.7):
         )
 
     return preconditioner
+
+
+#: Mixing modes whose preconditioner reads the local density of states at the
+#: Fermi level, which the driver hands it at every iteration
+#: (:func:`ldos_preconditioner`). Kept out of :data:`PRECONDITIONED` so that no
+#: install site written for Kerker or local-TF builds one of those for it.
+LDOS_DEPENDENT = {"ldos"}
+
+#: GMRES settings of :func:`ldos_preconditioner`'s inner solve: the relative
+#: tolerance, the Krylov width before a restart, and the number of restarts.
+LDOS_TOL, LDOS_RESTART, LDOS_MAXITER = 1.0e-4, 20, 4
+
+#: Count the inner solve's operator applications through a host callback, for
+#: a measurement of what one call costs. Read when the solve is traced.
+LDOS_COUNT_MATVECS = False
+
+
+def ldos_preconditioner(gvectors, cell, shape, beta=0.7):
+    """Herbst and Levitt's LDOS preconditioner (arXiv:2009.01665), charge only.
+
+    The step is ``beta eps~^-1 R`` with ``eps~ = 1 - chi0~ v``, ``v`` the Hartree
+    kernel ``e2 4 pi/|G|^2`` and
+
+        chi0~ dV = -D dV + D <D, dV> / <D, 1>,
+
+    where ``D(r)`` is the local density of states at the Fermi level, summed over
+    spin. A uniform ``D`` gives ``eps~ = 1 + 8 pi D/|G|^2``, which is Kerker with
+    ``q_TF^2 = 8 pi D``; a ``D`` that vanishes in the vacuum leaves the vacuum
+    unscreened, and a ``D`` that vanishes everywhere (an insulator) leaves the
+    plain step. ``eps~`` is not diagonal in either space, so it is inverted by
+    GMRES, preconditioned by Kerker at the cell-averaged ``D``. The second term
+    keeps the electron count: ``eps~ x`` integrates to the integral of ``x``.
+
+    Call :meth:`update_ldos` with the new ``D`` before each step.
+    """
+    from jax.scipy.sparse.linalg import gmres
+
+    grid = gvectors.grid
+    size = int(np.prod(shape))
+    nspin = shape[0]
+    index = gvectors.fft_index
+    g2 = jnp.asarray(gvectors.kinetic(cell))
+    nonzero = g2 > 1.0e-12
+    coulomb = jnp.where(nonzero, FPI * E2 / jnp.where(nonzero, g2, 1.0), 0.0)
+    points = int(np.prod(grid))
+    volume = float(cell.volume)
+    dv = volume / points
+
+    def filtered(x, factor):
+        box = jnp.fft.fftn(x.reshape(grid))
+        coefficients = box.reshape(-1)[index] * factor
+        box = jnp.zeros(box.size, dtype=box.dtype).at[index].set(
+            coefficients, unique_indices=True)
+        return jnp.real(jnp.fft.ifftn(box.reshape(grid))).reshape(-1)
+
+    class Counter:
+        matvecs = 0
+
+        def tick(self):
+            self.matvecs += 1
+
+    counter = Counter()
+
+    @jax.jit
+    def solve(residual, ldos):
+        total = jnp.sum(ldos) * dv
+        has_states = total > 1.0e-10
+        safe_total = jnp.where(has_states, total, 1.0)
+        mean = total / volume
+        kerker = jnp.where(nonzero, g2 / (g2 + FPI * E2 * mean), 0.0)
+
+        def eps(x):
+            if LDOS_COUNT_MATVECS:
+                jax.debug.callback(counter.tick)
+            vx = filtered(x, coulomb)
+            chi = -ldos * vx + ldos * (jnp.sum(ldos * vx) * dv) / safe_total
+            return x - chi
+
+        x, _ = gmres(eps, residual, x0=filtered(residual, kerker), tol=LDOS_TOL,
+                     restart=LDOS_RESTART, maxiter=LDOS_MAXITER,
+                     M=lambda r: filtered(r, kerker), solve_method="incremental")
+        # The G = 0 part of the residual is the electron count's drift and is
+        # not screened; it is removed exactly as Kerker removes it.
+        x = filtered(x, jnp.where(nonzero, 1.0, 0.0))
+        return jnp.where(has_states, x, residual)
+
+    class Preconditioner:
+        needs_ldos = True
+        ldos = None
+        calls = 0
+        seconds = 0.0
+
+        @property
+        def matvecs(self):
+            return counter.matvecs
+
+        def update_ldos(self, ldos):
+            self.ldos = jnp.asarray(ldos).reshape(-1)
+
+        def __call__(self, residual, density=None):
+            if self.ldos is None:
+                raise ValueError("the LDOS preconditioner was called before update_ldos")
+            import time
+            self.calls += 1
+            start = time.perf_counter()
+            try:
+                return self._apply(residual)
+            finally:
+                self.seconds += time.perf_counter() - start
+
+        def _apply(self, residual):
+            flat = jnp.asarray(np.asarray(residual).ravel())
+            head = flat[:size].reshape(shape)
+            if nspin == 1:
+                out = [beta * solve(head[0].reshape(-1), self.ldos)]
+            elif nspin == 2:
+                charge, moment = head[0] + head[1], head[0] - head[1]
+                charge = beta * solve(charge.reshape(-1), self.ldos)
+                moment = beta * moment.reshape(-1)
+                out = [0.5 * (charge + moment), 0.5 * (charge - moment)]
+            else:
+                out = [beta * solve(head[0].reshape(-1), self.ldos)] + [
+                    beta * head[c].reshape(-1) for c in range(1, nspin)
+                ]
+            return np.asarray(jnp.concatenate([jnp.concatenate(out), beta * flat[size:]]))
+
+    return Preconditioner()
 
 
 #: ``run_scf``'s ``mixing_space``, spelled either way, to the layout it selects:

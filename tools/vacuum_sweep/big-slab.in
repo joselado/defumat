@@ -1,0 +1,25 @@
+&control
+  calculation = 'scf'
+  pseudo_dir = '/l/ladovj1/defumat/tests/data/pseudo'
+/
+&system
+  ibrav = 0
+  nat = 1
+  ntyp = 1
+  ecutwfc = 40.0
+  ecutrho = 160.0
+  occupations = 'smearing'
+  smearing = 'gaussian'
+  degauss = 0.02
+/
+&electrons
+/
+ATOMIC_SPECIES
+  Al 26.98 Al.pz-vbc.UPF
+CELL_PARAMETERS bohr
+  60.0 0.0 0.0
+  0.0 14.0 0.0
+  0.0 0.0 54.0
+ATOMIC_POSITIONS bohr
+  Al 0.0 0.0 27.0
+K_POINTS gamma
