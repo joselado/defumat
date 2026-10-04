@@ -6806,7 +6806,8 @@ potential and the augmentation and PAW tables are the same at every orientation.
 `GPU-MEMORY-NEXT.md` item 20 says only the force theorem builds its own; three more do, and
 `get_nesting` builds two (`workflows/nesting.py:100`, `:137`). There is no compile saving for the
 potential: it is a module-level `jit` keyed on shapes and statics, so an LDA already reuses it
-and a GGA recompiles through its static `quantization_axis` whatever is shared. Separately,
+and a GGA recompiles through its static `quantization_axis` whatever is shared (no longer:
+the axis is an array argument since the 2026-10-04 paragraph above). Separately,
 `torque.py:251` builds a fresh `jax.jit(jax.value_and_grad(chunk))` at every call.
 
 **Fix.** One calculation for the one-shot leg, built once per scan or relaxation, and a mover
