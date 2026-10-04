@@ -1769,7 +1769,7 @@ line. Bit-identical.
 
 ### M5. The preconditioner contracts a block-diagonal `D` as a dense `(nkb, nkb)` **[moves a number; open, re-checked 2026-10-03]**
 
-**Done 2026-10-03, `680e01a`.** The diagonals are contracted atom block by atom block as one broadcast and one sum, which XLA fuses into a single reduction with no `(npwx, nkb)` intermediate (a batched einsum was measured worse, a dot not being fused on a CPU). Temp bytes 8.4 -> 6.5 MB on `si8-us-1k` and `si8-paw-1k`; energies within 6e-14 Ry, eigenvalues within 1e-13 (si16's 9.75e-13 is in pairs inside multiplets whose means agree to 6e-16, rule D4), iteration counts and every per-k Davidson step array unchanged on five cells. `hubbard/operator.py` has the same dense contraction on `v_ns` and is not changed.
+**Reverted 2026-10-04 (`dacdd8b`), a measured regression.** On `bi10-soc` (`test_ten_site.py::test_spin_orbit_coupling_at_ten_sites`, ten bismuth atoms, 150 spinor bands, a 216x45x81 grid), compiled-kernel cache off, the block form peaks at 12.66 and 12.72 GB on D22 where master reads 3.59 and 3.60, and the dense einsum put back alone reads 3.49 GB on this workstation: the broadcast over (plane waves, atoms, channel, channel) is not fused on that cell, where it was on the two silicon cells it was measured on, so the small cells' 1.9 MB of temporaries cost 9 GB on a heavy spinor cell. The Hubbard diagonal built on it (`6f366df`) went with it. A form whose intermediate is bounded by construction (the batched einsum, `(npwx, nkb)` like the dense one, `npwx nkb nh` products) is the one to try next, measured on `bi10-soc` and not on silicon. What follows is the entry as it stood. **Done 2026-10-03, `680e01a`.** The diagonals are contracted atom block by atom block as one broadcast and one sum, which XLA fuses into a single reduction with no `(npwx, nkb)` intermediate (a batched einsum was measured worse, a dot not being fused on a CPU). Temp bytes 8.4 -> 6.5 MB on `si8-us-1k` and `si8-paw-1k`; energies within 6e-14 Ry, eigenvalues within 1e-13 (si16's 9.75e-13 is in pairs inside multiplets whose means agree to 6e-16, rule D4), iteration counts and every per-k Davidson step array unchanged on five cells. `hubbard/operator.py` has the same dense contraction on `v_ns` and is not changed.
 
 `defumat/hamiltonian/operator.py:306`. `diagonal(ik)` builds `h_diag` as
 `einsum("gi,ij,gj->g", vkb.conj(), dij, vkb)`, where `dij` is the full matrix that
@@ -7299,7 +7299,8 @@ What the agents of this sweep's follow-up found outside their items, recorded ra
   guard read the largest entry of a degenerate triplet's rows (0.987 against a bound of 1.0, the
   comparison itself at 1.2e-8), now read as a norm (`01910a9`); and the two recorded before
   (`test_retention`, `test_spinor_response`). `test_ten_site.py` was killed at the 12 GB cap and passes
-  whole at 20 GB with a peak of 12.85 GB at the head.
+  whole at 20 GB with a peak of 12.85 GB at the head; master read 4.2 GB, and the cause was M5's block form,
+  reverted (Part III M5).
 - **`test_scf_solvers.py::test_an_inexact_newton_is_only_as_stability_blind_as_its_inner_solve` picks
   its root by round-off on `D22-0161`, the kicked start notwithstanding.** Its docstring says both
   arithmetics give M = -3.405 from the kicked state, measured on this workstation. On D22's CPU, 2026-10-04,
@@ -7309,7 +7310,7 @@ What the agents of this sweep's follow-up found outside their items, recorded ra
   order chooses on that machine. The test needs a start further from the saddle, or a statement of which
   machines it is a claim about.
 - **Small leftovers** (the first three done 2026-10-04 in `6f366df`: the torque reads `np.shape`, the Hubbard
-  diagonal goes by atom block through a static `atom_of_column`, bit-identical on `ni-ldau-ortho` and within the
+  diagonal goes by atom block through a static `atom_of_column` (reverted with M5 in `dacdd8b`), bit-identical on `ni-ldau-ortho` and within the
   SCF's round-off sensitivity on QE's FeO, and the comment is corrected; the uploads in the last clause are
   done 2026-10-04 in `f5c95a6`, where a host store reaches them, and the rest are left with the reason
   below): `forces/torque.py` reads a whole store's shape through `jnp.asarray(states).shape[1]`

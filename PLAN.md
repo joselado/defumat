@@ -23737,7 +23737,7 @@ default are where a trajectory lands, in `ph.x` as here: its own references hove
 before dropping under it (`si10-epsilon` three passes at 1.51e-14, 1.46e-14, 1.46e-14 before 1.8e-17;
 `al2-metal` 2.9e-14, 1.68e-14 before 2.15e-16), so no comparison test may rest on one.
 
-### P128 -- The second optimisation sweep: work done twice, compiled twice, or held twice, and the trajectories it moved. ✅ DONE for 20 of `OPEN.md` Part XXIII's 26 items (1 to 5 are P127) and four of Part III's; four are done in part and two are not done, each with its reason in the item.
+### P128 -- The second optimisation sweep: work done twice, compiled twice, or held twice, and the trajectories it moved. ✅ DONE for 20 of `OPEN.md` Part XXIII's 26 items (1 to 5 are P127) and three of Part III's (M5 reverted); four are done in part and two are not done, each with its reason in the item.
 
 **What it was.** A read-only sweep on 2026-10-03 (two agents re-reading the 122 items already listed
 against the code, five sweeping one subsystem each, two verifying every candidate sceptically) wrote
@@ -23771,7 +23771,7 @@ each, with its sites, is in its `OPEN.md` entry; this is the index and what the 
 | XXIII 26, part | one byte-packed all-gather of the eigenvalues and counts | collectives a pooled iteration 15 -> 7 | `d19a211` |
 | III H6 | `find_symmetries` memoised | 5 searches -> 1 a system, calculation and estimate; groups equal on 246 inputs | `fbf44d9` |
 | III M4 | `calbec` conjugates the smaller operand | loop-body copies 5 -> 0 on `si8-us-1k`; temp 10.0 -> 8.4 MB | `32b5605` |
-| III M5 | the preconditioner's `D` and `q` atom block by atom block | temp 8.4 -> 6.5 MB; within 6e-14 Ry | `680e01a` |
+| III M5, **reverted** | the preconditioner's `D` and `q` atom block by atom block | temp 8.4 -> 6.5 MB on silicon, and **3.6 -> 12.7 GB** on `bi10-soc`, where the broadcast is not fused; reverted with the Hubbard diagonal built on it | `680e01a`, `dacdd8b` |
 | III M6 | one Davidson executable whether or not the steps are asked for | an SCF and a residual solve share one `_every_k`, 2 compiles -> 1 | `920bf31` |
 
 **Three that move a number on purpose:**
@@ -23803,6 +23803,8 @@ each, with its sites, is in its `OPEN.md` entry; this is the index and what the 
   1.09e-6 Ry above real space's state on none of P113's four, and a seeded promotion source 2.0e-3
   above), and one G iteration costs 3.8 to 4.8 per cent more than one in real space on one core
   (0.244 against 0.235 s on `si8-us-1k`, 0.065 against 0.062 on `fe-mag-1k`, D22, medians of six).
+
+**One item was a regression and is reverted**: Part III M5, found by the slow set killing `test_ten_site.py` at its 12 GB cap and settled by a cache-off A/B on that file's spin-orbit test. The lesson is the memory rule of `CLAUDE.md` one level down: a compile-only temp figure on a small cell says what XLA fused *there*, and an elementwise broadcast whose fusion is the whole saving has to be measured on the cell where it would not fit.
 
 **Two defects found by doing the items, fixed:** `at_cell` did not move `basis_kpoints`, so a DFT+U
 vc-relax rebuilt `wfcU` at the starting cell's Cartesian k-points (1.8e-2 on 0.94 at a 3 per cent
