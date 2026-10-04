@@ -10463,3 +10463,50 @@ later, once D22 was idle, three times alike, with `prefix = 'silicon'` added to 
 `si-epsilon.ph.in`: the committed pair disagree (the `.in` sets it and the `.ph.in` does not), so
 `ph.x` run on them as committed stops reading `pwscf.save`. The first calls, compile included,
 read 6.11 -> 4.00, 14.59 -> 11.67, 26.67 -> 19.51 and 63.65 -> 33.14 s.
+
+
+## Cells with vacuum: the LDOS preconditioner against `pw.x` (CPU, 2026-10-04)
+
+`PLAN.md` P129; the measurement behind it is `VACUUM-MIXING-NEXT.md`. A mixer's cost is two
+numbers, the iterations and what one costs, and on a cell with vacuum the first is the larger.
+
+**The pair**, `tests/data/qe/co-slab-forcetheorem-sr.in` as committed (three Co(0001) layers,
+ultrasoft PBE, `nspin = 2`, cold smearing, 12x12x1, `beta = 0.7`, `conv_thr = 1e-10`), on one
+performance core of `D22-0161` (`taskset -c 0`, `OMP_NUM_THREADS=1`, `DEFUMAT_THREADS=off`),
+nothing else on the machine, each side run twice and the second read (the two agree to 0.15 s
+and 0.6 s). `pw.x` is the serial 7.5 build, its figure its own `PWSCF ... WALL`; this code's is
+the whole `get_scf()` of a warm process, setup included.
+
+| | iterations | whole run (s) | per iteration (s) |
+|---|---|---|---|
+| `pw.x`, `local-TF` (the input's mode) | 24 | **40.9** | 1.70 |
+| defumat, `local-TF` (the input's mode) | 30 | 106.0 | 3.53 |
+| defumat, `TF` | 51 | 152.2 | 2.98 |
+| defumat, `'ldos'` | 20 | **76.1** | 3.81 |
+
+**1.86x `pw.x`**, and 28 per cent faster than this code's own run of the input as written. The
+per-iteration base is 1.75x `pw.x` (`TF`'s 2.98 s, Kerker costing one FFT pair); `'ldos'` adds
+0.83 s an iteration to it, which is the LDOS accumulated in the density's pass, the inner
+conjugate gradients (36 applications a call at the 1e-3 tolerance, one FFT pair each on the
+film's 24x24x216 grid) and the host-side clamp, **not decomposed**. `pw.x`'s whole `mix_rho`,
+`approx_screening2` included, is 0.75 s over 24 calls, 31 ms a call; one call of this code's
+`local_tf_preconditioner` is 255 ms on the 59-bohr film's 24x24x300 grid, 1.4 times this one
+(median of five, synthetic slab density), and the `local-TF` row above pays 0.55 s an iteration
+over `TF`'s, for an algorithm `pw.x` runs in 31 ms, which is `OPEN.md` Part VIII item 4.
+
+**The prototype it replaced**, for the record of what each change was worth: a separate pass
+over the bands for the LDOS and a real-space GMRES with Kerker as `M` (4.3 FFT pairs an
+application on a 3.3-million-point grid: the operator's pair, `M`'s pair, and orthogonalising
+against 20 Krylov vectors) took 21 iterations and 89.8 s on the same run, 4.28 s an iteration;
+its LDOS pass alone was 0.85 s.
+
+**Memory.** The fused pass carries a second smooth-grid accumulator and a second raw `becsum`
+beside the density's, `(nspin_mag, n1, n2, n3)` and `nh^2 nat nspin` reals, which is noise next
+to the wavefunctions. On a CPU the band dial is one band at a time and nothing per band is
+added. On an accelerator, where the band dial is the whole block, the weight `vmap` may hold a
+`(nbnd, 2, n1, n2, n3)` real temporary before the band sum unless XLA fuses the multiply into
+the reduction, the size of the complex field stack the density already holds: **unmeasured**,
+and one `memory_analysis()` on a card answers it. The inner solve holds four vectors of the
+dense sphere's complex coefficients and `D` on the grid, about `4 x 16 ngm + 8 n1 n2 n3` bytes,
+110 MB at 3.3 million points. This is not a deviation from `pw.x`'s memory strategy, which has no
+such mixer; it is ABINIT's `iprcel = 200` and DFTK's `LdosMixing`, neither timed here.

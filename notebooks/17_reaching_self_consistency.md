@@ -18,7 +18,10 @@ $$\beta \;\longrightarrow\; \beta\,
    \frac{|\mathbf G|^2}{|\mathbf G|^2 + q_{\rm TF}^2},$$
 
 and on an aluminium slab, half metal and half vacuum, it takes the iteration count from
-**24 to 14** for one extra transform per iteration.
+**25 to 15** for one extra transform per iteration. **With more vacuum it loses**, because it
+screens the vacuum as well, and screening from the local density of states at the Fermi
+level instead takes **10 iterations at 16 and at 64 bohr** of vacuum, where Kerker goes
+from 15 to 36.
 
 **Solving $r[\rho] = 0$ as a root instead.** It is not faster, and it does something no mixer
 can: it converges on **unstable** self-consistent solutions. Iron's non-magnetic state is a
@@ -107,6 +110,87 @@ print(f"Anderson + Kerker {kerker.iterations:3d} iterations   "
     Anderson + Kerker  15 iterations   (same answer to 4.0e-09 Ry)
 
 
+## When the vacuum grows: screening from the states at the Fermi level
+
+Kerker treats the whole cell as one metal. In a slab the longest wavelength along the
+normal, $2\pi/c$, lives mostly in the vacuum, where nothing screens and the dielectric
+eigenvalue is 1, so damping it by $|\mathbf G|^2/(|\mathbf G|^2 + q_{\rm TF}^2)$ only slows
+the iteration, and by more the longer the cell. The win above turns into a loss once the
+vacuum is long enough.
+
+The cure is to screen only where there are states to screen with. With $D(\mathbf r)$ the
+local density of states at the Fermi level, the response of a system that screens through
+those states alone is
+
+$$\tilde\chi_0\,\delta V = -D\,\delta V + D\,\frac{\int D\,\delta V}{\int D},
+\qquad
+\rho_{\rm in} \;\longrightarrow\; \rho_{\rm in} + \beta\,(1 - \tilde\chi_0 v_H)^{-1} R .$$
+
+A uniform $D$ gives back Kerker with $q_{\rm TF}^2 = 8\pi D$; where $D$ vanishes, in the
+vacuum or across a whole insulator, nothing is screened, and the step is the plain one.
+This is `mixing_mode = 'ldos'` (Herbst and Levitt), and $D$ costs almost nothing to know:
+it is the density's own sum over bands with $\delta(\varepsilon_F - \varepsilon_{n\mathbf k})$
+in place of the occupation.
+
+
+```python
+far = load("al-slab-v64.in")
+counts = {}
+for label, calc in (("16 bohr", aluminium), ("64 bohr", far)):
+    counts[label] = {mode: calc.get_scf(mixing_mode=mode).iterations
+                     for mode in ("anderson", "kerker", "ldos")}
+    print(f"vacuum {label}:  " + "   ".join(f"{m} {n:3d}" for m, n in counts[label].items()))
+
+# The LDOS at the Fermi level on the 64-bohr slab, from its converged states: the
+# density's own pass with delta(e_F - e) in place of the occupations.
+scf = far.get_scf(mixing_mode="ldos")
+calculation = far.calculation
+levels = {"smearing": 0.0, "fermi_energy": scf.fermi_energy}
+_, rho, ldos = calculation.density_and_ldos(
+    scf.wavefunctions, np.asarray(scf.occupations)[None],
+    calculation.ldos_weights(scf.eigenvalues_by_spin, levels))
+grid = calculation.basis.dense.grid
+c = float(far.system.cell.at[2, 2])
+z = np.arange(grid[2]) * c / grid[2]
+density_z = np.asarray(rho)[0].mean(axis=(0, 1))
+ldos_z = np.asarray(ldos).reshape(grid).mean(axis=(0, 1))
+print(f"in the middle of the vacuum: density {density_z[0] / density_z.max():.1e}, "
+      f"LDOS {ldos_z[0] / ldos_z.max():.1e} of their maxima")
+
+fig, (left, right) = plt.subplots(1, 2, figsize=(10, 3.6))
+left.semilogy(z, density_z / density_z.max(), label="density")
+left.semilogy(z, ldos_z / ldos_z.max(), label="LDOS at $\\varepsilon_F$")
+left.set_xlabel("z (bohr)")
+left.set_ylabel("planar average / maximum")
+left.set_ylim(1e-6, 2)
+left.legend()
+modes = ("anderson", "kerker", "ldos")
+width = 0.25
+for i, mode in enumerate(modes):
+    right.bar(np.arange(2) + (i - 1) * width, [counts[l][mode] for l in counts],
+              width, label=mode)
+right.set_xticks(np.arange(2), [f"vacuum {l}" for l in counts])
+right.set_ylabel("SCF iterations")
+right.legend()
+fig.tight_layout()
+plt.show()
+```
+
+    vacuum 16 bohr:  anderson  25   kerker  15   ldos  10
+
+
+    vacuum 64 bohr:  anderson  34   kerker  36   ldos  10
+    in the middle of the vacuum: density 1.1e-06, LDOS 1.5e-06 of their maxima
+
+
+
+    
+![png](17_reaching_self_consistency_files/17_reaching_self_consistency_7_2.png)
+    
+
+
+Kerker's count grows from 15 to 36 as the vacuum goes from 16 to 64 bohr, past plain Anderson's 34, while the LDOS preconditioner takes 10 at both. The left panel says why: the states at the Fermi level fill the metal and fall by six orders of magnitude to the middle of the vacuum, as the density does, so the operator screens the slab like a metal and leaves the vacuum alone, where Kerker screens both. The same reasoning says that a monolayer, which has no thickness to slosh across, needs no screening at all, and plain Anderson is measured flat in the vacuum there; on an insulator $D$ is zero and the mode is plain Anderson exactly.
+
 ## The opposite failure: a run that crawls
 
 Kerker answers an SCF that is **oscillating**: the charge sloshes, the Hartree term amplifies
@@ -155,12 +239,12 @@ print(f"\nthe same fixed point: energies {gap:.1e} Ry apart, "
 
 ```
 
-    anderson   43 iterations,  67 Davidson steps   E = -55.788729937 Ry
+    anderson   15 iterations,  34 Davidson steps   E = -55.788729937 Ry
 
 
     adaptive   16 iterations,  42 Davidson steps   E = -55.788729937 Ry
     
-    the same fixed point: energies 3.0e-10 Ry apart, moments 2.4e-04 mu_B apart
+    the same fixed point: energies 1.4e-11 Ry apart, moments 6.1e-05 mu_B apart
 
 
 
@@ -180,7 +264,7 @@ fig.tight_layout()
 
 
     
-![png](17_reaching_self_consistency_files/17_reaching_self_consistency_8_0.png)
+![png](17_reaching_self_consistency_files/17_reaching_self_consistency_11_0.png)
     
 
 
@@ -232,7 +316,7 @@ print(f"all three agree to "
 
 
     
-![png](17_reaching_self_consistency_files/17_reaching_self_consistency_11_1.png)
+![png](17_reaching_self_consistency_files/17_reaching_self_consistency_14_1.png)
     
 
 
@@ -309,11 +393,11 @@ print(f"iron's magnetic stabilisation energy = "
 ```
 
     from the same kicked symmetric root               E (Ry)   m (mu_B)
-      Anderson, nspin = 2                       -55.44642602     3.4052
-      Newton-Krylov, nspin = 2                  -55.38228995     0.0005
-      nspin = 1 (independent reference)         -55.38228994         --
+      Anderson, nspin = 2                       -55.44642602     3.4053
+      Newton-Krylov, nspin = 2                  -55.38228996     0.0012
+      nspin = 1 (independent reference)         -55.38228993         --
     
-    Newton's root matches the nspin = 1 reference to 7.5e-09 Ry
+    Newton's root matches the nspin = 1 reference to 2.5e-08 Ry
     iron's magnetic stabilisation energy = 64.1 mRy
 
 

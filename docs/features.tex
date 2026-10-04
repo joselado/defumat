@@ -847,12 +847,13 @@ throw the converged moment away after every wall-clock kill.
 
 \textbf{Convergence.} \code{mixing\_mode} selects \code{anderson} (default),
 \code{linear}, \code{broyden}, Kerker/Thomas--Fermi preconditioning (\code{TF}),
-\code{local-TF}, or \code{adaptive}; \code{scf\_solver} offers a Newton--Krylov
+\code{local-TF}, the local-density-of-states preconditioner (\code{ldos}), or
+\code{adaptive}; \code{scf\_solver} offers a Newton--Krylov
 alternative that is slower but reaches solutions the mixer cannot hold.
 
 \code{TF} screens the residual with one Thomas--Fermi length for the whole cell.
 \code{local-TF} makes that length a function of $\rho(\mathbf r)$, which is what
-a \textbf{slab} needs: the metal wants strong screening and the vacuum wants
+a \textbf{metal film} needs: the metal wants strong screening and the vacuum wants
 none, and a single compromise value over-screens one and under-screens the other
 --- charge sloshing between the surfaces. The screened residual is the solution
 of
@@ -865,6 +866,83 @@ with $(\alpha f)$ multiplied in \emph{real} space, so the operator is not
 diagonal in $\mathbf G$ and is inverted iteratively at each step. On a cobalt
 film it converges at \code{mixing\_beta = 0.7} where plain Anderson at the same
 $\beta$ diverges and Kerker at $0.3$ is still far out after 250 iterations.
+
+\textbf{Both are for metal films, and they slow a monolayer or an insulator
+down}, which \code{pw.x}'s own description of \code{local-TF} (``for highly
+inhomogeneous systems'') does not say. Kerker damps the residual by
+$|\mathbf G|^2/(|\mathbf G|^2 + q_{\rm TF}^2)$ as though the whole cell were a metal, and
+in a cell with vacuum the longest wavelength along the normal, $2\pi/c$, is a mode of
+the vacuum, whose dielectric eigenvalue is 1: damping it only slows the iteration, and
+by more the longer the cell. \code{local-TF} screens less in the vacuum but still
+screens any dense layer as a metal. Iterations at 16 and 64 bohr of vacuum, each cell
+at its own \code{conv\_thr} and $\beta$ (\code{VACUUM-MIXING-NEXT.md}):
+\begin{center}
+\begin{tabular}{lrrrr}
+\toprule
+cell & \code{anderson} & \code{TF} & \code{local-TF} & \code{ldos} \\
+\midrule
+NbSe$_2$ monolayer, a 2D metal & 12, 9 & 14, 43 & 11, 18 & 10, 10 \\
+graphene ($c$ = 20 and 60 bohr) & 8, 8 & 16, 37 & 12, 22 & 8, 8 \\
+hBN, fixed occupations ($c$ = 20, 60) & 11, 11 & 19, 39 & 15, 24 & 11, 11 \\
+five Al(100) layers & 25, 34 & 15, 36 & 13, 20 & 10, 10 \\
+\bottomrule
+\end{tabular}
+\end{center}
+A monolayer, metal or not, converges under plain \code{anderson} in the same count at
+every vacuum, and \code{TF} adds about one iteration for every two bohr of cell length.
+\code{run\_scf} warns when \code{TF} or \code{local-TF} is asked for with fixed
+occupations, which is the one case the input can identify.
+
+\code{ldos} is the preconditioner of Herbst and Levitt (arXiv:2009.01665; DFTK's
+\code{LdosMixing}, ABINIT's \code{iprcel = 200}), and it builds the screening from the
+\textbf{states at the Fermi level} rather than from the charge, which is the property
+that separates a metal from a dense insulator:
+\begin{equation*}
+  \rho_{\rm in} \;\longrightarrow\; \rho_{\rm in} + \beta\,\tilde\varepsilon^{-1} R,
+  \qquad
+  \tilde\varepsilon = 1 - \tilde\chi_0 v_H,
+  \qquad
+  \tilde\chi_0\,\delta V = -D\,\delta V + D\,\frac{\int D\,\delta V}{\int D},
+\end{equation*}
+with $D(\mathbf r)$ the local density of states at $\varepsilon_F$, built at every
+iteration in the density's own pass over the bands, with a Gaussian of the run's own
+\code{degauss}. A uniform $D$ is Kerker with $q_{\rm TF}^2 = 8\pi D$; a $D$ that vanishes
+in the vacuum leaves the vacuum alone; a $D$ that vanishes everywhere leaves the plain
+step. So it is Kerker in the metal, nothing in the vacuum and plain Anderson in an
+insulator, with nothing to choose. The second term keeps the electron count. On the
+aluminium slab it takes 10 iterations at both vacua in the table, and on three Co(0001)
+layers at $\beta = 0.7$ (\code{tests/data/qe/co-slab-forcetheorem-sr.in}) it takes 20
+to 22 at every vacuum from 21 to 59 bohr, where \code{pw.x} takes 24 with \code{local-TF},
+\code{local-TF} here 24 to 35, \code{TF} 37 to 74, and \code{anderson} does not converge
+in 150. Each iteration pays an inner conjugate-gradient solve of about 10 to 40 Hartree
+applications, one FFT pair each.
+\begin{verbatim}
+from defumat import Calculator
+calc = Calculator.from_file("benchmarks/al-slab-v64.in",
+                            pseudo_dir="tests/data/pseudo")
+scf = calc.get_scf(mixing_mode="ldos")
+scf.iterations      # 10, where plain anderson takes 34
+\end{verbatim}
+
+\begin{refuses}
+\code{ldos} screens the \textbf{charge} only, as \code{TF} and \code{local-TF} do: the
+magnetization takes $\beta$, so the soft direction of a magnetic film or a 2D magnet is
+not helped by it. Where there are \textbf{no states at the Fermi level} (fixed or
+\code{from\_input} occupations) the step is the plain one and \code{run\_scf} warns that
+the run is plain \code{anderson}, which it is to the bit. Herbst and Levitt name two
+cases it does not help: a \textbf{metal on a semiconductor} (Kerker 26, \code{ldos} 26
+on their Al on GaAs), and \textbf{localized orbitals at $\varepsilon_F$}, where it is
+``as ineffective as homogeneous schemes'', which is a $d$-electron magnet's case.
+
+\textbf{Tetrahedra are refused}: the LDOS needs a smooth delta at $\varepsilon_F$, and
+with a Gaussian in its place the aluminium slab under \code{tetrahedra\_opt} converged
+under neither \code{ldos} nor plain \code{anderson} in 200 iterations, so the combination
+has no number behind it. It is refused by name, rather than run as plain
+\code{anderson} under its name, wherever a mixer is built with no LDOS to hand it: the
+Newton--Krylov warm-up (\code{warmup\_mixing}), the ultracell and the response loops.
+Under \code{scf\_solver = 'newton-krylov'} the solver's own preconditioner is Kerker and
+\code{mixing\_mode} does not reach it.
+\end{refuses}
 
 \code{adaptive} is Elk's \code{mixadapt} and answers the opposite failure. Every
 other mode here damps an iteration that is \emph{overshooting}; this one lengthens

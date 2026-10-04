@@ -126,7 +126,7 @@ want a number.
 |---|---|
 | [`01_silicon_setup`](01_silicon_setup.ipynb) | Input file to cell to k-points to the plane-wave basis, and what a cutoff can represent |
 | [`03_eigensolver_and_performance`](03_eigensolver_and_performance.ipynb) | What an iterative eigensolver saves over a dense one, the single-core comparison with QE, and one calculation on many cores |
-| [`17_reaching_self_consistency`](17_reaching_self_consistency.ipynb) | Charge sloshing and Kerker screening, and the unstable magnetic solutions a mixer cannot reach |
+| [`17_reaching_self_consistency`](17_reaching_self_consistency.ipynb) | Charge sloshing and Kerker screening, screening from the LDOS at the Fermi level when the vacuum grows, and the unstable magnetic solutions a mixer cannot reach |
 
 ## In file order
 
@@ -149,7 +149,7 @@ want a number.
 | [`14_spiral_relaxation.ipynb`](14_spiral_relaxation.ipynb) | `dE/dq`, and a relaxation that finds a magnet's ground-state pitch in six SCF runs |
 | [`15_stress.ipynb`](15_stress.ipynb) | The stress tensor, silicon's equation of state, and the Pulay stress a low cutoff carries |
 | [`16_projected_density_of_states.ipynb`](16_projected_density_of_states.ipynb) | Which atom and which orbital a band belongs to, as a projected DOS, Löwdin charges and fat bands, and resolved by $j$ for a spin-orbit run |
-| [`17_reaching_self_consistency.ipynb`](17_reaching_self_consistency.ipynb) | Charge sloshing and Kerker screening, and the unstable magnetic solutions a mixer cannot reach |
+| [`17_reaching_self_consistency.ipynb`](17_reaching_self_consistency.ipynb) | Charge sloshing and Kerker screening, screening from the LDOS at the Fermi level when the vacuum grows, and the unstable magnetic solutions a mixer cannot reach |
 | [`18_continuing_a_calculation.ipynb`](18_continuing_a_calculation.ipynb) | Starting one run from another across a change of spin regime: iron's moment rotated in one iteration |
 | [`19_linear_response.ipynb`](19_linear_response.ipynb) | Silicon's dielectric constant and Born charges against `ph.x`, norm-conserving and ultrasoft, the charge that does the screening, the ionicity of AlAs read off a Born charge where silicon's is zero by symmetry, and the same insulator written as a spinor, where every band holds one electron instead of two |
 | [`20_phonons.ipynb`](20_phonons.ipynb) | Phonons: silicon's optical mode at Gamma against `ph.x`, the charge that rearranges, a metal, and the six branches at the zone boundary |
@@ -281,7 +281,7 @@ order of magnitude it is rather than as current to the second.
 | `09` | 6 | `25` | 28 | `10` | 50 | `43` | 173 |
 | `02` | 8 | `18` | 29 | `29` | 59 | `27` | 178 |
 | `37` | 9 | `12` | 30 | `11` | 81 | `44` | 191 |
-| `03` | 100 | `21` | 30 | `45` | 85 | `17` | 203 |
+| `03` | 100 | `21` | 30 | `45` | 85 | `17` | 120 |
 | `05` | 10 | `15` | 31 | `14` | 89 | `38` | 242 |
 | `04` | 122 | `24` | 31 | `26` | 109 | `19` | 243 |
 | `22` | 12 | `28` | 90 | `33` | 401 | `36` | 244 |
@@ -377,6 +377,10 @@ potential evaluation per iteration, and an interleaved A/B measures that at **0.
 cent of an iteration, inside a 10 per cent spread** (`PERFORMANCE.md`), so it cannot be
 15 per cent of a notebook. What the 24 s is instead has not been measured -- one sample,
 on a path whose compiled code had changed, is not a timing.
+
+`17` reads **120 s** on 2026-10-04, idle, with the vacuum section in it (six aluminium-slab
+SCFs at 16 and 64 bohr under three mixers, and the LDOS of one); the 203 s below was the
+contended upper bound it says it was.
 
 `17` went from 29 s to 203 s on 2026-09-14, when it gained a noncollinear iron cell run
 through two mixers, and that figure is an **upper bound**: it was taken while three other

@@ -56,6 +56,7 @@ missing, are indexed at the head of `PLAN.md` §3.
 | what still refuses an ultrasoft or PAW dataset, and what each piece needs first | `AUGMENTATION-NEXT.md` |
 | what is left to do about GPU memory after `memory_mode`, sized and ranked | `GPU-MEMORY-NEXT.md` |
 | what is left to do about GPU speed and the Davidson stall, sized, and the replay tools | `GPU-SPEED-NEXT.md` |
+| which mixer a cell with vacuum wants, what the literature has, and what is left | `VACUUM-MIXING-NEXT.md` |
 
 **The claims in this project are numbers, not adjectives.** A phase is done when it has a
 concrete figure against `pw.x`, against Elk, or against an identity that shares no
@@ -221,6 +222,13 @@ in `docs/features.tex`'s amber boxes.
   `dmxc_lsda` does it on both branches), so what was refused as an analysis was a
   convention — and masking the *argument the derivative is taken at* is what works, where
   clipping the density leaves the primal singular and the tangent `0 * inf`.
+- **Converging a cell with vacuum** (P129, `mixing_mode = 'ldos'`): Herbst and Levitt's
+  preconditioner, screening built from the LDOS at `e_F` out of the density's own pass. Two
+  rules bind it. The LDOS is a **Gaussian** whatever the run smears with, because the inner
+  conjugate gradients need `D >= 0` and cold and Methfessel-Paxton derivatives go negative.
+  And the inner tolerance is a statement about a **norm**: 1e-3 in the Hartree norm is measured,
+  and the prototype's 1e-2 in a Kerker-weighted one lost seven iterations. `TF` and `local-TF`
+  are for metal films and slow every monolayer measured, linearly in the cell length.
 - **Starting from an all-electron ground state** (P72): Elk's converged density read off
   its own `STATE.OUT` and put on this run's grid, `Calculator.get_elk_seed`. The unit read
   is a run *directory*, because `STATE.OUT` carries neither the cell nor the positions and

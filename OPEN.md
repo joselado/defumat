@@ -3680,6 +3680,20 @@ separating the host syncs from the FFTs, before changing anything. On a GPU the 
 first suspect and on a grid that size the FFT count is, and that cell has both -- which is
 exactly why it needs measuring rather than reasoning.
 
+**Measured 2026-10-04, and it narrows the item without closing it** (`PLAN.md` P129,
+`PERFORMANCE.md` "Cells with vacuum"). One call on a synthetic slab density, one performance
+core of D22, median of five after a compiling call: **0.073 s** at 25,920 points, **0.255 s**
+at 172,800, **11.1 s** at 3,280,500, about 120 FFT pairs each time. So the routine scales with
+the grid as its transforms do, and a 4.1-million-point grid at that rate is about 14 s a call on
+one core, **not** 730: the probe does not reproduce the NiBr2 number, and what it would take to
+is something the synthetic density does not have (the real vacuum's `r_s`, `nspin_mag = 4`'s
+host traffic, the restarts running to `LOCAL_TF_REFRESHES`), still unprofiled. Beside `pw.x` on
+the cobalt film, the same algorithm is **31 ms** a call in `pw.x`'s `mix_rho` against this code's
+255 ms on a grid 1.4 times larger, and the film's `local-TF` run pays 0.55 s an iteration over
+Kerker's. What changed the item's weight: `mixing_mode = 'ldos'` is now the mode a metal film
+should use (20 iterations on that film where `local-TF` takes 30 here and 24 in `pw.x`), so this
+cost reaches only an input that asks for `local-TF` by name, which every `pw.x` slab input does.
+
 ---
 
 # Part IX -- from the tunnelling spectrum, 2026-09-15 (P90)
