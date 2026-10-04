@@ -298,7 +298,7 @@ def _atomic_projectors(calculation, kind: str):
     )
 
 
-def _projection_blocks(calculation, psi, channels, built: bool):
+def _projection_blocks(calculation, psi, channels, built: bool, width: int | None = None):
     """The ``(rows, live)`` blocks the projectors are built and applied on.
 
     **In memory mode the projectors are built a block of k-points at a time**,
@@ -321,7 +321,10 @@ def _projection_blocks(calculation, psi, channels, built: bool):
         not built and calculation.memory_mode == "memory")
     if not walked:
         return [(np.arange(nk), nk)]
-    per_k = int(np.shape(psi)[-1]) * max(1, len(channels)) * 16
+    # ``channels`` is ``None`` only when the whole set's projectors are handed
+    # in, and then ``width`` is their column count.
+    count = len(channels) if channels is not None else (width or 1)
+    per_k = int(np.shape(psi)[-1]) * max(1, count) * 16
     batch = max(1, calculation.k_batch or 1)
     block = batch * max(1, PROJECTOR_BLOCK_BYTES // max(1, per_k * batch))
     return list(k_chunks(nk, block))
@@ -376,8 +379,9 @@ def _site_density_matrix(calculation, result, projectors, channels,
         return states if whole else states[jnp.asarray(rows)]
 
     computed = [None] * len(wanted)
-    for rows, live in _projection_blocks(calculation, psi, channels,
-                                         projectors is not None):
+    for rows, live in _projection_blocks(
+            calculation, psi, channels, projectors is not None,
+            width=None if projectors is None else int(np.shape(projectors)[-1])):
         whole = live == nk and len(rows) == nk
         if projectors is not None:
             block = jnp.asarray(projectors if whole else np.asarray(projectors)[rows])

@@ -32,7 +32,8 @@ def _inputs(host: bool):
     weights = rng.uniform(size=(NK, NBND))
     result = types.SimpleNamespace(
         wavefunctions=psi if host else jnp.asarray(psi), occupations=weights)
-    return types.SimpleNamespace(nspin=1), result, projectors
+    calculation = types.SimpleNamespace(nspin=1, memory_mode="speed", k_batch=None)
+    return calculation, result, projectors
 
 
 @pytest.mark.parametrize("host", [False, True], ids=["device", "host-store"])
@@ -50,21 +51,16 @@ def test_an_unpolarized_channel_is_projected_once(host, monkeypatch):
     density = _site_density_matrix(calculation, result, projectors, channels=None)
     monkeypatch.undo()
 
-    # One pass over the k-points: one call on the device, one per k-point when
-    # the store streams. Twice that is the channel projected once per spin
-    # component.
-    assert len(calls) == (NK if host else 1), calls
+    # One pass over the k-points: one call on the device, and one per block of
+    # k-points when the store streams (``_projection_blocks``; three k-points of
+    # this size are one block). Twice that is the channel projected once per
+    # spin component.
+    assert len(calls) == 1, calls
 
     # The projection by the same route the function takes, done here once.
     psi = np.asarray(result.wavefunctions)[0]
-    if host:
-        coefficients = np.stack([
-            np.asarray(jnp.einsum("gi,bg->bi", projectors[ik].conj(),
-                                  jnp.asarray(psi[ik])))
-            for ik in range(NK)])
-    else:
-        coefficients = np.asarray(
-            jnp.einsum("kgi,kbg->kbi", projectors.conj(), jnp.asarray(psi)))
+    coefficients = np.asarray(
+        jnp.einsum("kgi,kbg->kbi", jnp.conj(jnp.asarray(projectors)), jnp.asarray(psi)))
     block = np.einsum("kb,kbi,kbj->ij", 0.5 * result.occupations,
                       coefficients, coefficients.conj())
     # Exactly the block either projection gave, in both diagonal positions, and
