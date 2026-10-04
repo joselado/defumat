@@ -79,7 +79,8 @@ run all the way to completeness, the valence-to-conduction block of
 ``r^{c;a}`` agrees with a parallel-transport finite difference to **0.69 at 20
 bands, 0.54 at 80, 0.52 at 120 -- and 2.6e-3 at 158**, which is the complete
 basis (measured 2026-10-04; the 6e-2, 4.8e-2, 4.3e-2 and 1.8e-4 written here
-before are reproduced neither by today's code nor by ``db41c61``, which wrote them). The sum rule is an *identity* once ``p`` runs over the whole
+before are reproduced neither by today's code nor by ``db41c61``, which wrote
+them). The sum rule is an *identity* once ``p`` runs over the whole
 space, and that is what the last number is; the slow approach to it is the tail
 of a sum whose terms fall off like ``1/E_p``. So a shift current at a
 production band count carries a few per cent from this and no symmetry check

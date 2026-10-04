@@ -7266,10 +7266,11 @@ What the agents of this sweep's follow-up found outside their items, recorded ra
   at 4 and 5 eV is stable across meshes, and its 2 eV tail do not reproduce at `db41c61` either, so the
   committed code never gave them. `docs/features.tex` now quotes today's peak, spin sum, tail and sum-rule
   sweep; notebook 32's "35 uA/V^2 at 4.2 eV" holds at that precision, and its outputs and notebook 30's
-  were executed after `27eeaa2`. The same sum-rule sweep is still quoted as recorded in
-  `test_photocurrent.py`'s docstrings, `NONLINEAR.md` and `photocurrent.py`'s docstrings (the last two
-  carry the 35.0 too), and silicon's antisymmetric residue as 4.0e-13 in the guide and in notebook 30's
-  prose where 1.8e-12 is measured, which is the same order and was left. Notebooks 32
+  were executed after `27eeaa2`. The copies of the sweep, the 35.0, the tail, the forbidden components
+  and the truncation in `test_photocurrent.py`, `NONLINEAR.md`, `photocurrent.py`, the guide and
+  `test_conductivity.py`'s plasma frequencies are corrected to the measurement (`ef238fb`); silicon's
+  antisymmetric residue stays 4.0e-13 in the guide and in notebook 30's prose where 1.8e-12 is measured,
+  the same order, and was left. Notebooks 32
   and 33 now converge their silicon control with symmetry kept and pass the whole mesh as `kpoints=`
   (`tests/data/qe/si2-symmetric.in`), which is what the grid warning of `263b6a3` advises; the two
   regression controls stay on `si2-nosym.in`, whose residue `test_shg.py` measures and bounds.
