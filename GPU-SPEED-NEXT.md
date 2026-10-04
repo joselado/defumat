@@ -32,6 +32,28 @@ evidence; an A/B is`. Record the steps with every timing. Two stories that fitte
 (slow genuine convergence and false convergence on stagnation) were both wrong, and so was a workaround
 (an accelerator floor under `ethr`) that fitted the symptom; the replay is what settled it.
 
+## Where it stands, 2026-10-04 (master `3f92e8a`, read against the code, nothing measured)
+
+The open items split by what they need. **A float64 card**, so a Triton job the user approves: the
+A100-class profile (item 5; `nsys` is not on the GPU nodes and `module spider nsight` has not been
+tried), the dials of item 6 (the FFT layout, `DEFUMAT_HOST_EIGH_ROWS`, a band batch that follows the cell
+size, and the radial chunk's 8 MB, `GPU-MEMORY-NEXT.md`'s fourth start item), the slab's step count and
+the V100's `k=all, b=1` reading (both item 7). **D22 alone**: the batched field solve (item 7, first
+bullet), the float32 tier's setup cast (item 7, `GPU-MEMORY-NEXT.md` item 26), the lowest-`nbnd` subspace
+`eigh` through `syevdx` (item 7; nothing in `defumat/` calls `syevdx` or `subset_by_index`), and the
+memory tail of `GPU-MEMORY-NEXT.md`'s start list.
+
+Three facts about the batched field solve, read off the code after P127. `_WholeField.respond` still
+solves the three directions one after another (`response/efield.py:620`, one `solver.solve` per axis).
+The perturbation reaches `SternheimerSolver.solve` as a callable (`response/sternheimer.py:777`), but the
+three directions' callables share one structure (`_bare_plus_induced`, `efield.py:976`), so one closure
+over the stacked `bare` and `dvscf` may batch them without item 7's perturbation-as-arrays rewrite; that
+is untried. The field's convergence test is joint over the three directions since P127
+(`response/mixing.py:ddv_scf(..., joint=True)`, as `solve_e`), so only the phonon, whose test is the
+largest single mode, would need a per-direction mask. The warm call's 2.1 s of tracing and 0.8 s of
+hashing were measured on 2026-10-02, before P127 handed `start` and `threshold` to the compiled solve as
+arrays, and have not been re-measured.
+
 ## 1. Run the stall check on a production card -- done 2026-10-02 on an H200 (section 4b), the `nsys` stage skipped
 
 The forecast, not a measurement: the one component that differs between the A2000 and a CPU on the
@@ -224,6 +246,7 @@ projected pair on a CPU (does not reproduce the card); an accelerator floor unde
 Tools: `tools/gpu/replay/` (this work), `tools/parallel/time_scf.py` and `gpu_scan.sh` (timing; the
 scan takes the FFT layout as a fourth field of an entry), `tools/gpu/` (the older sbatch scripts).
 D22: `CLAUDE.local.md`, "The GPU workstation `D22-0161`" and its 2026-10-01 additions (`nsys` path,
-how to launch background jobs, the timing environment); its checkout is detached at `4ee01c2`. Memory:
+how to launch background jobs, the timing environment); its checkout is detached at `7f6fef2` as of
+2026-10-04 (it was `4ee01c2` when this list was written). Memory:
 `davidson-stall-at-ethr-floor.md`. Guide: `docs/features.tex`, the batching section (the floor lever, the
 budget warning, the layout dial).
