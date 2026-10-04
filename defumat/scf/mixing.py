@@ -65,7 +65,9 @@ __all__ = ["Mixer", "LinearMixer", "AndersonMixer", "AdaptiveMixer", "get_mixer"
            "MIXERS", "PRECONDITIONED", "kerker_preconditioner",
            "local_tf_preconditioner", "thomas_fermi_screening", "SphereLayout",
            "MIXING_SPACES", "DEFAULT_MIXING_SPACE", "resolve_mixing_space",
-           "kerker_preconditioner_g", "local_tf_preconditioner_g"]
+           "kerker_preconditioner_g", "local_tf_preconditioner_g",
+           "LDOS_DEPENDENT", "LDOSPreconditioner", "ldos_preconditioner",
+           "ldos_preconditioner_g", "ldos_dielectric"]
 
 
 class Mixer:
@@ -1136,128 +1138,269 @@ def local_tf_preconditioner(gvectors, cell, shape, beta=0.7):
 #: Mixing modes whose preconditioner reads the local density of states at the
 #: Fermi level, which the driver hands it at every iteration
 #: (:func:`ldos_preconditioner`). Kept out of :data:`PRECONDITIONED` so that no
-#: install site written for Kerker or local-TF builds one of those for it.
+#: install site written for Kerker or local-TF builds one of those for it: the
+#: sites that cannot build this one refuse it by name instead.
 LDOS_DEPENDENT = {"ldos"}
 
-#: GMRES settings of :func:`ldos_preconditioner`'s inner solve: the relative
-#: tolerance, the Krylov width before a restart, and the number of restarts.
-LDOS_TOL, LDOS_RESTART, LDOS_MAXITER = 1.0e-4, 20, 4
+#: The inner solve's stopping rule: the relative 2-norm of the residual of
+#: ``A y = b`` (:func:`ldos_preconditioner`), which weights the density residual
+#: by ``1/|G|``, the Hartree norm, and is therefore strictest on the long
+#: wavelengths the preconditioner exists for; and its iteration cap.
+LDOS_TOL, LDOS_MAXITER = 1.0e-4, 200
 
-#: Count the inner solve's operator applications through a host callback, for
-#: a measurement of what one call costs. Read when the solve is traced.
-LDOS_COUNT_MATVECS = False
+#: The smallest width of the Gaussian the LDOS is built with, in Ry
+#: (``Calculation.ldos_weights``): ``max(degauss, LDOS_SIGMA_MIN)``.
+LDOS_SIGMA_MIN = 0.0
+
+#: The Gaussian's width for a tetrahedron run, which has no ``degauss`` of its
+#: own to build the LDOS with, in Ry.
+LDOS_TETRAHEDRA_SIGMA = 0.01
+
+#: Below this ``integral D dV`` (states per Ry in the cell) there are no states
+#: at the Fermi level and the step is ``beta R`` exactly, the plain one.
+LDOS_EMPTY = 1.0e-10
 
 
-def ldos_preconditioner(gvectors, cell, shape, beta=0.7):
-    """Herbst and Levitt's LDOS preconditioner (arXiv:2009.01665), charge only.
+@dataclass
+class _LDOSPieces:
+    """The transforms and kernels :func:`ldos_preconditioner` and its tests share."""
+    to_sphere: object
+    to_grid: object
+    coulomb: object
+    nonzero: object
 
-    The step is ``beta eps~^-1 R`` with ``eps~ = 1 - chi0~ v``, ``v`` the Hartree
-    kernel ``e2 4 pi/|G|^2`` and
 
-        chi0~ dV = -D dV + D <D, dV> / <D, 1>,
-
-    where ``D(r)`` is the local density of states at the Fermi level, summed over
-    spin. A uniform ``D`` gives ``eps~ = 1 + 8 pi D/|G|^2``, which is Kerker with
-    ``q_TF^2 = 8 pi D``; a ``D`` that vanishes in the vacuum leaves the vacuum
-    unscreened, and a ``D`` that vanishes everywhere (an insulator) leaves the
-    plain step. ``eps~`` is not diagonal in either space, so it is inverted by
-    GMRES, preconditioned by Kerker at the cell-averaged ``D``. The second term
-    keeps the electron count: ``eps~ x`` integrates to the integral of ``x``.
-
-    Call :meth:`update_ldos` with the new ``D`` before each step.
-    """
-    from jax.scipy.sparse.linalg import gmres
-
+def _ldos_pieces(gvectors, cell) -> _LDOSPieces:
     grid = gvectors.grid
-    size = int(np.prod(shape))
-    nspin = shape[0]
+    points = int(np.prod(grid))
     index = gvectors.fft_index
     g2 = jnp.asarray(gvectors.kinetic(cell))
     nonzero = g2 > 1.0e-12
     coulomb = jnp.where(nonzero, FPI * E2 / jnp.where(nonzero, g2, 1.0), 0.0)
-    points = int(np.prod(grid))
-    volume = float(cell.volume)
-    dv = volume / points
 
-    def filtered(x, factor):
-        box = jnp.fft.fftn(x.reshape(grid))
-        coefficients = box.reshape(-1)[index] * factor
-        box = jnp.zeros(box.size, dtype=box.dtype).at[index].set(
+    def to_sphere(field):
+        """``c_G = (1/N) sum_r f(r) e^{-iGr}`` on the sphere."""
+        return jnp.fft.fftn(field.reshape(grid)).reshape(-1)[index] / points
+
+    def to_grid(coefficients):
+        """``f(r) = sum_G c_G e^{iGr}``, real for a Hermitian ``c``."""
+        box = jnp.zeros(points, dtype=coefficients.dtype).at[index].set(
             coefficients, unique_indices=True)
-        return jnp.real(jnp.fft.ifftn(box.reshape(grid))).reshape(-1)
+        return jnp.real(jnp.fft.ifftn(box.reshape(grid))).reshape(-1) * points
 
-    class Counter:
-        matvecs = 0
+    return _LDOSPieces(to_sphere, to_grid, coulomb, nonzero)
 
-        def tick(self):
-            self.matvecs += 1
 
-    counter = Counter()
+def _chi0(field, ldos):
+    """``chi0~ f = -D f + D <D, f> / <D, 1>``, on the grid; the volume element cancels."""
+    total = jnp.sum(ldos)
+    return -ldos * field + ldos * jnp.sum(ldos * field) / jnp.where(total > 0, total, 1.0)
+
+
+def ldos_dielectric(gvectors, cell):
+    """``x -> eps~ x = x - chi0~ v x`` on the grid, for a given ``D``: the operator
+    :func:`ldos_preconditioner` inverts, built from the same pieces, for tests."""
+    pieces = _ldos_pieces(gvectors, cell)
 
     @jax.jit
-    def solve(residual, ldos):
-        total = jnp.sum(ldos) * dv
-        has_states = total > 1.0e-10
-        safe_total = jnp.where(has_states, total, 1.0)
-        mean = total / volume
+    def apply(x, ldos):
+        vx = pieces.to_grid(pieces.coulomb * pieces.to_sphere(x))
+        return x - _chi0(vx, ldos)
+
+    return apply
+
+
+def _pcg(apply_a, b, y0, precondition, tol, maxiter):
+    """Preconditioned conjugate gradients on complex vectors with ``Re(vdot)``.
+
+    Returns ``(y, iterations, relative residual)`` from the loop's own carry,
+    so a caller can record what a solve cost without a host callback inside it.
+    """
+    def dot(u, v):
+        return jnp.real(jnp.vdot(u, v))
+
+    bb = dot(b, b)
+    r = b - apply_a(y0)
+    z = precondition(r)
+    state = (y0, r, z, z, dot(r, z), dot(r, r), 0)
+
+    def unfinished(state):
+        return (state[5] > tol * tol * bb) & (state[6] < maxiter)
+
+    def step(state):
+        y, r, z, p, rz, _, k = state
+        ap = apply_a(p)
+        alpha = rz / dot(p, ap)
+        y = y + alpha * p
+        r = r - alpha * ap
+        z = precondition(r)
+        rz_next = dot(r, z)
+        return y, r, z, z + (rz_next / rz) * p, rz_next, dot(r, r), k + 1
+
+    y, _, _, _, _, rr, k = jax.lax.while_loop(unfinished, step, state)
+    return y, k, jnp.sqrt(rr / jnp.where(bb > 0, bb, 1.0))
+
+
+class LDOSPreconditioner:
+    """The step of :func:`ldos_preconditioner`, with the record of what it cost.
+
+    Host-side state rather than a pytree: it lives on the mixer, outside every
+    compiled path, as Kerker's closure does. ``update_ldos`` is called by the
+    driver once an iteration, after the occupations and before the mix.
+    """
+
+    needs_ldos = True
+
+    def __init__(self, solve, shape, beta, volume, points):
+        self._solve = solve
+        self._shape = shape
+        self._size = int(np.prod(shape))
+        self._beta = beta
+        self._dv = volume / points
+        self.ldos = None
+        #: ``integral D dV`` of the current LDOS, states per Ry.
+        self.states = 0.0
+        #: ``integral |D_-| dV / integral |D| dV``: the share of the LDOS the
+        #: clamp to ``D >= 0`` removed (the augmentation charge at ``e_F`` is a
+        #: signed field), recorded rather than assumed to be zero.
+        self.clamped = 0.0
+        #: One ``(iterations, relative residual)`` per screened charge.
+        self.solves = []
+
+    def update_ldos(self, ldos):
+        ldos = jnp.asarray(ldos).reshape(-1)
+        positive = jnp.where(ldos > 0, ldos, 0.0)
+        magnitude = float(jnp.sum(jnp.abs(ldos)))
+        self.clamped = (float(jnp.sum(positive - ldos)) / magnitude
+                        if magnitude > 0 else 0.0)
+        self.ldos = positive
+        self.states = float(jnp.sum(positive)) * self._dv
+
+    def _screen(self, charge):
+        if self.states < LDOS_EMPTY:
+            return self._beta * charge
+        x, iterations, residual = self._solve(charge, self.ldos)
+        self.solves.append((int(iterations), float(residual)))
+        return self._beta * x
+
+    def __call__(self, residual, density=None):
+        if self.ldos is None:
+            raise ValueError("the LDOS preconditioner was called before update_ldos; "
+                             "run_scf hands it the LDOS at every iteration")
+        flat = jnp.asarray(np.asarray(residual).ravel())
+        head = flat[:self._size].reshape(self._shape)
+        nspin = self._shape[0]
+        beta = self._beta
+        if nspin == 1:
+            out = [self._screen(head[0].reshape(-1))]
+        elif nspin == 2:
+            # (up, down) to (charge, magnetization) and back, as Kerker does.
+            charge, moment = head[0] + head[1], head[0] - head[1]
+            charge = self._screen(charge.reshape(-1))
+            moment = beta * moment.reshape(-1)
+            out = [0.5 * (charge + moment), 0.5 * (charge - moment)]
+        else:
+            out = [self._screen(head[0].reshape(-1))] + [
+                beta * head[c].reshape(-1) for c in range(1, nspin)]
+        return np.asarray(jnp.concatenate([jnp.concatenate(out), beta * flat[self._size:]]))
+
+
+def ldos_preconditioner(gvectors, cell, shape, beta=0.7):
+    """Herbst and Levitt's LDOS preconditioner, on the charge.
+
+    The step is ``beta eps~^-1 R`` with ``eps~ = 1 - chi0~ v``, ``v = e2 4 pi/|G|^2``
+    the Hartree kernel and
+
+        chi0~ dV = -D dV + D <D, dV> / <D, 1>,
+
+    the response of a system whose only screening is by the states at the Fermi
+    level, ``D(r)`` being their local density summed over spin
+    (``Calculation.ldos_weights``). Herbst and Levitt, "Black-box inhomogeneous
+    preconditioning for self-consistent field iterations in density functional
+    theory", arXiv:2009.01665, J. Phys.: Condens. Matter 33, 085503 (2021); it is
+    DFTK's ``LdosMixing`` and ABINIT's ``iprcel = 200``.
+
+    **What it is, physically.** A uniform ``D`` gives ``eps~ = 1 + 8 pi D/|G|^2``,
+    which is Kerker with ``q_TF^2 = 8 pi D``; a ``D`` that vanishes in the vacuum
+    leaves the vacuum unscreened; a ``D`` that vanishes everywhere, an insulator,
+    leaves the plain step. It is QE's ``local-TF`` with the charge ``rho(r)``
+    replaced by the states at ``e_F``, which is the property that separates a
+    metal from a dense insulator and that ``local-TF`` cannot see
+    (``VACUUM-MIXING-NEXT.md``). The second term of ``chi0~`` keeps the electron
+    count: ``eps~ f`` integrates to the integral of ``f``.
+
+    **How it is solved.** ``chi0~`` is self-adjoint, and with ``D >= 0`` it is
+    negative semidefinite (``<f, chi0~ f> = -<D f^2> + <D f>^2/<D> <= 0`` by
+    Cauchy-Schwarz with weight ``D``), so in ``y = v^1/2 x`` the operator
+    ``A = v^1/2 eps~ v^-1/2 = 1 - v^1/2 chi0~ v^1/2`` is Hermitian and ``>= 1``, and
+    preconditioned conjugate gradients solves ``A y = v^1/2 R`` on the dense
+    sphere's coefficients with Kerker at the cell-averaged ``D`` as the
+    preconditioner and the first guess, which is the exact inverse where ``D`` is
+    uniform. One application is one FFT pair; the loop is a ``lax.while_loop``
+    with no host synchronisation, and it returns its iteration count. ``D`` is
+    clamped to ``D >= 0`` first (:class:`LDOSPreconditioner`), because the
+    augmentation charge at ``e_F`` is a signed field and the argument needs it.
+    ``G = 0`` is left out, as Kerker leaves it out: the residual's ``G = 0`` is
+    the drift of the electron count, and the step does not change it.
+
+    Only the charge is screened; the magnetization, ``becsum``, ``ns`` and
+    ``tau`` take ``beta``, as in :func:`kerker_preconditioner` and for the
+    argument given there.
+    """
+    pieces = _ldos_pieces(gvectors, cell)
+    g2 = jnp.asarray(gvectors.kinetic(cell))
+    nonzero = pieces.nonzero
+    root = jnp.sqrt(pieces.coulomb)
+    inverse_root = jnp.where(nonzero, 1.0 / jnp.where(nonzero, root, 1.0), 0.0)
+    volume = float(cell.volume)
+    points = int(np.prod(gvectors.grid))
+    tol, maxiter = LDOS_TOL, LDOS_MAXITER
+
+    @jax.jit
+    def solve(charge, ldos):
+        mean = jnp.sum(ldos) / points
         kerker = jnp.where(nonzero, g2 / (g2 + FPI * E2 * mean), 0.0)
 
-        def eps(x):
-            if LDOS_COUNT_MATVECS:
-                jax.debug.callback(counter.tick)
-            vx = filtered(x, coulomb)
-            chi = -ldos * vx + ldos * (jnp.sum(ldos * vx) * dv) / safe_total
-            return x - chi
+        def apply_a(y):
+            field = pieces.to_grid(root * y)
+            return y - root * pieces.to_sphere(_chi0(field, ldos))
 
-        x, _ = gmres(eps, residual, x0=filtered(residual, kerker), tol=LDOS_TOL,
-                     restart=LDOS_RESTART, maxiter=LDOS_MAXITER,
-                     M=lambda r: filtered(r, kerker), solve_method="incremental")
-        # The G = 0 part of the residual is the electron count's drift and is
-        # not screened; it is removed exactly as Kerker removes it.
-        x = filtered(x, jnp.where(nonzero, 1.0, 0.0))
-        return jnp.where(has_states, x, residual)
+        b = root * pieces.to_sphere(charge)
+        y, iterations, residual = _pcg(apply_a, b, kerker * b,
+                                       lambda r: kerker * r, tol, maxiter)
+        return pieces.to_grid(inverse_root * y), iterations, residual
 
-    class Preconditioner:
+    return LDOSPreconditioner(solve, tuple(shape), beta, volume, points)
+
+
+def ldos_preconditioner_g(layout: SphereLayout, dense: GVectors, cell, beta=0.7):
+    """:func:`ldos_preconditioner` on a :class:`SphereLayout`, as
+    :func:`local_tf_preconditioner_g` wraps ``local-TF``: the solve runs over the
+    smooth sphere's G-vectors placed in the dense box, and the LDOS, a field on
+    the dense grid, is used as it is."""
+    smooth = GVectors(miller=dense.miller[:layout.ngms], grid=dense.grid,
+                      ecut=dense.ecut, gamma_only=dense.gamma_only)
+    screen = ldos_preconditioner(smooth, cell, layout.shape, beta)
+    size = int(np.prod(layout.stored_shape))
+
+    class OnTheSphere:
         needs_ldos = True
-        ldos = None
-        calls = 0
-        seconds = 0.0
 
-        @property
-        def matvecs(self):
-            return counter.matvecs
+        def __getattr__(self, name):
+            return getattr(screen, name)
 
         def update_ldos(self, ldos):
-            self.ldos = jnp.asarray(ldos).reshape(-1)
+            screen.update_ldos(ldos)
 
         def __call__(self, residual, density=None):
-            if self.ldos is None:
-                raise ValueError("the LDOS preconditioner was called before update_ldos")
-            import time
-            self.calls += 1
-            start = time.perf_counter()
-            try:
-                return self._apply(residual)
-            finally:
-                self.seconds += time.perf_counter() - start
+            residual = np.asarray(residual).ravel()
+            head = np.asarray(layout.field(residual[:size])).ravel()
+            screened = np.asarray(screen(head)).reshape(layout.shape)
+            out = beta * residual
+            out[:size] = layout.stored_of(screened).ravel()
+            return out
 
-        def _apply(self, residual):
-            flat = jnp.asarray(np.asarray(residual).ravel())
-            head = flat[:size].reshape(shape)
-            if nspin == 1:
-                out = [beta * solve(head[0].reshape(-1), self.ldos)]
-            elif nspin == 2:
-                charge, moment = head[0] + head[1], head[0] - head[1]
-                charge = beta * solve(charge.reshape(-1), self.ldos)
-                moment = beta * moment.reshape(-1)
-                out = [0.5 * (charge + moment), 0.5 * (charge - moment)]
-            else:
-                out = [beta * solve(head[0].reshape(-1), self.ldos)] + [
-                    beta * head[c].reshape(-1) for c in range(1, nspin)
-                ]
-            return np.asarray(jnp.concatenate([jnp.concatenate(out), beta * flat[size:]]))
-
-    return Preconditioner()
+    return OnTheSphere()
 
 
 #: ``run_scf``'s ``mixing_space``, spelled either way, to the layout it selects:

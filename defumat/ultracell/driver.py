@@ -119,7 +119,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.basis.builder import build_basis
-from defumat.scf.mixing import MIXERS, get_mixer
+from defumat.scf.mixing import LDOS_DEPENDENT, MIXERS, get_mixer
 from defumat.xc.functional import resolve_functional
 from defumat.scf.driver import default_nbnd
 from defumat.scf.occupations import (
@@ -995,6 +995,12 @@ def run_ultracell(
     # otherwise reach the guard inside ``AdaptiveMixer.mix`` after a ground
     # state and a supercell had already been paid for. ``accepts_precondition``
     # is a class attribute, so this asks the registry rather than an instance.
+    if str(mixing_mode).lower() in LDOS_DEPENDENT:
+        raise ValueError(
+            "mixing_mode = 'ldos' is not implemented for the ultracell: its mixer is "
+            "built here and never handed an LDOS, so it would run plain anderson "
+            "under the name. Its own Kerker (kerker=True) is the screened mode here"
+        )
     if kerker and not MIXERS[str(mixing_mode).lower()].accepts_precondition:
         raise ValueError(
             f"mixing_mode = {mixing_mode!r} does not take a preconditioner and "
