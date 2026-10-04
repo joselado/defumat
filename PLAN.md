@@ -9710,6 +9710,58 @@ frequencies is 13 MB per chunk against 5 MB of matrix elements: **the frequency
 axis is free and the band count is what has to be watched**, since it enters
 squared and is also the truncation the f-sum measures.
 
+**Re-measured 2026-10-04 for `27eeaa2`'s `l = 1` tangent at `k + G = 0` (P54),
+and no figure in this entry moves with it at the precision it is recorded to.**
+Every case runs on an unshifted mesh that holds `Gamma`, and on today's code and
+with `Calculation(..., origin_tangent=False)` on one SCF, after a control that the
+switch reaches `dH/dk` through `calculation=` (`27eeaa2`'s own
+`Gamma_1`-by-`Gamma_15` block on `si2-nosym`, 0.45892 against 0.16956): silicon's spectral
+weight reads 1.1852, 0.9853 and 0.9340 of `pi n_e/2` on 4x4x4, 6x6x6 and 8x8x8
+against 1.1853, 0.9853 and 0.9340, its diamagnetic weight 0.9423 and 0.9432 on
+both legs to every digit (the stencil sits at `|k + G| = 1e-3` and never reaches
+the row), the identity with P37 3.2e-14 against 3.0e-14 (the two share the
+velocity, so it is blind to the row), aluminium's plasma frequency, a
+Fermi-surface quantity that `Gamma` does not reach, 11.886697 and 20.485233 eV on
+both legs, and nickel's Hall conductivity -1101.58 and -77.10 S/cm on both legs
+to 1e-7. `Gamma` is one point in 64 or more, and the largest move is 1.4e-4 of
+silicon's 4x4x4 spectral weight.
+
+**Five figures here reproduce on neither leg, and none of them is the tangent.**
+
+* Nickel's plasma frequency is **0.852 eV** where the table and the Drude
+  paragraph record 0.597 and 0.5971, because `ni-soc-nosym.in` smears with `mv`,
+  the cold smearing, and `33936f2`'s correction of the Drude delta's argument
+  moved it too; that commit re-measured aluminium only. Today's code with
+  `w0gauss` handed `-x` gives 0.5973 back on the 4x4x4 mesh at 36 bands, and the
+  Hall conductivity does not move with it. It is still the same at 30 and 36
+  bands, 0.8517 eV, which is what the test asserts.
+* The nonmagnetic nickel of the degeneracy-guard section reads `sigma_xx`
+  1.289876e5 S/cm and a plasma frequency of 0.628511 eV on its frequency route
+  where 1.290657e5 and 0.688568 were recorded, for the same reason: the mirror
+  gives 1.290658e5 and 0.688568 back. Its `sigma_xy`, zero by time reversal,
+  reads 2.8e-7 S/cm where 8.5e-6 was, under either argument. Each is still the
+  same at 5.56e-13 and at the default guard, which is the claim.
+* The guard table's curvature route reads 4.504e-4 S/cm at 1e-5, 1e-8 and 1e-10
+  where 4.669e-4 and 4.668e-4 were recorded, `sigma_xy` 4.95e-5 and 4.97e-5, and
+  **2.140** S/cm at 5.56e-13 where 1.2576 was, so the 2700x of that paragraph is
+  4750x today. The counts, 102 and 42, are as recorded; the tight guard's value
+  is round-off inverted and moves with the rotation the eigensolver returns.
+* The Hall conductivity of the 4x4x4 row, -77.4 and -1101.7 S/cm when written,
+  reads -77.10 and -1101.58, a few parts in a thousand of a number the table
+  already shows changing sign with the mesh. Notebook 30 printed 1101.74 when
+  executed on 2026-09-02 and 1101.90 on 2026-09-21, so it has moved between
+  executions by more than a thousand times what the tangent is worth here (9e-5
+  S/cm). The 6x6x6 row was not re-run, about 25 minutes on two legs for a row
+  that is not compared with anything.
+* Silicon's antisymmetric `sigma` reads 1.8e-12 at 20 bands where 4.0e-13 was
+  recorded, and 6.3e-6, 1.4e-6 and 6.6e-7 at 12, 24 and 32 where 1.0e-5, 2.3e-6
+  and 8.3e-7 were, on both legs. The clean cut is round-off and the other three
+  cut a multiplet (`band_cut_gap` 7e-15, 4e-15 and 6e-15 Ry), so all four are
+  residues that move with any change of rounding, and the six orders of
+  magnitude between the two kinds of cut stand. The off-diagonals of the P37
+  identity at that clean cut are 9.7e-9 and 9.6e-9 where 1e-9 was written (at 36
+  bands 8.7e-10 and 1.9e-9, agreeing to 1.8e-9, as recorded).
+
 ### P52 — The Fermi-surface nesting function. ✅ DONE.
 
 `defumat/response/nesting.py` and `defumat/workflows/nesting.py`. Elk's task
@@ -10093,12 +10145,15 @@ The **spin sum**: the same AlAs cell run `nspin = 1` (14 bands) and as a
 two-component spinor (28) gives the same tensor to **4.6e-9**, peak ratio
 1.000000 -- P52's construction, where the same factor of two is a factor of four
 and invisible in the shape. It is also the only test behind the README row's
-claim that a spinor run works at all.
+claim that a spinor run works at all. Since `27eeaa2` the residue reads 4.5e-9,
+and 4.6e-9 with `origin_tangent=False` (the 2026-10-04 paragraph below).
 
 The **published literature, with the ordering doing the work**. AlAs's first
 peak converges to **35.0 uA/V^2 at 4.17 eV** -- 33.9 at `ecutwfc = 16`, then
 33.7, 34.8 and 35.0 at 22 with 14, 22 and 30 bands, so about 1% in both
-parameters. Calculations across the fourteen III-V and II-VI zincblende
+parameters. That is the sweep as written; since `27eeaa2` it reads 33.9, 33.7,
+34.9 and **35.1**, and 35.0 is what `origin_tangent=False` gives (the 2026-10-04
+paragraph below). Calculations across the fourteen III-V and II-VI zincblende
 semiconductors span **14 uA/V^2** (CdSe, smallest) to **83** (AlSb, largest),
 and find the *aluminium* compounds the strongest responders of the family and
 the II-VI compounds the weakest (Opt. Quantum Electron. **58**,
@@ -10129,7 +10184,62 @@ factor of two, and this one is against the first convention.
 at 5 eV**, stable across 4x4x4, 6x6x6 and 8x8x8 meshes, with a peak of about
 1.1e-4 near 4.4 eV — the published range for a zincblende semiconductor. Below
 the absorption edge it is **6.9e-25** at 2 eV. Silicon, the centrosymmetric
-control run through the same machinery, gives zero.
+control run through the same machinery, gives zero. (The stability across
+meshes and the 2 eV figure are not what the committed code gives; see the next
+paragraph.)
+
+**Re-measured 2026-10-04 for `27eeaa2`'s `l = 1` tangent at `k + G = 0` (P54),
+which moves two recorded figures in their last printed digit, the converged peak
+and the spin sum's residue, and the 2 eV tail by a factor of 2.5.** Every AlAs
+figure in this entry is on an unshifted mesh, so each was run on today's code and with `Calculation(..., origin_tangent=False)` on one
+SCF, and `db41c61`, the commit that wrote the entry, was run with its own test
+helpers beside them: it returns the `origin_tangent=False` leg to every printed
+digit on the 4x4x4, 6x6x6 and 8x8x8 meshes, which says the switch is the whole
+of the difference. At `ecutwfc = 22` on the 64-point mesh the first peak reads
+33.73, 34.90 and 35.08 uA/V^2 at 4.17 eV for 14, 22 and 30 bands, against 33.66,
+34.83 and 35.02 with the switch off, and at `ecutwfc = 16` it reads 33.93 at 4.17
+eV against 33.89 at 3.90, where two neighbouring maxima trade places; so the
+sweep as written is QE's leg, and 35.1 sits in the 14 to 83 range exactly where
+35.0 did. The tangent acts at the absorption edge, which is at `Gamma` in AlAs
+(the direct gap is smallest there, 2.85 eV at `ecutwfc = 10` and 2.44 at 22): the
+two legs differ most at the grid point nearest it, by 10 per cent of the peak on
+4x4x4, 1.2 on 6x6x6 and 0.8 on 8x8x8, falling as `Gamma`'s weight does, and they
+are bit-identical at the sum-rule harness's generic point, which holds no
+`k + G = 0` row. The spin sum holds on both legs, at 4.5e-9 today and 4.6e-9,
+the recorded figure, with the switch off, the peak ratio 1.000000 on both.
+Notebook 32's 44.2 uA/V^2 at 3.56 eV, its 4.5 per cent truncation and its
+forbidden components (4.0e-9 of the allowed), the 6x6x6 peak (1.145e-4 against
+1.143e-4, at 4.38 eV on both legs) and silicon's control (2.0e-5 of AlAs's peak
+on both) do not move at the precision recorded. The truncation reads
+3.5, 1.0 and 1.3 per cent at 14, 22 and 30 bands on both legs, and 22 and 30 cut
+a degenerate multiplet (`band_cut_gap` 4e-15 and 4e-16 Ry), which `569df06`'s
+warning now reports on both runs.
+
+**Four figures in this entry reproduce on neither leg nor at `db41c61`**, so they
+are not what the committed code gave when they were written, and none of them is
+the tangent:
+
+* the sum-rule sweep, recorded as 6.0e-2, 4.8e-2, 4.3e-2 and 1.8e-4 at 20, 80,
+  120 and 158 bands, reads 0.69, 0.54, 0.52 and 2.6e-3 with the committed
+  harness, bit-identical on both legs. The fall at completeness is there, a
+  factor of 200, and the test's bound of 3e-3 holds with 13 per cent to spare;
+  normalising the residue by the window's largest element, taking the median
+  rather than the largest relative error, or taking the Frobenius norm gives
+  1.2e-2 to 1.5e-2 at 20 bands and 3.0e-4 to 1.5e-3 at 158, which is not the
+  recorded sweep either;
+* `sigma^xyz` at 4 and 5 eV is not stable across meshes: at the grid point
+  nearest each it is -3.42e-5 and -2.8e-7 on 4x4x4, -1.48e-5 and -9.6e-6 on
+  6x6x6, and -1.771e-5 and -2.756e-5 on 8x8x8, on both legs, so the recorded pair
+  is the 8x8x8 mesh's alone;
+* the 2 eV tail, recorded as 6.9e-25 on the 6x6x6 mesh of
+  `test_photocurrent.py`, reads 1.7e-24 there (7.3e-25 on 8x8x8) with the switch
+  off and at `db41c61`, and 4.3e-24 (1.8e-24) today. It is a Gaussian tail 6.3
+  broadening widths below the edge at `Gamma`, so it carries the tangent's
+  factor of 2.5 and says no more than that the current vanishes, which is what
+  the test's relative bounds assert;
+* the forbidden components that `test_photocurrent.py`'s comment gives as 4.0e-4
+  of the allowed on 6x6x6 and 1.0e-5 on 4x4x4 are 2.3e-9 and 6.0e-9 on both legs
+  and at `db41c61`, which is this entry's "exactly `-43m`, to five figures".
 
 **Refused by name**: ultrasoft and PAW (the `dS/dk` and `d^2S/dk dk` terms are
 identically zero for a norm-conserving dataset, so nothing here can see their

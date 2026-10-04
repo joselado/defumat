@@ -7248,11 +7248,28 @@ What the agents of this sweep's follow-up found outside their items, recorded ra
   Elk comparisons, the scissors and absorption tests and the augmented pair (bounds now 1e-6) run 23
   bands and pass under `-W error::RuntimeWarning`, notebook 33 and the guide's snippet followed, and
   re-measuring them found the recorded Elk figures predate `27eeaa2`'s `l = 1` tangent at `k + G = 0`,
-  which is worth 6 per cent of the peak (`PLAN.md` P54). **Not checked: whether the same history sits
-  under P51's and P53's recorded figures.** The optical conductivity and the shift current are built from
-  the same `dH/dk` on unshifted meshes that hold `Gamma`, and nobody re-measured either when `27eeaa2`
-  landed; the measurement is one run of each recorded case today and one with
-  `Calculation(..., origin_tangent=False)`, which gave P54's old figure back to 4e-3 pm/V. Notebooks 32
+  which is worth 6 per cent of the peak (`PLAN.md` P54). **Checked 2026-10-04 for P51 and P53: the same
+  history sits under P53 in the last printed digit and under nothing in P51.** Each recorded case on a
+  mesh holding `Gamma` was run today and with `origin_tangent=False` on one SCF, after a control that the
+  switch reaches `dH/dk` through `calculation=` (`27eeaa2`'s own 0.45892 against 0.16956 on `si2-nosym`).
+  The shift current's converged AlAs peak reads 35.08 uA/V^2 at 4.17 eV against 35.02, so the recorded
+  35.0 is QE's leg and today's is 35.1, and the spin sum's residue 4.5e-9 against the recorded 4.6e-9;
+  `db41c61`, the commit that wrote P53, returns the `origin_tangent=False` leg to every printed digit.
+  The tangent acts on that spectrum at its edge, which is at `Gamma` in AlAs, by 10 per cent of the peak
+  on 4x4x4 and 0.8 on 8x8x8, and nothing recorded sits there but a 2 eV tail. In P51 the largest move is
+  1.4e-4 of silicon's 4x4x4 spectral weight, because `Gamma` is one point in 64 or more. **Nine other
+  items in the two entries reproduce on neither leg, and both entries now list them.** Nickel's plasma frequencies, 0.852
+  and 0.629 eV where 0.597 and 0.689 were recorded, are `33936f2`'s Drude argument, which the
+  cold-smeared nickel input feels and which that commit re-measured on aluminium only: the mirrored
+  argument gives the recorded figures back. P53's sum-rule sweep (0.69 to 2.6e-3 where 6.0e-2 to 1.8e-4
+  was recorded, the test's bound of 3e-3 holding with 13 per cent to spare), its claim that `sigma^xyz`
+  at 4 and 5 eV is stable across meshes, and its 2 eV tail do not reproduce at `db41c61` either, so the
+  committed code never gave them. `docs/features.tex` now quotes today's peak, spin sum, tail and sum-rule
+  sweep; notebook 32's "35 uA/V^2 at 4.2 eV" holds at that precision, and its outputs and notebook 30's
+  were executed after `27eeaa2`. The same sum-rule sweep is still quoted as recorded in
+  `test_photocurrent.py`'s docstrings, `NONLINEAR.md` and `photocurrent.py`'s docstrings (the last two
+  carry the 35.0 too), and silicon's antisymmetric residue as 4.0e-13 in the guide and in notebook 30's
+  prose where 1.8e-12 is measured, which is the same order and was left. Notebooks 32
   and 33 now converge their silicon control with symmetry kept and pass the whole mesh as `kpoints=`
   (`tests/data/qe/si2-symmetric.in`), which is what the grid warning of `263b6a3` advises; the two
   regression controls stay on `si2-nosym.in`, whose residue `test_shg.py` measures and bounds.
