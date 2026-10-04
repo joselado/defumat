@@ -1615,59 +1615,41 @@ def _orientation_torque(system, pseudos, density, rotation, nbnd, conv_thr,
     ), calculation
 
 
-def _drop_the_last_orientation(previous_used, used, previous_axis, axis) -> None:
-    """Free what the last one-shot of :func:`relax_orientation` compiled and this one did not reuse.
+def _drop_the_last_orientation(previous_used, used) -> None:
+    """Free the kept programs the last one-shot of :func:`relax_orientation` used and this one did not.
 
-    Two programs are compiled again at every orientation of a gradient-corrected
-    noncollinear run, and both for the same reason: the quantization axis
-    (``compute_ux``, :func:`~defumat.scf.potential.fixed_quantization_axis`)
-    turns with the texture, and the potential takes it as a **static**
-    argument (``scf.driver._potential_of_rho``). So the potential is a new
-    executable per orientation, and the torque's derivative, which traces that
-    potential, holds the axis as a constant and is a new kept program
-    (:mod:`defumat.eager`) per orientation too. Nothing else is: the
-    eigensolver, the Hamiltonian's build and the band sum are compiled once
-    and used at every step.
-
-    ``previous_used`` and ``used`` are the kept programs the last and this
-    one-shot reached (:func:`defumat.eager.tracking`), so what the last one used
-    and this one did not is the last orientation's own and is dropped; the
-    potential's executables are dropped when the axis moved (``clear_cache``
-    of that one ``jit``), which leaves this orientation's to be compiled again
-    only if the next one-shot is at the same axis. On a norm-conserving or
-    ultrasoft dataset under a functional without a gradient correction the
-    grid potential never reads the axis, so the torque's program is the same
-    at every orientation and stays (PAW passes the axis to its one-centre
-    terms as an argument, which the torque's trace may still hold as a
-    constant); with no fixed axis at all (moments not parallel) the potential
-    stays too.
-
-    Measured on tetragonal cobalt (``co-tetragonal-anisotropy-soc.in`` at
+    ``previous_used`` and ``used`` are the kept programs (:mod:`defumat.eager`)
+    the last and this one-shot reached (:func:`defumat.eager.tracking`), so
+    what the last one used and this one did not belonged to the last
+    orientation alone, and is dropped. It replaced a ``jax.clear_caches()``
+    after every one-shot, which also dropped the eigensolver, the Hamiltonian's
+    build and the band sum that every one-shot shares: 79 compilations a
+    one-shot on tetragonal cobalt (``co-tetragonal-anisotropy-soc.in`` at
     ``ecutwfc = 12`` on a 2x2x2 mesh, from ``rotation_from_euler(0.4, 0.9,
-    -0.3)``: 23 steps and six curvature one-shots, the persistent cache warm,
-    torques, free energies and curvature bit-identical in all three arms).
-    Keeping everything, the two compiles cost 1755 mappings and 115 MB
-    resident per one-shot, 55,705 mappings at the 29th, so from this
-    workstation's baseline a Triton node's 65,530 end the process during its
-    35th one-shot. ``jax.clear_caches()`` after every one-shot, which this
-    replaces, held the mappings at 910 but dropped the eigensolver and the
-    Hamiltonian's build with them, 79 compilations a one-shot. Dropping only
-    these two compiles 2 a one-shot and holds the mappings at 5703 after the
-    drop and 7453 before it, resident memory growing by 0.9 MB a one-shot.
-    The file's own cell (``ecutwfc = 20``, 3x3x2, four steps and the
-    curvature) reads the same: 1749 mappings a one-shot kept, 79 compilations
-    cleared, and 5745 after the drop and 7487 before it with 2.
+    -0.3)``, 23 steps and six curvature one-shots).
 
-    The root is the static axis, and the fix there is to pass it to the
-    potential as an array so that one executable serves every orientation;
-    until then this is what bounds a relaxation.
+    **On that relaxation it now drops nothing.** Two programs used to be new
+    at every orientation of a gradient-corrected run: the potential, which
+    took the quantization axis (``compute_ux``,
+    :func:`~defumat.scf.potential.fixed_quantization_axis`) as a static
+    argument while the axis turns with the texture, and the torque's
+    derivative, which traced that potential and held the axis as a nested
+    constant. Kept, the two cost 1755 mappings and 115 MB resident a
+    one-shot, so a Triton node's 65,530 mappings would have ended the process
+    during its 35th; this drop, with a ``clear_cache`` of the potential when
+    the axis moved, held them at 5700 after it and 7451 before it and
+    compiled the two again every time. The axis is an array argument now
+    (:meth:`~defumat.scf.driver.Calculation._axis_argument`), one potential
+    executable and one torque program serve every orientation, and no
+    one-shot after the first compiles anything: 6566 mappings at every
+    one-shot, the persistent cache warm, and every torque, free energy, band
+    energy and the curvature bit-identical to the static axis's. The drop
+    stays as the bound for whatever else a later change keys on the texture,
+    at the cost of one set difference a one-shot.
     """
     from defumat import eager
-    from defumat.scf.driver import _potential_of_rho
 
     eager.forget(previous_used - used)
-    if axis != previous_axis:
-        _potential_of_rho.clear_cache()
 
 
 #: Trust radii of the orientation relaxation, in **radians**: the rotation
@@ -1879,13 +1861,14 @@ def relax_orientation(
     # the texture moves between them.
     shared = [None]
     # What the last one-shot used, so that the next can drop what it did not.
-    # A gradient-corrected run compiles its potential and its torque again at
-    # every orientation, and kept they accumulated: on the four-cell cobalt
-    # helix 16 GB in eight steps (Triton job 20478664), when every orientation
-    # was also a new calculation. This used to be a ``jax.clear_caches()``
-    # after every one-shot, which also dropped everything every step shares;
-    # :func:`_drop_the_last_orientation` drops only the two.
-    last = {"used": set(), "axis": None}
+    # A gradient-corrected run used to compile its potential and its torque
+    # again at every orientation, and kept they accumulated: on the four-cell
+    # cobalt helix 16 GB in eight steps (Triton job 20478664), when every
+    # orientation was also a new calculation. This used to be a
+    # ``jax.clear_caches()`` after every one-shot, which also dropped
+    # everything every step shares; :func:`_drop_the_last_orientation` drops
+    # only a kept program the last orientation alone used.
+    last = {"used": set()}
 
     def one_shot(orientation):
         with eager.tracking() as used:
@@ -1893,9 +1876,8 @@ def relax_orientation(
                 system, pseudos, density, orientation, nbnd, conv_thr, k_batch,
                 soc_scale, becsum, shared[0],
             )
-        axis = shared[0].quantization_axis
-        _drop_the_last_orientation(last["used"], used, last["axis"], axis)
-        last["used"], last["axis"] = used, axis
+        _drop_the_last_orientation(last["used"], used)
+        last["used"] = used
         return result
 
     optimizer, settings = fresh_optimizer()

@@ -258,11 +258,16 @@ def _same_value(first, second) -> bool:
     return True
 
 
-#: ``quantization_axis`` is a fixed three-vector or ``None``, so it is static:
-#: it comes from the *input* magnetization and cannot change during a run.
-#: ``source_free`` is Elk's ``nosource`` and is an input flag, so it is
-#: static beside ``quantization_axis``.
-_potential_of_rho = jax.jit(v_of_rho, static_argnums=(6, 8))
+#: ``source_free`` is Elk's ``nosource`` and is an input flag, so it is static.
+#: ``quantization_axis`` is **not**, although it cannot change during one SCF:
+#: :meth:`Calculation.with_texture` turns it with the texture, and as a static
+#: argument it made every orientation of a scan or a relaxation a new executable
+#: here and, since the torque's derivative traces this function, a new kept
+#: program there (``OPEN.md`` Part XXIII item 14). It is passed as an array
+#: (:meth:`Calculation._axis_argument`), or as ``None`` when there is no fixed
+#: axis, and that difference is in the pytree's structure, so the branch it
+#: selects is still taken at trace time.
+_potential_of_rho = jax.jit(v_of_rho, static_argnums=(8,))
 _accuracy = jax.jit(scf_accuracy)
 _accuracy_split = jax.jit(scf_accuracy_split)
 #: ``tauk_ddot``, added to ``accuracy`` the way ``ns_ddot`` is rather than fused
@@ -2601,9 +2606,9 @@ class Calculation:
         # takes the sign of the magnetization along. ``None`` -- QE's
         # ``lsign = .FALSE.`` -- whenever the starting moments are not all
         # parallel; the uniform field's direction when there is no starting
-        # moment at all and the field alone made the run magnetic. A tuple
-        # rather than an array because it crosses a ``jit`` boundary as a
-        # static argument.
+        # moment at all and the field alone made the run magnetic. Kept as a
+        # tuple, which compares and hashes on the host; what crosses a ``jit``
+        # boundary is the array :meth:`_axis_argument` builds from it.
         axis = (
             fixed_quantization_axis(system.local_moments, system.b_field)
             if self.nspin_mag == 4 and not self.spiral else None
@@ -4416,7 +4421,7 @@ class Calculation:
             self.rho_core,
             self.functional,
             self.rho_core_g,
-            self.quantization_axis,
+            self._axis_argument(),
             tau,
             self.source_free,
         )
@@ -4464,9 +4469,30 @@ class Calculation:
                 "the same one. Potential.meta_c is where it comes from"
             )
         energy, blocks = _paw_onecenter(
-            self.paw, becsum_, meta_c, self.quantization_axis
+            self.paw, becsum_, meta_c, self._axis_argument()
         )
         return energy, _paw_block_matrices(self.augmentation, blocks, self.nspin_mag)
+
+    def _axis_argument(self):
+        """:attr:`quantization_axis` as the array the compiled potentials take, or ``None``.
+
+        A host array rather than the tuple, for two reasons. Static, the tuple
+        made every orientation :meth:`with_texture` turns to a new executable of
+        the grid potential. Handed to a ``jit`` as it is, three Python floats,
+        it is three dynamic scalars to that ``jit`` but three *literals* in the
+        jaxpr of anything tracing around it, so the torque's derivative
+        (:mod:`defumat.eager` keys on the printed jaxpr) was a new program at
+        every orientation on PAW as well. A NumPy array is one dynamic argument
+        to the ``jit`` and a hoisted constant of an enclosing trace, whose value
+        is never printed. Built from the tuple at each call rather than kept
+        beside it, so that the two cannot disagree after a ``copy.copy``; it is
+        three numbers. In the grid's real dtype, which is the dtype of the
+        magnetization it is projected on.
+        """
+        axis = self.quantization_axis
+        if axis is None:
+            return None
+        return np.asarray(axis, dtype=self.system.cell.precision.real)
 
     def becsum(self, wavefunctions, weights, *, rows=None,
                symmetrize: bool = True) -> tuple:
