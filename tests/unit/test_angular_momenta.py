@@ -347,3 +347,61 @@ K_POINTS automatic
     scf = calculator.get_scf()
     with pytest.raises(NotImplementedError, match="qq_so"):
         angular_momenta(calculator.calculation, scf)
+
+
+# --- the block build ----------------------------------------------------------
+
+
+@pytest.mark.parametrize("regime", ["", ", noncolin = .true."],
+                         ids=["unpolarized", "spinor"])
+def test_the_block_build_is_the_whole_build(pseudo_dir, monkeypatch, regime):
+    """In memory mode the projectors are built a block of k-points at a time.
+
+    ``OPEN.md`` Part XXIII item 17: each block's set on its own row-subset
+    calculation, its states projected before the next is built, as the
+    projected density of states does it. Each k-point's set is its own
+    arithmetic, so the blocks must give the whole build's density matrix to
+    round-off. The block is forced down to three k-points here, so that eight
+    k-points take three blocks and the last one is padded. The density matrix
+    rather than the moments, because silicon's ``<L>`` and ``<S>`` are zero by
+    symmetry and both routes would pass on them; the starting states rather than
+    converged ones, because the identity needs none.
+    """
+    import types
+    import warnings
+
+    import jax.numpy as jnp
+
+    import defumat.projwfc.projections as projections
+    from defumat.projwfc.angular_momentum import (
+        _atomic_projectors, _projection_blocks, _site_density_matrix,
+    )
+    from defumat.projwfc.channels import projection_channels
+
+    text = _SILICON.format(extra=", nosym = .true." + regime).replace(
+        " 4 4 4 0 0 0", " 2 2 2 0 0 0")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        calculation = Calculator.from_text(text, pseudo_dir, announce=False,
+                                           memory_mode="memory").calculation
+    assert calculation.memory_mode == "memory"
+    potential = calculation.potential(calculation.starting_density())
+    states = calculation.starting_wavefunctions(
+        calculation.hamiltonian(potential.v_scf), 8)
+    nk = states.shape[1]
+    weights = jnp.asarray(np.broadcast_to(
+        np.asarray(calculation.system.kpoints.weights)[None, :, None], (1, nk, 8)))
+    result = types.SimpleNamespace(wavefunctions=states, occupations=weights[0])
+    channels = projection_channels(calculation.pseudos, calculation.system.structure)
+
+    whole = _site_density_matrix(calculation, result,
+                                 np.asarray(_atomic_projectors(calculation, "ortho-atomic")),
+                                 channels)
+    per_k = int(states.shape[-1]) * len(channels) * 16
+    monkeypatch.setattr(projections, "PROJECTOR_BLOCK_BYTES", 3 * per_k)
+    blocks = _projection_blocks(calculation, states, channels, False)
+    assert [len(rows) for rows, _ in blocks] == [3, 3, 3] and blocks[-1][1] == 2
+    walked = _site_density_matrix(calculation, result, None, channels)
+
+    assert np.max(np.abs(whole)) > 0.1
+    np.testing.assert_allclose(walked, whole, atol=1e-12)

@@ -66,18 +66,23 @@ off-diagonal spin blocks are ``qq_so`` and the projection built here applies the
 every other regime and is missing a term in that one.
 
 Memory: the orbitals are ``(nk, npwx, natomwfc)`` complex, the same array a
-projected density of states or a Hubbard ``U`` already holds; the site matrices
-are ``(natom, nshell, 2l+1, 2, 2l+1, 2)``, which is nothing.
+projected density of states or a Hubbard ``U`` already holds, and in memory mode
+they are built a block of k-points at a time on the block's own rows, as the
+projected density of states builds them (:func:`_projection_blocks`); the
+coefficients ``<phi|S|psi>`` are ``(nk, nbnd, natomwfc)`` on the host and the
+site matrices ``(natom, nshell, 2l+1, 2, 2l+1, 2)``, which is nothing.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+import jax.numpy as jnp
 import numpy as np
 
 from defumat.basis.gvectors import refuse_gamma_storage
 from defumat.pseudo.spinorbit import LMAXX, rot_ylm
+from defumat.scf.streaming import is_host_store
 
 __all__ = [
     "SiteAngularMomentum",
@@ -227,7 +232,6 @@ def angular_momenta(
     Returns:
         :class:`SiteAngularMomentum`.
     """
-    from defumat.hubbard.projectors import build_atomic_projectors
     from defumat.projwfc.channels import projection_channels
     from defumat.projwfc.projections import PROJECTION_KINDS
 
@@ -245,13 +249,7 @@ def angular_momenta(
             "on, so there is no site to resolve an angular momentum onto"
         )
 
-    projectors = np.asarray(build_atomic_projectors(
-        calculation.pseudos, system.structure, system.cell,
-        calculation.basis.smooth, calculation.basis.planewaves,
-        calculation.basis_kpoints, calculation._overlap, kind=kind,
-    ))  # (nk, npwx, natomwfc)
-
-    density = _site_density_matrix(calculation, result, projectors, channels)
+    density = _site_density_matrix(calculation, result, None, channels, kind=kind)
     return _contract(
         density, channels, system, calculation.nspin, kind, calculation
     )
@@ -288,60 +286,128 @@ def _refuse_what_is_not_written(calculation) -> None:
         )
 
 
-def _site_density_matrix(calculation, result, projectors, channels):
+def _atomic_projectors(calculation, kind: str):
+    """``(nk, npwx, natomwfc)``: the projector set on ``calculation``'s own k-points."""
+    from defumat.hubbard.projectors import build_atomic_projectors
+
+    system = calculation.system
+    return build_atomic_projectors(
+        calculation.pseudos, system.structure, system.cell,
+        calculation.basis.smooth, calculation.basis.planewaves,
+        calculation.basis_kpoints, calculation._overlap, kind=kind,
+    )
+
+
+def _projection_blocks(calculation, psi, channels, built: bool):
+    """The ``(rows, live)`` blocks the projectors are built and applied on.
+
+    **In memory mode the projectors are built a block of k-points at a time**,
+    on the block's own row-subset calculation, and the block's states are
+    projected before the next is built, which is what the projected density of
+    states does (:func:`~defumat.projwfc.projections.atomic_projections`).
+    Whole, they are ``nk npwx natomwfc`` complex with the orthonormalisation's
+    copies beside them. Each k-point's set is its own arithmetic --
+    ``orthoUwfc`` orthonormalises per k -- so the blocks are the whole build to
+    round-off. A streamed store is walked the same way in either mode, so that
+    it never crosses whole; speed mode on a device store keeps the one-shot
+    build, and so does a caller that hands the whole set's projectors in
+    (``built``) with a device store.
+    """
+    from defumat.batching import k_chunks
+    from defumat.projwfc.projections import PROJECTOR_BLOCK_BYTES
+
+    nk = int(np.shape(psi)[1])
+    walked = is_host_store(psi) or (
+        not built and calculation.memory_mode == "memory")
+    if not walked:
+        return [(np.arange(nk), nk)]
+    per_k = int(np.shape(psi)[-1]) * max(1, len(channels)) * 16
+    batch = max(1, calculation.k_batch or 1)
+    block = batch * max(1, PROJECTOR_BLOCK_BYTES // max(1, per_k * batch))
+    return list(k_chunks(nk, block))
+
+
+def _site_density_matrix(calculation, result, projectors, channels,
+                         kind: str = "ortho-atomic"):
     """``(natomwfc, 2, natomwfc, 2)``: ``sum_nk wg c c*``, over the whole basis.
 
     The spin axis is always two wide, whatever the regime, so that the traces
     below have one form. ``nspin = 1`` splits its (already spin-degenerate)
     weight equally between the two diagonal blocks, which is what makes ``<S>``
     come out as the zero it is rather than as an artefact of the layout.
-    """
-    import jax.numpy as jnp
 
-    from defumat.scf.streaming import is_host_store
+    ``projectors`` is the whole set's ``(nk, npwx, natomwfc)``, or ``None`` to
+    build the ``kind`` set here, a block of k-points at a time where
+    :func:`_projection_blocks` says so. The coefficients are written into host
+    arrays block by block and contracted once at the end, so the order of the
+    k sum is the whole build's.
+    """
+    from defumat.scf.streaming import rows_to_device
 
     psi = result.wavefunctions                        # (nspin, nk, nbnd, ndim)
     weights = np.asarray(result.occupations)          # wg, k-weights folded in
     if weights.ndim == 2:
         weights = weights[None]
     nspin = calculation.nspin
-    natomwfc = projectors.shape[2]
+    nk = int(np.shape(psi)[1])
+    host = is_host_store(psi)
 
-    def project(channel, columns):
-        """``(nk, nbnd, natomwfc)``: ``<phi|psi>`` for one channel's columns."""
-        if not is_host_store(psi):
-            return np.asarray(jnp.einsum(
-                "kgi,kbg->kbi", projectors.conj(),
-                jnp.asarray(psi)[channel, :, :, columns]))
-        # A streamed store crosses one k-point at a time rather than whole
-        # (``GPU-MEMORY-NEXT.md`` item 4).
-        return np.stack([
-            np.asarray(jnp.einsum(
-                "gi,bg->bi", projectors[ik].conj(),
-                jnp.asarray(np.ascontiguousarray(psi[channel, ik, :, columns]))))
-            for ik in range(psi.shape[1])
-        ])
-
-    coefficients = []  # one (nk, nbnd, natomwfc) per spin component
+    # ``(channel of the store, columns of a state)`` for each spin component
+    # the density matrix is built from. At ``nspin = 1`` both components are
+    # the one channel there is, so it is projected once and the same array
+    # fills both diagonal blocks rather than the same product being computed a
+    # second time.
     if nspin == 4:
         npwx = calculation.basis.planewaves.npwx
-        for component in range(2):
-            coefficients.append(
-                project(0, slice(component * npwx, (component + 1) * npwx)))
-        band_weights = [np.asarray(weights[0]), np.asarray(weights[0])]
+        wanted = [(0, slice(component * npwx, (component + 1) * npwx))
+                  for component in range(2)]
+    elif nspin == 1:
+        wanted = [(0, slice(None))]
     else:
-        # At ``nspin = 1`` both components are the one channel there is, so it
-        # is projected once and the same array fills both diagonal blocks
-        # rather than the same product being computed a second time.
-        coefficients.append(project(0, slice(None)))
-        coefficients.append(coefficients[0] if nspin == 1
-                            else project(1, slice(None)))
-        if nspin == 1:
-            # ``wg`` already carries ``degspin = 2``; half of it belongs to each
-            # component, and the two are the same state.
-            band_weights = [0.5 * np.asarray(weights[0])] * 2
+        wanted = [(0, slice(None)), (1, slice(None))]
+
+    def states_of(channel, rows, whole):
+        """One block's states of one channel on the device, ``(rows, nbnd, ndim)``."""
+        if host:
+            # A streamed store crosses a block at a time rather than whole
+            # (``GPU-MEMORY-NEXT.md`` item 4).
+            return rows_to_device(psi, rows, channel)
+        states = jnp.asarray(psi)[channel]
+        return states if whole else states[jnp.asarray(rows)]
+
+    computed = [None] * len(wanted)
+    for rows, live in _projection_blocks(calculation, psi, channels,
+                                         projectors is not None):
+        whole = live == nk and len(rows) == nk
+        if projectors is not None:
+            block = jnp.asarray(projectors if whole else np.asarray(projectors)[rows])
         else:
-            band_weights = [np.asarray(weights[0]), np.asarray(weights[1])]
+            block = _atomic_projectors(
+                calculation if whole else calculation.at_rows(rows), kind)
+        conjugate = jnp.conj(block)
+        uploaded = {}
+        for slot, (channel, columns) in enumerate(wanted):
+            if channel not in uploaded:
+                uploaded[channel] = states_of(channel, rows, whole)
+            part = np.asarray(jnp.einsum(
+                "kgi,kbg->kbi", conjugate, uploaded[channel][..., columns]))
+            if computed[slot] is None:
+                computed[slot] = np.empty((nk,) + part.shape[1:], part.dtype)
+            computed[slot][rows[:live]] = part[:live]
+        del block, conjugate, uploaded
+    natomwfc = computed[0].shape[-1]
+
+    if nspin == 4:
+        coefficients = computed
+        band_weights = [np.asarray(weights[0]), np.asarray(weights[0])]
+    elif nspin == 1:
+        coefficients = [computed[0], computed[0]]
+        # ``wg`` already carries ``degspin = 2``; half of it belongs to each
+        # component, and the two are the same state.
+        band_weights = [0.5 * np.asarray(weights[0])] * 2
+    else:
+        coefficients = computed
+        band_weights = [np.asarray(weights[0]), np.asarray(weights[1])]
 
     density = np.zeros((natomwfc, 2, natomwfc, 2), dtype=complex)
     for a in range(2):
