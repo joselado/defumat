@@ -24202,7 +24202,14 @@ route on one converged state, one k-point a chunk on the CPU: on `al-metal-nosym
 9.3e-12, the frequencies to 1.7e-8 cm^-1, `gamma` 1.4e-10 GHz, `lambda` 1.2e-10, and the double
 delta identical (`test_the_k_chunked_coupling_is_the_whole_k_coupling`). A second call on either
 route compiles nothing. The walk costs 345 s against the whole route's 88 s on four threads of this
-workstation, 512 chunks of one k-point.
+workstation, 512 chunks of one k-point. **On D22's RTX A2000**, where `memory_mode = 'memory'`
+had refused, `get_electron_phonon((1/4, 0, 0), q_cartesian=True, tr2=1e-14)` now runs on the walked
+route (the whole mesh as one chunk, `k_batch` resolving to the mesh) in 11.9 s warm (calls 2 and 3;
+call 1 23.3 s) against `memory_mode = 'speed'`'s whole route at 16.7 s (call 1 20.5 s), 13
+iterations at `av.it.` 6.08 in both, frequencies 73.995, 73.995, 132.4737 cm^-1 and `gamma` 2.666,
+2.666, 1.534 GHz at `sigma = 0.02` in both, the CPU's to the printed digits. The card's peak is the
+SCF's in memory mode (1078.3 MB through the coupling) and 1103.1 MB in speed mode. Card times on a
+float32 part with float64 at 1/70, not claims about an A100.
 
 **Elk** computes the linewidth too (`ephcouple.f90`, task 240) with the phonon frequency in the
 second delta, `delta(omega + e_k - e_(k+q))`, where `ph.x` puts both states at `E_F`; not the
