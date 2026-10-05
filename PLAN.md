@@ -206,7 +206,8 @@ because that is what decides whether it is a session or a phase.
 - **Wyckoff input** (P6, the one part of that phase not done).
 - **Converging a magnetic slab or a metal on a semiconductor** (P129): `mixing_mode = 'ldos'`
   screens the charge from the states at `e_F` and is flat in the vacuum on metal films, but the
-  magnetization takes `beta` (a Stoner-like term, arXiv:2606.26693, is the next piece), an
+  magnetization takes `beta` (the Stoner term of arXiv:2606.26693 was built and measured in P130
+  and not merged: its inner solve fails on a film and it can land on a saddle), an
   insulating region gets no screening (Herbst and Levitt's LDOS+dielectric hybrid), and
   tetrahedra are refused for want of a smooth delta.
 - **A switch from single to double precision that pays** (P126): `'mixed'` converges to the double
@@ -23929,3 +23930,66 @@ slab, whose soft direction is the magnetization the scheme does not screen (Bara
 Torrent, arXiv:2606.26693, add a Stoner-like term); a large in-plane supercell of a 2D metal; any
 GPU number, where the band dial's `(nbnd, 2, n1, n2, n3)` temporary under the weight vmap wants
 one `memory_analysis()` on a card.
+
+### P130 -- The magnetization under the LDOS mixer: a spin-resolved LDOS term and Barat, Levitt and Torrent's Stoner term, measured and not merged. ❌ RECORDED, the user's decision of 2026-10-05; the code is on branch `ldos-spin` (`51c5948`), with its tests.
+
+**The question.** P129's `'ldos'` screens the charge alone and gives the magnetization `beta`;
+the user asked (2026-10-04) to make it work for collinear and noncollinear magnetization.
+
+**First, where the magnets are slow.** Under `'ldos'` the magnetic half of `dr2` is the larger
+in 0 of 20 iterations on the cobalt film and 0 of 15 on `fe-noncolin-pbe-stress` (4x4x4), so on
+those cells the magnetization is not the bottleneck. The one magnet `'ldos'` makes slower,
+`fe-mag-1k` (11 -> 20), is the bulk d-metal over-screening recorded in P129, not magnetism.
+
+**Built, step 1: the spin-resolved LDOS term** (`6de2b95`). `chi0~` answers the Hartree
+potential with each spin's own LDOS, so the screening electrons carry a moment `D_m (v x - c)`,
+which the magnetization's step gives back: `D_up - D_down` collinear (each spin keeping its own
+count under `two_fermi_energies`), the LDOS spin vector noncollinear, invariant inside a
+degenerate multiplet because its weights depend on the eigenvalue alone. Tested against the
+operator written again in numpy for the three cases, and bit for bit against the old step on an
+unpolarised LDOS. **Measured, off / on**: cobalt film 20 / 19, `fe-mag-1k` 20 / 18,
+`fe-noncolin-pbe-stress` 15 / 15, `ni-noldau-1k` 7 / 8, **`fe-unstable` 27 / 53**, the
+magnetization then the larger half in 24 of 53 iterations. Alone it is half a model: it induces
+the moment the Hartree potential draws without the exchange feedback that enhances or cancels
+it. `LDOS_SPIN_RESOLVED = False` on the branch.
+
+**Built, step 2: the Stoner term**, `mixing_mode = 'ldos-stoner'` (`a69d5fa`, `51c5948`,
+`scf/stoner.py`), after a plan reviewed by fable: `P = 1 - chi0^LDOS K_H - chi0^diag K_XC`,
+`chi0^diag` the frozen-orbital response over the codensities of the bands within `3 sigma` of
+`e_F` (`sigma = max(degauss, 0.02 Ry)`, the paper's raised width), with the cross codensities of
+bands closer than 1e-4 Ry and divided-difference weights, built by the density routine itself on
+one-hot weights (so augmented, spinor-complete, unsymmetrised, the output symmetrised); `K_XC` one
+`jvp` of the local exchange-correlation potential at the input density; an unrestarted GMRES in
+`rho_ddot`'s coordinates (charge `1/|G|` without `G = 0`, magnetization flat with it), Kerker on
+the charge as its preconditioner, at most 30 steps to 1e-3. **Its tests pass**: `chi0^diag` of a
+constant is zero and keeps the count; it equals the occupations' response to a uniform exchange
+field `(+b, -b)`, a finite difference that builds nothing from the codensities, to 2e-3 of the
+peak once both use the Gaussian's own Fermi level (the run's cold-smearing level sits far enough
+away to cost 5 to 8 per cent); with the kernel off it is the spin-resolved LDOS step.
+
+**Measured** (D22, iterations, the state each lands on):
+
+| cell | `anderson` | `'ldos'` | `'ldos-stoner'` |
+|---|---|---|---|
+| Co(0001) film, vacuum 21 / 40 / 59 bohr | n.c. | 22 / 20 / 22 | **31 / 36 / 32**, 501 to 1183 s against about 90 |
+| `fe-unstable`, 2x2x2 | 23 (M = 0) | 27 (0.42 mu_B) | **21** (0.42 mu_B) |
+| `fe-unstable`, 4x4x4 | 12 (M = 0) | 25 (M = 0) | **21 (2.06 mu_B, 0.0235 Ry lower)** |
+| `fe-unstable`, 6x6x6 | 12 (M = 0) | 16 (1.99 mu_B) | 20 (**M = 0, the saddle, 0.0226 Ry higher**) |
+| `fe-mag-1k`, `fe-noncolin-pbe-stress`, `fe-noncolin-nonmagnetic` | 11, 15, 10 | 20, 15, 28 | 19, 16, 27 |
+| `ni-noldau-1k`, aluminium slab 16 / 64, NbSe2 28 / 64, graphene 60 | 7, 25 / 34, 9 / 9, 8 | 7, 10 / 10, 10 / 10, 8 | 8, 10 / 10, 10 / 10, 8 |
+
+**Why it is not merged, in two mechanisms.** On the cobalt film the inner GMRES runs to its
+30-step cap at nearly every call with residuals of 2e-3 to 2e-1, where on iron it converges in 5 to
+13: the film's LDOS part alone needed 35 to 45 conjugate-gradient steps in P129, so 30 GMRES steps
+cannot carry it and the Stoner part together, and an inner solve that stops early is a different
+map every iteration (P129's 1e-2 measurement). And the Stoner term makes the step close to a true
+Newton step, so past the transition, where `P` has a negative eigenvalue along the magnetic mode,
+it converges onto the nearest root from a small starting moment, which at 6x6x6 is the
+nonmagnetic saddle. It helps where the paper says it does, near the transition, and its range is
+small. **What a second attempt would need**: the LDOS-only inverse (P129's CG) as the inner
+GMRES's preconditioner, so the Krylov space carries the Stoner part alone; and the enhancement
+capped so a step keeps its sign along an unstable mode.
+
+**In passing.** `benchmarks/fe-unstable.in`'s header says Anderson amplifies a 0.05 starting
+moment to 3.41 mu_B; on the code of 2026-10-04 it converges to M = 0 at 2x2x2, 4x4x4 and 6x6x6.
+The header is stale, or the code's path changed; not investigated.

@@ -9,7 +9,12 @@ the density's pass under a `vmap` rather than a second pass, it is built with a 
 and clamped to `D >= 0`, the inner solve is conjugate gradients in the Hartree norm at 1e-3, and
 tetrahedra are refused. It takes the aluminium slab in 10 to 11 iterations at every vacuum and
 the cobalt film in 20 to 22, and the film in **76.1 s against `pw.x`'s 40.9 s** and this code's
-own `local-TF` at 106.0 s (`PERFORMANCE.md`, "Cells with vacuum").
+own `local-TF` at 106.0 s (`PERFORMANCE.md`, "Cells with vacuum"). **The magnetization**
+(P130, 2026-10-05): a spin-resolved LDOS term and the paper's Stoner term were built on branch
+`ldos-spin` and measured, and not merged: the magnets measured are not slow in the magnetization
+under `'ldos'`, the Stoner term helps near iron's transition (2x2x2 27 -> 21) and fails on the
+cobalt film (inner solve unconverged, 20 -> 36, ten times the time), and can converge onto the
+nonmagnetic saddle.
 
 A proposal, written 2026-10-04 on master at `df8f4a8`, from a literature survey on arXiv and
 a measurement on `D22-0161`. The question was whether a cell with a lot of vacuum (a slab, a
