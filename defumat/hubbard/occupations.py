@@ -203,7 +203,9 @@ class NsSymmetry:
                     "szw,sikjl,wsnkl->znij",
                     self.spin.astype(gathered.dtype), operator, gathered,
                 ) / self.nsym
-            out = out.at[:, slots, :ldim, :ldim].set(averaged)
+            # ``add`` into zeros (the groups' slots are disjoint): a complex
+            # scatter-set is a loop on a card (:func:`~defumat.scf.mixing._field_of`).
+            out = out.at[:, slots, :ldim, :ldim].add(averaged)
         return out
 
     #: Swapping the two spin indices of the packed pair ``2 s1 + s2``.

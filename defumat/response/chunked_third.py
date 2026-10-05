@@ -52,7 +52,7 @@ import numpy as np
 from defumat.basis.interpolate import to_dense
 from defumat.forces.chunked import _move, _rows_of, row_leaves, with_rows
 from defumat.forces.energy import hoisted, with_hoisted
-from defumat.response.chunked import _add
+from defumat.response.chunked import _add, _stacked_rows
 from defumat.response.sternheimer import SternheimerSolver, paw_response
 from defumat.response.velocity import VelocityOperator
 from defumat.units import FPI
@@ -288,9 +288,3 @@ def _third_passes(calculation, key, kind, project) -> dict:
         ("forward", forward), ("global", global_), ("chunk", chunk))}
     cached[1][full] = passes
     return passes
-
-
-def _stacked_rows(store, rows):
-    """One chunk of a ``(3, nspin, nk, ...)`` store, the k axis the third."""
-    return jnp.stack([_rows_of(store[axis], rows) for axis in range(store.shape[0])])
-

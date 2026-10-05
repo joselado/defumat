@@ -10566,3 +10566,56 @@ the sphere and the half box, not timed apart. On the smooth grid a step is about
 fields and half boxes of the grid it runs on; on the smooth grid both shrink by about
 `(dual/4)^1.5`. On the film it is 3.0 MB against 16.8. This follows `pw.x`, whose `v(ngm0, mmx)`
 and `w(ngm0, mmx)` are the same space over the whole smooth sphere.
+
+## A complex scatter-set is a loop on a card: the vacuum mixers (RTX A2000, 2026-10-05)
+
+**Found by running the two vacuum mixers on the card for the first time.** `mixing_mode = 'local-TF'`
+and `'ldos'` had only been timed on a CPU (the two entries above). On the A2000 one preconditioner
+call was **95 to 140 times its CPU cost**, enough to make the card's whole SCF slower than D22's
+CPU. `nsys` over two warm local-TF calls on graphene (`--capture-range=cudaProfilerApi`, the call
+alone) found 668,460 launches each of three tiny kernels (`loop_dynamic_update_slice_fusion`,
+`loop_select_fusion`, `loop_add_fusion`, about 1.1 us each, 96 per cent of the kernel time), against
+52 FFT pairs. That is about 13,000 launches a Krylov step, two per entry of the sphere: the fill
+`box.at[sphere.positions].set(coefficients)` in `_field_of`, expanded into a serial loop.
+
+**The mechanism is the combiner and the dtype, not scatters as such.** XLA's GPU backend has no
+16-byte atomic, so a complex128 scatter with assignment semantics is expanded into a `while` loop
+over its indices, where a scatter-add of complex128 is two float64 atomic adds and is one kernel.
+Measured on the card, 6000 sorted unique indices into a box of 120,000, jitted, median of 20:
+
+| | `.at[idx].set` | `.at[idx].set`, sorted and unique hinted | `.at[idx].add` |
+|---|---|---|---|
+| complex128 | **30.66 ms** | 28.92 ms | **0.036 ms** |
+| float64 | 0.047 ms | 0.026 ms | 0.022 ms |
+| complex64 | 0.024 ms | 0.023 ms | 0.023 ms |
+
+The hints do not help, and the results of all three columns are the same bits. P126's stick fill
+(`basis.fft._fill_columns`) was this defect too: it is a complex `set` along the last axis, and its
+gather is one fix of it. An `add` into zeros is the other, and is exact wherever the indices are
+unique, which is every fill of a sphere into a box. **The audit of the package** (every `.at[...]
+.set(` whose index is an array rather than a slice or a scalar, a scan of the source rather than a
+grep for names): the mixers' four fills (`_field_of`'s two, Kerker's, the LDOS `to_grid`), the
+local-TF merge of the smooth solve into the dense sphere (`coefficients.at[inner_rows].set`, now a
+gather through a map built on the host), and two DFT+U assemblies (`hubbard/operator.py`'s
+`block_potential` and `hubbard/occupations.py`'s symmetrised `ns`, complex for a spinor, a few
+hundred entries a call). Every other index-array `set` in the package is real (`locals.py`,
+`residual_split.py`, the radial table in `augmentation.py`) or CPU-only (`_fill_columns`' scatter
+branch). The wavefunction transforms were already `add`.
+
+**The pair before and after**, each arm a fresh process, two SCFs and the second timed, D22's four
+performance cores (`taskset -c 0-3`, `OMP_NUM_THREADS=1`, `DEFUMAT_THREADS=off`), the CPU arm with
+`JAX_PLATFORMS=cpu` in the same harness; the call is the median over the run. Every arm reaches the
+same iterations and, on the card, the same energy to every printed digit before and after.
+
+| cell, mode | iterations | card before (s, call ms) | card after (s, call ms) | CPU (s, call ms) |
+|---|---|---|---|---|
+| cobalt film (P129's), `local-TF` | 37 | 96.9, 1757 | **33.9, 11.9** | 91.1, 19.2 |
+| cobalt film, `ldos` | 20 | 178.2, 7799 | **22.6, 19.2** | 59.0, 76.1 |
+| graphene, 40 bohr of vacuum, `local-TF` | 16 | 52.1, 3303 | **6.5, 19.2** | 14.1, 46.7 |
+| graphene, `ldos` | 8 | 9.1, 780 | **3.5, 7.1** | 8.1, 11.2 |
+| aluminium slab, 32 bohr, `ldos` | 11 | 5.8, 544 | **0.46, 3.1** | 0.50, 4.3 |
+
+The card was 1.1 to 3.0 times *slower* than the CPU on these runs and is now 1.1 to 2.7 times
+faster. The cobalt film is the case `pw.x` takes 41.1 s on one core (the entry above): on the card
+this code now takes 33.9 s with local-TF and 22.6 s with the LDOS mixer. The float64 rate of the
+A2000 (1/70 of float32) means none of these times is a claim about a data-centre card.

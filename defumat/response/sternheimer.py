@@ -834,6 +834,103 @@ class SternheimerSolver:
             residual=max(residuals),
         )
 
+    def _solve_directions(self, stack, ik, spin, start, level):
+        """:meth:`solve_at` for several right-hand sides at one k-point, as one loop.
+
+        ``stack`` is ``(ndir, nocc, ndim)``, unprojected; ``start`` is
+        ``(ndir, nocc, ndim)`` or ``None``; ``level`` is a scalar or
+        ``(ndir,)``. The CG is ``vmap``-ed over the leading axis, so its
+        ``lax.while_loop`` runs until every band of every direction has
+        converged, a finished direction's carry is frozen by the batched
+        predicate's select, and its iteration count is its own. Every band
+        keeps its own ``conv`` flag, as in one direction's solve.
+        """
+        rhs = jax.vmap(lambda r: self.project(r, ik, spin))(stack)
+        level = jnp.broadcast_to(level, stack.shape[:1])
+        if start is None:
+            return jax.vmap(
+                lambda r, t: self.solve_at(r, ik, spin, threshold=t))(rhs, level)
+        return jax.vmap(
+            lambda r, s, t: self.solve_at(r, ik, spin, start=s, threshold=t)
+        )(rhs, start, level)
+
+    def solve_many(self, perturbation, start=None, threshold=None):
+        """:meth:`solve` for ``ndir`` perturbations at once, one CG loop per k-point.
+
+        ``perturbation(psi, ik, spin)`` returns the stacked unprojected
+        ``(ndir, nocc, ndim)``; ``start`` is ``(ndir, nspin, nk, nocc, ndim)``;
+        ``threshold`` a scalar or ``(ndir,)``. Returns ``(dpsi, iterations,
+        residuals)`` with ``dpsi`` ``(ndir, nspin, nk, nocc, ndim)`` and the
+        worst iteration count and residual of each direction over k and spin,
+        so that the counts add up as ``ndir`` calls of :meth:`solve` do.
+
+        **A departure from QE**, which solves the directions one after another
+        (``solve_e.f90``). On an accelerator one loop for the three halves the
+        launches and the host reads of the loop condition by three; the cost is
+        that every direction runs ``max_d(iter_d)`` steps rather than its own,
+        2 per cent on cubic silicon, and three directions' CG state in flight.
+        """
+        batch = self.calculation.k_batch
+        level = jnp.asarray(self.threshold if threshold is None else threshold)
+        blocks, iterations, residuals = [], [], []
+        for spin in range(self.nspin):
+            if start is None:
+                def one_k(ik, level, spin=spin):
+                    stack = perturbation(self.psi[spin][ik], ik, spin)
+                    return self._solve_directions(stack, ik, spin, None, level)
+
+                dpsi, steps, residual = compiled(
+                    lambda indices, level, one_k=one_k: map_k(
+                        lambda ik: one_k(ik, level), indices, batch=batch),
+                    jnp.arange(self.psi.shape[1]), level,
+                )
+            else:
+                def one_k(ik, initial, level, spin=spin):
+                    stack = perturbation(self.psi[spin][ik], ik, spin)
+                    return self._solve_directions(stack, ik, spin,
+                                                  initial[:, ik], level)
+
+                dpsi, steps, residual = compiled(
+                    lambda indices, initial, level, one_k=one_k: map_k(
+                        lambda ik: one_k(ik, initial, level), indices,
+                        batch=batch),
+                    jnp.arange(self.psi.shape[1]), jnp.asarray(start[:, spin]),
+                    level,
+                )
+            # (nk, ndir, nocc, ndim) -> (ndir, nk, nocc, ndim); steps (nk, ndir)
+            blocks.append(jnp.swapaxes(dpsi, 0, 1))
+            iterations.append(np.max(np.asarray(steps), axis=0))
+            residuals.append(np.max(np.asarray(residual), axis=0))
+        return (jnp.stack(blocks, axis=1),
+                [int(x) for x in np.max(iterations, axis=0)],
+                [float(x) for x in np.max(residuals, axis=0)])
+
+    def solve_arrays_many(self, perturbation, start=None):
+        """:meth:`solve_many` for a caller that is itself being traced.
+
+        Returns ``(dpsi, iterations, residuals)`` as arrays: ``dpsi``
+        ``(ndir, nspin, nk, nocc, ndim)`` and the worst count and residual per
+        direction and channel, ``(ndir, nspin)``; ``start`` is
+        ``(ndir, nspin, nk, nocc, ndim)``.
+        """
+        batch = self.calculation.k_batch
+        level = jnp.asarray(self.threshold)
+        blocks, iterations, residuals = [], [], []
+        for spin in range(self.nspin):
+            def one_k(ik, spin=spin):
+                stack = perturbation(self.psi[spin][ik], ik, spin)
+                return self._solve_directions(
+                    stack, ik, spin, None if start is None else start[:, spin, ik],
+                    level)
+
+            dpsi, steps, residual = map_k(
+                one_k, jnp.arange(self.psi.shape[1]), batch=batch)
+            blocks.append(jnp.swapaxes(dpsi, 0, 1))
+            iterations.append(jnp.max(steps, axis=0))
+            residuals.append(jnp.max(residual, axis=0))
+        return (jnp.stack(blocks, axis=1), jnp.stack(iterations, axis=1),
+                jnp.stack(residuals, axis=1))
+
     def solve_arrays(self, perturbation, start=None):
         """:meth:`solve` for a caller that is itself being traced.
 

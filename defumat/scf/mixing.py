@@ -923,7 +923,10 @@ def kerker_preconditioner(gvectors, cell, shape, beta=0.7, screening=None, nelec
     def screened(channel):
         box = jnp.fft.fftn(channel.reshape(grid))
         coefficients = box.reshape(-1)[index] * factor
-        box = jnp.zeros(box.size, dtype=box.dtype).at[index].set(coefficients)
+        # ``add`` into zeros, not ``set``: the same numbers, and a complex128
+        # scatter-set is a serial loop over its indices on a card
+        # (:func:`~defumat.basis.fft.scatter_to_box`).
+        box = jnp.zeros(box.size, dtype=box.dtype).at[index].add(coefficients)
         return jnp.real(jnp.fft.ifftn(box.reshape(grid))).reshape(-1)
 
     @jax.jit
@@ -1048,9 +1051,15 @@ def _field_of(coefficients, sphere: _ScreeningSphere, grid):
     n1, n2, n3 = grid
     h3 = n3 // 2 + 1
     box = jnp.zeros(n1 * n2 * h3, dtype=coefficients.dtype)
-    box = box.at[sphere.positions].set(coefficients, indices_are_sorted=True,
+    # ``add`` into zeros rather than ``set``, the same numbers since the two
+    # index sets are disjoint and unique: XLA has no 16-byte atomic, so on a card
+    # a complex128 scatter-set is expanded into a loop over its indices, three
+    # kernel launches each, and on an RTX A2000 that was 1.8 s of every 1.8 s
+    # local-TF call on the cobalt film (``PERFORMANCE.md``, "A complex
+    # scatter-set is a loop on a card").
+    box = box.at[sphere.positions].add(coefficients, indices_are_sorted=True,
                                        unique_indices=True)
-    box = box.at[sphere.partners].set(jnp.conj(coefficients[sphere.plane]),
+    box = box.at[sphere.partners].add(jnp.conj(coefficients[sphere.plane]),
                                       unique_indices=True)
     return jnp.fft.irfftn(box.reshape(n1, n2, h3), s=grid).reshape(-1) * (n1 * n2 * n3)
 
@@ -1170,7 +1179,8 @@ def _approx_screening2(drho, rho, sphere: _ScreeningSphere, volume, *, grid,
 
 @partial(jax.jit, static_argnames=("shape", "grid", "smooth_grid"))
 def _local_tf_apply(vector, density, beta, volume, outer: _ScreeningSphere,
-                    inner: _ScreeningSphere, inner_rows, *, shape, grid, smooth_grid):
+                    inner: _ScreeningSphere, inner_rows, inner_mask, inner_slot, *,
+                    shape, grid, smooth_grid):
     """:func:`local_tf_preconditioner`'s step on a packed real-space vector."""
     nspin = shape[0]
     size = int(np.prod(shape))
@@ -1186,7 +1196,11 @@ def _local_tf_apply(vector, density, beta, volume, outer: _ScreeningSphere,
         screened, _, _ = _approx_screening2(
             coefficients[inner_rows], _half_of(total, outer, grid)[inner_rows], inner,
             volume, grid=smooth_grid)
-        return _field_of(coefficients.at[inner_rows].set(screened), outer, grid)
+        # The smooth rows take the screened values: a gather through a map
+        # built on the host, since a complex scatter-set is a loop on a card
+        # (:func:`_field_of`).
+        merged = jnp.where(inner_mask, jnp.take(screened, inner_slot), coefficients)
+        return _field_of(merged, outer, grid)
 
     if nspin == 1:
         out = [beta * screen(head[0], rho[0])]
@@ -1282,7 +1296,16 @@ def local_tf_preconditioner(gvectors, cell, shape, beta=0.7, smooth=None):
         inner_rows = where[smooth_rows]
         if np.any(inner_rows < 0):
             raise AssertionError("a smooth representative is not a dense one")
-    inner_rows = jnp.asarray(inner_rows)
+    # Where each outer row's screened value is, for the gather that puts the
+    # smooth solve back: ``inner_slot[r]`` indexes ``screened`` where
+    # ``inner_mask[r]``.
+    inner_rows = np.asarray(inner_rows)
+    inner_mask = np.zeros(rows.size, dtype=bool)
+    inner_mask[inner_rows] = True
+    inner_slot = np.zeros(rows.size, dtype=np.int32)
+    inner_slot[inner_rows] = np.arange(inner_rows.size, dtype=np.int32)
+    inner_rows, inner_mask, inner_slot = (jnp.asarray(inner_rows), jnp.asarray(inner_mask),
+                                          jnp.asarray(inner_slot))
     volume = float(cell.volume)
 
     def preconditioner(residual, density=None):
@@ -1294,7 +1317,8 @@ def local_tf_preconditioner(gvectors, cell, shape, beta=0.7, smooth=None):
         residual = jnp.asarray(np.asarray(residual).ravel())
         density = jnp.asarray(np.asarray(density).ravel())
         return np.asarray(_local_tf_apply(
-            residual, density, beta, volume, outer, inner, inner_rows, shape=shape,
+            residual, density, beta, volume, outer, inner, inner_rows, inner_mask,
+            inner_slot, shape=shape,
             grid=grid, smooth_grid=smooth_grid))
 
     return preconditioner
@@ -1352,7 +1376,8 @@ def _ldos_pieces(gvectors, cell) -> _LDOSPieces:
 
     def to_grid(coefficients):
         """``f(r) = sum_G c_G e^{iGr}``, real for a Hermitian ``c``."""
-        box = jnp.zeros(points, dtype=coefficients.dtype).at[index].set(
+        # ``add`` into zeros: :func:`_field_of` says why not ``set``.
+        box = jnp.zeros(points, dtype=coefficients.dtype).at[index].add(
             coefficients, unique_indices=True)
         return jnp.real(jnp.fft.ifftn(box.reshape(grid))).reshape(-1) * points
 

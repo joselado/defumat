@@ -82,7 +82,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.basis.interpolate import to_dense
-from defumat.batching import k_chunks
+from defumat.batching import k_chunks, resolve_field_batch
 from defumat.forces.chunked import _move, _rows_of, row_leaves, with_rows
 from defumat.forces.energy import (
     _constraint_energy, _kinetic_energy, _projector_energies,
@@ -162,9 +162,40 @@ def _passes(calculation, key) -> dict:
         _, parts = jax.jvp(solver.density_parts, (solver.psi,), (dpsi,))
         return dpsi, steps, residual, parts
 
-    passes = {"bare": jax.jit(bare), "respond": jax.jit(respond)}
+    def respond_many(big, rowset, hamiltonians, psi, arrays, scalars, v_scf,
+                     ddd_paw, bare_c, dv, coefficients, start_c):
+        """:func:`respond` for the three directions in one CG loop per k-point:
+        ``bare_c``, ``dv`` and ``start_c`` carry a leading direction axis and
+        ``coefficients`` is a tuple of three (or ``None``). The right-hand
+        sides and the density tangents are built a direction at a time; only
+        the solve is batched (:meth:`SternheimerSolver.solve_arrays_many`)."""
+        solver = solver_on(big, rowset, hamiltonians, psi, arrays, scalars,
+                           v_scf, ddd_paw)
+        induced = [
+            local_perturbation(solver.calculation, dv[axis], v_scf, ddd_paw,
+                               coefficients=None if coefficients is None
+                               else coefficients[axis])
+            for axis in range(3)
+        ]
+
+        def perturbation(states, ik, spin):
+            return jnp.stack([bare_c[axis][spin][ik] + induced[axis](states, ik, spin)
+                              for axis in range(3)])
+
+        dpsi, steps, residual = solver.solve_arrays_many(perturbation, start=start_c)
+        parts = [jax.jvp(solver.density_parts, (solver.psi,), (dpsi[axis],))[1]
+                 for axis in range(3)]
+        return dpsi, steps, residual, parts
+
+    passes = {"bare": jax.jit(bare), "respond": jax.jit(respond),
+              "respond_many": jax.jit(respond_many)}
     cached[1][key] = passes
     return passes
+
+
+def _stacked_rows(store, rows):
+    """One chunk of a ``(3, nspin, nk, ...)`` store, the k axis the third."""
+    return jnp.stack([_rows_of(store[axis], rows) for axis in range(store.shape[0])])
 
 
 class StreamedField:
@@ -191,6 +222,10 @@ class StreamedField:
         self.hamiltonians = solver.hamiltonians
         self.chunks = list(k_chunks(calculation.system.kpoints.nk,
                                     calculation.k_batch))
+        batch = calculation.k_batch
+        self.batched_chunks = list(k_chunks(
+            calculation.system.kpoints.nk,
+            None if batch is None else max(1, batch // 3)))
         self.kcart = np.asarray(
             calculation.system.kpoints.cartesian(calculation.system.cell))
         self.passes = _passes(calculation, (solver.nocc, solver.occupied_counts,
@@ -259,6 +294,8 @@ class StreamedField:
             coefficients.append(solver.perturbed_coefficients(dv, dddd)
                                 if self.calculation.is_ultrasoft else None)
 
+        if resolve_field_batch():
+            return self._respond_batched(fields, coefficients, onecentre, threshold)
         parts = [None, None, None]
         worst = [0, 0, 0]
         for rows, live in self.chunks:
@@ -273,6 +310,39 @@ class StreamedField:
                 parts[axis] = _add(parts[axis], chunk_parts)
                 worst[axis] = max(worst[axis], int(np.max(np.asarray(steps))))
         self.iterations += sum(worst)
+        self.solves += 3
+
+        response = [solver.finish_density(*parts[axis]) for axis in range(3)]
+        becsum_response = ([parts[axis][1] for axis in range(3)]
+                           if onecentre is not None else [])
+        return response, becsum_response
+
+    def _respond_batched(self, fields, coefficients, onecentre, threshold):
+        """:meth:`respond` with the three directions in one CG loop per k-point.
+
+        Three directions' CG state are in flight where one was, so the k-chunk
+        is a third of the SCF's (:attr:`batched_chunks`), which keeps the
+        response's peak where the serial loop has it.
+        """
+        solver = self.solver
+        stacked_fields = jnp.stack([jnp.asarray(f) for f in fields])
+        stacked_coefficients = (None if coefficients[0] is None
+                                else tuple(coefficients))
+        parts = [None, None, None]
+        worst = np.zeros(3, dtype=int)
+        for rows, live in self.batched_chunks:
+            arguments = self._arguments(rows, live, threshold)
+            written = rows[:live]
+            dpsi, steps, _, chunk_parts = self.passes["respond_many"](
+                *arguments, _stacked_rows(self.bare, rows), stacked_fields,
+                stacked_coefficients, _stacked_rows(self.dpsi, rows),
+            )
+            dpsi = np.asarray(dpsi)
+            for axis in range(3):
+                self.dpsi[axis][:, written] = dpsi[axis][:, :live]
+                parts[axis] = _add(parts[axis], chunk_parts[axis])
+            worst = np.maximum(worst, np.max(np.asarray(steps), axis=1))
+        self.iterations += int(np.sum(worst))
         self.solves += 3
 
         response = [solver.finish_density(*parts[axis]) for axis in range(3)]

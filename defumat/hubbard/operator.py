@@ -37,18 +37,21 @@ def block_potential(v_ns: jnp.ndarray, indices) -> jnp.ndarray:
     has a single channel however many components ``v_ns`` has.
     """
     spin, slot, row, column, block_row, block_column, nwfcU = indices
+    # The entries are unique and land in zeros, so ``add`` is ``set``; it is
+    # written as ``add`` because a complex128 scatter-set is a serial loop over
+    # its indices on a card (:func:`~defumat.scf.mixing._field_of`).
     if v_ns.shape[0] == 4:
         # A spinor's four spin blocks are the four quadrants of **one**
         # operator, and ``spin`` is which quadrant each entry belongs to.
         values = v_ns[spin, slot, block_row, block_column]
         empty = jnp.zeros((1, nwfcU, nwfcU), dtype=v_ns.dtype)
-        return empty.at[0, row, column].set(values)
+        return empty.at[0, row, column].add(values)
     # Collinear: the same per-atom scatter in every channel, so the channel axis
     # broadcasts and ``spin`` (all zeros here) is not used.
     nspin = v_ns.shape[0]
     values = v_ns[:, slot, block_row, block_column]  # (nspin, nentries)
     empty = jnp.zeros((nspin, nwfcU, nwfcU), dtype=v_ns.dtype)
-    return empty.at[:, row, column].set(values)
+    return empty.at[:, row, column].add(values)
 
 
 class HubbardTerm(eqx.Module):

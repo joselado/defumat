@@ -7322,6 +7322,23 @@ DEFUMAT_K_BATCH=all DEFUMAT_BAND_BATCH=all python3 run.py
 or per call, \code{run\_scf(..., k\_batch=...)}. The chunk size changes the order
 contributions are summed in and nothing else --- round-off, $\sim$1e-15 Ry.
 
+\textbf{The three field directions.} The dielectric tensor and the Born charges
+solve one Sternheimer equation per Cartesian direction of the field, and
+\qe's \code{solve\_e} solves them one after another. On a GPU they are solved as
+one batch, one conjugate-gradient loop per $k$-point for all three, because the
+loop is short and its cost there is the launches and the reads of its stopping
+test, which the batch divides by three; each band of each direction still stops
+on its own threshold, so the tensor is the serial one to round-off (1e-14 on
+ultrasoft AlAs) with the same iteration counts. The price is that every direction
+runs as many steps as the slowest one, and on a CPU, where there is nothing to
+amortise, the serial loop stays the default. In the walked route the batch holds
+three directions' states where one was, so the $k$-chunk is a third of the SCF's.
+\code{DEFUMAT\_FIELD\_BATCH} sets it for a whole process:
+
+\begin{shcode}
+DEFUMAT_FIELD_BATCH=0 python3 run.py    # one direction at a time, as ph.x
+\end{shcode}
+
 \textbf{The floor under Davidson's threshold.} The SCF tightens the threshold
 \code{ethr} with its own error, as \code{electrons.f90} does, and floors it at
 $10^{-13}$~Ry on every platform; \code{DEFUMAT\_ETHR\_MIN} sets the floor for a

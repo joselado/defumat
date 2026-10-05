@@ -896,6 +896,26 @@ def resolve_fft_layout(requested: str = "default") -> str:
     return layout
 
 
+def resolve_field_batch(requested: bool | str = "default") -> bool:
+    """Whether a response solves its three field directions as one loop: an argument, then ``DEFUMAT_FIELD_BATCH``, then the platform.
+
+    ``True`` ``vmap``-s the Sternheimer CG over the three directions
+    (:meth:`~defumat.response.sternheimer.SternheimerSolver.solve_many`), which
+    on a card divides the launches and the host reads of the loop condition by
+    three; on a CPU there is no launch to save, every direction then runs as
+    many steps as the slowest one, and the default is the serial loop, QE's
+    ``solve_e``. The two give the same tensor to the CG's threshold.
+    """
+    if isinstance(requested, str) and requested == "default":
+        setting = (environ_get("DEFUMAT_FIELD_BATCH", "") or "").strip().lower()
+        if setting in ("1", "on", "true", "yes"):
+            return True
+        if setting in ("0", "off", "false", "no"):
+            return False
+        return _backend() != "cpu"
+    return bool(requested)
+
+
 def resolve_ethr_floor(floor: float) -> float:
     """The floor the SCF clamps ``ethr`` to: ``DEFUMAT_ETHR_MIN``, else ``floor``, QE's 1e-13.
 

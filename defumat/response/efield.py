@@ -130,7 +130,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.basis.fft import g_to_r, r_to_g
-from defumat.batching import map_k, upload
+from defumat.batching import map_k, resolve_field_batch, upload
 from defumat.eager import compiled, compiled_jvp
 from defumat.pseudo.augmentation import augmentation_dipole
 from defumat.response.born import born_effective_charges, require_born_charges
@@ -617,6 +617,9 @@ class _WholeField:
         """
         solver = self.solver
         response, becsum_response = [], []
+        if resolve_field_batch():
+            return self._respond_batched(dvscf, onecentre, include_induced,
+                                         threshold)
         for axis in range(3):
             perturbation = _bare_plus_induced(
                 solver, self.bare[axis], dvscf[axis],
@@ -632,6 +635,37 @@ class _WholeField:
             response.append(solver.response_density(solution.dpsi))
             if onecentre is not None:
                 becsum_response.append(solver.response_becsum(solution.dpsi))
+        return response, becsum_response
+
+    def _respond_batched(self, dvscf, onecentre, include_induced, threshold):
+        """:meth:`respond` with the three directions in one CG loop per k-point.
+
+        The right-hand sides are built as they are one at a time and stacked;
+        only the solve is batched (:meth:`SternheimerSolver.solve_many`).
+        ``dpsi`` is then held as one ``(3, nspin, nk, nocc, ndim)`` array, which
+        every reader indexes by direction as it indexes the list.
+        """
+        solver = self.solver
+        parts = [
+            _bare_plus_induced(
+                solver, self.bare[axis], dvscf[axis],
+                None if onecentre is None else onecentre[axis], include_induced)
+            for axis in range(3)
+        ]
+
+        def perturbation(psi, ik, spin):
+            return jnp.stack([part(psi, ik, spin) for part in parts])
+
+        start = (jnp.zeros((3,) + tuple(self.bare[0].shape), self.bare[0].dtype)
+                 if self.dpsi[0] is None else self.dpsi)
+        dpsi, iterations, _ = solver.solve_many(perturbation, start=start,
+                                                threshold=threshold)
+        self.dpsi = dpsi
+        self.iterations += sum(iterations)
+        self.solves += 3
+        response = [solver.response_density(dpsi[axis]) for axis in range(3)]
+        becsum_response = ([solver.response_becsum(dpsi[axis]) for axis in range(3)]
+                           if onecentre is not None else [])
         return response, becsum_response
 
     def overlaps(self) -> np.ndarray:
