@@ -76,7 +76,7 @@ from defumat.eager import compiled
 from defumat.units import AMU_TO_RY, RY_TO_CMM1, RY_TO_THZ
 
 __all__ = ["ElectronPhonon", "electron_phonon_at_q", "elphsum_simple",
-           "RY_TO_GHZ"]
+           "mode_matrix_elements", "RY_TO_GHZ"]
 
 #: ``constants.f90``'s ``RY_TO_GHZ``: ``RY_TO_THZ * 1000``.
 RY_TO_GHZ = RY_TO_THZ * 1000.0
@@ -123,41 +123,69 @@ def matrix_elements(internals, nat: int):
     """``g^(a i)_(mn)(k, q)``: ``(nat, 3, nspin, nk, nbnd_kq, nbnd_k)`` complex, Ry/bohr.
 
     ``m`` runs over the states at ``k + q`` and ``n`` over those at ``k``.
-    Built per mode as one compiled walk over k (:func:`~defumat.batching.map_k`):
-    the bare vector plus the converged ``dV_scf`` applied to ``psi_k``, then
-    contracted with ``psi_(k+q)`` on the second sphere. Allocates the result
-    only; the operands are the phonon's.
+    Per mode, :func:`mode_matrix_elements` on the whole k-set, compiled by its
+    structure; on the streamed route the same function is one compiled pass
+    per k-chunk (:meth:`~defumat.response.chunked_phonon.
+    StreamedDisplacementsAtQ.matrix_elements`) and the chunks are assembled on
+    the host. Allocates the result only; the operands are the phonon's.
     """
-    from defumat.batching import map_k
-    from defumat.response.phononq import induced_perturbation_at_q
+    if "displacements" in internals:
+        return internals["displacements"].matrix_elements()
 
     solver = internals["solver"]
     calculation, kq = solver.calculation, internals["calculation_kq"]
     dvscf = internals["dvscf"]
-    nspin, nk = solver.psi.shape[:2]
     out = []
     for atom in range(nat):
         for cart in range(3):
-            induced = induced_perturbation_at_q(calculation, kq, dvscf[atom, cart])
-            bare = internals["bare"][atom, cart]
+            def walk(psi, psi_kq, bare, dv):
+                return mode_matrix_elements(calculation, kq, psi, psi_kq, bare, dv)
 
-            def walk(psi, psi_kq, bare, induced=induced):
-                channels = []
-                for spin in range(nspin):
-                    def one_k(item, spin=spin):
-                        ik, states, states_kq, applied = item
-                        dvpsi = applied + induced(states, ik, spin)
-                        return jnp.einsum("mg,ng->mn", jnp.conj(states_kq), dvpsi)
-
-                    channels.append(map_k(
-                        one_k,
-                        (jnp.arange(nk), psi[spin], psi_kq[spin], bare[spin]),
-                        batch=calculation.k_batch,
-                    ))
-                return jnp.stack(channels)
-
-            out.append(compiled(walk, internals["psi"], solver.psi_kq, bare))
+            out.append(compiled(walk, internals.get("psi", solver.psi),
+                                solver.psi_kq, internals["bare"][atom, cart],
+                                dvscf[atom, cart]))
     return np.asarray(jnp.stack(out)).reshape((nat, 3) + out[0].shape)
+
+
+def mode_matrix_elements(calculation, calculation_kq, psi, psi_kq, bare, dv):
+    """One mode's ``g_(mn)(k, q)`` on the k-points the two calculations hold.
+
+    ``<psi_(m, k+q)| dV_bare |psi_(n k)> + <psi_(m, k+q)| dV_scf |psi_(n k)>``,
+    with ``bare`` the vector ``dV_bare |psi_k>`` already on the ``k + q``
+    sphere and ``dv`` the converged ``dV_scf`` on the dense grid; ``elphel``'s
+    one ``zgemm`` per k-point (``elphon.f90:571-574``). Traceable, and walked
+    with :func:`~defumat.batching.map_k`, so the whole k-set and one k-chunk's
+    row-subset calculations are the same code. Returns ``(nspin, nk, nbnd_kq,
+    nbnd_k)``.
+    """
+    from defumat.batching import map_k
+    from defumat.response.phononq import induced_perturbation_at_q
+
+    induced = induced_perturbation_at_q(calculation, calculation_kq, dv)
+    nspin, nk = psi.shape[:2]
+    channels = []
+    for spin in range(nspin):
+        def one_k(item, spin=spin):
+            ik, states, states_kq, applied = item
+            dvpsi = applied + induced(states, ik, spin)
+            return jnp.einsum("mg,ng->mn", jnp.conj(states_kq), dvpsi)
+
+        channels.append(map_k(
+            one_k, (jnp.arange(nk), psi[spin], psi_kq[spin], bare[spin]),
+            batch=calculation.k_batch,
+        ))
+    return jnp.stack(channels)
+
+
+def _eigenvalue_pair(internals):
+    """The eigenvalues at ``k`` and at ``k + q`` that ``g``'s two band indices run
+    over: the ``"eigenvalues"`` and ``"eigenvalues_kq"`` the phonon handed over,
+    or its two-sphere solver's where it did not name them."""
+    solver = internals.get("solver")
+    eigenvalues = internals.get("eigenvalues")
+    eigenvalues_kq = internals.get("eigenvalues_kq")
+    return (solver.eigenvalues if eigenvalues is None else eigenvalues,
+            solver.eigenvalues_kq if eigenvalues_kq is None else eigenvalues_kq)
 
 
 def elphsum_simple(g, eigenvalues, eigenvalues_kq, kpoint_weights, nelec,
@@ -277,13 +305,13 @@ def electron_phonon_at_q(
     nat = calculation.system.structure.nat
     g = matrix_elements(internals, nat)
 
-    solver = internals["solver"]
+    eigenvalues_k, eigenvalues_kq = _eigenvalue_pair(internals)
     masses = np.repeat(np.asarray(calculation.system.structure.masses), 3) * AMU_TO_RY
     displacements = np.asarray(phonons.eigenvectors) / np.sqrt(masses)[:, None]
     if sigmas is None:
         sigmas = el_ph_sigma * np.arange(1, el_ph_nsigma + 1)
     ef, dos, phase, summed, gamma, coupling = elphsum_simple(
-        g, internals["eigenvalues"], solver.eigenvalues_kq,
+        g, eigenvalues_k, eigenvalues_kq,
         calculation.system.kpoints.weights, calculation.nelec,
         phonons.omega2, displacements, sigmas, ngauss=el_ph_ngauss,
         degeneracy_cmm1=degeneracy_cmm1,

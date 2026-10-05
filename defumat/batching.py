@@ -773,7 +773,7 @@ def map_bands(fn, states, *, batch: int | None | str = "default"):
     """``fn`` over the leading axis of a block of states, ``batch`` bands at a time.
 
     ``states`` is ``(..., m, ndim)`` and ``fn`` maps a block of bands to a block
-    of the same shape; the leading axes are flattened together first, so a
+    of as many bands, each of any one length; the leading axes are flattened together first, so a
     caller with a spin or k index does not have to know how many there are.
 
     Unlike :func:`map_k` this is not a dial between two *algorithms* -- every
@@ -796,10 +796,15 @@ def map_bands(fn, states, *, batch: int | None | str = "default"):
 
     full = m // batch
     head = flat[: full * batch].reshape((full, batch, shape[-1]))
-    done = lax.map(fn, head).reshape((full * batch, shape[-1]))
+    mapped = lax.map(fn, head)
+    # The last axis is the *output's*: a band moved from the ``k`` sphere to
+    # the ``k + q`` one (the phonon at ``q``) comes back at that sphere's width,
+    # which differs from this one's whenever ``q`` is off the k-grid.
+    width = mapped.shape[-1]
+    done = mapped.reshape((full * batch, width))
     if m > full * batch:
         done = jnp.concatenate([done, fn(flat[full * batch :])], axis=0)
-    return done.reshape(shape)
+    return done.reshape(shape[:-1] + (width,))
 
 
 def _resolve_band_batch(requested: int | None | str = "default") -> int | None:

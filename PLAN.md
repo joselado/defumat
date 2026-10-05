@@ -24124,8 +24124,8 @@ response contraction weights by `wk`, not `wg`, because the occupation is alread
 (`drhodvnl.f90:181`, `phonon._state_weights`). The Fermi level is re-derived from the eigenvalues
 as the `Gamma` route does. No `ef_shift`: `ph.x` shifts only at `q = 0` (`lmetq0`), and a metal at
 `q = 0` or at a reciprocal lattice vector is refused on this route and pointed at
-`get_phonons()`, the user's choice of 2026-10-05. Refused on the k-chunked route, whose chunk
-solver is built with `smearing=None`.
+`get_phonons()`, the user's choice of 2026-10-05. Refused at first on the k-chunked route, whose
+chunk solver was built with `smearing=None`; admitted since (the k-chunked paragraph below).
 
 | check | defumat | reference |
 |---|---|---|
@@ -24185,6 +24185,31 @@ asserts all of it at `tr2 = 1e-14` and `conv_thr = 1e-12`, plus the folding iden
 against `ph.x`'s 5.9 and 6.1 s, **5.7x**, of which the coupling is 0.5 s; the rest is the
 metallic phonon at `q`, 11 iterations of three modes at `av.it.` 6.55 against `ph.x`'s 26
 iterations over three representations.
+
+**The k-chunked route, for a card in `memory_mode = 'memory'`** (branch `elph-card`). The
+route `_streams` picks on an accelerator refused both halves: the metal, because
+`_phonon_q_passes` built its chunk solver with `smearing=None`, and `keep_internals`, which the
+matrix elements need. The smearing is now in that pass's cache key and reaches each chunk's
+`TwoSphereSolver`, whose metal branch then reads the `k + q` column mask and the smeared weights
+exactly as the whole route does (the parent solver already ships `wk` as `density_weights` and the
+cut mask through `chunk_arrays`), and `StreamedDisplacementsAtQ.response_force_constants` contracts
+with `_state_weights`, `wk` for a metal, where it had `wg`. The matrix elements are one traceable
+function, `elph.mode_matrix_elements`, which the whole route compiles over the whole set and the
+streamed route jits per k-chunk from the host stores, assembling `g` on the host. Against the whole
+route on one converged state, one k-point a chunk on the CPU: on `al-metal-nosym.in` at
+`q = b_3/2`, `D(q)` to 2.4e-15 and the frequencies to 1.2e-12 cm^-1, `gamma` to 6.4e-14 GHz; on
+`al-elph-nosym.in` at `(1/4, 0, 0)`, identical loop histories over 13 iterations, `D(q)` to
+9.3e-12, the frequencies to 1.7e-8 cm^-1, `gamma` 1.4e-10 GHz, `lambda` 1.2e-10, and the double
+delta identical (`test_the_k_chunked_coupling_is_the_whole_k_coupling`). A second call on either
+route compiles nothing. The walk costs 345 s against the whole route's 88 s on four threads of this
+workstation, 512 chunks of one k-point. **On D22's RTX A2000**, where `memory_mode = 'memory'`
+had refused, `get_electron_phonon((1/4, 0, 0), q_cartesian=True, tr2=1e-14)` now runs on the walked
+route (the whole mesh as one chunk, `k_batch` resolving to the mesh) in 11.9 s warm (calls 2 and 3;
+call 1 23.3 s) against `memory_mode = 'speed'`'s whole route at 16.7 s (call 1 20.5 s), 13
+iterations at `av.it.` 6.08 in both, frequencies 73.995, 73.995, 132.4737 cm^-1 and `gamma` 2.666,
+2.666, 1.534 GHz at `sigma = 0.02` in both, the CPU's to the printed digits. The card's peak is the
+SCF's in memory mode (1078.3 MB through the coupling) and 1103.1 MB in speed mode. Card times on a
+float32 part with float64 at 1/70, not claims about an A100.
 
 **Elk** computes the linewidth too (`ephcouple.f90`, task 240) with the phonon frequency in the
 second delta, `delta(omega + e_k - e_(k+q))`, where `ph.x` puts both states at `E_F`; not the

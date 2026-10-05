@@ -1,0 +1,15 @@
+! The `ph.x` input that generated `reference.out.ph-al-metal-nosym-offgrid`, at
+! q = (0.1, 0.05, 0) in 2 pi/alat, a wavevector off the 4x4x4 grid of
+! `al-metal-nosym.in`, so the k + q spheres pad to a different width than the
+! k spheres. From the ground state of `al-metal-nosym.in`:
+!
+!   pw.x -in al-metal-nosym.in && ph.x -in al-metal-nosym.ph.in
+!
+! Serial QE 7.5, 2026-10-05. `outdir`, `prefix` and `fildyn` are rewritten by
+! whoever regenerates it.
+elph
+ &inputph
+  tr2_ph=1.0d-14, prefix='aloff', outdir='./tmp', fildvscf='aloffdv',
+  amass(1)=26.98, fildyn='aloff.dyn', electron_phonon='simple', trans=.true.,
+ /
+0.1 0.05 0.0

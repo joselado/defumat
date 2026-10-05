@@ -303,7 +303,7 @@ class StreamedDisplacements:
                 parts[index] = add(parts[index], chunk_parts)
                 worst[index] = max(worst[index], int(np.max(np.asarray(steps))))
         self.iterations += sum(worst)
-        self.solves += len(modes)
+        self.solves += len(self.modes)
         if self.host_fields:
             response = [np.asarray(solver.finish_density(
                 *jax.tree_util.tree_map(jax.device_put, part))) for part in parts]
@@ -754,6 +754,15 @@ class StreamedDisplacementsAtQ:
                                      for h in hamiltonians_kq)
         keep = solver.psi.shape[2]
         self.keep = keep
+        # A metal solves the bands below its cut and no more, the widest
+        # ``nbnd_occ(k)`` of the whole grid (:func:`~defumat.response.phononq.
+        # metallic_rows`), decided here on the host since a chunk's pass cannot
+        # read its eigenvalues. ``bare`` keeps every band ``keep`` holds, which
+        # the coupling's matrix elements run over.
+        from defumat.response.phononq import metallic_rows
+
+        self.width = (keep if solver.smearing is None
+                     else metallic_rows(solver.eigenvalues, solver.smearing))
         self.states_kq = states_kq
         self.eigenvalues_kq = np.asarray(eigenvalues_kq)[:, :, :keep]
         self.q_cart = jnp.asarray(np.asarray(q_cart, dtype=float))
@@ -762,7 +771,10 @@ class StreamedDisplacementsAtQ:
         self.modes = [(atom, cart) for atom in range(self.nat) for cart in range(3)]
         self.chunks = list(k_chunks(calculation.system.kpoints.nk,
                                     calculation.k_batch))
-        self.passes = _phonon_q_passes(calculation, (keep, solver.occupied_counts))
+        # The smearing is static and part of the key: a metal's chunk solver
+        # takes ``orthogonalize``'s smeared branch, an insulator's the sharp one.
+        self.passes = _phonon_q_passes(
+            calculation, (keep, solver.occupied_counts, solver.smearing, self.width))
         self.gamma_passes = _phonon_passes(
             calculation, (solver.nocc, solver.occupied_counts, solver.smearing))
         self.big = hoisted(calculation)
@@ -778,7 +790,7 @@ class StreamedDisplacementsAtQ:
         shape = (self.nat, 3, nspin, nk, keep, ndim)
         dtype = np.dtype(solver.psi.dtype)
         self.bare = np.zeros(shape, dtype)
-        self.dpsi = np.zeros(shape, dtype)
+        self.dpsi = np.zeros(shape[:4] + (self.width, ndim), dtype)
         self.iterations = 0
         self.solves = 0
 
@@ -831,7 +843,7 @@ class StreamedDisplacementsAtQ:
                       else np.zeros_like(dvscf[atom, cart]))
                 dpsi, steps, total = self.passes["respond"](
                     *arguments[:-1], scalars_at(self.scalars, levels[index]),
-                    _rows_of(self.bare[atom, cart], rows),
+                    _rows_of(self.bare[atom, cart][:, :, :self.width], rows),
                     jax.device_put(dv), _rows_of(self.dpsi[atom, cart], rows))
                 self.dpsi[atom, cart][:, written] = np.asarray(dpsi)[:, :live]
                 # Each mode's share of the sum over k is added on the host, in
@@ -842,6 +854,35 @@ class StreamedDisplacementsAtQ:
         self.iterations += sum(worst)
         self.solves += len(modes)
         return [np.asarray(self._finish(jax.device_put(total))) for total in totals]
+
+    def matrix_elements(self) -> np.ndarray:
+        """``g^(a i)_(mn)(k, q)`` a k-chunk at a time, assembled on the host.
+
+        :func:`~defumat.response.elph.mode_matrix_elements` on each chunk's two
+        row-subset calculations, with the bare vector from the host store and
+        the converged ``dV_scf`` the loop left on :attr:`dvscf`, as the whole
+        route applies them; ``m`` runs over every band at ``k + q`` and ``n``
+        over the bands the store holds at ``k``. The result,
+        ``(nat, 3, nspin, nk, nbnd_kq, nbnd_k)``, is small next to the stores.
+        """
+        nspin, nk = self.solver.psi.shape[:2]
+        nbnd_k = self.bare.shape[4]
+        nbnd_kq = np.shape(self.states_kq)[2]
+        g = np.zeros((self.nat, 3, nspin, nk, nbnd_kq, nbnd_k),
+                     dtype=np.dtype(self.solver.psi.dtype))
+        for rows, live in self.chunks:
+            leaves = row_leaves(self.calculation, rows)
+            leaves_kq = row_leaves(self.calculation_kq, rows)
+            psi = _rows_of(self.solver.psi, rows)
+            psi_kq = _rows_of(self.states_kq, rows)
+            written = rows[:live]
+            for atom, cart in self.modes:
+                block = self.passes["elph"](
+                    self.big, leaves, leaves_kq, psi, psi_kq,
+                    _rows_of(self.bare[atom, cart], rows),
+                    jax.device_put(self.dvscf[atom, cart]))
+                g[atom, cart][:, written] = np.asarray(block)[:, :live]
+        return g
 
     def _finish(self, total):
         """The whole route's own finish (normalise, lift to the dense grid), on
@@ -878,16 +919,22 @@ class StreamedDisplacementsAtQ:
         """``2 sum_kn w <dpsi_i| dV_bare_j |psi>`` from the two host stores --
         :func:`~defumat.response.phononq.response_force_constants` as one Gram
         product. The stores hold real rows only, so there is no padding here."""
+        from defumat.response.phonon import _state_weights
+
         modes = 3 * self.nat
-        weights = np.asarray(self.solver.weights)
+        # ``wg`` for an insulator, ``wk`` for a metal, whose occupation is
+        # already inside ``dpsi``: the whole route's weight (``drhodvnl.f90:181``).
+        width = self.width
+        weights = np.asarray(_state_weights(self.solver, self.solver.weights))[..., :width]
         left = (np.conj(self.dpsi) * weights[None, None, ..., None]).reshape(modes, -1)
-        return 2.0 * left @ self.bare.reshape(modes, -1).T
+        return 2.0 * left @ self.bare[..., :width, :].reshape(modes, -1).T
 
 
 def _phonon_q_passes(calculation, key) -> dict:
     """The phonon at ``q``'s compiled passes, built once and cached on the calculation.
 
-    ``key`` is the solved block's width and the counts per channel. ``q`` is an
+    ``key`` is the solved block's width, the counts per channel and the
+    smearing (``None`` for an insulator). ``q`` is an
     argument, and the ``k + q`` sphere arrives as row leaves, so nothing here
     closes over one ``q``'s calculation.
     """
@@ -898,11 +945,12 @@ def _phonon_q_passes(calculation, key) -> dict:
     key = ("phonon-q",) + tuple(key)
     if key in cached[1]:
         return cached[1][key]
+    from defumat.response.elph import mode_matrix_elements
     from defumat.response.phononq import (
         TwoSphereSolver, applied_at_q, induced_perturbation_at_q,
     )
 
-    keep, counts = key[1:]
+    keep, counts, smearing, rows = key[1:]
 
     def local(big, rowset):
         return with_rows(with_hoisted(calculation, big), rowset)
@@ -921,9 +969,9 @@ def _phonon_q_passes(calculation, key) -> dict:
         sub, sub_kq = local(big, rowset), local(big, rowset_kq)
         base = SternheimerSolver.on_chunk(
             sub, sub.restricted_hamiltonians(hamiltonians), psi, arrays, scalars,
-            nocc=keep, occupied_counts=counts, smearing=None)
+            nocc=keep, occupied_counts=counts, smearing=smearing)
         two = TwoSphereSolver(base, sub_kq.restricted_hamiltonians(hamiltonians_kq),
-                              psi_kq, eigenvalues_kq, sub_kq)
+                              psi_kq, eigenvalues_kq, sub_kq, rows=rows)
         induced = induced_perturbation_at_q(sub, sub_kq, dv)
 
         def perturbation(states, ik, spin):
@@ -932,7 +980,12 @@ def _phonon_q_passes(calculation, key) -> dict:
         dpsi, steps, _ = two.solve_arrays(perturbation, start=start_c)
         return dpsi, steps, two.response_parts_at_q(dpsi)
 
+    def elph(big, rowset, rowset_kq, psi, psi_kq, bare_c, dv):
+        """One mode's electron-phonon matrix elements on one chunk."""
+        return mode_matrix_elements(local(big, rowset), local(big, rowset_kq),
+                                    psi, psi_kq, bare_c, dv)
+
     passes = {name: jax.jit(fn) for name, fn in (
-        ("bare", bare), ("respond", respond))}
+        ("bare", bare), ("respond", respond), ("elph", elph))}
     cached[1][key] = passes
     return passes

@@ -128,6 +128,26 @@ def test_the_band_default_is_qes_loop():
 
 
 @pytest.mark.parametrize("batch", CHUNKS)
+def test_map_bands_lets_a_band_change_its_length(batch):
+    """A band moved onto another sphere comes back at that sphere's width.
+
+    The phonon at ``q`` gathers ``dV |psi_k>`` onto the ``k + q`` sphere, whose
+    padded width differs from the ``k`` sphere's whenever ``q`` is off the grid;
+    the chunked walk used to reshape the result to the input's width and fail.
+    """
+    key = jax.random.split(jax.random.PRNGKey(7), 2)
+    states = (jax.random.normal(key[0], (2, 7, 4))
+              + 1j * jax.random.normal(key[1], (2, 7, 4)))
+
+    def block(x):
+        return jnp.concatenate([x, 2.0 * x[..., :1]], axis=-1)
+
+    got = map_bands(block, states, batch=batch)
+    assert got.shape == (2, 7, 5)
+    np.testing.assert_array_equal(got, block(states))
+
+
+@pytest.mark.parametrize("batch", CHUNKS)
 def test_map_bands_is_exact_whatever_the_chunk(batch):
     """No accumulation, so no round-off either: the answers must be identical."""
     key = jax.random.split(jax.random.PRNGKey(5), 2)

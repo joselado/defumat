@@ -2756,9 +2756,7 @@ spirals, meta-GGA and DFT+U. A \textbf{metal} runs at every $\mathbf q$ but
 zero, and at $\mathbf q = 0$ (or a reciprocal lattice vector) it is refused
 and pointed at \code{get\_phonons()}: only there can a displacement change the
 number of electrons, so only there does the Fermi level move (\code{ph.x}'s
-\code{ef\_shift}), and this route carries no shift. A metal is also refused on
-the k-chunked route an accelerator takes in \code{memory\_mode = 'memory'},
-whose chunk solver is the insulator's. A \textbf{nonlinear core correction} is refused for
+\code{ef\_shift}), and this route carries no shift. A \textbf{nonlinear core correction} is refused for
 a reason that belongs to $\mathbf q$ rather than to the dataset: two atoms' core
 charges overlap inside a nonlinear $E_{\mathrm{xc}}$, so unlike every other
 frozen term that one \emph{is} a function of $\mathbf q$.
@@ -2843,7 +2841,7 @@ average is reported, which is the number \code{ph.x} prints for each member.
 empty and $\lambda$ is not defined), and everything the phonon at $\mathbf q$
 refuses: so ultrasoft and PAW, whose screened term carries the augmentation
 charge's $\int\Delta V\,Q_{ij}$ on the projectors (\code{adddvscf}), spin
-polarization and spinors, a symmetry-reduced $k$-set, the k-chunked route, and
+polarization and spinors, a symmetry-reduced $k$-set, and
 $\mathbf q = 0$, where the Fermi shift has to be taken out of $\Delta V$
 first. There is no $\alpha^2F(\omega)$, no $\lambda$ averaged over the zone
 and no $T_c$: \code{ph.x}'s \code{'interpolated'} route gets them from a

@@ -309,13 +309,19 @@ class TwoSphereSolver(SternheimerSolver):
         the electron count is possible, and :func:`dynamical_matrix_at_q`
         refuses a metal there.
         """
+        occupation, weights = self._projection_at(
+            self.eigenvalues[spin][ik], self.eigenvalues_kq[spin][ik],
+            self.projector_mask_kq[spin][ik])
+        return occupation[:, None] * rhs, weights * overlaps
+
+    def _projection_at(self, eps, eps_kq, columns):
+        """``(wg1_i, wwg_(j i))`` at one k-point, from its eigenvalues at ``k``
+        (``i``) and at ``k + q`` (``j``) and the ``j`` admitted to the shift."""
         smearing = self.smearing
         degauss, ngauss = smearing.degauss, smearing.ngauss
-        eps = self.eigenvalues[spin][ik]                                # i, at k
-        eps_kq = self.eigenvalues_kq[spin][ik]                          # j, at k+q
-        occupation = wgauss((smearing.ef - eps) / degauss, ngauss)      # wg1_i
+        occupation = wgauss((smearing.ef - eps) / degauss, ngauss)      # wg1_i, at k
         delta = w0gauss((smearing.ef - eps) / degauss, ngauss) / degauss
-        occupation_kq = wgauss((smearing.ef - eps_kq) / degauss, ngauss)  # wgp_j
+        occupation_kq = wgauss((smearing.ef - eps_kq) / degauss, ngauss)  # wgp_j, at k+q
 
         difference = eps_kq[:, None] - eps[None, :]                     # deltae_(j,i)
         step = wgauss(difference / degauss, 0)                          # theta
@@ -325,20 +331,15 @@ class TwoSphereSolver(SternheimerSolver):
         safe = jnp.where(close, 1.0, difference)
         ratio = (occupation_kq[:, None] - occupation[None, :]) / safe
         shift = self.alpha_pv * step * jnp.where(close, -delta[None, :], ratio)
-        weights = mixed + jnp.where(
-            self.projector_mask_kq[spin][ik][:, None], shift, 0.0)
-        return occupation[:, None] * rhs, weights * overlaps
+        return occupation, mixed + jnp.where(columns[:, None], shift, 0.0)
 
     def _preconditioner(self, ik, spin):
         """``h_prec`` on the second sphere: ``|k+q+G|^2`` and ``evq``."""
-        hamiltonian = self.hamiltonians[spin]
+        kinetic = self.hamiltonians[spin].state_kinetic[ik]
         # ``h_prec``'s ``eprec(ibnd)`` from ``evq(:, ibnd)``: one per solved row.
         occupied = self.psi_kq[spin][ik][: self.psi.shape[2]]
-        kinetic = hamiltonian.state_kinetic[ik]
-        expectation = jnp.real(
-            jnp.einsum("ng,g,ng->n", jnp.conj(occupied), kinetic, occupied)
-        )
-        eprec = 1.35 * expectation
+        eprec = 1.35 * jnp.real(
+            jnp.einsum("ng,g,ng->n", jnp.conj(occupied), kinetic, occupied))
         return 1.0 / jnp.maximum(1.0, kinetic[None, :] / eprec[:, None])
 
     # -- a metal's k-points, grouped by how many bands each one solves -------
@@ -362,6 +363,13 @@ class TwoSphereSolver(SternheimerSolver):
             cached[spin] = [(int(width), np.flatnonzero(counts == width))
                             for width in np.unique(counts)]
         return cached[spin]
+
+    def _groups_by_width(self) -> bool:
+        """Whether :meth:`solve` and the response density walk :meth:`row_groups`:
+        a metal on device arrays with concrete eigenvalues, which a pass
+        compiled over a k-chunk does not have (it solves at one width)."""
+        return (self.smearing is not None and not is_host_store(self.psi)
+                and not isinstance(self.eigenvalues, jax.core.Tracer))
 
     def narrowed(self, width: int) -> "TwoSphereSolver":
         """This solver with the solved block cut to its first ``width`` rows."""
@@ -387,7 +395,7 @@ class TwoSphereSolver(SternheimerSolver):
         which is what the whole-width solve returns there. ``perturbation`` is
         called with the narrowed block and must answer at its width.
         """
-        if self.smearing is None or is_host_store(self.psi):
+        if not self._groups_by_width():
             return super().solve(perturbation, start=start, threshold=threshold)
         from defumat.batching import map_k
 
@@ -516,7 +524,7 @@ class TwoSphereSolver(SternheimerSolver):
 
         # Called once per displacement per iteration with new closures, so it is
         # compiled by its structure (:mod:`defumat.eager`).
-        if self.smearing is not None and not is_host_store(self.psi):
+        if self._groups_by_width():
             groups = tuple(tuple(jnp.asarray(chosen) for _, chosen in
                                  self.row_groups(spin))
                            for spin in range(self.nspin))
@@ -1413,8 +1421,12 @@ def require_a_two_sphere_regime(calculation, q_crystal) -> None:
         )
 
 
-def _require_a_metallic_q(cell, q_cart, streamed: bool) -> None:
-    """The two places a metal is refused on this route, each by its term."""
+def _require_a_metallic_q(cell, q_cart) -> None:
+    """Where a metal is refused on this route: at ``q = 0``, by its missing term.
+
+    Both routes, whole and k-chunked, carry the metal branch of the two-sphere
+    projector, so the only refusal left is ``ef_shift``.
+    """
     crystal = np.asarray(cell.k_to_crystal(np.asarray(q_cart) / cell.tpiba))
     if np.max(np.abs(crystal - np.rint(crystal))) < 1.0e-8:
         raise NotImplementedError(
@@ -1423,14 +1435,6 @@ def _require_a_metallic_q(cell, q_cart, streamed: bool) -> None:
             "the number of electrons and the Fermi level moves, which is "
             "ph.x's ef_shift (lmetq0 = lgauss .AND. lgamma), and this route "
             "carries none. Use get_phonons(), which does"
-        )
-    if streamed:
-        raise NotImplementedError(
-            "a metal at q != 0 on the streamed (k-chunked) route is not "
-            "implemented: its chunk solver is built with smearing=None, the "
-            "insulator's sharp projector, so orthogonalize's smeared weights "
-            "at k and k + q would be missing. Run with every k-point resident "
-            "(memory_mode='speed', or a cell whose states fit)"
         )
 
 
@@ -1468,8 +1472,9 @@ def dynamical_matrix_at_q(
 
     ``keep_internals`` attaches the two-sphere solver, the bare perturbations
     and the converged ``dV_scf`` to the result's ``internals``, which is what
-    :mod:`defumat.response.elph` builds the coupling from. Refused on the
-    streamed route, whose states live in host memory a chunk at a time.
+    :mod:`defumat.response.elph` builds the coupling from. On the streamed
+    route they are the host stores (``"displacements"``), and the coupling is
+    walked a chunk at a time from them.
     """
     from defumat.response.phonon import Phonons
     from defumat.response.sternheimer import make_sternheimer
@@ -1498,16 +1503,9 @@ def dynamical_matrix_at_q(
 
     streamed = _streams(calculation, wavefunctions, keep_internals=False,
                         what="the dynamical matrix at q")
-    if keep_internals and streamed:
-        raise NotImplementedError(
-            "the electron-phonon matrix element needs every k-point's response "
-            "resident, and this run walks the k axis a chunk at a time "
-            "(memory_mode='memory' on an accelerator). Run with "
-            "memory_mode='speed', or on a CPU"
-        )
     metal = calculation.system.occupations != "fixed"
     if metal:
-        _require_a_metallic_q(cell, q_cart, streamed)
+        _require_a_metallic_q(cell, q_cart)
     result = _GroundState(wavefunctions, eigenvalues, density, becsum)
     # A metal's Fermi level is re-derived from these eigenvalues by the call
     # the SCF made, as the ``Gamma`` route does (``phonon._fermi_level``).
@@ -1579,10 +1577,18 @@ def dynamical_matrix_at_q(
 
     frequencies, vectors = _diagonalize_at_q(matrix, np.asarray(structure.masses))
     internals = None
-    if keep_internals:
+    if keep_internals and streamed:
+        # ``g`` runs over every band the stores hold at ``k`` and every band
+        # at ``k + q``, and so do the eigenvalues ``elphsum`` weights it with.
+        internals = {"displacements": displacements, "calculation_kq": kq,
+                     "dvscf": displacements.dvscf, "q_cart": q_cart,
+                     "psi": solver.psi, "eigenvalues": solver.eigenvalues,
+                     "eigenvalues_kq": np.asarray(eigenvalues_kq)}
+    elif keep_internals:
         internals = {"solver": two, "bare": whole, "calculation_kq": kq,
                      "dvscf": displacements.dvscf, "q_cart": q_cart,
-                     "psi": solver.psi, "eigenvalues": solver.eigenvalues}
+                     "psi": solver.psi, "eigenvalues": solver.eigenvalues,
+                     "eigenvalues_kq": np.asarray(two.eigenvalues_kq)}
     return Phonons(
         matrix=matrix.reshape(nat, 3, nat, 3),
         frequencies=frequencies,
