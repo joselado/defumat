@@ -26,6 +26,7 @@ from jax import lax
 from defumat import eager
 from defumat.calculator import Calculator
 from defumat.eager import compiled
+from tests.backend import assert_same
 
 pytestmark = pytest.mark.unit
 
@@ -404,5 +405,10 @@ def test_a_second_tetrahedron_occupation_call_compiles_nothing(pseudo_dir):
     with counting_compiles() as names:
         second, second_levels = calculation.occupations(eigenvalues)
     assert names == []
-    np.testing.assert_array_equal(first, second)
-    assert first_levels == second_levels
+    # The same bits on a CPU; on a card the occupations' scatter-add with
+    # colliding indices is atomic and does not repeat its last bit (2.2e-16).
+    assert_same(second, first, atol=1e-14)
+    assert second_levels.keys() == first_levels.keys()
+    for name in first_levels:
+        assert_same(np.asarray(second_levels[name]), np.asarray(first_levels[name]),
+                    atol=1e-14)

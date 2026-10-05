@@ -25,9 +25,11 @@ import numpy as np
 import pytest
 
 from defumat.batching import (
-    WFC_STORES, fetch_wavefunctions, park_wavefunctions, resolve_wfc_store,
+    WFC_STORES, fetch_wavefunctions, park_wavefunctions, resolve_projectors,
+    resolve_wfc_store,
 )
 from defumat.calculator import Calculator
+from tests.backend import on_a_cpu
 
 pytestmark = pytest.mark.unit
 
@@ -243,11 +245,14 @@ def test_the_resolved_mode_is_printed_and_a_typo_does_not_read_as_a_pin(
     line under test is the one that tells them apart, and the assertion is that
     it agrees with :func:`resolve_wfc_store` rather than with the request.
     """
+    # The CPU's defaults: on a card the run resolves the store by the SCF's
+    # own rule (``resolve_scf_wfc_store``), which ``resolve_wfc_store`` is not.
+    on_a_cpu(monkeypatch)
     _scf("device", max_iterations=1, verbose=True)
     printed = capsys.readouterr().out
     assert "wfc_store = device" in printed
     assert "k_batch = " in printed and "band_batch = " in printed
-    assert "projectors = store" in printed
+    assert f"projectors = {resolve_projectors()}" in printed
 
     # The typo. The run falls back to the platform default; the log must say
     # the default, and must not echo what was asked for.

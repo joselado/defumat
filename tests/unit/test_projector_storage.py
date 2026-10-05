@@ -19,6 +19,7 @@ import pytest
 
 from defumat.batching import PROJECTOR_STORES, resolve_projectors
 from defumat.calculator import Calculator
+from tests.backend import on_a_cpu
 
 pytestmark = pytest.mark.unit
 
@@ -39,7 +40,9 @@ def _calculation(which):
 # the dial
 # --------------------------------------------------------------------------
 
-def test_the_default_is_what_every_validated_number_was_measured_with():
+def test_the_default_is_what_every_validated_number_was_measured_with(monkeypatch):
+    # The CPU's default; a card's memory mode rebuilds (``resolve_projectors``).
+    on_a_cpu(monkeypatch)
     assert resolve_projectors() == "store"
     assert resolve_projectors("default") == "store"
     assert set(PROJECTOR_STORES) == {"store", "rebuild"}
@@ -57,6 +60,7 @@ def test_a_storage_that_is_not_one_is_refused():
 
 
 def test_an_unreadable_environment_variable_warns_and_falls_back(monkeypatch):
+    on_a_cpu(monkeypatch)
     monkeypatch.setenv("DEFUMAT_PROJECTORS", "rebiuld")
     with pytest.warns(RuntimeWarning, match="DEFUMAT_PROJECTORS"):
         assert resolve_projectors() == "store"

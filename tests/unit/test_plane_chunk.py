@@ -22,6 +22,7 @@ from defumat.io.pwin import read_pw_input
 from defumat.pseudo import read_upf
 from defumat.scf.driver import Calculation
 from defumat.system import build_system
+from tests.backend import on_a_cpu
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -83,6 +84,7 @@ def test_spinor_local_term_is_the_same_in_chunks():
 
 
 def test_the_dial_follows_the_platform_and_the_environment(monkeypatch):
+    on_a_cpu(monkeypatch)
     grid = (36, 36, 144)
     monkeypatch.delenv("DEFUMAT_PLANE_CHUNK", raising=False)
     # On a CPU: the byte budget's worth of planes, at least one, at most n3,

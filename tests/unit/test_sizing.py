@@ -19,6 +19,7 @@ import pytest
 from defumat.calculator import Calculator
 from defumat.scf.driver import default_nbnd
 from defumat.sizing import estimate_size
+from tests.backend import on_a_cpu
 
 pytestmark = pytest.mark.unit
 
@@ -256,7 +257,7 @@ def test_nothing_is_allocated_on_the_device(pseudo_dir):
     assert calculator._calculation is None
 
 
-def test_the_spin_channels_do_not_double_the_eigensolver(pseudo_dir):
+def test_the_spin_channels_do_not_double_the_eigensolver(pseudo_dir, monkeypatch):
     """``diagonalize`` solves the channels one after another.
 
     The wavefunctions are held for both and the Davidson workspace is not, so a
@@ -268,6 +269,9 @@ def test_the_spin_channels_do_not_double_the_eigensolver(pseudo_dir):
         "ecutwfc = 12.0, nspin = 2, starting_magnetization(1) = 0.1,\n"
         "  occupations = 'smearing', smearing = 'mv', degauss = 0.02",
     )
+    # The device report of a CPU run: a card's memory mode streams the
+    # wavefunctions and names that line differently.
+    on_a_cpu(monkeypatch)
     # ``nbnd`` is pinned in both: a smeared run defaults to more bands than a
     # fixed-occupation one, and without this the doubling being measured is the
     # band count's rather than the spin axis's.

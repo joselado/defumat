@@ -140,7 +140,9 @@ def test_the_kernel_matrix_is_the_transposed_difference():
     for a in range(min(sphere.nm, 6)):
         for b in range(min(sphere.nm, 6)):
             index = tuple((miller[b] - miller[a]) % grid)
-            assert matrix[a, b] == pytest.approx(coefficients[index], abs=1e-14)
+            # 1e-14 or a few ulp of the entry, whichever is larger: a card's
+            # sum lands 4e-14 from the CPU's on an entry of 109.
+            assert matrix[a, b] == pytest.approx(coefficients[index], abs=1e-14, rel=2e-15)
 
 
 # --- the k + q fold -----------------------------------------------------------

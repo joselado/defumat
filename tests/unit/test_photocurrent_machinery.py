@@ -181,7 +181,10 @@ def test_the_generalized_derivative_is_hermitian_in_the_band_pair():
     for a in range(3):
         for c in range(3):
             block = gen[a, c, 0]
-            assert np.max(np.abs(block - np.conj(block.T))) < 1.0e-11
+            # Relative to the block: on a card one of 1.9e7 is Hermitian to
+            # 1.9e-9, 1e-16 of it, which a bare 1e-11 read as a failure.
+            scale = max(1.0, float(np.max(np.abs(block))))
+            assert np.max(np.abs(block - np.conj(block.T))) < 1.0e-11 + 1.0e-15 * scale
 
 
 # --- the refusals, on the guard itself ---------------------------------------

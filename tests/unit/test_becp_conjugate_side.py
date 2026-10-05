@@ -20,6 +20,7 @@ import pytest
 
 from defumat import Calculator
 from defumat.hamiltonian.operator import conjugated_contraction
+from tests.backend import assert_same
 
 pytestmark = pytest.mark.unit
 
@@ -51,5 +52,8 @@ def test_both_sides_of_the_conjugate_give_the_same_bits(vkb, kind):
         states = jnp.asarray(rng.standard_normal(shape) + 1j * rng.standard_normal(shape),
                              dtype=vkb.dtype)
         reference = np.asarray(old(projectors, states))
-        assert np.array_equal(np.asarray(new(projectors, states)), reference), nvec
-        assert np.array_equal(np.asarray(chosen(projectors, states)), reference), nvec
+        # Bit for bit is the CPU's promise; a card's contractions round in
+        # their own order.
+        atol = 1e-13 * float(np.max(np.abs(reference)))
+        assert_same(new(projectors, states), reference, atol, err_msg=str(nvec))
+        assert_same(chosen(projectors, states), reference, atol, err_msg=str(nvec))

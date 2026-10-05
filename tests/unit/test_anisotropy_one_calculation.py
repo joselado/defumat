@@ -39,6 +39,7 @@ from defumat.workflows.anisotropy import (
     relax_orientation,
     run_anisotropy,
 )
+from tests.backend import on_a_cpu
 
 pytestmark = pytest.mark.unit
 
@@ -77,7 +78,12 @@ def cobalt(pseudo_dir):
 
 
 def _stand_ins(monkeypatch):
-    """Count the constructors, and record every calculation a solve is asked in."""
+    """Count the constructors, and record every calculation a solve is asked in.
+
+    On the CPU's route: a card's memory mode streams the store and solves
+    through a path this stand-in does not replace, so nothing is counted.
+    """
+    on_a_cpu(monkeypatch)
     built, solved = [], []
     original = Calculation.__init__
 

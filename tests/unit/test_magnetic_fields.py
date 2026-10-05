@@ -276,6 +276,10 @@ def test_the_polar_angle_constraint_is_finite_just_off_the_axis(axial_density, c
     rng = np.random.default_rng(4242)
     rho[1] = rng.normal(size=GRID) * 0.1
     rho[1] -= rho[1].mean()
+    # Whether that leaves 1e-15 or exactly 0 is the platform's rounding (a card
+    # gave 0), so a transverse moment of about 5e-15 is put in by hand: inside
+    # QE's 1e-14 threshold on every platform.
+    rho[1] += 5.0e-15 / float(cell.volume)
     field = MagneticField(
         regions=None, uniform=jnp.zeros(3), atomic=None,
         targets=jnp.asarray([40.0]), penalty=0.31,

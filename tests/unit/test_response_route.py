@@ -19,6 +19,7 @@ import pytest
 
 import defumat.batching as batching
 from defumat.response.efield import _streams
+from tests.backend import on_a_cpu
 
 pytestmark = pytest.mark.unit
 
@@ -32,8 +33,9 @@ def _calculation(memory_mode, k_batch, nk=27, **extra):
 STORE = np.zeros((1, 27, 2, 3), dtype=complex)
 
 
-def test_on_a_cpu_the_route_is_the_force_rule():
+def test_on_a_cpu_the_route_is_the_force_rule(monkeypatch):
     """A host store, or memory mode with a chunk smaller than the mesh."""
+    on_a_cpu(monkeypatch)
     assert _streams(_calculation("speed", None), STORE, False)
     assert _streams(_calculation("memory", 4), jnp.asarray(STORE), False)
     assert not _streams(_calculation("memory", None), jnp.asarray(STORE), False)

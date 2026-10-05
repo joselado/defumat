@@ -22,6 +22,7 @@ from defumat import batching
 from defumat.calculator import Calculator
 from defumat.scf.driver import Calculation, resolve_k_batch_for
 from defumat.sizing import BandBatchChoice, KBatchChoice, choose_k_batch, estimate_size
+from tests.backend import on_a_cpu
 
 pytestmark = pytest.mark.unit
 
@@ -100,8 +101,9 @@ def test_the_environment_form_is_silent_to_a_caller_without_a_system(monkeypatch
     assert not batching.k_batch_fit_requested("default")
 
 
-def test_a_cpu_keeps_its_default(pseudo_dir):
+def test_a_cpu_keeps_its_default(pseudo_dir, monkeypatch):
     """A batch over k was measured slower on a CPU, and there is no card to fill."""
+    on_a_cpu(monkeypatch)
     calculator = _calculator(pseudo_dir)
     calculation = Calculation(calculator.system, calculator.pseudos, k_batch="fit")
     assert calculation.k_batch == batching.resolve_k_batch("default", calculation.memory_mode)
@@ -161,7 +163,12 @@ def test_speed_mode_with_fit_keeps_its_own_dials(pseudo_dir, monkeypatch):
 
 def test_the_size_report_takes_the_chunk_the_run_takes(pseudo_dir):
     calculator = _calculator(pseudo_dir, k_batch="fit")
-    assert calculator.estimate().k_batch == calculator.calculation.k_batch
+    # On a card the whole mesh fits this two-atom cell, and the run records
+    # that as ``None`` where the report records the chunk, 64 of 64 k-points:
+    # the same chunk, written two ways.
+    nk = calculator.system.kpoints.nk
+    report, run = calculator.estimate().k_batch, calculator.calculation.k_batch
+    assert (nk if report is None else min(report, nk)) == (nk if run is None else min(run, nk))
 
 
 def test_memory_mode_on_a_card_takes_fit_by_default(pseudo_dir, monkeypatch):
@@ -176,7 +183,8 @@ def test_memory_mode_on_a_card_takes_fit_by_default(pseudo_dir, monkeypatch):
     assert Calculation(system, pseudos, memory_mode="memory").k_batch == 1
 
 
-def test_a_cpu_keeps_one_k_point_by_default(pseudo_dir):
+def test_a_cpu_keeps_one_k_point_by_default(pseudo_dir, monkeypatch):
+    on_a_cpu(monkeypatch)
     calculator = _calculator(pseudo_dir)
     calculation = Calculation(calculator.system, calculator.pseudos, memory_mode="memory")
     assert calculation.k_batch == 1

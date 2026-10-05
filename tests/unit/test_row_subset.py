@@ -20,6 +20,7 @@ import pytest
 
 from defumat.calculator import Calculator
 from defumat.response.velocity import VelocityOperator
+from tests.backend import assert_same
 
 pytestmark = pytest.mark.unit
 
@@ -51,8 +52,7 @@ def test_a_row_subset_is_the_whole_set_at_those_k_points():
     energies, psi = whole.diagonalize(hamiltonians, 6, None, 1e-11)
     part_energies, _ = part.diagonalize(part.hamiltonian(potential.v_scf), 6,
                                         None, 1e-11)
-    np.testing.assert_array_equal(np.asarray(part_energies),
-                                  np.asarray(energies)[:, ROWS])
+    assert_same(part_energies, np.asarray(energies)[:, ROWS], atol=1e-13)
 
     part_hamiltonian = part.hamiltonian(potential.v_scf)[0]
     # The whole set's Hamiltonian with its k-indexed fields sliced, which is
@@ -60,21 +60,18 @@ def test_a_row_subset_is_the_whole_set_at_those_k_points():
     # redone per chunk: the same operator, bit for bit.
     restricted = part.restricted_hamiltonians(hamiltonians)[0]
     for position, ik in enumerate(ROWS):
-        np.testing.assert_array_equal(
-            np.asarray(part_hamiltonian.apply(psi[0, ik], position)),
-            np.asarray(hamiltonians[0].apply(psi[0, ik], ik)))
-        np.testing.assert_array_equal(
-            np.asarray(restricted.apply(psi[0, ik], position)),
-            np.asarray(hamiltonians[0].apply(psi[0, ik], ik)))
-        np.testing.assert_array_equal(
-            np.asarray(restricted.apply_s(psi[0, ik], position)),
-            np.asarray(hamiltonians[0].apply_s(psi[0, ik], ik)))
+        assert_same(part_hamiltonian.apply(psi[0, ik], position),
+                    hamiltonians[0].apply(psi[0, ik], ik), atol=1e-13)
+        assert_same(restricted.apply(psi[0, ik], position),
+                    hamiltonians[0].apply(psi[0, ik], ik), atol=1e-13)
+        assert_same(restricted.apply_s(psi[0, ik], position),
+                    hamiltonians[0].apply_s(psi[0, ik], ik), atol=1e-13)
 
     weights = jnp.ones((1, len(ROWS), 6))
     chunk = psi[:, ROWS]
     for a, b in zip(whole.becsum(chunk, weights, rows=ROWS, symmetrize=False),
                     part.becsum(chunk, weights, symmetrize=False)):
-        np.testing.assert_array_equal(np.asarray(a), np.asarray(b))
+        assert_same(a, b, atol=1e-13)
 
     # The velocity operator is a jvp of at_kcart over the k axis: the same
     # operator at each point, over a shorter axis.
