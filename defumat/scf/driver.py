@@ -6393,7 +6393,8 @@ def _solve_residual(
             warm_mixer.precondition = build(
                 calculation.basis.dense, calculation.system.cell, residual.shapes[0],
                 beta=warm_mixer.beta,
-                **({} if warmup_mixing.lower() in DENSITY_DEPENDENT
+                **({"smooth": calculation.basis.smooth}
+                   if warmup_mixing.lower() in DENSITY_DEPENDENT
                    else {"nelec": calculation.nelec}),
             )
         warm_metric = (_rho_ddot_metric(calculation)
@@ -7358,9 +7359,9 @@ def run_scf(
         if layout is not None:
             # On the stored smooth sphere, as ``approx_screening`` and
             # ``approx_screening2`` act on ``of_g(:ngm0)``: Kerker is a
-            # multiplication there, and local-TF reuses its own solver.
+            # multiplication there, and local-TF solves on the smooth grid.
             mixer.precondition = (
-                local_tf_preconditioner_g(layout, calculation.basis.dense,
+                local_tf_preconditioner_g(layout, calculation.basis.smooth,
                                           calculation.system.cell, beta=mixer.beta)
                 if density_dependent else
                 kerker_preconditioner_g(layout, calculation.system.cell,
@@ -7371,10 +7372,13 @@ def run_scf(
                 local_tf_preconditioner if density_dependent
                 else kerker_preconditioner
             )
+            # local-TF solves on the smooth grid and leaves the shell at
+            # ``beta``, as ``approx_screening2`` and ``high_frequency_mixing`` do.
             mixer.precondition = build(
                 calculation.basis.dense, calculation.system.cell, tuple(np.shape(rho)),
                 beta=mixer.beta,
-                **({} if density_dependent else {"nelec": calculation.nelec}),
+                **({"smooth": calculation.basis.smooth} if density_dependent
+                   else {"nelec": calculation.nelec}),
             )
 
     scheme = calculation.system.occupations

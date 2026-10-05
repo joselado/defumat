@@ -52,6 +52,7 @@ import dataclasses
 import warnings
 from dataclasses import dataclass, field
 from functools import partial
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -960,7 +961,8 @@ def kerker_preconditioner(gvectors, cell, shape, beta=0.7, screening=None, nelec
 
 
 #: ``mmx`` in ``approx_screening2``: the Krylov space's width before it is
-#: restarted, and how many times it may be restarted before giving up.
+#: restarted, and how many times it may be restarted before giving up. Together
+#: they bound a call at ``mmx (refreshes + 1) = 60`` operator applications.
 LOCAL_TF_MMX, LOCAL_TF_REFRESHES = 12, 4
 
 #: ``eps32`` in ``approx_screening2``: below this the local density has no
@@ -968,7 +970,236 @@ LOCAL_TF_MMX, LOCAL_TF_REFRESHES = 12, 4
 LOCAL_TF_EPS = 1.0e-32
 
 
-def local_tf_preconditioner(gvectors, cell, shape, beta=0.7):
+def _rfft_half(miller, grid):
+    """One G of each ``(G, -G)`` pair, as ``rfftn`` stores it, and where it sits.
+
+    ``rfftn`` of a real field keeps the half box ``k3 = 0 .. n3 // 2``, so the
+    representative of a pair is the G with ``m3 > 0``; on the ``m3 = 0`` plane,
+    which the half box holds whole, it is the one with ``m2 > 0`` and then
+    ``m1 >= 0``, so G = 0 is kept once. This is not :func:`_half_sphere`'s choice,
+    which is ``ggen``'s and splits on the first index.
+
+    Returns the chosen rows of ``miller`` ordered by their flat position in the
+    ``(n1, n2, n3 // 2 + 1)`` box, so that a gather and a scatter run over sorted
+    unique indices; those positions; and, for the chosen rows on the ``m3 = 0``
+    plane other than G = 0, their index in the chosen list and the position of
+    their partner ``-G``, which the inverse transform reads too.
+    """
+    miller = np.asarray(miller)
+    n1, n2, n3 = (int(n) for n in grid)
+    m1, m2, m3 = miller[:, 0], miller[:, 1], miller[:, 2]
+    if 2 * int(np.max(np.abs(m3))) >= n3:
+        raise ValueError(
+            f"the sphere reaches the Nyquist plane of an FFT grid {tuple(grid)}"
+        )
+    keep = (m3 > 0) | ((m3 == 0) & (m2 > 0)) | ((m3 == 0) & (m2 == 0) & (m1 >= 0))
+    rows = np.flatnonzero(keep)
+    if 2 * rows.size - 1 != miller.shape[0]:
+        raise ValueError("the G-vector set is not closed under G -> -G")
+    h3 = n3 // 2 + 1
+
+    def position(a, b, c):
+        return ((a % n1) * n2 + (b % n2)) * h3 + c
+
+    order = np.argsort(position(m1[rows], m2[rows], m3[rows]))
+    rows = rows[order]
+    positions = position(m1[rows], m2[rows], m3[rows])
+    plane = np.flatnonzero((m3[rows] == 0) & ((m1[rows] != 0) | (m2[rows] != 0)))
+    partners = position(-m1[rows][plane], -m2[rows][plane], 0)
+    return rows, positions, plane, partners
+
+
+class _ScreeningSphere(NamedTuple):
+    """The arrays :func:`_approx_screening2` reads for one sphere on one grid.
+
+    ``g2`` is ``|G|^2`` in 1/bohr^2 on the :func:`_rfft_half` rows and ``weight``
+    the Coulomb metric's ``2/|G|^2`` there, zero at G = 0: the factor 2 is the
+    partner every stored G stands for, so the metric is the whole sphere's sum.
+    """
+
+    positions: jnp.ndarray
+    plane: jnp.ndarray
+    partners: jnp.ndarray
+    g2: jnp.ndarray
+    weight: jnp.ndarray
+
+
+def _screening_sphere(gvectors: GVectors, cell):
+    """``(rows, sphere)``: :func:`_rfft_half` of ``gvectors`` and its arrays."""
+    rows, positions, plane, partners = _rfft_half(gvectors.miller, gvectors.grid)
+    g2 = np.asarray(gvectors.kinetic(cell))[rows]
+    nonzero = g2 > 1.0e-12
+    weight = np.where(nonzero, 2.0 / np.where(nonzero, g2, 1.0), 0.0)
+    return rows, _ScreeningSphere(jnp.asarray(positions), jnp.asarray(plane),
+                                  jnp.asarray(partners), jnp.asarray(g2),
+                                  jnp.asarray(weight))
+
+
+def _half_of(field, sphere: _ScreeningSphere, grid):
+    """A real field on ``grid`` -> its coefficients on the sphere's rows (QE's fwfft)."""
+    points = grid[0] * grid[1] * grid[2]
+    box = jnp.fft.rfftn(field.reshape(grid)).reshape(-1)
+    return box.at[sphere.positions].get(indices_are_sorted=True,
+                                        unique_indices=True) / points
+
+
+def _field_of(coefficients, sphere: _ScreeningSphere, grid):
+    """Coefficients on the sphere's rows -> the real field on ``grid``."""
+    n1, n2, n3 = grid
+    h3 = n3 // 2 + 1
+    box = jnp.zeros(n1 * n2 * h3, dtype=coefficients.dtype)
+    box = box.at[sphere.positions].set(coefficients, indices_are_sorted=True,
+                                       unique_indices=True)
+    box = box.at[sphere.partners].set(jnp.conj(coefficients[sphere.plane]),
+                                      unique_indices=True)
+    return jnp.fft.irfftn(box.reshape(n1, n2, h3), s=grid).reshape(-1) * (n1 * n2 * n3)
+
+
+@partial(jax.jit, static_argnames=("grid", "mmx", "refreshes"))
+def _approx_screening2(drho, rho, sphere: _ScreeningSphere, volume, *, grid,
+                       mmx=LOCAL_TF_MMX, refreshes=LOCAL_TF_REFRESHES):
+    """``approx_screening2`` on one charge: ``(v, steps, error)`` on the sphere's rows.
+
+    ``drho`` and ``rho`` are complex coefficients on the :func:`_rfft_half` rows
+    of ``sphere``; ``v`` is the screened ``drho`` there, ``steps`` the operator
+    applications taken and ``error`` the last ``dr2_best``, both diagnostics.
+
+    **One compiled loop.** The Krylov space is two ``(mmx, 2 nh)`` real buffers,
+    the directions and the operator applied to them, with the real and the
+    imaginary parts of the ``nh`` stored coefficients side by side: every
+    coefficient the method forms is real, so a direction is a real combination
+    of Hermitian fields and stays one, and the algebra is real products of half
+    the length a complex vector over the whole sphere has. The Gram matrix grows
+    a row per step, the ``m x m`` system is solved inside the loop with the
+    unused block set to the identity, and nothing leaves the device until the
+    loop ends. The restart, the stopping rule and the order of operations are
+    ``mix_rho.f90:787-1019``'s. Where the Fortran stops in ``errore`` on a
+    singular system, this keeps the last good estimate instead: a failed
+    preconditioner is not worth an SCF. At most ``mmx (refreshes + 1)``
+    applications, one transform pair each.
+    """
+    n1, n2, n3 = grid
+    points = n1 * n2 * n3
+    real = sphere.g2.dtype
+    nh = sphere.g2.shape[0]
+    fpi_e2 = FPI * E2
+
+    def to_real(c):
+        return jnp.concatenate([jnp.real(c), jnp.imag(c)])
+
+    def to_complex(v):
+        return jax.lax.complex(v[:nh], v[nh:])
+
+    # ``alpha(r) = 3 (2 pi / 3)^(5/3) r_s(r)`` and ``agg0``: ``avg_rsm1`` is the
+    # harmonic mean of ``r_s`` over the grid, so the vacuum, with a huge ``r_s``
+    # and a negligible ``1/r_s``, barely moves it. ``abs`` is not differentiated
+    # here: a preconditioner acts on numbers, not on a traced density.
+    magnitude = jnp.abs(_field_of(rho, sphere, grid))
+    dense = magnitude > LOCAL_TF_EPS
+    radius = jnp.where(
+        dense, (3.0 / (FPI * jnp.where(dense, magnitude, 1.0))) ** (1.0 / 3.0), 0.0)
+    inverse = jnp.sum(jnp.where(dense, 1.0 / jnp.where(dense, radius, 1.0), 0.0))
+    agg0 = (12.0 / np.pi) ** (2.0 / 3.0) * inverse / points
+    alpha = 3.0 * (2.0 * np.pi / 3.0) ** (5.0 / 3.0) * radius
+
+    g2 = jnp.concatenate([sphere.g2, sphere.g2])
+    weight = jnp.concatenate([sphere.weight, sphere.weight])
+    nonzero = g2 > 1.0e-12
+    denominator = jnp.where(g2 + agg0 > 0.0, g2 + agg0, 1.0)
+    scale = fpi_e2 * 0.5 * volume
+
+    def dot(a, b):
+        return scale * jnp.sum(weight * a * b)
+
+    def screened(v):
+        """``|G|^2 (alpha v)(G)``: one transform pair on the grid."""
+        field = alpha * _field_of(to_complex(v), sphere, grid)
+        return g2 * to_real(_half_of(field, sphere, grid))
+
+    def operator(v):
+        """``4 pi e2 v + |G|^2 (alpha v)``, the system's left-hand side."""
+        return fpi_e2 * v + screened(v)
+
+    # ``drho%of_g(1,1) = 0`` and then ``dv = |G|^2 (alpha drho)(G)``.
+    dv = jnp.where(nonzero, screened(jnp.where(nonzero, to_real(drho), 0.0)), 0.0)
+    first = dv / denominator
+    index = jnp.arange(mmx)
+    eye = jnp.eye(mmx, dtype=real)
+    zero = jnp.zeros((), dtype=real)
+    state = (jnp.zeros((mmx, 2 * nh), dtype=real).at[0].set(first),
+             jnp.zeros((mmx, 2 * nh), dtype=real), jnp.zeros((mmx, mmx), dtype=real),
+             jnp.zeros((mmx,), dtype=real), jnp.int32(0), jnp.int32(0), first, zero,
+             jnp.int32(0), zero, jnp.bool_(False))
+
+    def body(state):
+        V, W, aa, bb, m, refreshed, best, target, steps, error, _ = state
+        w = operator(V[m])
+        W = W.at[m].set(w)
+        live = index <= m
+        row = jnp.where(live, scale * (W @ (weight * w)), 0.0)
+        aa = aa.at[m, :].set(row).at[:, m].set(row)
+        bb = bb.at[m].set(dot(w, dv))
+        vec = jnp.linalg.solve(jnp.where(live[:, None] & live[None, :], aa, eye),
+                               jnp.where(live, bb, 0.0))
+        # A direction the operator sends to zero gives the Gram matrix a zero
+        # diagonal, which an LU solve turns into a non-finite vector on a CPU
+        # and need not on a card, so both are tested.
+        ok = jnp.all(jnp.isfinite(vec)) & jnp.all(jnp.where(live, jnp.diag(aa) > 0.0, True))
+        vec = jnp.where(live & ok, vec, 0.0)
+        residue = dv - vec @ W
+        dr2_best = dot(residue, residue)
+        best = jnp.where(ok, vec @ V, best)
+        target = jnp.where(ok & (target == 0.0),
+                           jnp.maximum(1.0e-12, 1.0e-6 * dr2_best), target)
+        full = m + 1 >= mmx
+        stop = (~ok) | (dr2_best < target) | (full & (refreshed >= refreshes))
+        restart = full & ~stop
+        # A restart begins from the best estimate, which keeps the Krylov space
+        # bounded without throwing the answer away; otherwise the next direction
+        # is the residue under the Kerker-like ``1/(|G|^2 + agg0)``.
+        slot = jnp.where(restart, 0, jnp.minimum(m + 1, mmx - 1))
+        V = V.at[slot].set(jnp.where(restart, best, residue / denominator))
+        return (V, W, jnp.where(restart, 0.0, aa), jnp.where(restart, 0.0, bb),
+                jnp.where(restart, 0, m + 1), refreshed + restart.astype(jnp.int32),
+                best, target, steps + 1, jnp.where(ok, dr2_best, error), stop)
+
+    state = jax.lax.while_loop(lambda s: ~s[-1], body, state)
+    best, steps, error = state[6], state[8], state[9]
+    return to_complex(jnp.where(nonzero, best, 0.0)), steps, error
+
+
+@partial(jax.jit, static_argnames=("shape", "grid", "smooth_grid"))
+def _local_tf_apply(vector, density, beta, volume, outer: _ScreeningSphere,
+                    inner: _ScreeningSphere, inner_rows, *, shape, grid, smooth_grid):
+    """:func:`local_tf_preconditioner`'s step on a packed real-space vector."""
+    nspin = shape[0]
+    size = int(np.prod(shape))
+    head = vector[:size].reshape(nspin, -1)
+    rho = density[:size].reshape(nspin, -1)
+
+    def screen(charge, total):
+        # The charge on the dense sphere; its smooth part is solved on the
+        # smooth grid and the shell above it passes through, which is
+        # ``high_frequency_mixing``. Without a smooth grid ``inner_rows`` is the
+        # whole sphere and the shell is empty.
+        coefficients = _half_of(charge, outer, grid)
+        screened, _, _ = _approx_screening2(
+            coefficients[inner_rows], _half_of(total, outer, grid)[inner_rows], inner,
+            volume, grid=smooth_grid)
+        return _field_of(coefficients.at[inner_rows].set(screened), outer, grid)
+
+    if nspin == 1:
+        out = [beta * screen(head[0], rho[0])]
+    elif nspin == 2:
+        charge = screen(head[0] + head[1], rho[0] + rho[1])
+        moment = beta * (head[0] - head[1])
+        out = [0.5 * (beta * charge + moment), 0.5 * (beta * charge - moment)]
+    else:
+        out = [beta * screen(head[0], rho[0])] + [beta * head[c] for c in range(1, nspin)]
+    return jnp.concatenate(out + [beta * vector[size:]])
+
+
+def local_tf_preconditioner(gvectors, cell, shape, beta=0.7, smooth=None):
     """``approx_screening2``: Thomas-Fermi screening with a *local* length.
 
     Kerker and ``approx_screening`` screen with one number for the whole cell.
@@ -994,7 +1225,24 @@ def local_tf_preconditioner(gvectors, cell, shape, beta=0.7):
     the same inner product ``rho_ddot`` measures self-consistency in, restarting
     every ``mmx = 12`` directions. That is transcribed rather than replaced by a
     library solve: the metric, the restart and the stopping rule
-    ``max(1e-12, 1e-6 dr2)`` are all part of how it behaves.
+    ``max(1e-12, 1e-6 dr2)`` are all part of how it behaves
+    (:func:`_approx_screening2`, one compiled loop with real transforms).
+
+    **Where it runs.** ``smooth`` is the smooth G-vector set on its own grid
+    (``Basis.smooth``), and given it the solve runs there, as ``pw.x``'s does:
+    ``approx_screening2`` works on ``of_g(:ngm0)`` with ``ngm0 = ngms``, reads
+    ``r_s(r)`` off ``rho_g2r(dffts, ...)``, which fills the smooth sphere on the
+    smooth grid, and leaves the shell between ``ngms`` and ``ngm`` to
+    ``high_frequency_mixing``, so here the shell of the charge takes the plain
+    ``beta``. ``None`` solves on ``gvectors`` itself, the dense set. At dual 4
+    the two are the same set on the same grid. Above it they are not the same
+    preconditioner. On the cobalt film of
+    ``tests/data/qe/co-slab-forcetheorem-sr.in`` (dual 8) the dense solve takes 58
+    to 60 steps, 27 of 29 calls at the bound, and the smooth one 21 to 60, median
+    39, one call of 36 at the bound, on a grid a third the size; but the SCF
+    takes 37 iterations with it under the flat Anderson fit against the dense
+    solve's 30, and 23 under ``pw.x``'s whole recipe (the G layout and the
+    ``rho_ddot`` fit), against ``pw.x``'s 24 (``PLAN.md`` P59).
 
     ``beta`` multiplies the result, as it does for Kerker, and for the same
     reason -- at large ``|G|`` the operator tends to the identity, so the
@@ -1005,102 +1253,37 @@ def local_tf_preconditioner(gvectors, cell, shape, beta=0.7):
     Only the *charge* is screened; the magnetization, ``becsum``, ``ns`` and
     ``tau`` take the plain ``beta``, exactly as in
     :func:`kerker_preconditioner` and for the argument given there.
+
+    **Memory**: the Krylov space is ``2 x 12`` real vectors of twice the half
+    sphere's length, which is ``24 x 16 nh`` bytes with ``nh = (ngm0 + 1) / 2``,
+    plus a few real fields and half boxes of the grid it runs on.
     """
-    import jax.numpy as jnp
-
-    grid = gvectors.grid
-    size = int(np.prod(shape))
-    nspin = shape[0]
-    index = gvectors.fft_index
-    g2 = np.asarray(gvectors.kinetic(cell))
+    grid = tuple(int(n) for n in gvectors.grid)
+    shape = tuple(int(n) for n in shape)
+    if shape[1:] != grid:
+        raise ValueError(f"the density's shape {shape} is not (nspin,) + the grid {grid}")
+    rows, outer = _screening_sphere(gvectors, cell)
+    if smooth is not None and tuple(smooth.grid) == grid and smooth.ngm == gvectors.ngm:
+        smooth = None  # dual 4: the smooth set is the dense one
+    if smooth is None:
+        smooth_grid, inner, inner_rows = grid, outer, np.arange(rows.size)
+    else:
+        smooth_grid = tuple(int(n) for n in smooth.grid)
+        dense_miller = np.asarray(gvectors.miller)
+        smooth_miller = np.asarray(smooth.miller)
+        ngms = smooth_miller.shape[0]
+        if ngms > dense_miller.shape[0] or np.any(dense_miller[:ngms] != smooth_miller):
+            raise ValueError("the smooth G-vectors are not a prefix of the dense ones")
+        smooth_rows, inner = _screening_sphere(smooth, cell)
+        # Both halves choose the same representative of a pair, so the smooth
+        # one is a subset of the dense one row for row.
+        where = np.full(dense_miller.shape[0], -1)
+        where[rows] = np.arange(rows.size)
+        inner_rows = where[smooth_rows]
+        if np.any(inner_rows < 0):
+            raise AssertionError("a smooth representative is not a dense one")
+    inner_rows = jnp.asarray(inner_rows)
     volume = float(cell.volume)
-    points = int(np.prod(grid))
-    # ``e2 = 2`` in Rydberg atomic units, so ``fpi * e2 = 8 pi``.
-    fpi_e2 = 4.0 * np.pi * 2.0
-    # ``gstart``: the metric and the operator both skip G = 0.
-    nonzero = g2 > 1.0e-12
-    weight = np.zeros_like(g2)
-    weight[nonzero] = 1.0 / g2[nonzero]
-
-    @jax.jit
-    def _to_sphere(field):
-        return jnp.fft.fftn(field.reshape(grid)).reshape(-1)[index] / points
-
-    @jax.jit
-    def _to_grid(coefficients):
-        box = jnp.zeros(points, dtype=coefficients.dtype).at[index].set(coefficients)
-        return jnp.real(jnp.fft.ifftn(box.reshape(grid))).reshape(-1) * points
-
-    def _alpha(charge):
-        """``alpha(r)`` and ``agg0``, the cell-averaged screening it falls back on."""
-        magnitude = np.abs(np.asarray(charge).reshape(-1))
-        dense = magnitude > LOCAL_TF_EPS
-        radius = np.zeros_like(magnitude)
-        radius[dense] = (3.0 / (4.0 * np.pi * magnitude[dense])) ** (1.0 / 3.0)
-        # ``avg_rsm1`` is the *harmonic* mean of r_s over the grid: QE sums
-        # 1/r_s and divides the point count by it, so a vacuum point -- with a
-        # huge r_s and a negligible 1/r_s -- pulls the average almost not at
-        # all. A plain mean would let the vacuum dominate the fallback.
-        inverse = np.sum(1.0 / radius[dense]) if np.any(dense) else 0.0
-        average = points / inverse if inverse > 0.0 else np.inf
-        agg0 = (12.0 / np.pi) ** (2.0 / 3.0) / average
-        alpha = 3.0 * (2.0 * np.pi / 3.0) ** (5.0 / 3.0) * radius
-        return jnp.asarray(alpha), float(agg0)
-
-    def _screen(residual_charge, density_charge):
-        alpha, agg0 = _alpha(density_charge)
-
-        def operator(v):
-            """``4 pi e2 v + |G|^2 (alpha v)``, the system's left-hand side."""
-            return fpi_e2 * v + g2 * _to_sphere(alpha * _to_grid(v))
-
-        drho = _to_sphere(jnp.asarray(np.asarray(residual_charge).reshape(-1)))
-        dv = g2 * _to_sphere(alpha * _to_grid(drho))
-        dv = dv.at[~nonzero].set(0.0)
-
-        def dot(a, b):
-            return float(
-                fpi_e2 * 0.5 * volume * jnp.sum(weight * jnp.real(jnp.conj(a) * b))
-            )
-
-        directions = [dv / (g2 + agg0)]
-        applied, aa, bb = [], [], []
-        target, best, refreshes = 0.0, None, 0
-        while True:
-            applied.append(operator(directions[-1]))
-            m = len(applied)
-            aa = np.pad(np.asarray(aa).reshape(m - 1, m - 1), ((0, 1), (0, 1))) \
-                if m > 1 else np.zeros((1, 1))
-            for i in range(m):
-                aa[i, m - 1] = aa[m - 1, i] = dot(applied[i], applied[m - 1])
-            bb = np.append(np.asarray(bb), dot(applied[m - 1], dv))
-            try:
-                vec = np.linalg.solve(aa, bb)
-            except np.linalg.LinAlgError:
-                # A dependent direction: keep the best estimate so far rather
-                # than failing the whole SCF iteration for a preconditioner.
-                break
-            if not np.all(np.isfinite(vec)):
-                break
-            best = sum(c * v for c, v in zip(vec, directions))
-            residue = dv - sum(c * w for c, w in zip(vec, applied))
-            error = dot(residue, residue)
-            if target == 0.0:
-                target = max(1.0e-12, 1.0e-6 * error)
-            if error < target:
-                break
-            if m >= LOCAL_TF_MMX:
-                if refreshes >= LOCAL_TF_REFRESHES:
-                    break
-                # Restart from the best estimate, which is what keeps the
-                # Krylov space bounded without throwing the answer away.
-                refreshes += 1
-                directions, applied, aa, bb = [best], [], [], []
-                continue
-            directions.append(residue / (g2 + agg0))
-        if best is None:
-            best = directions[0]
-        return _to_grid(best.at[~nonzero].set(0.0))
 
     def preconditioner(residual, density=None):
         if density is None:
@@ -1108,29 +1291,11 @@ def local_tf_preconditioner(gvectors, cell, shape, beta=0.7):
                 "local-TF is a density-dependent preconditioner and was called "
                 "without one; Mixer.step passes it"
             )
-        flat = jnp.asarray(np.asarray(residual).ravel())
-        rho = np.asarray(density).ravel()[:size].reshape(shape)
-        head = flat[:size].reshape(shape)
-        if nspin == 1:
-            out = [_screen(head[0], rho[0])]
-        elif nspin == 2:
-            charge, moment = head[0] + head[1], head[0] - head[1]
-            charge = _screen(charge, rho[0] + rho[1])
-            moment = beta * moment.reshape(-1)
-            out = [0.5 * (beta * charge + moment), 0.5 * (beta * charge - moment)]
-            return np.asarray(
-                jnp.concatenate([jnp.concatenate(out), beta * flat[size:]])
-            )
-        else:
-            out = [beta * _screen(head[0], rho[0])] + [
-                beta * head[c].reshape(-1) for c in range(1, nspin)
-            ]
-            return np.asarray(
-                jnp.concatenate([jnp.concatenate(out), beta * flat[size:]])
-            )
-        return np.asarray(
-            jnp.concatenate([beta * out[0], beta * flat[size:]])
-        )
+        residual = jnp.asarray(np.asarray(residual).ravel())
+        density = jnp.asarray(np.asarray(density).ravel())
+        return np.asarray(_local_tf_apply(
+            residual, density, beta, volume, outer, inner, inner_rows, shape=shape,
+            grid=grid, smooth_grid=smooth_grid))
 
     return preconditioner
 
@@ -1784,22 +1949,68 @@ def kerker_preconditioner_g(layout: SphereLayout, cell, beta=0.7, screening=None
     return preconditioner
 
 
-def local_tf_preconditioner_g(layout: SphereLayout, dense: GVectors, cell, beta=0.7):
-    """:func:`local_tf_preconditioner` on a :class:`SphereLayout`, on ``pw.x``'s sphere.
+def local_tf_preconditioner_g(layout: SphereLayout, smooth: GVectors, cell, beta=0.7):
+    """:func:`local_tf_preconditioner` on a :class:`SphereLayout`, on ``pw.x``'s sphere and grid.
 
     ``approx_screening2(drho, rhobest)`` works on ``mix_type`` objects, so both
     the residual it screens and the density it reads ``r_s(r)`` from are their
-    ``of_g(:ngm0)``: the smooth sphere, the shell included in neither. The
-    real-space solver is reused unchanged with its own transforms, built on the
-    smooth sphere's G-vectors placed in the dense box, so its Krylov space and
-    its Coulomb metric run over ``ngm0`` as ``pw.x``'s do; the residual and the
-    density go to the box from their stored smooth halves, and the screened
-    charge comes back the same way. Everything after the density takes ``beta``.
+    ``of_g(:ngm0)``: the smooth sphere, the shell included in neither, on the
+    smooth grid ``dffts``. That is what the layout stores, so the solve takes the
+    stored coefficients as they are, moved from the layout's representative of
+    each pair (``ggen``'s, :func:`_half_sphere`) to the one ``rfftn`` keeps
+    (:func:`_rfft_half`) by a permutation and a conjugation, and nothing is
+    transformed on the dense box. ``smooth`` is ``Basis.smooth``, the smooth set
+    on its own grid. Everything after the density takes ``beta``.
     """
-    smooth = GVectors(miller=dense.miller[:layout.ngms], grid=dense.grid,
-                      ecut=dense.ecut, gamma_only=dense.gamma_only)
-    screen = local_tf_preconditioner(smooth, cell, layout.shape, beta)
+    miller = np.asarray(smooth.miller)
+    if miller.shape[0] != layout.ngms:
+        raise ValueError(
+            f"local-TF on the stored sphere needs the smooth set of {layout.ngms} "
+            f"G-vectors, and was given {miller.shape[0]}"
+        )
+    stored = miller[np.flatnonzero(_half_sphere(miller))]
+    if stored.shape[0] != layout.nsmooth:
+        raise AssertionError("the layout's half of the smooth sphere is not ggen's")
+    rows, sphere = _screening_sphere(smooth, cell)
+    base = 2 * int(np.max(np.abs(miller))) + 1
+
+    def key(m):
+        m = m + base // 2
+        return (m[:, 0] * base + m[:, 1]) * base + m[:, 2]
+
+    order = np.argsort(key(stored))
+    sorted_keys = key(stored)[order]
+
+    def find(m):
+        at = np.clip(np.searchsorted(sorted_keys, key(m)), 0, sorted_keys.size - 1)
+        return order[at], sorted_keys[at] == key(m)
+
+    # Each row the solver keeps is G or -G of exactly one stored entry.
+    index, same = find(miller[rows])
+    flipped, opposite = find(-miller[rows])
+    if np.any(~(same | opposite)):
+        raise AssertionError("a smooth G-vector has no stored representative")
+    index = np.where(same, index, flipped)
+    conjugate = ~same
+    if np.unique(index).size != index.size:
+        raise AssertionError("two solver rows map onto one stored entry")
+    smooth_grid = tuple(int(n) for n in smooth.grid)
+    volume = float(cell.volume)
     size = int(np.prod(layout.stored_shape))
+    nspin = layout.nspin
+
+    def solve(charge, total):
+        """The screened charge, complex, in the layout's order."""
+        def to_solver(c):
+            c = c[index]
+            return jnp.asarray(np.where(conjugate, np.conj(c), c))
+
+        screened, _, _ = _approx_screening2(to_solver(charge), to_solver(total), sphere,
+                                            volume, grid=smooth_grid)
+        screened = np.asarray(screened)
+        out = np.empty_like(charge)
+        out[index] = np.where(conjugate, np.conj(screened), screened)
+        return out
 
     def preconditioner(residual, density=None):
         if density is None:
@@ -1808,12 +2019,18 @@ def local_tf_preconditioner_g(layout: SphereLayout, dense: GVectors, cell, beta=
                 "without one; Mixer.step passes it"
             )
         residual = np.asarray(residual).ravel()
-        density = np.asarray(density).ravel()
-        head = np.asarray(layout.field(residual[:size])).ravel()
-        rho = np.asarray(layout.field(density[:size])).ravel()
-        screened = np.asarray(screen(head, rho)).reshape(layout.shape)
+        head = layout.unpack(residual[:size])
+        rho = layout.unpack(np.asarray(density).ravel()[:size])
         out = beta * residual
-        out[:size] = layout.stored_of(screened).ravel()
+        if nspin == 2:
+            # Only the charge is screened, as in the real-space form.
+            charge = beta * solve(head[0] + head[1], rho[0] + rho[1])
+            moment = beta * (head[0] - head[1])
+            pair = np.stack([0.5 * (charge + moment), 0.5 * (charge - moment)])
+            out[:size] = layout.pack(pair)[0].ravel()
+        else:
+            charge = beta * solve(head[0], rho[0])
+            out[:layout.ngms] = layout.pack(charge[None])[0].ravel()
         return out
 
     return preconditioner

@@ -32,7 +32,8 @@ remaining Hubbard refusal, which was as wide as the field's had been and is **cl
 
 **Parts VIII and IX** are from the workstation, **2026-09-14** and **2026-09-15**. What is
 left open in them is the two that are measurements rather than fixes: `local-TF`'s 730 s
-an iteration, unprofiled, and the `pp.x` reference pair P90 owes. The two defects are
+an iteration, whose routine was rewritten 2026-10-05 and whose NiBr2 run is still to be
+repeated, and the `pp.x` reference pair P90 owes. The two defects are
 closed -- a resume that spent a whole Davidson budget on bands nothing reads (Part VIII
 item 3, **closed 2026-09-15**), and a bias window integrated with no check that the axis
 resolves the broadening (Part IX item 1).
@@ -3634,7 +3635,7 @@ dropped with a `RuntimeWarning` when the count does not match, which is exactly 
 behaviour every resume had until today, and the guard has a test that trips it rather than
 a clean pass that cannot be told from silence.
 
-### 4. `local-TF` costs about 730 s an iteration on a 3.5-million-G-vector dense grid **[opened 2026-09-14, from the NiBr2 helix run; unprofiled; re-checked 2026-10-03, the routine unchanged since `375af59` and all four properties below still as described]**
+### 4. `local-TF` costs about 730 s an iteration on a 3.5-million-G-vector dense grid **[opened 2026-09-14, from the NiBr2 helix run; unprofiled; the routine rewritten 2026-10-05, the NiBr2 run not repeated]**
 
 **The evidence is an A/B and a fit, which is the right order.** `nibr2_k161_localtf.scf.in`
 differs from `nibr2_k161_anderson.scf.in` in exactly one line, `mixing_mode`: same geometry,
@@ -3693,6 +3694,18 @@ the cobalt film, the same algorithm is **31 ms** a call in `pw.x`'s `mix_rho` ag
 Kerker's. What changed the item's weight: `mixing_mode = 'ldos'` is now the mode a metal film
 should use (20 iterations on that film where `local-TF` takes 30 here and 24 in `pw.x`), so this
 cost reaches only an input that asks for `local-TF` by name, which every `pw.x` slab input does.
+
+**Changed 2026-10-05, and the item stays open on the NiBr2 number alone** (`PLAN.md` P59's
+addendum, `PERFORMANCE.md` "local-TF as one compiled loop"). The solve is now one compiled loop
+with real transforms, and it runs on the smooth sphere and grid as `pw.x`'s does. The four
+properties listed above are gone: no Python loop, no host sync until the loop ends, `alpha` built
+on the device, and the call is a single dispatch. Measured on D22, one core: the cobalt film's
+call from 340 to 19 ms (`pw.x`'s whole `mix_rho` 31), and the 3.3-million-point synthetic slab's
+from 11.06 to 2.76 s, at 36 and 34 steps, so the "about 120 FFT pairs" above was a time divided
+by a pair, not a count. None of this reproduces 730 s an iteration either, so **what is left is
+one run of `nibr2_k161_localtf.scf.in` on Triton with this code**, reading the per-iteration time
+against the `anderson` law in the table above; on that PAW cell the solve also moves to the
+smooth grid, which is smaller than the dense one by about `(dual/4)^1.5`.
 
 ---
 

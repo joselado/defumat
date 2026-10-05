@@ -10510,3 +10510,59 @@ and one `memory_analysis()` on a card answers it. The inner solve holds four vec
 dense sphere's complex coefficients and `D` on the grid, about `4 x 16 ngm + 8 n1 n2 n3` bytes,
 110 MB at 3.3 million points. This is not a deviation from `pw.x`'s memory strategy, which has no
 such mixer; it is ABINIT's `iprcel = 200` and DFTK's `LdosMixing`, neither timed here.
+
+## local-TF as one compiled loop, on `pw.x`'s grid (CPU, 2026-10-05)
+
+`PLAN.md` P59 (its addendum of this date) and `OPEN.md` Part VIII item 4. `approx_screening2`'s
+Krylov solve was a Python loop that dispatched two jitted transforms a step, synced to the host
+for every entry of its Gram matrix and formed each combination as a separate eager operation. It
+is now one `lax.while_loop` on the coefficients `rfftn` keeps, with real transforms, and it runs
+on the smooth sphere and the smooth grid, as `pw.x`'s does; the shell above the smooth sphere
+takes `beta`.
+
+**The pair**, the cobalt film as committed (`tests/data/qe/co-slab-forcetheorem-sr.in`, three
+Co(0001) layers, ultrasoft PBE at dual 8, `nspin = 2`, 12x12x1, `beta = 0.7`,
+`conv_thr = 1e-10`), on one performance core of `D22-0161` (`taskset -c 0`, `OMP_NUM_THREADS=1`,
+`DEFUMAT_THREADS=off`, `JAX_PLATFORMS=cpu`), nothing else on the machine, each arm a fresh
+process with the kernel cache warm, two passes and the second read (the passes agree to 0.7 s
+for this code and 0.4 s for `pw.x`). `pw.x` is the serial 7.5 build and its figure its own
+`PWSCF ... WALL`; this code's is the whole `get_scf()`, setup included, and the call is the
+median of that run's calls after the first. All arms land on -223.13884424 Ry.
+
+| | iterations | whole run (s) | per iteration (s) | one local-TF call (ms) |
+|---|---|---|---|---|
+| `pw.x` 7.5, `local-TF` | 24 | **41.1** | 1.71 | 31, its whole `mix_rho` (P129) |
+| committed loop, dense grid | 30 | 105.8 | 3.53 | 340 |
+| compiled, dense grid | 30 | 99.0 | 3.30 | 85 |
+| **compiled, smooth grid (the default now)** | 37 | 114.5 | 3.10 | **19** |
+| compiled, smooth grid, G layout, `rho_ddot` fit | 23 | 79.3 | 3.45 | 17 |
+
+**A call is 18 times cheaper and below `pw.x`'s whole mixer, and the run is slower**, 2.79x
+`pw.x` where it was 2.57x, because on this film the smooth grid costs this code's flat Anderson
+fit seven iterations (`PLAN.md` P59 has the counts at three vacuum widths). That trade is the
+user's decision of 2026-10-05, taken with the table in hand. **Per iteration it is 1.81x `pw.x`
+against 2.06x, and the preconditioner is no longer the gap**: 19 ms of 3.10 s. What is left is
+the base iteration, `TF`'s 2.98 s in "Cells with vacuum", not decomposed. `pw.x`'s whole recipe
+(its grid, the G layout and `rho_ddot` over `ngms`) is the fastest arm, 23 iterations and 1.93x
+`pw.x`, which bears on the pending `rho_ddot` decision (`VACUUM-MIXING-NEXT.md` P-C).
+
+**On the 3.3-million-point synthetic slab** of `tools/vacuum_sweep/prec_cost.py` (243x60x225,
+dual 4, so the two grids are one), D22 core 0, median of five after a compiling call: **11.06 s
+a call committed against 2.76 s compiled**, in 36 and 34 steps (the committed count from
+`tests/unit/test_local_tf.py`'s transcription reading the raw density, as the committed loop
+did; the compiled loop reads its projection on the sphere). So the earlier record's "about 120
+FFT pairs" was a time divided by the cost of a pair and not a count: the committed loop's 37
+pairs at 0.091 s were 3.4 s of its 11.06, and the rest was the loop around them. A step is now
+79 ms against 299. `prec_cost.py` fails on master in its LDOS half (`'LDOSPreconditioner' object
+has no attribute 'matvecs'`), so these were taken with its setup and its first three timings.
+
+**Where a step goes now**, on the workstation's core 0 (Core Ultra 5, not D22) and the film's
+dense grid: 3.1 ms a step against 1.65 ms for a real transform pair (2.97 ms complex). What else
+a step does is three products with the `(12, 2 nh)` buffers and the gather and scatter between
+the sphere and the half box, not timed apart. On the smooth grid a step is about 0.84 ms.
+
+**Memory.** The Krylov space is `24 x 16 nh` bytes with `nh = (ngm0 + 1) / 2`, half of the
+`24 x 16 ngm` the Python loop's two lists of complex sphere vectors reached, plus a few real
+fields and half boxes of the grid it runs on; on the smooth grid both shrink by about
+`(dual/4)^1.5`. On the film it is 3.0 MB against 16.8. This follows `pw.x`, whose `v(ngm0, mmx)`
+and `w(ngm0, mmx)` are the same space over the whole smooth sphere.

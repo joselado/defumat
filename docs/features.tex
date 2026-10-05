@@ -863,7 +863,9 @@ of
   \qquad \alpha(\mathbf r) = 3\left(\tfrac{2\pi}{3}\right)^{5/3} r_s(\mathbf r),
 \end{equation*}
 with $(\alpha f)$ multiplied in \emph{real} space, so the operator is not
-diagonal in $\mathbf G$ and is inverted iteratively at each step. On a cobalt
+diagonal in $\mathbf G$ and is inverted iteratively at each step. As in
+\code{pw.x}, the solve runs on the smooth sphere and the smooth FFT grid, and on an
+ultrasoft or PAW run the shell between the two cutoffs takes the plain $\beta$. On a cobalt
 film it converges at \code{mixing\_beta = 0.7} where plain Anderson at the same
 $\beta$ diverges and Kerker at $0.3$ is still far out after 250 iterations.
 
@@ -913,7 +915,7 @@ insulator, with nothing to choose. The second term keeps the electron count. On 
 aluminium slab it takes 10 iterations at both vacua in the table, and on three Co(0001)
 layers at $\beta = 0.7$ (\code{tests/data/qe/co-slab-forcetheorem-sr.in}) it takes 20
 to 22 at every vacuum from 21 to 59 bohr, where \code{pw.x} takes 24 with \code{local-TF},
-\code{local-TF} here 24 to 35, \code{TF} 37 to 74, and \code{anderson} does not converge
+\code{local-TF} here 26 to 40, \code{TF} 37 to 74, and \code{anderson} does not converge
 in 150. Each iteration pays an inner conjugate-gradient solve of about 10 to 40 Hartree
 applications, one FFT pair each.
 \begin{verbatim}

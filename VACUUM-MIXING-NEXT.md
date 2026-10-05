@@ -358,7 +358,11 @@ for a run that does not ask for `'ldos'`. The user's decision.
 P-A replaces `local-TF` as the slab recommendation, this matters only for inputs that ask for
 `local-TF` by name. The probe in section 3 does not reproduce the 730 s (11.1 s for one call
 on 3.3 million points, one core), so the first step there is still the profile that item
-asks for, on the NiBr2 cell itself.
+asks for, on the NiBr2 cell itself. **Done in part 2026-10-05** (`PLAN.md` P59's addendum): the
+solve is one compiled loop on `pw.x`'s smooth grid, 2.76 s on the same 3.3 million points and
+19 ms a call on the film against 340; the film's `local-TF` count under the flat fit moves to
+26, 37, 40 at the three vacua, and `pw.x`'s whole recipe (its grid, the G layout, `rho_ddot`)
+takes 21, 23, 33, which is new evidence for P-C. The NiBr2 run itself is still to repeat.
 
 ## 6. Not measured
 

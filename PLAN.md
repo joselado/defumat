@@ -11314,6 +11314,65 @@ rather than assumed -- the two preconditioners differ **more in the vacuum than
 in the metal**, which is the whole of what a local screening length buys and
 which no energy comparison would show.
 
+**The solve as one compiled loop, on `pw.x`'s grid (2026-10-05; `OPEN.md` Part VIII
+item 4).** The Python loop dispatched two jitted transforms a step, synced to the host for
+every entry of the Gram matrix and formed each combination as a separate eager operation. It
+is now `_approx_screening2`, one `lax.while_loop` with the Krylov space in two `(12, 2 nh)`
+real buffers, on the coefficients of one G of each `(G, -G)` pair as `rfftn` stores them
+(real and imaginary parts side by side, since every coefficient the method forms is real), with
+real transforms. On the same grid it is the transcription to round-off: on the 29 calls
+captured from the cobalt film's SCF (`tests/data/qe/co-slab-forcetheorem-sr.in`) the screened
+residual agrees with the committed loop to 9e-14 to 3e-12 relative, the `becsum` tail bit for
+bit, and the SCF takes the same 30 iterations to the same energy. `tests/unit/test_local_tf.py`
+keeps the old loop as a literal transcription and checks the new one against it step for step,
+through a restart and through the cap, and against the closed form a uniform density admits,
+`v = G^2 alpha drho / (8 pi + G^2 alpha)`. The singular-system guard tests the Gram diagonal
+as well as the solve's finiteness, since only the CPU's LU is known to return a non-finite
+vector for a zero pivot.
+
+**And the grid is now `pw.x`'s, which it had not been.** `approx_screening2` acts on
+`of_g(:ngm0)` with `ngm0 = ngms` and reads `r_s(r)` off `rho_g2r(dffts, ...)`, whose
+`fftx_oned2threed` fills `desc%ngm` coefficients, the smooth sphere on the smooth grid; the
+shell is `high_frequency_mixing`'s, at `alphamix`. This code had solved on the whole dense set
+on the dense box (the G layout on the smooth sphere, but in the dense box). Now
+`local_tf_preconditioner(..., smooth=Basis.smooth)` solves on the smooth sphere and grid and
+passes the charge's shell through at `beta`, and `local_tf_preconditioner_g` solves on the
+stored coefficients with no transform of the dense box. At dual 4 nothing changes. On the film
+(dual 8, dense grid 24x24x216, smooth 15x15x160) the dense solve took 58 to 60 steps, 27 of 29
+calls at the 60-step bound, and the smooth one takes 21 to 60, median 39, one of 36 at the
+bound. Neither half of the change does that alone: on the dense sphere a density floored at
+1e-7 or filtered to the smooth sphere takes 44 to 60 steps, and the smooth sphere with the
+dense density 39 to 59.
+
+**It costs iterations under this code's flat Anderson fit, and that is the user's choice,
+made with the table below in hand (2026-10-05).** All arms land on the same energy:
+
+| local-TF solve | layout, fit | Co, 21 bohr | 40 bohr (as committed) | 59 bohr |
+|---|---|---|---|---|
+| dense (before) | real space, flat | 24 | 30 | 35 |
+| smooth (now) | real space, flat | 26 | 37 | 40 |
+| dense (before) | real space, `rho_ddot` | 20 | 24 | 26 |
+| smooth | real space, `rho_ddot` | | 26 | |
+| smooth | G, flat | | 36 | |
+| smooth | G, `rho_ddot` | 21 | **23** | 33 |
+| `pw.x` 7.5 | | | 24 | |
+
+The dense flat counts at 21 and 59 bohr and the dense `rho_ddot` count at 40 are P129's; the
+rest were measured on the workstation four arms at a time across both kinds of core, so a
+difference of one or two is not evidence (`CLAUDE.local.md`: the two kinds of core differ in
+the last bit). `pw.x`'s whole recipe (its grid, the G layout and `rho_ddot` over `ngms`) takes
+23 against `pw.x`'s 24, the closest this film has come to `pw.x`'s count, which bears on the
+pending P-C decision (`VACUUM-MIXING-NEXT.md`) and does not decide it; at 59 bohr the same
+recipe takes 33 against the dense solve's 26.
+
+**What the call costs and what it does not explain.** On D22, one performance core, the second
+of two passes: the committed loop 340 ms a call and 105.8 s for the film's 30 iterations; the
+compiled loop on the dense grid 85 ms and 99.0 s; on the smooth grid 19 ms and 114.5 s for 37,
+3.10 s an iteration; `pw.x`'s whole `mix_rho` 31 ms (P129) and its run 41.1 s for 24, 1.71 s an
+iteration. So the preconditioner now costs what `pw.x`'s does, and the 1.8x per iteration that
+is left is the base iteration, not the mixer (`PERFORMANCE.md`, "local-TF as one compiled
+loop").
+
 ### P60 — The magnetic torque: the anisotropy as a derivative rather than a difference. ✅ DONE.
 
 `defumat/forces/torque.py`, `run_torque`, `Calculator.get_torque`,
