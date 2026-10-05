@@ -66,8 +66,12 @@ the CPU, in four kinds:
 * **a fixture placed by the CPU's rounding** (1): `test_magnetic_fields.py`'s polar-angle case
   needs a residue that the card rounds to exactly zero.
 
-Making the gate portable (pin the platform where a test is about a CPU default, a relative bound
-where it is about round-off) is not done; it is the user's call whether the card gate is wanted.
+**Made portable the same day, at the user's request** (`tests/backend.py`: `on_a_cpu` pins
+`batching._backend` where a test's claim is a CPU default, `assert_same` asks for the same bits on
+a CPU and round-off on a card; two bounds made relative, a transposed dot accepted, the polar-angle
+fixture's residue put in by hand). The gate then reads **2841 passed, 74 skipped, none failed in
+11:59 on the card** (warm cache; the first run's 40:53 was mostly compiling) and 3446 passed on the
+workstation's CPU. Running it on D22 is `review/card_gate.sh`, which leaves out `JAX_PLATFORMS`.
 
 ## Where it stood, 2026-10-04 (master `3f92e8a`, read against the code, nothing measured)
 

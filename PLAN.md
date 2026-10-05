@@ -24097,6 +24097,7 @@ the `jacfwd` of `frozen_polarization` and the per-atom `jvp` of `_constraint_san
 
 **The gate on the card** is the first: the earlier D22 gates all set `JAX_PLATFORMS=cpu`. 19
 failed of 2915, every one a test that assumes the CPU (its defaults, its rounding, its HLO) and
-none a wrong number; the list is in `GPU-SPEED-NEXT.md`. The workstation's gate passed on the
+none a wrong number; the list is in `GPU-SPEED-NEXT.md`. Made portable at the user's request
+(`tests/backend.py`), it then passed whole on the card, 2841 tests in 11:59. The workstation's gate passed on the
 branch (3446 passed), and so did the four slow response files; the new compile-count test fails
 on the commit before its fix.
