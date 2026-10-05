@@ -22,7 +22,8 @@ from defumat.config import subspace_dtype
 from jax.lax.linalg import EighImplementation, eigh as _lax_eigh
 from jax.scipy.linalg import solve_triangular
 
-__all__ = ["generalised_eigh", "rayleigh_ritz"]
+__all__ = ["generalised_eigh", "orthonormality_defect", "orthonormality_tolerance",
+           "rayleigh_ritz"]
 
 
 #: A direction of the overlap below this fraction of its largest eigenvalue is
@@ -159,6 +160,43 @@ def _canonical_route(h, s, parked=None):
 
     values, vectors = _eigh(reduced)
     return values, x @ vectors
+
+
+def orthonormality_defect(s, vectors):
+    """``max |V^H S V - 1|``: how far the returned coefficients are from S-orthonormal.
+
+    **The Cholesky route can succeed and still be wrong**, which is the case
+    :func:`generalised_eigh`'s finiteness guard cannot see. When the overlap's
+    smallest eigenvalue reaches the round-off floor but stays positive, the
+    factor is finite and the reduction ``L^-1 H L^-H`` turns the round-off in
+    ``H`` along the near-null direction into an eigenvalue of order one, of
+    either sign. If it lands below the spectrum it is taken as the lowest root,
+    and its eigenvector is that near-null direction, so its plane-wave vector is
+    close to zero. Measured on a four-atom aluminium cell at ``ethr = 1e-13``
+    from a random start (``tests/unit/test_davidson_zero_root.py``): the overlap
+    reached ``4.9e-16`` against a largest of order one, a root appeared at
+    -0.60 Ry, then -1.08 Ry, 1.07 Ry below the true lowest, with a coefficient
+    vector of norm ``4e7``, and the collapse that followed stored its zero
+    vector under a unit overlap, after which it was a converged root with a
+    zero residual for the rest of the solve. The defect read ``3e-15`` or less
+    on every clean solve of that call and ``1.4e-2`` to ``4.3e-2`` on the three
+    broken ones, so the test has five orders of margin on either side.
+
+    ``vectors`` is ``(m, n)``, the columns taken; ``s`` is the ``(m, m)``
+    overlap the solve was handed, parked rows included.
+    """
+    gram = vectors.conj().T @ s @ vectors
+    return jnp.max(jnp.abs(gram - jnp.eye(gram.shape[0], dtype=gram.dtype)))
+
+
+def orthonormality_tolerance(dtype) -> float:
+    """The largest :func:`orthonormality_defect` a solve in ``dtype`` is trusted at.
+
+    ``sqrt(eps)``: 1.5e-8 in double, 3.5e-4 in single. A clean solve sits at a
+    few ``eps`` and a broken one at order one, so the square root is far from
+    both.
+    """
+    return float(np.sqrt(jnp.finfo(dtype).eps))
 
 
 def _route(route, h, s, parked):

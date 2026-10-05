@@ -1,0 +1,30 @@
+! `al4-metal.in`'s cubic cell on a 5x5x5 grid with no symmetry, which is where
+! the Davidson solve returned a zero eigenvector. A non-self-consistent solve at
+! `k + q`, `q = (0.2, 0, 0)` in units of 2 pi/alat (one grid step, so every
+! `k + q` is another grid point), from a random start and at `ethr = 1e-13`, took
+! the subspace overlap to 4.9e-16; the Cholesky factor stayed finite, a root
+! appeared at -1.08 Ry below a true lowest state of -0.014 Ry, and its vector had
+! zero norm, so every true state moved up one slot. It was k-point 28 of 125 on
+! one machine and 65 on another, since which one breaks is round-off.
+! `tests/regression/test_davidson_zero_root.py` is the test.
+ &control
+    calculation='scf'
+ /
+ &system
+    ibrav=1, celldm(1)=7.5, nat=4, ntyp=1,
+    ecutwfc=15.0, nosym=.true., noinv=.true.,
+    occupations='smearing', smearing='marzari-vanderbilt', degauss=0.05
+ /
+ &electrons
+    conv_thr = 1.0d-12
+    mixing_beta = 0.7
+ /
+ATOMIC_SPECIES
+ Al  26.98 Al.pz-vbc.UPF
+ATOMIC_POSITIONS crystal
+ Al  0.0 0.0 0.0
+ Al  0.0 0.5 0.5
+ Al  0.5 0.0 0.5
+ Al  0.5 0.5 0.0
+K_POINTS automatic
+ 5 5 5 0 0 0
