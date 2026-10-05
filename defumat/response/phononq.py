@@ -55,14 +55,19 @@ transcribed halves (``dvqpsi_us``, ``compute_dvloc``, ``incdrhoscf``,
 
 from __future__ import annotations
 
+import copy
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 
 from defumat.basis.fft import g_to_r, r_to_g
 from defumat.eager import compiled
-from defumat.response.sternheimer import SternheimerSolver, pass_threshold
+from defumat.response.sternheimer import (
+    SternheimerResult, SternheimerSolver, pass_threshold,
+)
 from defumat.scf.occupations import w0gauss, wgauss
+from defumat.scf.streaming import is_host_store
 from defumat.system.cell import Cell
 from defumat.system.kpoints import KPoints
 
@@ -147,6 +152,16 @@ def states_at_k_plus_q(calculation, v_scf, q_cart, nbnd, ethr: float = 1e-13,
     return moved, hamiltonians, np.asarray(eigenvalues), wavefunctions
 
 
+def metallic_rows(eigenvalues, smearing) -> int:
+    """``max_k nbnd_occ(k)``: the bands a metal solves for, the grid's widest cut.
+
+    ``setup_nbnd_occ``'s count, ``eps < ef + xmax degauss``, maximised over k
+    and spin so it is one static width. Host-side, on concrete eigenvalues.
+    """
+    below = np.asarray(eigenvalues) < smearing.cutoff
+    return max(1, int(np.max(np.sum(below, axis=-1))))
+
+
 class TwoSphereSolver(SternheimerSolver):
     """``(H_{k+q} - eps_k S_{k+q} + alpha Q) dpsi = -P_c^{k+q} dV_q |psi_k>``.
 
@@ -170,7 +185,7 @@ class TwoSphereSolver(SternheimerSolver):
     """
 
     def __init__(self, base: SternheimerSolver, hamiltonians_kq, psi_kq,
-                 eigenvalues_kq, calculation_kq):
+                 eigenvalues_kq, calculation_kq, rows: int | None = None):
         # Built from a converged parent rather than from scratch: everything
         # that is a property of the ground state at ``k`` -- the occupied
         # counts, ``alpha_pv``, the weights, the thresholds -- is already
@@ -186,8 +201,32 @@ class TwoSphereSolver(SternheimerSolver):
         # response density are built from.
         self.hamiltonians = tuple(hamiltonians_kq)
         keep = self.psi.shape[2]
-        self.psi_kq = jnp.asarray(psi_kq)[:, :, :keep]
-        self.eigenvalues_kq = jnp.asarray(eigenvalues_kq)[:, :, :keep]
+        if self.smearing is not None:
+            # **A metal solves fewer rows than it projects out.** The rows are
+            # the bands at ``k`` below the cut, ``nbnd_occ(ikk)``, and nothing
+            # past the largest such count over the grid has a right-hand side
+            # (``orthogonalize`` and ``cgsolve_all`` stop at ``nbnd_occ(ikk)``),
+            # so the block is cut there: a static width, the grid's maximum.
+            # The columns are every band at ``k + q``, ``orthogonalize``'s
+            # ``DO jbnd = 1, nbnd``, whose weights fall off with ``wgp`` rather
+            # than at the cut. On ``al-elph-nosym.in`` the cut leaves 1 to 4
+            # bands per k-point of 6, 1.88 on average.
+            # ``rows`` is that count when the caller has it already, as a pass
+            # compiled over a k-chunk must (:func:`metallic_rows`).
+            if rows is None:
+                rows = metallic_rows(self.eigenvalues, self.smearing)
+            self.psi = self.psi[:, :, :rows]
+            self.eigenvalues = self.eigenvalues[:, :, :rows]
+            self.weights = self.weights[:, :, :rows]
+            self.density_weights = self.density_weights[:, :, :rows]
+            self.projector_mask = self.projector_mask[:, :, :rows]
+            self.nocc = rows
+        else:
+            self.psi_kq = jnp.asarray(psi_kq)[:, :, :keep]
+            self.eigenvalues_kq = jnp.asarray(eigenvalues_kq)[:, :, :keep]
+        if self.smearing is not None:
+            self.psi_kq = jnp.asarray(psi_kq)
+            self.eigenvalues_kq = jnp.asarray(eigenvalues_kq)
         # The projector runs over the occupied manifold **at k + q**, and the
         # right-hand side runs over the bands being solved for, **at k**. They
         # are the same count for an insulator with a gap everywhere, but they
@@ -293,13 +332,106 @@ class TwoSphereSolver(SternheimerSolver):
     def _preconditioner(self, ik, spin):
         """``h_prec`` on the second sphere: ``|k+q+G|^2`` and ``evq``."""
         hamiltonian = self.hamiltonians[spin]
-        occupied = self.psi_kq[spin][ik]
+        # ``h_prec``'s ``eprec(ibnd)`` from ``evq(:, ibnd)``: one per solved row.
+        occupied = self.psi_kq[spin][ik][: self.psi.shape[2]]
         kinetic = hamiltonian.state_kinetic[ik]
         expectation = jnp.real(
             jnp.einsum("ng,g,ng->n", jnp.conj(occupied), kinetic, occupied)
         )
         eprec = 1.35 * expectation
         return 1.0 / jnp.maximum(1.0, kinetic[None, :] / eprec[:, None])
+
+    # -- a metal's k-points, grouped by how many bands each one solves -------
+
+    def row_groups(self, spin: int) -> list:
+        """``[(width, k indices)]``: the k-points of one channel by ``nbnd_occ(k)``.
+
+        ``cgsolve_all`` is called with ``nbnd_occ(ikk)`` bands
+        (``response_kernels.f90:261``), a different block at every k-point of a
+        metal. Here each distinct count is one static width and its k-points
+        are solved together at that width, so a k-point with one band below the
+        cut applies ``H`` to one band and not to the grid's widest block: on
+        ``al-elph-nosym.in`` 167, 243, 96 and 6 k-points at widths 1 to 4, 1.88
+        bands a k-point against 4. ``None`` widths for an insulator, whose
+        block is one width already.
+        """
+        cached = self.__dict__.setdefault("_row_groups", {})
+        if spin not in cached:
+            below = np.asarray(self.eigenvalues[spin]) < self.smearing.cutoff
+            counts = np.maximum(1, np.sum(below, axis=-1))
+            cached[spin] = [(int(width), np.flatnonzero(counts == width))
+                            for width in np.unique(counts)]
+        return cached[spin]
+
+    def narrowed(self, width: int) -> "TwoSphereSolver":
+        """This solver with the solved block cut to its first ``width`` rows."""
+        cached = self.__dict__.setdefault("_narrowed", {})
+        if width not in cached:
+            view = copy.copy(self)
+            view.__dict__.pop("_narrowed", None)
+            view.psi = self.psi[:, :, :width]
+            view.eigenvalues = self.eigenvalues[:, :, :width]
+            view.weights = self.weights[:, :, :width]
+            view.density_weights = self.density_weights[:, :, :width]
+            view.projector_mask = self.projector_mask[:, :, :width]
+            view.nocc = width
+            cached[width] = view
+        return cached[width]
+
+    def solve(self, perturbation, start=None, threshold=None) -> SternheimerResult:
+        """:meth:`SternheimerSolver.solve`, a metal's k-points one width at a time.
+
+        Each group of :meth:`row_groups` is one walk over its k-points with the
+        block cut to its width, and the solutions are put back into the whole
+        ``(nk, nocc, npwx)`` array with zero rows past each k-point's count,
+        which is what the whole-width solve returns there. ``perturbation`` is
+        called with the narrowed block and must answer at its width.
+        """
+        if self.smearing is None or is_host_store(self.psi):
+            return super().solve(perturbation, start=start, threshold=threshold)
+        from defumat.batching import map_k
+
+        batch = self.calculation.k_batch
+        level = jnp.asarray(self.threshold if threshold is None else threshold)
+        nk, rows = self.psi.shape[1], self.psi.shape[2]
+        ndim = self.psi_kq.shape[-1]
+        blocks, iterations, residuals = [], [], []
+        for spin in range(self.nspin):
+            groups = self.row_groups(spin)
+            # Sliced here, outside the trace, so the cached views hold arrays.
+            views = [self.narrowed(width) for width, _ in groups]
+            initial = (jnp.zeros((nk, rows, ndim), dtype=self.psi.dtype)
+                       if start is None else jnp.asarray(start[spin]))
+
+            def walk(level, initial, indices, spin=spin, groups=groups,
+                     views=views):
+                out = jnp.zeros((nk, rows, ndim), dtype=initial.dtype)
+                steps, worst = [], []
+                for (width, _), chosen, view in zip(groups, indices, views):
+
+                    def one_k(ik, view=view, width=width):
+                        rhs = view.project(
+                            perturbation(view.psi[spin][ik], ik, spin)[:width],
+                            ik, spin)
+                        return view.solve_at(rhs, ik, spin,
+                                             start=initial[ik][:width],
+                                             threshold=level)
+
+                    dpsi, count, residual = map_k(one_k, chosen, batch=batch)
+                    out = out.at[chosen].set(
+                        jnp.pad(dpsi, ((0, 0), (0, rows - width), (0, 0))))
+                    steps.append(jnp.max(count))
+                    worst.append(jnp.max(residual))
+                return out, jnp.max(jnp.stack(steps)), jnp.max(jnp.stack(worst))
+
+            dpsi, steps, residual = compiled(
+                walk, level, initial,
+                tuple(jnp.asarray(chosen) for _, chosen in groups))
+            blocks.append(dpsi)
+            iterations.append(int(steps))
+            residuals.append(float(residual))
+        return SternheimerResult(dpsi=jnp.stack(blocks), iterations=max(iterations),
+                                 residual=max(residuals))
 
     # -- the density it produces -------------------------------------------
 
@@ -366,8 +498,29 @@ class TwoSphereSolver(SternheimerSolver):
                 )
             return total
 
+        def grouped(psi, dpsi, groups):
+            # A metal's rows past ``nbnd_occ(k)`` hold zeros (:meth:`solve`), so
+            # each group of :meth:`row_groups` is summed at its own width:
+            # ``incdrhoscf``'s ``DO ibnd = 1, nbnd_occ(ikk)``.
+            total = jnp.zeros(grid, dtype=psi.dtype)
+            for spin in range(self.nspin):
+                for (width, _), chosen in zip(self.row_groups(spin), groups[spin]):
+                    total = total + sum_k(
+                        one_k,
+                        (psi[spin][chosen, :width], dpsi[spin][chosen, :width],
+                         index_k[chosen], index_kq[chosen],
+                         self.density_weights[spin][chosen, :width]),
+                        batch=calculation.k_batch,
+                    )
+            return total
+
         # Called once per displacement per iteration with new closures, so it is
         # compiled by its structure (:mod:`defumat.eager`).
+        if self.smearing is not None and not is_host_store(self.psi):
+            groups = tuple(tuple(jnp.asarray(chosen) for _, chosen in
+                                 self.row_groups(spin))
+                           for spin in range(self.nspin))
+            return compiled(grouped, self.psi, dpsi, groups)
         return compiled(summed, self.psi, dpsi)
 
     def finish_response_at_q(self, total) -> jnp.ndarray:
@@ -680,6 +833,20 @@ def self_consistent_response_at_q(
     )
 
 
+def _modes(nat: int, modes):
+    """``modes`` as a list of ``(atom, cart)``, every mode when ``None``."""
+    if modes is None:
+        return [(atom, cart) for atom in range(nat) for cart in range(3)]
+    return list(modes)
+
+
+def _levels(threshold, count: int) -> list:
+    """One CG threshold per mode from a scalar, ``None`` or a list."""
+    if isinstance(threshold, (list, tuple)):
+        return list(threshold)
+    return [threshold] * count
+
+
 class _WholeDisplacementsAtQ:
     """The ``3 nat`` solves at ``q`` with every k-point in one array: the route as it was.
 
@@ -697,37 +864,41 @@ class _WholeDisplacementsAtQ:
         self.iterations = 0
         self.solves = 0
 
-    def respond(self, dvscf, include_induced: bool, threshold=None):
+    def respond(self, dvscf, include_induced: bool, threshold=None, modes=None):
         """One iteration's solves: the complex response density per mode.
 
         Each solve starts from the previous pass's ``dpsi``, zeros on the first
-        (``iudwf``); ``threshold`` is this pass's CG threshold.
+        (``iudwf``). ``modes`` is the ``(atom, cart)`` pairs still being solved,
+        every one when ``None``; ``threshold`` this pass's CG threshold, one
+        value or one per mode in ``modes``.
         """
         solver = self.solver
         response = []
-        for atom in range(self.nat):
-            for cart in range(3):
-                if not include_induced:
-                    perturbation = (
-                        lambda psi, ik, spin, b=self.bare[atom, cart]: b[spin][ik]
-                    )
-                else:
-                    induced = induced_perturbation_at_q(
-                        self.calculation, self.calculation_kq, dvscf[atom, cart]
-                    )
-                    perturbation = (
-                        lambda psi, ik, spin, b=self.bare[atom, cart], f=induced:
-                        b[spin][ik] + f(psi, ik, spin)
-                    )
-                previous = self.dpsi[atom, cart]
-                start = (jnp.zeros_like(self.bare[atom, cart]) if previous is None
-                         else previous)
-                solution = solver.solve(perturbation, start=start,
-                                        threshold=threshold)
-                self.dpsi[atom, cart] = solution.dpsi
-                self.iterations += solution.iterations
-                self.solves += 1
-                response.append(solver.response_density_at_q(solution.dpsi))
+        modes = _modes(self.nat, modes)
+        levels = _levels(threshold, len(modes))
+        for (atom, cart), level in zip(modes, levels):
+            if not include_induced:
+                perturbation = (
+                    lambda psi, ik, spin, b=self.bare[atom, cart]:
+                    b[spin][ik][: psi.shape[0]]
+                )
+            else:
+                induced = induced_perturbation_at_q(
+                    self.calculation, self.calculation_kq, dvscf[atom, cart]
+                )
+                perturbation = (
+                    lambda psi, ik, spin, b=self.bare[atom, cart], f=induced:
+                    b[spin][ik][: psi.shape[0]] + f(psi, ik, spin)
+                )
+            previous = self.dpsi[atom, cart]
+            start = (jnp.zeros_like(self.bare[atom, cart]) if previous is None
+                     else previous)
+            solution = solver.solve(perturbation, start=start,
+                                    threshold=level)
+            self.dpsi[atom, cart] = solution.dpsi
+            self.iterations += solution.iterations
+            self.solves += 1
+            response.append(solver.response_density_at_q(solution.dpsi))
         return response
 
 
@@ -776,47 +947,62 @@ def screening_loop_at_q(
     # per-mode one converges in 11 iterations to ph.x 7.5's frequencies to
     # 5e-4 cm^-1 (``PLAN.md`` EP1).
     mixers = [ResponseMixer(mixing_mode, beta=alpha_mix) for _ in range(3 * nat)]
+    # **And one loop per mode**, which is the rest of ``ph.x``'s: each
+    # representation runs its own ``solve_linter``, with its own CG threshold
+    # from its own ``dr2`` and its own stop. A mode below ``tr2`` keeps the
+    # input it was solved at and is not solved again while the others finish;
+    # on ``al-elph-nosym.in`` at q = (1/4, 0, 0) that is 10, 8 and 8 passes
+    # rather than three times the slowest mode's 11. ``history`` stays the
+    # worst mode's ``|ddv_scf|^2`` per pass, the test the loop as a whole meets.
+    modes = 3 * nat
+    changes = [None] * modes
+    active = list(range(modes))
+    drho = None
     for iteration in range(max_iterations):
+        thresholds = [pass_threshold(displacements.solver,
+                                     [] if changes[index] is None else [changes[index]])
+                      for index in active]
         response = displacements.respond(
-            dvscf, iteration > 0,
-            threshold=pass_threshold(displacements.solver, history))
+            dvscf, iteration > 0, threshold=thresholds,
+            modes=[divmod(index, 3) for index in active])
 
-        drho = stack(response).reshape((nat, 3) + grid_shape)
-        induced = stack([
-            screened(drho[atom, cart])
-            for atom in range(nat) for cart in range(3)
-        ]).reshape(dvscf.shape)
+        if drho is None:
+            drho = xp.zeros((nat, 3) + tuple(np.shape(response[0])), dtype=dtype)
+        for index, field in zip(active, response):
+            atom, cart = divmod(index, 3)
+            drho = _set(drho, (atom, cart), field)
 
-        # ``ph.x``'s ``|ddv_scf|^2`` of the worst single mode, as the Gamma
-        # loop tests it (:data:`defumat.response.phonon.TR2`); the potential is
-        # complex, and ``ndimtot`` counts its entries as two reals each, as at
-        # ``Gamma``. Until 2026-10-03 this was ``max |dV|^2`` over the grid,
-        # about five decades tighter than ``ph.x``'s test on 20^3 silicon.
-        difference = induced - dvscf
-        change = ddv_scf(
-            [difference[atom, cart] for atom in range(nat) for cart in range(3)],
-            joint=False,
-        )
+        # ``ph.x``'s ``|ddv_scf|^2`` of each mode, as the Gamma loop tests it
+        # (:data:`defumat.response.phonon.TR2`); the potential is complex, and
+        # ``ndimtot`` counts its entries as two reals each, as at ``Gamma``.
+        induced = {}
+        for index in active:
+            atom, cart = divmod(index, 3)
+            induced[index] = screened(drho[atom, cart])
+            changes[index] = ddv_scf([induced[index] - dvscf[atom, cart]],
+                                     joint=False)
+        change = max(changes)
         history.append(change)
         if verbose:
-            print(f"  response iteration {iteration + 1}: |ddv_scf|^2 = {change:.3e}")
+            print(f"  response iteration {iteration + 1}: |ddv_scf|^2 = {change:.3e}"
+                  f" ({len(active)} modes)")
         # Tested before mixing, and on convergence the input is kept, as
         # ``mix_potential`` keeps it; ``drho`` is this pass's output density,
         # which is ``ph.x``'s ``drhop`` too.
-        if change < tr2 / calculation.system.npol:
+        limit = tr2 / calculation.system.npol
+        active = [index for index in active if changes[index] >= limit]
+        if not active:
             converged = True
             break
 
-        modes = []
-        for index in range(3 * nat):
+        for index in active:
             atom, cart = divmod(index, 3)
             real, imaginary = mixers[index].mix(
                 [np.real(dvscf[atom, cart]), np.imag(dvscf[atom, cart])],
-                [np.real(induced[atom, cart]), np.imag(induced[atom, cart])],
+                [np.real(induced[index]), np.imag(induced[index])],
                 host=host,
             )
-            modes.append(real + 1j * imaginary)
-        dvscf = stack(modes).reshape(dvscf.shape)
+            dvscf = _set(dvscf, (atom, cart), real + 1j * imaginary)
 
     # The input ``dV_scf`` the last ``dpsi`` was solved at, which on
     # convergence is the one kept (``ph.x``'s ``dvscfins``, what ``elphel``
@@ -829,6 +1015,14 @@ def screening_loop_at_q(
 # ---------------------------------------------------------------------------
 # The ionic second derivative: d2ionq.
 # ---------------------------------------------------------------------------
+
+def _set(array, index, value):
+    """``array[index] = value`` on a numpy or a JAX array, returning the array."""
+    if isinstance(array, np.ndarray):
+        array[index] = np.asarray(value)
+        return array
+    return array.at[index].set(value)
+
 
 def ewald_dynamical_matrix(calculation, q_cart, alpha: float | None = None):
     """``d2ionq``: the Ewald sum's second derivative under a modulated displacement.
@@ -1359,7 +1553,16 @@ def dynamical_matrix_at_q(
     else:
         two = TwoSphereSolver(solver, hamiltonians_kq, psi_kq, eigenvalues_kq, kq)
 
-        bare = bare_displacements_at_q(calculation, kq, two, q_cart, positions)
+        # The coupling's matrix elements run over every band at ``k``
+        # (``elphel``), where a metal's solve stops at its cut, so with
+        # ``keep_internals`` the bare vectors are built on the whole block and
+        # the solve takes their leading rows.
+        whole = bare_displacements_at_q(
+            calculation, kq, solver if keep_internals else two, q_cart, positions)
+        rows = two.psi.shape[2]
+        bare = np.empty_like(whole)
+        for index in np.ndindex(whole.shape):
+            bare[index] = whole[index][:, :, :rows]
         displacements = _WholeDisplacementsAtQ(calculation, kq, two, bare, nat)
         dpsi, drho, history, average, converged = screening_loop_at_q(
             calculation, displacements, density, q_cart,
@@ -1377,8 +1580,9 @@ def dynamical_matrix_at_q(
     frequencies, vectors = _diagonalize_at_q(matrix, np.asarray(structure.masses))
     internals = None
     if keep_internals:
-        internals = {"solver": two, "bare": bare, "calculation_kq": kq,
-                     "dvscf": displacements.dvscf, "q_cart": q_cart}
+        internals = {"solver": two, "bare": whole, "calculation_kq": kq,
+                     "dvscf": displacements.dvscf, "q_cart": q_cart,
+                     "psi": solver.psi, "eigenvalues": solver.eigenvalues}
     return Phonons(
         matrix=matrix.reshape(nat, 3, nat, 3),
         frequencies=frequencies,

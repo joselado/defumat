@@ -156,7 +156,7 @@ def matrix_elements(internals, nat: int):
                     ))
                 return jnp.stack(channels)
 
-            out.append(compiled(walk, solver.psi, solver.psi_kq, bare))
+            out.append(compiled(walk, internals["psi"], solver.psi_kq, bare))
     return np.asarray(jnp.stack(out)).reshape((nat, 3) + out[0].shape)
 
 
@@ -283,7 +283,7 @@ def electron_phonon_at_q(
     if sigmas is None:
         sigmas = el_ph_sigma * np.arange(1, el_ph_nsigma + 1)
     ef, dos, phase, summed, gamma, coupling = elphsum_simple(
-        g, solver.eigenvalues, solver.eigenvalues_kq,
+        g, internals["eigenvalues"], solver.eigenvalues_kq,
         calculation.system.kpoints.weights, calculation.nelec,
         phonons.omega2, displacements, sigmas, ngauss=el_ph_ngauss,
         degeneracy_cmm1=degeneracy_cmm1,

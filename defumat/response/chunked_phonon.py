@@ -303,7 +303,7 @@ class StreamedDisplacements:
                 parts[index] = add(parts[index], chunk_parts)
                 worst[index] = max(worst[index], int(np.max(np.asarray(steps))))
         self.iterations += sum(worst)
-        self.solves += len(self.modes)
+        self.solves += len(modes)
         if self.host_fields:
             response = [np.asarray(solver.finish_density(
                 *jax.tree_util.tree_map(jax.device_put, part))) for part in parts]
@@ -811,21 +811,27 @@ class StreamedDisplacementsAtQ:
                     self._tangent(atom, cart), self.q_cart, self.dij)
                 self.bare[atom, cart][:, written] = np.asarray(bare)[:, :live]
 
-    def respond(self, dvscf, include_induced: bool, threshold=None):
+    def respond(self, dvscf, include_induced: bool, threshold=None, modes=None):
         """One iteration's solves: the complex response density per mode,
         finished. Each chunk starts from its previous solution in the host
-        store (zero before the first pass); ``threshold`` is this pass's CG
-        threshold."""
-        totals = [None] * len(self.modes)
-        worst = [0] * len(self.modes)
+        store (zero before the first pass). ``modes`` is the ``(atom, cart)``
+        pairs still being solved, every one when ``None``; ``threshold`` this
+        pass's CG threshold, one value or one per mode."""
+        from defumat.response.phononq import _levels
+
+        modes = self.modes if modes is None else list(modes)
+        levels = _levels(threshold, len(modes))
+        totals = [None] * len(modes)
+        worst = [0] * len(modes)
         for rows, live in self.chunks:
-            arguments = self._arguments(rows, live, threshold)
+            arguments = self._arguments(rows, live)
             written = rows[:live]
-            for index, (atom, cart) in enumerate(self.modes):
+            for index, (atom, cart) in enumerate(modes):
                 dv = (dvscf[atom, cart] if include_induced
                       else np.zeros_like(dvscf[atom, cart]))
                 dpsi, steps, total = self.passes["respond"](
-                    *arguments, _rows_of(self.bare[atom, cart], rows),
+                    *arguments[:-1], scalars_at(self.scalars, levels[index]),
+                    _rows_of(self.bare[atom, cart], rows),
                     jax.device_put(dv), _rows_of(self.dpsi[atom, cart], rows))
                 self.dpsi[atom, cart][:, written] = np.asarray(dpsi)[:, :live]
                 # Each mode's share of the sum over k is added on the host, in
@@ -834,7 +840,7 @@ class StreamedDisplacementsAtQ:
                 totals[index] = total if totals[index] is None else totals[index] + total
                 worst[index] = max(worst[index], int(np.max(np.asarray(steps))))
         self.iterations += sum(worst)
-        self.solves += len(self.modes)
+        self.solves += len(modes)
         return [np.asarray(self._finish(jax.device_put(total))) for total in totals]
 
     def _finish(self, total):
