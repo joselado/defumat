@@ -1219,8 +1219,12 @@ def require_a_two_sphere_regime(calculation, q_crystal) -> None:
         )
 
 
-def _require_a_metallic_q(cell, q_cart, streamed: bool) -> None:
-    """The two places a metal is refused on this route, each by its term."""
+def _require_a_metallic_q(cell, q_cart) -> None:
+    """Where a metal is refused on this route: at ``q = 0``, by its missing term.
+
+    Both routes, whole and k-chunked, carry the metal branch of the two-sphere
+    projector, so the only refusal left is ``ef_shift``.
+    """
     crystal = np.asarray(cell.k_to_crystal(np.asarray(q_cart) / cell.tpiba))
     if np.max(np.abs(crystal - np.rint(crystal))) < 1.0e-8:
         raise NotImplementedError(
@@ -1229,14 +1233,6 @@ def _require_a_metallic_q(cell, q_cart, streamed: bool) -> None:
             "the number of electrons and the Fermi level moves, which is "
             "ph.x's ef_shift (lmetq0 = lgauss .AND. lgamma), and this route "
             "carries none. Use get_phonons(), which does"
-        )
-    if streamed:
-        raise NotImplementedError(
-            "a metal at q != 0 on the streamed (k-chunked) route is not "
-            "implemented: its chunk solver is built with smearing=None, the "
-            "insulator's sharp projector, so orthogonalize's smeared weights "
-            "at k and k + q would be missing. Run with every k-point resident "
-            "(memory_mode='speed', or a cell whose states fit)"
         )
 
 
@@ -1274,8 +1270,9 @@ def dynamical_matrix_at_q(
 
     ``keep_internals`` attaches the two-sphere solver, the bare perturbations
     and the converged ``dV_scf`` to the result's ``internals``, which is what
-    :mod:`defumat.response.elph` builds the coupling from. Refused on the
-    streamed route, whose states live in host memory a chunk at a time.
+    :mod:`defumat.response.elph` builds the coupling from. On the streamed
+    route they are the host stores (``"displacements"``), and the coupling is
+    walked a chunk at a time from them.
     """
     from defumat.response.phonon import Phonons
     from defumat.response.sternheimer import make_sternheimer
@@ -1304,16 +1301,9 @@ def dynamical_matrix_at_q(
 
     streamed = _streams(calculation, wavefunctions, keep_internals=False,
                         what="the dynamical matrix at q")
-    if keep_internals and streamed:
-        raise NotImplementedError(
-            "the electron-phonon matrix element needs every k-point's response "
-            "resident, and this run walks the k axis a chunk at a time "
-            "(memory_mode='memory' on an accelerator). Run with "
-            "memory_mode='speed', or on a CPU"
-        )
     metal = calculation.system.occupations != "fixed"
     if metal:
-        _require_a_metallic_q(cell, q_cart, streamed)
+        _require_a_metallic_q(cell, q_cart)
     result = _GroundState(wavefunctions, eigenvalues, density, becsum)
     # A metal's Fermi level is re-derived from these eigenvalues by the call
     # the SCF made, as the ``Gamma`` route does (``phonon._fermi_level``).
@@ -1376,7 +1366,10 @@ def dynamical_matrix_at_q(
 
     frequencies, vectors = _diagonalize_at_q(matrix, np.asarray(structure.masses))
     internals = None
-    if keep_internals:
+    if keep_internals and streamed:
+        internals = {"displacements": displacements, "calculation_kq": kq,
+                     "dvscf": displacements.dvscf, "q_cart": q_cart}
+    elif keep_internals:
         internals = {"solver": two, "bare": bare, "calculation_kq": kq,
                      "dvscf": displacements.dvscf, "q_cart": q_cart}
     return Phonons(

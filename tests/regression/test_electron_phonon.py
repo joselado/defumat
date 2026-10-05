@@ -182,3 +182,50 @@ def test_a_metal_at_q_zero_is_refused_by_name():
         calc.get_phonons_at_q((0.0, 0.0, 0.0))
     with pytest.raises(NotImplementedError, match="ef_shift"):
         calc.get_phonons_at_q((1.0, 0.0, 0.0))
+
+
+#: Streamed against whole on one converged state, both loops 13 iterations
+#: with identical histories to the printed digits. Measured 2026-10-05 at
+#: q = (1/4, 0, 0) on this cell: frequencies 1.7e-8 cm^-1, gamma 1.4e-10 GHz,
+#: lambda 1.2e-10, el_ph_sum 6.6e-13, the double delta identical, D(q) 9.3e-12;
+#: on the 4x4x4 cell at q = b_3/2, 1.2e-12 cm^-1 and 6.4e-14 GHz.
+STREAMED_FREQUENCY_TOLERANCE = 1.0e-6
+STREAMED_GAMMA_TOLERANCE_GHZ = 1.0e-8
+STREAMED_LAMBDA_TOLERANCE = 1.0e-8
+
+
+def test_the_k_chunked_coupling_is_the_whole_k_coupling():
+    """The route an accelerator takes in ``memory_mode = 'memory'``, on the CPU.
+
+    The ground state handed in as a host store makes ``dynamical_matrix_at_q``
+    walk the k axis a chunk at a time (one k-point a chunk here), with the
+    metal's smeared two-sphere projector inside each chunk's solve and the
+    matrix elements walked the same way. Only the invariants are compared: a
+    per-band ``g_mn`` is free in the rotation inside a degenerate multiplet at
+    ``k`` or ``k + q`` (rule D4), and the two routes diagonalise ``k + q`` with
+    different compiled programs.
+    """
+    from defumat.response.elph import electron_phonon_at_q
+
+    q, name = REFERENCES["q1"]
+    calc = _calculator("al-elph-nosym")
+    result = calc.get_scf()
+    streamed = electron_phonon_at_q(
+        calc.calculation, np.asarray(result.wavefunctions), result.eigenvalues,
+        result.density, result.becsum, q=q, q_cartesian=True, tr2=1.0e-14)
+    whole = _coupling("q1")
+    reference = _read_reference(name)
+    assert streamed.phonons.converged
+    assert np.allclose(streamed.frequencies, whole.frequencies,
+                       rtol=0, atol=STREAMED_FREQUENCY_TOLERANCE)
+    assert np.allclose(streamed.gamma_ghz, whole.gamma_ghz,
+                       rtol=0, atol=STREAMED_GAMMA_TOLERANCE_GHZ)
+    assert np.allclose(streamed.lambdas, whole.lambdas,
+                       rtol=0, atol=STREAMED_LAMBDA_TOLERANCE)
+    assert np.allclose(streamed.el_ph_sum, whole.el_ph_sum, rtol=0, atol=1.0e-10)
+    assert np.allclose(streamed.phase_space, whole.phase_space, rtol=0, atol=1.0e-10)
+    assert np.allclose(streamed.frequencies, reference["frequencies"],
+                       atol=FREQUENCY_TOLERANCE)
+    assert np.allclose(streamed.gamma_ghz, reference["gamma_ghz"],
+                       atol=GAMMA_TOLERANCE_GHZ)
+    assert np.allclose(streamed.lambdas, reference["lambda"], atol=LAMBDA_TOLERANCE)
