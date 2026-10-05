@@ -1367,8 +1367,12 @@ def dynamical_matrix_at_q(
     frequencies, vectors = _diagonalize_at_q(matrix, np.asarray(structure.masses))
     internals = None
     if keep_internals and streamed:
+        # ``g`` runs over every band the stores hold at ``k`` and every band
+        # at ``k + q``, and so do the eigenvalues ``elphsum`` weights it with.
         internals = {"displacements": displacements, "calculation_kq": kq,
-                     "dvscf": displacements.dvscf, "q_cart": q_cart}
+                     "dvscf": displacements.dvscf, "q_cart": q_cart,
+                     "psi": solver.psi, "eigenvalues": solver.eigenvalues,
+                     "eigenvalues_kq": np.asarray(eigenvalues_kq)}
     elif keep_internals:
         internals = {"solver": two, "bare": bare, "calculation_kq": kq,
                      "dvscf": displacements.dvscf, "q_cart": q_cart}

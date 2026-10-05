@@ -756,9 +756,6 @@ class StreamedDisplacementsAtQ:
         self.keep = keep
         self.states_kq = states_kq
         self.eigenvalues_kq = np.asarray(eigenvalues_kq)[:, :, :keep]
-        # Every band at ``k + q``, which the coupling's matrix elements run
-        # over whatever block the solve takes (``elphel``'s ``evq``).
-        self.eigenvalues_kq_all = np.asarray(eigenvalues_kq)
         self.q_cart = jnp.asarray(np.asarray(q_cart, dtype=float))
         self.positions = jnp.asarray(positions)
         self.nat = int(self.positions.shape[0])

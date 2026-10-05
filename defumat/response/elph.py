@@ -141,8 +141,9 @@ def matrix_elements(internals, nat: int):
             def walk(psi, psi_kq, bare, dv):
                 return mode_matrix_elements(calculation, kq, psi, psi_kq, bare, dv)
 
-            out.append(compiled(walk, solver.psi, solver.psi_kq,
-                                internals["bare"][atom, cart], dvscf[atom, cart]))
+            out.append(compiled(walk, internals.get("psi", solver.psi),
+                                solver.psi_kq, internals["bare"][atom, cart],
+                                dvscf[atom, cart]))
     return np.asarray(jnp.stack(out)).reshape((nat, 3) + out[0].shape)
 
 
@@ -177,12 +178,14 @@ def mode_matrix_elements(calculation, calculation_kq, psi, psi_kq, bare, dv):
 
 
 def _eigenvalue_pair(internals):
-    """The eigenvalues at ``k`` and at ``k + q`` that ``g``'s two band indices run over."""
-    if "displacements" in internals:
-        displacements = internals["displacements"]
-        return displacements.solver.eigenvalues, displacements.eigenvalues_kq_all
-    solver = internals["solver"]
-    return solver.eigenvalues, solver.eigenvalues_kq
+    """The eigenvalues at ``k`` and at ``k + q`` that ``g``'s two band indices run
+    over: the ``"eigenvalues"`` and ``"eigenvalues_kq"`` the phonon handed over,
+    or its two-sphere solver's where it did not name them."""
+    solver = internals.get("solver")
+    eigenvalues = internals.get("eigenvalues")
+    eigenvalues_kq = internals.get("eigenvalues_kq")
+    return (solver.eigenvalues if eigenvalues is None else eigenvalues,
+            solver.eigenvalues_kq if eigenvalues_kq is None else eigenvalues_kq)
 
 
 def elphsum_simple(g, eigenvalues, eigenvalues_kq, kpoint_weights, nelec,

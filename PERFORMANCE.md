@@ -10684,3 +10684,26 @@ pair, the gap here is wider and the place to look first is the solve: 512 points
 for all six bands (a metal keeps every band, where `ph.x` truncates at `nbnd_occ`) against
 `ph.x`'s per-representation stop, which ends a converged representation's solves while ours
 keeps solving all three modes until the worst one is done.
+
+**The k-chunked route, and the card** (2026-10-05, branch `elph-card`). The same call on the walked
+route `memory_mode = 'memory'` takes on a card, forced on the CPU by handing in a host store:
+345 s against the whole route's 88 s on four threads of this workstation (not D22, not one core,
+so a ratio between the two routes rather than a pair against `ph.x`), at one k-point a chunk over
+512 chunks, with identical loop histories. On D22's RTX A2000, one call warm, nothing else on the
+card, CPU threads pinned to cores 6-11:
+
+| `al-elph-nosym.in`, `q = (1/4, 0, 0)` | warm (calls 2, 3) | call 1 | iterations, `av.it.` | card peak |
+|---|---|---|---|---|
+| `memory_mode = 'memory'` (walked, the mesh as one chunk) | 11.9, 11.9 s | 23.3 s | 13, 6.08 | 1078.3 MB, the SCF's |
+| `memory_mode = 'speed'` (whole route) | 16.7, 16.7 s | 20.5 s | 13, 6.08 | 1103.1 MB |
+
+The walked route is 1.4x faster on the card at equal iteration counts, which is **not explained**:
+the candidates are the `jax.jit` passes taking every array as an argument against the whole route's
+per-mode `compiled` closures, and the host-side fields and mixer. A float32 part with float64 at
+1/70 of its rate; not a claim about an A100.
+
+**The whole route has moved since the table above.** At `7faef71` it gives 73.9950, 73.9950,
+132.4738 cm^-1 in 13 iterations, on this workstation, on the card, and in the other session's
+run of the same commit, where the table and `PLAN.md` P132 record 73.9960, 73.9961, 132.4755 in
+11; still 1.4e-3 inside the 6e-3 tolerance against `ph.x`, and not caused by the walked route,
+which reproduces the whole one to 1.7e-8.
