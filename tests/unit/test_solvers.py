@@ -481,7 +481,7 @@ def test_the_retry_replaces_only_the_k_points_that_failed(monkeypatch):
     stub, fast_e, fast_psi, robust_e, robust_psi = _stub_every_k(bad_index=2)
     monkeypatch.setattr(davidson, "_every_k", stub)
 
-    with pytest.warns(UserWarning, match="non-finite"):
+    with pytest.warns(UserWarning, match="failed on the Cholesky route"):
         values, vectors = davidson.davidson_eigensolver_all(
             _HAMILTONIAN_IS_UNUSED, 3, None, 1.0e-6)
 
