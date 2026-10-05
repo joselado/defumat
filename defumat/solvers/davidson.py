@@ -129,7 +129,9 @@ from defumat.hamiltonian.operator import (
     Hamiltonian, from_planes, planes_force_real_g0, planes_inner, planes_norm2, to_planes,
     twice,
 )
-from defumat.solvers.subspace import generalised_eigh
+from defumat.solvers.subspace import (
+    generalised_eigh, orthonormality_defect, orthonormality_tolerance,
+)
 
 __all__ = ["davidson_eigensolver", "davidson_eigensolver_all", "DAVID_NDIM",
            "MAX_ITERATIONS", "ETHR", "ETHR_MIN", "EMPTY_ETHR_FLOOR",
@@ -597,9 +599,28 @@ def davidson_eigensolver(
             # the bands' real precision, since they enter the preconditioner
             # and the residual, and the coefficients in theirs.
             wide = subspace_dtype(hc.dtype)
+            overlap = 0.5 * (sc + sc.conj().T).astype(wide)
             values, vectors = generalised_eigh(0.5 * (hc + hc.conj().T).astype(wide),
-                                               0.5 * (sc + sc.conj().T).astype(wide),
-                                               robust=robust, parked=inactive)
+                                               overlap, robust=robust, parked=inactive)
+            if not robust:
+                # **A finite Cholesky answer is not a right one.** With the
+                # overlap's smallest eigenvalue at the round-off floor and still
+                # positive, the factor is finite and the reduction can return a
+                # root below the whole spectrum whose vector is the near-null
+                # direction, a zero plane-wave vector; the collapse then stores
+                # it under a unit overlap and it stays a converged root with a
+                # zero residual. Its coefficients are not S-orthonormal, which
+                # a clean solve's are to round-off, so such a solve is marked
+                # non-finite here: the loop stops (``unconverged``) and
+                # :func:`davidson_eigensolver_all` re-solves the k-point by
+                # canonical orthogonalisation, as it does for a factor that
+                # failed outright. ``subspace.orthonormality_defect`` has the
+                # measurement. The canonical route is not checked: its kept
+                # block is S-orthonormal by construction, and there is nothing
+                # behind it to retry with.
+                defect = orthonormality_defect(overlap, vectors[:, :nbnd])
+                values = jnp.where(defect > orthonormality_tolerance(wide),
+                                   jnp.nan, values)
             values = values.astype(diagonal.dtype)
             vectors = vectors.astype(psi.dtype)
             coefficients = vectors[:, :nbnd]
@@ -1218,12 +1239,15 @@ def davidson_eigensolver_all(
     named = (np.flatnonzero(failed) if indices is None
              else np.asarray(indices)[failed])
     warnings.warn(
-        f"{int(failed.sum())} of {failed.size} k-points came back non-finite "
-        f"from the Cholesky route ({named.tolist()[:8]}"
-        f"{' ...' if failed.sum() > 8 else ''}) and are being re-solved with "
-        "canonical orthogonalisation. A non-finite overlap here is usually a "
-        "solve that stalled rather than a bad Hamiltonian -- check the step "
-        "counts, and loosen ethr (conv_thr) before trusting the result",
+        f"{int(failed.sum())} of {failed.size} k-points failed on the Cholesky "
+        f"route ({named.tolist()[:8]}{' ...' if failed.sum() > 8 else ''}): "
+        "either the factor of the subspace overlap was not finite, or it was "
+        "and the Ritz vectors it gave were not S-orthonormal, which is the "
+        "overlap at the round-off floor giving a spurious root. They are being "
+        "re-solved with canonical orthogonalisation. A singular overlap here "
+        "is usually a solve that stalled rather than a bad Hamiltonian -- "
+        "check the step counts, and loosen ethr (conv_thr) before trusting "
+        "the result",
         stacklevel=2,
     )
     if donate:
