@@ -13,6 +13,7 @@ ultrasoft, so their antisymmetric part is a charge rather than a residue, and
 ``int3`` reaches every direction's right-hand side.
 """
 
+import logging
 import warnings
 from functools import lru_cache
 
@@ -80,3 +81,38 @@ def test_the_batched_directions_are_the_serial_ones(case, k_batch, streamed,
     assert len(batched.history) == len(serial.history)
     assert batched.converged and serial.converged
     assert batched.average_iterations == serial.average_iterations
+
+
+def test_a_second_whole_k_born_call_compiles_nothing(monkeypatch):
+    """The whole-k route's ultrasoft Born charges compile nothing on a second call.
+
+    Measured before the fix (2026-10-05, D22's CPU, through the facade): 24
+    programs on every call, ``efield.ultrasoft_position``'s eager ``map_k`` (3)
+    and two top-level derivatives in ``born_effective_charges`` with a ``map_k``
+    inside, the ``jacfwd`` of the frozen polarization (3) and the ``jvp`` of
+    the constraint sandwich, once per atom and direction (18). The walked route
+    had none, which is why the card did not show it.
+    """
+    monkeypatch.setenv("DEFUMAT_FIELD_BATCH", "0")
+    calculation, result = _converged(*CASES[0])
+    _response(calculation, result, result.wavefunctions)
+
+    compiles = []
+
+    class Count(logging.Handler):
+        def emit(self, record):
+            if "ompiling" in record.getMessage():
+                compiles.append(record.getMessage())
+
+    handler = Count()
+    logger = logging.getLogger("jax")
+    logger.addHandler(handler)
+    level = logger.level
+    logger.setLevel(logging.WARNING)
+    try:
+        with jax.log_compiles(True):
+            _response(calculation, result, result.wavefunctions)
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(level)
+    assert compiles == []

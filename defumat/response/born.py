@@ -112,7 +112,7 @@ import numpy as np
 
 from defumat.basis.interpolate import to_dense
 from defumat.batching import map_k
-from defumat.eager import compiled
+from defumat.eager import compiled, compiled_jvp
 from defumat.forces.energy import FrozenState, frozen_energy
 from defumat.scf.density import becsum as becsum_of, spinor_sum_band, sum_band
 from defumat.system.symmetry import cartesian_rotations
@@ -232,9 +232,13 @@ def born_effective_charges(
     # The explicit ``d_E d_u`` term: how the polarization moves when the atoms do
     # and the states do not. ``(3, nat, 3)``, field axis leading.
     operator = _position_operator(calculation, projector_velocities)
-    frozen = np.asarray(jax.jacfwd(
-        lambda pos: frozen_polarization(calculation, pos, psi, weights, operator)
-    )(positions))
+    # Compiled whole (:mod:`defumat.eager`): an eager ``jacfwd`` over this
+    # closure compiled the k loops inside it at every call.
+    frozen = np.asarray(compiled(
+        lambda pos: jax.jacfwd(
+            lambda p: frozen_polarization(calculation, p, psi, weights, operator)
+        )(pos),
+        positions))
 
     charges = np.zeros((natoms, 3, 3))
     unshifted = jnp.zeros_like(shifts[0])
@@ -697,7 +701,10 @@ def constraint_position_term(calculation, positions, solver, weights, commutator
     for atom in range(natoms):
         for cart in range(3):
             tangent = jnp.zeros_like(positions).at[atom, cart].set(1.0)
-            _, derivative = jax.jvp(sandwich, (positions,), (tangent,))
+            # :func:`~defumat.eager.compiled_jvp`: an eager ``jvp`` of this
+            # closure compiled the k loop inside it at every call, 18 programs
+            # a dielectric call on ultrasoft AlAs.
+            _, derivative = compiled_jvp(sandwich, (positions,), (tangent,))
             out[atom, cart] = complex(derivative)
     return out
 

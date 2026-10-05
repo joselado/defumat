@@ -975,7 +975,11 @@ def ultrasoft_position(calculation, hamiltonians, states, position, dipole,
             coefficients = 1j * (becp2 @ qq.T) + becp1 @ dipole.T
             return overlapped + jnp.einsum("gk,nk->ng", vkb, coefficients)
 
-        blocks.append(map_k(one_k, jnp.arange(occupied.shape[0]), batch=batch))
+        # Compiled by its structure (:mod:`defumat.eager`): ``one_k`` is a new
+        # closure at every call.
+        blocks.append(compiled(
+            lambda indices, one_k=one_k: map_k(one_k, indices, batch=batch),
+            jnp.arange(occupied.shape[0])))
     return jnp.stack(blocks)
 
 

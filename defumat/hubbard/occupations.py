@@ -50,6 +50,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 import numpy as np
 
+from defumat.basis.fft import put_unique
 from defumat.batching import map_k
 from defumat.eager import compiled
 
@@ -203,9 +204,10 @@ class NsSymmetry:
                     "szw,sikjl,wsnkl->znij",
                     self.spin.astype(gathered.dtype), operator, gathered,
                 ) / self.nsym
-            # ``add`` into zeros (the groups' slots are disjoint): a complex
-            # scatter-set is a loop on a card (:func:`~defumat.scf.mixing._field_of`).
-            out = out.at[:, slots, :ldim, :ldim].add(averaged)
+            # Into zeros, the groups' slots being disjoint: a complex
+            # scatter-set is a loop on a card (:func:`~defumat.basis.fft.put_unique`).
+            out = put_unique(out, (slice(None), slots, slice(None, ldim),
+                                   slice(None, ldim)), averaged)
         return out
 
     #: Swapping the two spin indices of the packed pair ``2 s1 + s2``.

@@ -26,7 +26,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
-__all__ = ["scatter_to_box", "gather_from_box", "g_to_r", "r_to_g",
+__all__ = ["scatter_to_box", "put_unique", "gather_from_box", "g_to_r", "r_to_g",
            "sticks_to_r", "r_to_sticks",
            "scatter_to_box_gamma", "g_to_r_gamma", "r_to_g_gamma",
            "gamma_inner", "force_real_g0"]
@@ -186,6 +186,28 @@ def force_real_g0(coefficients, gamma_only: bool):
 # the xy plane contiguous, because that is what makes the 2D pass cheap -- see
 # defumat.basis.sticks. Anything multiplying such a field, the local potential
 # above all, has to be stored in the same order.
+
+
+def put_unique(target: jnp.ndarray, index, values: jnp.ndarray, **hints) -> jnp.ndarray:
+    """``target.at[index].set(values)`` for a ``target`` that is zero at ``index``.
+
+    XLA's GPU backend has no 16-byte atomic, so a **complex128** scatter-set is
+    expanded into a serial loop over its indices, three kernel launches each:
+    6000 entries took 30.7 ms on an RTX A2000, where the same scatter as an add
+    took 0.036 ms (``PERFORMANCE.md``, "A complex scatter-set is a loop on a
+    card"). Where the target is zero at every index and the indices are unique,
+    which is every fill of a sphere into a box, an add is the same numbers, so
+    an accelerator takes it. **A CPU keeps the set**: inside the LDOS
+    preconditioner's fused program the add made a call 75 ms against 55 and
+    moved the cobalt film's converged energy by 5e-9 Ry, so the CPU's
+    trajectories stay as they were. ``hints`` go to both (``unique_indices``,
+    ``indices_are_sorted``).
+    """
+    from defumat.batching import _backend
+
+    if _backend() == "cpu":
+        return target.at[index].set(values, **hints)
+    return target.at[index].add(values, **hints)
 
 
 def _fill_columns(values: jnp.ndarray, columns, ncols: int) -> jnp.ndarray:

@@ -32,7 +32,22 @@ evidence; an A/B is`. Record the steps with every timing. Two stories that fitte
 (slow genuine convergence and false convergence on stagnation) were both wrong, and so was a workaround
 (an accelerator floor under `ethr`) that fitted the symptom; the replay is what settled it.
 
-## Where it stands, 2026-10-04 (master `3f92e8a`, read against the code, nothing measured)
+## Where it stands, 2026-10-05 (branch `card-scatter-field-batch`, `PLAN.md` P131)
+
+Three of the D22-alone items below were taken up. **The batched field solve is done**
+(`DEFUMAT_FIELD_BATCH`, on by default on a card) and is worth 4 to 5 per cent of a warm call, not
+the factor the bullet in item 7 forecast: P127 had already removed most of the tracing that
+forecast was sized on. **The float32 setup cast and the `syevdx` subspace solve were put to the
+user and skipped** (2026-10-05): `band_precision = 'single'` already covers the band side, and
+`syevdx` needs a compiled FFI handler, the first non-Python code in the package. **New, and worth
+more than either:** a complex128 scatter-set is a serial loop over its indices on a card (no
+16-byte atomic), which made both vacuum mixers slower on the A2000 than on D22's CPU; fixed with
+`basis.fft.put_unique` (`PERFORMANCE.md`, "A complex scatter-set is a loop on a card"). The next
+`.at[index].set(...)` of complex data on a path a card runs should go through it. **The push gate
+on the card** was started on D22 the same day, the first one with the card as backend; its result
+goes here when it lands.
+
+## Where it stood, 2026-10-04 (master `3f92e8a`, read against the code, nothing measured)
 
 The open items split by what they need. **A float64 card**, so a Triton job the user approves: the
 A100-class profile (item 5; `nsys` is not on the GPU nodes and `module spider nsight` has not been

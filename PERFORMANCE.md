@@ -10592,7 +10592,12 @@ Measured on the card, 6000 sorted unique indices into a box of 120,000, jitted, 
 The hints do not help, and the results of all three columns are the same bits. P126's stick fill
 (`basis.fft._fill_columns`) was this defect too: it is a complex `set` along the last axis, and its
 gather is one fix of it. An `add` into zeros is the other, and is exact wherever the indices are
-unique, which is every fill of a sphere into a box. **The audit of the package** (every `.at[...]
+unique, which is every fill of a sphere into a box; `basis.fft.put_unique` takes it on an
+accelerator. **A CPU keeps the set**, as P126 kept the stick fill's scatter there: inside the LDOS
+preconditioner's fused program the add made a CPU call 75 ms against 55 and moved the cobalt
+film's converged energy from -223.13884423198 to -223.13884422666 Ry, reproducibly (the same code
+twice gives the same bits, and the old commit gives the old ones), although an isolated set and
+add on a CPU are the same bits. The standalone microbenchmark could not have shown it. **The audit of the package** (every `.at[...]
 .set(` whose index is an array rather than a slice or a scalar, a scan of the source rather than a
 grep for names): the mixers' four fills (`_field_of`'s two, Kerker's, the LDOS `to_grid`), the
 local-TF merge of the smooth solve into the dense sphere (`coefficients.at[inner_rows].set`, now a
@@ -10619,3 +10624,39 @@ The card was 1.1 to 3.0 times *slower* than the CPU on these runs and is now 1.1
 faster. The cobalt film is the case `pw.x` takes 41.1 s on one core (the entry above): on the card
 this code now takes 33.9 s with local-TF and 22.6 s with the LDOS mixer. The float64 rate of the
 A2000 (1/70 of float32) means none of these times is a claim about a data-centre card.
+
+## The three field directions as one CG loop, and three Born-charge loops compiled at every call (RTX A2000 and CPU, 2026-10-05)
+
+`GPU-SPEED-NEXT.md` item 7's first bullet. `DEFUMAT_FIELD_BATCH` (`batching.resolve_field_batch`)
+makes the field response `vmap` its Sternheimer CG over the three directions
+(`SternheimerSolver.solve_many`), on by default on an accelerator. **The gain the item forecast is
+not there any more**: it was sized on the 2026-10-02 call, 7.1 s of which 2.1 s was tracing and
+0.8 s hashing, and P127 then took most of that away. Warm calls of `get_dielectric_tensor()`,
+fresh process per arm, D22's performance cores 0-3, `OMP_NUM_THREADS=1`, the third and fourth call
+read (medians of calls 2-4 agree), every arm on the same tensor and the same CG counts:
+
+| cell | card serial (s) | card batched (s) | CPU serial (s) | CPU batched (s) |
+|---|---|---|---|---|
+| ultrasoft AlAs (`alas-epsilon-us.in`, `Z*` included) | 1.61 | **1.55** | 11.0 | 10.8 |
+| norm-conserving silicon (`si-epsilon.in`) | 0.60 | **0.57** | 2.42 | 2.17 |
+
+4 to 5 per cent on the card, which takes the walked route there (memory mode), and on the CPU 2
+and 10 per cent, against the forecast that a CPU cannot win because each direction runs as many
+steps as the slowest; on cubic silicon the extra steps are 2 per cent (Fable's count, 678 against
+663) and the batched einsums evidently save more than that. The CPU default stays serial, being a
+departure from `solve_e.f90` for a gain inside the spread of a three-sample median on AlAs. The
+first, compiling call is where the batch shows on the card, 7.6 s against 20.7 on AlAs and 4.2
+against 8.6 on silicon, one program for three.
+
+**What the CPU arm found instead.** The third AlAs call on the CPU, counted on the `jax` logger,
+compiled 24 programs (`jit(scan)`, each served from the persistent cache), the card's none: the
+CPU takes the whole-k route and the Born charges' ultrasoft terms are there. Three sites, found
+by a traceback on each `Compiling` record: `efield.ultrasoft_position`'s `map_k` over a fresh
+closure (3 a call), and two top-level derivatives in `born.born_effective_charges` whose bodies
+hold a `map_k` -- the `jax.jacfwd` of `frozen_polarization` (3) and the `jax.jvp` of
+`_constraint_sandwich`, once per atom and direction (18). The first is now `defumat.eager.compiled`,
+the other two `compiled` and `compiled_jvp` around the whole derivative; the third call compiles
+nothing and the tensor is the same to every digit. On this machine the cache hits cost little
+(11.0 s before and after); on a Triton node, where every loaded executable adds memory mappings
+under a cap of 65,530 (`OPEN.md` Part XIII item 2), they are the defect `CLAUDE.md`'s trap list
+describes, and a long ultrasoft Born-charge run there would have met it.

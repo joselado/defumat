@@ -24052,3 +24052,48 @@ capped so a step keeps its sign along an unstable mode.
 **In passing.** `benchmarks/fe-unstable.in`'s header says Anderson amplifies a 0.05 starting
 moment to 3.41 mu_B; on the code of 2026-10-04 it converges to M = 0 at 2x2x2, 4x4x4 and 6x6x6.
 The header is stale, or the code's path changed; not investigated.
+
+### P131 -- The first runs of the vacuum mixers and of the batched field directions on a card: a complex scatter-set is a loop there, and three Born-charge loops compiled at every call. ✅ DONE on the RTX A2000 and D22's CPU, 2026-10-05; nothing measured on a float64 card.
+
+**What was asked.** "Is there something worth testing on the D22 GPU", then three items of
+`GPU-SPEED-NEXT.md`: the vacuum mixers (P129, P59's compiled local-TF) on the card, the push gate
+with the card as backend, and the batched field solve (item 7). The float32 setup cast and a
+lowest-roots `eigh` through `syevdx` were put to the user and skipped: `band_precision = 'single'`
+already covers the band side, and `syevdx` would be the package's first compiled extension.
+
+**1. A complex128 scatter-set is a serial loop on a card.** Both vacuum mixers cost 95 to 140
+times their CPU time per call on the A2000, so the card's SCF was slower than D22's CPU (the
+cobalt film, `local-TF`: 96.9 s against 91.1). `nsys` named it: 13,000 launches of three tiny
+kernels a Krylov step, the box fills of `_field_of`. XLA has no 16-byte atomic, so a complex128
+scatter with assignment semantics is expanded into a loop over its indices; an add is one kernel,
+float64 and complex64 sets are one kernel (30.7 ms against 0.036 for 6000 entries). Fix:
+`basis.fft.put_unique`, an add into zeros on an accelerator and the set on a CPU, in the four mixer
+fills and two DFT+U assemblies, and a gather for the local-TF merge. **The CPU keeps the set
+because the add moved its bits**: inside the LDOS program it made a call 75 ms against 55 and the
+film's energy -223.13884422666 against -223.13884423198 Ry, reproducibly, though an isolated set
+and add on a CPU are the same bits. After: the film 33.9 s (local-TF) and 22.6 s (`ldos`) on the
+card against `pw.x`'s 41.1 s on one core, every arm faster than D22's CPU, the card's iterations
+and energies unchanged to every digit. P126's stick fill was the same defect.
+
+**2. The batched field directions.** `SternheimerSolver.solve_many` (a `vmap` of `solve_at` over
+the directions, so each band of each direction keeps its own flag and a finished direction's
+carry is frozen), the whole route's `_respond_batched` and the walked route's `respond_many` pass,
+whose k-chunk is a third of the SCF's when the batch is on (Fable's review: it keeps the walked
+route's peak by construction, since the `'fit'` sizing has no response term).
+`DEFUMAT_FIELD_BATCH`, default on an accelerator. **Validated** as a route identity on four cells
+and both routes: epsilon and `Z*` 1e-14 apart on silicon, ultrasoft silicon and ultrasoft AlAs,
+every CG count equal; ultrasoft AlAs with spin-orbit coupling 5.5e-12 and 1.3e-10 at the
+facade's scheduled threshold, counts equal (Fable measured the difference to track the CG's
+threshold). `tests/regression/test_field_batch.py`. **Worth 4 to 5 per cent on the card** (AlAs
+1.61 -> 1.55 s, silicon 0.60 -> 0.57), because P127 had already taken most of the per-call
+overhead the item was sized on; 2 and 10 per cent on the CPU, where it stays off.
+
+**3. Three loops in the whole-k Born charges compiled at every call** (found by the CPU arm of
+the timing, the card taking the walked route): `efield.ultrasoft_position`'s eager `map_k`, and
+the `jacfwd` of `frozen_polarization` and the per-atom `jvp` of `_constraint_sandwich` in
+`born_effective_charges`, 24 programs a call on ultrasoft AlAs, now none
+(`test_a_second_whole_k_born_call_compiles_nothing`). The `CLAUDE.md` trap, at sites the
+2026-10-02 sweep did not reach because the streamed route's test was the one written.
+
+**The gate on the card** is the first: the earlier D22 gates all set `JAX_PLATFORMS=cpu`. Its
+result is in `GPU-SPEED-NEXT.md`.

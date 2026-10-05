@@ -58,7 +58,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from defumat.basis.fft import g_to_r_gamma
+from defumat.basis.fft import g_to_r_gamma, put_unique
 from defumat.basis.gvectors import GVectors, _half_sphere
 from defumat.units import E2, FPI
 
@@ -923,10 +923,9 @@ def kerker_preconditioner(gvectors, cell, shape, beta=0.7, screening=None, nelec
     def screened(channel):
         box = jnp.fft.fftn(channel.reshape(grid))
         coefficients = box.reshape(-1)[index] * factor
-        # ``add`` into zeros, not ``set``: the same numbers, and a complex128
-        # scatter-set is a serial loop over its indices on a card
-        # (:func:`~defumat.basis.fft.scatter_to_box`).
-        box = jnp.zeros(box.size, dtype=box.dtype).at[index].add(coefficients)
+        # :func:`~defumat.basis.fft.put_unique`: a complex scatter-set is a
+        # loop on a card.
+        box = put_unique(jnp.zeros(box.size, dtype=box.dtype), index, coefficients)
         return jnp.real(jnp.fft.ifftn(box.reshape(grid))).reshape(-1)
 
     @jax.jit
@@ -1051,16 +1050,15 @@ def _field_of(coefficients, sphere: _ScreeningSphere, grid):
     n1, n2, n3 = grid
     h3 = n3 // 2 + 1
     box = jnp.zeros(n1 * n2 * h3, dtype=coefficients.dtype)
-    # ``add`` into zeros rather than ``set``, the same numbers since the two
-    # index sets are disjoint and unique: XLA has no 16-byte atomic, so on a card
-    # a complex128 scatter-set is expanded into a loop over its indices, three
-    # kernel launches each, and on an RTX A2000 that was 1.8 s of every 1.8 s
-    # local-TF call on the cobalt film (``PERFORMANCE.md``, "A complex
-    # scatter-set is a loop on a card").
-    box = box.at[sphere.positions].add(coefficients, indices_are_sorted=True,
-                                       unique_indices=True)
-    box = box.at[sphere.partners].add(jnp.conj(coefficients[sphere.plane]),
-                                      unique_indices=True)
+    # :func:`~defumat.basis.fft.put_unique`, the two index sets being disjoint
+    # and unique: on a card a complex128 scatter-set is a loop over its indices,
+    # and on an RTX A2000 that was nearly all of a 1.8 s local-TF call on the
+    # cobalt film (``PERFORMANCE.md``, "A complex scatter-set is a loop on a
+    # card").
+    box = put_unique(box, sphere.positions, coefficients, indices_are_sorted=True,
+                     unique_indices=True)
+    box = put_unique(box, sphere.partners, jnp.conj(coefficients[sphere.plane]),
+                     unique_indices=True)
     return jnp.fft.irfftn(box.reshape(n1, n2, h3), s=grid).reshape(-1) * (n1 * n2 * n3)
 
 
@@ -1376,9 +1374,9 @@ def _ldos_pieces(gvectors, cell) -> _LDOSPieces:
 
     def to_grid(coefficients):
         """``f(r) = sum_G c_G e^{iGr}``, real for a Hermitian ``c``."""
-        # ``add`` into zeros: :func:`_field_of` says why not ``set``.
-        box = jnp.zeros(points, dtype=coefficients.dtype).at[index].add(
-            coefficients, unique_indices=True)
+        # :func:`~defumat.basis.fft.put_unique`, as in :func:`_field_of`.
+        box = put_unique(jnp.zeros(points, dtype=coefficients.dtype), index,
+                         coefficients, unique_indices=True)
         return jnp.real(jnp.fft.ifftn(box.reshape(grid))).reshape(-1) * points
 
     return _LDOSPieces(to_sphere, to_grid, coulomb, nonzero)
