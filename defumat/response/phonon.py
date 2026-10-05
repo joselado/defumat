@@ -213,6 +213,11 @@ class Phonons:
     #: with every other atom held fixed -- so the modes are the frozen-substrate
     #: ones and there is no acoustic triplet among them to look for.
     atoms: tuple | None = None
+    #: What :func:`~defumat.response.phononq.dynamical_matrix_at_q` keeps when
+    #: asked to (``keep_internals``): the solver, the bare perturbations and the
+    #: converged ``dV_scf``, which the electron-phonon matrix element is built
+    #: from (:mod:`defumat.response.elph`). ``None`` otherwise.
+    internals: dict | None = field(default=None, repr=False)
 
     @property
     def omega2(self) -> np.ndarray:

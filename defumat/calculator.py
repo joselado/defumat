@@ -1145,6 +1145,24 @@ class Calculator:
                                  exclude=SCF_ONLY_OPTIONS),
         )
 
+    def get_electron_phonon(self, q=(0.0, 0.0, 0.0), **options):
+        """The coupling of the phonons at ``q`` to the Fermi surface.
+
+        ``ph.x``'s ``electron_phonon = 'simple'``: the matrix elements
+        ``<psi_(k+q)| dV_q |psi_k>``, the linewidth ``gamma_(q nu)`` and the
+        dimensionless ``lambda_(q nu)`` at each broadening of the double delta.
+        ``q`` as :meth:`get_phonons_at_q` reads it. A metal only.
+        """
+        from defumat.response.elph import electron_phonon_at_q
+
+        result = self._ground_state("the electron-phonon coupling")
+        return electron_phonon_at_q(
+            self.calculation, result.wavefunctions, result.eigenvalues,
+            result.density, result.becsum, q=q,
+            **self._defaults_for(electron_phonon_at_q, options,
+                                 exclude=SCF_ONLY_OPTIONS),
+        )
+
     def get_raman_tensors(self, **options):
         """``d(epsilon)/d(tau)``: the Raman tensor of each atom."""
         from defumat.response.nonlinear import raman_tensors

@@ -38,8 +38,10 @@ The whole ``q`` dependence of the part that does not involve the response is
 therefore in the Ewald sum, ``d2ionq``.
 
 **What is refused, and it is most things.** This lands the norm-conserving
-insulator on a full k-grid: no ultrasoft or PAW (``S`` moves with the atoms and
-the multiplier matrix has no two-sphere form), no metal, no spin polarization,
+insulator and the norm-conserving metal on a full k-grid: no ultrasoft or PAW
+(``S`` moves with the atoms and the multiplier matrix has no two-sphere form),
+no metal at ``q = 0`` (that is ``ef_shift``, and :func:`~defumat.response.
+phonon.dynamical_matrix` has it), no spin polarization,
 no spinor, no nonlinear core correction (``dynmatcc.f90:105`` calls
 ``set_drhoc(xq, drc)``, so unlike ``dynmat_us`` the core term *is* a function of
 ``q``), and no symmetry -- the small group of ``q`` and the star of ``q`` are
@@ -60,6 +62,7 @@ import numpy as np
 from defumat.basis.fft import g_to_r, r_to_g
 from defumat.eager import compiled
 from defumat.response.sternheimer import SternheimerSolver, pass_threshold
+from defumat.scf.occupations import w0gauss, wgauss
 from defumat.system.cell import Cell
 from defumat.system.kpoints import KPoints
 
@@ -187,16 +190,21 @@ class TwoSphereSolver(SternheimerSolver):
         self.eigenvalues_kq = jnp.asarray(eigenvalues_kq)[:, :, :keep]
         # The projector runs over the occupied manifold **at k + q**, and the
         # right-hand side runs over the bands being solved for, **at k**. They
-        # are the same count for an insulator with a gap everywhere -- which is
-        # the only regime this class admits -- but they are not the same object,
-        # and writing one mask for both is the kind of thing that is right until
-        # a band crosses.
-        bands = jnp.arange(self.eigenvalues_kq.shape[2])
-        counts = jnp.asarray(self.occupied_counts)
-        self.projector_mask_kq = jnp.broadcast_to(
-            (bands[None, :] < counts[:, None])[:, None, :],
-            self.eigenvalues_kq.shape,
-        )
+        # are the same count for an insulator with a gap everywhere, but they
+        # are not the same object, and writing one mask for both is the kind of
+        # thing that is right until a band crosses -- which in a metal is every
+        # k-point on the Fermi surface. A metal's mask is ``setup_nbnd_occ``'s
+        # cut, ``eps < ef + xmax degauss``, evaluated on the k + q eigenvalues
+        # (``nbnd_occ(ikq)`` in ``orthogonalize.f90`` and ``ch_psi_all.f90``).
+        if self.smearing is not None:
+            self.projector_mask_kq = self.eigenvalues_kq < self.smearing.cutoff
+        else:
+            bands = jnp.arange(self.eigenvalues_kq.shape[2])
+            counts = jnp.asarray(self.occupied_counts)
+            self.projector_mask_kq = jnp.broadcast_to(
+                (bands[None, :] < counts[:, None])[:, None, :],
+                self.eigenvalues_kq.shape,
+            )
 
     # -- the three pieces that move to the second sphere -------------------
 
@@ -227,7 +235,8 @@ class TwoSphereSolver(SternheimerSolver):
 
         Two masks rather than one: the **row** mask is over the bands being
         solved for and is the ground state's at ``k``; the **column** mask is
-        over the manifold projected out and is the one at ``k + q``.
+        over the manifold projected out and is the one at ``k + q``. A metal
+        takes :meth:`_smeared_projection_at_q` for the columns instead.
         """
         hamiltonian = self.hamiltonians[spin]
         occupied = self.psi_kq[spin][ik]
@@ -236,10 +245,50 @@ class TwoSphereSolver(SternheimerSolver):
         rows = self.projector_mask[spin][ik][:, None]
         columns = self.projector_mask_kq[spin][ik][:, None]
         rhs = jnp.where(rows, rhs, 0.0)
+        if self.smearing is not None:
+            rhs, overlaps = self._smeared_projection_at_q(
+                rhs, jnp.einsum("mg,ng->mn", jnp.conj(occupied), rhs), ik, spin)
+            return -(rhs - jnp.einsum("mn,mg->ng", overlaps, s_occupied))
         overlaps = jnp.where(
             columns, jnp.einsum("mg,ng->mn", jnp.conj(occupied), rhs), 0.0
         )
         return -(rhs - jnp.einsum("mn,mg->ng", overlaps, s_occupied))
+
+    def _smeared_projection_at_q(self, rhs, overlaps, ik, spin):
+        """``orthogonalize``'s metal branch with its two eigenvalue sets apart.
+
+        :meth:`SternheimerSolver._smeared_projection` with ``eps_i`` (the band
+        solved for, the rows of ``rhs``) at ``k`` and ``eps_j`` (the band
+        projected out, the rows of ``overlaps``) at ``k + q``, which is
+        ``orthogonalize.f90:115-138`` read as written: ``wg1`` and ``w0g`` from
+        ``et(ibnd, ikk)``, ``wgp`` from ``et(jbnd, ikq)``, and
+        ``deltae = et(jbnd, ikq) - et(ibnd, ikk)``. The ``alpha_pv`` piece is
+        admitted for ``j`` inside ``nbnd_occ(ikq)``, the column mask.
+
+        There is no ``ef_shift`` anywhere on this route: ``ph.x`` shifts the
+        Fermi level only at ``q = 0`` (``lmetq0``), where a uniform change of
+        the electron count is possible, and :func:`dynamical_matrix_at_q`
+        refuses a metal there.
+        """
+        smearing = self.smearing
+        degauss, ngauss = smearing.degauss, smearing.ngauss
+        eps = self.eigenvalues[spin][ik]                                # i, at k
+        eps_kq = self.eigenvalues_kq[spin][ik]                          # j, at k+q
+        occupation = wgauss((smearing.ef - eps) / degauss, ngauss)      # wg1_i
+        delta = w0gauss((smearing.ef - eps) / degauss, ngauss) / degauss
+        occupation_kq = wgauss((smearing.ef - eps_kq) / degauss, ngauss)  # wgp_j
+
+        difference = eps_kq[:, None] - eps[None, :]                     # deltae_(j,i)
+        step = wgauss(difference / degauss, 0)                          # theta
+        mixed = occupation[None, :] * (1.0 - step) + occupation_kq[:, None] * step
+
+        close = jnp.abs(difference) <= 1.0e-5
+        safe = jnp.where(close, 1.0, difference)
+        ratio = (occupation_kq[:, None] - occupation[None, :]) / safe
+        shift = self.alpha_pv * step * jnp.where(close, -delta[None, :], ratio)
+        weights = mixed + jnp.where(
+            self.projector_mask_kq[spin][ik][:, None], shift, 0.0)
+        return occupation[:, None] * rhs, weights * overlaps
 
     def _preconditioner(self, ik, spin):
         """``h_prec`` on the second sphere: ``|k+q+G|^2`` and ``evq``."""
@@ -717,7 +766,16 @@ def screening_loop_at_q(
             calculation, density, jax.device_put(field) if host else field, q_cart)
         return np.asarray(out) if host else out
 
-    mixer = ResponseMixer(mixing_mode, beta=alpha_mix)
+    # **One mixer per mode**, which is ``ph.x``'s: ``solve_linter`` mixes each
+    # irreducible representation with its own ``mix_potential`` history, and
+    # with no symmetry every mode is one. Nothing physical couples the modes
+    # here (no symmetrisation at q), and one Anderson history across all of
+    # them is unstable at the floor for a metal at small q: on
+    # ``al-elph-nosym.in`` at q = (1/4, 0, 0) the joint history reached
+    # 1.5e-14 at the scheduled CG thresholds and then grew to 1e+4, where the
+    # per-mode one converges in 11 iterations to ph.x 7.5's frequencies to
+    # 5e-4 cm^-1 (``PLAN.md`` EP1).
+    mixers = [ResponseMixer(mixing_mode, beta=alpha_mix) for _ in range(3 * nat)]
     for iteration in range(max_iterations):
         response = displacements.respond(
             dvscf, iteration > 0,
@@ -749,13 +807,21 @@ def screening_loop_at_q(
             converged = True
             break
 
-        real, imaginary = mixer.mix(
-            [np.real(dvscf), np.imag(dvscf)],
-            [np.real(induced), np.imag(induced)],
-            host=host,
-        )
-        dvscf = real + 1j * imaginary
+        modes = []
+        for index in range(3 * nat):
+            atom, cart = divmod(index, 3)
+            real, imaginary = mixers[index].mix(
+                [np.real(dvscf[atom, cart]), np.imag(dvscf[atom, cart])],
+                [np.real(induced[atom, cart]), np.imag(induced[atom, cart])],
+                host=host,
+            )
+            modes.append(real + 1j * imaginary)
+        dvscf = stack(modes).reshape(dvscf.shape)
 
+    # The input ``dV_scf`` the last ``dpsi`` was solved at, which on
+    # convergence is the one kept (``ph.x``'s ``dvscfins``, what ``elphel``
+    # applies).
+    displacements.dvscf = dvscf
     return (displacements.dpsi, drho, history,
             displacements.iterations / max(1, displacements.solves), converged)
 
@@ -980,7 +1046,12 @@ def response_force_constants(solver, dpsi, bare, nat) -> np.ndarray:
     the Sternheimer solves dominate it by two orders; on a large cell the trade
     is worth revisiting, and the stack is where to start.
     """
-    weights = solver.weights
+    from defumat.response.phonon import _state_weights
+
+    # ``wg`` for an insulator, ``wk`` for a metal, whose occupation is already
+    # inside ``dpsi`` (``orthogonalize``'s ``wg1 dvpsi``): ``drhodvnl.f90:181``
+    # contracts with ``2 wk``. An insulator cannot tell the two apart.
+    weights = _state_weights(solver, solver.weights)
     matrix = np.zeros((3 * nat, 3 * nat), dtype=complex)
     for atom in range(nat):
         for cart in range(3):
@@ -1148,11 +1219,33 @@ def require_a_two_sphere_regime(calculation, q_crystal) -> None:
         )
 
 
+def _require_a_metallic_q(cell, q_cart, streamed: bool) -> None:
+    """The two places a metal is refused on this route, each by its term."""
+    crystal = np.asarray(cell.k_to_crystal(np.asarray(q_cart) / cell.tpiba))
+    if np.max(np.abs(crystal - np.rint(crystal))) < 1.0e-8:
+        raise NotImplementedError(
+            "a metal at q = 0 (or at a reciprocal lattice vector) through the "
+            "q != 0 route is not implemented: there the perturbation can change "
+            "the number of electrons and the Fermi level moves, which is "
+            "ph.x's ef_shift (lmetq0 = lgauss .AND. lgamma), and this route "
+            "carries none. Use get_phonons(), which does"
+        )
+    if streamed:
+        raise NotImplementedError(
+            "a metal at q != 0 on the streamed (k-chunked) route is not "
+            "implemented: its chunk solver is built with smearing=None, the "
+            "insulator's sharp projector, so orthogonalize's smeared weights "
+            "at k and k + q would be missing. Run with every k-point resident "
+            "(memory_mode='speed', or a cell whose states fit)"
+        )
+
+
 def dynamical_matrix_at_q(
     calculation, wavefunctions, eigenvalues, density, becsum=(),
     q=(0.0, 0.0, 0.0), q_cartesian: bool = False, nbnd: int | None = None,
     threshold: float | None = None, alpha_mix: float = 0.7, tr2: float = 1.0e-14,
     max_iterations: int = 100, verbose: bool = False,
+    keep_internals: bool = False,
 ):
     """``D(q)``: the dynamical matrix at one wavevector.
 
@@ -1178,6 +1271,11 @@ def dynamical_matrix_at_q(
     :func:`ewald_dynamical_matrix` are whole-cell objects, and a partial
     dynamical matrix that silently mixed the two would be a plausible wrong
     answer rather than an error. Adding it means slicing all three together.
+
+    ``keep_internals`` attaches the two-sphere solver, the bare perturbations
+    and the converged ``dV_scf`` to the result's ``internals``, which is what
+    :mod:`defumat.response.elph` builds the coupling from. Refused on the
+    streamed route, whose states live in host memory a chunk at a time.
     """
     from defumat.response.phonon import Phonons
     from defumat.response.sternheimer import make_sternheimer
@@ -1206,12 +1304,30 @@ def dynamical_matrix_at_q(
 
     streamed = _streams(calculation, wavefunctions, keep_internals=False,
                         what="the dynamical matrix at q")
+    if keep_internals and streamed:
+        raise NotImplementedError(
+            "the electron-phonon matrix element needs every k-point's response "
+            "resident, and this run walks the k axis a chunk at a time "
+            "(memory_mode='memory' on an accelerator). Run with "
+            "memory_mode='speed', or on a CPU"
+        )
+    metal = calculation.system.occupations != "fixed"
+    if metal:
+        _require_a_metallic_q(cell, q_cart, streamed)
     result = _GroundState(wavefunctions, eigenvalues, density, becsum)
+    # A metal's Fermi level is re-derived from these eigenvalues by the call
+    # the SCF made, as the ``Gamma`` route does (``phonon._fermi_level``).
+    if metal:
+        from defumat.response.phonon import _fermi_level
+
+        levels = _fermi_level(calculation, jnp.asarray(eigenvalues).reshape(
+            (-1,) + jnp.shape(eigenvalues)[-2:]))
+        result.fermi_energy = levels.fermi_energy
     # The bare solves stay at the fixed 1e-14 this entry always used; the
     # loop's are scheduled unless a number is given (``pass_threshold``).
     solver = make_sternheimer(
         calculation, result, threshold=1.0e-14 if threshold is None else threshold,
-        host_store=streamed)
+        metals=True, host_store=streamed)
     solver.schedule = threshold is None
     potential = calculation.potential(density)
 
@@ -1244,8 +1360,9 @@ def dynamical_matrix_at_q(
         two = TwoSphereSolver(solver, hamiltonians_kq, psi_kq, eigenvalues_kq, kq)
 
         bare = bare_displacements_at_q(calculation, kq, two, q_cart, positions)
-        dpsi, drho, history, average, converged = self_consistent_response_at_q(
-            calculation, kq, two, bare, density, q_cart,
+        displacements = _WholeDisplacementsAtQ(calculation, kq, two, bare, nat)
+        dpsi, drho, history, average, converged = screening_loop_at_q(
+            calculation, displacements, density, q_cart,
             alpha_mix=alpha_mix, tr2=tr2, max_iterations=max_iterations,
             verbose=verbose,
         )
@@ -1258,6 +1375,10 @@ def dynamical_matrix_at_q(
     matrix = 0.5 * (matrix + matrix.conj().T)
 
     frequencies, vectors = _diagonalize_at_q(matrix, np.asarray(structure.masses))
+    internals = None
+    if keep_internals:
+        internals = {"solver": two, "bare": bare, "calculation_kq": kq,
+                     "dvscf": displacements.dvscf, "q_cart": q_cart}
     return Phonons(
         matrix=matrix.reshape(nat, 3, nat, 3),
         frequencies=frequencies,
@@ -1267,6 +1388,7 @@ def dynamical_matrix_at_q(
         history=history,
         average_iterations=average,
         converged=converged,
+        internals=internals,
     )
 
 

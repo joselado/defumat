@@ -103,6 +103,7 @@ from defumat.response.shg import (
 from defumat.response.strain import StrainResponse, strain_response
 from defumat.response.phonon import Phonons, dynamical_matrix
 from defumat.response.phononq import dynamical_matrix_at_q
+from defumat.response.elph import ElectronPhonon, electron_phonon_at_q
 from defumat.response.spectra import (
     VibrationalSpectrum,
     loto_modes,
@@ -147,6 +148,8 @@ __all__ = [
     "dielectric_tensor",
     "dynamical_matrix",
     "dynamical_matrix_at_q",
+    "ElectronPhonon",
+    "electron_phonon_at_q",
     "effective_mass",
     "elastic_constants",
     "electrostriction",

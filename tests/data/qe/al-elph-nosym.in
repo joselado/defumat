@@ -1,0 +1,26 @@
+! QE's `test-suite/ph_interpol_metal/al.scf.in` with the symmetry switched off,
+! the ground state of that directory's electron-phonon benchmark
+! (`al.elph.in`, electron_phonon = 'simple'). fcc aluminium, norm-conserving LDA,
+! Marzari-Vanderbilt at degauss = 0.05 Ry on the 8x8x8 unshifted grid. The grid
+! is closed under the point group, so the whole-grid sum here equals ph.x's
+! symmetrised wedge sum to the solves' residue. conv_thr is tighter than the
+! reference's 1e-8, which a derived quantity needs (CLAUDE.md, "a test asserting
+! a tolerance its own conv_thr does not deliver").
+ &control
+    calculation='scf'
+ /
+ &system
+    ibrav=2, celldm(1)=7.5, nat=1, ntyp=1,
+    ecutwfc=15.0, nosym=.true., noinv=.true.,
+    occupations='smearing', smearing='marzari-vanderbilt', degauss=0.05
+ /
+ &electrons
+    conv_thr = 1.0d-12
+    mixing_beta = 0.7
+ /
+ATOMIC_SPECIES
+ Al  26.98 Al.pz-vbc.UPF
+ATOMIC_POSITIONS crystal
+ Al  0.3333333333333  0.6666666666667  0.0000000000
+K_POINTS automatic
+ 8 8 8 0 0 0

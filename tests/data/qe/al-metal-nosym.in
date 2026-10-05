@@ -1,0 +1,23 @@
+! The one-atom primitive cell of `al2-metal.in`, on the 4x4x4 unshifted grid that
+! cell's 4x4x2 unfolds to, with no symmetry: the phonon at q = (0, 0, 1/2) crystal
+! (half of b3) folds onto `al2-metal.in`'s Gamma, whose modes `ph.x` has computed
+! (reference.out.ph-al2-metal), so the metallic q != 0 route is checked against a
+! zone-centre calculation it shares no machinery with.
+ &control
+    calculation='scf'
+ /
+ &system
+    ibrav=2, celldm(1)=7.50,
+    nat=1, ntyp=1,
+    ecutwfc=15.0, nosym=.true., noinv=.true.,
+    occupations='smearing', smearing='marzari-vanderbilt', degauss=0.05
+ /
+ &electrons
+    conv_thr = 1.0d-12
+ /
+ATOMIC_SPECIES
+ Al  26.98 Al.pz-vbc.UPF
+ATOMIC_POSITIONS (alat)
+ Al  0.00  0.00  0.00
+K_POINTS automatic
+ 4 4 4 0 0 0

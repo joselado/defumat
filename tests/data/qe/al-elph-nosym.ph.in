@@ -1,0 +1,19 @@
+! The `ph.x` input that generated `reference.out.ph-al-elph-nosym` (q = (1/4, 0, 0))
+! and `reference.out.ph-al-elph-nosym-q2` (q = (3/4, 1/4, 1/4), the last line
+! changed), from the ground state of `al-elph-nosym.in`:
+!
+!   pw.x -in al-elph-nosym.in && ph.x -in al-elph-nosym.ph.in
+!
+! Serial QE 7.5, 2026-10-05. `test-suite/ph_interpol_metal`'s own benchmark is
+! the same cell and the same q, and was written by QE 6.5: its frequencies are
+! 76.568 and 133.655 cm^-1 where 7.5 gives 74.007 and 132.474 with symmetry and
+! 73.996 and 132.475 without, from an identical ground state (total energy
+! -4.18634465 Ry in both versions), so the two versions' ph.x differ and only
+! 7.5's output is a reference here. `outdir`, `prefix` and `fildyn` are
+! rewritten by whoever regenerates it.
+elph
+ &inputph
+  tr2_ph=1.0d-14, prefix='alnosym', outdir='./tmp', fildvscf='aldv',
+  amass(1)=26.98, fildyn='alnosym.dyn', electron_phonon='simple', trans=.true.,
+ /
+0.25 0.0 0.0
