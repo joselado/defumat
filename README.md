@@ -423,8 +423,15 @@ alone from the same solve; notebook [19](notebooks/19_linear_response.ipynb).
   [20](notebooks/20_phonons.ipynb).
 - **Phonons at $\mathbf q \neq 0$**: the dynamical matrix at one wavevector, from
   the perturbed states on their own $\mathbf k + \mathbf q$ plane-wave sphere;
-  norm-conserving insulators on the full grid. `calc.get_phonons_at_q(q)`,
+  norm-conserving insulators and metals on the full grid. `calc.get_phonons_at_q(q)`,
   notebook [20](notebooks/20_phonons.ipynb).
+- **Electron-phonon coupling**: the matrix elements
+  $g_{mn}^\nu(\mathbf k, \mathbf q) = \langle\psi_{m\mathbf k+\mathbf q}|\partial_\nu V|\psi_{n\mathbf k}\rangle$
+  of a metal, and from them the phonon linewidth $\gamma_{\mathbf q\nu}$, which
+  inelastic neutron and x-ray scattering resolve, and the dimensionless coupling
+  $\lambda_{\mathbf q\nu}$ whose zone average enters $T_c$, at a list of
+  broadenings of the Fermi surface. `calc.get_electron_phonon(q)`, notebook
+  [49](notebooks/49_electron_phonon.ipynb).
 - **Raman tensors**, $\partial\epsilon_{ij}/\partial\tau_{I\alpha}$, how the
   dielectric tensor changes when an atom moves. `calc.get_raman_tensors()`,
   notebook [26](notebooks/26_raman_and_infrared_spectra.ipynb).
@@ -647,6 +654,7 @@ note, the routine or task in the other code's source, is in
 | **Dielectric constant** and **Born effective charges** | `calc.get_dielectric_tensor()` | ✓ | ✓ |
 | **Phonons at $\Gamma$** | `calc.get_phonons()` | ✓ | ✓ |
 | **Phonons at $\mathbf q \neq 0$** | `calc.get_phonons_at_q(q)` | ✓ | ✓ |
+| **Electron-phonon coupling**: phonon linewidths and $\lambda_{\mathbf q\nu}$ | `calc.get_electron_phonon(q)` | ✓ | (✓)¹⁸ |
 | **Raman tensors** | `calc.get_raman_tensors()` | (✓)¹⁰ | |
 | **Raman and infrared spectra** | `calc.get_vibrational_spectrum()` | ✓ | |
 | **LO-TO splitting and the static dielectric constant** | `calc.get_vibrational_spectrum(loto_direction=...)` | ✓ | (✓)¹¹ |
@@ -714,6 +722,10 @@ Where a tick is qualified, in one sentence each; the routines behind them are in
 - ¹⁷ `pw.x` has nothing of the kind, `PWCOND` is the different geometry of the
   note above, and Elk's Fermi-surface tasks write bands for a plotting program
   rather than weighting them by anything.
+- ¹⁸ Elk's `ephcouple` keeps the phonon frequency in the second delta,
+  $\delta(\omega_{\mathbf q\nu} + \varepsilon_{n\mathbf k} - \varepsilon_{m\mathbf k+\mathbf q})$,
+  where `ph.x` and this code put both states at $E_F$, so the two linewidths
+  are not the same sum.
 
 The variants under each row, which smearing or tetrahedron method fixes the
 occupations, which projectors DFT+U uses, which constraint scheme holds a

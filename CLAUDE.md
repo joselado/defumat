@@ -222,6 +222,13 @@ in `docs/features.tex`'s amber boxes.
   `dmxc_lsda` does it on both branches), so what was refused as an analysis was a
   convention — and masking the *argument the derivative is taken at* is what works, where
   clipping the density leaves the primal singular and the tangent `0 * inf`.
+- **Electron-phonon coupling at one `q`** (P132, `response/elph.py`): `ph.x`'s
+  `electron_phonon = 'simple'`, the linewidth and `lambda` of each mode at a list of
+  broadenings, on the metallic phonon at `q != 0` (which needed the two-sphere projector's
+  weights at `k` and `k + q` apart, `wk` in the contraction, and one mixer per mode). `g`
+  is the bare vector the right-hand side was built from plus the converged `dV_scf`, so
+  nothing new is differentiated. Refused: a metal at `q = 0` (`ef_shift`), ultrasoft/PAW,
+  spin, and the zone sum (`alpha^2 F`, `T_c`).
 - **Converging a cell with vacuum** (P129, `mixing_mode = 'ldos'`): Herbst and Levitt's
   preconditioner, screening built from the LDOS at `e_F` out of the density's own pass. Two
   rules bind it. The LDOS is a **Gaussian** whatever the run smears with, because the inner
@@ -847,6 +854,7 @@ Paths relative to `quantum_espresso/qe-7.5-ReleasePack/qe-7.5/`.
 | Occupations / smearing | `PW/src/gweights.f90`, `Modules/wgauss.f90`, `Modules/w0gauss.f90`, `PW/src/set_occupations.f90` | |
 | NSCF / band structure | `PW/src/non_scf.f90`, `PP/src/bands.f90`, `PP/src/plotband.f90` | fixed density, diagonalize once per k on an explicit path |
 | DOS | `PW/src/tetra.f90`, `PP/src/dos.f90` | `tetra.f90` has both the linear and the Bloechl-corrected tetrahedron method |
+| Electron-phonon coupling | `PHonon/PH/elphon.f90` (`elphel`, `elphsum_simple`; `elphsum` and `PW/src/a2fmod.f90` for `'interpolated'`), `LR_Modules/orthogonalize.f90` (the metal branch at `ikq`), `PHonon/PH/drhodvnl.f90` | `elphsum_simple` recomputes `E_F` and `N(E_F)` at each `sigma` with `el_ph_ngauss` but takes **Gaussian** deltas. **`test-suite/ph_interpol_metal`'s benchmark is QE 6.5's and is 2.5 cm^-1 from 7.5's `ph.x` on the same ground state** -- use it as evidence, not a reference; the 7.5 outputs are committed beside `al-elph-nosym.in` |
 | Projected DOS | `PP/src/projwfc.f90` (`projwave`, `sym_proj_k`, `print_lowdin`), `PP/src/projections_mod.f90` (`fill_nlmchi`), `PP/src/partialdos.f90`, `PW/src/tetra.f90` (`opt_tetra_partialdos`) | the projectors are `orthoUwfc`'s, so `hubbard/projectors.py` builds them for both; the weighted integration goes through the *same* DOS registry, and `do_projwfc` silently runs the **linear** tetrahedron method whatever the SCF used |
 
 Fortran conventions that carry over: arrays are column-major and 1-indexed, so index order

@@ -82,6 +82,7 @@ instead, which means the physics is selected in the input file rather than at th
 | Band velocities | `get_band_velocities()` | [19](19_linear_response.ipynb) |
 | Phonon frequencies at `Gamma` | `get_phonons()` | [20](20_phonons.ipynb) |
 | Phonon frequencies at any wavevector | `get_phonons_at_q()` | [20](20_phonons.ipynb) |
+| How long a phonon lives in a metal: its linewidth and its electron-phonon coupling `lambda` | `get_electron_phonon()` | [49](49_electron_phonon.ipynb) |
 | Raman tensors | `get_raman_tensors()` | [26](26_raman_and_infrared_spectra.ipynb) |
 | Raman and infrared activities per mode | `get_vibrational_spectrum()` | [26](26_raman_and_infrared_spectra.ipynb) |
 | LO-TO splitting, and the static dielectric constant | `get_vibrational_spectrum(loto_direction=..., neutralize=True)` | [26](26_raman_and_infrared_spectra.ipynb) |
@@ -180,6 +181,7 @@ want a number.
 | [`46_a_spin_wave_that_stays.ipynb`](46_a_spin_wave_that_stays.ipynb) | A long cell built out of a ferromagnet stays ferromagnetic however long it is, the tiled state being an exact solution of its own equations, so a wave has to be handed over: a staggered wave that comes out three millirydberg per cell below the ferromagnet it was started from, a helix that keeps its ninety degrees per cell, and the canting a pitch check on its own would not see |
 | [`47_turning_a_magnet.ipynb`](47_turning_a_magnet.ipynb) | A magnet let go turns on its own: every spin turned together by the torque on the whole texture, as atoms are moved along their forces, so tetragonal cobalt started 51.6 degrees off its long axis lands on it in eight steps, and the energy it gains on the way gives the anisotropy constants; and a self-consistent run with spin-orbit coupling that wanders when left alone and converges on the easy axis when its moments are turned by the same torque |
 | [`48_spiral_chirality.ipynb`](48_spiral_chirality.ipynb) | Spin-orbit coupling added to first order on a spin spiral in its own one-atom cell: on a nickel chain with an iodine beside each bond the energy is a vector along the normal to the plane of the atoms, so only the cycloid in that plane feels it, the mirror-image spiral costs exactly the opposite, and a four-cell supercell and the coupling scaled to zero both land on the same number; the number itself is not converged in cutoff or k-mesh and is shown as the method's, not the chain's |
+| [`49_electron_phonon.ipynb`](49_electron_phonon.ipynb) | Electron-phonon coupling in fcc aluminium at two wavevectors: the linewidth and `lambda` of each mode at ten broadenings of the Fermi surface, against `ph.x` 7.5 on the same input, `lambda` to every digit it prints and the linewidths to 0.007 GHz, and what the dependence on the broadening says about the k-mesh |
 
 ## Conventions
 
@@ -287,7 +289,7 @@ order of magnitude it is rather than as current to the second.
 | `22` | 12 | `28` | 90 | `33` | 401 | `36` | 244 |
 | `42` | 13 | `31` | 34 | `13` | 131 | `35` | 276 |
 | `16` | 18 | `40` | 34 | `30` | 232 | `20` | 282 |
-| `00` | 22 | `23` | 35 | `39` | 151 |  |  |
+| `00` | 22 | `23` | 35 | `39` | 151 | `49` | 194 |
 | `07` | 22 | `32` | 84 | `41` | 164 |  |  |
 | `46` | 61 | `47` | 260 | `48` | 121 |  |  |
 

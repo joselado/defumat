@@ -10660,3 +10660,27 @@ nothing and the tensor is the same to every digit. On this machine the cache hit
 (11.0 s before and after); on a Triton node, where every loaded executable adds memory mappings
 under a cap of 65,530 (`OPEN.md` Part XIII item 2), they are the defect `CLAUDE.md`'s trap list
 describes, and a long ultrasoft Born-charge run there would have met it.
+
+## Electron-phonon coupling at one `q`, against `ph.x` (CPU, D22, 2026-10-05)
+
+`al-elph-nosym.in` (fcc aluminium, norm-conserving LDA, Marzari-Vanderbilt 0.05 Ry, 8x8x8
+unshifted, no symmetry, 512 k-points, `nbnd = 6`) at `q = (1/4, 0, 0)` 2 pi/a with
+`electron_phonon = 'simple'` and `tr2 = 1e-14`. Both codes on core 0 of D22's i5-12600K (a
+performance core), one thread (`OMP_NUM_THREADS=1`, `DEFUMAT_THREADS=1`, the affinity mask set
+before JAX is imported), from a converged ground state, nothing else running. Not this
+workstation: it was free, but the comparison against `ph.x` asked for the same core twice.
+
+| | defumat | `ph.x` 7.5 |
+|---|---|---|
+| phonon at `q` and the coupling, warm | 34.05, 34.04 s (calls 2 and 3; call 1 35.79) | 5.90, 6.06 s (`PHONON` wall, two runs) |
+| the phonon alone | 33.55 s (call 2; call 1 34.83) | `phqscf` 3.82, 3.94 s |
+| self-consistent iterations | 11, three modes mixed separately, `av.it.` 6.55 | 10 + 8 + 8 over three representations, `av.it.` 2 to 6 |
+
+**5.7x**, and the coupling is 0.5 s of it, so the ratio is the metallic phonon at `q`, not the
+matrix elements: `matrix_elements` is one compiled walk over k per mode and a third call compiles
+nothing. The `ph.x` side includes its `k + q` diagonalisation (`phq_init` and the non-scf step
+inside `PHONON`), as ours includes `states_at_k_plus_q`. The same physics as P127's silicon
+pair, the gap here is wider and the place to look first is the solve: 512 points each solved
+for all six bands (a metal keeps every band, where `ph.x` truncates at `nbnd_occ`) against
+`ph.x`'s per-representation stop, which ends a converged representation's solves while ours
+keeps solving all three modes until the worst one is done.

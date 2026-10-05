@@ -2751,11 +2751,104 @@ either: that needs the star of $\mathbf q$ and \code{q2r}/\code{matdyn}'s
 Fourier interpolation on top of this. Ultrasoft and PAW are refused ($S$ moves
 with the atoms, and the orthonormality multipliers carry a term whose bra is at
 $\mathbf k$ and whose ket is at $\mathbf k+\mathbf q$, where $q_{ij}$ pairs
-projectors on one sphere); so are metals, spin polarization, spinors, spin
-spirals, meta-GGA and DFT+U. A \textbf{nonlinear core correction} is refused for
+projectors on one sphere); so are spin polarization, spinors, spin
+spirals, meta-GGA and DFT+U. A \textbf{metal} runs at every $\mathbf q$ but
+zero, and at $\mathbf q = 0$ (or a reciprocal lattice vector) it is refused
+and pointed at \code{get\_phonons()}: only there can a displacement change the
+number of electrons, so only there does the Fermi level move (\code{ph.x}'s
+\code{ef\_shift}), and this route carries no shift. A metal is also refused on
+the k-chunked route an accelerator takes in \code{memory\_mode = 'memory'},
+whose chunk solver is the insulator's. A \textbf{nonlinear core correction} is refused for
 a reason that belongs to $\mathbf q$ rather than to the dataset: two atoms' core
 charges overlap inside a nonlinear $E_{\mathrm{xc}}$, so unlike every other
 frozen term that one \emph{is} a function of $\mathbf q$.
+\end{refuses}
+
+\subsection*{Electron--phonon coupling}
+
+What is the lifetime of a phonon in a metal? It decays by exciting an
+electron--hole pair across the Fermi surface, and the rate is set by the matrix
+element of the change of the self-consistent potential between a state at
+$\mathbf k$ and one at $\mathbf k+\mathbf q$,
+\begin{equation*}
+g^{\mu}_{mn}(\mathbf k,\mathbf q) = \langle\psi_{m\mathbf k+\mathbf q}|
+  \,\partial_{\mu}V_{\mathrm{bare}} + \partial_{\mu}V_{\mathrm{scf}}\,|\psi_{n\mathbf k}\rangle ,
+\end{equation*}
+with $\mu$ an atom and a cartesian direction, so $g$ is in Ry/bohr. Both
+halves are already there after the phonon at $\mathbf q$: the bare one is the
+right-hand side of the Sternheimer equation above, and the screened one is the
+converged $\Delta V_{\mathbf q}$ of its loop. Summed over the Fermi surface
+with the mode's displacement $z_\nu = e_\nu/\sqrt M$,
+\begin{equation*}
+\gamma_{\mathbf q\nu} = \frac{\pi}{2}\sum_{\mathbf k}w_{\mathbf k}\sum_{mn}
+  \big|z_\nu^{\dagger} g_{mn}(\mathbf k,\mathbf q)\big|^2\,
+  \delta(\epsilon_{n\mathbf k}-E_F)\,\delta(\epsilon_{m\mathbf k+\mathbf q}-E_F),
+\qquad
+\lambda_{\mathbf q\nu} = \frac{\gamma_{\mathbf q\nu}}{\pi N(E_F)\,\omega_{\mathbf q\nu}^2},
+\end{equation*}
+meaning that $\gamma_{\mathbf q\nu}$ is the linewidth, a half-width in
+energy that inelastic neutron or x-ray scattering resolves, and
+$\lambda_{\mathbf q\nu}$ the dimensionless coupling of that mode, whose
+average over the zone is the $\lambda$ of McMillan's $T_c$. $w_{\mathbf k}$
+sums to 2 and $N(E_F)$ is per spin. This is \code{ph.x}'s
+\code{electron\_phonon = 'simple'}, transcribed: for each broadening
+$\sigma$ the Fermi level and $N(E_F)$ are recomputed at that width with
+Methfessel--Paxton smearing, and the two deltas are Gaussians of width
+$\sigma$, so you can watch how far the result is from converged in the
+$k$-mesh by how much it moves with $\sigma$.
+
+\begin{pycode}
+# a metal: occupations = 'smearing', nosym and noinv on an unshifted grid
+calc = Calculator.from_file("al-elph-nosym.in", pseudo_dir="pseudo")
+
+el = calc.get_electron_phonon(q=(0.25, 0.0, 0.0), q_cartesian=True)
+print(el.frequencies)        # cm^-1, those of el.phonons
+print(el.sigmas)             # Ry: 0.02, 0.04, ..., 0.20 as in ph.x
+print(el.gamma_ghz[1])       # (3 nat,) linewidths at sigma = 0.04, GHz
+print(el.lambdas[1])         # (3 nat,) lambda_(q nu)
+print(el.dos[1], el.fermi_energies[1])   # N(E_F) per spin per Ry, E_F in Ry
+\end{pycode}
+
+\noindent \code{sigmas}, \code{el\_ph\_sigma}, \code{el\_ph\_nsigma} and
+\code{el\_ph\_ngauss} choose the broadenings as \code{ph.x}'s variables of the
+same names do; \code{degeneracy\_cmm1} (0.05~cm$^{-1}$) is how close two
+frequencies have to be for their linewidths to be averaged as one degenerate
+set. The result also carries \code{el\_ph\_sum}, the
+$3n_{\mathrm{at}}\times3n_{\mathrm{at}}$ matrix $\sum|g|^2\delta\delta$ before
+it is projected on the modes, and \code{phase\_space}, the double delta
+alone.
+
+Aluminium on the $8\times8\times8$ grid without symmetry, against serial
+\code{ph.x}~7.5 on the same input: at $\mathbf q = (1/4, 0, 0)\,2\pi/a$ the
+frequencies are 73.9960, 73.9961 and 132.4755~cm$^{-1}$ against 73.9956,
+73.9957 and 132.4752, and at $\sigma = 0.02$~Ry the linewidths are 2.67, 2.67
+and 1.53~GHz with $\lambda = 0.2120$, 0.2120, 0.0381, which is what
+\code{ph.x} prints; $E_F$, $N(E_F)$ and the double delta agree to every printed
+digit at all ten broadenings. Test-suite \code{ph\_interpol\_metal} has the
+same cell and the same $\mathbf q$, and is \emph{not} the reference: its
+benchmark was written by QE~6.5, whose frequencies there are 76.57 and
+133.66~cm$^{-1}$ from a ground state identical to 7.5's to every printed digit,
+so the difference is between the two versions of \code{ph.x}.
+
+\textbf{What is invariant and what is not.} The sum over band pairs with
+weights that depend only on eigenvalues does not care which basis a degenerate
+eigensolver returned, at $\mathbf k$ or at $\mathbf k+\mathbf q$, so
+$\gamma$ is well defined; a single $|g_{mn}|^2$ is not, and is not exposed.
+Inside a degenerate pair of \emph{modes} the split of $\gamma$ between the two
+depends on which basis of the pair the diagonalisation chose, so the pair's
+average is reported, which is the number \code{ph.x} prints for each member.
+
+\begin{refuses}
+\textbf{Refuses.} An insulator (with fixed occupations the double delta is
+empty and $\lambda$ is not defined), and everything the phonon at $\mathbf q$
+refuses: so ultrasoft and PAW, whose screened term carries the augmentation
+charge's $\int\Delta V\,Q_{ij}$ on the projectors (\code{adddvscf}), spin
+polarization and spinors, a symmetry-reduced $k$-set, the k-chunked route, and
+$\mathbf q = 0$, where the Fermi shift has to be taken out of $\Delta V$
+first. There is no $\alpha^2F(\omega)$, no $\lambda$ averaged over the zone
+and no $T_c$: \code{ph.x}'s \code{'interpolated'} route gets them from a
+dense-grid band structure and \code{q2r}/\code{matdyn}'s interpolation, and
+the dispersion they need is not written here.
 \end{refuses}
 
 \begin{refuses}

@@ -204,6 +204,13 @@ new phase is started. Each entry names the missing term rather than the missing 
 because that is what decides whether it is a session or a phase.
 
 - **Wyckoff input** (P6, the one part of that phase not done).
+- **The electron-phonon coupling summed over the zone** (P132 has it at one `q`):
+  `ph.x`'s `'interpolated'` route, which needs the dense-grid band structure (`la2F`), the
+  trilinear interpolation of `|g|^2` (`elphsum`, `clinear`), the star of `q` and
+  `q2r`/`matdyn` before `alpha^2 F`, the zone-averaged `lambda`, `omega_log` and `T_c`
+  (`lambda.x`) exist; the coupling at `q = 0` of a metal, which needs `def` taken out of
+  `dV_scf` in the Gamma loop; and an ultrasoft or PAW coupling, whose `dvpsi` carries
+  `adddvscf`'s `int3`, P97's second term.
 - **Converging a magnetic slab or a metal on a semiconductor** (P129): `mixing_mode = 'ldos'`
   screens the charge from the states at `e_F` and is flat in the vacuum on metal films, but the
   magnetization takes `beta` (the Stoner term of arXiv:2606.26693 was built and measured in P130
@@ -308,7 +315,8 @@ because that is what decides whether it is a session or a phase.
   wedge rather than the full grid, `symdvscf`), the **star of `q`**, and `q2r`/`matdyn`'s
   Fourier interpolation with the acoustic sum rule. `test-suite/ph_2d` has a committed
   BN reference for both halves. Beside them, the regimes P71 refuses: ultrasoft and PAW,
-  metals, spin, spinors, and a nonlinear core correction (`dynmatcc` is the one frozen
+  spin, spinors, a metal at `q = 0` through this route (`ef_shift`; P132 admitted the
+  metal everywhere else) or on the k-chunked route, and a nonlinear core correction (`dynmatcc` is the one frozen
   term that *is* a function of `q`). **The ultrasoft and PAW refusal named one term and
   the code is missing four** (P97): the response density carries no augmentation at all
   (`addusddens.f90`'s `Q_ij(q + G)`, the table at the shifted modulus its `setqmod` call
@@ -24101,3 +24109,83 @@ none a wrong number; the list is in `GPU-SPEED-NEXT.md`. Made portable at the us
 (`tests/backend.py`), it then passed whole on the card, 2841 tests in 11:59. The workstation's gate passed on the
 branch (3446 passed), and so did the four slow response files; the new compile-count test fails
 on the commit before its fix.
+
+### P132 -- Electron-phonon coupling at one `q`: the metallic phonon away from `Gamma` (EP1) and `ph.x`'s `electron_phonon = 'simple'` on top of it (EP2). ✅ DONE for norm-conserving metals on the full grid, against serial `ph.x` 7.5: frequencies to 4e-3 cm^-1, `lambda` and the Fermi-surface sums to every printed digit, `gamma` to 7e-3 GHz, 2026-10-05; the zone sum (`'interpolated'`, `alpha^2 F`, `T_c`) is not here.
+
+The plan was written by a fable subagent before any code (it read `elphon.f90`, the test-suite
+directories and Elk's `ephcouple.f90`) and checked by the advisor halfway through.
+
+**EP1, the metal at `q != 0`.** Three things the insulator could not tell apart, in
+`response/phononq.py`: the column mask of the two-sphere projector is `setup_nbnd_occ`'s cut
+`eps < ef + xmax degauss` on the **k + q** eigenvalues; `orthogonalize`'s smeared weights take
+`wg1`, `w0g` at `k` and `wgp`, `theta(eps_(j,k+q) - eps_(i,k))` across the two spheres
+(`TwoSphereSolver._smeared_projection_at_q`, `orthogonalize.f90:115-138` as written); and the
+response contraction weights by `wk`, not `wg`, because the occupation is already inside `dpsi`
+(`drhodvnl.f90:181`, `phonon._state_weights`). The Fermi level is re-derived from the eigenvalues
+as the `Gamma` route does. No `ef_shift`: `ph.x` shifts only at `q = 0` (`lmetq0`), and a metal at
+`q = 0` or at a reciprocal lattice vector is refused on this route and pointed at
+`get_phonons()`, the user's choice of 2026-10-05. Refused on the k-chunked route, whose chunk
+solver is built with `smearing=None`.
+
+| check | defumat | reference |
+|---|---|---|
+| one atom at `q = b_3/2`, 4x4x4 (`al-metal-nosym.in`), against `al2-metal`'s folded `Gamma` modes in `ph.x` | 146.7199, 146.7200, 311.0496 | 146.7105, 146.7144, 311.0354 |
+| the same with the atom at (1/3, 2/3, 0) crystal | 146.7352, 146.7354, 311.0330 | (a rigid shift) |
+| `al-elph-nosym.in`, `q = (1/4, 0, 0)`, `tr2 = 1e-14` | 73.9960, 73.9961, 132.4755 | `ph.x` 7.5 nosym: 73.9956, 73.9957, 132.4752 |
+| the same, `q = (3/4, 1/4, 1/4)` | 179.8494, 223.9919, 292.9981 | 179.8509, 223.9919, 293.0018 |
+
+**The trap: the committed benchmark is not 7.5's.** `test-suite/ph_interpol_metal`'s
+`al.elph.in` output was written by QE **6.5** and gives 76.568, 76.568, 133.655 cm^-1 at
+`(1/4, 0, 0)`; serial `ph.x` 7.5 on the same cell gives 74.007, 74.007, 132.474 with symmetry and
+73.996, 73.996, 132.475 without, from a ground state identical in the two versions
+(-4.18634465 Ry in both, `E_F` 8.1777 against 8.1776 eV), so the 2.5 cm^-1 is between the two
+`ph.x`. The first comparison against it read as a 1.8 cm^-1 defect and cost an afternoon's
+diagnosis (a rigid shift, three more `q`, `Gamma`, a fixed threshold) before 7.5 was run.
+`reference.out.ph-al-elph-nosym` and `-q2` are 7.5's, from `al-elph-nosym.ph.in`.
+
+**The defect it did find: one Anderson history across the modes.** With the scheduled CG
+thresholds (`pass_threshold`, `ph.x`'s) and `tr2 = 1e-14` the loop at `(1/4, 0, 0)` reached
+1.5e-14 at iteration 11 and then grew to 1e+4 by iteration 45. Its first two iterations,
+7.010e-01 and 2.853e+02, are `ph.x`'s to every printed digit for the longitudinal mode, so the
+solve, the density and the kernel were right and the histories part at the mixer. The 2x2:
+joint mixing at a fixed CG threshold of 1e-11 converges (9 iterations, 6.8e-17, 73.9951 and
+132.4733); per-mode mixing at the schedule converges (11 iterations, 1.3e-15, the table above).
+`solve_at`'s test is `sqrt(rho) < threshold`, `cgsolve_all`'s norm, so the schedule means what it
+means in `ph.x`. `screening_loop_at_q` now keeps one mixer per mode, which is `solve_linter`'s
+per-representation `mix_potential` with every mode its own representation. **On silicon (the
+insulator route, `si-epsilon-unshifted-nosym`)** the frequencies at `L` and `X` move by at most
+0.010 cm^-1, inside each arm's own distance from a run at a fixed 1e-12 CG threshold (0.013 and
+0.019 at `X`), and `X` converges in 7 iterations instead of 9; `test_phonons_at_q.py` passes.
+
+**EP2, the coupling** (`response/elph.py`, `Calculator.get_electron_phonon`). `g` is the bare
+vector the Sternheimer right-hand side was built from plus the converged input `dV_scf`
+(`screening_loop_at_q` now leaves it on the displacements, `dynamical_matrix_at_q(...,
+keep_internals=True)` hands it over), contracted with `psi_(k+q)`: `elphel`'s `zgemm`. The sum is
+`elphsum_simple` transcribed: `E_F` and `N(E_F)` recomputed at each `sigma` with `el_ph_ngauss`
+(MP), Gaussian deltas, `gamma = (pi/2) z^dagger S z`, `lambda = gamma / (pi omega^2 N(E_F))`, zero
+below 20 cm^-1. Rule D4: only the band-pair trace `S` and the degenerate-mode average of `gamma`
+are exposed. One trap of this code's own on the way: `bisect_fermi` takes one weight per row and
+broadcasts it over the bands, and an `(nk, nbnd)` weight array put `E_F` at -2.9 eV.
+
+| `q = (1/4, 0, 0)`, `sigma = 0.02` Ry | defumat | `ph.x` 7.5 |
+|---|---|---|
+| `E_F` (eV), `N(E_F)` (states/spin/Ry) | 8.278656, 2.675810 | 8.278656, 2.675810 |
+| double delta | 20.425493 | 20.425493 |
+| `lambda` | 0.2120, 0.2120, 0.0381 | 0.2120, 0.2120, 0.0381 |
+| `gamma` (GHz) | 2.67, 2.67, 1.53 | 2.67, 2.67, 1.53 |
+
+Over both `q` and all ten broadenings the largest differences are 7.0e-3 GHz in `gamma` (on
+18.48, of which 5e-3 is `ph.x`'s rounding) and 5.0e-5 in `lambda` (all rounding); `E_F`,
+`N(E_F)` and the double delta agree to the printed `f10.6`. `tests/regression/test_electron_phonon.py`
+asserts all of it at `tr2 = 1e-14` and `conv_thr = 1e-12`, plus the folding identity and the
+`q = 0` refusal. A third `get_electron_phonon` on one calculator compiles nothing
+(`jax_log_compiles`).
+
+**Cost**, one core of D22 each, from a converged ground state (`PERFORMANCE.md`): 34.0 s warm
+against `ph.x`'s 5.9 and 6.1 s, **5.7x**, of which the coupling is 0.5 s; the rest is the
+metallic phonon at `q`, 11 iterations of three modes at `av.it.` 6.55 against `ph.x`'s 26
+iterations over three representations.
+
+**Elk** computes the linewidth too (`ephcouple.f90`, task 240) with the phonon frequency in the
+second delta, `delta(omega + e_k - e_(k+q))`, where `ph.x` puts both states at `E_F`; not the
+same sum, and the README's tick says so.
