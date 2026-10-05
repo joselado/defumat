@@ -8,8 +8,12 @@ and grid, as ``pw.x``'s does, with the two mixer layouts solving the same system
 there and the shell above the smooth sphere passing through at ``beta``.
 """
 
+import contextlib
+import logging
+import re
 from pathlib import Path
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -268,3 +272,60 @@ def test_above_dual_4_both_layouts_solve_on_the_smooth_grid(dual8):
     assert np.max(np.abs(shell_in)) > 0
     np.testing.assert_allclose(shell_out, 0.6 * shell_in, rtol=0,
                                atol=1e-12 * np.max(np.abs(shell_in)))
+
+
+@contextlib.contextmanager
+def _counting_compiles():
+    """Every XLA compilation inside the block, read off the ``jax`` logger (``test_eager.py``)."""
+    names = []
+
+    class Grab(logging.Handler):
+        def emit(self, record):
+            found = re.search(r"Finished XLA compilation of (.+?) in", record.getMessage())
+            if found:
+                names.append(found.group(1))
+
+    handler, logger = Grab(), logging.getLogger("jax")
+    before = jax.config.jax_log_compiles
+    jax.config.update("jax_log_compiles", True)
+    logger.addHandler(handler)
+    try:
+        yield names
+    finally:
+        logger.removeHandler(handler)
+        jax.config.update("jax_log_compiles", before)
+
+
+def test_a_second_preconditioner_and_a_second_call_compile_nothing(dual8):
+    """One program per grid and shape, shared by every instance and every call.
+
+    The SCF builds a preconditioner once a run and a relaxation once a step, so
+    a program keyed on the instance would compile again at every geometry. The
+    counter is first shown to see the cold call, so that an empty second count
+    is a measurement and not a silent logger.
+    """
+    basis, cell = dual8
+    layout = SphereLayout(basis.dense, basis.ngms, cell, (2,) + basis.dense.grid)
+    rng = np.random.default_rng(4)
+    residual = np.stack([_band_limited(basis.dense, rng, 1e-3) for _ in range(2)])
+    smooth_on_dense = GVectors(miller=basis.dense.miller[:basis.ngms],
+                               grid=basis.dense.grid, ecut=basis.dense.ecut,
+                               gamma_only=basis.dense.gamma_only)
+    density = np.stack([0.5 * _slab_density(smooth_on_dense, cell)] * 2)
+    stored_residual = layout.stored_of(residual.reshape(layout.shape)).ravel()
+    stored_density = layout.stored_of(density.reshape(layout.shape)).ravel()
+
+    jax.clear_caches()
+    with _counting_compiles() as cold:
+        local_tf_preconditioner(basis.dense, cell, layout.shape, beta=0.7,
+                                smooth=basis.smooth)(residual.ravel(), density.ravel())
+        local_tf_preconditioner_g(layout, basis.smooth, cell, beta=0.7)(
+            stored_residual, stored_density)
+    assert cold, "the counter saw no compilation on a cold call"
+
+    with _counting_compiles() as warm:
+        local_tf_preconditioner(basis.dense, cell, layout.shape, beta=0.4,
+                                smooth=basis.smooth)(2.0 * residual.ravel(), density.ravel())
+        local_tf_preconditioner_g(layout, basis.smooth, cell, beta=0.4)(
+            2.0 * stored_residual, stored_density)
+    assert not warm, f"a second instance compiled {warm}"
