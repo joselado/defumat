@@ -43,9 +43,31 @@ user and skipped** (2026-10-05): `band_precision = 'single'` already covers the 
 more than either:** a complex128 scatter-set is a serial loop over its indices on a card (no
 16-byte atomic), which made both vacuum mixers slower on the A2000 than on D22's CPU; fixed with
 `basis.fft.put_unique` (`PERFORMANCE.md`, "A complex scatter-set is a loop on a card"). The next
-`.at[index].set(...)` of complex data on a path a card runs should go through it. **The push gate
-on the card** was started on D22 the same day, the first one with the card as backend; its result
-goes here when it lands.
+`.at[index].set(...)` of complex data on a path a card runs should go through it.
+
+**The push gate on the card, the first ever** (D22, the branch's files over `55c9cd2`, no
+`JAX_PLATFORMS`): **19 failed, 2822 passed, 74 skipped in 40:53**, against 20:45 on the
+workstation's CPU. Every failure was read, and none is a wrong number; they are tests that assume
+the CPU, in four kinds:
+
+* **a CPU default asserted as the default** (10): `test_k_budget.py` (3), `test_plane_chunk.py`,
+  `test_projector_storage.py` (2, the card's default is `rebuild`), `test_response_route.py`
+  (`on_a_cpu_...`), `test_wfc_store.py`, `test_sizing.py` (a row the card's report names
+  differently, `KeyError`) and `test_anisotropy_one_calculation.py` (2, a counter that the card's
+  route never increments);
+* **exact equality or an absolute bound read off the CPU's rounding** (5): two calls of the
+  tetrahedron occupations 2.2e-16 apart (`test_eager.py`; a scatter-add with colliding indices is
+  atomic on a card, so not reproducible run to run), a row subset 3.9e-15 from the whole set
+  (`test_row_subset.py`), the magnon kernel 4e-14 on 109 (`test_magnon_machinery.py`), the
+  photocurrent derivative's asymmetry 1.9e-9 on a block of 1.9e7, 1e-16 relative
+  (`test_photocurrent_machinery.py`), and both cases of `test_becp_conjugate_side.py`, which
+  asserts the same bits from two contractions;
+* **a compiled program's shapes** (1): `test_gamma_davidson_real.py` reads the CPU's HLO;
+* **a fixture placed by the CPU's rounding** (1): `test_magnetic_fields.py`'s polar-angle case
+  needs a residue that the card rounds to exactly zero.
+
+Making the gate portable (pin the platform where a test is about a CPU default, a relative bound
+where it is about round-off) is not done; it is the user's call whether the card gate is wanted.
 
 ## Where it stood, 2026-10-04 (master `3f92e8a`, read against the code, nothing measured)
 

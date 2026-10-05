@@ -24095,5 +24095,8 @@ the `jacfwd` of `frozen_polarization` and the per-atom `jvp` of `_constraint_san
 (`test_a_second_whole_k_born_call_compiles_nothing`). The `CLAUDE.md` trap, at sites the
 2026-10-02 sweep did not reach because the streamed route's test was the one written.
 
-**The gate on the card** is the first: the earlier D22 gates all set `JAX_PLATFORMS=cpu`. Its
-result is in `GPU-SPEED-NEXT.md`.
+**The gate on the card** is the first: the earlier D22 gates all set `JAX_PLATFORMS=cpu`. 19
+failed of 2915, every one a test that assumes the CPU (its defaults, its rounding, its HLO) and
+none a wrong number; the list is in `GPU-SPEED-NEXT.md`. The workstation's gate passed on the
+branch (3446 passed), and so did the four slow response files; the new compile-count test fails
+on the commit before its fix.
