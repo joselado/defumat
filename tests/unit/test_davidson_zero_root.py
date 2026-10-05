@@ -73,15 +73,28 @@ def test_a_finite_cholesky_answer_with_a_spurious_root_is_flagged(i):
     assert float(orthonormality_defect(s, vectors[:, :NBND])) > orthonormality_tolerance(s.dtype)
 
 
-@pytest.mark.parametrize("i", [52, 53])
-def test_the_spurious_root_sits_below_the_spectrum_and_the_canonical_route_drops_it(i):
-    h, s, parked = _captured(i)
-    cholesky, _ = generalised_eigh(h, s, robust=False, parked=parked)
-    assert float(cholesky[0]) < LOWEST - 0.5, "the captured solve no longer shows the defect"
+@pytest.mark.parametrize("i", [51, 52, 53])
+def test_the_canonical_route_drops_the_near_null_direction_and_cholesky_does_not(i):
+    """Where the spurious root lands is round-off; that Cholesky is wrong is not.
 
+    On the CPU that captured them, solves 52 and 53 put it at -0.60 and -1.08
+    Ry, below the spectrum, but its value is round-off divided by an overlap
+    eigenvalue of 4.9e-16, so another LAPACK, or cuSOLVER, may put it anywhere.
+    What holds on any arithmetic is that the Cholesky answer is wrong somewhere:
+    its coefficients are not S-orthonormal, or its roots are not the canonical
+    route's.
+    """
+    h, s, parked = _captured(i)
     values, vectors = generalised_eigh(h, s, robust=True, parked=parked)
     assert float(orthonormality_defect(s, vectors[:, :NBND])) < 1e-12
     assert abs(float(values[0]) - LOWEST) < 1e-6
+
+    cholesky, coefficients = generalised_eigh(h, s, robust=False, parked=parked)
+    defect = float(orthonormality_defect(s, coefficients[:, :NBND]))
+    shift = float(np.max(np.abs(np.asarray(cholesky[:NBND]) - np.asarray(values[:NBND]))))
+    assert defect > orthonormality_tolerance(s.dtype) or shift > 1e-6, (
+        "the captured solve no longer shows the defect"
+    )
 
 
 class _Skewed:
