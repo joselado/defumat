@@ -316,7 +316,7 @@ because that is what decides whether it is a session or a phase.
   Fourier interpolation with the acoustic sum rule. `test-suite/ph_2d` has a committed
   BN reference for both halves. Beside them, the regimes P71 refuses: ultrasoft and PAW,
   spin, spinors, a metal at `q = 0` through this route (`ef_shift`; P132 admitted the
-  metal everywhere else) or on the k-chunked route, and a nonlinear core correction (`dynmatcc` is the one frozen
+  metal everywhere else, and on the k-chunked route since P133's merge), and a nonlinear core correction (`dynmatcc` is the one frozen
   term that *is* a function of `q`). **The ultrasoft and PAW refusal named one term and
   the code is missing four** (P97): the response density carries no augmentation at all
   (`addusddens.f90`'s `Q_ij(q + G)`, the table at the shifted modulus its `setqmod` call
@@ -24214,3 +24214,80 @@ float32 part with float64 at 1/70, not claims about an A100.
 **Elk** computes the linewidth too (`ephcouple.f90`, task 240) with the phonon frequency in the
 second delta, `delta(omega + e_k - e_(k+q))`, where `ph.x` puts both states at `E_F`; not the
 same sum, and the README's tick says so.
+
+### P133 -- The metallic phonon at `q`, cut to each k-point's own band count, one loop per mode, off the k-grid and on a card; and two defects a four-atom cell found. ✅ DONE on D22's CPU and its RTX A2000, 2026-10-05: 3.2x `ph.x` on one aluminium atom (from 5.7x) and 3.9x on four (from 5.6x and wrong).
+
+**Where the time went.** On `al-elph-nosym.in` at `q = (1/4, 0, 0)`, one core of D22, the warm
+34.0 s of P132 was 25.0 s of CG solves, 5.1 s of response density, 2.6 s of the `k + q`
+diagonalisation and 1.3 s of everything else, against `ph.x`'s 2.3 s of `cgsolve` and 0.42 s of
+`incdrhoscf`. Two things set the solve's size and both were `ph.x`'s to copy:
+
+* **The rows.** A metal solved all six bands at every k-point. `cgsolve_all` is called with
+  `nbnd_occ(ikk)` bands (`response_kernels.f90:261`) and `incdrhoscf` sums the same count, while
+  `orthogonalize` projects over every band at `k + q` (`DO jbnd = 1, nbnd`). On this grid
+  `nbnd_occ` is 1, 2, 3 or 4 at 167, 243, 96 and 6 k-points, 1.88 on average.
+  `TwoSphereSolver` now cuts the solved block at the grid's widest count (`metallic_rows`) and
+  keeps every band at `k + q`, and its `solve` and its response density walk the k-points in
+  groups of equal count (`row_groups`, `narrowed`), each group at its own static width, so the
+  block shrinks the way `nbnd_occ(ikk)` makes it shrink. The grouped and whole-width solves agree
+  to 7e-11 at a 1e-8 threshold. The coupling's matrix elements still run over every band at
+  both spheres (`elphel`), so the bare vectors are built on the whole block and the solve takes
+  their leading rows.
+* **The loop.** `ph.x` runs one `solve_linter` per representation, with its own CG schedule from
+  its own `dr2` and its own stop. The loop here mixed the modes separately since P132 but scheduled
+  and stopped them on the worst one. It now runs one loop per mode inside one pass: each mode's
+  threshold comes from its own previous `|ddv_scf|^2`, and a mode below `tr2` keeps its input and
+  is not solved again. On the single atom that is 24 mode-solves in 8 passes against 33 in 11,
+  and `ph.x`'s 26; on four atoms 165 against `ph.x`'s 144.
+
+Together, warm on core 0: **34.0 to 19.1 s** at `(1/4, 0, 0)` against `ph.x`'s 5.90 and 6.06 s,
+and 21.8 s at `(3/4, 1/4, 1/4)` against 6.05 and 5.95 s. Frequencies 73.9961, 73.9963, 132.4750
+and 179.8494, 223.9916, 292.9979 cm^-1, 6e-4 and 3.9e-3 from `ph.x` 7.5.
+
+**What is left is the transform.** Each CG iteration is an `H` application, and `H` is two FFTs a
+band: XLA's 15^3 transform costs 19 to 26 us here and its 20^3 one 40 to 46 us, where `ph.x`'s
+`fftw` stick transform averages 5.5 us on the first cell and 11.4 us on the second. That is 3x to
+4x per transform before any arithmetic, and it is outside this code. Three other levers were
+measured and gave nothing: batching k-points or bands (`k_batch` 8, 64, 512 and `band_batch`
+`all`: 25.6 to 48.4 s against 21.1), XLA's older CPU runtime (`--xla_cpu_use_thunk_runtime=false`:
+18.98 against 19.38 s), and building the metal's projection weights and the preconditioner's
+kinetic scales once per solver rather than per k-point and solve (19.10 against 19.07 s, reverted).
+
+**Four aluminium atoms, and a Davidson defect.** The simple-cubic cell of fcc aluminium
+(`al4-metal-k5-nosym.in`: four atoms, 5x5x5 unshifted, no symmetry, `nbnd = 10`) at
+`q = (0.2, 0, 0)` came out 3 to 4 cm^-1 from `ph.x` 7.5 with its degenerate pairs split (59.71,
+61.15 against 56.94, 56.94), and so did the code of P132; with the CG held at 1e-10 both agreed
+with `ph.x` to 0.035 cm^-1. The error sat in one k-point and one band: the non-self-consistent
+diagonalisation at `k + q` had returned, at one k-point of 125 (which one depends on round-off:
+28 on the workstation, 65 on D22), a lowest root 1.07 Ry below the true one with an eigenvector of
+**zero norm**, so every true state moved up a slot, and `h_prec` paired solved row 0 with that
+vector, whose kinetic scale is zero, so band 0's CG stopped where it started. The cause is in the
+eigensolver: the subspace overlap reached 4.9e-16 against an order-one largest eigenvalue while
+staying positive, so the Cholesky factor was finite, the guard that watches for a non-finite factor
+passed, and the reduction turned round-off along the near-null direction into a root below the
+spectrum. Inside Davidson the Cholesky route now measures `max |V^H S V - 1|` on the roots it
+keeps (3e-15 or less on every clean solve of that call, 1.4e-2 to 6.8e-2 on the broken ones) and
+hands a solve over `sqrt(eps)` to the canonical route the retry already had
+(`tests/unit/test_davidson_zero_root.py` replays the captured solves;
+`tests/regression/test_davidson_zero_root.py` runs the cell). After it the four-atom frequencies
+are 56.9558, 56.9563, 107.6808, 193.2091, ... against `ph.x`'s 56.9408, 56.9439, 107.6532,
+193.2040, ..., 0.028 cm^-1 at most, which is `ph.x`'s own scheduled residue here; warm **169.8 s
+against `ph.x`'s 43.1 and 45.2 s**, 165 mode-solves against 144.
+
+**A `q` off the k-grid failed outright.** `map_bands` reshaped every band back to the input's
+length, and the bare perturbation and `dV_scf |psi>` move a band from the `k` sphere to the `k + q`
+one, whose padded width differs whenever `k + q` is not a grid point. Every `q` tested before was on
+its grid. It now keeps the output's length (`test_map_bands_lets_a_band_change_its_length`), and
+`al-metal-nosym.in` at `q = (0.1, 0.05, 0)` gives 33.036, 41.287, 52.805 cm^-1 on D22 against
+`ph.x`'s 33.035, 41.280, 52.805, with `N(E_F)` and the double delta to every printed digit
+(`test_a_wavevector_off_the_grid_matches_ph_x`). That point is soft and its scheduled residue is
+the largest measured: 41.2972 on the workstation, 41.2941 with the CG held at 1e-10, so `ph.x`
+itself is 1.5e-2 from its own converged value and the test allows 3e-2.
+
+**On the card**, D22's RTX A2000, the merged code (the k-chunked route of P132's last paragraph
+with the cut block passed into its pass as `rows`): **7.0 s warm in `memory_mode = 'memory'`**,
+against 11.9 s before, and 17.0 s in `'speed'`, 8 passes in both, frequencies 73.9962, 73.997,
+132.4749. The chunked route cannot group by width inside its compiled pass, which reads no
+eigenvalues, so it solves at the grid's widest count. Card times on a float32 part with float64 at
+1/70, not claims about an A100.
+

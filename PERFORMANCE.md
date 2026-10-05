@@ -10702,8 +10702,36 @@ the candidates are the `jax.jit` passes taking every array as an argument agains
 per-mode `compiled` closures, and the host-side fields and mixer. A float32 part with float64 at
 1/70 of its rate; not a claim about an A100.
 
-**The whole route has moved since the table above.** At `7faef71` it gives 73.9950, 73.9950,
-132.4738 cm^-1 in 13 iterations, on this workstation, on the card, and in the other session's
-run of the same commit, where the table and `PLAN.md` P132 record 73.9960, 73.9961, 132.4755 in
-11; still 1.4e-3 inside the 6e-3 tolerance against `ph.x`, and not caused by the walked route,
-which reproduces the whole one to 1.7e-8.
+**The 13 iterations are a placement, not a change of code.** At `7faef71` the whole route gives
+73.9950, 73.9950, 132.4738 cm^-1 in 13 iterations on four threads of this workstation and on the
+card's host cores, and 73.9960, 73.9961, 132.4755 in 11 on D22's core 0, the table's run, the
+same commit read again the same evening. The scheduled loop's path follows the last bits of its
+CG solves, which the thread count and the core type move; both are 1.4e-3 inside the 6e-3
+tolerance against `ph.x`, and the walked route reproduces the whole one to 1.7e-8 on one placement.
+
+**After P133** (2026-10-05, the same core 0 of D22, the same input, warm, call 2 of each):
+
+| | defumat | `ph.x` 7.5 | ratio |
+|---|---|---|---|
+| `al-elph-nosym.in`, `q = (1/4, 0, 0)` | 19.07, 19.10, 19.38 s (three processes) | 5.90, 6.06 s | 3.2x (from 5.7x) |
+| `al-elph-nosym.in`, `q = (3/4, 1/4, 1/4)` | 21.79 s | 6.05, 5.95 s | 3.6x |
+| `al4-metal-k5-nosym.in` (four atoms, 125 k, `nbnd = 10`), `q = (0.2, 0, 0)` | 169.83 s (call 1 183.63) | 43.11, 45.20 s | 3.9x (from 5.6x) |
+| mode-solves in all, single atom at `(1/4, 0, 0)` | 24 in 8 passes | 26 | |
+| mode-solves in all, four atoms | 165 in 16 passes | 144 | |
+
+The single atom's warm call is 13.0 s of solves, 2.4 s of response density and 2.6 s of the
+`k + q` diagonalisation; the four atoms' is about 133 s of solves, 21 s of response density and
+6.5 s of diagonalisation, against `ph.x`'s 27.7 s of `cgsolve` and 5.1 s of `incdrhoscf`. Where
+the steps went (`PLAN.md` P133): a metal's solve cut at each k-point's own `nbnd_occ(k)`, 1.88
+bands of 6 on average, and one loop per mode with its own schedule and stop. What is left is the
+transform: one XLA FFT costs 19 to 26 us at 15^3 and 40 to 46 us at 20^3 on this core, against
+`fftw`'s stick transform at 5.5 and 11.4 us in `ph.x`'s own clock (`fftw` over its calls), which is
+3x to 4x before any arithmetic. Measured and no help: `k_batch` 8 to 512 and `band_batch = 'all'`
+(25.6 to 48.4 s against 21.1), the older XLA CPU runtime (18.98 against 19.38 s), and tables of
+the projection weights and preconditioner built once per solver (19.10 against 19.07 s). The
+earlier four-atom figure (241 to 253 s) was taken before the Davidson fix of P133 and its answer
+was 3 to 4 cm^-1 out, so it is a time for a wrong result, kept only as the "from".
+
+**On the card after P133**, D22's A2000, host cores 6-11: 7.0 s warm in `memory_mode = 'memory'`
+(call 1 14.1 s; 11.9 s before) and 17.0 s in `'speed'` (call 1 31.3 s), 8 passes in both, against
+`ph.x`'s 5.9 to 6.1 s on one CPU core.
