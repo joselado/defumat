@@ -4191,10 +4191,15 @@ $H(\mathbf k)$ and $D$ from a difference of the dense eigenvalues: the two agree
 to $1.6\times10^{-5}$ of the scale from 0.5 to 16~eV with the term, and differ by
 the whole scale, 0.81 against 0.81, without it. On the $4^3$ grid of the
 snippet the term makes $\epsilon_{xx}$ at $\omega\to0$ read $-278$ with
-$\eta = 0.5$~eV, since it grows as $1/\eta^2$ there; \code{subtract\_static=True}
+$\eta = 0.5$~eV, since it grows as $1/\eta^2$ there. \code{subtract\_static=True}
 removes the constant part of $\mathbf J$ first, as Elk's \code{jtconst0} does,
-which is right only once the current has settled to it, and on a converged
-mesh it is not needed.
+and on that grid it brings the kick to the interband
+\code{get\_optical\_conductivity} on the same mesh to 0.1 to 0.3 per cent from 2
+to 6~eV ($32.87+10.59i$ against $32.83+10.61i$ at 2~eV) and to 3 per cent at
+$\omega\to0$ (22.59 against 23.27), where the time average of the oscillating
+current over a finite run is not exactly zero. Both read 23 because a $4^3$ grid
+is far from converged for silicon. On a converged mesh the term, and the
+subtraction, are not needed.
 
 \subsection{The high-harmonic spectrum}
 
