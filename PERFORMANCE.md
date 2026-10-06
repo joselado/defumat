@@ -10907,3 +10907,13 @@ BiCGStab solves' Hamiltonian applications (27 iterations of two applications on 
 whole code shares, and what would make it cheaper is fewer iterations (the projector on more computed
 bands, a warm start, which took a fine AlAs sweep from 18 iterations to 16) or more vectors per
 transform, not the assembly.
+
+**On D22's RTX A2000**, second calls, against the same script on two CPU threads of the same machine
+(cores 0 and 1, while a hierarchy run held cores 2 to 11, so the CPU column is slow by the shared
+memory bandwidth and is a ratio, not a timing): silicon's two-cycle pulse on the 4x4x4 mesh's
+18-point wedge, **2.86 s frozen and 6.19 s with the potential updated on the card**, against 17.3 and
+36.6 s, the currents equal to 1e-13 and 3e-14; AlAs's spectrum at two frequencies to second order on
+its 4x4x4 mesh's 20 points at 8 Ry, 3.76 s on the card walking one k-point at a time against 3.57 s on
+the CPU, and **2.73 s** once the k-points of a chunk are one `vmap` (`k_batch`), `chi_xyz` equal to
+1e-10 on both, the solver's tolerance. The card runs double precision at 1/70 of single, so these say
+the routes run there unchanged and not what a data-centre card would do.
