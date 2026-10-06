@@ -24,6 +24,18 @@ through ``chi3_from_orders``'s formulas. Unlike ``D`` it is only the leading
 piece of the third-order artefact in ``1/w``: the interband parts carry total
 derivatives of their own, and nothing here takes them.
 
+Measured on D22 at 12 Ry (``STEP4 = 0.005``, within 2 per cent of 0.01):
+``D`` is -9.71, -2.14, -0.539, -0.128, -0.0116 Ha bohr^2 on 2^3 to 10^3, a
+factor of four per step in the mesh, so ``chi_D`` at 1.55 eV and 0.2 eV is
+135, 29.8, 7.5, 1.8, 0.16 against a ``chi^(1)`` of about 15; it then changes sign
+and sits at +0.0215 (12^3) and +0.034 (16^3), a floor that is the frozen
+sphere's at this cutoff and not the mesh's, since at 16 Ry it is +0.0035 at
+12^3 and +0.017 at 16^3: half the 12 Ry floor, and worth ``chi_D = -0.47`` at
+12 Ry, three per cent of ``chi^(1)``. ``S4`` falls more slowly, 3846, 1344, 607, 279, 122, 50, 7.6 Ha bohr^4 on
+2^3 to 16^3, as the ``k^4`` in its weights would have it, and barely moves
+with the cutoff (51.6 at 16 Ry, 12^3); its ``chi(3w)`` is 3.5e-18 on 2^3,
+the size of the whole answer, and 7e-21 on 16^3.
+
     JAX_PLATFORMS=cpu python3 tools/realtime/si_band_curvature.py OUT.json ECUT GRID[,GRID...] [STEP4]
 """
 import json

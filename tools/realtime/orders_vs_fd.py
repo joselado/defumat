@@ -15,6 +15,12 @@ propagator, the time grid and the start transient, so the run can be short and
 the comparison is of the differentiation alone. The states are the dense ground
 states, exact eigenstates of the same ``H(k)``.
 
+Measured on D22 at the defaults (4 Ry, 400 steps a period, ``eta T = 6.3``): the
+``J^(3)(t)`` difference falls by four per halving of ``h`` to **6.5e-6** at
+``h = 3.125e-4`` and rises as ``1/h^3`` below 1.6e-4, the rounding of a current
+that is not small at zero field divided by ``12 h^3``;
+``tests/regression/test_realtime_orders_fd.py`` carries the whole scan.
+
     JAX_PLATFORMS=cpu python3 tools/realtime/orders_vs_fd.py [ecut] [steps_per_period] [eta_T] [h,h,...]
 """
 import json
