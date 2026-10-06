@@ -192,12 +192,12 @@ it decides the low harmonics. Measured offline on 8x8x8, silicon's third harmoni
 is 1.3 times the fundamental rather than 21, and the electrons left excited are
 0.71 per cell rather than 0.31, so the strength of the first few harmonics here is
 a statement about where a handful of k-points sit against the interband
-resonances and not about silicon. From the 11th harmonic on the two meshes agree
+resonances and not about silicon. From the 11th on the odd harmonics of the two meshes agree
 within a factor of two up to the 23rd, both put the cutoff at the 19th, and the
 parity of the harmonics, which is a statement of symmetry, holds on any mesh the
 crystal maps onto itself. The step of 0.2 gives the same harmonics as a step of
 0.1 to 0.1 per cent up to the 21st. Silicon's plane-wave cutoff is its input's
-12 Ry, and at 20 Ry the harmonics up to the 13th move by at most a factor of 2.2 while the
+12 Ry, and at 20 Ry the odd harmonics up to the 13th move by at most a factor of 2.2 while the
 plateau above them does not hold: the 15th moves by a factor of seven, and the
 spectrum stays above a millionth of the fundamental to the 23rd and then drops by
 two decades at the 25th. So the end of the plateau, 29 eV here, is the one number
