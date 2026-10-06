@@ -1,8 +1,23 @@
 # High harmonics and the third harmonic: what to build, in what order, and what each piece costs
 
-A plan written on 2026-10-06 for the session that implements it. Nothing below is
-implemented: the package has no real-time propagation, no $\chi^{(3)}$ and no entry point
-for either, and `README.md` lists real-time propagation under "Not yet". `PLAN.md` stays
+A plan written on 2026-10-06 for the session that implements it.
+
+> **Status, 2026-10-06 evening.** The first two phases are implemented: the repair of the
+> row at k + G = 0, the propagator at a frozen potential, the linear response, the
+> high-harmonic workflow and the little group of the field are `PLAN.md` P134, and the
+> perturbative orders with the third harmonic by the real-time route are P135. Two
+> departures from the text below, each measured: the projectors at k + kappa come from a
+> Chebyshev table of g_l(q^2) rather than from `at_kcart`, since the rebuild by the radial
+> transform was three quarters of a step; and the linear identity against the Kubo sum
+> carries the mesh sum of band curvature, `sigma_RT = sigma_Kubo + i D/(Omega z)`, which on
+> two k-points is the size of the answer. What is left is the stage "Updating the
+> potential in time", the third phase (the frequency-domain hierarchy with its complex
+> shifted solver), and the list "What is left for later". The rest of this file is the
+> plan as written.
+
+When written, nothing below was implemented: the package had no real-time propagation, no
+$\chi^{(3)}$ and no entry point for either, and `README.md` listed real-time propagation
+under "Not yet". `PLAN.md` stays
 the record of what is done, and this file is about what is to be done, why in this order,
 and what was and was not verified while planning it. The next free phase number on the
 day of writing was P134.

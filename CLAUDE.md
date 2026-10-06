@@ -57,7 +57,7 @@ missing, are indexed at the head of `PLAN.md` §3.
 | what is left to do about GPU memory after `memory_mode`, sized and ranked | `GPU-MEMORY-NEXT.md` |
 | what is left to do about GPU speed and the Davidson stall, sized, and the replay tools | `GPU-SPEED-NEXT.md` |
 | which mixer a cell with vacuum wants, what the literature has, and what is left | `VACUUM-MIXING-NEXT.md` |
-| the plan for real-time propagation, high harmonics and the third harmonic, with what was checked | `HARMONICS-NEXT.md` |
+| real-time propagation, high harmonics and the third harmonic: the plan, and what is left of it (the update of the potential, the frequency-domain hierarchy) | `HARMONICS-NEXT.md` |
 
 **The claims in this project are numbers, not adjectives.** A phase is done when it has a
 concrete figure against `pw.x`, against Elk, or against an identity that shares no
@@ -230,6 +230,22 @@ in `docs/features.tex`'s amber boxes.
   is the bare vector the right-hand side was built from plus the converged `dV_scf`, so
   nothing new is differentiated. Refused: a metal at `q = 0` (`ef_shift`), ultrasoft/PAW,
   spin, and the zone sum (`alpha^2 F`, `T_c`).
+- **Real-time propagation, high harmonics and the third harmonic** (P134, P135,
+  `defumat/realtime/`, `workflows/realtime.py`): the occupied states under
+  `H(k + kappa(t))`, `kappa = A/c`, on the sphere built for `k`, at the ground state's
+  potential. Four rules bind it. **The current is `jax.grad` in `kappa` of the kinetic and
+  nonlocal band energy**, which already holds the diamagnetic term and `[r, V_NL]`; adding
+  Elk's `-(1/c) A N` counts the first twice. **The projectors at `k + kappa` come from the
+  Chebyshev table of `g_l(q^2)`** (`realtime/radial.py`), the real-time route's only: the
+  transform cost five Hamiltonian applications a rebuild, and the ground state keeps it.
+  **A k-chunk's arrays are arguments of the kept block, never closed over**: a program
+  `compiled_function` keeps replays the constants it was traced with, so a closure over
+  one chunk returns that chunk's current for the next (wrong by 1.2e-4, silently), and a
+  static field that differs per chunk retraces every block. **The perturbative orders are
+  nested `jvp` in the field amplitude** under `exp(eta t) cos(w t)`, checked against the
+  dense hierarchy of `realtime/dense.py`. Times are Hartree a.u. at the boundary, the step
+  is `H_Ry dt/2`. Refused: ultrasoft/PAW (`P_kappa`), `nspin = 2`, spinors, DFT+U, the
+  potential updated in time.
 - **Converging a cell with vacuum** (P129, `mixing_mode = 'ldos'`): Herbst and Levitt's
   preconditioner, screening built from the LDOS at `e_F` out of the density's own pass. Two
   rules bind it. The LDOS is a **Gaussian** whatever the run smears with, because the inner
@@ -273,8 +289,8 @@ conjugate partner (`gamma_inner`, `calbec_gamma`); and `Im c(0)` must stay zero
 refused**, with a warning, for ultrasoft/PAW, for a run that uses symmetry, and for a
 spinor or spiral run — the same physics at twice the storage, and it says so.
 
-**Out of scope until the above works:** EXX, real-time propagation and the
-Liouville-Lanczos route to a spectrum (`TDDFPT/`), Car-Parrinello (`CPV/`), and everything
+**Out of scope until the above works:** EXX, the Liouville-Lanczos route to a spectrum
+(`TDDFPT/`), Car-Parrinello (`CPV/`), and everything
 in `EPW/`, `HP/`, `GWW/`. The code should nonetheless be shaped so these are additions,
 not rewrites.
 
