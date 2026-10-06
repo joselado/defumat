@@ -24712,14 +24712,13 @@ doors that do that (`calc.density`, `finish_density`, `energy_at(density=None)`)
 **What it costs.** Each step is `1 + corrector` Taylor steps and as many densities and potentials,
 so about twice the frozen step: on silicon's whole 4x4x4 mesh 8.99 against 4.70 ms per k-point and
 step (two-atom silicon at 12 Ry, four of this workstation's efficiency cores beside other work, a
-ratio and not a timing), and on Elk's `Si-dielectric` pair below 2.16x, 1294 against 598 s, run back
-to back on D22's core 0 while another session's jobs held five to seven of its other cores. **The
-pair against Elk is therefore not a clean measurement**: Elk's tasks 450 and 460 took 1300 s on a
-quiet core (P134), and this route 1163 s (a first run, which another job joined near its end) and
-1294 s (the back-to-back run, under load from its start). The frozen run of P134 was 486 s quiet and
-598 s in the loaded pair, so the quiet `'hxc'` run is about 1050 s, below Elk's 1300 s for the same
-physics, with LAPW against the plane-wave sphere and Elk's 25 bands against the whole sphere the
-part that is not comparable.
+ratio and not a timing). **Against Elk, one quiet core each** (D22's core 0, back to back,
+2026-10-07, `ps` before and after): `'hxc'` **1085 s** and frozen 505 s against Elk's tasks 450 and
+460 at 1300 s (P134), so the same physics at 0.83x Elk's time, with LAPW in 25 bands against the
+whole plane-wave sphere the part that is not comparable and Elk's step first order in the potential
+where this one is second. Under another session's load the same pair read 1294 and 598 s (2.16x),
+and a first run 1163 s. Without the corrector a step is 1.08x the frozen one (4.69 against 4.35 ms
+per k-point and step on silicon's whole 4x4x4 mesh) and with it 2.04x.
 
 **Refused**, by name: a meta-GGA with `'hxc'` (no energy for a potential-only one, and `tau(t)`
 would have to be propagated), a checkpoint with the potential updated (every state and two

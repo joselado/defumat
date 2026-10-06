@@ -4613,10 +4613,9 @@ $\omega\to0$ is $-4.13$.
 \textbf{What it costs.} The whole mesh's states are resident, twice inside a
 step, and $2^n$ times at order $n$ of the orders; each step is $1+$\code{corrector}
 Taylor steps and as many densities and potentials, about twice the frozen
-step: on Elk's \code{Si-dielectric} run 2.16 times, 1294 against 598~s back to
-back on one core of a machine other jobs shared, against Elk's 1300~s on a quiet
-core, so the clean pair is about 1050~s against 1300 and is not yet measured as
-one. With \code{corrector=0} a step is one Taylor step and one density, 1.08
+step: on Elk's \code{Si-dielectric} run, one quiet core each, 1085~s against
+505~s frozen and against Elk's 1300~s for the same physics, Elk's step being first
+order in the potential where this one is second. With \code{corrector=0} a step is one Taylor step and one density, 1.08
 times the frozen one on silicon's whole $4^3$ mesh against 2.04 with the corrector,
 at the price of the extrapolation's ten times larger energy drift above.
 

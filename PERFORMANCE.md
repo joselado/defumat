@@ -10863,3 +10863,47 @@ threshold). Not a claim about a data-centre card.
 against 5.4 ms at first order, eight copies of each state in nested forward mode; the dense
 frequency-domain hierarchy is 0.35 to 0.9 s a k-point at 169 plane waves, two orders cheaper there
 and `npw^3` in the cutoff.
+
+## The potential updated in time, and the frequency-domain hierarchy (D22 and CPU, 2026-10-07)
+
+**The potential updated in time (P136) against Elk, the same physics now.** Elk's `Si-dielectric`
+pair of the section above updates its potential at every step, so `potential = 'hxc'` is the
+like-for-like run (`tools/realtime/time_realtime.py <out> hxc`, the same 100 points and 4000 steps):
+
+| | Elk 11.0.2, tasks 450 and 460 | defumat, `'frozen'` | defumat, `'hxc'` |
+|---|---|---|---|
+| quiet core 0 of D22, back to back (2026-10-07 00:00, `ps` before and after) | **1300 s** (P134) | **505 s** (486 in P134) | **1085 s** |
+| back to back, another session's jobs on five to seven other cores | | 598 s | 1294 s |
+| a first run, another job joining near its end | | | 1163 s |
+
+**So the like-for-like pair is 1085 s against Elk's 1300**, 0.83x, for the same physics on the same
+100 points and 4000 steps, with LAPW in 25 bands against the whole plane-wave sphere the part that is
+not comparable, and Elk's step first order in the potential where this one is second. The ratio to
+the frozen run is 2.15 quiet and 2.16 loaded, which is the step's own count: each step is `1 + corrector` Taylor steps and as many densities and potentials.
+On silicon's whole 4x4x4 mesh (64 points resident, 12 Ry) it read 8.99 against 4.70 ms per k-point and
+step on four of this workstation's efficiency cores beside other work, 1.9x; measured again with the
+three in one process, 4.35 frozen, **4.69 with `corrector = 0`** (one Taylor step and one density a
+step, 1.08x) and 8.87 with the corrector (2.04x). The corrector buys a tenth of the energy drift after
+a kick (P136) for that factor, and it is the default. The memory
+the update adds is the whole mesh's states resident (twice inside a step) and three dense potentials,
+where the frozen route holds one chunk; Elk holds its 25-band vectors for every k-point too.
+
+**The frequency-domain hierarchy (P137) against the propagation it replaces.** No other code computes
+this spectrum (`pw.x` has no nonlinear optics beyond `el_opt`, and Elk's `nonlinopt` is a sum over
+states of the second order), so the comparison is with this code's own real-time route at the same
+frequency, AlAs at 6 Ry on its 2x2x2 mesh along [111], 1.5 eV, `eta = 0.3` eV, four of this
+workstation's efficiency cores, second calls:
+
+| | one frequency, orders 1 to 3 |
+|---|---|
+| `get_nonlinear_spectrum` (fixed-density solve included) | **13.6 s** |
+| `get_harmonic_orders`, `eta_t = 12`, 400 steps a period (4000 steps) | 302 s |
+| the same at 800 steps a period, the accuracy the hierarchy has to 1e-5 | 599 s |
+
+**Where a call goes**, one k-point of two-atom silicon at 12 Ry (`npw` 174, twelve computed bands):
+82, 198 and 364 ms for orders one to three, the current's assembly 21 ms of the last and the rest the
+BiCGStab solves' Hamiltonian applications (27 iterations of two applications on 8, 12 and 16 vectors;
+16 vectors cost 2.8 ms an application on those cores). So the hierarchy is at the transform floor the
+whole code shares, and what would make it cheaper is fewer iterations (the projector on more computed
+bands, a warm start, which took a fine AlAs sweep from 18 iterations to 16) or more vectors per
+transform, not the assembly.
