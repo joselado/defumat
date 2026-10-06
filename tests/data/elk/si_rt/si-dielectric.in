@@ -1,0 +1,28 @@
+! Silicon at the settings of Elk's examples/TDDFT-time-evolution/Si-dielectric,
+! for the real-time dielectric function (Calculator.get_realtime with a Kick of
+! 0.1/c along x, which is that example's pulse, or get_realtime_dielectric).
+!
+! Matched to the Elk input: the lattice (avec 5.13 5.13 0, ..., so a = 10.26
+! bohr), the LDA, the unshifted 8x8x8 grid. Not matched: the basis
+! (norm-conserving plane waves at 16 Ry against LAPW at rgkmax = 7, with Elk's
+! time evolution in a basis of 25 ground-state bands), and Elk's potential, which
+! is updated at every step where this one is frozen. The scissor of the Elk
+! example (0.0331 Ha) is refused by the real-time route here, so the
+! like-for-like Elk run sets scissor 0 (si-dielectric-sc0.elk.in).
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.26, nat = 2, ntyp = 1,
+    ecutwfc = 16.0
+ /
+ &electrons
+    conv_thr = 1.0d-11
+ /
+ATOMIC_SPECIES
+ Si 28.086 Si.pz-vbc.UPF
+ATOMIC_POSITIONS crystal
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS (automatic)
+ 8 8 8 0 0 0
