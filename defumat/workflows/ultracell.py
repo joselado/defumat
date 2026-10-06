@@ -261,7 +261,6 @@ def run_ultracell_transport(
     tip_polarization: float = 1.0,
     incoherent: bool = True,
     exit_region: str = "plane",
-    k_batch: int | None = 1,
 ) -> VerticalTransport:
     """``T(r; E)`` through a modulated two-dimensional material.
 
@@ -302,13 +301,13 @@ def run_ultracell_transport(
             one part of this that an **ultrasoft or PAW** dataset is refused
             for, because the whole cell's Gram matrix is ``<psi|S|psi>`` where
             the plane's is not; the transmission itself runs.
-        k_batch: how many ``k0`` points' amplitudes are held at once. It bounds
-            a **host** array, ``(npol, k_batch, N nbnd, npoints)`` with another
-            of the same size beside it inside the contraction, and an ultracell
-            has ``N`` times as many states per k-point as a unit cell does: a
-            40x40 map over 630 ultracell states is 16 MB per ``k0``, twice
-            over. One at a time by default, which is the whole subpackage's end
-            of that trade (``state_batch``, and the Python ``k0`` loop).
+
+    **What is held at once** is one ``k0``'s block of ``N nbnd`` states, built
+    on demand (:meth:`~defumat.ultracell.states.UltracellStates.block`), and the
+    tip amplitudes of the states inside the energy window for a fixed block of
+    pixels (:func:`~defumat.workflows.transport._assemble`). An ultracell has
+    ``N`` times the states a unit cell has and the window keeps the same
+    fraction of them, so it is here that sampling only the window saves most.
     """
     states = _states_of(result, "a vertical transmission")
     if exit_axis not in (0, 1, 2):
@@ -364,7 +363,7 @@ def run_ultracell_transport(
         spin=spin, polarization=float(polarization),
         tip_spin=tip_spin, tip_polarization=float(tip_polarization),
         incoherent=bool(incoherent), exit_region=exit_region,
-        method=method, smearing=smearing, k_batch=k_batch,
+        method=method, smearing=smearing,
     )
 
     if bias is not None:

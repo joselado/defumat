@@ -45,7 +45,8 @@ from __future__ import annotations
 
 import numpy as np
 
-__all__ = ["exit_overlap", "volume_overlap", "surface_area", "spin_projector"]
+__all__ = ["exit_overlap", "volume_overlap", "surface_area", "spin_projector",
+           "plane_groups", "fold_onto_plane"]
 
 
 def surface_area(cell, axis: int) -> float:
@@ -89,8 +90,88 @@ def spin_projector(direction, polarization: float = 1.0,
     return 0.5 * (np.eye(2, dtype=complex) + p * dotted)
 
 
+def plane_groups(miller, axis: int):
+    """``(group, inplane)``: which in-plane index each plane wave carries.
+
+    ``group`` is ``(npw,)``, the position of each plane wave's in-plane pair in
+    ``inplane``, which is ``(ngroups, 3)`` integer Miller indices with the
+    ``axis`` column zero -- the sphere's shadow on the surface reciprocal
+    lattice, written as a sphere in its own right so that
+    :func:`~defumat.basis.sample.sample_wavefunctions` takes it unchanged. It
+    depends on the k-point's sphere and not on a height, so a caller folding at
+    two heights (the exit plane and a flat tip plane) builds it once.
+    """
+    miller = np.asarray(miller, dtype=int)
+    if axis not in (0, 1, 2):
+        raise ValueError(f"axis must be 0, 1 or 2, got {axis}")
+    inplane = np.delete(miller, axis, axis=1)
+    unique, group = np.unique(inplane, axis=0, return_inverse=True)
+    rows = np.insert(np.asarray(unique, dtype=int), axis, 0, axis=1)
+    return np.asarray(group).reshape(-1), rows.reshape((-1, 3))
+
+
+def fold_onto_plane(coefficients, miller, height: float, axis: int, *,
+                    npol: int = 1, mask=None, k_along: float = 0.0,
+                    groups=None):
+    """The sum over the Miller index normal to a plane, done before anything else.
+
+    On a plane at crystal coordinate ``s`` along ``axis`` every plane wave with
+    the same in-plane index ``h_par`` has the same lateral dependence, so
+
+        b_n(h_par) = sum_{h3} c_n(h_par, h3) e^{2 pi i (k3 + h3) s}
+
+    is everything a band carries there. :func:`exit_overlap` integrates two of
+    these over the plane, where ``k3`` is common to every band at the k-point
+    and cancels (it is passed as 0); a flat **tip** plane evaluates one of them
+    at points, where ``k3`` is kept so that the result is ``psi`` and not ``psi``
+    up to a phase. The sphere of ``npw`` plane waves becomes ``ngroups`` of
+    them, which is the number of columns the sphere has along ``axis``: 1415 of
+    26695 on a twenty-atom bismuth slab at ``ecutwfc = 20``.
+
+    Args:
+        coefficients: ``(nbnd, npol * npw)`` complex, one k-point's bands.
+        miller: ``(npw, 3)`` the sphere's integer Miller indices.
+        height: the plane's crystal coordinate along ``axis``.
+        axis: which lattice vector the plane is normal to.
+        npol: 1 or 2; a spinor's components are the two halves of the row.
+        mask: ``(npw,)`` the padding mask. A padded entry points at ``G = 0``
+            and is dropped rather than trusted to be zero.
+        k_along: the k-point's crystal coordinate along ``axis``.
+        groups: :func:`plane_groups` of ``miller`` and ``axis``, when the caller
+            already has it.
+
+    Returns ``(b, inplane)``: ``(nbnd, npol, ngroups)`` complex and the
+    ``(ngroups, 3)`` in-plane sphere from :func:`plane_groups`.
+    """
+    coefficients = np.asarray(coefficients)
+    miller = np.asarray(miller, dtype=int)
+    npw = miller.shape[0]
+    if coefficients.shape[-1] != npol * npw:
+        raise ValueError(
+            f"the coefficients are {coefficients.shape[-1]} long and the sphere "
+            f"has {npw} plane waves times npol = {npol}"
+        )
+    if axis not in (0, 1, 2):
+        raise ValueError(f"axis must be 0, 1 or 2, got {axis}")
+    group, inplane = plane_groups(miller, axis) if groups is None else groups
+
+    nbnd = coefficients.shape[0]
+    blocks = coefficients.reshape((nbnd, npol, npw))
+    # The h3 sum, which carries the plane's height and collapses the sphere onto
+    # its shadow on the surface reciprocal lattice. The mask goes into the phase
+    # rather than onto the coefficients, so the whole block is copied once.
+    phase = np.exp(2.0j * np.pi * (miller[:, axis] + float(k_along))
+                   * float(height))
+    if mask is not None:
+        phase = phase * np.asarray(mask, dtype=bool)
+    b = np.zeros((nbnd, npol, inplane.shape[0]), dtype=complex)
+    np.add.at(b, (slice(None), slice(None), group), blocks * phase[None, None, :])
+    return b, inplane
+
+
 def exit_overlap(coefficients, miller, height: float, axis: int, cell,
-                 mask=None, npol: int = 1, projector=None) -> np.ndarray:
+                 mask=None, npol: int = 1, projector=None,
+                 groups=None) -> np.ndarray:
     """``S_k``: the bands' Gram matrix on the exit plane, ``(nbnd, nbnd)``.
 
     Args:
@@ -107,37 +188,17 @@ def exit_overlap(coefficients, miller, height: float, axis: int, cell,
         projector: ``(2, 2)`` complex, the substrate's spin acceptance, or
             ``None`` for a substrate that takes both spins equally. Only for a
             spinor run; a collinear one selects a channel outside this.
+        groups: :func:`plane_groups` of ``miller`` and ``axis``, when the caller
+            already has it.
 
     Hermitian to round-off and positive semi-definite. Both are asserted by the
     tests rather than imposed here, because imposing them would hide the bug
     they are there to catch.
     """
-    coefficients = np.asarray(coefficients)
-    miller = np.asarray(miller, dtype=int)
-    npwx = miller.shape[0]
-    if coefficients.shape[-1] != npol * npwx:
-        raise ValueError(
-            f"the coefficients are {coefficients.shape[-1]} long and the sphere "
-            f"has {npwx} plane waves times npol = {npol}"
-        )
-    if axis not in (0, 1, 2):
-        raise ValueError(f"axis must be 0, 1 or 2, got {axis}")
-
-    nbnd = coefficients.shape[0]
-    blocks = coefficients.reshape((nbnd, npol, npwx))
-    if mask is not None:
-        blocks = blocks * np.asarray(mask, dtype=bool)[None, None, :]
-
-    # The h3 sum, done first: it is what carries the plane's height and it
-    # collapses the sphere onto its shadow on the surface reciprocal lattice.
-    phase = np.exp(2.0j * np.pi * miller[:, axis] * float(height))
-    inplane = np.delete(miller, axis, axis=1)
-    _, group = np.unique(inplane, axis=0, return_inverse=True)
-    group = np.asarray(group).reshape(-1)
-    ngroups = int(group.max()) + 1 if group.size else 0
-
-    b = np.zeros((nbnd, npol, ngroups), dtype=complex)
-    np.add.at(b, (slice(None), slice(None), group), blocks * phase[None, None, :])
+    # The h3 sum, done first (:func:`fold_onto_plane`). ``k3`` is common to
+    # every band at this k-point and cancels in ``b* b``, so it is left out.
+    b, _ = fold_onto_plane(coefficients, miller, height, axis, npol=npol,
+                           mask=mask, groups=groups)
 
     scale = surface_area(cell, axis) / float(cell.volume)
     if npol == 1:

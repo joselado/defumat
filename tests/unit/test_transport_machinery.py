@@ -1120,3 +1120,208 @@ def test_the_bias_axis_is_checked_before_the_fixed_density_solve():
         body = inspect.getsource(entry)
         assert body.index("_check_bias_axis(") < body.index(expensive), \
             entry.__name__
+
+
+# --- what the assembly holds: one k-point, the window, a block of pixels ------
+
+
+def _junction(npol=1, nk=2, nbnd=10, seed=31):
+    """A synthetic junction for :func:`~defumat.workflows.transport._assemble`.
+
+    Ten bands spread over 1.2 Ry with a degenerate pair near the tip energy, at
+    a broadening of 0.01 Ry. One band sits five broadenings from the nearer
+    energy at the first k-point and seven at the second, which the window must
+    keep and which a threshold set too high would drop for a visible change in
+    the map; the rest sit between twelve and a hundred broadenings away, far
+    enough for the window to drop them and near enough that their amplitude has
+    not underflowed to an exact zero, which is the case a window could get
+    wrong.
+    """
+    from defumat.transport.green import TransportGeometry
+
+    rng = np.random.default_rng(seed)
+    miller = _sphere(2)
+    npw = miller.shape[0]
+    mask = np.ones(npw, dtype=bool)
+    mask[-7:] = False
+    coefficients = (rng.normal(size=(1, nk, nbnd, npol * npw))
+                    + 1.0j * rng.normal(size=(1, nk, nbnd, npol * npw)))
+    levels = np.array([-0.6, -0.35, -0.14, 0.01, 0.01 + 3.0e-7, 0.08, 0.15,
+                       0.3, 0.45, 0.6])[:nbnd]
+    eigenvalues = np.stack([levels + 0.02 * ik for ik in range(nk)])[None]
+    geometry = TransportGeometry(
+        miller=np.stack([miller] * nk),
+        mask=np.stack([mask] * nk),
+        kcrystal=rng.uniform(-0.5, 0.5, size=(nk, 3)) * np.array([1.0, 1.0, 0.0]),
+        kweights=np.full(nk, 2.0 / nk),
+        cell=HEXAGONAL,
+        npol=npol,
+    )
+    return geometry, coefficients, eigenvalues
+
+
+def _run(geometry, coefficients, eigenvalues, points, **options):
+    from defumat.workflows.transport import _assemble
+
+    settings = dict(exit_height=0.1, exit_axis=2, energies=np.array([0.0, 0.03]),
+                    broadening=0.01, spin=None, polarization=1.0,
+                    tip_spin=None, tip_polarization=1.0, incoherent=True,
+                    exit_region="plane", method="spectral", smearing="gaussian")
+    settings.update(options)
+    return _assemble(geometry, coefficients, eigenvalues, points, **settings)
+
+
+def _plane(n=6, height=0.8):
+    u, v = np.meshgrid(np.arange(n) / n, np.arange(n) / n, indexing="ij")
+    return np.stack([u.ravel(), v.ravel(), np.full(u.size, height)], axis=1)
+
+
+def _agree(one, other):
+    for key in ("coherent", "incoherent"):
+        scale = np.abs(other[0][key]).max()
+        assert scale > 0.0
+        assert np.abs(one[0][key] - other[0][key]).max() / scale < 1.0e-13, key
+
+
+def _spy_on_the_sampler(monkeypatch):
+    import defumat.workflows.transport as transport
+
+    calls = []
+    real = transport.sample_wavefunctions
+
+    def spy(coefficients, miller, *args, **kwargs):
+        out = real(coefficients, miller, *args, **kwargs)
+        calls.append((np.asarray(miller).shape[0], out.size, out.shape))
+        return out
+
+    monkeypatch.setattr(transport, "sample_wavefunctions", spy)
+    return calls
+
+
+@pytest.mark.parametrize("npol,tip_spin", [(1, None), (2, None), (2, (0.3, -0.4, 0.86))])
+def test_the_band_window_drops_only_what_the_map_cannot_see(monkeypatch, npol, tip_spin):
+    """Sampling the window and sampling every band give the same map.
+
+    The reference is the same assembly with the window switched off, and the
+    test also asserts that the window **did** drop bands: a window that kept
+    everything would pass the first half trivially.
+    """
+    import defumat.workflows.transport as transport
+
+    geometry, coefficients, eigenvalues = _junction(npol=npol)
+    points = _plane()
+    options = dict(tip_spin=tip_spin, tip_polarization=0.7) if tip_spin else {}
+    windowed = _run(geometry, coefficients, eigenvalues, points, **options)
+    monkeypatch.setattr(transport, "_WINDOW_TOL", None)
+    every = _run(geometry, coefficients, eigenvalues, points, **options)
+
+    kept, total = windowed[1]["notes"]["window"]
+    assert every[1]["notes"]["window"] == (total, total)
+    assert 0 < kept <= total // 2
+    _agree(windowed, every)
+    # The diagnostics are the substrate's, on every band, window or not.
+    for key in ("channels", "hermiticity"):
+        assert windowed[1]["notes"][key] == every[1]["notes"][key]
+    assert windowed[1]["least_eigenvalue"] == every[1]["least_eigenvalue"]
+    assert windowed[1]["offdiagonal_weight"] == every[1]["offdiagonal_weight"]
+
+
+def test_the_resolvent_keeps_every_band():
+    """``1/(E - e + i eta)`` is nowhere small enough to drop."""
+    geometry, coefficients, eigenvalues = _junction()
+    result = _run(geometry, coefficients, eigenvalues, _plane(3),
+                  method="resolvent")
+    kept, total = result[1]["notes"]["window"]
+    assert kept == total
+
+
+def test_the_window_keeps_a_degenerate_block_whole(monkeypatch):
+    """A threshold that falls between two members of a multiplet keeps both.
+
+    Built directly on :func:`_band_window`: the pair at 0.2 Ry is degenerate to
+    5e-7, one member is put just above the threshold and the other just below,
+    and a nondegenerate band below it is there to show the threshold is real.
+    """
+    from defumat.workflows.transport import _band_window
+
+    eigenvalues = np.array([[[0.0, 0.2, 0.2 + 5.0e-7, 0.7]]])
+    weights = np.array([1.0, 2.0e-18, 0.5e-18, 0.5e-18],
+                       dtype=complex)[None, None, None, :]
+    window = _band_window(weights, eigenvalues, "spectral")[0][0]
+    assert window.tolist() == [0, 1, 2]
+
+
+def test_the_tip_pixels_are_taken_in_blocks(monkeypatch):
+    """A block too small for the image samples it in pieces and gets the same map.
+
+    The spy counts the sampler's calls, so a block that silently held the whole
+    image would fail the count rather than pass the comparison.
+    """
+    import defumat.workflows.transport as transport
+
+    geometry, coefficients, eigenvalues = _junction(npol=2)
+    points = _plane(6)
+    whole = _run(geometry, coefficients, eigenvalues, points)
+    calls = _spy_on_the_sampler(monkeypatch)
+    monkeypatch.setattr(transport, "_AMPLITUDE_BLOCK", 2 * 4 * 5)
+    pieces = _run(geometry, coefficients, eigenvalues, points)
+
+    _agree(pieces, whole)
+    nk = geometry.kweights.shape[0]
+    assert len(calls) > 2 * nk
+    assert max(size for _, size, _ in calls) <= 2 * 4 * 5
+
+
+def test_a_flat_tip_plane_is_folded_and_a_tilted_one_is_not(monkeypatch):
+    """The fold is taken where every pixel shares a height, and nowhere else.
+
+    The sampler is spied on for the size of the sphere it is handed: the
+    in-plane shadow (25 columns of a 125-vector sphere) for a flat plane, the
+    whole sphere for a tilted one. The flat map is compared with the same map
+    sampled without the fold.
+    """
+    import defumat.workflows.transport as transport
+
+    geometry, coefficients, eigenvalues = _junction()
+    flat = _plane(5)
+    calls = _spy_on_the_sampler(monkeypatch)
+    folded = _run(geometry, coefficients, eigenvalues, flat)
+    assert {npw for npw, _, _ in calls} == {25}
+
+    calls.clear()
+    tilted = flat.copy()
+    tilted[:, 2] += 0.05 * flat[:, 0]
+    _run(geometry, coefficients, eigenvalues, tilted)
+    assert {npw for npw, _, _ in calls} == {125}
+
+    monkeypatch.setattr(transport, "_flat_axis", lambda points, miller: None)
+    direct = _run(geometry, coefficients, eigenvalues, flat)
+    _agree(folded, direct)
+
+
+def test_the_store_is_read_one_k_point_at_a_time():
+    """The assembly never asks for the whole store, so a device one stays there.
+
+    The stand-in refuses to become an array, which is what converting the whole
+    store would ask of it, and records which k-points it was asked for.
+    """
+    geometry, coefficients, eigenvalues = _junction()
+
+    class Store:
+        shape = coefficients.shape
+
+        def __init__(self):
+            self.reads = []
+
+        def __getitem__(self, index):
+            self.reads.append(tuple(int(i) for i in index))
+            return coefficients[index]
+
+        def __array__(self, *args, **kwargs):
+            raise AssertionError("the whole store was converted to an array")
+
+    store = Store()
+    result = _run(geometry, store, eigenvalues, _plane(3))
+    reference = _run(geometry, coefficients, eigenvalues, _plane(3))
+    assert store.reads == [(0, 0), (0, 1)]
+    assert np.array_equal(result[0]["coherent"], reference[0]["coherent"])

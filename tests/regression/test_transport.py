@@ -170,59 +170,86 @@ def test_the_band_count_converges():
                   - maps[0] / maps[0].mean()).max() < 1.0e-4
 
 
-def test_the_tip_amplitudes_are_bounded_by_the_k_dial():
-    """The assembly's host array is ``(npol, nk, nbnd, npoints)`` and the dial
-    has to reach it.
+def test_the_tip_amplitudes_are_held_in_a_fixed_block(monkeypatch):
+    """The assembly's host array is a block of pixels at one k-point.
 
-    This workflow's largest allocation is not on the device and is not the
-    wavefunctions: it is the tip amplitudes, one complex number per spinor
-    component, k-point, band and *pixel*. An image is thousands of pixels, so
-    the array grows with the product of two things a user turns up for a better
-    picture, and it sat outside every dial.
+    This workflow's largest allocation is the tip amplitudes, one complex
+    number per spinor component, band and *pixel*, and an image is thousands of
+    pixels. It used to be ``(npol, nk, nbnd, npoints)`` and was then bounded by
+    the k dial (``OPEN.md`` D3), whose floor of one k-point is exactly where a
+    large cell already sits. It is now one k-point, the bands the energy window
+    lets through, and a block of pixels of fixed size.
 
-    Two assertions, because a chunked sum has to be both smaller and the same
-    answer: the largest array the assembly asks numpy for scales with the chunk
-    rather than with ``nk``, and the map is unchanged by it. The sum over k
-    ends in ``kweights @ term`` in every branch, so a chunk moves nothing but
-    the order the contributions are added in.
+    Three assertions, because a blocked sum has to be smaller, actually blocked,
+    and the same answer: no sampled array is larger than the block or one
+    k-point's worth, a block smaller than the image takes more calls than there
+    are k-points, and the map and its diagnostics do not move.
     """
+    import defumat.workflows.transport as transport
+
     calculator = _converged("h-sheet")
     nk = len(calculator.system.kpoints.weights)
-    assert nk > 1, "a single k-point cannot show a chunking"
+    assert nk > 1, "a single k-point cannot show that only one is held"
 
-    def run(k_batch):
-        biggest = 0
-        empty = np.empty
+    def run(block):
+        sizes = []
+        real = transport.sample_wavefunctions
 
-        def spy(shape, *args, **kwargs):
-            nonlocal biggest
-            size = int(np.prod(shape)) if isinstance(shape, tuple) else int(shape)
-            biggest = max(biggest, size)
-            return empty(shape, *args, **kwargs)
+        def spy(*args, **kwargs):
+            out = real(*args, **kwargs)
+            sizes.append(out.size)
+            return out
 
-        np.empty = spy
-        try:
+        with monkeypatch.context() as patch:
+            patch.setattr(transport, "sample_wavefunctions", spy)
+            patch.setattr(transport, "_AMPLITUDE_BLOCK", block)
             image = run_vertical_transport(
                 calculator.system, calculator.pseudos, calculator.get_scf(),
-                shape=(8, 8), k_batch=k_batch, **SHEET)
-        finally:
-            np.empty = empty
-        return image, biggest
+                shape=(8, 8), **SHEET)
+        return image, sizes
 
-    one, small = run(1)
-    whole, large = run(None)
+    whole, at_once = run(transport._AMPLITUDE_BLOCK)
+    blocked, pieces = run(40)
 
-    # 8 bands x 64 pixels a k-point: the whole axis is nk times that, and the
-    # chunked run never asks for more than one k-point's worth.
-    assert small < 2 * 8 * 8 * 8
-    assert large > (nk // 2) * 8 * 8 * 8
-    assert np.abs(one.image - whole.image).max() / whole.image.max() < 1.0e-13
-    assert np.abs(one.incoherent - whole.incoherent).max() \
+    # 8 bands x 64 pixels is one k-point's worth, and nothing is ever more.
+    assert max(at_once) <= 8 * 8 * 8
+    assert len(at_once) <= nk
+    assert max(pieces) <= 40
+    assert len(pieces) > nk
+    assert np.abs(blocked.image - whole.image).max() / whole.image.max() < 1.0e-13
+    assert np.abs(blocked.incoherent - whole.incoherent).max() \
         / whole.incoherent.max() < 1.0e-13
-    assert one.least_eigenvalue == pytest.approx(whole.least_eigenvalue, rel=1e-12)
-    assert one.notes["channels"] == pytest.approx(whole.notes["channels"], rel=1e-12)
-    assert one.notes["band_edge_weight"] == pytest.approx(
-        whole.notes["band_edge_weight"], rel=1e-10)
+    assert blocked.least_eigenvalue == whole.least_eigenvalue
+    assert blocked.notes["channels"] == whole.notes["channels"]
+    assert blocked.notes["band_edge_weight"] == pytest.approx(
+        whole.notes["band_edge_weight"], rel=1e-12)
+
+
+def test_the_band_window_leaves_a_real_map_unchanged(monkeypatch):
+    """Sampling only the bands near the tip energy is the same map on graphene.
+
+    Twenty bands on the whole 6x6 grid at a broadening of 0.02 Ry, where the
+    window is a few eV wide and most of the band set is outside it. The
+    reference is the same call with the window switched off, and the window is
+    asserted to have dropped something, since one that kept every band would
+    pass the comparison trivially.
+    """
+    import defumat.workflows.transport as transport
+
+    calculator = _converged("graphene-monolayer")
+    shared = dict(height=0.62, shape=(10, 10), grid=(6, 6, 1), nbnd=20,
+                  exit_height=0.38, broadening=0.02, bias=0.1, nenergies=11)
+    windowed = calculator.get_vertical_transport(**shared)
+    with monkeypatch.context() as patch:
+        patch.setattr(transport, "_WINDOW_TOL", None)
+        every = calculator.get_vertical_transport(**shared)
+
+    kept, total = windowed.notes["window"]
+    assert every.notes["window"] == (total, total)
+    assert kept < total // 2
+    assert np.abs(windowed.image - every.image).max() / every.image.max() < 1.0e-13
+    assert np.abs(windowed.incoherent - every.incoherent).max() \
+        / every.incoherent.max() < 1.0e-13
 
 
 # --------------------------------------------------------------------------

@@ -45,7 +45,6 @@ import warnings
 import numpy as np
 
 from defumat.basis.builder import build_basis
-from defumat.batching import resolve_k_batch
 from defumat.basis.gvectors import refuse_gamma_storage
 from defumat.basis.sample import sample_wavefunctions
 from defumat.scf.driver import Calculation, gamma_storage_is_consumable
@@ -57,12 +56,15 @@ from defumat.transport.green import (
     VerticalTransport,
     amplitude_weights,
     channel_basis,
+    multiplets,
     spin_transmission,
     transmission,
 )
 from defumat.transport.momentum import MomentumTransport, momentum_weights
 from defumat.transport.substrate import (
     exit_overlap,
+    fold_onto_plane,
+    plane_groups,
     spin_projector,
     surface_area,
     volume_overlap,
@@ -174,12 +176,12 @@ def run_vertical_transport(
             density on a denser k-set first, as a density of states wants.
             The grid is built **whole**, not reduced to a wedge, because a
             wedge is refused here -- see :func:`whole_grid`.
-        k_batch: the k-axis batching dial. It reaches two places here: the
-            band solve, as everywhere else, **and** the assembly's host array
-            of tip amplitudes, which is ``(npol, nk, nbnd, npoints)`` complex
-            and is the largest thing this workflow allocates. See
-            :func:`_assemble` for why an accelerator's default does not bound
-            the second one.
+        k_batch: the band solve's k-axis dial, as everywhere else. The
+            assembly does not read it: it holds one k-point, the bands inside
+            the energy window and a fixed block of tip pixels at a time, so its
+            working set does not grow with ``nk``, ``nbnd`` or the image
+            (:func:`_assemble`). Through :class:`~defumat.calculator.Calculator`
+            the solve uses the calculator's own chunk, whatever is passed here.
         calculation: the SCF's own :class:`~defumat.scf.driver.Calculation`,
             used on its own k-set or moved to ``kpoints`` with ``at_kpoints``
             rather than a second one built beside it
@@ -278,8 +280,10 @@ def run_vertical_transport(
 
     grid_energies = _energies(energies, levels, bias, nenergies,
                               float(broadening))
-    wavefunctions = np.asarray(wavefunctions)
 
+    # The store is handed over as it is -- a device array or a host one -- and
+    # read one k-point at a time; converting it here would copy every k-point
+    # to the host at once, beside the device copy the result still holds.
     values, extras = _assemble(
         _geometry(calculation), wavefunctions, eigenvalues, points,
         exit_height=float(exit_height), exit_axis=exit_axis,
@@ -288,7 +292,6 @@ def run_vertical_transport(
         tip_spin=tip_spin, tip_polarization=float(tip_polarization),
         incoherent=bool(incoherent), exit_region=exit_region,
         method=method, smearing=smearing,
-        k_batch=resolve_k_batch(k_batch),
     )
 
     if bias is not None:
@@ -621,7 +624,7 @@ def _geometry(calculation) -> TransportGeometry:
 def _assemble(geometry, wavefunctions, eigenvalues, points, *,
               exit_height, exit_axis, energies, broadening, spin,
               polarization, tip_spin, tip_polarization, incoherent,
-              exit_region, method, smearing, k_batch=None):
+              exit_region, method, smearing):
     """Sample the tip, build every ``S_k``, contract. One channel at a time.
 
     **A spinor's two components are two amplitude vectors, not one**, and what
@@ -641,16 +644,33 @@ def _assemble(geometry, wavefunctions, eigenvalues, points, *,
     through the identity, and then the two components are contracted rather
     than added: ``T = Tr[P_t M]`` with ``M[s,s'] = a_s^T S a_{s'}^*``
     (:func:`defumat.transport.green.spin_transmission`). ``P_t = 1`` is the sum
-    above, so ``tip_spin=None`` takes the branch it always took, unchanged and
-    to the last bit.
+    above, so ``tip_spin=None`` takes the branch it always took.
 
-    **``k_batch`` bounds the amplitudes, and it is the one dial that reaches a
-    host array.** Everywhere else in this package the dial decides how much is
-    resident on the *device*; here the tip amplitudes are sampled into a numpy
-    array of ``(npol, nk, nbnd, npoints)`` and the working set is the same on a
-    CPU and on a GPU, so ``k_batch = None`` -- an accelerator's default,
-    chosen because a device wants the whole axis -- does **not** bound it. A
-    machine with a GPU and an image-sized ``npoints`` should pass a number.
+    **What is held, and why it no longer grows with the cell.** Everything here
+    is host memory: the band solve is the only part of a transmission that
+    runs on an accelerator. Three things bound it, and each changes the order a
+    sum is added in and nothing else.
+
+    * **One k-point at a time.** The sum over k is incoherent, ``kweights @
+      term`` in every branch, so nothing is gained by holding two. A k-point's
+      states are read from the store one at a time, so a store that lives on a
+      device is never copied to the host whole.
+    * **Only the bands the energy window lets through are sampled**
+      (:func:`_band_window`). The on-shell amplitude is the square root of a
+      Gaussian, and a band many broadenings from every requested energy carries
+      nothing the map can show; its rows of ``S_k`` multiply an amplitude that
+      is zero to round-off. ``S_k`` itself is built on every band, because the
+      diagnostics below are properties of the substrate and not of the window.
+    * **The tip pixels are taken in blocks** of :data:`_AMPLITUDE_BLOCK`
+      complex amplitudes. The contraction is independent pixel by pixel, so
+      the block decides only how many pixels are in flight: the amplitude
+      array is ``(npol, n_window, pixels)`` with ``npol n_window pixels`` held
+      at that size whatever the image and the cell.
+
+    A flat tip plane is also **folded** before it is sampled
+    (:func:`~defumat.transport.substrate.fold_onto_plane`): every pixel shares
+    one crystal coordinate along an axis, so the sum over that Miller index is
+    done once per band rather than once per pixel.
     """
     miller = np.asarray(geometry.miller)
     mask = np.asarray(geometry.mask)
@@ -659,32 +679,37 @@ def _assemble(geometry, wavefunctions, eigenvalues, points, *,
     volume = geometry.volume
     npol = int(geometry.npol)
     npwx = geometry.npwx
+    eigenvalues = np.asarray(eigenvalues, dtype=float)
+    energies = np.atleast_1d(np.asarray(energies, dtype=float))
+    points = np.atleast_2d(np.asarray(points, dtype=float))
 
+    nspin, nk, nbnd = (int(n) for n in wavefunctions.shape[:3])
     projector, channel_scale = _substrate_acceptance(
-        spin, polarization, npol, wavefunctions.shape[0])
+        spin, polarization, npol, nspin)
     tip_projector, tip_scale = _tip_acceptance(
-        tip_spin, tip_polarization, npol, wavefunctions.shape[0])
+        tip_spin, tip_polarization, npol, nspin)
     # ``S`` without a Hamiltonian to hang it on, which the volume diagnostic
     # needs and the plane does not: the augmentation charge is zero in the
     # vacuum where both planes of a tunnelling geometry sit. ``None`` is the
     # identity, which is what a norm-conserving dataset's overlap is.
     apply_s = geometry.apply_s
 
-    nspin, nk, nbnd, _ = wavefunctions.shape
-    total = np.zeros((energies.shape[0], points.shape[0]))
+    npts = points.shape[0]
+    total = np.zeros((energies.shape[0], npts))
     total_incoherent = np.zeros_like(total) if incoherent else None
     top_band = np.zeros_like(total) if incoherent else None
     least, offdiagonal, hermiticity, channels = np.inf, [], 0.0, []
 
-    # **The k axis is walked in chunks, and this is a host array rather than a
-    # device one.** ``amplitudes`` is ``(npol, nk, nbnd, npoints)`` complex and
-    # ``npoints`` is an image -- a 100x100 map over 100 k-points and 50 spinor
-    # bands is 1.6 GB, and the ``sa`` intermediate inside
-    # :func:`~defumat.transport.green.transmission` is another ``(nk, nbnd,
-    # npoints)`` beside it. Every contraction downstream ends in
-    # ``kweights @ term``, so the sum over k is exact term by term and a chunk
-    # changes only the order the contributions are added in.
-    chunk = nk if k_batch is None else min(int(k_batch), nk)
+    # Every per-state factor at once, ``(nspin, nE, nk, nbnd)``: it is small,
+    # and the window is decided from all of it.
+    state_weights = np.stack([
+        np.stack([amplitude_weights(eigenvalues[ispin], float(energy),
+                                    broadening, method, smearing)
+                  for energy in energies])
+        for ispin in range(nspin)])
+    windows = _band_window(state_weights, eigenvalues, method)
+    flat = _flat_axis(points, miller)
+
     open_path = 0.0
     for ispin in range(nspin):
         scale = 1.0 if channel_scale is None else channel_scale[ispin]
@@ -696,99 +721,83 @@ def _assemble(geometry, wavefunctions, eigenvalues, points, *,
         open_path += scale
         # Which bands the band-count truncation actually cuts: the topmost
         # *multiplet*, in the same channel basis the denominator is taken in.
-        # It is decided k-point by k-point, so it is built once for the whole
-        # axis and sliced -- rebuilding it per chunk would be the same numbers
-        # and a second place for the rule to drift out of step.
         top_multiplet = _top_multiplet_mask(eigenvalues[ispin])
 
-        for start in range(0, nk, chunk):
-            here = slice(start, min(start + chunk, nk))
-            live = here.stop - here.start
-            amplitudes = np.empty(
-                (npol, live, nbnd, points.shape[0]), dtype=complex)
-            overlaps = np.empty((live, nbnd, nbnd), dtype=complex)
-            for ik in range(here.start, here.stop):
-                at = ik - here.start
-                block = np.asarray(wavefunctions[ispin, ik])
-                if exit_region == "volume":
-                    overlaps[at] = volume_overlap(
-                        block, mask[ik], npol,
-                        overlap=(None if apply_s is None
-                                 else (lambda p, i=ik: apply_s(p, i))))
-                else:
-                    overlaps[at] = exit_overlap(
-                        block, miller[ik], exit_height, exit_axis,
-                        geometry.cell, mask=mask[ik], npol=npol,
-                        projector=projector,
-                    )
-                sampled = sample_wavefunctions(
-                    block.reshape((nbnd, npol, npwx)), miller[ik],
-                    kcrystal[ik], points, volume, mask=mask[ik],
+        for ik in range(nk):
+            block = np.asarray(wavefunctions[ispin, ik])
+            groups = plane_groups(miller[ik], exit_axis)
+            if exit_region == "volume":
+                overlap = volume_overlap(
+                    block, mask[ik], npol,
+                    overlap=(None if apply_s is None
+                             else (lambda p, i=ik: apply_s(p, i))))
+            else:
+                overlap = exit_overlap(
+                    block, miller[ik], exit_height, exit_axis,
+                    geometry.cell, mask=mask[ik], npol=npol,
+                    projector=projector, groups=groups,
                 )
-                amplitudes[:, at] = np.moveaxis(sampled, 1, 0)
+            bands = eigenvalues[ispin][ik]
+            hermiticity, least = _diagnose(overlap, bands, hermiticity, least,
+                                           channels, offdiagonal)
 
-            bands = eigenvalues[ispin][here]
-            weight_of_k = kweights[here]
-            hermiticity = max(hermiticity, float(
-                np.abs(overlaps - np.conj(np.swapaxes(overlaps, 1, 2))).max()))
-            hermitian = 0.5 * (overlaps + np.conj(np.swapaxes(overlaps, 1, 2)))
-            spectrum = np.linalg.eigvalsh(hermitian)
-            least = min(least, float(spectrum.min()))
-            # How many independent ways there are through the substrate: the
-            # participation ratio of S_k's spectrum, which is the number of
-            # open transmission channels. In the vacuum it is close to **one**
-            # -- every band's evanescent tail has nearly the same shape on the
-            # plane and differs only by a coefficient -- and that is precisely
-            # why the interference here is large rather than a correction: the
-            # plane sees one amplitude, so what tunnels is |sum_n a_n c_n|^2
-            # and not sum |a_n|^2.
-            positive = np.clip(spectrum, 0.0, None)
-            norms2 = (positive ** 2).sum(axis=1)
-            channels.extend(
-                np.where(norms2 > 0.0, positive.sum(axis=1) ** 2
-                         / np.where(norms2 > 0.0, norms2, 1.0), 0.0))
-            # In the channel basis, so that "how much sits off the diagonal" is
-            # a property of the substrate and not of which basis the
-            # eigensolver returned inside a multiplet.
-            u = channel_basis(overlaps, bands)
-            rotated = np.einsum("kni,knm,kmj->kij", u.conj(), overlaps, u,
-                                optimize=True)
-            norms = np.linalg.norm(rotated, axis=(1, 2))
-            diagonals = np.linalg.norm(np.einsum("knn->kn", rotated), axis=1)
-            offdiagonal.extend(
-                np.sqrt(np.clip(norms ** 2 - diagonals ** 2, 0.0, None))
-                / np.where(norms > 0.0, norms, 1.0))
-
-            if scale == 0.0:
+            rows = windows[ispin][ik]
+            if scale == 0.0 or rows.size == 0:
                 continue
-            cut = top_multiplet[here]
-            for ie, energy in enumerate(energies):
-                weights = amplitude_weights(
-                    bands, energy, broadening, method, smearing)
-                if tip_projector is not None:
-                    total[ie] += scale * spin_transmission(
-                        amplitudes, overlaps, weight_of_k, weights,
-                        tip_projector, coherent=True)
-                    if incoherent:
-                        total_incoherent[ie] += scale * spin_transmission(
+            # The window's rows, copied out so the whole block can go before the
+            # pixels are sampled.
+            window = block.reshape((nbnd, npol * npwx))[rows]
+            del block
+            sphere = _tip_sphere(window, miller[ik], mask[ik], kcrystal[ik],
+                                 npol, flat, points, exit_axis, groups)
+            overlaps = overlap[np.ix_(rows, rows)][None]
+            weight_of_k = kweights[ik:ik + 1]
+            windowed = state_weights[ispin][:, ik, rows]
+            in_window = bands[rows][None]
+            cut = top_multiplet[ik, rows][None]
+
+            pixels = max(1, int(_AMPLITUDE_BLOCK // (npol * rows.size)))
+            for start in range(0, npts, pixels):
+                here = slice(start, min(start + pixels, npts))
+                coefficients, sphere_miller, sphere_k, sphere_mask = sphere
+                sampled = sample_wavefunctions(
+                    coefficients, sphere_miller, sphere_k, points[here],
+                    volume, mask=sphere_mask,
+                )
+                # ``(npol, 1, n_window, pixels)``: the spinor component leads,
+                # then the one k-point, which is the layout the contractions
+                # take.
+                amplitudes = np.moveaxis(sampled, 1, 0)[:, None]
+                del sampled
+                for ie in range(energies.shape[0]):
+                    weights = windowed[ie][None]
+                    if tip_projector is not None:
+                        total[ie, here] += scale * spin_transmission(
                             amplitudes, overlaps, weight_of_k, weights,
-                            tip_projector, coherent=False, eigenvalues=bands)
-                        top_band[ie] += scale * spin_transmission(
-                            amplitudes, overlaps, weight_of_k,
-                            weights * cut, tip_projector,
-                            coherent=False, eigenvalues=bands)
-                    continue
-                for component in range(npol):
-                    total[ie] += scale * transmission(
-                        amplitudes[component], overlaps, weight_of_k, weights,
-                        coherent=True)
-                    if incoherent:
-                        total_incoherent[ie] += scale * transmission(
+                            tip_projector, coherent=True)
+                        if incoherent:
+                            total_incoherent[ie, here] += scale * spin_transmission(
+                                amplitudes, overlaps, weight_of_k, weights,
+                                tip_projector, coherent=False,
+                                eigenvalues=in_window)
+                            top_band[ie, here] += scale * spin_transmission(
+                                amplitudes, overlaps, weight_of_k,
+                                weights * cut, tip_projector,
+                                coherent=False, eigenvalues=in_window)
+                        continue
+                    for component in range(npol):
+                        total[ie, here] += scale * transmission(
                             amplitudes[component], overlaps, weight_of_k,
-                            weights, coherent=False, eigenvalues=bands)
-                        top_band[ie] += scale * transmission(
-                            amplitudes[component], overlaps, weight_of_k,
-                            weights * cut, coherent=False, eigenvalues=bands)
+                            weights, coherent=True)
+                        if incoherent:
+                            total_incoherent[ie, here] += scale * transmission(
+                                amplitudes[component], overlaps, weight_of_k,
+                                weights, coherent=False, eigenvalues=in_window)
+                            top_band[ie, here] += scale * transmission(
+                                amplitudes[component], overlaps, weight_of_k,
+                                weights * cut, coherent=False,
+                                eigenvalues=in_window)
+                del amplitudes
 
     if not np.any(total > 0.0) and open_path == 0.0:
         # Two spin filters in series with nothing in common pass nothing, and
@@ -838,6 +847,9 @@ def _assemble(geometry, wavefunctions, eigenvalues, points, *,
         "band_edge_weight": (
             float("nan") if not incoherent or total_incoherent.sum() == 0.0
             else float(top_band.sum() / total_incoherent.sum())),
+        # How many bands were sampled, out of how many there are: the window.
+        "window": (int(sum(kept.size for row in windows for kept in row)),
+                   int(nspin * nk * nbnd)),
     }
     extras = {
         "least_eigenvalue": float(least),
@@ -845,6 +857,146 @@ def _assemble(geometry, wavefunctions, eigenvalues, points, *,
         "notes": notes,
     }
     return values, extras
+
+
+#: Complex tip amplitudes held at once, ``npol x n_window x pixels`` -- 32 MB
+#: of complex128, the size of :mod:`defumat.basis.sample`'s phase block. The
+#: contraction makes about three more arrays of one component's size beside
+#: it, so the assembly's own working set is of order 100 MB on any cell.
+_AMPLITUDE_BLOCK = 2_000_000
+
+#: An amplitude below this fraction of the largest at the same energy is not
+#: sampled. The spectral amplitude of a Gaussian falls as ``exp(-x^2/2)`` with
+#: ``x`` the distance in broadenings, so this is ``x = 9.1``; a Fermi-Dirac
+#: delta's square root falls as ``exp(-|x|/2)`` and reaches it at ``x = 84``.
+#: ``None`` samples every band, which is the reference the window is tested
+#: against.
+_WINDOW_TOL = 1.0e-18
+
+
+def _band_window(weights, eigenvalues, method):
+    """Per channel and k-point, the bands whose amplitude can reach the map.
+
+    ``weights`` is ``(nspin, nE, nk, nbnd)``, the per-state factor of
+    :func:`~defumat.transport.green.amplitude_weights` at every energy. A band
+    is kept if, **at some energy**, its factor is above :data:`_WINDOW_TOL` of
+    the largest factor at that energy over every channel, k-point and band.
+    The reference is the whole map's and not the k-point's own, because a
+    k-point far from every state would otherwise keep bands whose contribution
+    is nothing on the map's scale. The dropped terms are then below
+    ``_WINDOW_TOL`` of the map's largest term, pixel by pixel, times the ratio
+    of the two bands' amplitudes at that pixel.
+
+    **A degenerate block is kept whole.** The incoherent map is a diagonal in
+    the substrate's channel basis, which rotates inside each block
+    (:func:`~defumat.transport.green.channel_basis`), and a block cut in two
+    would rotate a different pair: the members of a block have equal energies
+    to ``DEGENERACY_TOL`` and so near-equal factors, and a threshold can still
+    fall between them.
+
+    ``method = "resolvent"`` keeps everything: ``1/(E - e + i eta)`` is nowhere
+    small enough to drop, which is the reason that method does not converge.
+
+    Returns ``windows[ispin][ik]``, an ascending integer index array.
+    """
+    weights = np.asarray(weights)
+    eigenvalues = np.asarray(eigenvalues, dtype=float)
+    nspin, _, nk, nbnd = weights.shape
+    every = np.arange(nbnd)
+    if _WINDOW_TOL is None or method.strip().lower() == "resolvent":
+        return [[every for _ in range(nk)] for _ in range(nspin)]
+    size = np.abs(weights)
+    reference = size.max(axis=(0, 2, 3))
+    reached = (size > _WINDOW_TOL * reference[None, :, None, None]).any(axis=1)
+    windows = []
+    for ispin in range(nspin):
+        row = []
+        for ik in range(nk):
+            keep = reached[ispin, ik].copy()
+            if keep.any():
+                for block in multiplets(eigenvalues[ispin, ik]):
+                    if keep[block].any():
+                        keep[block] = True
+            row.append(np.flatnonzero(keep))
+        windows.append(row)
+    return windows
+
+
+def _flat_axis(points, miller):
+    """The lattice axis every tip point shares a crystal coordinate along, or ``None``.
+
+    A map made with ``height=`` is one, exactly: the plane's origin and both
+    edges carry the same coordinate along ``axis`` and the points are built
+    from them with nothing added along it. When more than one axis qualifies
+    -- a single tip point -- the fold goes along the one whose Miller indices
+    run furthest, which is the stacking axis of a slab and the one that folds
+    the most plane waves into each column.
+    """
+    constant = [c for c in range(3) if np.ptp(points[:, c]) == 0.0]
+    if not constant:
+        return None
+    reach = [int(np.ptp(np.asarray(miller)[..., c])) for c in constant]
+    return constant[int(np.argmax(reach))]
+
+
+def _tip_sphere(window, miller, mask, kcrystal, npol, flat, points, exit_axis,
+                groups):
+    """``(coefficients, miller, k, mask)`` to sample one k-point's window with.
+
+    The sphere itself where the tip points are not on one lattice plane; the
+    sphere folded onto that plane where they are, with the plane's coordinate
+    and the k-point's along it already in the coefficients, so the sampler
+    sums over ``h_par`` alone and the phase it adds along ``flat`` is zero.
+    """
+    npw = miller.shape[0]
+    if flat is None:
+        return window.reshape((-1, npol, npw)), miller, kcrystal, mask
+    folded, inplane = fold_onto_plane(
+        window, miller, float(points[0, flat]), flat, npol=npol, mask=mask,
+        k_along=float(kcrystal[flat]),
+        groups=groups if flat == exit_axis else None,
+    )
+    lateral = np.array(kcrystal, dtype=float)
+    lateral[flat] = 0.0
+    return folded, inplane, lateral, None
+
+
+def _diagnose(overlap, bands, hermiticity, least, channels, offdiagonal):
+    """What one ``S_k`` says about the substrate, on every band.
+
+    Returns the running ``(hermiticity, least)`` and appends to ``channels``
+    and ``offdiagonal``.
+    """
+    overlaps = overlap[None]
+    hermiticity = max(hermiticity, float(
+        np.abs(overlaps - np.conj(np.swapaxes(overlaps, 1, 2))).max()))
+    hermitian = 0.5 * (overlaps + np.conj(np.swapaxes(overlaps, 1, 2)))
+    spectrum = np.linalg.eigvalsh(hermitian)
+    least = min(least, float(spectrum.min()))
+    # How many independent ways there are through the substrate: the
+    # participation ratio of S_k's spectrum, which is the number of open
+    # transmission channels. In the vacuum it is close to **one** -- every
+    # band's evanescent tail has nearly the same shape on the plane and differs
+    # only by a coefficient -- and that is precisely why the interference here
+    # is large rather than a correction: the plane sees one amplitude, so what
+    # tunnels is |sum_n a_n c_n|^2 and not sum |a_n|^2.
+    positive = np.clip(spectrum, 0.0, None)
+    norms2 = (positive ** 2).sum(axis=1)
+    channels.extend(
+        np.where(norms2 > 0.0, positive.sum(axis=1) ** 2
+                 / np.where(norms2 > 0.0, norms2, 1.0), 0.0))
+    # In the channel basis, so that "how much sits off the diagonal" is a
+    # property of the substrate and not of which basis the eigensolver
+    # returned inside a multiplet.
+    u = channel_basis(overlaps, np.asarray(bands)[None])
+    rotated = np.einsum("kni,knm,kmj->kij", u.conj(), overlaps, u,
+                        optimize=True)
+    norms = np.linalg.norm(rotated, axis=(1, 2))
+    diagonals = np.linalg.norm(np.einsum("knn->kn", rotated), axis=1)
+    offdiagonal.extend(
+        np.sqrt(np.clip(norms ** 2 - diagonals ** 2, 0.0, None))
+        / np.where(norms > 0.0, norms, 1.0))
+    return hermiticity, least
 
 
 
@@ -1005,25 +1157,15 @@ def _top_multiplet_mask(eigenvalues, tol: float = DEGENERACY_TOL):
     better diagnostic: a truncation at ``nbnd`` cuts the multiplet, not one
     member of it.
 
-    The grouping rule is :func:`channel_basis`'s own -- compare to the *first*
-    of the group, on sorted eigenvalues -- so the mask and the rotation always
-    agree about where the block is.
+    The grouping rule is :func:`channel_basis`'s own, read from the one place
+    it is written (:func:`~defumat.transport.green.multiplets`), so the mask
+    and the rotation always agree about where the block is.
     """
     eigenvalues = np.asarray(eigenvalues, dtype=float)
     nk, nbnd = eigenvalues.shape
     mask = np.zeros((nk, nbnd), dtype=float)
     for ik in range(nk):
-        order = np.argsort(eigenvalues[ik], kind="stable")
-        start = 0
-        while start < nbnd:
-            stop = start + 1
-            while (stop < nbnd
-                   and eigenvalues[ik][order[stop]]
-                   - eigenvalues[ik][order[start]] < tol):
-                stop += 1
-            block = order[start:stop]
-            start = stop
-        mask[ik, block] = 1.0  # the last block the scan built is the top one
+        mask[ik, multiplets(eigenvalues[ik], tol)[-1]] = 1.0
     return mask
 
 

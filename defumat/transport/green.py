@@ -115,7 +115,8 @@ from dataclasses import dataclass, field
 import numpy as np
 
 __all__ = ["VerticalTransport", "TransportGeometry", "transmission",
-           "spin_transmission", "amplitude_weights", "channel_basis"]
+           "spin_transmission", "amplitude_weights", "channel_basis",
+           "multiplets"]
 
 
 @dataclass(frozen=True)
@@ -242,21 +243,44 @@ def channel_basis(overlaps, eigenvalues, tol: float = DEGENERACY_TOL):
     rotation = np.zeros((nk, nbnd, nbnd), dtype=complex)
     for ik in range(nk):
         rotation[ik] = np.eye(nbnd)
-        start = 0
-        order = np.argsort(eigenvalues[ik], kind="stable")
-        while start < nbnd:
-            stop = start + 1
-            while (stop < nbnd
-                   and eigenvalues[ik][order[stop]]
-                   - eigenvalues[ik][order[start]] < tol):
-                stop += 1
-            block = order[start:stop]
+        for block in multiplets(eigenvalues[ik], tol):
             if block.size > 1:
                 sub = overlaps[ik][np.ix_(block, block)]
                 _, vectors = np.linalg.eigh(0.5 * (sub + sub.conj().T))
                 rotation[ik][np.ix_(block, block)] = vectors
-            start = stop
     return rotation
+
+
+def multiplets(eigenvalues, tol: float = DEGENERACY_TOL) -> list[np.ndarray]:
+    """One k-point's degenerate blocks, as index arrays in ascending energy.
+
+    A block opens at the lowest eigenvalue not yet taken and holds every one
+    within ``tol`` of **that opening value**, not of its neighbour, so a ladder
+    of near-equal levels does not chain into one block. It is the rule
+    :func:`channel_basis` rotates within, written once, because the band window
+    of :func:`~defumat.workflows.transport._assemble` has to keep whole blocks
+    of exactly this kind: the incoherent map is a diagonal in the channel basis,
+    and a block cut in two would rotate a different pair.
+
+    Removing whole blocks from a spectrum leaves the remaining blocks as they
+    were, which is what lets the window apply this rule before it cuts and
+    :func:`channel_basis` apply it again after: a block's opening value is at
+    least ``tol`` above the previous block's, and every later one is higher
+    still.
+    """
+    eigenvalues = np.asarray(eigenvalues, dtype=float)
+    order = np.argsort(eigenvalues, kind="stable")
+    count = order.size
+    blocks = []
+    start = 0
+    while start < count:
+        stop = start + 1
+        while (stop < count
+               and eigenvalues[order[stop]] - eigenvalues[order[start]] < tol):
+            stop += 1
+        blocks.append(order[start:stop])
+        start = stop
+    return blocks
 
 
 def transmission(amplitudes, overlaps, kweights, weights, coherent: bool = True,
