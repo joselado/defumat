@@ -52,7 +52,7 @@ np.savez(sys.argv[1], times=run.times, current=run.current, volume=run.volume,
 print(json.dumps({
     "total_s": total, "fixed_density_s": marks["fixed_density_s"],
     "propagation_s": total - marks["fixed_density_s"], "steps": len(run.times) - 1,
-    "kpoints_wedge": int(len(calc.calculation.system.kpoints.weights)),
+    "symmetry_operations_note": "the wedge of the field (8 operations on 8x8x8 is 100 points)",
     "symmetry_operations": run.symmetry_operations, "norm_drift": run.norm_drift,
     "affinity": sorted(os.sched_getaffinity(0)),
 }), flush=True)
