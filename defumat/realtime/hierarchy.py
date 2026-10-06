@@ -321,7 +321,7 @@ def hierarchy_orders(calculation, basis, energies, weights, v_scf, *, omegas, et
     if nb <= nocc:
         raise ValueError("the computed bands must include more than the occupied ones")
     setup = _prepare(calculation, basis[:, :nocc], weights, v_scf, 0.0, None, "taylor4",
-                     1, kcart)
+                     1, kcart, bounds=False)
     real = setup.real
     unit = np.asarray(direction, dtype=float)
     unit = unit / np.linalg.norm(unit)

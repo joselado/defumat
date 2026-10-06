@@ -451,10 +451,13 @@ class _Setup:
 
 
 def _prepare(calculation, states, weights, v_scf, kappa_max, dt, propagator,
-             k_batch, kcart) -> _Setup:
+             k_batch, kcart, bounds: bool = True) -> _Setup:
     """The table, the k-chunks, the spectrum and the centre; refuses an unstable step.
 
-    ``dt = None`` skips the refusal, for :func:`largest_stable_step`.
+    ``dt = None`` skips the refusal, for :func:`largest_stable_step`;
+    ``bounds = False`` skips the spectrum as well, a pass over every k-point
+    that the frequency-domain hierarchy, which takes no time step, has no use
+    for.
     """
     require_a_realtime_regime(calculation)
     step_fn, bound = get_propagator(propagator)
@@ -484,8 +487,12 @@ def _prepare(calculation, states, weights, v_scf, kappa_max, dt, propagator,
 
     chunks = list(k_chunks(nk, _batch(calculation, k_batch)))
     first = _Chunk.build(calculation, chunks[0][0], terms, table, kcart)
-    lower, upper, centre, carried = spectral_bounds(
-        calculation, states, weights, terms, table, kcart, chunks, kappa_max)
+    if bounds:
+        lower, upper, centre, carried = spectral_bounds(
+            calculation, states, weights, terms, table, kcart, chunks, kappa_max)
+    else:
+        lower = upper = centre = float("nan")
+        carried = (float("nan"), float("nan"))
     # **The centre is the carried states' mean energy and is never moved.** The
     # step's error on a component at energy e goes as (dt (e - centre))^5 in
     # phase and ^6 in norm, and the states live at the bottom of a one-sided
