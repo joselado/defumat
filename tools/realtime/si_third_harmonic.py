@@ -20,6 +20,19 @@ the field normalisation checked once at first order beside the paper's 15.2.
 
 ``GRID:ETA`` is ``8:0.1`` for an 8x8x8 mesh at ``eta = 0.1`` eV. The result of
 every run is appended to ``OUT.json`` as it finishes.
+
+Measured on D22 at 12 Ry, one hyperthread each. **The step**: the driver's
+half-width bound is ``dt = 0.344`` (320 steps a period at 1.55 eV), and between
+it and ``2 bound/(upper - occupied) = 0.307`` (360) the centre of the step is
+clamped off the occupied energies, where the step loses ``y^6/72`` of norm a
+step: on 2^3 at 0.2 eV, 322 steps a period read ``chi(3w)`` 2.8 per cent from
+720, and 360 read it 2.0e-5 from 720. **The transient**: against the dense
+hierarchy (:mod:`tools.realtime.si_dense_orders`), ``chi(3w)`` is 8.4e-3 off at
+``eta_t = 6`` and 4.8e-5 at ``eta_t = 12`` on 2^3, and 7.5e-3 (0.2 eV) and
+1.1e-3 (0.1 eV) at ``eta_t = 6`` on 4^3, where a run takes 2400 to 2600 s.
+**The mesh**: on these meshes the number is the velocity gauge's mesh
+artefact (:mod:`tools.realtime.si_band_curvature`), ``chi^(1)`` 206 on 2^3 and
+59 on 4^3 against about 15; the dense series is the one that converges.
 """
 import json
 import math
