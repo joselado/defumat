@@ -72,9 +72,9 @@ called here.
 **Memory.** The states of the whole mesh are resident, ``16 nk nbnd npwx``
 bytes, twice inside a step (the states at ``t`` and the stepped ones), and
 ``2^n`` times that at order ``n`` of :func:`propagate_orders_self_consistent`;
-beside them, every chunk's k-dependent arrays (kinetic energies, FFT indices,
-and the projector columns at ``kappa = 0``, ``16 nk npwx nkb``), three dense
-potentials and the density.
+beside them, every chunk's k-dependent arrays (kinetic energies, FFT indices
+and masks; the projectors at ``kappa = 0`` are dropped, since every step builds
+its own), three dense potentials and the density.
 """
 
 from __future__ import annotations
@@ -138,10 +138,28 @@ class _KPart(eqx.Module):
 
     @classmethod
     def of(cls, chunk):
+        """The chunk's k-indexed arrays, with what every step rebuilds left out.
+
+        The step builds the projectors and their columns at ``k + kappa`` from
+        the table (:meth:`~defumat.realtime.propagate._Chunk.moved`), so the ones
+        at ``kappa = 0`` the chunk was built with, ``vkb`` and the real columns
+        with their ``k + G``, are never read again; kept for the whole mesh they
+        were ``16 nk npwx nkb + 8 nk npwx (ncs + 3)`` bytes resident beside states
+        that are ``16 nk npwx nbnd``, several times their size.
+        """
         placeholder = jnp.zeros((), dtype=chunk.template.potential.dtype)
+        projectors = chunk.template.projectors
+        projectors = dataclasses.replace(
+            projectors, stored=jnp.zeros((chunk.nk, 1, projectors.dij.shape[0]),
+                                         dtype=projectors.dtype))
         template = dataclasses.replace(chunk.template, potential=placeholder,
-                                       potential_wave=placeholder)
-        return cls(k0=chunk.k0, gcart=chunk.gcart, mask=chunk.mask, core=chunk.core,
+                                       potential_wave=placeholder, projectors=projectors)
+        core = chunk.core
+        core = eqx.tree_at(lambda c: (c.columns, c.kg), core,
+                           (jnp.zeros((chunk.nk, 1, core.columns.shape[-1]),
+                                      dtype=core.columns.dtype),
+                            jnp.zeros((chunk.nk, 1, 3), dtype=core.kg.dtype)))
+        return cls(k0=chunk.k0, gcart=chunk.gcart, mask=chunk.mask, core=core,
                    template=template, nk=chunk.nk)
 
     def chunk(self, table, positions, terms=None):
