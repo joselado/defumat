@@ -49,6 +49,16 @@ RY_TO_KELVIN = RYDBERG_SI / K_BOLTZMANN_SI
 #: ``AU_PS`` under another name in ``constants.f90``, kept there because a
 #: frequency in THz and a time in ps are the same number.
 AU_SEC = H_PLANCK_SI / TPI / HARTREE_SI
+#: The speed of light in Hartree atomic units, ``1/alpha`` (CODATA 2018), and
+#: Elk's ``solsc``. A vector potential ``A`` of Elk's in Hartree units is the
+#: crystal-momentum shift ``kappa = A / C_AU`` in 1/bohr that a real-time run
+#: here carries (:mod:`defumat.realtime.pulse`).
+C_AU = 137.035999084
+#: The peak intensity in W/cm^2 of a linearly polarised field of peak strength
+#: one Hartree atomic unit (``5.14e11 V/m``), ``c E0^2 / 8 pi`` in Gaussian
+#: atomic units: Elk's ``ppd`` times its ``cpd`` at ``E0 = 1``, 3.51e16.
+INTENSITY_AU_W_CM2 = (C_AU / (8.0 * PI)) * HARTREE_SI / (
+    H_PLANCK_SI / TPI / HARTREE_SI * (100.0 * BOHR_RADIUS_SI) ** 2)
 AU_PS = AU_SEC * 1.0e12
 #: A frequency in Ry (energy, with hbar = 1) as THz and as cm^-1 -- the two
 #: units ``dyndia`` prints a phonon in. The ``4 pi`` is not decoration: an
