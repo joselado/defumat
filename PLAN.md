@@ -204,6 +204,19 @@ new phase is started. Each entry names the missing term rather than the missing 
 because that is what decides whether it is a session or a phase.
 
 - **Wyckoff input** (P6, the one part of that phase not done).
+- **Real-time propagation with the potential updated in time** (P134 has it frozen): a
+  predictor-corrector on `density` and `potential` at the midpoint, checked by the `rpa`-with-local-
+  fields and `alda` pairings of the linear stage and by energy conservation after a kick; with it the
+  self-consistent orders. Also open there: ultrasoft and PAW (`P_kappa`, the term an overlap moving
+  with `kappa` adds to the equation of motion, derived and not sourced; shifting the projectors alone
+  moves `<psi|S|psi>` by 1.6e-3), `nspin = 2` and spinors (a linear reference first), DFT+U (the
+  Hubbard projectors' own row at `k + G = 0`, `OPEN.md`), and re-centring the sphere for a `kappa`
+  past half a reciprocal vector.
+- **A spectrum of `chi^(3)`** (P135 has it at one frequency per run): the frequency-domain hierarchy
+  of `HARMONICS-NEXT.md` with an indefinite complex shifted solver, the third phase of that plan; the
+  dense version (`realtime/dense.py`) is its reference and already two orders cheaper than the
+  propagation at 169 plane waves. And `get_shg`'s missing curvature of the projectors, 5 to 9 per
+  cent on AlAs (`OPEN.md`).
 - **The electron-phonon coupling summed over the zone** (P132 has it at one `q`):
   `ph.x`'s `'interpolated'` route, which needs the dense-grid band structure (`la2F`), the
   trilinear interpolation of `|g|^2` (`elphsum`, `clinear`), the star of `q` and
@@ -24319,3 +24332,253 @@ against 11.9 s before, and 17.0 s in `'speed'`, 8 passes in both, frequencies 73
 eigenvalues, so it solves at the grid's widest count. Card times on a float32 part with float64 at
 1/70, not claims about an A100.
 
+### P134 -- Real-time propagation at a frozen potential: the occupied states under `H(k + kappa(t))` on the frozen sphere, the current, the dielectric function from a kick, the high-harmonic spectrum and the little group of the field; and the projector rows at `k + G = 0` repaired to every order. ✅ DONE for norm-conserving `nspin = 1`, 2026-10-06, on D22's CPU and card; the update of the potential in time is not here.
+
+The plan is `HARMONICS-NEXT.md` (2026-10-06, reviewed by a fable subagent before any code); the
+design of the driver was reviewed by a second one against the code before the driver was written,
+and its findings are folded in below. Phase 2 of the plan, the perturbative orders and the third
+harmonic by the real-time route, is P135.
+
+**The row at `k + G = 0`, repaired first.** A projector column is `Y_lm(qhat) f_l(|q|)`, both
+factors guarded at the origin, and the `l = 1` `custom_jvp` of P24 put back the first tangent
+only. `pseudo/projectors.py:_with_origin_rows` replaces it: on the rows `|q|^2 <= ORIGIN_TOL` the
+guarded column plus `S_lm(q) g_l(q^2)` without the `l = 0` constant, with `S_lm` the regular solid
+harmonic (`harmonics.real_solid_harmonics`, a polynomial) and `g_l` the transform's own Taylor
+series in `q^2` to `s^3` (`formfactors.origin_series`). At `q = 0` exactly the added term is a
+zero of either sign, so every value is unchanged; a concrete `kg` with no such row skips the
+rewrite (`_has_origin_rows`). On `si2-nosym` at Gamma, `nbnd = 10`, against a central
+difference of the order below:
+
+| | master, `h = 1e-3` | master, `3e-4` | repaired, `1e-3` | repaired, `3e-4` | `k = (0.1, 0, 0)`, `3e-4` |
+|---|---|---|---|---|---|
+| second derivative, `xa` row (norm 5.95) | 2.56e-2 | 2.56e-2 | 1.17e-7 | 1.05e-8 | 8.99e-9 |
+| third derivative, `xxx` (norm 0.674) | 9.28e-2 | 9.28e-2 | 1.82e-7 | 1.64e-8 | 1.84e-8 |
+
+The SCF energy of `si2-nosym` is bit-identical (-15.793596560406883 Ry both). The series is
+checked against a cubic fit of the transform in `s` on three kinds of dataset (3.3e-11, 7.2e-7,
+5.7e-3 for `s^0`, `s^1`, `s^2`, the fit's floor). No recorded shift-current figure moves at
+its printed precision: only Gamma's own edge transition moves, by 0.77 per cent, falling with
+Gamma's weight in the mesh (`OPEN.md`, 2026-10-06). The Hubbard projectors carry the first-order
+form of the same defect and are not repaired (`OPEN.md`).
+
+**The design.** `defumat/realtime/`: `pulse.py` (`kappa(t) = A(t)/c` in 1/bohr on Hartree
+atomic units of time; Elk's Gaussian, ramp and step, `sin^2`, the adiabatic switch-on; `E` is
+`-dkappa/dt` by `jacfwd`, never a second expression), `propagators.py` (the fourth-order Taylor
+step at the midpoint, `|R(iy)|^2 = 1 - y^6/72 + y^8/576`, stable for `|y| <= 2 sqrt 2`),
+`radial.py`, `propagate.py`, `orders.py`, `spectra.py`, `dense.py`; `workflows/realtime.py` and
+five `Calculator` methods. The step exponentiates `H_Ry dt/2` (the internal time unit is
+`hbar/Ry`, twice Elk's), the only conversion. The current is `jax.grad` in `kappa` of the
+kinetic and nonlocal band energy, the only terms that carry `kappa`, so no FFT; the review
+measured its identity with the step's Hamiltonian, a central difference of
+`<psi|H(k + kappa)|psi>` through `at_kcart` against the gradient, at 9.1e-9 (`h = 1e-3`) and
+8.9e-11 (`1e-4`), at Gamma and off it, at three `kappa`.
+
+**Measured before building, and what it changed.** One core of D22, two-atom silicon, one
+k-point, four bands, warm medians of 31 (`tools/realtime/step_cost.py`):
+
+| | 12 Ry (`npwx` 180, 16^3) | 30 Ry (`npwx` 736, 32^3) |
+|---|---|---|
+| one Hamiltonian application on the four bands | 0.17 ms | 1.06 ms |
+| `vkb` and `|k+G+kappa|^2` rebuilt by the radial transform (`at_kcart`) | 0.79 ms | 3.21 ms |
+| the current through the transform | 2.14 ms | 8.51 ms |
+| one Taylor step through the transform | 1.43 ms | 7.46 ms |
+
+So three quarters of a step was the projectors, and they are built from a Chebyshev series of
+`g_l(s)` in `s = q^2` on `[0, s_max]` instead (`realtime/radial.py`): 32 terms, within 1.1e-13,
+1.4e-13, 4.0e-14 and 7.2e-14 of the transform for `Si.pz-vbc`, `C.pz-rrkjus`, Pt PAW and
+`As.pz-bhs`, `vkb` to 7.8e-15 and the current to 1.7e-13 relative; on this workstation the
+rebuild fell from 2.4 to 0.25 ms and the current from 4.4 to 0.27. The column is
+`S_lm(q) g_l(|q|^2)`, a polynomial in the components of `q`, so it has no guard to lose at
+`k + G + kappa = 0`, where a pulse passes once per zero crossing. It is the real-time route's
+projector only: the ground state keeps the transform. The frozen sphere's own error, the
+eigenvalues of `H(k + kappa)` on the sphere of `k` against a sphere rebuilt at `k + kappa`:
+at 30 Ry, at most 1.8e-5, 3.4e-4 and 2.9e-4 eV on the occupied bands at `kappa` = 0.1, 0.3,
+0.5 1/bohr (4.0e-4, 8.7e-4, 1.6e-3 over the eight lowest); at 12 Ry about 1e-2 eV, the cutoff's
+own error.
+
+**Three traps on the way, each a plausible wrong number.**
+
+- **A kept program replays the arrays it closed over.** `eager.compiled_function` traces once
+  and calls the program with the constants captured at the trace; a block closing over one
+  k-chunk and called on the next returns the first chunk's current, wrong by 1.2e-4 with nothing
+  to say so (the review measured it). The chunk is an `eqx.Module` passed as an argument
+  (`propagate._Chunk`), and then a **static field** sent every chunk after the first through a
+  retrace: `Hamiltonian.npw`, each row subset's smallest sphere. It is set to `None` on the
+  template (only the eigensolver reads it); the second, third and fourth k-chunks compile
+  nothing (`test_a_second_k_chunk_compiles_nothing`).
+- **The centre of the step belongs on the occupied energies.** Centred at the middle of the
+  spectrum (2.3 Ry on silicon at 12 Ry) the occupied components sat 2 to 3 Ry from it and the
+  norm drifted 1.6e-5 in 200 steps of 0.1 with the energy 1.4e-6 Ha off; centred on the band
+  energies, as near as stability allows, 3.6e-9 and 2.6e-10.
+- **The linear identity has a term a coarse mesh makes the size of the answer.** The propagation
+  carries the exact diamagnetic term and the Kubo sum its f-sum value, so
+  `sigma_RT(z) = sigma_Kubo(z) + i D/(Omega z)` with `D` the mesh sum of band curvature; the
+  review derived it and measured `D` at Gamma at -0.71 against `Pi(0)` of -0.94. And the obvious
+  reference, `optical_conductivity` at `nbnd = npw`, is unreachable: the Davidson subspace is
+  capped at `min_k npw`, so the test feeds the resolvent sum from a dense `eigh`.
+
+**The checks.**
+
+| check | cell | result |
+|---|---|---|
+| no field: energy, norm, current | Si, 6 Ry, 2x2x2, exact eigenstates, 200 steps of 0.1 | 2.0e-10 Ha, 3e-9, 1e-10 constant |
+| work against energy gained, `Sin2` 1e12 W/cm^2 at 1.55 eV, 2 cycles | Si, 12 Ry, 2x2x2 | 0.0180479463 against 0.0180479025 (2.4e-6, the trapezoid) |
+| linear: kick against the Kubo resolvent sum with every band plus `iD/(Omega z)` | Si, 6 Ry, Gamma and a general point, `eta` 0.02 Ha, `dt` 0.05, 0.5 to 16 eV | 1.6e-5 of the scale; 0.81 on 0.81 without the `D` term |
+| the little group of a [100] field against the whole mesh | Si, 12 Ry, 4x4x4: 18 points and 8 operations against 64 | 6.2e-11 on 8.8e-4, 19 s against 63 |
+| the same, [110] | 26 points, 4 operations | 3.6e-11 on 6.0e-4 |
+| the card against the CPU, the same pulse | Si, 12 Ry, 2x2x2, RTX A2000 | 8.9e-11 on 3.4e-3; 3.1 s against 14.9 s (two CPU threads), second call |
+| an unstable step | Si, 6 Ry, `dt` 5 | refused by name |
+
+**The kick against the Kubo sum on a production-like grid.** On `si2-symmetric` at 12 Ry, the
+4x4x4 grid's [100] wedge, `eta` 0.5 eV: with the constant part of `J` subtracted, `eps_xx` is
+32.87+10.59i, -11.88+35.74i and -8.67+4.31i at 2, 4 and 6 eV against the interband
+`get_optical_conductivity` on the same mesh at 40 bands, 32.83+10.61i, -11.89+35.75i, -8.68+4.31i,
+and 22.59 against 23.27 at `w -> 0`, where the time average of the oscillation over a finite run is
+not zero; without the subtraction the curvature term reads -278 there.
+
+**The harmonic spectrum** (notebook 50, `get_hhg`). Silicon and AlAs, 4x4x4 wedges of the [111]
+field (six operations in both), eight cycles of 1.55 eV at 3e12 W/cm^2, `dt` 0.2: silicon's odd
+harmonics to the 19th above 1e-6 of the fundamental, its 4th 0.0095 of its 5th against AlAs's 0.26;
+AlAs along [100] is odd-only to 1.5e-2, 7e-4 and 9e-5 for orders 4, 6, 8, because zincblende's C2
+about [010] reverses that field. The plateau's end against intensity on silicon: 9, 15, 19, 27, 31
+from 1 to 5e12 W/cm^2; against the basis, the 19th at 12 Ry and the 23rd at 20. `dt` 0.2 against 0.1:
+the peaks agree to 0.1 per cent up to the 21st. `J[E] + J[-E]` is 1.5e-8 of `max |J|` on the
+silicon wedge, so silicon's residual even orders are the finite pulse. 373 s through
+`tools/export_notebooks.sh`.
+
+**The comparison against Elk**: [ELK].
+
+**The ultrasoft refusal's number.** Shifting the projectors alone to the published silicon
+pulse's peak, `kappa = 0.11` 1/bohr, moves `<psi|S|psi>` of ultrasoft silicon (`si2-us.in`) by up
+to 1.6e-3 at a general k-point and 1.7e-4 at Gamma, where the first-order term
+`kappa <psi|dS/dk|psi>` vanishes by time reversal (`tools/realtime/ultrasoft_norm.py`). That is
+the size of the anti-Hermitian half of the missing `P_kappa`; the Hermitian half leaves the norm
+alone and has no number yet.
+
+**Timing against Elk**: [TIMING].
+
+**The review of the code** (a subagent, after the driver and before the record) demonstrated twelve
+findings with a number each, all fixed in `44cb3d0`: the checkpoint's signature was the grid and the
+k-count alone and resumed a run at twice the amplitude bit for bit (43 per cent off); the centre and
+the bound came from the first k-chunk, so `k_batch` moved the current by 3.9e-7; the whole state set
+went to the device; a projection over a broken period leaked 1.5e-2 into `J_(3,3)`; `k_batch='fit'`
+raised; the radial table ran in float64 under a float32 policy; the two transforms took 1.6 and
+3.6 GB of host memory; the cutoff read an isolated noise peak; two docstrings; a whole shifted grid
+was refused without the little group; and Elk's coupling has the opposite sign of `A`
+(`genhmlt.f90`'s `-(1/c) A.p`), which leaves the conductivity and the odd orders alike and flips the
+even ones. Checked clean: the units, the Taylor polynomial, `chi3_from_orders` on an instantaneous
+cubic medium (2, 2 and 0.7 to 1e-15), the padding, the weights, the multiplet check, the little
+group off the axes ([110], [111], [120] to 6e-9), and the table's derivatives to fourth order
+(1e-8 at 4 Ry).
+
+**What is outstanding**, each with what it needs: the potential updated in time (a
+predictor-corrector on `density` and `potential`, the `rpa`-with-local-fields and `alda`
+pairings, and energy conservation after a kick as the check); ultrasoft and PAW (`P_kappa`);
+`nspin = 2` and spinors (a linear reference first); DFT+U at a frozen occupation matrix (its
+linear check); re-centring the sphere when `kappa` crosses half a reciprocal lattice vector; a
+split-operator step; single precision on a card, measured on a spectrum.
+
+### P135 -- The perturbative orders of the current by nested `jvp` through the propagation, and `chi^(3)` by the real-time route. ✅ DONE for norm-conserving `nspin = 1` at one frequency per run, 2026-10-06; a spectrum (the frequency-domain hierarchy and its complex shifted solver) is the plan's third phase and is not here.
+
+**The route.** `kappa(t) = lam a(t)` with `a(t) = exp(eta t) cos(w t) e` on `[-T, 0]`
+(`realtime.pulse.Adiabatic`), and `J^(n) = (1/n!) d^n J/d lam^n` at `lam = 0` by `n` nested
+`jax.jvp` through every block of the propagation (`realtime/orders.py:_lift`): the states become
+a tower of `2^n` arrays, the tangent of `lam` is one at every level, and the kept block is the
+lifted function itself, traced once and called on every chunk with the tower as its argument.
+`J^(n)(t) = exp(n eta t) sum_m J_(n,m) exp(-i m w t)`, and `fourier_component` takes `J_(n,m)` as
+the mean over the last period of a grid whose step divides it. With `E(z) = i lam z/2`,
+`P = i J/Omega_s` and Boyd's degeneracy factors, `chi^(3)(-3w; w,w,w) = -8 J_(3,3)/(3 z^4)` and
+`chi^(3)(-w; w,w,-w) = 8 J_(3,1)/(3 (2z - zbar) z^2 zbar)` in atomic units, `4 pi / E_au^2 =
+4.75e-23` m^2/V^2 each (`workflows/realtime.py:chi3_from_orders`, `CHI3_AU_TO_SI`); `[110]`
+gives `(chi_xxxx + 3 chi_xxyy)/(2 sqrt 2)` in the `x` current, by the intrinsic permutation
+symmetry of the third harmonic.
+
+**The ladder** (`HARMONICS-NEXT.md`, "The perturbative orders"), in the order it was climbed:
+
+1. **The dense hierarchy, every order at once** (ladder item 3, taken first because it needs no
+   unit). `realtime/dense.py` builds `H(k + x e)` as a matrix through `at_kcart` (the radial
+   transform and the rewritten origin rows) and its derivatives in `x` to fourth order by nested
+   `jvp`, and solves the steady-state hierarchy of `tools/realtime/toy_orders.py` densely at
+   `m w + i n eta` with every band of the sphere; the propagation uses the Chebyshev table. They
+   share `H(k)` and nothing else. Zincblende AlAs at 4 Ry, Gamma and `(0.25, 0.1, -0.05)`,
+   `w = 0.05`, `eta = 0.01` Ha:
+
+   | `(n, m)` | `eta T` = 6.3, 200 steps a period | 20.1, 400 | 20.1, 800 |
+   |---|---|---|---|
+   | (1,1) | 4.6e-2 | 1.37e-5 | 4.88e-6 |
+   | (2,2) | 2.0e-2 | 1.93e-5 | 5.23e-6 |
+   | (2,0) | 1.9e-2 | 1.99e-5 | 5.06e-6 |
+   | (3,3) | 4.3e-3 | 2.69e-5 | 7.60e-6 |
+   | (3,1) | 8.8e-3 | 2.95e-5 | 7.58e-6 |
+
+   The first column is the start transient, `exp(-eta T)` times a resonance factor, which does
+   not decay because the evolution is unitary; the last two fall by three to four at half the
+   step, the midpoint rule's `dt^2`. `|J_(2,2)| = 9.0e-3` against `|J_(1,1)| = 7.7e-3`, so the
+   even orders are compared and are not a residue. 73 s and 100 s on three D22 cores at order
+   three, 6400 and 12800 steps, two k-points.
+2. **The first order against the Kubo sum** (item 1): P134's linear identity, 1.6e-5.
+3. **The second order against `get_shg`** (item 2). `chi2_from_orders`: `chi^(2) = -2i J_(2,2)/z^3`
+   in atomic units, `24.4377` pm/V each. AlAs at 12 Ry, 4x4x4, the [111] wedge (six operations, 20
+   points; [011] keeps two and its longitudinal second-order current vanishes in `Td`), `eta` 0.2
+   eV: the propagation reads 124.918+20.117i pm/V at 0.7 eV against the dense hierarchy's
+   124.926+20.155i (3.0e-4), 215.161+321.547i at 1.5 eV (6.1e-5), 1029 s and 1095 s on two D22
+   threads. The relation to `get_shg` is `chi_RT = -conj(chi_SoS)` at every frequency (0.4 to 1.7
+   eV), `eta` (0.1 to 0.3 eV), mesh (4^3 to 8^3) and cutoff (8 to 16 Ry): the conjugate is the sum's
+   time convention, the minus the charge, which `chi^(2)` is odd in and the sum does not carry. The
+   factor of two, `J = dP/dt` and the normalisation are pinned. **The sum over states is 5 to 9 per
+   cent short with every band**, on every mesh (7.5, 6.8, 5.0 per cent at 0.4, 0.7, 1.5 eV on 4^3;
+   8.6, 8.2, 5.9 on 8^3), and with `D_ij = 0` and the local potential tripled the comparison closes to
+   6.2e-4 at 12 Ry and 2.2e-5 at 8 Ry, so the projectors' curvature is what its sum rule misses
+   (`OPEN.md`). `tests/regression/test_realtime_shg.py`: the local-model identity to 4.3e-5 (46 s) and
+   the real calculation against `get_shg` at 23 bands, `-conj` to 1.93e-2 (388 s).
+4. **A finite difference in the amplitude** (item 5). Four full runs at `lam = +-h, +-2h`, the
+   stencil `([J(2h) - J(-2h)] - 2[J(h) - J(-h)])/(12 h^3)`, AlAs at 4 Ry on two k-points, `eta T` 6.3:
+   the whole `J^(3)(t)` agrees with the nested `jvp` to 0.10, 2.6e-2, 6.5e-3, ..., 2.5e-5 and 6.5e-6
+   for `h` = 0.04 halving to 3.1e-4, the `h^2` of the stencil, and rises below that as `1/h^3` from the
+   rounding of the zero-field current; `J_(3,3)` and `J_(3,1)` agree to 6.5e-6 and 3.3e-6 at the best
+   `h` (`tests/regression/test_realtime_orders_fd.py`, 66 s).
+5. **Silicon's `chi^(3)` against arXiv:1810.06500** (item 4). **The plan's reference numbers were
+   misread**: the paper's own TDDFT-LDA values (Table V) are `|chi_1111(w)| = 2.2e-18` and
+   `|chi_1111(3w)| = 1.3e-18` m^2/V^2 (TB-mBJ 8.6e-19, 1.4e-18); the 2.5e-18 and 3.0e-18 first quoted
+   are its optical-polarizability column and its `3 chi_1122(w)` row, corrected in the plan. At 12 Ry
+   on the [100] wedge, from the dense hierarchy, which agrees with the propagation on every cell
+   both ran (4.8e-5 on 2^3 at `eta T` 12):
+
+   | mesh | `|chi(3w)|`, 0.2 eV | `|chi(w)|`, 0.2 eV | `|chi(3w)|`, 0.1 eV | `|chi(w)|`, 0.1 eV | `chi^(1)`, 0.2 eV |
+   |---|---|---|---|---|---|
+   | 4^3 | 1.69e-18 | 8.28e-18 | 2.03e-18 | 9.76e-18 | 59.0 |
+   | 8^3 | 1.08e-18 | 1.82e-18 | 1.57e-18 | 1.94e-18 | 18.2 |
+   | 12^3 | 1.02e-18 | 0.62e-18 | 1.77e-18 | 0.70e-18 | 14.7 |
+   | 20^3 | 0.66e-18 | 0.94e-18 | 0.95e-18 | 1.36e-18 | 14.31 |
+   | 28^3 | 0.65e-18 | 0.93e-18 | 0.90e-18 | 1.35e-18 | 14.30 |
+
+   Converged to 2 per cent at 0.2 eV; at 0.1 eV `chi(3w)` oscillates by 10 per cent to 28^3. 16 Ry
+   moves `|chi(w)|` by +8 and `|chi(3w)|` by +1 to +2 per cent at 12^3. Delays 0.52 and 0.64 fs
+   against the paper's 0.6 and 0.7. So the frozen potential is the paper's scale and smaller by about
+   two, and the factor cannot be separated between its updated potential (local fields and ALDA),
+   its 10.26 bohr against 10.2 and its fit to a filtered 20 fs pulse. **The velocity gauge's mesh
+   artefact is the size of the answer on a coarse mesh**: the band-curvature sum `D` is -9.71,
+   -2.14, -0.54, -0.13, -0.012 Ha bohr^2 on 2^3 to 10^3, 135, 30, 7.5, 1.8, 0.16 in `chi^(1)`, then a
+   floor of +0.034 at 16^3 that belongs to the frozen sphere (+0.017 at 16 Ry); its quartic sibling
+   `S4/(18 Omega z^4)` is 3.5e-18 on 2^3, the whole `chi(3w)`, and 7e-21 on 16^3.
+
+**What it costs.** Third order on silicon at 12 Ry: 18 to 25 ms per k-point per step on one D22
+thread against 5.4 ms at first order, the first compile about 100 s. A 12^3 wedge (294 points) at
+0.1 eV and `eta T` 20 is about 18000 steps a point, a day on one core. The dense hierarchy at
+`npw` 169 is 0.35 to 0.9 s a k-point for both broadenings (28^3, 3150 points, 1088 s), two orders
+cheaper at this cutoff and `npw^3` in the cutoff.
+
+**Stable is not accurate**, found by both the second- and third-order steps and fixed in `44cb3d0`:
+between the half-width bound and the bound centred on the bands the old driver clamped the centre
+off the occupied energies; on silicon at 322 steps a period that lost 4.6 per cent of the norm over
+2576 steps and 2.2 to 2.9 per cent of `chi^(1)`, `chi(3w)` and `chi(w)` against 720 steps a period
+(1.2e-5 to 3.0e-5 at 360), and on AlAs at 12 Ry a step of 0.305 took the first-order current from
+9.5e-9 to 2e-20 in 800 steps. `run_harmonic_orders` now chooses its steps from the bound centred on
+the bands, and `OrdersResult.norm_drift` carries the zeroth order's norm. Order three of nested forward mode carries eight
+copies of each state; `jax.experimental.jet`, which would carry four, was not measured.
+
+**What is outstanding**: a spectrum of `chi^(3)`, which is the frequency-domain hierarchy with an
+indefinite complex shifted solve (`NONLINEAR.md` §7's missing machine; QE's `solve_e_fpol.f90` the
+nearest reference), with the secular `1/(2 i eta)` component of `c^(2)_0` and the occupied-occupied
+denominators to be designed for; the self-consistent orders, which come with the potential
+updated in time; and Taylor-mode propagation.
