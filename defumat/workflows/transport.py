@@ -707,17 +707,22 @@ def _assemble(geometry, wavefunctions, eigenvalues, points, *,
                                     broadening, method, smearing)
                   for energy in energies])
         for ispin in range(nspin)])
-    windows = _band_window(state_weights, eigenvalues, method)
+    # Two polarizers multiply: on a collinear run each is a weight on the
+    # channel, and a channel the tip does not accept is one the substrate never
+    # sees. The window is decided on these, so that a closed channel's states
+    # set no scale for an open one's.
+    scales = []
+    for ispin in range(nspin):
+        scale = 1.0 if channel_scale is None else channel_scale[ispin]
+        if tip_scale is not None:
+            scale *= tip_scale[ispin]
+        scales.append(float(scale))
+    windows = _band_window(state_weights, eigenvalues, method, scales)
     flat = _flat_axis(points, miller)
 
     open_path = 0.0
     for ispin in range(nspin):
-        scale = 1.0 if channel_scale is None else channel_scale[ispin]
-        # Two polarizers multiply: on a collinear run each is a weight on the
-        # channel, and a channel the tip does not accept is one the substrate
-        # never sees.
-        if tip_scale is not None:
-            scale *= tip_scale[ispin]
+        scale = scales[ispin]
         open_path += scale
         # Which bands the band-count truncation actually cuts: the topmost
         # *multiplet*, in the same channel basis the denominator is taken in.
@@ -825,8 +830,10 @@ def _assemble(geometry, wavefunctions, eigenvalues, points, *,
             f"{broadening:g} Ry of the tip energy on this k-set. Either the "
             "run is gapped there, or the grid misses the point the states sit "
             "at -- graphene's are at K, which a mesh whose divisions are not a "
-            "multiple of three does not contain. Widen broadening=, move "
-            "energies=, or use a grid that carries the states",
+            "multiple of three does not contain -- or, with a fully polarized "
+            "lead on a spinor run, the states that do lie there carry the spin "
+            "it rejects. Widen broadening=, move energies=, or use a grid that "
+            "carries the states",
             stacklevel=4,
         )
 
@@ -874,18 +881,33 @@ _AMPLITUDE_BLOCK = 2_000_000
 _WINDOW_TOL = 1.0e-18
 
 
-def _band_window(weights, eigenvalues, method):
+def _band_window(weights, eigenvalues, method, scales=None):
     """Per channel and k-point, the bands whose amplitude can reach the map.
 
     ``weights`` is ``(nspin, nE, nk, nbnd)``, the per-state factor of
-    :func:`~defumat.transport.green.amplitude_weights` at every energy. A band
-    is kept if, **at some energy**, its factor is above :data:`_WINDOW_TOL` of
-    the largest factor at that energy over every channel, k-point and band.
-    The reference is the whole map's and not the k-point's own, because a
-    k-point far from every state would otherwise keep bands whose contribution
-    is nothing on the map's scale. The dropped terms are then below
+    :func:`~defumat.transport.green.amplitude_weights` at every energy, and
+    ``scales`` the weight each channel enters the map with, which is what a
+    spin-selective lead on a collinear run is (``None``: every channel at 1).
+    A band is kept if, **at some energy**, its factor times the square root of
+    its channel's weight is above :data:`_WINDOW_TOL` of the largest such
+    product at that energy over every channel, k-point and band.
+
+    **The reference is the map's own, and two things follow from that.** It is
+    not the k-point's own, because a k-point far from every state would
+    otherwise keep bands whose contribution is nothing on the map's scale. And
+    a channel the leads do not accept sets no scale for one they do: with
+    ``spin="up"`` a down state on the energy would otherwise push every up
+    tail below the threshold, and the up map, which is those tails, would read
+    zero. With the weights in, a dropped term ``scale a_n a_m* S_nm`` is below
     ``_WINDOW_TOL`` of the map's largest term, pixel by pixel, times the ratio
-    of the two bands' amplitudes at that pixel.
+    of the two bands' ``|psi|`` at that pixel and their overlaps.
+
+    **What it does not see is a spin projector inside a channel**: a spinor
+    run's polarized substrate or tip acts on the spin of each state, and a
+    state of the rejected spin still counts here at its full amplitude. With a
+    fully polarized lead and only such states near the energy, the window
+    drops the accepted states' tails, which are below 1e-18 of the unpolarized
+    map there, and the polarized map reads zero rather than those tails.
 
     **A degenerate block is kept whole.** The incoherent map is a diagonal in
     the substrate's channel basis, which rotates inside each block
@@ -905,7 +927,9 @@ def _band_window(weights, eigenvalues, method):
     every = np.arange(nbnd)
     if _WINDOW_TOL is None or method.strip().lower() == "resolvent":
         return [[every for _ in range(nk)] for _ in range(nspin)]
-    size = np.abs(weights)
+    root = np.sqrt(np.ones(nspin) if scales is None
+                   else np.clip(np.asarray(scales, dtype=float), 0.0, None))
+    size = np.abs(weights) * root[:, None, None, None]
     reference = size.max(axis=(0, 2, 3))
     reached = (size > _WINDOW_TOL * reference[None, :, None, None]).any(axis=1)
     windows = []

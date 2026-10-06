@@ -1325,3 +1325,35 @@ def test_the_store_is_read_one_k_point_at_a_time():
     reference = _run(geometry, coefficients, eigenvalues, _plane(3))
     assert store.reads == [(0, 0), (0, 1)]
     assert np.array_equal(result[0]["coherent"], reference[0]["coherent"])
+
+
+def test_a_closed_channel_sets_no_scale_for_the_window(monkeypatch):
+    """With ``spin="up"`` the up map is measured against itself, not against down.
+
+    The down channel has a state on the energy and the nearest up state is
+    twelve broadenings away, so the up map is nothing but tails, about 1e-63 of
+    what the down state would give. A window measured against every channel
+    drops those tails and returns zero; measured against the open channel it
+    keeps them, and the map agrees with sampling every band relative to its
+    own maximum. The reference map is asserted nonzero, which is what makes the
+    comparison mean anything.
+    """
+    import defumat.workflows.transport as transport
+    from defumat.transport.green import TransportGeometry
+
+    geometry, up, _ = _junction(nk=1, nbnd=3, seed=41)
+    _, down, _ = _junction(nk=1, nbnd=3, seed=43)
+    coefficients = np.concatenate([up, down])
+    eigenvalues = np.array([[[-0.5, 0.12, 0.3]], [[-0.4, 0.0, 0.35]]])
+    geometry = TransportGeometry(miller=geometry.miller, mask=geometry.mask,
+                                 kcrystal=geometry.kcrystal,
+                                 kweights=np.array([1.0]), cell=geometry.cell)
+    options = dict(energies=np.array([0.0]), spin="up", polarization=1.0)
+
+    windowed = _run(geometry, coefficients, eigenvalues, _plane(4), **options)
+    monkeypatch.setattr(transport, "_WINDOW_TOL", None)
+    every = _run(geometry, coefficients, eigenvalues, _plane(4), **options)
+
+    assert np.abs(every[0]["coherent"]).max() > 0.0
+    _agree(windowed, every)
+    assert windowed[1]["notes"]["window"][0] < every[1]["notes"]["window"][0]
