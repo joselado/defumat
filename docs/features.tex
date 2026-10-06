@@ -412,6 +412,15 @@ says so (\code{tests/unit/test\_facade\_documentation.py}).
 \code{get\_shift\_current} & the bulk photovoltaic effect, in A/V$^2$ \\
 \code{get\_shg} & $\chi^{(2)}(-2\omega;\omega,\omega)$, in pm/V \\
 \addlinespace
+\multicolumn{2}{@{}l}{\textit{Real-time propagation and the nonlinear orders}} \\
+\midrule
+\code{get\_realtime} & the current under a pulse, frozen or updated potential \\
+\code{get\_realtime\_dielectric} & $\epsilon(\omega+i\eta)$ from a kick \\
+\code{get\_hhg} & the high-harmonic spectrum $|\omega\mathbf J(\omega)|^2$ \\
+\code{get\_harmonic\_orders} & $\mathbf J_{(n,m)}$ at one frequency, by the propagation \\
+\code{get\_third\_harmonic} & $\chi^{(3)}$ at one frequency, by the propagation \\
+\code{get\_nonlinear\_spectrum} & $\mathbf J_{(n,m)}$, $\chi^{(2)}$ and $\chi^{(3)}$ over frequencies \\
+\addlinespace
 \multicolumn{2}{@{}l}{\textit{Topology, polarization and magnetism}} \\
 \midrule
 \code{get\_berry\_curvature} & $\Omega(\mathbf k)$ on a plane mesh \\

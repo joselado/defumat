@@ -581,7 +581,7 @@ def run_nonlinear_spectrum(system, pseudos, density, *, frequencies, broadening:
                            grid=None, little_group: bool = True, nbnd: int | None = None,
                            conv_thr: float = 1.0e-10, k_batch="default",
                            tolerance: float = 1.0e-10, max_iterations: int = 500,
-                           calculation=None) -> NonlinearSpectrum:
+                           potential: str = "frozen", calculation=None) -> NonlinearSpectrum:
     """The orders of the current, ``chi^(2)`` and ``chi^(3)`` over ``frequencies`` (eV).
 
     The frequency-domain hierarchy at the ground state's frozen potential, the
@@ -597,6 +597,12 @@ def run_nonlinear_spectrum(system, pseudos, density, *, frequencies, broadening:
     """
     from defumat.realtime.hierarchy import hierarchy_orders
 
+    if potential != "frozen":
+        raise NotImplementedError(
+            "the frequency-domain hierarchy with the potential updated is not implemented: "
+            "it needs the induced potentials at w, 2w and 3w, each a fixed point of its own "
+            "at every frequency. The real-time route has it at one frequency a run "
+            "(get_harmonic_orders(potential='hxc'))")
     frequencies = np.atleast_1d(np.asarray(frequencies, dtype=float))
     unit = np.asarray(direction, dtype=float)
     unit = unit / np.linalg.norm(unit)

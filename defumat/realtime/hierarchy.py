@@ -81,12 +81,13 @@ class HierarchyError(RuntimeError):
     """A component's solve did not converge within its budget."""
 
 
-def _bicgstab(apply, b, precondition, tolerance, max_iterations):
+def _bicgstab(apply, b, precondition, tolerance, max_iterations, start=None):
     """``x`` with ``apply(x) = b`` per row, right-preconditioned BiCGStab, masked by row.
 
-    ``b`` and ``precondition`` are ``(nv, npwx)``. Returns ``(x, iterations,
-    residual)``, the residual the true one, ``|b - A x| / |b|`` per row, from
-    one more application after the loop.
+    ``b`` and ``precondition`` are ``(nv, npwx)``; ``start`` is the first iterate,
+    zero when ``None``, and the shadow residual is the first residual. Returns
+    ``(x, iterations, residual)``, the residual the true one, ``|b - A x| / |b|``
+    per row, from one more application after the loop.
     """
     real = jnp.finfo(b.dtype).dtype
 
@@ -99,9 +100,11 @@ def _bicgstab(apply, b, precondition, tolerance, max_iterations):
     bnorm = norm(b)
     target = tolerance * bnorm
     zero = jnp.zeros_like(b)
+    x0 = zero if start is None else start.astype(b.dtype)
+    r0 = b if start is None else b - apply(x0)
     one = jnp.ones(b.shape[0], dtype=b.dtype)
-    state = (zero, b, zero, zero, one, one, one, jnp.zeros(b.shape[0], dtype=jnp.int32),
-             bnorm <= 0.0, jnp.array(0))
+    state = (x0, r0, zero, zero, one, one, one, jnp.zeros(b.shape[0], dtype=jnp.int32),
+             norm(r0) <= target, jnp.array(0))
 
     def safe(numerator, denominator):
         ok = jnp.abs(denominator) > 0.0
@@ -109,12 +112,12 @@ def _bicgstab(apply, b, precondition, tolerance, max_iterations):
 
     def body(state):
         x, r, p, v, rho, alpha, omega, count, done, step = state
-        rho_new = dot(b, r)  # the shadow residual is the right-hand side, r0 = b
+        rho_new = dot(r0, r)  # the shadow residual is the first residual
         beta = jnp.where(step == 0, 0.0, safe(rho_new, rho) * safe(alpha, omega))
         p_new = r + beta[:, None] * (p - omega[:, None] * v)
         y = precondition * p_new
         v_new = apply(y)
-        alpha_new = safe(rho_new, dot(b, v_new))
+        alpha_new = safe(rho_new, dot(r0, v_new))
         s = r - alpha_new[:, None] * v_new
         early = norm(s) <= target
         zz = precondition * s
@@ -152,12 +155,15 @@ def _derivative(f, order: int):
 
 
 def _orders_at(chunk, basis, energies, weights, precondition, omega, eta, alpha, direction,
-               *, nocc: int, order: int, tolerance: float, max_iterations: int):
+               starts, *, nocc: int, order: int, tolerance: float, max_iterations: int):
     """At one k-point: ``{(N, M): sum_n w <..|d_kappa h_p|..>}`` (3,), iterations, residuals.
 
     ``basis`` is ``(nb, npwx)``, the computed bands with the occupied first,
     ``energies`` their ``(nb,)`` energies in Ry, ``weights`` the ``(nocc,)``
-    occupations times the k-weight, ``omega`` and ``eta`` in Ry.
+    occupations times the k-weight, ``omega`` and ``eta`` in Ry. ``starts`` is
+    one ``((N+1) nocc, npwx)`` first iterate per order, the complement's
+    solution at the previous frequency of a sweep, and the new ones are
+    returned beside the currents.
     """
     real = energies.dtype
     zero3 = jnp.zeros(3, dtype=real)
@@ -198,7 +204,7 @@ def _orders_at(chunk, basis, energies, weights, precondition, omega, eta, alpha,
     occupied = basis[:nocc]
     e_occ = energies[:nocc]
 
-    def solve(rhs, z, band):
+    def solve(rhs, z, band, start):
         coefficient = jnp.einsum("jg,vg->vj", jnp.conj(basis), rhs)
         inside = jnp.einsum("vj,jg->vg", coefficient / (z[:, None] - energies[None, :]), basis)
         outside = -(rhs - jnp.einsum("vj,jg->vg", coefficient, basis))
@@ -209,11 +215,11 @@ def _orders_at(chunk, basis, energies, weights, precondition, omega, eta, alpha,
             return h0(x) - z[:, None] * x + alpha * projected
 
         x, count, residual = _bicgstab(apply, outside, precondition[band], tolerance,
-                                       max_iterations)
-        return inside + x, count, residual
+                                       max_iterations, start)
+        return inside + x, x, count, residual
 
     components = {(0, 0): occupied}
-    counts, residuals = [], []
+    counts, residuals, outsides = [], [], []
     applied = {}
 
     def apply_h(p, key):
@@ -235,11 +241,13 @@ def _orders_at(chunk, basis, energies, weights, precondition, omega, eta, alpha,
             rhs.append(total)
         z = jnp.concatenate([e_occ + m * omega + 1j * n * eta for m in harmonics])
         band = jnp.tile(jnp.arange(nocc), len(harmonics))
-        solution, count, residual = solve(jnp.concatenate(rhs), z.astype(basis.dtype), band)
+        solution, outside, count, residual = solve(jnp.concatenate(rhs),
+                                                   z.astype(basis.dtype), band, starts[n - 1])
         for i, m in enumerate(harmonics):
             components[(n, m)] = solution[i * nocc:(i + 1) * nocc]
         counts.append(count)
         residuals.append(residual)
+        outsides.append(outside)
 
     totals = {}
     keys = list(components)
@@ -251,7 +259,7 @@ def _orders_at(chunk, basis, energies, weights, precondition, omega, eta, alpha,
                     big = (k1[0] + k2[0] + p, -k1[1] + (2 * s - p) + k2[1])
                     weight = math.comb(p, s) / (math.factorial(p) * 2**p)
                     totals[big] = totals.get(big, 0.0) + weight * value
-    return totals, jnp.concatenate(counts), jnp.concatenate(residuals)
+    return totals, jnp.concatenate(counts), jnp.concatenate(residuals), tuple(outsides)
 
 
 def _preconditioner(chunk, occupied):
@@ -264,7 +272,8 @@ def _preconditioner(chunk, occupied):
 
 def hierarchy_orders(calculation, basis, energies, weights, v_scf, *, omegas, eta: float,
                      direction, order: int = 3, tolerance: float = 1e-10,
-                     max_iterations: int = 500, kcart=None, symmetrise=None) -> dict:
+                     max_iterations: int = 500, kcart=None, symmetrise=None,
+                     warm: bool = True) -> dict:
     """``J_(N,M)`` at every frequency, Hartree atomic units, the whole set of k-points.
 
     Args:
@@ -282,6 +291,9 @@ def hierarchy_orders(calculation, basis, energies, weights, v_scf, *, omegas, et
         tolerance: BiCGStab's relative residual on each right-hand side.
         symmetrise: cartesian rotations to average the currents over, a polar
             vector each, when the k-set is the wedge of their group.
+        warm: start each frequency's solves from the previous frequency's
+            solutions at the same k-point; the answer is the same to the
+            tolerance either way.
 
     Returns ``{"components": {(N, M): (nw, 3) complex}, "iterations": (nw,)
     largest BiCGStab iteration count, "residual": (nw,) largest final residual,
@@ -311,9 +323,9 @@ def hierarchy_orders(calculation, basis, energies, weights, v_scf, *, omegas, et
     alpha = 2.0 * (float(energies.max()) - float(energies[:, :nocc].min())) \
         + 3.0 * float(omegas_ry.max()) + 1.0
 
-    def at(chunk, u, e, w, precondition, omega, eta_, alpha_, direction_):
+    def at(chunk, u, e, w, precondition, omega, eta_, alpha_, direction_, starts):
         return _orders_at(chunk, u, e, w, precondition, omega, eta_, alpha_, direction_,
-                          nocc=nocc, order=order, tolerance=float(tolerance),
+                          starts, nocc=nocc, order=order, tolerance=float(tolerance),
                           max_iterations=int(max_iterations))
 
     totals = {}
@@ -328,12 +340,19 @@ def hierarchy_orders(calculation, basis, energies, weights, v_scf, *, omegas, et
         precondition = _preconditioner(chunk, u[:nocc]).astype(real)
         fixed = (chunk, u, jnp.asarray(energies[ik], dtype=real),
                  jnp.asarray(weights[ik], dtype=real), precondition)
+        # each frequency starts from the previous one's solution at this k-point,
+        # which a sweep finer than the broadening makes a good guess
+        starts = tuple(jnp.zeros(((n + 1) * nocc, u.shape[-1]), dtype=u.dtype)
+                       for n in range(1, order + 1))
         for iw, omega in enumerate(omegas_ry):
             arguments = fixed + (jnp.asarray(omega, dtype=real), jnp.asarray(eta_ry, dtype=real),
-                                 jnp.asarray(alpha, dtype=real), jnp.asarray(unit, dtype=real))
+                                 jnp.asarray(alpha, dtype=real), jnp.asarray(unit, dtype=real),
+                                 starts)
             if run is None:
                 run = compiled_function(at, *arguments)
-            out, count, res = run(*arguments)
+            out, count, res, starts = run(*arguments)
+            if not warm:
+                starts = tuple(jnp.zeros_like(x) for x in starts)
             count, res = np.asarray(count), np.asarray(res)
             if res.max() > 10.0 * tolerance:
                 raise HierarchyError(
