@@ -16,7 +16,15 @@ is the mesh's interband susceptibility. The ``xx`` curvature is the same at
 every member of a star of the ``[100]`` little group, so the wedge sum is the
 mesh sum.
 
-    JAX_PLATFORMS=cpu python3 tools/realtime/si_band_curvature.py OUT.json ECUT GRID[,GRID...]
+Its sibling at third order is the band followed adiabatically,
+``J = -(1/Omega) sum w d eps/dk (k + kappa)``, whose cubic term
+``-(1/Omega) (S4/6) kappa^3`` with ``S4 = sum w d^4 eps_occ/dk_x^4`` gives
+``chi(3w) = S4/(18 Omega z^4)`` and ``chi(w) = -S4/(6 Omega (2z - zbar) z^2 zbar)``
+through ``chi3_from_orders``'s formulas. Unlike ``D`` it is only the leading
+piece of the third-order artefact in ``1/w``: the interband parts carry total
+derivatives of their own, and nothing here takes them.
+
+    JAX_PLATFORMS=cpu python3 tools/realtime/si_band_curvature.py OUT.json ECUT GRID[,GRID...] [STEP4]
 """
 import json
 import math
@@ -33,13 +41,16 @@ from defumat import Calculator
 from defumat.realtime.dense import dense_hamiltonians
 from defumat.realtime.pulse import EV_TO_HA, Adiabatic
 from defumat.scf import Calculation
-from defumat.workflows.realtime import _kset
+from defumat.workflows.realtime import CHI3_AU_TO_SI, _kset
 
 repo = Path(__file__).resolve().parents[2]
 out = Path(sys.argv[1])
 ecut = float(sys.argv[2])
 grids = [int(g) for g in sys.argv[3].split(",")]
 step = 3e-4
+#: the fourth derivative's step, where the stencil's h^2 and the rounding's
+#: 1/h^4 are both below a per cent of it
+step4 = float(sys.argv[4]) if len(sys.argv) > 4 else 0.02
 direction = np.array([1.0, 0.0, 0.0])
 
 text = (repo / "tests/data/qe/si2-symmetric.in").read_text()
@@ -60,20 +71,31 @@ for grid in grids:
     nocc = int(round(calculation.nelec / 2))
     kcart = np.asarray(kset.cartesian(system.cell))
     weights = np.asarray(kset.weights)
-    total = 0.0
+    total, total4 = 0.0, 0.0
     for ik in range(len(weights)):
-        sums = [np.sum(np.linalg.eigvalsh(dense_hamiltonians(
+        sums = {x: np.sum(np.linalg.eigvalsh(dense_hamiltonians(
             calculation, terms, ik, direction, 0, kcart=kcart + x * direction[None, :])[0])[:nocc])
-            for x in (-step, 0.0, step)]
-        total += weights[ik] * (sums[0] - 2.0 * sums[1] + sums[2]) / step**2
+            for x in (-step, 0.0, step, -step4, -2 * step4, step4, 2 * step4)}
+        total += weights[ik] * (sums[-step] - 2.0 * sums[0.0] + sums[step]) / step**2
+        total4 += weights[ik] * (sums[2 * step4] - 4.0 * sums[step4] + 6.0 * sums[0.0]
+                                 - 4.0 * sums[-step4] + sums[-2 * step4]) / step4**4
     curvature = 0.5 * total                      # Ry to Hartree
+    quartic = 0.5 * total4
     volume = float(system.cell.volume)
     record = {"grid": grid, "nk": int(len(weights)), "weights_sum": float(weights.sum()),
-              "D_Ha_bohr2": float(curvature), "seconds": time.time() - t0}
+              "D_Ha_bohr2": float(curvature), "S4_Ha_bohr4": float(quartic), "step4": step4,
+              "seconds": time.time() - t0}
     for eta in (0.1, 0.2):
         z = omega + 1j * eta * EV_TO_HA
         chi = -4.0 * math.pi * curvature / (volume * z**2)
         record[f"chi_D_SI_eta{eta}"] = [chi.real, chi.imag]
+        # the adiabatic intraband current's cubic term, -(1/Omega)(S4/6) kappa^3,
+        # through chi3_from_orders' two formulas
+        third = quartic / (18.0 * volume * z**4) * CHI3_AU_TO_SI
+        first = (-quartic / (6.0 * volume * (2 * z - np.conj(z)) * z**2 * np.conj(z))
+                 * CHI3_AU_TO_SI)
+        record[f"chi3_3w_S4_SI_eta{eta}"] = [third.real, third.imag]
+        record[f"chi3_w_S4_SI_eta{eta}"] = [first.real, first.imag]
     records.append(record)
     out.write_text(json.dumps(records, indent=1))
     print(json.dumps(record), flush=True)
