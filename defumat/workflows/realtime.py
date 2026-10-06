@@ -96,6 +96,7 @@ def _kset(system, pulse, kpoints, grid, little_group: bool):
 
     cell = system.cell
     rotations = None
+    shift = (0, 0, 0)
     if kpoints is not None:
         if is_reduced(kpoints):
             raise NotImplementedError(
@@ -107,20 +108,21 @@ def _kset(system, pulse, kpoints, grid, little_group: bool):
         return for_spin(kpoints, system.nspin), None
     if grid is None:
         grid = getattr(system.kpoints, "grid", None)
-        shift = getattr(system.kpoints, "shift", None)
+        shift = tuple(int(x) for x in (getattr(system.kpoints, "shift", None) or (0, 0, 0)))
         if grid is None:
             if is_reduced(system.kpoints):
                 raise NotImplementedError(
                     "the run's own k-set is reduced and carries no grid to "
                     "rebuild the whole one from; pass grid= or kpoints=")
             return for_spin(system.kpoints, system.nspin), None
-        if shift is not None and any(int(s) for s in shift):
+        if little_group and any(shift):
             raise NotImplementedError(
-                "real-time propagation on a shifted Monkhorst-Pack grid is not "
-                "implemented: a shifted grid is not closed under the point group, "
-                "so neither the whole grid nor the little group's wedge sums the "
-                "current correctly (the rule P24 found for the response stack). "
-                "Pass grid= for an unshifted one")
+                "the little group of the field on a shifted Monkhorst-Pack grid is "
+                "not implemented: a shifted grid is not closed under the point "
+                "group, so its wedge does not sum the current correctly (the rule "
+                "P24 found for the response stack). Pass little_group=False to "
+                "propagate the whole shifted grid, whose k-points are independent "
+                "at a frozen potential, or grid= for an unshifted one")
     grid = tuple(int(n) for n in grid)
     if little_group:
         crystal, rotations = field_little_group(system, pulse)
@@ -129,7 +131,7 @@ def _kset(system, pulse, kpoints, grid, little_group: bool):
         if len(rotations) <= 1:
             rotations = None
     else:
-        kset = KPoints.automatic(grid, (0, 0, 0), cell)
+        kset = KPoints.automatic(grid, shift, cell)
     return for_spin(kset, system.nspin), rotations
 
 
@@ -147,7 +149,10 @@ def _occupied_states(system, pseudos, density, kset, *, nbnd, conv_thr, k_batch,
     nelec_guess = sum(pseudos[t].z_valence for t in system.structure.types)
     fixed = str(getattr(system, "occupations", "fixed")).lower() == "fixed"
     if nbnd is None:
-        nbnd = int(math.ceil(nelec_guess / 2)) + (2 if fixed else 6)
+        # Four past the occupied: two ended inside a degenerate conduction pair
+        # at three of AlAs's twenty wedge points, where the solve then reports
+        # an unconverged root (found writing the harmonic notebook).
+        nbnd = int(math.ceil(nelec_guess / 2)) + (4 if fixed else 6)
     # The caller's own calculation, when handed one, is moved to this k-set
     # rather than a second one built beside it.
     calculation, moved, kpoints, k_batch = threaded_calculation(

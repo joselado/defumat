@@ -173,9 +173,10 @@ def test_a_step_past_the_stability_bound_is_refused(pseudo_dir):
 def test_a_second_k_chunk_compiles_nothing(pseudo_dir):
     """The eager-closure trap, checked the way ``CLAUDE.md`` says: count compilations.
 
-    Every chunk's arrays reach the kept block as arguments, so after the first
-    chunk has compiled its programs the others compile none. The counter is
-    validated on the first chunk, which must compile something.
+    Every chunk's arrays reach the kept programs as arguments, so after the first
+    chunk of a pass has compiled them the others compile none, in the pass that
+    bounds the spectrum and in the propagation. The counter is validated on the
+    first chunk of the spectrum's pass, which must compile something.
     """
     from defumat.realtime import propagate as module
 
@@ -212,8 +213,14 @@ def test_a_second_k_chunk_compiles_nothing(pseudo_dir):
         module._Chunk.build = original
         logger.removeHandler(handler)
         logger.setLevel(previous)
-    assert built[1] > built[0], "the counter saw the first chunk compile"
-    assert built[1:] == [built[1]] * (len(built) - 1), built
+    # Four chunks of two k-points. The builds are: the setup's first chunk, the
+    # spectrum's pass over all four, then the propagation's chunks 1 to 3 (its
+    # chunk 0 is the setup's), and the end of the run. Each pass compiles on its
+    # first chunk and on no other.
+    assert len(built) == 9, built
+    assert built[2] > built[1], "the counter saw the spectrum's first chunk compile"
+    assert built[2] == built[3] == built[4], built
+    assert built[6] == built[7] == built[8], built
 
 
 def test_what_is_refused_is_refused_by_name(pseudo_dir):
@@ -255,3 +262,68 @@ def test_a_checkpoint_resumes_after_the_chunks_it_records(pseudo_dir, tmp_path):
     other = propagate(calculation, states, weights, v_scf, pulse, dt=0.25,
                       block_steps=200, k_batch=4, checkpoint=path)
     assert other.current.shape != first.current.shape
+
+
+def test_a_checkpoint_of_another_run_is_not_resumed(pseudo_dir, tmp_path):
+    """The digest holds the field, so a pulse of twice the amplitude at the same length is another run.
+
+    Found in review: the signature was the grid and the k-count alone, and a
+    run at twice the amplitude returned the first one's current bit for bit,
+    43 per cent off.
+    """
+    calculation, states, weights, v_scf = _silicon(pseudo_dir)
+    path = tmp_path / "rt.npz"
+    weak = propagate(calculation, states, weights, v_scf, Sin2.from_intensity(1e11, 1.55, 1),
+                     dt=0.2, block_steps=200, k_batch=4, checkpoint=path)
+    strong = propagate(calculation, states, weights, v_scf, Sin2.from_intensity(4e11, 1.55, 1),
+                       dt=0.2, block_steps=200, k_batch=4, checkpoint=path)
+    clean = propagate(calculation, states, weights, v_scf, Sin2.from_intensity(4e11, 1.55, 1),
+                      dt=0.2, block_steps=200, k_batch=4)
+    np.testing.assert_array_equal(strong.current, clean.current)
+    assert np.abs(strong.current - weak.current).max() > 0.5 * np.abs(weak.current).max()
+
+
+def test_the_chunk_size_is_not_in_the_current(pseudo_dir):
+    """``k_batch`` moves the current by round-off and nothing more.
+
+    The centre of the step and the spectrum are taken over every k-point; built
+    on the first chunk, the centre was 0.224, 0.117 and 0.096 Ry at ``k_batch``
+    1, 4 and 8 and the current moved by 3.9e-7 of its size (found in review).
+    ``'fit'`` reads the calculation's own chunk.
+    """
+    calculation, states, weights, v_scf = _silicon(pseudo_dir)
+    pulse = Sin2.from_intensity(1e12, 1.55, 1)
+    runs = [propagate(calculation, states, weights, v_scf, pulse, dt=0.2, block_steps=200,
+                      k_batch=batch) for batch in (1, 4, "fit")]
+    scale = np.abs(runs[0].current).max()
+    for other in runs[1:]:
+        assert np.abs(other.current - runs[0].current).max() < 1e-12 * scale
+
+
+def test_a_projection_over_a_broken_period_is_refused():
+    """``fourier_component`` needs a step that divides the period, or it leaks the other harmonics."""
+    from defumat.realtime.orders import fourier_component
+
+    omega = 0.05
+    times = np.arange(0.0, 400.0, 0.3)
+    with pytest.raises(ValueError, match="does not divide the period"):
+        fourier_component(times, np.zeros((len(times), 3)), 3, 3, omega, 0.01)
+    period = 2 * np.pi / omega
+    times = -period * 10 + np.arange(4001) * period / 400
+    signal = np.cos(3 * omega * times)[:, None] * np.ones(3)
+    value = fourier_component(times, signal, 0, 3, omega, 0.0)
+    np.testing.assert_allclose(value, 0.5, atol=1e-12)
+
+
+def test_the_cutoff_is_the_end_of_an_unbroken_plateau():
+    """An isolated peak past a gap does not move the cutoff; found in review, where it read 31 for 9."""
+    from defumat.realtime.spectra import HarmonicSpectrum
+
+    orders = np.linspace(0, 40, 4001)
+    total = np.full_like(orders, 1e-12)
+    for n, height in ((1, 1.0), (3, 0.5), (5, 0.3), (7, 0.2), (9, 0.1), (31, 2e-3)):
+        total[np.abs(orders - n) < 0.05] = height
+    spectrum = HarmonicSpectrum(frequencies=orders, orders=orders,
+                                intensity=total[:, None] * np.ones(3), total=total,
+                                omega=1.0, window="none")
+    assert spectrum.cutoff(floor=1e-3) == 9

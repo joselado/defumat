@@ -94,9 +94,10 @@ class RadialTable(eqx.Module):
         """``g(s)`` for every radial channel, ``(..., nbeta)``, by Clenshaw's recurrence.
 
         Outside ``[0, s_max]`` a Chebyshev series grows without bound, so the
-        argument is held at the edge there; the driver refuses a run whose
-        field takes a plane wave past it, and the one place that reaches it
-        otherwise is the padding of ``npwx``, which the mask zeroes.
+        argument is held at the edge there, the value frozen and its derivative
+        zero. The driver builds its table to ``(max |k+G| + kappa_max + 0.5)^2``,
+        so no live plane wave reaches the edge in a run; a caller that builds a
+        smaller table is clamped without a word.
         """
         s = jnp.where(s <= self.s_max, s, self.s_max)
         x = (2.0 * s / self.s_max - 1.0)[..., None]

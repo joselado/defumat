@@ -46,6 +46,9 @@ from defumat.units import HARTREE_TO_EV
 __all__ = ["conductivity_from_kick", "KickResponse", "harmonic_spectrum",
            "HarmonicSpectrum", "WINDOWS"]
 
+#: Frequencies transformed together, which bounds the host memory of a transform.
+_BLOCK = 32
+
 
 def _simpson(values, dt):
     """Composite Simpson's rule along axis 0, an odd number of samples or one trapezoid at the end."""
@@ -108,8 +111,12 @@ def conductivity_from_kick(times, current, strength: float, direction, frequenci
         j = j - _simpson(j, t[1] - t[0]) / (t[-1] - t[0])
     dt = float(t[1] - t[0])
     z = np.asarray(frequencies, dtype=float) + 1j * float(eta)
-    phase = np.exp(1j * np.outer(t, z))  # (nt, nw)
-    transform = _simpson(phase[:, :, None] * j[:, None, :], dt)  # (nw, 3)
+    # A block of frequencies at a time: the whole (nt, nw, 3) product of a
+    # 0.1 eV broadening at dt = 0.1 and 400 frequencies took 1.6 GB of host
+    # memory (found in review), and a block of 32 is a few tens of MB.
+    transform = np.concatenate([
+        _simpson(np.exp(1j * np.outer(t, z[i:i + _BLOCK]))[:, :, None] * j[:, None, :], dt)
+        for i in range(0, len(z), _BLOCK)])  # (nw, 3)
     sigma = -transform / float(strength)
     unit = np.asarray(direction, dtype=float)
     unit = unit / np.linalg.norm(unit)
@@ -166,19 +173,26 @@ class HarmonicSpectrum:
 
     def cutoff(self, floor: float = 1e-3, highest: int | None = None,
                width: float = 0.25) -> int:
-        """The highest odd harmonic whose peak is above ``floor`` times the fundamental's.
+        """The end of the plateau: the last odd harmonic of an unbroken run above ``floor``.
 
-        A plateau of nearly equal odd harmonics followed by a fall is what
-        marks the cutoff of a solid's spectrum; this rule reads the end of the
-        plateau at a stated level and is not a fit.
+        Odd orders are read upward from the first while each stays above
+        ``floor`` times the fundamental, and the last one read is the cutoff.
+        A plateau of nearly equal odd harmonics followed by a fall is what marks
+        the cutoff of a solid's spectrum; the rule reads the end of the plateau
+        at a stated level and is not a fit, and an isolated peak above the floor
+        past a gap (the noise above the gap of an undephased run) does not move
+        it, where the highest order above the floor anywhere would.
         """
         if highest is None:
             highest = int(self.orders.max())
         peaks = self.harmonics(highest, width)
         reference = peaks[0]
-        odd = [n for n in range(1, highest + 1, 2)
-               if np.isfinite(peaks[n - 1]) and peaks[n - 1] >= floor * reference]
-        return max(odd) if odd else 1
+        last = 1
+        for n in range(1, highest + 1, 2):
+            if not (np.isfinite(peaks[n - 1]) and peaks[n - 1] >= floor * reference):
+                break
+            last = n
+        return last
 
 
 def harmonic_spectrum(times, current, omega: float, *, window: str = "hann",
@@ -194,8 +208,11 @@ def harmonic_spectrum(times, current, omega: float, *, window: str = "hann",
     shape = WINDOWS[window](len(times))
     dt = float(times[1] - times[0])
     frequencies = np.linspace(0.0, highest * float(omega), samples)
-    phase = np.exp(1j * np.outer(frequencies, times - times[0]))  # (nw, nt)
-    transform = phase @ (current * shape[:, None]) * dt  # (nw, 3)
+    windowed = current * shape[:, None]
+    transform = np.concatenate([
+        np.exp(1j * np.outer(frequencies[i:i + _BLOCK], times - times[0])) @ windowed * dt
+        for i in range(0, len(frequencies), _BLOCK)])  # (nw, 3), a block at a time
+    # (the whole (samples, nt) phase matrix was 3.6 GB at 28501 steps)
     intensity = np.abs(frequencies[:, None] * transform) ** 2
     return HarmonicSpectrum(frequencies=frequencies, orders=frequencies / float(omega),
                             intensity=intensity, total=intensity.sum(axis=-1),

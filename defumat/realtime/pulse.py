@@ -13,7 +13,14 @@ sphere built for ``k`` (:mod:`defumat.realtime.propagate`).
 
 **Times here are Hartree atomic units of time, 24.189 as**, Elk's ``dtimes``
 and ``tstime``, and every frequency is in Hartree, so that a pulse written for
-an Elk input reads the same here. The propagator works in ``hbar/Ry``, twice
+an Elk input reads the same here. **The sign of the coupling is the physical
+electron's and is not Elk's**: here an electron of charge -1 sees
+``H(k + A/c)`` and carries ``J = -(1/Omega) sum <v>``, where Elk adds
+``-(1/c) A.p`` (``genhmlt.f90``), which is ``H(k - A/c)``, and writes
+``sum <p> - A N/c`` with no charge (``timestep.f90``). For the same ``A`` the
+two give the same conductivity and dielectric function and odd orders of the
+current of the same sign as Elk's ``JTOT_TD/Omega``, and even orders, the
+phase of the even harmonics, of the opposite sign. The propagator works in ``hbar/Ry``, twice
 that, and the conversion is made once, in the driver. The pulses are written in
 ``jax.numpy`` so that ``E(t)`` is the derivative of ``kappa(t)`` taken by
 differentiation, never a second expression.
@@ -151,8 +158,8 @@ class Gaussian(Pulse):
         """A pulse of peak intensity ``I`` in W/cm^2 and photon energy in eV.
 
         ``kappa0 = E0 / omega``, ``E0`` from :func:`field_amplitude`. The peak
-        is put three widths in when not given, where the envelope is 1e-4 of its
-        maximum.
+        is put three widths in when not given, where the envelope at ``t = 0`` is
+        ``2^-36``, 1.5e-11, of its maximum.
         """
         omega = float(photon_ev) * EV_TO_HA
         fwhm = float(fwhm_fs) * FS_TO_AU

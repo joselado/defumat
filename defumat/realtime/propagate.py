@@ -130,8 +130,9 @@ class RealTimeResult:
     effective_cutoff: float
     propagator: str = "taylor4"
     pulse: object = None
-    #: ``(lower, upper)`` bound on the spectrum of ``H(k + kappa)`` in Ry, and
-    #: ``dt_Ry`` times its half-width, which the propagator's bound refused above.
+    #: ``(lower, upper)`` edges of the spectrum of ``H(k + kappa)`` in Ry, and
+    #: ``dt_Ry`` times the distance from the centre to the farther one, which the
+    #: propagator's bound refused above.
     spectrum: tuple = ()
     step_radius: float = float("nan")
     #: Which k-points were propagated and with what weight: the whole mesh, or
@@ -295,85 +296,137 @@ class _Chunk(eqx.Module):
         return jnp.real(jnp.einsum("kng,kng,kn->", jnp.conj(psi), hpsi, weights))
 
 
-def _band_energies(chunk: "_Chunk", states, terms):
-    """``<u_n|H(k)|u_n>`` in Ry on the first chunk's rows, ``(nk, nbnd)``, zero elsewhere."""
-    ham = chunk.hamiltonian(jnp.zeros(3))
-    rows = min(chunk.nk, states.shape[0])
-    values = np.zeros(states.shape[:2])
-    for ik in range(rows):
-        hpsi = ham.apply(states[ik], ik)
-        values[ik] = np.real(np.einsum("ng,ng->n", np.conj(np.asarray(states[ik])),
-                                       np.asarray(hpsi)))
-    # the other rows take the first chunk's mean, which is what a centre needs
-    mean = values[:rows].mean(axis=0)
-    values[rows:] = mean
-    return values
+def _energies_of(chunk, psi):
+    """``<u_n|H(k)|u_n>`` in Ry for every k-point of a chunk, ``(nk, nbnd)``."""
+    ham = chunk.hamiltonian(jnp.zeros(3, dtype=chunk.k0.dtype))
+    hpsi = map_k(lambda ik: ham.apply(psi[ik], ik), jnp.arange(chunk.nk), batch=None)
+    return jnp.real(jnp.einsum("kng,kng->kn", jnp.conj(psi), hpsi))
 
 
-def spectral_bounds(calculation, chunk: _Chunk, terms, kappa_max: float):
-    """``(lower, upper)`` in Ry bounding the spectrum of ``H(k + kappa)`` for ``|kappa| <= kappa_max``.
+def _chunk_spectrum(chunk, psi, terms, kappa_max):
+    """``(energies, kinetic_max, nl_min, nl_max)`` of one chunk, on the host.
 
-    Weyl's inequality on the three terms: the kinetic energy lies in
-    ``[0, max (|k+G| + kappa_max)^2]``, the local potential between its
-    extremes on the smooth grid, and the nonlocal term between the extreme
-    eigenvalues of ``G^(1/2) D G^(1/2)`` with ``G = vkb^dagger vkb`` the Gram
-    matrix of the projectors on the sphere, taken at ``kappa = 0`` and widened by
-    ten per cent for the shift. Rigorous for the first two and for the third at
-    the k-points of the first chunk.
+    The carried states' energies at ``kappa = 0``, the largest ``|k+G| + kappa_max``
+    squared over the chunk's spheres, and the extreme eigenvalues of
+    ``G^(1/2) D G^(1/2)``, ``G = vkb^dagger vkb``, over its k-points at
+    ``kappa = 0``.
     """
     norms = np.linalg.norm(np.asarray(chunk.gcart + chunk.k0[:, None, :]), axis=-1)
     norms = np.where(np.asarray(chunk.mask), norms, 0.0)
     kinetic_max = float((norms.max() + kappa_max) ** 2)
-    potential = np.asarray(terms.potentials[0])
-    vmin, vmax = float(potential.min()), float(potential.max())
-    _, projectors = chunk.moved(jnp.zeros(3))
+    _, projectors = chunk.moved(jnp.zeros(3, dtype=chunk.k0.dtype))
     vkb = np.asarray(projectors.vkb)
-    nl_min, nl_max = 0.0, 0.0
     coefficients = np.asarray(chunk.template.coefficients)
+    nl_min, nl_max = 0.0, 0.0
     for ik in range(vkb.shape[0]):
         gram = vkb[ik].conj().T @ vkb[ik]
         values, vectors = np.linalg.eigh(gram)
         root = (vectors * np.sqrt(np.clip(values, 0.0, None))) @ vectors.conj().T
         eig = np.linalg.eigvalsh(root @ coefficients @ root)
         nl_min, nl_max = min(nl_min, float(eig.min())), max(nl_max, float(eig.max()))
-    return vmin + 1.1 * nl_min, kinetic_max + vmax + 1.1 * nl_max
+    energies = np.asarray(compiled_function(_energies_of, chunk, psi)(chunk, psi))
+    return energies, kinetic_max, nl_min, nl_max
+
+
+def spectral_bounds(calculation, states, weights, terms, table, kcart, chunks,
+                    kappa_max: float):
+    """``(lower, upper, centre, carried)`` in Ry, over **every** k-point of the run.
+
+    ``upper`` is Weyl's inequality on the three terms of ``H(k + kappa)`` for
+    ``|kappa| <= kappa_max``: the largest kinetic energy ``(|k+G| + kappa_max)^2``
+    on any sphere, the largest value of the local potential on the smooth grid,
+    and the largest eigenvalue of the nonlocal term ``G^(1/2) D G^(1/2)`` at
+    ``kappa = 0``, widened by ten per cent for the shift. ``lower`` is the lowest
+    carried energy less the largest drop the kinetic energy can take under the
+    shift, ``2 |k+G| kappa_max + kappa_max^2``, and one Rydberg: the carried states
+    are the bottom of each k-point's spectrum, which Weyl's bound on the same
+    three terms (the local potential's minimum, about -14 Ry on silicon) places
+    ten times too low. It is an estimate rather than a bound, and the run checks
+    it as it goes, by refusing to continue if a norm grows. ``centre`` is the
+    carried states' weighted mean energy and ``carried`` their ``(min, max)``.
+
+    All of it over every chunk: built on the first chunk alone, as it once was,
+    the centre and the refusal depended on the chunk size, which moved the
+    current by 3.9e-7 of its size between ``k_batch`` 1 and 8 on two-atom
+    silicon (found in review).
+    """
+    nk = states.shape[0]
+    energies = np.zeros(states.shape[:2])
+    kinetic_max, nl_min, nl_max = 0.0, 0.0, 0.0
+    radius = 0.0
+    for rows, live in chunks:
+        chunk = _Chunk.build(calculation, rows, terms, table, kcart)
+        values, kin, low, high = _chunk_spectrum(
+            chunk, jnp.asarray(states[rows]), terms, kappa_max)
+        energies[rows[:live]] = values[:live]
+        kinetic_max = max(kinetic_max, kin)
+        radius = max(radius, math.sqrt(kin) - kappa_max)
+        nl_min, nl_max = min(nl_min, low), max(nl_max, high)
+    potential = np.asarray(terms.potentials[0])
+    upper = kinetic_max + float(potential.max()) + 1.1 * nl_max
+    drop = 2.0 * radius * kappa_max + kappa_max**2
+    lower = float(energies.min()) - drop - 1.0
+    total = max(float(np.sum(weights)), 1e-300)
+    centre = float(np.sum(weights * energies)) / total
+    del nk
+    return lower, upper, centre, (float(energies.min()), float(energies.max()))
+
+
+def _reach(lower, upper, centre):
+    """How far the spectrum reaches from the centre, the half-width the step must be stable for."""
+    return max(upper - centre, centre - lower)
 
 
 def largest_stable_step(calculation, states, weights, v_scf, kappa_max: float = 0.0,
                         propagator: str = "taylor4", k_batch="default", kcart=None) -> float:
     """The largest ``dt`` in Hartree atomic units the propagator is stable for here.
 
-    ``4 bound / (upper - lower)`` from :func:`spectral_bounds` on the first
-    k-chunk, which is what :func:`propagate` refuses a step against. A caller
-    that has a period to divide (:func:`~defumat.workflows.realtime.run_harmonic_orders`)
-    reads it to choose its steps rather than be refused.
+    ``2 bound / reach`` with ``reach`` the distance from the centre of the step
+    (the carried energies) to the farther edge of the spectrum
+    (:func:`spectral_bounds`), which is what :func:`propagate` refuses a step
+    against. A caller that has a period to divide
+    (:func:`~defumat.workflows.realtime.run_harmonic_orders`) reads it to choose
+    its steps rather than be refused.
     """
-    require_a_realtime_regime(calculation)
-    _, bound = get_propagator(propagator)
-    cell = calculation.system.cell
-    if kcart is None:
-        kcart = getattr(calculation, "_kcart", None)
-    if kcart is None:
-        kcart = calculation.system.kpoints.cartesian(cell)
-    kcart = np.asarray(kcart)
-    terms = calculation.local_terms(v_scf)
-    planewaves = calculation.basis.planewaves
-    gnorm = np.linalg.norm(
-        np.asarray(calculation.basis.smooth.cartesian(cell))[np.asarray(planewaves.indices)]
-        + kcart[:, None, :], axis=-1)
-    radius = float(np.max(np.where(np.asarray(planewaves.mask), gnorm, 0.0)))
-    table = radial_table(calculation.pseudos, float(cell.volume),
-                         (radius + kappa_max + 0.5) ** 2)
-    batch = calculation.k_batch if k_batch == "default" else k_batch
-    rows, _ = next(iter(k_chunks(states.shape[0], batch)))
-    chunk = _Chunk.build(calculation, rows, terms, table, kcart)
-    lower, upper = spectral_bounds(calculation, chunk, terms, kappa_max)
-    # dt_Ry (upper - lower)/2 <= bound, and dt = 2 dt_Ry in Hartree time
-    return 4.0 * bound / (upper - lower)
+    setup = _prepare(calculation, np.asarray(states), np.asarray(weights, dtype=float),
+                     v_scf, kappa_max, None, propagator, k_batch, kcart)
+    return 2.0 * setup.bound / _reach(setup.lower, setup.upper, setup.centre)
 
 
-def _checkpoint_signature(times, kpoints_rows, nbnd):
-    return np.asarray([len(times), float(times[0]), float(times[-1]), kpoints_rows, nbnd])
+def _batch(calculation, k_batch):
+    """The k-chunk to walk: the calculation's own for ``'default'`` and ``'fit'``.
+
+    ``'fit'`` is sized from the card where a calculation is built, so a run
+    handed one reads the calculation's resolved chunk rather than resolving the
+    string again, which :func:`~defumat.batching.resolve_k_batch` refuses.
+    """
+    from defumat.batching import resolve_k_batch
+
+    if isinstance(k_batch, str) and k_batch in ("default", "fit"):
+        return calculation.k_batch
+    return resolve_k_batch(k_batch)
+
+
+def _checkpoint_signature(*parts) -> str:
+    """A digest of everything that decides the result of a run.
+
+    The time grid and the field sampled on it (so a pulse of another amplitude
+    or shape at the same length is another run), the propagator, the block
+    length, the chunk boundaries, the centre of the step, and the bytes of the
+    states, the weights and the k-points. A file whose digest differs is
+    ignored: a resume that found the same grid and k-count used to return a run
+    at another amplitude bit for bit (found in review, 43 per cent off).
+    """
+    import hashlib
+
+    digest = hashlib.sha256()
+    for part in parts:
+        if isinstance(part, np.ndarray):
+            digest.update(str(part.shape).encode())
+            digest.update(np.ascontiguousarray(part).tobytes())
+        else:
+            digest.update(repr(part).encode())
+    return digest.hexdigest()
 
 
 @dataclass
@@ -389,6 +442,7 @@ class _Setup:
     lower: float
     upper: float
     centre: float
+    carried: tuple
     dt_ry: float
     volume: float
     effective_cutoff: float
@@ -398,7 +452,10 @@ class _Setup:
 
 def _prepare(calculation, states, weights, v_scf, kappa_max, dt, propagator,
              k_batch, kcart) -> _Setup:
-    """The table, the k-chunks, the spectral bounds and the centre; refuses an unstable step."""
+    """The table, the k-chunks, the spectrum and the centre; refuses an unstable step.
+
+    ``dt = None`` skips the refusal, for :func:`largest_stable_step`.
+    """
     require_a_realtime_regime(calculation)
     step_fn, bound = get_propagator(propagator)
     cell = calculation.system.cell
@@ -417,39 +474,56 @@ def _prepare(calculation, states, weights, v_scf, kappa_max, dt, propagator,
         + kcart[:, None, :], axis=-1)
     radius = float(np.max(np.where(np.asarray(planewaves.mask), gnorm, 0.0)))
     table = radial_table(calculation.pseudos, volume, (radius + kappa_max + 0.5) ** 2)
+    # The table runs in the dtype policy's real type: built in float64 from the
+    # transform, it ran the recurrence in double precision inside a
+    # single-precision step (found in review), which a card pays 1/70 for.
+    table = eqx.tree_at(lambda t: t.coefficients, table,
+                        table.coefficients.astype(cell.precision.real))
     effective_cutoff = max(0.0, radius - kappa_max) ** 2
 
-    batch = calculation.k_batch if k_batch == "default" else k_batch
-    chunks = list(k_chunks(nk, batch))
+    chunks = list(k_chunks(nk, _batch(calculation, k_batch)))
     first = _Chunk.build(calculation, chunks[0][0], terms, table, kcart)
-    lower, upper = spectral_bounds(calculation, first, terms, kappa_max)
-    half = 0.5 * (upper - lower)
-    dt_ry = 0.5 * float(dt)
-    if dt_ry * half > bound:
+    lower, upper, centre, carried = spectral_bounds(
+        calculation, states, weights, terms, table, kcart, chunks, kappa_max)
+    # **The centre is the carried states' mean energy and is never moved.** The
+    # step's error on a component at energy e goes as (dt (e - centre))^5 in
+    # phase and ^6 in norm, and the states live at the bottom of a one-sided
+    # spectrum. Centred at the middle of the spectrum the occupied components
+    # sat 2 to 3 Ry from it and the norm drifted 1.6e-5 in 200 steps of 0.1 on
+    # silicon at 12 Ry, against 3.6e-9 on the band energies. And a centre moved
+    # off the bands to keep a long step stable is worse than a refusal: on AlAs
+    # at 12 Ry a step of 0.305, inside the old half-width bound, put it 9.8 Ry
+    # above the bands, damped every occupied state by 0.925 to 0.954 a step and
+    # took the first-order current from 9.5e-9 to 2e-20 in 800 steps (found by
+    # the second-order comparison against get_shg); on silicon a clamp between
+    # the two bounds lost 4.6 per cent of the norm over a run and 2 to 3 per cent
+    # of chi^(3). So the step is refused unless the farther edge of the spectrum
+    # is within reach of the centre itself.
+    dt_ry = 0.0 if dt is None else 0.5 * float(dt)
+    reach = _reach(lower, upper, centre)
+    if dt is not None and dt_ry * reach > bound:
         raise ValueError(
             f"the time step dt = {dt} (Hartree a.u.) is past the stability bound of "
-            f"the {propagator!r} propagator: the spectrum of H(k + kappa) lies in "
-            f"[{lower:.2f}, {upper:.2f}] Ry, so dt_Ry times its half-width is "
-            f"{dt_ry * half:.3f} against {bound:.3f}. A Taylor instability grows "
-            f"exponentially and reads as physics for the first thousand steps; "
-            f"use dt <= {2.0 * bound / half:.4f}")
-    # **The centre is put where the occupied states are**, as near as stability
-    # allows, and not at the middle of the spectrum. The step's error on a
-    # component at energy e goes as (dt (e - centre))^5 in phase and ^6 in norm,
-    # and the states live at the bottom of a one-sided spectrum: centred at the
-    # middle (2.3 Ry on two-atom silicon at 12 Ry) the occupied components sat
-    # 2 to 3 Ry from it and the norm drifted 1.6e-5 in 200 steps of 0.1, against
-    # 3.6e-9 with the centre on the band energies, which leaves only the small
-    # high-energy tail far from it. Any centre within ``bound/dt`` of both ends
-    # of the spectrum is stable.
-    occupied = float(np.sum(weights * np.asarray(_band_energies(first, states, terms))))
-    occupied /= max(float(weights.sum()), 1e-300)
-    reach = bound / dt_ry
-    centre = min(max(occupied, upper - reach), lower + reach)
+            f"the {propagator!r} propagator: the spectrum of H(k + kappa) reaches "
+            f"from {lower:.2f} to {upper:.2f} Ry and the step is centred on the "
+            f"carried states at {centre:.3f} Ry, so dt_Ry times the farther "
+            f"distance is {dt_ry * reach:.3f} against {bound:.3f}. A Taylor "
+            f"instability grows exponentially and reads as physics for the first "
+            f"thousand steps; use dt <= {2.0 * bound / reach:.4f}")
     return _Setup(terms=terms, table=table, chunks=chunks, first=first, step_fn=step_fn,
-                  bound=bound, lower=lower, upper=upper, centre=centre, dt_ry=dt_ry,
-                  volume=volume, effective_cutoff=effective_cutoff,
+                  bound=bound, lower=lower, upper=upper, centre=centre, carried=carried,
+                  dt_ry=dt_ry, volume=volume, effective_cutoff=effective_cutoff,
                   real=cell.precision.real, kcart=kcart)
+
+
+def _check_growth(psi, live, where: str):
+    """Refuse to go on if a norm has grown: a Taylor step past its region is unitary nowhere."""
+    norms = np.real(np.einsum("kng,kng->kn", np.conj(np.asarray(psi)), np.asarray(psi)))[:live]
+    if norms.max() > 1.0 + 1e-6:
+        raise FloatingPointError(
+            f"a state's norm grew to {norms.max():.8f} {where}: the step is unstable "
+            "for part of the spectrum the estimate of its lower edge missed. Halve dt")
+    return norms
 
 
 def _block_function(step_fn, centre):
@@ -502,6 +576,28 @@ def _padded_grid(kappa_mid, kappa_end, nsteps, block_steps, dt_ry):
     return padded_array(kappa_mid), padded_array(kappa_end), steps, nblocks
 
 
+def _warn_damping(setup, nsteps: int, tolerance: float = 1e-4) -> None:
+    """Warn when the step will lose more than ``tolerance`` of a carried state's norm.
+
+    The fourth-order Taylor step multiplies a component at ``y = dt_Ry (e -
+    centre)`` by ``|R(iy)|`` with ``1 - |R|^2 = y^6/72 - y^8/576``, so the carried
+    band farthest from the centre loses about ``nsteps y^6/144`` of its norm over
+    the run. It is a loss of accuracy and not an instability, and it reads as a
+    response that fades.
+    """
+    import warnings
+
+    low, high = setup.carried
+    y = setup.dt_ry * max(abs(high - setup.centre), abs(setup.centre - low))
+    loss = nsteps * (y**6 / 72.0 - y**8 / 576.0) / 2.0
+    if loss > tolerance:
+        warnings.warn(
+            f"the step loses about {loss:.1e} of the norm of the carried state "
+            f"farthest from the centre over {nsteps} steps (dt_Ry (e - centre) = "
+            f"{y:.3f}); the response fades by as much. Halve dt", RuntimeWarning,
+            stacklevel=3)
+
+
 def propagate(calculation, states, weights, v_scf, pulse, *, dt: float,
               duration: float | None = None, start: float | None = None,
               propagator: str = "taylor4", k_batch="default",
@@ -531,7 +627,9 @@ def propagate(calculation, states, weights, v_scf, pulse, *, dt: float,
         symmetrise: ``(nsym, 3, 3)`` cartesian rotations to average the current
             over, a polar vector, when the k-set is the wedge of their group.
     """
-    states = jnp.asarray(states)
+    # The states stay where they are, a host array in the frozen mode, and go to
+    # the device one chunk at a time: the peak is one chunk whatever the mesh.
+    states = np.asarray(states)
     weights = np.asarray(weights, dtype=float)
     nk, nbnd, _ = states.shape
     times, kappa_t, kappa_mid, efield = time_grid(pulse, dt, duration, start)
@@ -544,7 +642,7 @@ def propagate(calculation, states, weights, v_scf, pulse, *, dt: float,
     kcart, real = setup.kcart, setup.real
     lower, upper = setup.lower, setup.upper
     effective_cutoff = setup.effective_cutoff
-    half = 0.5 * (upper - lower)
+    _warn_damping(setup, nsteps)
 
     kappa_mid_p, kappa_end_p, dts, nblocks = _padded_grid(
         kappa_mid, kappa_t[1:], nsteps, block_steps, dt_ry)
@@ -553,10 +651,13 @@ def propagate(calculation, states, weights, v_scf, pulse, *, dt: float,
     energy_index = [0] + [min((b + 1) * block_steps, nsteps) for b in range(nblocks)]
     energy = np.zeros(len(energy_index))
     norm_drift, excited, done = 0.0, 0.0, 0
-    signature = _checkpoint_signature(times, nk, nbnd)
+    signature = _checkpoint_signature(
+        np.asarray(times), np.asarray(kappa_t), np.asarray(kappa_mid), propagator,
+        block_steps, np.concatenate([rows for rows, _ in chunks]), centre,
+        states, weights, kcart)
     if checkpoint is not None and Path(checkpoint).exists():
         saved = np.load(checkpoint)
-        if np.array_equal(saved["signature"], signature):
+        if str(saved["signature"]) == signature:
             current, energy = saved["current"], saved["energy"]
             norm_drift, excited, done = (float(saved["norm_drift"]),
                                          float(saved["excited"]), int(saved["done"]))
@@ -567,8 +668,8 @@ def propagate(calculation, states, weights, v_scf, pulse, *, dt: float,
             continue
         chunk = first if index == 0 else _Chunk.build(calculation, rows, terms, table, kcart)
         w = _chunk_weights(weights, rows, live, real)
-        psi = states[jnp.asarray(rows)]
-        initial = psi
+        psi = jnp.asarray(states[rows])
+        initial = states[rows]
         kappa0 = jnp.asarray(kappa_t[0], dtype=real)
         if run is None:
             args = (chunk, w, psi, jnp.asarray(kappa_mid_p[:block_steps], dtype=real),
@@ -590,15 +691,15 @@ def propagate(calculation, states, weights, v_scf, pulse, *, dt: float,
             # current is a repeat; it is dropped here
             current[b * block_steps + 1:stop + 1] += np.asarray(gradients)[:stop - b * block_steps]
             energy[b + 1] += float(measure(chunk, w, psi, jnp.asarray(kappa_t[stop], dtype=real)))
+            norms = _check_growth(psi, live, f"after step {stop} of k-chunk {index}")
 
-        norms = np.real(np.einsum("kng,kng->kn", np.conj(np.asarray(psi)), np.asarray(psi)))
-        norm_drift = max(norm_drift, float(np.abs(norms[:live] - 1.0).max()))
+        norm_drift = max(norm_drift, float(np.abs(norms - 1.0).max()))
         overlap = np.einsum("kmg,kng->kmn", np.conj(np.asarray(initial)), np.asarray(psi))
         kept = np.sum(np.abs(overlap) ** 2, axis=1)  # (nk, nbnd)
         excited += float(np.sum(np.asarray(w) * (1.0 - kept)))
         if checkpoint is not None:
-            np.savez(checkpoint, signature=signature, current=current, energy=energy,
-                     norm_drift=norm_drift, excited=excited, done=index + 1)
+            np.savez(checkpoint, signature=np.asarray(signature), current=current,
+                     energy=energy, norm_drift=norm_drift, excited=excited, done=index + 1)
 
     # Ry bohr of band-energy slope to the current density in Hartree units: the
     # velocity is dH_Ha/dk, half the Rydberg one, and the charge is -1.
@@ -613,6 +714,6 @@ def propagate(calculation, states, weights, v_scf, pulse, *, dt: float,
         norm_drift=norm_drift, excited=excited, volume=volume,
         nelec=float(weights.sum()), dt=float(dt), effective_cutoff=effective_cutoff,
         propagator=propagator, pulse=pulse, spectrum=(lower, upper),
-        step_radius=dt_ry * half,
+        step_radius=dt_ry * _reach(lower, upper, centre),
         symmetry_operations=1 if symmetrise is None else len(symmetrise),
     )

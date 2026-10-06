@@ -43,7 +43,8 @@ import numpy as np
 
 from defumat.eager import compiled_function
 from defumat.realtime.propagate import (
-    _Chunk, _block_function, _chunk_weights, _padded_grid, _prepare, time_grid)
+    _Chunk, _block_function, _check_growth, _chunk_weights, _padded_grid, _prepare,
+    _warn_damping, time_grid)
 
 __all__ = ["OrdersResult", "propagate_orders", "fourier_component"]
 
@@ -68,6 +69,9 @@ class OrdersResult:
     shape: object
     dt: float
     volume: float
+    #: ``max |<u|u> - 1|`` of the unperturbed states at the end: the zeroth order
+    #: of the tower, which a step that damps the bands would show here first.
+    norm_drift: float = float("nan")
 
     def component(self, n: int, m: int, axis=None, periods: int = 1):
         """``J_(n,m)``, :func:`fourier_component` of order ``n`` at harmonic ``m``.
@@ -95,7 +99,16 @@ def fourier_component(times, current, n: int, m: int, omega: float, eta: float,
     """
     times = np.asarray(times)
     dt = float(times[1] - times[0])
-    per = int(round(2.0 * math.pi / omega / dt))
+    exact = 2.0 * math.pi / omega / dt
+    per = int(round(exact))
+    if abs(exact - per) > 1e-6 * exact:
+        # A window that is not a whole period leaks every other harmonic into
+        # the one projected: 1.5e-2 on J_(3,3) beside a J_(3,1) a hundred times
+        # larger at dt = 0.3 (found in review), where it is exact to 1.7e-14 at
+        # a step that divides the period.
+        raise ValueError(
+            f"the step does not divide the period: 2 pi / (w dt) = {exact:.6f}. "
+            "Run the orders with dt = period / an integer, as run_harmonic_orders does")
     take = slice(len(times) - per * periods, len(times))
     t = times[take]
     factor = np.exp(-n * eta * t) * np.exp(1j * m * omega * t)
@@ -150,7 +163,7 @@ def propagate_orders(calculation, states, weights, v_scf, shape, *, dt: float,
     of amplitude one. The other arguments are
     :func:`~defumat.realtime.propagate.propagate`'s; the potential is frozen.
     """
-    states = jnp.asarray(states)
+    states = np.asarray(states)
     weights = np.asarray(weights, dtype=float)
     nk = states.shape[0]
     times, a_t, a_mid, _ = time_grid(shape, dt, duration, start)
@@ -176,13 +189,15 @@ def propagate_orders(calculation, states, weights, v_scf, shape, *, dt: float,
         return _lift(f, depth)(tower, lam)[1]
 
     raw = np.zeros((depth + 1, nsteps + 1, 3))
+    drift = 0.0
+    _warn_damping(setup, nsteps)
     run = start_run = None
     lam = jnp.zeros((), dtype=real)
     for index, (rows, live) in enumerate(setup.chunks):
         chunk = setup.first if index == 0 else _Chunk.build(
             calculation, rows, setup.terms, setup.table, setup.kcart)
         w = _chunk_weights(weights, rows, live, real)
-        tower = _tower(states[jnp.asarray(rows)], depth)
+        tower = _tower(jnp.asarray(states[rows]), depth)
         a0 = jnp.asarray(a_t[0], dtype=real)
         if run is None:
             args = (chunk, w, tower, lam, jnp.asarray(a_mid_p[:block_steps], dtype=real),
@@ -202,8 +217,11 @@ def propagate_orders(calculation, states, weights, v_scf, shape, *, dt: float,
             for k in range(depth + 1):
                 raw[k, b * block_steps + 1:stop + 1] += np.asarray(
                     _derivative(out, k, depth))[:stop - b * block_steps]
+            norms = _check_growth(_derivative(tower, 0, depth), live,
+                                  f"after step {stop} of k-chunk {index}")
+        drift = max(drift, float(np.abs(norms - 1.0).max()))
 
     factorials = np.asarray([math.factorial(k) for k in range(depth + 1)], dtype=float)
     currents = -raw / (2.0 * setup.volume) / factorials[:, None, None]
     return OrdersResult(times=times, currents=currents, shape=shape, dt=float(dt),
-                        volume=setup.volume)
+                        volume=setup.volume, norm_drift=drift)

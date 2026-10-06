@@ -9,3 +9,9 @@ built from, :mod:`~defumat.realtime.propagate` the driver and the current, and
 :mod:`~defumat.realtime.dense` the dense frequency-domain reference the
 perturbative orders are checked against.
 """
+
+from defumat.realtime.pulse import (  # noqa: E402, F401  (the one import a script needs)
+    Adiabatic, Gaussian, Kick, Ramp, Sin2, Sum, field_amplitude, get_pulse)
+
+__all__ = ["Adiabatic", "Gaussian", "Kick", "Ramp", "Sin2", "Sum", "field_amplitude",
+           "get_pulse"]
