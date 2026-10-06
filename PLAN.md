@@ -24815,6 +24815,17 @@ saves at most four of nine solves and only at `eta = 0`.
 3. **The second harmonic on a mesh**: AlAs at 8 Ry, the 4x4x4 mesh's 20 points along [111], 1.5 eV,
    `eta = 0.3` eV: `chi_xyz = 145.2015 + 119.0707i` pm/V, the dense hierarchy's (P135) to every
    printed digit and the propagation's 145.1967 + 119.0447i to 1.4e-4, in 20 and 19 iterations.
+4. **Silicon's third harmonic on converged meshes** (`tools/realtime/si_spectrum.py`, D22, ten
+   cores, 12 Ry, `eta = 0.2` eV, the [100] wedge): at 1.55 eV on 20^3, `|chi_xxxx(3w)|` =
+   **0.6575e-18** and `|chi_xxxx(-w; w, w, -w)|` = **0.9356e-18** m^2/V^2 with `chi^(1)` = 14.307,
+   the dense hierarchy's 0.66, 0.94 and 14.31 of P135, in 163 s; and the spectrum on 16^3, 27
+   frequencies from 0.4 to 3.0 eV in **1124 s**, 23 to 25 iterations each, where the propagation
+   took a day of one core for one frequency on 12^3 (P135). `|chi(3w)|` peaks at 1.22e-18 near
+   1.0 eV, the three-photon resonance at a third of the mesh's direct gap, and falls to 3e-20 by
+   3 eV; `|chi(-w; w, w, -w)|` falls to 2.2e-19 at 0.9 eV and rises to 4.1e-18 at the one-photon edge.
+   At 1.5 and 1.6 eV the 16^3 values bracket P135's 16^3 numbers (0.70 and 0.81). Below about
+   0.6 eV both components and `chi^(1)` (8.93 + 4.91i at 0.4 eV) are the velocity gauge's mesh
+   artefact, which grows as the frequency falls (P135), and are not silicon's.
 
 **What it costs.** On that cell the hierarchy took 13.6 s for the frequency, the fixed-density solve
 included, against 302 s for the propagation at 400 steps a period and 599 s at 800 (four of this
