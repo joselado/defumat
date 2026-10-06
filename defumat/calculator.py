@@ -1768,6 +1768,88 @@ class Calculator:
         )
 
     # ------------------------------------------------------------------
+    # real-time propagation
+    # ------------------------------------------------------------------
+
+    def get_realtime(self, pulse, **options):
+        """The current ``J(t)`` of the crystal driven by ``pulse``, at the ground state's potential.
+
+        The occupied states propagated under ``H(k + A(t)/c)`` on the frozen
+        sphere; the result carries the field, the current, the band energy and
+        the norm drift on the run's time grid (Hartree atomic units).
+        """
+        from defumat.workflows.realtime import run_realtime
+
+        result = self._ground_state("a real-time propagation")
+        return run_realtime(
+            self.system, self.pseudos, result.density, pulse,
+            calculation=self.calculation,
+            **self._call_options(run_realtime, result, options,
+                                 exclude=SCF_ONLY_OPTIONS)
+        )
+
+    def get_realtime_dielectric(self, **options):
+        """``sigma(w + i eta)`` and ``eps`` from the current after a kick, Elk's task 481.
+
+        The exact first order in the kick by default, one ``jvp`` through the
+        propagation; ``broadening`` and the frequencies are in eV.
+        """
+        from defumat.workflows.realtime import run_realtime_dielectric
+
+        result = self._ground_state("a real-time dielectric function")
+        return run_realtime_dielectric(
+            self.system, self.pseudos, result.density,
+            calculation=self.calculation,
+            **self._call_options(run_realtime_dielectric, result, options,
+                                 exclude=SCF_ONLY_OPTIONS)
+        )
+
+    def get_hhg(self, pulse, **options):
+        """The high-harmonic spectrum ``|w J(w)|^2`` of the crystal driven by ``pulse``."""
+        from defumat.workflows.realtime import run_hhg
+
+        result = self._ground_state("a high-harmonic spectrum")
+        return run_hhg(
+            self.system, self.pseudos, result.density, pulse,
+            calculation=self.calculation,
+            **self._call_options(run_hhg, result, options,
+                                 exclude=SCF_ONLY_OPTIONS)
+        )
+
+    def get_harmonic_orders(self, frequency, **options):
+        """``J^(n)(t)``, the perturbative orders of the current, by nested ``jvp`` in the field.
+
+        Under the adiabatic field ``exp(eta t) cos(w t)``, so that each order's
+        Fourier components are response functions at complex frequencies;
+        ``frequency`` and ``broadening`` in eV.
+        """
+        from defumat.workflows.realtime import run_harmonic_orders
+
+        result = self._ground_state("the perturbative orders of the current")
+        return run_harmonic_orders(
+            self.system, self.pseudos, result.density, frequency=frequency,
+            calculation=self.calculation,
+            **self._call_options(run_harmonic_orders, result, options,
+                                 exclude=SCF_ONLY_OPTIONS)
+        )
+
+    def get_third_harmonic(self, frequency, **options):
+        """``chi^(3)(-3w; w, w, w)`` and ``chi^(3)(-w; w, w, -w)`` of a cubic crystal, m^2/V^2.
+
+        By the real-time route at one frequency (eV), from fields along
+        ``[100]`` and ``[110]``.
+        """
+        from defumat.workflows.realtime import run_third_harmonic
+
+        result = self._ground_state("the third harmonic")
+        return run_third_harmonic(
+            self.system, self.pseudos, result.density, frequency=frequency,
+            calculation=self.calculation,
+            **self._call_options(run_third_harmonic, result, options,
+                                 exclude=SCF_ONLY_OPTIONS)
+        )
+
+    # ------------------------------------------------------------------
     # topology
     # ------------------------------------------------------------------
 
