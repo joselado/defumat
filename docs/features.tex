@@ -5480,6 +5480,21 @@ between bands degenerate at the tip energy, which is the interference a real
 experiment lets happen, and converges: to \textbf{3e-7} in the mean between 8
 and 45 bands. \code{method="resolvent"} is reachable and warns.
 
+\textbf{What a map holds is one k-point, the bands near the tip energy and a
+block of pixels}, so a large cell or a large image costs time rather than
+memory. A band whose on-shell amplitude is below $10^{-18}$ of the largest at
+every energy asked for is not sampled at all, which for a Gaussian delta is
+about nine broadenings away and for a Fermi--Dirac one about 84, meaning that
+what it would have added is below round-off of the map; a degenerate block is
+kept whole, and \code{t.notes["window"]} reports how many bands were sampled
+out of how many there are. The exit-plane overlaps and the diagnostics are
+still built on every band, and \code{method="resolvent"} samples every band,
+since no term of its denominator is small. The tip pixels are taken in blocks
+of a fixed size, and a flat tip plane is folded onto its in-plane plane waves
+before it is sampled, as the exit plane is. None of this runs on an
+accelerator: on a card the band solve is the only part of the map that does,
+and the wavefunctions are read from it one k-point at a time.
+
 \textbf{Validated by identities}, since neither \code{pw.x} nor Elk computes
 this. (QE's \code{pwcond.x} is a Landauer transmission of a different geometry:
 two semi-infinite crystalline leads with the current along one axis, one

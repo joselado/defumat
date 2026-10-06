@@ -13045,6 +13045,28 @@ default does not bound this one** — `k_batch = None` is an accelerator's defau
 *device* wants the whole axis, and this array is on the host either way, so a GPU run
 asking for an image-sized `npoints` has to pass a number.
 
+**Later (2026-10-06): one k-point, the energy window and a block of pixels.** The k dial's
+floor is one k-point and a large cell sits there already, so the amplitudes still grew as
+`nbnd` times the pixel count, both of which grow with the area. Three changes, each exact to
+round-off. **The band window** (`_band_window`): a band is sampled only if its on-shell
+amplitude is above 1e-18 of the largest at some requested energy, over every channel, k-point
+and band, which is 9.1 broadenings for a Gaussian delta and 84 for a Fermi-Dirac one; a
+degenerate block is kept whole, by the one grouping rule `channel_basis` uses
+(`green.multiplets`), because the incoherent map rotates inside blocks; `S_k` and every
+diagnostic stay on all bands; `method = "resolvent"` keeps every band. **The pixel block**:
+one k-point at a time and the tip points in blocks of `_AMPLITUDE_BLOCK` = 2e6 complex
+amplitudes, so the assembly no longer reads `k_batch` and `run_ultracell_transport` lost its
+own. **The fold**: a flat tip plane is summed over its normal Miller index first
+(`substrate.fold_onto_plane`, which `exit_overlap` now goes through bit-identically), so the
+sampler sums over the plane's in-plane columns. And the store is no longer converted whole
+before the loop. *Measured* on a 3x3 graphene supercell re-solved at 120 bands on the whole
+2x2 grid: a 300x300 dI/dV map over a 0.54 eV bias from 476 s and 1059 MB of host memory
+(2967 MB with the whole k axis in flight) to 2.76 s and 123 MB, the map unchanged to 6.3e-15
+of its maximum; the window alone is worth 67 s and the fold alone 72 s, because they cut the
+`nbnd^2` contraction and the per-pixel phase table respectively. `PERFORMANCE.md`, "The
+vertical transport's assembly". The guards are `tests/unit/test_transport_machinery.py` (eight,
+each shown to fail when its route is disabled) and two in `tests/regression/test_transport.py`.
+
 ### P67 — Running a calculation too large for one job: sizing, checkpointing, and a partial dynamical matrix. ✅ DONE.
 
 Driven by a concrete case from another project -- a 57-atom FePc molecule on a

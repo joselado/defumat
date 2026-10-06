@@ -10735,3 +10735,69 @@ was 3 to 4 cm^-1 out, so it is a time for a wrong result, kept only as the "from
 **On the card after P133**, D22's A2000, host cores 6-11: 7.0 s warm in `memory_mode = 'memory'`
 (call 1 14.1 s; 11.9 s before) and 17.0 s in `'speed'` (call 1 31.3 s), 8 passes in both, against
 `ph.x`'s 5.9 to 6.1 s on one CPU core.
+
+## The vertical transport's assembly: one k-point, the energy window and a block of pixels (CPU, 2026-10-06)
+
+`run_vertical_transport` after the band solve, before and after branch `transport-window`.
+**No reference pair is owed**, for P66's reason: neither `pw.x` nor Elk computes a tip-resolved
+vertical transmission. What is recorded is the same assembly on the same converged states at the
+two commits, so the ratio is between two implementations of one contraction.
+
+The cell is graphene as a 3x3 supercell of `tests/data/qe/graphene-monolayer.in` (18 atoms,
+`ecutwfc = 40`, 14411 plane waves at `Gamma` in 535 in-plane columns along the stacking axis),
+converged on a 2x2 grid and re-solved by `grid = (2, 2, 1)` with `nbnd = 120`, so the assembly
+sees 4 k-points of 120 bands of 14418 padded plane waves. Tip plane at 0.62, exit plane at 0.38,
+`broadening = 0.005` Ry. Two energy sets: the dI/dV of a 0.04 Ry bias on 9 energies from `E_F`
+(0.54 eV), and 31 energies 0.005 Ry apart from `E_F` (0.15 Ry, 2 eV). The assembly is captured
+from one `get_vertical_transport` call and re-run on its own, so neither the SCF nor the band
+solve is in the numbers. The peak is `tracemalloc`'s, which numpy reports its buffers to; times
+are medians of three at 100x100 and single calls at 300x300 (the peak is deterministic). This
+workstation, default threads, a load of 1.3 to 3.7 from a video call and a browser; the scripts are
+in the session's scratchpad and the "before" arm is a worktree at `2af5f25`.
+
+| 100x100 map | before, `k_batch = 1` | before, `k_batch = None` | after |
+|---|---|---|---|
+| 0.54 eV, 9 energies | 53.1 s, 185 MB | 53.1 s, 333 MB | **0.85 s, 100 MB**, 4 of 480 bands |
+| 2 eV, 31 energies | 68.0 s, 190 MB | 66.0 s, 338 MB | **2.24 s, 106 MB**, 19 of 480 bands |
+
+| 300x300 map, 0.54 eV | time | peak |
+|---|---|---|
+| before, `k_batch = 1` | 476 s | 1059 MB |
+| before, `k_batch = None` | 463 s | 2967 MB |
+| after | **2.76 s** | **123 MB** |
+| after, window off (`_WINDOW_TOL = None`) | 67.2 s | 209 MB |
+| after, fold off (`_flat_axis` returning `None`) | 72.1 s | 124 MB |
+
+Every map agrees with the old code's to **6.3e-15** of its maximum (5.9e-15 at 100x100), the
+incoherent map likewise, and the diagnostics (`channels`, the least eigenvalue of `S_k`, the
+off-diagonal weight) are identical, since `S_k` is still built on every band.
+
+**What the old peak was** is the amplitudes, `npol k_chunk nbnd npoints` complex, and the
+contraction's three temporaries of one component beside them, which is why it grows with the image,
+185 MB to 1059 MB from the 100x100 map to the 300x300 one, and to 2967 MB with the whole k axis in
+flight. **What the new one is** does not contain them: one k-point's states (120 x 14418 complex,
+27.7 MB), their phased copy inside the fold (27.7 MB), the sampler's phase block (32 MB) and the
+output maps, three of `nE x npoints` reals (19 MB at 300x300), which is most of what still grows
+from 100 to 123 MB. So the bound is one
+k-point's states and the image itself, whatever `nbnd`, `nk` and the energy window are. Tip
+amplitudes are held at `_AMPLITUDE_BLOCK` = 2e6 complex numbers, 32 MB, at most.
+
+**The two levers cut different terms and neither alone is most of it.** The window removes the
+contraction `S a*`, `nbnd^2` complex multiply-adds per pixel per energy per call, three calls with
+`incoherent = True`: with every band sampled that is the 67 s. The fold removes the phase table,
+`npoints x npw` complex exponentials per k-point whatever the band count, 535 columns where there
+were 14411 plane waves: with the fold off and the window on it is the 72 s. Together, 170x on the
+300x300 map, 62x and 30x on the two 100x100 sets. The window is only as narrow as the physics:
+4 bands of 480 at 0.54 eV around graphene's Dirac point, where a 3x3 cell folds `K` onto `Gamma`
+and nothing else on the grid is near `E_F`, and 19 of 480 over 2 eV.
+
+**On a card**, which this does not measure: the assembly is host numpy, so a transmission's card
+memory is the band solve's, and the change there is that the store is read one k-point at a time.
+`run_vertical_transport` used to convert it with `np.asarray` first, which in speed mode copied
+every k-point to the host beside the device copy the result still holds, `nspin nk nbnd npol npwx`
+complex: 111 MB on this cell, by construction. In memory mode the store is already a numpy array
+and the conversion cost nothing. **The dial that used to bound the amplitudes never reached them
+through the facade**: `threaded_calculation` replaces a `k_batch` passed with `calculation=` by the
+calculation's own, so `get_vertical_transport(k_batch=None)` and `k_batch=2` both handed `_assemble`
+1 on `h-sheet.in` here, and on a card in speed mode the chunk was the whole axis whatever was asked
+(read off `memory_preset`, not measured). The assembly no longer reads it.

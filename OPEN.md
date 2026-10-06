@@ -1028,6 +1028,23 @@ than no estimate.
 complex128 up front, and each k-point's wavefunctions pulled to host inside a Python
 loop.
 
+> **Superseded 2026-10-06 (branch `transport-window`).** The k dial's floor is one
+> k-point, and a large cell is already there, so the amplitudes still grew as `nbnd`
+> times the pixel count. The assembly now holds one k-point, samples only the bands the
+> energy window lets through (`_band_window`, amplitude above 1e-18 of the largest at
+> some requested energy, degenerate blocks whole) and takes the pixels in blocks of
+> `_AMPLITUDE_BLOCK` = 2e6 complex numbers; it no longer reads `k_batch`, and
+> `run_ultracell_transport` lost its `k_batch`, which bounded nothing else. Two things
+> found on the way. **The dial never reached the assembly through the facade**: with
+> `calculation=` passed, `threaded_calculation` returns the calculation's own `k_batch`,
+> so `get_vertical_transport(k_batch=None)` or `k_batch=2` handed `_assemble` 1 on this
+> workstation, silently (probed on `h-sheet.in`); the transport no longer depends on it,
+> and the same replacement applies to every workflow taking `calculation=`. And
+> `run_vertical_transport` converted the whole store with `np.asarray` before a loop
+> that reads one k-point at a time, which on a card in speed mode copied every k-point
+> to the host beside the device copy. `PERFORMANCE.md`, "The vertical transport's
+> assembly: one k-point, the energy window and a block of pixels".
+
 ---
 
 ## E. Incompatibilities worth building, with the missing term named
