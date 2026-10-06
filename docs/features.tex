@@ -4155,8 +4155,8 @@ which take a \code{Calculation}, the states, their weights and the potential to
 freeze, and return a \code{RealTimeResult} or an \code{OrdersResult}
 (\code{fourier\_component} projects an order on a harmonic). \code{conductivity\_from\_kick}
 and \code{harmonic\_spectrum} turn a current into a \code{KickResponse} or a
-\code{HarmonicSpectrum}. The pulses are behind \code{get\_pulse} and
-\code{register\_pulse}, the steps behind \code{get\_propagator} and
+\code{HarmonicSpectrum}. The pulses are behind \code{pulse.get\_pulse} and
+\code{register\_pulse}, the steps behind \code{propagators.get\_propagator} and
 \code{register\_propagator} (\code{taylor4}, with \code{largest\_stable\_step}
 saying how long a step the cell admits), the projectors' table is
 \code{radial\_table}, and the dense frequency-domain hierarchy the orders are
@@ -4257,7 +4257,7 @@ from defumat.realtime.pulse import Sin2
 pulse = Sin2.from_intensity(1e12, 1.55, 10, polarization=(1, 0, 0))
 hhg = calc.get_hhg(pulse, grid=(6, 6, 6), dt=0.2, highest=25)
 print(hhg.harmonics(15))          # the peak intensity at orders 1 to 15
-print(hhg.cutoff(floor=1e-6))     # the highest odd order above 1e-6 of the first
+print(hhg.cutoff(floor=1e-6))     # the end of the unbroken odd run above 1e-6
 print(hhg.realtime.excited)       # electrons per cell promoted by the pulse
 \end{pycode}
 
