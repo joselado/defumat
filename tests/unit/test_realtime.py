@@ -6,6 +6,11 @@ order, a state with no field is stationary, the work the field does is the
 energy it puts in, an unstable step is refused, and the program a block
 compiles serves every k-chunk after the first. The comparisons against the
 Kubo sum and the dense hierarchy are in ``tests/regression/test_realtime.py``.
+
+The six that propagate a cell (10 to 35 s each on this workstation) are in the
+slow set, by the rule that a test above about five seconds that is not a direct
+number against a reference code belongs there; the gate keeps the field, the
+step, the refusals and the projection.
 """
 
 import logging
@@ -130,6 +135,7 @@ def _silicon(pseudo_dir, ecut=6.0):
     return calculation, jnp.asarray(states), weights, v_scf
 
 
+@pytest.mark.slow
 def test_with_no_field_the_states_are_stationary(pseudo_dir):
     """``J`` and the energy constant to round-off, the norm to the step's ``y^6/144``.
 
@@ -149,6 +155,7 @@ def test_with_no_field_the_states_are_stationary(pseudo_dir):
     assert result.excited < 1e-8
 
 
+@pytest.mark.slow
 def test_the_work_done_is_the_energy_gained(pseudo_dir):
     """``Omega int J.E dt = Delta E`` for a pulse, to the trapezoid rule's ``dt^2``.
 
@@ -170,6 +177,7 @@ def test_a_step_past_the_stability_bound_is_refused(pseudo_dir):
         propagate(calculation, states, weights, v_scf, Kick(0.0), dt=5.0, duration=10.0)
 
 
+@pytest.mark.slow
 def test_a_second_k_chunk_compiles_nothing(pseudo_dir):
     """The eager-closure trap, checked the way ``CLAUDE.md`` says: count compilations.
 
@@ -241,6 +249,7 @@ def test_what_is_refused_is_refused_by_name(pseudo_dir):
     assert len(rotations) == 8, "a [100] field keeps eight of silicon's 48"
 
 
+@pytest.mark.slow
 def test_a_checkpoint_resumes_after_the_chunks_it_records(pseudo_dir, tmp_path):
     """A run that finds its own checkpoint returns the recorded current unchanged.
 
@@ -264,6 +273,7 @@ def test_a_checkpoint_resumes_after_the_chunks_it_records(pseudo_dir, tmp_path):
     assert other.current.shape != first.current.shape
 
 
+@pytest.mark.slow
 def test_a_checkpoint_of_another_run_is_not_resumed(pseudo_dir, tmp_path):
     """The digest holds the field, so a pulse of twice the amplitude at the same length is another run.
 
@@ -283,6 +293,7 @@ def test_a_checkpoint_of_another_run_is_not_resumed(pseudo_dir, tmp_path):
     assert np.abs(strong.current - weak.current).max() > 0.5 * np.abs(weak.current).max()
 
 
+@pytest.mark.slow
 def test_the_chunk_size_is_not_in_the_current(pseudo_dir):
     """``k_batch`` moves the current by round-off and nothing more.
 
