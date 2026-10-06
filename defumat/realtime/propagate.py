@@ -83,7 +83,7 @@ from defumat.realtime.radial import radial_table
 from defumat.units import AU_SEC
 
 __all__ = ["RealTimeResult", "propagate", "require_a_realtime_regime",
-           "spectral_bounds", "time_grid"]
+           "spectral_bounds", "time_grid", "largest_stable_step"]
 
 
 @dataclass
@@ -337,6 +337,39 @@ def spectral_bounds(calculation, chunk: _Chunk, terms, kappa_max: float):
         eig = np.linalg.eigvalsh(root @ coefficients @ root)
         nl_min, nl_max = min(nl_min, float(eig.min())), max(nl_max, float(eig.max()))
     return vmin + 1.1 * nl_min, kinetic_max + vmax + 1.1 * nl_max
+
+
+def largest_stable_step(calculation, states, weights, v_scf, kappa_max: float = 0.0,
+                        propagator: str = "taylor4", k_batch="default", kcart=None) -> float:
+    """The largest ``dt`` in Hartree atomic units the propagator is stable for here.
+
+    ``4 bound / (upper - lower)`` from :func:`spectral_bounds` on the first
+    k-chunk, which is what :func:`propagate` refuses a step against. A caller
+    that has a period to divide (:func:`~defumat.workflows.realtime.run_harmonic_orders`)
+    reads it to choose its steps rather than be refused.
+    """
+    require_a_realtime_regime(calculation)
+    _, bound = get_propagator(propagator)
+    cell = calculation.system.cell
+    if kcart is None:
+        kcart = getattr(calculation, "_kcart", None)
+    if kcart is None:
+        kcart = calculation.system.kpoints.cartesian(cell)
+    kcart = np.asarray(kcart)
+    terms = calculation.local_terms(v_scf)
+    planewaves = calculation.basis.planewaves
+    gnorm = np.linalg.norm(
+        np.asarray(calculation.basis.smooth.cartesian(cell))[np.asarray(planewaves.indices)]
+        + kcart[:, None, :], axis=-1)
+    radius = float(np.max(np.where(np.asarray(planewaves.mask), gnorm, 0.0)))
+    table = radial_table(calculation.pseudos, float(cell.volume),
+                         (radius + kappa_max + 0.5) ** 2)
+    batch = calculation.k_batch if k_batch == "default" else k_batch
+    rows, _ = next(iter(k_chunks(states.shape[0], batch)))
+    chunk = _Chunk.build(calculation, rows, terms, table, kcart)
+    lower, upper = spectral_bounds(calculation, chunk, terms, kappa_max)
+    # dt_Ry (upper - lower)/2 <= bound, and dt = 2 dt_Ry in Hartree time
+    return 4.0 * bound / (upper - lower)
 
 
 def _checkpoint_signature(times, kpoints_rows, nbnd):

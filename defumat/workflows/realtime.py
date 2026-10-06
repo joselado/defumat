@@ -304,7 +304,7 @@ def run_hhg(system, pseudos, density, pulse: Pulse, *, dt: float = 0.1,
 def run_harmonic_orders(system, pseudos, density, *, frequency: float,
                         broadening: float = 0.1, direction=(1.0, 0.0, 0.0),
                         order: int = 3, eta_t: float = 20.0,
-                        steps_per_period: int = 400, kpoints=None, grid=None,
+                        steps_per_period: int | None = None, kpoints=None, grid=None,
                         little_group: bool = True, nbnd: int | None = None,
                         conv_thr: float = 1.0e-10, k_batch="default",
                         block_steps: int = 400, calculation=None) -> OrdersResult:
@@ -313,7 +313,9 @@ def run_harmonic_orders(system, pseudos, density, *, frequency: float,
     ``frequency`` and ``broadening`` in eV. The run starts ``eta_t/eta``
     before ``t = 0``, rounded up to whole periods, and the step divides the
     period ``steps_per_period`` times, so the Fourier projection over the last
-    period is exact for the harmonics the grid resolves. ``exp(-eta_t)`` times
+    period is exact for the harmonics the grid resolves. Without it the step
+    is the largest whole fraction of the period inside 0.9 of the
+    propagator's stability bound, and never fewer than 200 a period. ``exp(-eta_t)`` times
     a resonance factor is the start transient left in every order, and it
     does not decay because the evolution is unitary: measured on zincblende
     AlAs against the dense hierarchy, 1.4e-5 to 3.0e-5 at ``eta_t = 20`` and
@@ -331,6 +333,11 @@ def run_harmonic_orders(system, pseudos, density, *, frequency: float,
     calc, states, weights, v_scf = _occupied_states(
         system, pseudos, density, kset, nbnd=nbnd, conv_thr=conv_thr,
         k_batch=k_batch, calculation=calculation)
+    if steps_per_period is None:
+        from defumat.realtime.propagate import largest_stable_step
+
+        largest = largest_stable_step(calc, states, weights, v_scf, k_batch=k_batch)
+        steps_per_period = max(200, int(math.ceil(period / (0.9 * largest))))
     result = propagate_orders(calc, states, weights, v_scf, shape,
                               dt=period / int(steps_per_period), order=order,
                               start=-length, duration=length, k_batch=k_batch,
@@ -386,7 +393,7 @@ def chi3_from_orders(orders: OrdersResult, axis=0):
 
 def run_third_harmonic(system, pseudos, density, *, frequency: float,
                        broadening: float = 0.1, both_directions: bool = True,
-                       eta_t: float = 20.0, steps_per_period: int = 400,
+                       eta_t: float = 20.0, steps_per_period: int | None = None,
                        kpoints=None, grid=None, little_group: bool = True,
                        nbnd: int | None = None, conv_thr: float = 1.0e-10,
                        k_batch="default", block_steps: int = 400,

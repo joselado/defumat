@@ -4260,10 +4260,10 @@ in atomic units, $4\pi/E_{\mathrm{au}}^2 = 4.75\times10^{-23}$~m$^2$/V$^2$ each.
 
 \begin{pycode}
 orders = calc.get_harmonic_orders(frequency=1.55, broadening=0.3, order=3,
-                                  grid=(2, 2, 2), eta_t=10, steps_per_period=200)
+                                  grid=(2, 2, 2), eta_t=10)
 print(orders.component(3, 3, axis=0))      # J_(3,3) along x, Hartree a.u.
 thg = calc.get_third_harmonic(frequency=1.55, broadening=0.3, grid=(2, 2, 2),
-                              eta_t=10, steps_per_period=200)
+                              eta_t=10)
 print(thg.chi_xxxx_3w, thg.chi_xxyy_3w)    # m^2/V^2
 print(thg.chi_xxxx_w)                      # chi(-w; w, w, -w)
 \end{pycode}
