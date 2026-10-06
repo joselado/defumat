@@ -65,9 +65,10 @@ The pulse is the 800 nm light of a titanium-sapphire laser, 1.55 eV a photon, wi
 a $\sin^2$ envelope eight periods long, 21 fs, and a peak intensity of
 $3\times10^{12}$ W/cm$^2$, which is a peak field $E_0$ of 4.75 V/nm. What the
 electrons feel is the vector potential, and its amplitude
-$\kappa_0=E_0/\omega=0.16$ bohr$^{-1}$ is a quarter of the distance from $\Gamma$ to
-X, so you can think of every electron as being swept back and forth along its own
-band, a quarter of the way to the zone boundary on either side, eight times. The
+$\kappa_0=E_0/\omega=0.16$ bohr$^{-1}$ is three tenths of the distance from $\Gamma$
+to L, the edge of the zone along [111], so you can think of every electron as being
+swept back and forth along its own band, three tenths of the way to the zone edge
+on either side, eight times. The
 step is 0.2 atomic units of time, 4.8 as, and `nbnd = 8` is there because six
 bands would end inside a degenerate pair of conduction bands at three k-points of
 AlAs.
@@ -124,7 +125,7 @@ where the $n$-th harmonic is the response of $n$-th order in the field; from the
 on the fall slows to about a decade every four or five orders, and this slower
 stretch is what is called the plateau, with the cutoff where it gives out. In AlAs
 every integer is there: the 4th harmonic is a quarter of the 5th, and from the 8th
-on the even harmonics are as strong as the odd ones beside them. This is the
+on the even harmonics are comparable to the odd ones beside them. This is the
 second-order response, the one that gives AlAs its second-harmonic generation,
 carried into every order by the strong field.
 
@@ -195,12 +196,13 @@ resonances and not about silicon. From the 11th harmonic on the two meshes agree
 within a factor of two up to the 23rd, both put the cutoff at the 19th, and the
 parity of the harmonics, which is a statement of symmetry, holds on any mesh the
 crystal maps onto itself. The step of 0.2 gives the same harmonics as a step of
-0.1 to 0.1 per cent up to the 21st. The plane-wave cutoff is the input's 12 Ry,
-and at 20 Ry the harmonics up to the 13th move by at most a factor of 2.2 while the
+0.1 to 0.1 per cent up to the 21st. Silicon's plane-wave cutoff is its input's
+12 Ry, and at 20 Ry the harmonics up to the 13th move by at most a factor of 2.2 while the
 plateau above them does not hold: the 15th moves by a factor of seven, and the
 spectrum stays above a millionth of the fundamental to the 23rd and then drops by
 two decades at the 25th. So the end of the plateau, 29 eV here, is the one number
-in this notebook that needs a larger basis before it is quoted.
+in this notebook that needs a larger basis before it is quoted, and AlAs's 10 Ry
+has not been checked at all.
 
 What the calculation leaves out is the rest of the physics of a real sample. The
 gap is the LDA's, less than half of the 1.17 eV measured in silicon; the potential is held
