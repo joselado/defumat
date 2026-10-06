@@ -306,8 +306,10 @@ All of this was read from the code on 2026-10-06 and should be checked again bef
 ## The stages
 
 Each stage ends with a number, and the order is chosen so that each number is available
-before the next stage needs to trust it. The first four are the first phase, the fifth
-and sixth the second.
+before the next stage needs to trust it. The first phase is the first four together
+with the little group of the field, which is written here after the update of the
+potential and is done before the notebook (see "Decisions"); the second phase is the
+perturbative orders by the real-time route, and the third the hierarchy.
 
 ### Measure before building
 
@@ -780,12 +782,15 @@ phases. The real-time route comes first, since it needs no new solver and is the
 of the second, and the frequency-domain hierarchy with its complex shifted solver
 follows as its own phase.
 
-Still open, and both wait on the timing of the first stage:
+The two smaller ones were left to the plan's own recommendation the same day:
 
-1. Whether the first phase includes the update of the potential in time or ships at a
-   frozen potential. We recommend the frozen potential first, since every check of the
-   ladder is available there.
-2. Whether the little group goes ahead of the notebook.
+1. The first phase ships at a frozen potential. Every check of the ladder is available
+   there, and the update of the potential in time follows as its own stage with its own
+   two pairings (`rpa` with local fields, `alda`).
+2. The little group of the field goes ahead of the notebook, since the full mesh is at
+   the edge of the ten-minute ceiling by the count of transform pairs. The one case
+   that reverses this is a first-stage timing that puts the full-mesh notebook under
+   five minutes, in which case the notebook comes first and the reduction after it.
 
 ## What was read, and what could not be verified
 
