@@ -32,7 +32,7 @@ from defumat.workflows.spiral_soc import SpiralSpinOrbit, spiral_spin_orbit_ener
 from defumat.workflows.stm import run_stm, run_sts
 from defumat.workflows.realtime import (
     run_harmonic_orders, run_hhg, run_realtime, run_realtime_dielectric,
-    run_third_harmonic)
+    run_third_harmonic, run_nonlinear_spectrum)
 from defumat.workflows.topology import (
     DFTSource,
     run_berry_curvature,
@@ -73,6 +73,7 @@ __all__ = [
     "run_hhg",
     "run_harmonic_orders",
     "run_third_harmonic",
+    "run_nonlinear_spectrum",
     "run_sts",
     "fixed_density_bands",
     "fixed_density_states",

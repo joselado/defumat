@@ -1849,6 +1849,23 @@ class Calculator:
                                  exclude=SCF_ONLY_OPTIONS)
         )
 
+    def get_nonlinear_spectrum(self, frequencies, **options):
+        """The orders of the current, ``chi^(2)`` and ``chi^(3)`` over ``frequencies`` (eV).
+
+        The frequency-domain hierarchy at the ground state's potential, nine
+        iterative solves per band and k-point a frequency; the real-time route
+        (:meth:`get_harmonic_orders`) is its check at one frequency.
+        """
+        from defumat.workflows.realtime import run_nonlinear_spectrum
+
+        result = self._ground_state("a nonlinear spectrum")
+        return run_nonlinear_spectrum(
+            self.system, self.pseudos, result.density, frequencies=frequencies,
+            calculation=self.calculation,
+            **self._call_options(run_nonlinear_spectrum, result, options,
+                                 exclude=SCF_ONLY_OPTIONS)
+        )
+
     # ------------------------------------------------------------------
     # topology
     # ------------------------------------------------------------------

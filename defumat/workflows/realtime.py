@@ -48,7 +48,8 @@ from defumat.realtime.spectra import (
 from defumat.units import C_AU
 
 __all__ = ["run_realtime", "run_realtime_dielectric", "run_hhg", "run_harmonic_orders",
-           "run_third_harmonic", "ThirdHarmonic", "field_little_group", "field_symmetries",
+           "run_third_harmonic", "ThirdHarmonic", "run_nonlinear_spectrum",
+           "NonlinearSpectrum", "field_little_group", "field_symmetries",
            "chi2_from_orders", "CHI3_AU_TO_SI"]
 
 #: One atomic unit of ``chi^(3)`` in m^2/V^2, in the SI convention
@@ -166,6 +167,19 @@ def _occupied_states(system, pseudos, density, kset, *, nbnd, conv_thr, k_batch,
     run every band carrying weight above ``1e-10``, held at its ground-state
     occupation.
     """
+    calc, states, weights, v_scf, _, _ = _solved_states(
+        system, pseudos, density, kset, nbnd=nbnd, conv_thr=conv_thr, k_batch=k_batch,
+        calculation=calculation)
+    return calc, states, weights, v_scf
+
+
+def _solved_states(system, pseudos, density, kset, *, nbnd, conv_thr, k_batch,
+                   calculation):
+    """:func:`_occupied_states` and every band the solve resolved, with their energies.
+
+    The last two are ``(nk, nbnd, npwx)`` and ``(nk, nbnd)`` in Ry, for the
+    frequency-domain hierarchy's projector on the computed bands.
+    """
     from defumat.workflows.nscf import fixed_density_states, threaded_calculation
 
     nelec_guess = sum(pseudos[t].z_valence for t in system.structure.types)
@@ -212,7 +226,8 @@ def _occupied_states(system, pseudos, density, kset, *, nbnd, conv_thr, k_batch,
                 "occupations do")
     states = np.asarray(wavefunctions)[0, :, :keep]
     v_scf = calc.potential(jnp.asarray(density)).v_scf
-    return calc, states, wg[:, :keep], v_scf
+    return (calc, states, wg[:, :keep], v_scf, np.asarray(wavefunctions)[0],
+            eigenvalues[0])
 
 
 def run_realtime(system, pseudos, density, pulse: Pulse, *, dt: float = 0.1,
@@ -501,3 +516,108 @@ def run_third_harmonic(system, pseudos, density, *, frequency: float,
                          chi_xxxx_3w=third * CHI3_AU_TO_SI,
                          chi_xxyy_3w=xxyy * CHI3_AU_TO_SI,
                          chi_xxxx_w=first * CHI3_AU_TO_SI, orders=runs)
+
+
+@dataclass
+class NonlinearSpectrum:
+    """The perturbative orders of the current over a frequency axis, at a frozen potential.
+
+    From the frequency-domain hierarchy (:mod:`defumat.realtime.hierarchy`), the
+    same orders the real-time route projects out of one run per frequency.
+
+    Attributes:
+        frequencies: ``(nw,)``, the drive's ``hbar w`` in eV.
+        broadening: ``eta`` in eV, per photon.
+        direction: the field's unit vector.
+        components: ``{(n, m): (nw, 3)}``, ``J_(n,m)`` in Hartree atomic units per
+            unit of the amplitude to the ``n``, the response at ``m w + i n eta``
+            (:meth:`~defumat.realtime.orders.OrdersResult.component`'s).
+        iterations: ``(nw,)``, the largest BiCGStab iteration count of each
+            frequency over the k-points, the bands and the orders.
+        residual: ``(nw,)``, the largest final relative residual.
+        computed_bands: the bands the hierarchy's projector holds exactly.
+        volume: the cell volume in bohr^3.
+    """
+
+    frequencies: np.ndarray
+    broadening: float
+    direction: np.ndarray
+    components: dict
+    iterations: np.ndarray
+    residual: np.ndarray
+    computed_bands: int
+    volume: float
+
+    def _z(self):
+        return (np.asarray(self.frequencies) + 1j * float(self.broadening)) * EV_TO_HA
+
+    def component(self, n: int, m: int, axis=None):
+        """``J_(n,m)`` at every frequency: ``(nw, 3)``, or ``(nw,)`` along ``axis``."""
+        value = np.asarray(self.components[(n, m)])
+        if axis is None:
+            return value
+        if np.ndim(axis) == 0:
+            return value[:, int(axis)]
+        return value @ np.asarray(axis, dtype=float)
+
+    def chi2(self, axis=0):
+        """``chi^(2)(-2w; w, w)`` in pm/V along ``axis``, :func:`chi2_from_orders`'s formula."""
+        from defumat.response.shg import CHI2_AU_TO_PM_PER_V
+
+        z = self._z()
+        return -2j * self.component(2, 2, axis) / z**3 * CHI2_AU_TO_PM_PER_V
+
+    def chi3(self, axis=0):
+        """``(chi^(3)(-3w; w,w,w), chi^(3)(-w; w,w,-w))`` in m^2/V^2, :func:`chi3_from_orders`'s."""
+        z = self._z()
+        third = -8.0 * self.component(3, 3, axis) / (3.0 * z**4)
+        first = 8.0 * self.component(3, 1, axis) / (3.0 * (2.0 * z - np.conj(z)) * z**2
+                                                     * np.conj(z))
+        return third * CHI3_AU_TO_SI, first * CHI3_AU_TO_SI
+
+
+def run_nonlinear_spectrum(system, pseudos, density, *, frequencies, broadening: float = 0.1,
+                           direction=(1.0, 0.0, 0.0), order: int = 3, kpoints=None,
+                           grid=None, little_group: bool = True, nbnd: int | None = None,
+                           conv_thr: float = 1.0e-10, k_batch="default",
+                           tolerance: float = 1.0e-10, max_iterations: int = 500,
+                           calculation=None) -> NonlinearSpectrum:
+    """The orders of the current, ``chi^(2)`` and ``chi^(3)`` over ``frequencies`` (eV).
+
+    The frequency-domain hierarchy at the ground state's frozen potential, the
+    spectrum the real-time route of :func:`run_harmonic_orders` gives one
+    frequency at a time, with no time step and no start transient: each
+    frequency is nine iterative solves per band and k-point. ``nbnd`` is the
+    fixed-density solve's band count, ``3 nocc + 4`` by default, and every band
+    below its top four is held exactly by the hierarchy's projector, which is
+    what bounds the iteration count. The k-set and the little group of the field
+    are :func:`run_realtime`'s. For a smeared run the carried bands keep their
+    ground-state occupations, so there is no occupation response, as in the
+    real-time route.
+    """
+    from defumat.realtime.hierarchy import hierarchy_orders
+
+    frequencies = np.atleast_1d(np.asarray(frequencies, dtype=float))
+    unit = np.asarray(direction, dtype=float)
+    unit = unit / np.linalg.norm(unit)
+    kick = Kick(strength=1.0, direction=tuple(unit))
+    kset, rotations, _ = _kset(system, kick, kpoints, grid, little_group)
+    if nbnd is None:
+        nelec_guess = sum(pseudos[t].z_valence for t in system.structure.types)
+        nbnd = 3 * int(math.ceil(nelec_guess / 2)) + 4
+    calc, states, weights, v_scf, bands, energies = _solved_states(
+        system, pseudos, density, kset, nbnd=nbnd, conv_thr=conv_thr, k_batch=k_batch,
+        calculation=calculation)
+    computed = bands.shape[1] - 4
+    if computed <= weights.shape[1]:
+        raise ValueError(
+            f"nbnd = {bands.shape[1]} leaves no conduction band below the top four for the "
+            "hierarchy's projector; pass a larger nbnd")
+    out = hierarchy_orders(calc, bands[:, :computed], energies[:, :computed], weights, v_scf,
+                           omegas=frequencies * EV_TO_HA, eta=float(broadening) * EV_TO_HA,
+                           direction=unit, order=order, tolerance=tolerance,
+                           max_iterations=max_iterations, symmetrise=rotations)
+    return NonlinearSpectrum(frequencies=frequencies, broadening=float(broadening),
+                             direction=unit, components=out["components"],
+                             iterations=out["iterations"], residual=out["residual"],
+                             computed_bands=computed, volume=out["volume"])
