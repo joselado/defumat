@@ -87,7 +87,11 @@ class RadialTable(eqx.Module):
     #: ``(ncols,)``: which radial channel and which harmonic each column takes.
     beta_of: jnp.ndarray
     lm_of: jnp.ndarray
-    s_max: float = eqx.field(static=True)
+    #: The end of the range, bohr^-2, a scalar array rather than a static field:
+    #: the range follows the largest shift a pulse reaches, and a static one put
+    #: it in the program, so a second run of another amplitude recompiled the
+    #: whole step (four programs on two-atom silicon, found by counting).
+    s_max: jnp.ndarray
     lmax: int = eqx.field(static=True)
 
     def radial(self, s):
@@ -153,7 +157,8 @@ def radial_table(pseudos, volume: float, s_max: float, *, tolerance: float = 1e-
     lmax = max([0] + [p.lmax for p in datasets])
     if not beta_of:
         return RadialTable(coefficients=jnp.zeros((0, 1)), beta_of=jnp.zeros((0,), int),
-                           lm_of=jnp.zeros((0,), int), s_max=float(s_max), lmax=lmax)
+                           lm_of=jnp.zeros((0,), int), s_max=jnp.asarray(float(s_max)),
+                           lmax=lmax)
     n = start
     while True:
         nodes = np.cos(np.pi * (np.arange(n) + 0.5) / n)
@@ -171,7 +176,7 @@ def radial_table(pseudos, volume: float, s_max: float, *, tolerance: float = 1e-
         n *= 2
     return RadialTable(coefficients=jnp.asarray(coefficients),
                        beta_of=jnp.asarray(beta_of), lm_of=jnp.asarray(lm_of),
-                       s_max=float(s_max), lmax=lmax)
+                       s_max=jnp.asarray(float(s_max)), lmax=lmax)
 
 
 def max_error(table: RadialTable, pseudos, volume: float, samples: int = 257) -> float:

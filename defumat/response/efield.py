@@ -279,7 +279,9 @@ def dielectric_tensor(
             constant instead, which is not a physical improvement but is the
             only way to compare this solve with a sum-over-states response run
             in RPA (:mod:`defumat.tddft`): the two routes are identities of
-            each other only when their kernels match.
+            each other only when their kernels match. ``"none"`` is the
+            independent-particle response, the frozen potential of a
+            real-time propagation.
         threshold: the CG threshold of the linear solves. ``None``, the
             default, is ``ph.x``'s schedule (:func:`~defumat.response.
             sternheimer.pass_threshold`): ``1e-2`` on the first pass and
@@ -802,8 +804,20 @@ def _screening_kernel(calculation, density, screening: str):
     agreement of two routes -- so the referee needs this switch to be honest.
     The exchange-correlation term is dropped, not approximated: nothing else
     about the solve changes.
+
+    ``"none"`` screens with nothing, the independent-particle response with
+    every band, which is what a real-time propagation at the ground state's
+    frozen potential computes; the shift from it to ``"full"`` is then the
+    local fields and the kernel alone, the quantity a propagation with the
+    potential updated in time is compared against
+    (:mod:`defumat.realtime.selfconsistent`).
     """
     density = jnp.asarray(density)
+    if screening == "none":
+        def screen(drho):
+            return jnp.zeros_like(drho)
+
+        return screen
     if screening == "full":
         def screen(drho):
             _, dv = compiled_jvp(
@@ -815,7 +829,8 @@ def _screening_kernel(calculation, density, screening: str):
     if screening != "hartree":
         raise ValueError(
             f"unknown screening kernel {screening!r}: 'full' is Hartree plus "
-            "f_xc (dv_of_drho, the physical one) and 'hartree' is RPA"
+            "f_xc (dv_of_drho, the physical one), 'hartree' is RPA and 'none' "
+            "the independent-particle response"
         )
 
     gvectors = calculation.basis.dense

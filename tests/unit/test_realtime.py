@@ -282,6 +282,46 @@ def test_a_second_k_chunk_compiles_nothing(pseudo_dir):
     assert built[6] == built[7] == built[8], built
 
 
+@pytest.mark.slow
+def test_a_second_self_consistent_run_compiles_nothing(pseudo_dir):
+    """With the potential updated, a second run of another pulse compiles nothing.
+
+    The stacked chunks reach the kept block as arguments and the density and
+    the potential are closed over arrays of the run, so a second run with a
+    pulse of another amplitude on the same k-set reuses every program, which
+    the counter is validated against on the first run.
+    """
+    calculation, states, weights, v_scf = _silicon(pseudo_dir)
+    count = [0]
+
+    class Counter(logging.Handler):
+        def emit(self, record):
+            if "Finished XLA compilation" in record.getMessage() or \
+                    "Compiling" in record.getMessage():
+                count[0] += 1
+
+    handler = Counter()
+    logger = logging.getLogger("jax")
+    previous = logger.level
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+    jax.config.update("jax_log_compiles", True)
+    counts = []
+    try:
+        for intensity in (1e11, 2e11):
+            before = count[0]
+            propagate(calculation, states, weights, v_scf,
+                      Sin2.from_intensity(intensity, 1.55, 1), dt=0.2, block_steps=50,
+                      k_batch=2, potential="hxc")
+            counts.append(count[0] - before)
+    finally:
+        jax.config.update("jax_log_compiles", False)
+        logger.removeHandler(handler)
+        logger.setLevel(previous)
+    assert counts[0] > 0, "the counter saw the first run compile"
+    assert counts[1] == 0, counts
+
+
 def test_what_is_refused_is_refused_by_name(pseudo_dir):
     """An ultrasoft dataset, a collinear run and a wedge passed as the k-set."""
     from defumat.realtime.propagate import require_a_realtime_regime

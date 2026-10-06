@@ -277,6 +277,7 @@ def _block_function(run: _Run, step_fn, centre, corrector: int):
     and ``v_now`` where they are, which is how a block is padded.
     """
     density, potential_of, local_terms = run.density, run.potential, run.local_terms
+    centre = jnp.asarray(centre)  # a constant of the program, not a literal in it
 
     def block(parts, table, positions, w, carry, kmid, kend, steps):
         def body(state, x):

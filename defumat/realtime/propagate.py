@@ -477,8 +477,9 @@ def _prepare(calculation, states, weights, v_scf, kappa_max, dt, propagator,
     # The table runs in the dtype policy's real type: built in float64 from the
     # transform, it ran the recurrence in double precision inside a
     # single-precision step (found in review), which a card pays 1/70 for.
-    table = eqx.tree_at(lambda t: t.coefficients, table,
-                        table.coefficients.astype(cell.precision.real))
+    table = eqx.tree_at(lambda t: (t.coefficients, t.s_max), table,
+                        (table.coefficients.astype(cell.precision.real),
+                         table.s_max.astype(cell.precision.real)))
     effective_cutoff = max(0.0, radius - kappa_max) ** 2
 
     chunks = list(k_chunks(nk, _batch(calculation, k_batch)))
@@ -537,6 +538,11 @@ def _block_function(step_fn, centre):
     serves every chunk; only the propagator and the centre, the same for the
     whole run, are closed over.
     """
+    # an array rather than a float, so that it is a constant of the kept
+    # program and not a literal in it: a run from other states, or a second
+    # run, then reuses the program
+    centre = jnp.asarray(centre)
+
     def block(chunk, w, psi, kmid, kend, steps):
         def body(state, x):
             k_mid, k_end, step = x
