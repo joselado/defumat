@@ -27,8 +27,8 @@ steps a period) and 6.1e-5 at 1.5 eV (600 steps a period), 124.918 + 20.117i and
   an electron of charge -1 (``H(k + kappa)`` with ``kappa = A/c``, ``E = -dkappa/dt``,
   ``J = -(1/Omega) sum dH/dk``), and the sum over states carries no charge at all
   (``shg.py:658``, Elk's ``t0 = wkptnr/omega``), which is Hughes and Sipe's ``e^3`` set
-  to +1. So the real-time route's static ``chi_xyz`` is positive on this cell where
-  ``get_shg``'s is negative.
+  to +1. So below the gap (0.4 eV) the real-time route's ``chi_xyz`` is positive on
+  this cell where ``get_shg``'s is negative.
 * **With every band of the sphere the magnitudes differ by 5 to 9 per cent, and the
   difference is the projectors.** At 0.4, 0.7 and 1.5 eV it is 7.5, 6.8 and 5.0 per
   cent here, 8.3, 7.7 and 5.3 on 6x6x6 and 8.6, 8.2 and 5.9 on 8x8x8, so it is not the
