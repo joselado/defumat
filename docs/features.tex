@@ -5483,7 +5483,8 @@ and 45 bands. \code{method="resolvent"} is reachable and warns.
 \textbf{What a map holds is one k-point, the bands near the tip energy and a
 block of pixels}, so a large cell or a large image costs time rather than
 memory. A band whose on-shell amplitude is below $10^{-18}$ of the largest at
-every energy asked for is not sampled at all, which for a Gaussian delta is
+every energy asked for, among the spin channels the leads accept, is not
+sampled at all, which for a Gaussian delta is
 about nine broadenings away and for a Fermi--Dirac one about 84, meaning that
 what it would have added is below round-off of the map; a degenerate block is
 kept whole, and \code{t.notes["window"]} reports how many bands were sampled

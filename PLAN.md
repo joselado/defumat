@@ -13049,8 +13049,14 @@ asking for an image-sized `npoints` has to pass a number.
 floor is one k-point and a large cell sits there already, so the amplitudes still grew as
 `nbnd` times the pixel count, both of which grow with the area. Three changes, each exact to
 round-off. **The band window** (`_band_window`): a band is sampled only if its on-shell
-amplitude is above 1e-18 of the largest at some requested energy, over every channel, k-point
-and band, which is 9.1 broadenings for a Gaussian delta and 84 for a Fermi-Dirac one; a
+amplitude, times the square root of the weight its channel enters the map with, is above 1e-18
+of the largest such product at some requested energy, over every k-point and band of the
+channels the leads accept, which is 9.1 broadenings for a Gaussian delta and 84 for a
+Fermi-Dirac one. The channel weight is not decoration: measured against every channel, a down
+state on the energy pushed the tails of a `spin="up"` map below the threshold and the map read
+zero (`fdb0702`, with the test that caught it). A spin projector *inside* a spinor channel is
+still not seen, so with a fully polarized lead and only states of the rejected spin near the
+energy the map reads zero rather than tails below 1e-18 of the unpolarized one; a
 degenerate block is kept whole, by the one grouping rule `channel_basis` uses
 (`green.multiplets`), because the incoherent map rotates inside blocks; `S_k` and every
 diagnostic stay on all bands; `method = "resolvent"` keeps every band. **The pixel block**:
@@ -13064,7 +13070,7 @@ before the loop. *Measured* on a 3x3 graphene supercell re-solved at 120 bands o
 (2967 MB with the whole k axis in flight) to 2.76 s and 123 MB, the map unchanged to 6.3e-15
 of its maximum; the window alone is worth 67 s and the fold alone 72 s, because they cut the
 `nbnd^2` contraction and the per-pixel phase table respectively. `PERFORMANCE.md`, "The
-vertical transport's assembly". The guards are `tests/unit/test_transport_machinery.py` (eight,
+vertical transport's assembly". The guards are `tests/unit/test_transport_machinery.py` (nine,
 each shown to fail when its route is disabled) and two in `tests/regression/test_transport.py`.
 
 ### P67 — Running a calculation too large for one job: sizing, checkpointing, and a partial dynamical matrix. ✅ DONE.

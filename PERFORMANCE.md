@@ -10770,7 +10770,10 @@ in the session's scratchpad and the "before" arm is a worktree at `2af5f25`.
 
 Every map agrees with the old code's to **6.3e-15** of its maximum (5.9e-15 at 100x100), the
 incoherent map likewise, and the diagnostics (`channels`, the least eigenvalue of `S_k`, the
-off-diagonal weight) are identical, since `S_k` is still built on every band.
+off-diagonal weight) are identical, since `S_k` is still built on every band. The fourth,
+`band_edge_weight`, is not identical by construction: when the topmost multiplet lies outside the
+window it is now exactly 0.0, where the old code returned its tail, which is below round-off of
+the map.
 
 **What the old peak was** is the amplitudes, `npol k_chunk nbnd npoints` complex, and the
 contraction's three temporaries of one component beside them, which is why it grows with the image,
