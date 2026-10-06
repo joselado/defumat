@@ -128,7 +128,7 @@ def test_the_sum_over_states_is_the_velocity_gauge_when_the_hamiltonian_is_local
     ``chi_xyz`` reads -32.5294 - 48.5278i from the hierarchy and -32.5272 - 48.5266i
     as minus the conjugate of the sum over states, **4.3e-5** apart (2.2e-5 and
     2.5e-5 at 0.4 and 0.7 eV), against 5.0 to 8.6 per cent with the projectors in.
-    Measured 31 s for the mesh on two D22 cores.
+    Measured 46 s with its SCF on two D22 cores.
     """
     calculator, scf = _calculator(pseudo_dir, tmp_path, 8.0)
     system = eqx.tree_at(lambda s: s.kpoints, calculator.system,
@@ -186,7 +186,7 @@ def test_the_second_order_current_is_get_shg_up_to_its_conventions(pseudo_dir, t
     conjugate and 1.53 for the value itself. Every band of the sphere gives
     155.3600 + 122.4520i and 5.7 per cent, which is the projectors' term of the
     module docstring; the 23-band agreement is the truncation cancelling part of it.
-    Measured 380 s on two D22 cores, 1.8 GB resident for the file.
+    Measured 388 s on two D22 cores, 1.8 GiB resident for the file.
     """
     calculator, _ = _calculator(pseudo_dir, tmp_path, 8.0)
     frequency, broadening = 1.5, 0.3  # eV

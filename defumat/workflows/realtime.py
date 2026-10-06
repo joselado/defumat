@@ -377,6 +377,15 @@ def chi2_from_orders(orders: OrdersResult, axis=0):
     zincblende crystal ``chi_xyz`` itself in the ``x`` current of a field along
     ``[011]``, and two thirds of it along ``[111]``. Times
     :data:`~defumat.response.shg.CHI2_AU_TO_PM_PER_V` it is in pm/V.
+
+    **It is minus the conjugate of** :func:`~defumat.response.shg.second_harmonic`,
+    which evaluates at ``w - i eta`` and carries no charge, where this is the
+    response of an electron of charge -1 (``chi^(2)`` is odd in the charge).
+    Measured on AlAs, 1.9e-2 apart at 23 bands; with the projectors removed,
+    this formula on the dense hierarchy's ``J_(2,2)`` and every band of the sum
+    agree to 4.3e-5, and the 5 to 9 per cent left with them in is the curvature
+    of the projectors, which the sum over states does not carry
+    (``tests/regression/test_realtime_shg.py``).
     """
     shape = orders.shape
     z = shape.omega + 1j * shape.eta
