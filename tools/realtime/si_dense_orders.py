@@ -13,13 +13,16 @@ step. The current along ``x`` is the same at every member of a star, so the
 wedge sum is the mesh sum.
 
 Measured on D22 at 12 Ry, ``|chi_xxxx(3w)|`` in 1e-18 m^2/V^2 on 4^3, 6^3, 8^3,
-10^3, 12^3, 16^3, 20^3, 24^3: 1.69, 1.14, 1.08, 1.10, 1.02, 0.70, 0.66, 0.67 at
-``eta = 0.2`` eV and 2.03, 1.44, 1.57, 1.64, 1.77, 0.97, 0.95, 1.13 at 0.1 eV;
-``|chi_xxxx(w)|`` 8.28, 3.72, 1.82, 0.96, 0.62, 0.81, 0.94, 0.95 at 0.2 eV and
-9.76, 4.34, 1.94, 1.19, 0.70, 1.09, 1.36, 1.38 at 0.1 eV; ``chi^(1)`` 59.0,
-26.9, 18.2, 15.5, 14.7, 14.35, 14.31, 14.31 at 0.2 eV. So at 0.2 eV both
-components are converged in the mesh to a few per cent by 20^3 and the
-third harmonic at 0.1 eV is not (18 per cent from 20^3 to 24^3). At 16 Ry
+10^3, 12^3, 16^3, 20^3, 24^3, 28^3: 1.69, 1.14, 1.08, 1.10, 1.02, 0.70, 0.66,
+0.67, 0.65 at ``eta = 0.2`` eV and 2.03, 1.44, 1.57, 1.64, 1.77, 0.97, 0.95,
+1.13, 0.90 at 0.1 eV; ``|chi_xxxx(w)|`` 8.28, 3.72, 1.82, 0.96, 0.62, 0.81,
+0.94, 0.95, 0.93 at 0.2 eV and 9.76, 4.34, 1.94, 1.19, 0.70, 1.09, 1.36, 1.38,
+1.35 at 0.1 eV; ``chi^(1)`` 59.0, 26.9, 18.2, 15.5, 14.7, 14.35, 14.31, 14.31,
+14.30 at 0.2 eV. So at 0.2 eV both components are converged in the mesh to
+two per cent from 20^3 to 28^3, and at 0.1 eV the first-harmonic one is and
+the third harmonic oscillates by ten per cent about 1.0. The delays
+``arg(chi)/(m w)`` at 20^3 to 28^3 are 0.51 to 0.52 fs for ``chi(w)`` and 0.63
+to 0.64 fs for ``chi(3w)`` (modulo its 0.89 fs period) at 0.2 eV. At 16 Ry
 against 12 Ry, on 12^3: ``chi^(1)`` +4.3, ``|chi(w)|`` +8 and ``|chi(3w)|``
 +1 to +2 per cent. The propagation on 2^3 and 4^3 at 0.2 eV gives these
 numbers to 0.85 and 0.7 per cent in ``chi(3w)``, its start transient at
