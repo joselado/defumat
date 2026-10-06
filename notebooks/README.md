@@ -320,7 +320,9 @@ eight-cycle spectrum with the potential updated is quoted from an offline run, s
 alone would put the notebook past the ceiling. `51` reads **290 s** the same night, its first
 measurement, on four cores beside the same jobs: the AlAs spectrum at 31 frequencies, the
 sum over states at 60 bands and silicon at three frequencies; silicon's converged mesh is
-quoted from offline runs.
+quoted from offline runs. With the section on the linear response with local fields added
+(one self-consistent first order at two frequencies and two static dielectric constants) it
+re-executed in 158 s, its compiled programs in the cache, so the 290 s stays the bound.
 
 `48` reads **121 s** on 2026-09-27, its first measurement, unpinned through
 `tools/export_notebooks.sh`: one spiral SCF of the nickel-iodine chain and one

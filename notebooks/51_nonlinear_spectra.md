@@ -159,17 +159,48 @@ $10^{-18}$ m$^2$/V$^2$, against 1.3 and 2.2 from the published LDA calculation o
 arXiv:1810.06500, whose potential responds to the field where this one is the ground
 state's: the same scale, smaller by about two.
 
+
+## The linear response, with the potential responding
+
+At first order the potential can respond to the field as well. The field moves charge inside
+each cell, that charge has a Hartree and an exchange-correlation potential of its own, and the
+states then respond to the field and to that potential together: this is what local fields
+are, and their effect on the dielectric function is a shift, which at low frequency has to be
+the shift of the static dielectric constant.
+
+
+```python
+lf = silicon.get_nonlinear_spectrum([0.1, 2.0], broadening=0.1, order=1, potential="hxc")
+shift = lf.epsilon(0) - lf.epsilon(0, frozen=True)        # the local fields' shift of eps_xx
+static = {s: silicon.get_dielectric_tensor(screening=s, born_charges=False).epsilon[0, 0]
+          for s in ("none", "full")}
+print(f"shift at 0.1 eV: {shift[0].real:+.4f}   static: {static['full'] - static['none']:+.4f}")
+print(f"shift at 2.0 eV: {shift[1].real:+.4f} {shift[1].imag:+.4f}i")
+```
+
+    shift at 0.1 eV: -0.8834   static: -0.8833
+    shift at 2.0 eV: -1.5598 -0.1419i
+
+
+The local fields lower silicon's dielectric constant by about 0.88, 3.7 per cent of 23.8 on
+this mesh, and the steady state at 0.1 eV gives the shift the static response gives, which is
+a solve of a different kind that shares only the functional with it. At 2 eV the shift is
+larger and acquires an absorptive part. The shift and not the dielectric function itself is
+what is compared: on a coarse mesh each carries a term from coupling the field as a shift of
+crystal momentum that their difference does not.
+
 ## What it refuses
 
-The steady state is solved at the ground state's potential; with the potential responding to
-the field the induced potentials at $\omega$, $2\omega$ and $3\omega$ would each be a fixed
-point at every frequency, and that is refused by name (a laser pulse propagated in time has
-it, one frequency a run, notebook 50). It needs a norm-conserving pseudopotential and no
+The second and third orders are solved at the ground state's potential; with the potential
+responding to the field the induced potentials at $2\omega$ and $3\omega$ would each be a
+fixed point at every frequency, and that is refused by name (a laser pulse propagated in time
+has it, one frequency a run, notebook 50). It needs a norm-conserving pseudopotential and no
 spin, as the propagation does, and it refuses a solve that has not converged, since an
 unconverged first order is amplified into the second by one over the broadening.
 
 ---
 The checks behind this notebook are in `tests/regression/test_realtime_hierarchy.py`, where the
 iterative steady state is compared with a dense solve using every band of the sphere and
-with the propagation of a pulse at one frequency, and `tests/regression/test_realtime_shg.py`,
+with the propagation of a pulse at one frequency, and its first order with the potential
+responding with a dense self-consistent solve and with the static response, and `tests/regression/test_realtime_shg.py`,
 where the second harmonic is compared with the sum over states.
