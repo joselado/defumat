@@ -293,13 +293,22 @@ order of magnitude it is rather than as current to the second.
 | `16` | 18 | `40` | 34 | `30` | 232 | `20` | 282 |
 | `00` | 22 | `23` | 35 | `39` | 151 | `49` | 194 |
 | `07` | 22 | `32` | 84 | `41` | 110 |  |  |
-| `46` | 61 | `47` | 260 | `48` | 121 |  |  |
+| `46` | 61 | `47` | 260 | `48` | 121 | `50` | 373 |
 
 `32` and `33` read **84 s** and **401 s** on 2026-10-04, through
 `tools/export_notebooks.sh` on a machine carrying other work at a load of about 11, so
 both are upper bounds; the run before it, on the same kind of load, gave `33` 444 s. Both
 now converge their silicon control with symmetry kept and sum it over the whole mesh,
 and `33` runs AlAs at 23 bands.
+
+`50` reads **373 s** on 2026-10-06, its first measurement, unpinned through
+`tools/export_notebooks.sh` at a load of 1.2 when it started and 4.3 when it ended,
+so it is an upper bound: two propagations of eight cycles at 4414 steps each, over
+the 20 k-points the field's little group leaves of a 4x4x4 mesh, 196 s for silicon
+and 168 s for AlAs. A trial at a load of 3 to 7 took 386 s. The AlAs run along
+[100], the 8x8x8 mesh, the 20 Ry cutoff, the smaller step and the five intensities
+are quoted from offline runs rather than repeated, since any one of them would put
+the notebook near or past the ceiling.
 
 `48` reads **121 s** on 2026-09-27, its first measurement, unpinned through
 `tools/export_notebooks.sh`: one spiral SCF of the nickel-iodine chain and one
