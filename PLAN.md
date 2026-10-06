@@ -24382,12 +24382,14 @@ k-point, four bands, warm medians of 31 (`tools/realtime/step_cost.py`):
 | `vkb` and `|k+G+kappa|^2` rebuilt by the radial transform (`at_kcart`) | 0.79 ms | 3.21 ms |
 | the current through the transform | 2.14 ms | 8.51 ms |
 | one Taylor step through the transform | 1.43 ms | 7.46 ms |
+| the same three through the table of `g_l(q^2)` (below) | 0.048, 0.10, 0.69 ms | 0.12, 0.25, 4.47 ms |
 
 So three quarters of a step was the projectors, and they are built from a Chebyshev series of
 `g_l(s)` in `s = q^2` on `[0, s_max]` instead (`realtime/radial.py`): 32 terms, within 1.1e-13,
 1.4e-13, 4.0e-14 and 7.2e-14 of the transform for `Si.pz-vbc`, `C.pz-rrkjus`, Pt PAW and
-`As.pz-bhs`, `vkb` to 7.8e-15 and the current to 1.7e-13 relative; on this workstation the
-rebuild fell from 2.4 to 0.25 ms and the current from 4.4 to 0.27. The column is
+`As.pz-bhs`, `vkb` to 7.8e-15 and the current to 1.7e-13 relative; on D22 the rebuild fell 17x
+and 27x and the current 21x and 34x (the last row), and a step with its current from 3.58 to 0.79 ms
+at 12 Ry and 15.9 to 4.72 at 30, where the four applications are now 4.2 of the step's 4.5 ms. The column is
 `S_lm(q) g_l(|q|^2)`, a polynomial in the components of `q`, so it has no guard to lose at
 `k + G + kappa = 0`, where a pulse passes once per zero crossing. It is the real-time route's
 projector only: the ground state keeps the transform. The frozen sphere's own error, the
@@ -24446,7 +24448,23 @@ the peaks agree to 0.1 per cent up to the 21st. `J[E] + J[-E]` is 1.5e-8 of `max
 silicon wedge, so silicon's residual even orders are the finite pulse. 373 s through
 `tools/export_notebooks.sh`.
 
-**The comparison against Elk**: [ELK].
+**The comparison against Elk**, on its own `Si-dielectric` example at scissor 0 (the 8x8x8 grid's
+100-point wedge, 4000 steps of 0.2, `A = 0.1` from `t = 0`; `tests/data/elk/si_rt/`), both currents
+through the same transcription of Elk's task 481 (`tools/realtime/elk_tdrt.py`, which rebuilds
+Elk's printed `EPSILON_TDRT_11` from its `JTOT_TD` to 6.1e-9): the static `eps_xx` is **15.11** here
+against Elk's independent-particle task 121 at **15.19**, and Elk's own real-time route gives
+**-4.13** at `w -> 0`, the low-frequency failure of a velocity-gauge propagation in a truncated band
+basis that the plan chose the full sphere to avoid (arXiv:1710.01300), shown on Elk's example. The
+`Im eps` peaks are 3.57 and 3.67 eV here, 3.50 and 3.64 in Elk's real-time file, 3.47 and 3.64 in
+its task 121; the height 65.0 against 62.6. The currents themselves correlate at 0.88 with their
+constant parts removed and differ by 24 per cent of the oscillation at most: Elk updates the
+potential (local fields and the ALDA, `tddft.f90`), propagates in 25 LAPW bands, and its diamagnetic
+term counts 6.54 of the 8 electrons (its static charge is 21.46 of 28), where this one counts all
+eight through `d^2H/dk^2`; at `t = 0` the two read -2.05e-5 and -1.76e-5. Elk's sign of the coupling
+is opposite (`genhmlt.f90`'s `-(1/c) A.p`, `H(k - A/c)`), which leaves the linear current alike.
+**Elk's `Si-ramp` was not compared**: its vector potential reaches `kappa = 1.82` 1/bohr, past half a
+reciprocal vector, where the frozen sphere's cutoff along the field is 13.4 Ry of 30 and needs the
+re-centring listed as outstanding.
 
 **The ultrasoft refusal's number.** Shifting the projectors alone to the published silicon
 pulse's peak, `kappa = 0.11` 1/bohr, moves `<psi|S|psi>` of ultrasoft silicon (`si2-us.in`) by up
@@ -24455,7 +24473,11 @@ to 1.6e-3 at a general k-point and 1.7e-4 at Gamma, where the first-order term
 the size of the anti-Hermitian half of the missing `P_kappa`; the Hermitian half leaves the norm
 alone and has no number yet.
 
-**Timing against Elk**: [TIMING].
+**Timing against Elk**, the same run, one D22 core each from a converged ground state: Elk's
+tasks 450 and 460 **1300 s**, defumat **486 s** (1.7 s of fixed-density solve on the wedge, 485 s of
+propagation, 1.21 ms per k-point and step at 16 Ry), 2.7x, with the work that is not shared stated in
+`PERFORMANCE.md` (Elk updates its potential at every step and diagonalises in a band basis; this
+applies `H` on the full sphere at a frozen one).
 
 **The review of the code** (a subagent, after the driver and before the record) demonstrated twelve
 findings with a number each, all fixed in `44cb3d0`: the checkpoint's signature was the grid and the
