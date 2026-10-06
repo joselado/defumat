@@ -10804,3 +10804,62 @@ through the facade**: `threaded_calculation` replaces a `k_batch` passed with `c
 calculation's own, so `get_vertical_transport(k_batch=None)` and `k_batch=2` both handed `_assemble`
 1 on `h-sheet.in` here, and on a card in speed mode the chunk was the whole axis whatever was asked
 (read off `memory_preset`, not measured). The assembly no longer reads it.
+
+## Real-time propagation against Elk's: one core each, and where a step goes (D22, 2026-10-06)
+
+**The pair.** Elk's `examples/TDDFT-time-evolution/Si-dielectric` at scissor 0 (a constant
+`A = 0.1` along x from `t = 0`, 4000 steps of 0.2 Hartree a.u., the 8x8x8 grid, 100 points of the
+field's wedge), against `tools/realtime/time_realtime.py` on `tests/data/elk/si_rt/si-dielectric.in`
+(the same lattice, the LDA, the same grid and the same 100-point wedge of eight operations,
+`Si.pz-vbc` at 16 Ry), both from a converged ground state, both on D22's core 0 with its SMT sibling
+idle, `OMP_NUM_THREADS=1`, nothing else running but the virus scanner (`ps` before and after),
+`tools/realtime/time_against_elk.sh`:
+
+| | Elk 11.0.2, tasks 450 and 460 | defumat, `get_realtime` |
+|---|---|---|
+| wall clock | **1300 s** | **486 s** (the fixed-density solve on the wedge 1.7 s, the propagation 485 s) |
+| per k-point and step | 3.3 ms | 1.21 ms |
+
+**Not the same work, and in both directions.** Elk rebuilds the density and the Kohn-Sham potential
+at every step (`tddft.f90` calls `rhomag` and `potkst`), so its propagation has local fields and the
+ALDA where this one holds the ground state's potential; and it propagates in 25 ground-state bands
+of an LAPW basis, building `H(t)` in that basis and diagonalising it each step, where this applies
+the Hamiltonian on the whole plane-wave sphere to the four occupied states. The two answers agree
+where they should (the static dielectric constant 15.11 here against Elk's independent-particle
+task 121 at 15.19, `PLAN.md` P134), so the 2.7x is a statement about these two algorithms on this
+cell and not about one doing less physics than it reports. defumat's run was the second call of the
+process (a short run compiled every program first); Elk's includes reading its ground state and
+setting up the 100 points (task 450 writes the vector potential).
+
+**Where a step goes, and what the radial table bought.** One D22 core, two-atom silicon, one
+k-point, the four occupied bands, warm medians of 31 (`tools/realtime/step_cost.py`):
+
+| | 12 Ry (`npwx` 180) | 30 Ry (`npwx` 736) |
+|---|---|---|
+| one Hamiltonian application on four bands | 0.17 ms | 1.05 ms |
+| `vkb` and `|k+G+kappa|^2` by the radial transform (`at_kcart`) / by the table | 0.80 / **0.048** ms | 3.21 / **0.12** ms |
+| the current, `jax.grad` of the band energy in `kappa`, through each | 2.15 / **0.10** ms | 8.48 / **0.25** ms |
+| one Taylor step (rebuild and four applications), through each | 1.43 / **0.69** ms | 7.45 / **4.47** ms |
+| a step and its current, through each | 3.58 / **0.79** ms | 15.9 / **4.72** ms |
+
+So a step at 30 Ry is now its four Hamiltonian applications (4.2 of 4.5 ms), which is the transform
+floor every other part of the code shares, and the projectors at `k + kappa` cost 3 per cent of it.
+The table is 32 Chebyshev terms per radial channel, within 1e-13 of the transform, `vkb` to 7.8e-15
+and the current to 1.7e-13 relative.
+
+**Memory.** The resident set is the states, `16 nk nbnd npwx` bytes in host memory for the whole
+mesh (`2^n` times that at order `n` of the perturbative orders), and one k-chunk is on the device at
+a time: the Taylor terms (`5 x 16 nk_chunk nbnd npwx`), `vkb` for the chunk and the FFT boxes. The
+two transforms of a current into a spectrum hold a block of 32 frequencies at a time; built whole
+they took 1.6 GB (`conductivity_from_kick` at 59867 steps and 400 frequencies) and 3.6 GB
+(`harmonic_spectrum` at 28501 steps and 4000 frequencies) of host memory.
+
+**On the card** (RTX A2000, float64 at 1/70 of float32): two-atom silicon at 12 Ry on the whole
+2x2x2 grid, a two-cycle pulse of 2207 steps, the second call 3.1 s against 14.9 s on two CPU threads,
+the current 8.9e-11 apart on a scale of 3.4e-3 (the two ground-state solves differ at their
+threshold). Not a claim about a data-centre card.
+
+**The third order** (P135): 18 to 25 ms per k-point and step on one D22 thread for silicon at 12 Ry
+against 5.4 ms at first order, eight copies of each state in nested forward mode; the dense
+frequency-domain hierarchy is 0.35 to 0.9 s a k-point at 169 plane waves, two orders cheaper there
+and `npw^3` in the cutoff.
