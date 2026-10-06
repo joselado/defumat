@@ -230,7 +230,7 @@ in `docs/features.tex`'s amber boxes.
   is the bare vector the right-hand side was built from plus the converged `dV_scf`, so
   nothing new is differentiated. Refused: a metal at `q = 0` (`ef_shift`), ultrasoft/PAW,
   spin, and the zone sum (`alpha^2 F`, `T_c`).
-- **Real-time propagation, high harmonics and the third harmonic** (P134 to P137,
+- **Real-time propagation, high harmonics and the third harmonic** (P134 to P138,
   `defumat/realtime/`, `workflows/realtime.py`): the occupied states under
   `H(k + kappa(t))`, `kappa = A/c`, on the sphere built for `k`, at the ground state's
   potential. Four rules bind it. **The current is `jax.grad` in `kappa` of the kinetic and
@@ -251,7 +251,9 @@ in `docs/features.tex`'s amber boxes.
   averages the response away. **The spectrum of the orders** (P137, `realtime/hierarchy.py`,
   `get_nonlinear_spectrum`) is the steady state solved at each frequency: the computed bands
   exactly through a projector, the rest by BiCGStab, and a solve that reaches its budget is
-  refused rather than used, since `1/(2 eta)` amplifies it. Refused: ultrasoft/PAW
+  refused rather than used, since `1/(2 eta)` amplifies it; at first order the induced potential
+  can be in it (P138, `potential = 'hxc'`, the outer fixed point a GMRES, never the static
+  response's mixing, which diverges at a resonance). Refused: ultrasoft/PAW
   (`P_kappa`), `nspin = 2`, spinors, DFT+U.
 - **Converging a cell with vacuum** (P129, `mixing_mode = 'ldos'`): Herbst and Levitt's
   preconditioner, screening built from the LDOS at `e_F` out of the density's own pass. Two

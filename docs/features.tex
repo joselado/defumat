@@ -4490,10 +4490,48 @@ for two frequencies against the propagation's minutes for one.
 BiCGStab iterations of two Hamiltonian applications, so a few hundred
 applications per band and k-point where the propagation pays tens of thousands;
 the current's assembly needs no transform and is a few per cent of a call. The
-k-points are independent and are walked one at a time, each frequency starting
-from the previous one's solutions, and what is resident per k-point is the nine
+k-points are independent and are solved in chunks of \code{k\_batch} (one on a
+CPU, one \code{vmap} over a chunk on a card), each frequency starting from the
+previous one's solutions, and what is resident per k-point is the nine
 components, BiCGStab's six vectors for the largest order and the computed bands,
 \code{(10 + 24) nocc + nb} vectors of \code{npwx}.
+
+\textbf{At first order the potential can respond too.} With
+\code{potential="hartree"} or \code{"hxc"} and \code{order=1}, the right-hand side
+gains the induced potential, $\delta v_+ c_0$ at $+\omega$ and $\delta v_+^* c_0$ at
+$-\omega$, with $\delta v_+ = K\,\delta\rho_+$,
+$\delta\rho_+ = \sum w\,(c_0^* c_+ + c_-^* c_0)$ and $K$ the Hartree kernel or the
+derivative of the whole potential at the states' own density, the propagation's
+update of the previous subsection linearised. The fixed point in $\delta v_+$ is a
+GMRES solve, each of whose products is one pass over every k-point; the mixing
+the static response uses (\code{ph.x}'s, history four) took 200 passes and
+diverged on an interband transition with the Hartree kernel where GMRES took 28.
+The result's \code{epsilon(axis)} is $1 + 8\pi J_{(1,1)}/z^2$ and
+\code{epsilon(axis, frozen=True)} the same run's at the ground state's potential,
+and on a coarse mesh the two differ from the converged $\epsilon_M$ by the same
+band-curvature term, which their difference does not carry.
+
+\begin{pycode}
+lf = calc.get_nonlinear_spectrum([0.1, 2.0], broadening=0.1, order=1, potential="hxc")
+print(lf.epsilon(0) - lf.epsilon(0, frozen=True))   # the local fields' shift of eps_xx
+\end{pycode}
+
+Against the dense self-consistent solve on AlAs at 4~Ry, at the three
+frequencies of the frozen check, it agrees to $9\times10^{-12}$ to
+$5\times10^{-11}$ in 9 to 12 products, where the induced potential moves the
+current by 2 to 12 per cent with the Hartree kernel and 0.08 to 2 per cent with
+the exchange-correlation one. Against the static response of the Sternheimer
+stack, which shares only the functional's derivative, on two-atom silicon's
+$4^3$ mesh at $\omega = 0.1$~eV and $\eta = 0.1$~eV: the shifts are $-2.119995$ and
+$-0.883446$ against $-2.120012$ and $-0.883444$, $8\times10^{-6}$ and
+$2\times10^{-6}$, which is also the check that the induced density of the field's
+wedge is completed with the right group. And against the propagation with the
+potential updated, from kicks without the static subtraction (so that the
+band-curvature term is the same in both and cancels in the shift), on the same
+mesh at 1, 2 and 3~eV and $\eta = 0.5$~eV: the frozen $\epsilon$ agree to
+$6\times10^{-7}$ to $1\times10^{-6}$ and the shifts to $5\times10^{-4}$ of the shift,
+$10^{-5}$ of $\epsilon$, which is the propagation's second-order step at
+$\Delta t = 0.2$.
 
 \subsection{The potential updated in time: local fields and the adiabatic kernel}
 
@@ -4647,10 +4685,13 @@ checkpoint}, since every state and two potentials would have to be saved. The
 frequency-domain hierarchy refuses \textbf{a component whose solve does not
 converge} (\code{HierarchyError}, with its residual and count, since an
 unconverged first order is amplified by $1/(2\eta)$ into the second),
-\textbf{the potential updated in time} (the induced potentials at $\omega$,
-$2\omega$ and $3\omega$ would each be a fixed point at every frequency; the
-propagation has it at one frequency a run), \textbf{an order above three}, and an
-\code{nbnd} that leaves no conduction band below the top four.
+\textbf{the potential updated in time above first order} (the induced potentials
+at $2\omega$ and $3\omega$ would each be a fixed point at every frequency, and they
+would carry the second-order density artefact, 7 per cent of $\rho$ on a $2^3$
+mesh; the propagation has them at one frequency a run), \textbf{two FFT grids}
+with the potential updated, \textbf{an outer solve that does not converge},
+\textbf{an order above three}, and an \code{nbnd} that leaves no conduction band
+below the top four.
 \end{refuses}
 
 % =====================================================================

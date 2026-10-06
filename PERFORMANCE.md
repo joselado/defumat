@@ -10917,3 +10917,11 @@ its 4x4x4 mesh's 20 points at 8 Ry, 3.76 s on the card walking one k-point at a 
 the CPU, and **2.73 s** once the k-points of a chunk are one `vmap` (`k_batch`), `chi_xyz` equal to
 1e-10 on both, the solver's tolerance. The card runs double precision at 1/70 of single, so these say
 the routes run there unchanged and not what a data-centre card would do.
+
+**The first order with the induced potential (P138)** costs ten to thirty frozen first orders a
+frequency, one per outer GMRES product: on two-atom silicon's 18-point wedge at 12 Ry, 28 s and 16 s
+for two frequencies with the Hartree and the full kernel (9 to 10 and 7 to 8 products, four of this
+workstation's efficiency cores beside other work). It is therefore not the cheap route to a whole
+linear spectrum, where one kick with the potential updated gives every frequency (1085 s on Elk's
+100-point wedge, above); it is the route to `eps_M` with every band at a handful of frequencies and at
+the low-frequency end, where a finite kick divides its last oscillation by `w^2`.

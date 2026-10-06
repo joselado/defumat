@@ -210,8 +210,9 @@ because that is what decides whether it is a session or a phase.
   `<psi|S|psi>` by 1.6e-3), `nspin = 2` and spinors (a linear reference first), DFT+U (the Hubbard
   projectors' own row at `k + G = 0`, `OPEN.md`), re-centring the sphere for a `kappa` past half a
   reciprocal vector, a checkpoint of a self-consistent run, and **the self-consistent
-  frequency-domain hierarchy** (the induced potentials at `w`, `2w` and `3w`, each a fixed point at
-  every frequency). And `get_shg`'s missing curvature of the projectors, 5 to 9 per cent on AlAs
+  frequency-domain hierarchy above first order** (P138 has the first: the induced potentials at `2w`
+  and `3w`, each a fixed point at every frequency, and the velocity gauge's second-order density
+  artefact, 7 per cent of `rho` on 2^3, which no affordable mesh converges away). And `get_shg`'s missing curvature of the projectors, 5 to 9 per cent on AlAs
   (`OPEN.md`), which `get_nonlinear_spectrum(order=2)` carries.
 - **The electron-phonon coupling summed over the zone** (P132 has it at one `q`):
   `ph.x`'s `'interpolated'` route, which needs the dense-grid band structure (`la2F`), the
@@ -24836,3 +24837,74 @@ occupation response, as the real-time route does.
 
 **What is outstanding**: the self-consistent hierarchy; the shifted Lanczos for the whole linear
 spectrum from one sequence per band; batching k on a card.
+
+### P138 -- The first order of the frequency-domain hierarchy with the induced potential: `eps_M(w)` with local fields and the adiabatic kernel, band-complete, from the steady state. ✅ DONE for norm-conserving `nspin = 1` on one FFT grid, 2026-10-07, as an identity against a dense self-consistent solve and against the static Sternheimer stack; the second and third orders with the potential updated are refused.
+
+The first item of `HARMONICS-NEXT.md`'s "What is left for later" (the self-consistent hierarchy),
+scoped to first order by a fable review the night's decisions were delegated to, which measured the
+outer solver and set a stop condition (the dense identity green by 03:30, else the slow real-time
+files instead); it was green at 01:00.
+
+**The route** (`realtime/hierarchy.py:hierarchy_linear_self_consistent`,
+`get_nonlinear_spectrum(order=1, potential='hartree' | 'hxc')`). P137's first order with the induced
+potential in the right-hand side, `dv_+ c0` at `+w` and `conj(dv_+) c0` at `-w`, `dv_+ = K drho_+`,
+`drho_+ = sum w (conj(u0) u_+ + u0 conj(u_-))`, `K` the Hartree kernel or the `jvp` of the potential
+at the states' own density (P136's difference form linearised), applied to the real and imaginary
+parts apart because the kernel's `jvp` takes a real tangent. **The outer fixed point is GMRES** on
+`(Re, Im)` of `dv_+` with the previous frequency's `dv` as its start; each product is one pass over
+every k-point with the inner BiCGStab from a zero start at a fixed tolerance, since a scheduled or
+warm inner solve changes the operator between Krylov steps. The review measured it against the static
+response's mixing on two-atom silicon at 6 Ry, outer residual 1e-8:
+
+| | GMRES products | Anderson, history 4 (`ph.x`'s) | Anderson 8 | linear 0.7 | `|K chi0|` |
+|---|---|---|---|---|---|
+| 1 eV, hartree / hxc | 12 / 10 | 14 / 12 | 12 / 11 | 38 / 19 | 1.39 / 0.72 |
+| on a transition (3.148 eV), hartree | 28 | 200, diverging | 161 | diverges | 4.44 |
+| on a transition, hxc | 18 | 33 | 23 | diverges | 1.38 |
+| 4 eV, hartree / hxc | 21 / 14 | 43 / 16 | 27 / 15 | diverges / 24 | 2.27 / 0.86 |
+
+so the static response's loop, built for an imaginary frequency in `solve_e_fpol`, fails at a real
+resonance with the Hartree kernel and GMRES is indifferent to the map's norm. **Two traps the review
+named, both handled**: `scf/driver.py:_symmetrize` keeps the real part of what it is given, so a
+complex `drho_+` symmetrised as one channel loses its absorptive half while its real half looks
+right; the real and imaginary parts go through it as two channels. And `dv_+(G = 0)` is set to zero:
+the Hartree kernel has none and the uniform part of the exchange-correlation one is a global phase,
+exact in the band sum and round-off-amplified at the static limit.
+
+**The numbers.**
+
+1. **Against the dense self-consistent solve** (`dense_first_order`, every band of each sphere,
+   GMRES on the same equation), AlAs at 4 Ry, Gamma and `(0.25, 0.1, -0.05)`, `eta = 0.01` Ha:
+   **9e-12 to 5e-11** at 0.02, 0.05 and 0.11 Ha with either kernel, in 9 to 12 outer products, the
+   same run's frozen current 2e-13 to 5e-13, while the induced potential moves `J_(1,1)` by 2.1, 3.5
+   and 11.5 per cent (Hartree) and 0.08, 0.35 and 2.1 per cent (Hartree and exchange-correlation).
+2. **The static limit against the Sternheimer stack**, band-complete and sharing only the
+   functional's derivative, on two-atom silicon's 4x4x4 mesh and its [100] wedge, so the induced
+   density is completed by the field's eight operations: at `w = 0.1` eV and `eta = 0.1` eV the
+   shift `eps - eps_frozen` is **-2.119995 - 0.0054i** (Hartree) and **-0.883446 - 0.0018i**
+   (Hartree and exchange-correlation) against `screening = 'hartree'` and `'full'` minus `'none'`,
+   -2.120012 and -0.883444: **8e-6 and 2e-6**. The propagation's first order reached 2.6 and 2.0
+   per cent at 0.5 eV (P136), where `|z|^2` over the gap squared is the limit.
+3. **Against the propagation with the potential updated** (P136), on the same mesh at 1, 2 and 3 eV
+   and `eta = 0.5` eV, from the exact first order of a kick **without** the static subtraction, so
+   that the band-curvature term is the same in both routes and cancels in the shift: the frozen
+   `eps` agree to 6e-7 to 1e-6 (both carry the curvature term: 48.43 + 2.58i at 2 eV), and the
+   shifts, -0.944 - 0.106i, -1.252 - 0.477i and -1.177 - 1.058i, to **5.6e-4, 4.9e-4 and 5.2e-4** of
+   themselves, 1e-5 of `eps`, which is the propagation's second-order step at `dt = 0.2` with the
+   corrector (P136). With the subtraction the kick's shift is 1.4 to 3.6 per cent off, the
+   subtraction's own error, which divides the run's last oscillation by `w^2` and differs between
+   the two potentials.
+
+**What it costs.** Each outer product is a pass of two solves per band and k-point, so a frequency is
+about ten to thirty frozen first orders: on silicon's 18-point wedge at 12 Ry, 28 s and 16 s for two
+frequencies with the Hartree and the full kernel (9 to 10 and 7 to 8 products). The review's estimate
+for Elk's 100-point wedge is about 100 s a frequency, so a spectrum of a hundred frequencies is about
+three hours against the kick's 1085 s for the whole axis (P136): this route buys `eps_M` with every
+band and no transient at the low-frequency end, where the kick divides the last oscillation by
+`w^2`, at the static limit at complex `z`, and at a handful of frequencies, and not a cheaper spectrum.
+
+**Refused**, by name: the potential updated above first order (the induced potentials at `2w` and
+`3w`, and the second-order density artefact of P136, 7 per cent of `rho` on 2^3, falling by about
+three a mesh step, so no affordable mesh validates them), two FFT grids (the induced potential would
+cross from the dense grid to the smooth one at every product, which nothing checks yet), an outer
+solve that does not reach its tolerance (`HierarchyError`), and a meta-GGA kernel.

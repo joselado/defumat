@@ -18,8 +18,11 @@ A plan written on 2026-10-06 for the session that implements it.
 > (2026-10-07): the computed bands held exactly by a projector and the rest of the sphere by
 > a right-preconditioned BiCGStab, both chosen by a review that measured the candidates
 > (QE's GMRES(4) of `solve_e_fpol.f90` took about a thousand products above the gap where
-> this takes 40 to 50). What is left is the self-consistent hierarchy and the list "What is
-> left for later". The rest of this file is the plan as written.
+> this takes 40 to 50). The self-consistent hierarchy at first order is P138, `eps_M(w)` with
+> local fields band-complete, the static shift equal to the Sternheimer stack's to 8e-6; above
+> first order it is refused, since the second-order density artefact is 7 per cent of `rho` on a
+> 2x2x2 mesh. What is left is the list "What is left for later". The rest of this file is the
+> plan as written.
 
 When written, nothing below was implemented: the package had no real-time propagation, no
 $\chi^{(3)}$ and no entry point for either, and `README.md` listed real-time propagation
