@@ -60,6 +60,19 @@ second route beside it.
 | Transverse spin susceptibility `chi^{+-}(q, w)` and magnons | 330/331 (`tddftsplr.f90`) | P63 |
 | Scanning-tunnelling microscopy images, including spin-polarized | 162 (`wfplot.f90`) | P65 |
 | Tunnelling spectra, `dI/dV` over an energy axis | none -- 162 is one delta at one energy | P90 |
+| Real-time propagation under a laser pulse, the current `J(t)`, the dielectric function from a kick | 460 to 463 (`tddft.f90`, `timestep.f90`), 480/481 (`dielectric_tdrt.f90`) | P134 |
+| The high-harmonic spectrum | none -- 460 writes `JTOT_TD.OUT`, the `GaAs-HHG` example reads it by hand | P134 |
+
+**The real-time rows were added 2026-10-06 (P134) and take Elk's protocol, not its
+algorithm.** Elk expands the time-dependent states in `nstsv` ground-state bands of
+each k-point and adds the field as `-(1/c) A.p`, which is exact for an LAPW
+potential and is an approximation in the field on top of a truncation in the bands
+for a nonlocal pseudopotential, whose projector at `k + G + kappa` is not linear in
+`kappa`. What is taken is the pulse shapes of `genafieldt.f90`, the little group of
+the field of `tdinit.f90`, the polar-vector average of the current of
+`timestep.f90`, and task 481's dielectric function from a kick; the propagation is
+the occupied states on the full plane-wave sphere under `H(k + kappa(t))`
+(`HARMONICS-NEXT.md`). Elk has no `chi^(3)`.
 
 **The second-harmonic row was in the *rejected* table until P54 and was wrong
 there**, which is worth recording because the reasoning that put it there is

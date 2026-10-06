@@ -318,6 +318,17 @@ reach of 2n+1 with first-order wavefunctions; it needs `dpsi^(2)`, i.e. differen
 through the linear solve. That is the same object route (a) of §4.1 builds, so if that
 route is taken, `chi^(3)` becomes reachable rather than impossible.
 
+> **Corrected 2026-10-06 (P135).** That is a statement about the **Sternheimer stack**,
+> the same qualification P53 added for the shift current. `chi^(3)` is reached without a
+> second-order wavefunction by the real-time route: the occupied states are propagated
+> under `H(k + lam a(t))` with the adiabatic envelope `exp(eta t) cos(w t)`, and the
+> third order of the current is a third nested `jvp` of the propagation in `lam`
+> (`defumat/realtime/orders.py`), checked against a dense frequency-domain hierarchy to
+> 1.4e-5 to 3.0e-5 on all five components through third order (`HARMONICS-NEXT.md`).
+> What that route does not give is a spectrum, one frequency costing one run; the
+> spectrum is the frequency-domain hierarchy, which needs the complex shifted solver of
+> §7 and is still not here.
+
 **The geometric family — and it is the best fit for this codebase.** Shift current and
 the bulk photovoltaic effect, the Berry-curvature dipole and the non-linear Hall effect
 are second-order responses governed by quantum geometry rather than by a self-consistent

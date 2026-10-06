@@ -662,6 +662,8 @@ note, the routine or task in the other code's source, is in
 | **Optical conductivity**, the Kerr angle and the anomalous Hall conductivity | `calc.get_optical_conductivity()` | (✓)¹² | ✓ |
 | **Shift current** | `calc.get_shift_current()` | ¹³ | |
 | **Second-harmonic generation** | `calc.get_shg()` | (✓)¹⁴ | ✓ |
+| **Real-time response to a laser pulse**: the current in time, the dielectric function from a kick, the high-harmonic spectrum | `calc.get_realtime(pulse)`, `calc.get_realtime_dielectric()`, `calc.get_hhg(pulse)` | | (✓)¹⁹ |
+| **Third-harmonic susceptibility** $\chi^{(3)}$, and the perturbative orders of the current | `calc.get_third_harmonic(frequency)`, `calc.get_harmonic_orders(frequency)` | | |
 | **Berry curvature and Chern numbers** | `calc.get_chern()` | | |
 | **$\mathbb{Z}_2$ invariants** in 2D and 3D | `calc.get_z2()` | | |
 | **Berry-phase polarization** | `calc.get_polarization()` | ✓ | ✓ |
@@ -726,6 +728,11 @@ Where a tick is qualified, in one sentence each; the routines behind them are in
   $\delta(\omega_{\mathbf q\nu} + \varepsilon_{n\mathbf k} - \varepsilon_{m\mathbf k+\mathbf q})$,
   where `ph.x` and this code put both states at $E_F$, so the two linewidths
   are not the same sum.
+- ¹⁹ Elk propagates in time (tasks 460 to 463) and transforms the current to a
+  dielectric function (tasks 480 and 481), with the field coupled linearly in a
+  basis of ground-state bands; it writes the current a harmonic spectrum is read
+  from, and no task reads the harmonics off. `TDDFPT` in Quantum ESPRESSO is
+  the Liouville-Lanczos route to a linear spectrum and propagates nothing.
 
 The variants under each row, which smearing or tetrahedron method fixes the
 occupations, which projectors DFT+U uses, which constraint scheme holds a
@@ -779,7 +786,9 @@ to features, so a run that starts is one whose physics is all there, and the
 refusals of each quantity are the refusal notes of the guide.
 
 **Not yet:** a phonon dispersion (one wavevector works; the star of $\mathbf q$
-and the Fourier interpolation do not), exact exchange, real-time propagation.
+and the Fourier interpolation do not), exact exchange, and a real-time
+propagation that updates the potential in time (the propagation here holds the
+ground state's potential, which is the independent-particle response).
 
 **Substituted with a warning rather than refused:** `K_POINTS gamma` stores one
 plane wave of each $(\mathbf G, -\mathbf G)$ pair, which halves every array a

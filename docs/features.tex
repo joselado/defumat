@@ -4041,6 +4041,279 @@ which is why the snippet asks for 23.
 \end{refuses}
 
 % =====================================================================
+\section{Real-time propagation: the current under a pulse, high harmonics and the third harmonic}
+
+What does a crystal do when an intense laser pulse goes through it? The
+simplest way to find out is to let the occupied Kohn-Sham states evolve in time
+under the field and read off the current they carry, which is what this section
+does, and two quantities come out of the same engine: the high-harmonic
+spectrum, which is a non-perturbative response and can only come from a
+propagation, and the third-harmonic susceptibility, which is the weak-field
+limit of the lowest odd harmonic above the fundamental and comes out as a
+derivative of the propagation with respect to the field strength.
+
+We take a uniform field $\mathbf E(t)$ in the velocity gauge, a vector potential
+with $\mathbf E = -(1/c)\,\partial_t\mathbf A$, and carry it as the shift of
+crystal momentum it is,
+\begin{equation*}
+\boldsymbol\kappa(t) = \mathbf A(t)/c, \qquad
+\partial_t\boldsymbol\kappa = -\mathbf E(t),
+\end{equation*}
+in 1/bohr and Hartree atomic units of time. The periodic part of each occupied
+state then evolves as
+\begin{equation*}
+i\,\partial_t|u_{n\mathbf k}(t)\rangle
+ = H\big(\mathbf k+\boldsymbol\kappa(t)\big)\,|u_{n\mathbf k}(t)\rangle ,
+\end{equation*}
+meaning that the Hamiltonian at time $t$ is the ordinary Bloch Hamiltonian at a
+displaced k-point, on the plane-wave sphere built for $\mathbf k$ and never
+rebuilt. For a norm-conserving pseudopotential that is the whole coupling to
+the field: the kinetic energy becomes $|\mathbf k+\mathbf G+\boldsymbol\kappa|^2$
+and the projectors are evaluated at $\mathbf k+\mathbf G+\boldsymbol\kappa$, since
+the gauge factor $e^{-i\boldsymbol\kappa\cdot\mathbf R}$ cancels between the two
+projectors of one atom, so nothing is expanded in the field and no empty state
+is needed. The current is the derivative of the band energy with respect to
+$\boldsymbol\kappa$ at frozen states,
+\begin{equation*}
+\mathbf J(t) = -\frac{1}{\Omega}\sum_{n\mathbf k} w_{n\mathbf k}\,
+  \Big\langle u_{n\mathbf k}(t)\Big|\frac{\partial H}{\partial\mathbf k}
+  \Big|_{\mathbf k+\boldsymbol\kappa(t)}\Big|u_{n\mathbf k}(t)\Big\rangle ,
+\end{equation*}
+which already contains the diamagnetic current (the derivative of
+$|\mathbf k+\mathbf G+\boldsymbol\kappa|^2$) and the commutator of the position
+with the nonlocal potential (the derivative of the projectors), so nothing is
+added to it by hand: a code that adds $-(1/c)\mathbf A N$ to a current computed
+this way counts the diamagnetic term twice.
+
+\textbf{The potential is the ground state's and is held fixed}, which is the
+independent-particle response. It is what the published silicon calculation
+found sufficient for its conditions (arXiv:1609.09298, for one material, the
+LDA and one weak mid-infrared pulse), and it is what makes the k-points
+independent, so a chunk of them is propagated through the whole pulse at a
+time and the peak memory is one chunk whatever the mesh. The update of the
+potential in time is not here.
+
+\textbf{The step} is the fourth-order Taylor expansion of
+$\exp[-iH(t+\Delta t/2)\,\Delta t]$, four Hamiltonian applications, which is
+stable for $|\Delta t\,\rho| \le 2\sqrt2$ with $\rho$ the spectral radius of $H$
+about the centre the step subtracts. The run bounds the spectrum before it
+starts (the kinetic, local and nonlocal terms separately, by Weyl's
+inequality) and refuses a step past the bound by name, since a Taylor
+instability grows exponentially and reads as physics for the first thousand
+steps. \code{dt} is in Hartree atomic units of time, 24.189~as, as Elk's
+\code{dtimes} is; the published silicon runs use 0.08 to 0.1. The projectors at
+$\mathbf k+\boldsymbol\kappa$ come from a Chebyshev table of the radial
+functions in $q^2$ built once per dataset, within $10^{-13}$ of the radial
+transform, because rebuilding them by the transform at every step cost five
+times a Hamiltonian application.
+
+\textbf{The pulses} are Elk's three shapes, so that an Elk input reads the same
+here (\code{Gaussian}: a Gaussian-enveloped sine with a phase and a chirp,
+\code{genafieldt.f90}'s; \code{Ramp}, a polynomial ramp; \code{Kick}, a step in
+$\mathbf A$), the $\sin^2$ envelope of the high-harmonic literature
+(\code{Sin2}), and the adiabatic switch-on $e^{\eta t}\cos\omega t$
+(\code{Adiabatic}) the perturbative orders use. A peak intensity in W/cm$^2$
+becomes $E_0 = \sqrt{I/3.51\times10^{16}}$ atomic units, which is what Elk
+prints as the peak power density.
+
+\begin{pycode}
+from defumat import Calculator
+from defumat.realtime.pulse import Sin2
+
+calc = Calculator.from_file("si2-symmetric.in", pseudo_dir="pseudo")
+calc.get_scf(conv_thr=1e-10)
+
+pulse = Sin2.from_intensity(5e11, 1.55, 2, polarization=(1, 0, 0))
+run = calc.get_realtime(pulse, grid=(4, 4, 4), dt=0.2)
+print(run.times.shape, run.current.shape)   # Hartree a.u.; J is (nt, 3)
+print(run.symmetry_operations)              # 8: the little group of a [100] field
+print(run.work, run.energy_gained)          # Omega int J.E dt against E(T) - E(0)
+print(run.norm_drift, run.excited)          # electrons per cell left across the gap
+\end{pycode}
+
+\textbf{The k-set} is a whole unshifted grid, because the current is a polar
+vector and time reversal does not hold under a field (the state at
+$-\mathbf k$ evolves under $-\boldsymbol\kappa$). What reduces it is the
+\textbf{little group of the field}, the crystal's operations that leave every
+polarisation of the pulse invariant, with time reversal off, as Elk's
+\code{tdinit.f90} reduces it: each point of the wedge stands for its star and the
+current is averaged over the group as a polar vector. A field along $[100]$ in
+silicon keeps 8 of the 48 operations and 18 of the 64 points of a $4^3$ grid, and
+the wedge gives the whole grid's current to $6\times10^{-11}$ on a scale of
+$8.8\times10^{-4}$, the fixed-density solve's own threshold, in 19~s against 63.
+
+Two checks hold for any run and are what the result carries:
+\textbf{with no field the states are stationary} (the band energy constant to
+$2\times10^{-10}$~Ha over 200 steps from exact eigenstates, the norm to
+$(\Delta t\,\Delta\epsilon)^6/144$ a step), and \textbf{the work the field does is
+the energy it puts in}, $\Omega\int\mathbf J\cdot\mathbf E\,dt = \Delta E$, to
+$2.4\times10^{-6}$ on a two-cycle pulse. The second is blind to the time unit
+and to any constant on $\mathbf J$ or $\mathbf E$; what it sees is a current
+that is not the derivative of the Hamiltonian the step applies and a step that
+is not unitary. The scale is pinned by the comparisons below.
+
+\subsection{The dielectric function from a kick}
+
+A step in $\boldsymbol\kappa$ at $t=0$ is a field $\mathbf E(t) =
+-\kappa_0\delta(t)$, the same at every frequency, so the current after it is the
+linear response at all frequencies at once,
+\begin{equation*}
+\sigma_{ab}(z) = -\frac{1}{\kappa_0}\int_0^\infty J_a(t)\,e^{izt}\,dt,
+\qquad z = \omega + i\eta, \qquad
+\epsilon_{ab}(z) = \delta_{ab} + \frac{4\pi i\,\sigma_{ab}(z)}{z},
+\end{equation*}
+which is Elk's task 481. The window $e^{-\eta t}$ is the imaginary part of $z$,
+so the transform is exactly the response at the complex frequency, prefactor
+included. \code{get\_realtime\_dielectric} takes the \emph{exact} first order in
+the kick by default, one \code{jvp} through the propagation, so no kick strength
+has to be chosen small; \code{strength=} runs a finite kick as Elk does.
+
+\begin{pycode}
+eps = calc.get_realtime_dielectric(direction=(1, 0, 0), broadening=0.5,
+                                   window=10.0, nw=200, grid=(4, 4, 4), dt=0.2)
+print(eps.frequencies_ev[:3], eps.epsilon[:3, 0])   # eps_xx(w + i eta)
+\end{pycode}
+
+\textbf{It is an identity with the Kubo sum, up to one term that a coarse mesh
+makes large.} The propagation carries the exact diamagnetic term,
+$\sum w\langle\partial^2H/\partial k^2\rangle$, where the interband
+\code{get\_optical\_conductivity} replaces it by its f-sum value. On a finite set
+of k-points the two differ by the mesh sum of the band curvature,
+\begin{equation*}
+\sigma^{\mathrm{RT}}(z) = \sigma^{\mathrm{Kubo}}(z) + \frac{iD}{\Omega z},
+\qquad D = \sum_{n\mathbf k} w_{n\mathbf k}\,\frac{\partial^2\epsilon_{n\mathbf k}}{\partial k^2},
+\end{equation*}
+which is exponentially small in the mesh density for an insulator and not small
+on a coarse one: a spurious Drude term. Measured on two-atom silicon at 6~Ry on
+two k-points, against the Kubo resolvent sum fed every eigenstate of the dense
+$H(\mathbf k)$ and $D$ from a difference of the dense eigenvalues: the two agree
+to $1.6\times10^{-5}$ of the scale from 0.5 to 16~eV with the term, and differ by
+the whole scale, 0.81 against 0.81, without it. \code{subtract\_static=True}
+removes the constant part of $\mathbf J$ first, as Elk's \code{jtconst0} does,
+which is right only once the current has settled to it.
+
+\subsection{The high-harmonic spectrum}
+
+Driven hard enough, a solid emits at multiples of the drive's frequency, and the
+spectrum $\omega^2|\mathbf J(\omega)|^2$ of the current is what is measured:
+a plateau of nearly equal odd harmonics up to a cutoff that grows with the field,
+then a fall. With an inversion centre only the odd orders appear; without one,
+in zincblende AlAs, the even ones do too.
+
+\begin{pycode}
+from defumat.realtime.pulse import Sin2
+
+pulse = Sin2.from_intensity(1e12, 1.55, 10, polarization=(1, 0, 0))
+hhg = calc.get_hhg(pulse, grid=(6, 6, 6), dt=0.2, highest=25)
+print(hhg.harmonics(15))          # the peak intensity at orders 1 to 15
+print(hhg.cutoff(floor=1e-6))     # the highest odd order above 1e-6 of the first
+print(hhg.realtime.excited)       # electrons per cell promoted by the pulse
+\end{pycode}
+
+Two properties of a solid's spectrum belong here rather than in a surprise. The
+spectrum of one cell without dephasing is noisy above the gap and converges
+slowly in k, and published work either adds a dephasing time of a few
+femtoseconds or propagates the pulse through the sample (arXiv:1705.10707); what
+is offered is the window (\code{window='hann'} by default, since a current cut
+off while it oscillates puts a sinc on every harmonic and hides the weak ones)
+and the mesh. And a velocity-gauge propagation on a fixed mesh has no
+structure-gauge problem, since each k-point evolves alone and no k-derivative of
+a Bloch state appears.
+
+\textbf{The frozen sphere under a large shift.} The sphere holds the plane waves
+with $|\mathbf k+\mathbf G|^2\le E_{\mathrm{cut}}$ while the state at time $t$
+lives at $\mathbf k+\mathbf G+\boldsymbol\kappa$, so the cutoff along the field is
+$(\sqrt{E_{\mathrm{cut}}}-\kappa_{\max})^2$: 11.2~Ry instead of 12 for the
+published silicon pulse. The result carries it as \code{effective\_cutoff}.
+Measured on two-atom silicon at 30~Ry, the occupied eigenvalues of
+$H(\mathbf k+\boldsymbol\kappa)$ on the sphere of $\mathbf k$ differ from those on
+a sphere rebuilt at $\mathbf k+\boldsymbol\kappa$ by at most $1.8\times10^{-5}$,
+$3.4\times10^{-4}$ and $2.9\times10^{-4}$~eV at $\kappa$ = 0.1, 0.3 and
+0.5~bohr$^{-1}$; at 12~Ry by $10^{-2}$~eV, which is that cutoff's own error.
+
+\subsection{The perturbative orders and the third harmonic}
+
+Scale the field, $\boldsymbol\kappa(t) = \lambda\,\mathbf a(t)$, and expand the
+current, $\mathbf J = \sum_n\lambda^n\mathbf J^{(n)}$. Each order is a
+derivative of the propagation with respect to $\lambda$ at $\lambda=0$, and it
+is taken as one, by nested forward differentiation through every step rather
+than by fitting runs at several amplitudes, so the orders come out separated
+exactly. With the adiabatic switch-on $\mathbf a(t) = e^{\eta t}\cos(\omega t)\,
+\hat{\mathbf e}$ on $[-T,0]$ the response of order $n$ is $e^{n\eta t}$ times a
+periodic function,
+\begin{equation*}
+\mathbf J^{(n)}(t) = e^{n\eta t}\sum_m \mathbf J_{(n,m)}\,e^{-im\omega t},
+\end{equation*}
+whose coefficients are the response functions at the complex frequencies
+$m\omega+in\eta$, so that $\eta$ is a broadening per photon, the same parameter a
+sum over states calls its broadening, and a unitary evolution needs no
+dephasing invented for it. The third harmonic is $\mathbf J_{(3,3)}$, the
+intensity-dependent index $\mathbf J_{(3,1)}$, the second harmonic
+$\mathbf J_{(2,2)}$ and the optical rectification $\mathbf J_{(2,0)}$. With
+$E(z) = i\lambda z/2$ the field's amplitude at $z$ and $P = iJ/\Omega_s$ at the
+output frequency,
+\begin{equation*}
+\chi^{(3)}(-3\omega;\omega,\omega,\omega) = -\frac{8\,J_{(3,3)}}{3z^4},\qquad
+\chi^{(3)}(-\omega;\omega,\omega,-\omega) = \frac{8\,J_{(3,1)}}{3(2z-\bar z)\,z^2\bar z},
+\end{equation*}
+in atomic units, $4\pi/E_{\mathrm{au}}^2 = 4.75\times10^{-23}$~m$^2$/V$^2$ each.
+
+\begin{pycode}
+orders = calc.get_harmonic_orders(frequency=1.55, broadening=0.3, order=3,
+                                  grid=(2, 2, 2), eta_t=10, steps_per_period=200)
+print(orders.component(3, 3, axis=0))      # J_(3,3) along x, Hartree a.u.
+thg = calc.get_third_harmonic(frequency=1.55, broadening=0.3, grid=(2, 2, 2),
+                              eta_t=10, steps_per_period=200)
+print(thg.chi_xxxx_3w, thg.chi_xxyy_3w)    # m^2/V^2
+print(thg.chi_xxxx_w)                      # chi(-w; w, w, -w)
+\end{pycode}
+
+\textbf{The check is a second route to the same orders that shares nothing but
+$H(\mathbf k)$.} At order $n$ and harmonic $m$ the steady-state component of
+each occupied state solves a linear equation at $\epsilon_n+m\omega+in\eta$ with
+the derivatives $\partial^pH/\partial k^p$ along the field on its right-hand
+side; built densely with every band of the sphere at a small cutoff, it is a
+frequency-domain hierarchy with no time step, no propagator and no Fourier
+projection. On zincblende AlAs at 4~Ry, at $\Gamma$ (where the projector row at
+$\mathbf k+\mathbf G=0$ lives) and at a general point, with $\omega = 0.05$ and
+$\eta = 0.01$~Ha over $\eta T = 20$: the five components $(1,1)$, $(2,2)$,
+$(2,0)$, $(3,3)$, $(3,1)$ agree to $1.4\times10^{-5}$ to $3.0\times10^{-5}$ at 400
+steps a period and to $4.9\times10^{-6}$ to $7.6\times10^{-6}$ at 800, the midpoint
+rule's $\Delta t^2$. The even orders there are the size of the odd ones, so they
+are compared and not a residue.
+
+\textbf{What it costs.} One run serves one frequency, and its length is
+$T = \ln(C/\varepsilon)/\eta$ for a start transient of relative size
+$\varepsilon$, which does not decay because the evolution is unitary: at
+$\eta T = 6$ the same comparison reads 0.4 to 4.6 per cent. Order $n$ of nested
+forward mode carries $2^n$ copies of each state. A converged spectrum of
+$\chi^{(3)}$ is therefore the job of the frequency-domain hierarchy with an
+iterative solver, which is not here; this route is the one it will be checked
+against.
+
+\begin{refuses}
+\textbf{Refuses.} An \textbf{ultrasoft or PAW} dataset: with the projectors at
+$\mathbf k+\boldsymbol\kappa(t)$ the overlap moves with time and the equation of
+motion gains a term built from the augmentation dipole and the projectors'
+$\kappa$ derivative, which is derived and not sourced. Shifting the projectors
+alone moves $\langle\psi|S|\psi\rangle$ of ultrasoft silicon by up to
+$1.6\times10^{-3}$ at a general k-point and $1.7\times10^{-4}$ at $\Gamma$ at the
+published pulse's peak $\kappa = 0.11$~bohr$^{-1}$, which is the size of what is
+missing. \textbf{\code{nspin} = 2 and spinors}: two channels or one spinor
+Hamiltonian with no new physics, refused for want of a linear reference to check
+them against, since the optical conductivity and $\chi^0$ both refuse collinear
+spin. \textbf{DFT+$U$}, until its linear check is run. \textbf{A spin spiral} and
+\textbf{gamma-only storage}. \textbf{A ground state converged under a magnetic
+field or a constrained moment}, for the response stack's reason.
+\textbf{A symmetry-reduced k-set passed as \code{kpoints}} (pass \code{grid=}, which
+builds the field's own wedge) and \textbf{a shifted grid}, which is not closed
+under the group. \textbf{\code{occupations = 'fixed'} cutting a degenerate
+multiplet}: the current would depend on the rotation the eigensolver returned.
+A metal runs with its ground-state occupations held, and its intraband response
+converges slowly in k.
+\end{refuses}
+
+% =====================================================================
 \section{Topological invariants}
 
 Everything is built from one primitive --- the overlap of occupied manifolds at
