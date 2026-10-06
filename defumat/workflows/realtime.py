@@ -49,7 +49,7 @@ from defumat.units import C_AU
 
 __all__ = ["run_realtime", "run_realtime_dielectric", "run_hhg", "run_harmonic_orders",
            "run_third_harmonic", "ThirdHarmonic", "field_little_group",
-           "CHI3_AU_TO_SI"]
+           "chi2_from_orders", "CHI3_AU_TO_SI"]
 
 #: One atomic unit of ``chi^(3)`` in m^2/V^2, in the SI convention
 #: ``P = eps_0 chi^(3) E E E``: ``(e/(a_0^2 eps_0 E_au)) / E_au^2`` with
@@ -369,6 +369,35 @@ class ThirdHarmonic:
     chi_xxyy_3w: complex
     chi_xxxx_w: complex
     orders: dict = field(default_factory=dict)
+
+
+def chi2_from_orders(orders: OrdersResult, axis=0):
+    """``chi(-2w; w, w)`` in atomic units, contracted with the field, along ``axis``.
+
+    With ``kappa = (lam/2)(exp(-i z t) + exp(i zbar t))``, ``z = w + i eta``,
+    the field's amplitude is ``E(z) = i lam z/2``, the polarisation at the
+    output frequency ``2z`` is ``P = i J_(2,2) / (2z)``, since ``J = dP/dt``,
+    and ``P(2z) = chi E(z) E(z)`` with one ordering of the two equal input
+    frequencies. So ``chi(2w) = -2 i J_(2,2) / z^3``, the response at
+    ``2w + 2 i eta``, and what it is is ``sum_bc chi^abc e_b e_c`` for the unit
+    polarisation ``e`` and the component ``a`` that ``axis`` selects: in a
+    zincblende crystal ``chi_xyz`` itself in the ``x`` current of a field along
+    ``[011]``, and two thirds of it along ``[111]``. Times
+    :data:`~defumat.response.shg.CHI2_AU_TO_PM_PER_V` it is in pm/V.
+
+    **It is minus the conjugate of** :func:`~defumat.response.shg.second_harmonic`,
+    which evaluates at ``w - i eta`` and carries no charge, where this is the
+    response of an electron of charge -1 (``chi^(2)`` is odd in the charge).
+    Measured on AlAs, 1.9e-2 apart at 23 bands; with the projectors removed,
+    this formula on the dense hierarchy's ``J_(2,2)`` and every band of the sum
+    agree to 4.3e-5, and the 5 to 9 per cent left with them in is the curvature
+    of the projectors, which the sum over states does not carry
+    (``tests/regression/test_realtime_shg.py``).
+    """
+    shape = orders.shape
+    z = shape.omega + 1j * shape.eta
+    j22 = complex(orders.component(2, 2, axis=axis))
+    return -2j * j22 / z**3
 
 
 def chi3_from_orders(orders: OrdersResult, axis=0):
