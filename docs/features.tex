@@ -4215,6 +4215,17 @@ current over a finite run is not exactly zero. Both read 23 because a $4^3$ grid
 is far from converged for silicon. On a converged mesh the term, and the
 subtraction, are not needed.
 
+\textbf{Against Elk}, on its own \code{Si-dielectric} example at scissor 0 (the
+same lattice, grid and field, the 100 points of the field's wedge, 4000 steps of
+0.2), both currents through one transcription of Elk's task 481: the static
+$\epsilon_{xx}$ is 15.11 here against Elk's independent-particle task 121 at 15.19,
+while Elk's own real-time route reads $-4.13$ at $\omega\to0$, the low-frequency
+failure of a propagation in a truncated band basis that the full sphere does not
+have. The first two absorption peaks are at 3.57 and 3.67~eV here and 3.50 and
+3.64 in Elk's real-time spectrum, whose potential is updated in time (local
+fields and the ALDA) where this one is frozen. On one core each, Elk's
+propagation took 1300~s and this one 486~s.
+
 \subsection{The high-harmonic spectrum}
 
 Driven hard enough, a solid emits at multiples of the drive's frequency, and the
