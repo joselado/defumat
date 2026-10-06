@@ -294,7 +294,7 @@ order of magnitude it is rather than as current to the second.
 | `42` | 13 | `31` | 34 | `13` | 131 | `35` | 276 |
 | `16` | 18 | `40` | 34 | `30` | 232 | `20` | 282 |
 | `00` | 22 | `23` | 35 | `39` | 151 | `49` | 194 |
-| `07` | 22 | `32` | 84 | `41` | 110 | `51` | 281 |
+| `07` | 22 | `32` | 84 | `41` | 110 | `51` | 290 |
 | `46` | 61 | `47` | 260 | `48` | 121 | `50` | 509 |
 
 `32` and `33` read **84 s** and **401 s** on 2026-10-04, through
@@ -317,8 +317,8 @@ the notebook near or past the ceiling.
 upper bound and near the ceiling: the two propagations of two cycles it adds, one of them
 with the potential rebuilt at every step, are about a third of the eight-cycle pair. The
 eight-cycle spectrum with the potential updated is quoted from an offline run, since it
-alone would put the notebook past the ceiling. `51` reads **281 s** the same night, its first
-measurement, on four cores beside the same jobs: the AlAs spectrum at 25 frequencies, the
+alone would put the notebook past the ceiling. `51` reads **290 s** the same night, its first
+measurement, on four cores beside the same jobs: the AlAs spectrum at 31 frequencies, the
 sum over states at 60 bands and silicon at three frequencies; silicon's converged mesh is
 quoted from offline runs.
 

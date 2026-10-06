@@ -33,7 +33,7 @@ from defumat import Calculator
 
 PSEUDO, CASES = Path("../tests/data/pseudo"), Path("../tests/data/qe")
 alas = Calculator.from_file(CASES / "alas-raman-wedge.in", PSEUDO, announce=False)
-EV = np.linspace(0.2, 2.6, 25)                          # the fundamental photon energy
+EV = np.linspace(0.2, 3.2, 31)                          # the fundamental photon energy
 FIELD = np.ones(3) / np.sqrt(3.0)                       # light polarized along [111]
 spectrum = alas.get_nonlinear_spectrum(EV, broadening=0.1, direction=tuple(FIELD), order=2)
 xyz = spectrum.chi2(axis=FIELD) * np.sqrt(3.0) / 2.0    # chi_xyz, the one element, pm/V
@@ -98,7 +98,7 @@ mesh = KPoints.automatic((4, 4, 4), (0, 0, 0), alas.system.cell)
 shg = alas.get_shg(kpoints=mesh, nbnd=60, frequencies=EV / RY_TO_EV, broadening=0.1 / RY_TO_EV)
 summed = -np.conj(np.asarray(shg.chi)[:, 0, 1, 2])
 print(f"{'eV':>5s} {'steady state':>20s} {'sum over states':>20s}")
-for i in range(1, 25, 3):
+for i in range(1, 31, 3):
     print(f"{EV[i]:5.1f} {xyz[i].real:10.1f}{xyz[i].imag:+9.1f}i {summed[i].real:10.1f}{summed[i].imag:+9.1f}i")
 ```
 
@@ -115,6 +115,8 @@ for i in range(1, 25, 3):
       1.8      -97.7   +651.6i      -87.7   +652.3i
       2.1     -510.5   +476.2i     -511.9   +486.3i
       2.4     -541.3    -13.7i     -543.0    -12.7i
+      2.7     -286.3   -601.3i     -284.9   -597.4i
+      3.0       63.2   -110.6i       60.2   -109.2i
 
 
 Below the edge the two agree to a few tenths of a per cent with sixty bands, and with 24 they
