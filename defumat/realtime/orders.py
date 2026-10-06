@@ -155,14 +155,29 @@ def propagate_orders(calculation, states, weights, v_scf, shape, *, dt: float,
                      order: int = 3, duration: float | None = None,
                      start: float | None = None, propagator: str = "taylor4",
                      k_batch="default", block_steps: int = 400,
-                     kcart=None) -> OrdersResult:
+                     kcart=None, potential: str = "frozen", corrector: int = 1,
+                     symmetrise=None, density_symmetry=None) -> OrdersResult:
     """``J^(n)(t)`` for ``n <= order`` under ``kappa(t) = lam * shape(t)``, at ``lam = 0``.
 
     ``shape`` is a :class:`~defumat.realtime.pulse.Pulse` whose amplitude is the
     unit ``lam`` multiplies, usually an :class:`~defumat.realtime.pulse.Adiabatic`
     of amplitude one. The other arguments are
-    :func:`~defumat.realtime.propagate.propagate`'s; the potential is frozen.
+    :func:`~defumat.realtime.propagate.propagate`'s, ``symmetrise`` included:
+    the currents of every order are averaged over those rotations, a polar
+    vector each. With ``potential`` other than ``'frozen'`` the orders are those
+    of the self-consistent propagation
+    (:func:`~defumat.realtime.selfconsistent.propagate_orders_self_consistent`),
+    where ``density_symmetry`` completes the wedge's density.
     """
+    if potential != "frozen":
+        from defumat.realtime.selfconsistent import propagate_orders_self_consistent
+
+        return propagate_orders_self_consistent(
+            calculation, states, weights, v_scf, shape, dt=dt, order=order,
+            duration=duration, start=start, propagator=propagator, k_batch=k_batch,
+            block_steps=block_steps, kcart=kcart, symmetrise=symmetrise,
+            density_symmetry=density_symmetry, potential=potential,
+            corrector=corrector)
     states = np.asarray(states)
     weights = np.asarray(weights, dtype=float)
     nk = states.shape[0]
@@ -223,5 +238,8 @@ def propagate_orders(calculation, states, weights, v_scf, shape, *, dt: float,
 
     factorials = np.asarray([math.factorial(k) for k in range(depth + 1)], dtype=float)
     currents = -raw / (2.0 * setup.volume) / factorials[:, None, None]
+    if symmetrise is not None:
+        rotations = np.asarray(symmetrise, dtype=float)
+        currents = np.einsum("sab,ntb->nta", rotations, currents) / len(rotations)
     return OrdersResult(times=times, currents=currents, shape=shape, dt=float(dt),
                         volume=setup.volume, norm_drift=drift)

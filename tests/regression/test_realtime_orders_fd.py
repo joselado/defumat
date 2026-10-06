@@ -69,7 +69,8 @@ def _cell(pseudo_dir, case, ecut):
     return calculation, calculation.local_terms(v_scf), v_scf
 
 
-def test_the_third_order_is_the_finite_difference_of_full_runs(pseudo_dir):
+@pytest.mark.parametrize("potential", ["frozen", "hxc"])
+def test_the_third_order_is_the_finite_difference_of_full_runs(pseudo_dir, potential):
     """``J^(3)(t)`` by nested ``jvp`` against the four-point stencil, on AlAs at 4 Ry.
 
     ``w = 0.05`` and ``eta = 0.01`` Hartree along ``[100]``, five periods
@@ -101,6 +102,12 @@ def test_the_third_order_is_the_finite_difference_of_full_runs(pseudo_dir):
     stencil converging on the derivative rather than a coincidence of one
     ``h``. The centre of the step is checked equal in both routes, since the
     propagator is the same map only if it is.
+
+    With the Hartree and exchange-correlation potentials updated in time
+    (``potential = 'hxc'``) the runs are primal self-consistent propagations,
+    so the stencil sees the second and third derivatives of ``v_of_rho``
+    exactly as the nested ``jvp`` must take them, and nothing else checks
+    those by an identity.
     """
     calculation, terms, v_scf = _cell(pseudo_dir, "alas-shg", 4.0)
     omega, eta, direction = 0.05, 0.01, np.array([1.0, 0.0, 0.0])
@@ -130,9 +137,11 @@ def test_the_third_order_is_the_finite_difference_of_full_runs(pseudo_dir):
     assert abs(centres[0] - centres[1]) < 1e-12
 
     orders = propagate_orders(calculation, states, w, v_scf, shape(1.0), dt=dt, order=3,
-                              start=-length, duration=length, k_batch=None)
+                              start=-length, duration=length, k_batch=None,
+                              potential=potential)
     runs = {lam: propagate(calculation, states, w, v_scf, shape(lam), dt=dt,
-                           start=-length, duration=length, k_batch=None).current
+                           start=-length, duration=length, k_batch=None,
+                           potential=potential).current
             for lam in (s * f * h for f in (1, 2, 4) for s in (1, -1))}
     j1, j3 = orders.currents[1], orders.currents[3]
     times = orders.times

@@ -602,7 +602,8 @@ def propagate(calculation, states, weights, v_scf, pulse, *, dt: float,
               duration: float | None = None, start: float | None = None,
               propagator: str = "taylor4", k_batch="default",
               block_steps: int = 400, kcart=None, checkpoint=None,
-              symmetrise=None) -> RealTimeResult:
+              symmetrise=None, potential: str = "frozen", corrector: int = 1,
+              density_symmetry=None) -> RealTimeResult:
     """Propagate ``states`` under ``pulse`` at the frozen potential ``v_scf``.
 
     Args:
@@ -626,7 +627,31 @@ def propagate(calculation, states, weights, v_scf, pulse, *, dt: float,
             time grid and k-set resumes after the chunks it records.
         symmetrise: ``(nsym, 3, 3)`` cartesian rotations to average the current
             over, a polar vector, when the k-set is the wedge of their group.
+        potential: ``'frozen'``, or ``'hartree'`` or ``'hxc'`` for the potential
+            updated in time (:mod:`defumat.realtime.selfconsistent`), where the
+            k-points are no longer independent and the whole set is resident.
+        corrector: with the potential updated, how many times the midpoint
+            potential is corrected after it is extrapolated.
+        density_symmetry: with the potential updated on a reduced k-set, the
+            :class:`~defumat.system.symmetry.Symmetries` of the field's little
+            group, which completes the density.
     """
+    if potential != "frozen":
+        from defumat.realtime.selfconsistent import (
+            propagate_self_consistent, require_a_potential_mode)
+
+        require_a_potential_mode(calculation, potential, symmetrise, density_symmetry)
+        if checkpoint is not None:
+            raise NotImplementedError(
+                "a checkpoint of a run with the potential updated is not implemented: "
+                "the k-points are not independent, so the run would have to save every "
+                "state and two potentials rather than the current of the chunks done")
+        return propagate_self_consistent(
+            calculation, states, weights, v_scf, pulse, dt=dt, duration=duration,
+            start=start, propagator=propagator, k_batch=k_batch,
+            block_steps=block_steps, kcart=kcart, symmetrise=symmetrise,
+            density_symmetry=density_symmetry, potential=potential,
+            corrector=corrector)
     # The states stay where they are, a host array in the frozen mode, and go to
     # the device one chunk at a time: the peak is one chunk whatever the mesh.
     states = np.asarray(states)

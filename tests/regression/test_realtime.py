@@ -30,7 +30,8 @@ import pytest
 
 from defumat.io.pwin import read_pw_input
 from defumat.pseudo import read_upf
-from defumat.realtime.dense import dense_ground_states, dense_hamiltonians, dense_orders
+from defumat.realtime.dense import (
+    dense_first_order, dense_ground_states, dense_hamiltonians, dense_orders)
 from defumat.realtime.orders import propagate_orders
 from defumat.realtime.pulse import Adiabatic, Kick
 from defumat.realtime.spectra import conductivity_from_kick
@@ -111,6 +112,48 @@ def test_the_orders_are_the_dense_hierarchy(pseudo_dir):
     assert abs(dense[(2, 2)]) > 0.5 * abs(dense[(1, 1)]), "the even order is not a residue"
 
 
+@pytest.mark.parametrize("potential", ["hartree", "hxc"])
+def test_the_self_consistent_first_order_is_the_dense_self_consistent_solve(pseudo_dir,
+                                                                            potential):
+    """``J_(1,1)`` with the potential updated against the dense self-consistent solve.
+
+    AlAs at 4 Ry on Gamma and a general point, ``w = 0.05`` and ``eta = 0.01``
+    Hartree over ``eta T = 20``, the first order of the propagation in the
+    difference form of :mod:`defumat.realtime.selfconsistent` against
+    :func:`~defumat.realtime.dense.dense_first_order`, whose fixed point in the
+    induced potential is a GMRES solve with every band of each sphere.
+    Measured: **1.36e-5** (Hartree) and **1.64e-5** (Hartree and
+    exchange-correlation) at 400 steps a period, against 1.37e-5 for the frozen
+    potential on the same grid, and 8.3e-7 and 3.7e-6 at 800, while the local
+    fields move ``J_(1,1)`` by **3.5 per cent** (Hartree) and **0.35 per cent**
+    (with the exchange-correlation kernel, which undoes most of the Hartree
+    part on this cell) from the frozen value, so the comparison sees the
+    update by a factor of 200 to 2500.
+    """
+    calculation, terms, v_scf = _cell(pseudo_dir, "alas-shg", 4.0)
+    omega, eta, direction = 0.05, 0.01, np.array([1.0, 0.0, 0.0])
+    nocc = int(round(calculation.nelec / 2))
+    weights = np.asarray(calculation.system.kpoints.weights)
+    volume = float(calculation.system.cell.volume)
+    frozen, states, _ = dense_first_order(calculation, terms, direction, 2 * omega,
+                                          2 * eta, nocc)
+    reference, _, residual = dense_first_order(calculation, terms, direction, 2 * omega,
+                                               2 * eta, nocc, potential=potential)
+    assert residual < 1e-10
+    period = 2 * math.pi / omega
+    length = math.ceil(20.0 / eta / period) * period
+    shape = Adiabatic(amplitude=1.0, omega=omega, eta=eta, eta_t=length * eta)
+    result = propagate_orders(
+        calculation, jnp.asarray(states), np.repeat(weights[:, None], nocc, axis=1),
+        v_scf, shape, dt=period / 400, order=1, start=-length, duration=length,
+        k_batch=None, potential=potential)
+    value = complex(result.component(1, 1, axis=0))
+    reference = -reference / (2.0 * volume)
+    frozen = -frozen / (2.0 * volume)
+    assert abs(value - reference) < 3e-5 * abs(reference), (value, reference)
+    assert abs(reference - frozen) > 2e-3 * abs(frozen), "the update is load-bearing"
+
+
 def test_the_linear_response_is_the_kubo_sum_plus_the_band_curvature(pseudo_dir):
     """``sigma_RT(z) = sigma_Kubo(z) + i D / (Omega z)`` on silicon at 6 Ry.
 
@@ -164,12 +207,17 @@ def test_the_linear_response_is_the_kubo_sum_plus_the_band_curvature(pseudo_dir)
     assert np.abs(sigma - sigma_kubo).max() > 0.1 * scale, "the curvature term is load-bearing"
 
 
-def test_the_little_group_of_the_field_gives_the_whole_mesh_current(pseudo_dir):
+@pytest.mark.parametrize("potential", ["frozen", "hxc"])
+def test_the_little_group_of_the_field_gives_the_whole_mesh_current(pseudo_dir, potential):
     """A [100] pulse on silicon's 4x4x4 mesh: 18 points and eight operations against 64.
 
     Measured: the two currents agree to **6.2e-11** on a scale of 8.8e-4, which
     is the fixed-density solve's own threshold (the states at the members of a
-    star are separate solves), and the wedge took 19 s against 63.
+    star are separate solves), and the wedge took 19 s against 63. With the
+    potential updated the wedge's density is completed with the same eight
+    operations and their translations, which a wrong group (the crystal's
+    whole one, or the rotations without the translations) would fail by the
+    size of the local-field effect.
     """
     from defumat import Calculator
     from defumat.realtime.pulse import Sin2
@@ -178,8 +226,10 @@ def test_the_little_group_of_the_field_gives_the_whole_mesh_current(pseudo_dir):
                                       announce=False)
     calculator.get_scf(conv_thr=1e-10)
     pulse = Sin2.from_intensity(5e11, 1.55, 2, (1, 0, 0))
-    whole = calculator.get_realtime(pulse, grid=(4, 4, 4), little_group=False, dt=0.2)
-    wedge = calculator.get_realtime(pulse, grid=(4, 4, 4), little_group=True, dt=0.2)
+    whole = calculator.get_realtime(pulse, grid=(4, 4, 4), little_group=False, dt=0.2,
+                                    potential=potential)
+    wedge = calculator.get_realtime(pulse, grid=(4, 4, 4), little_group=True, dt=0.2,
+                                    potential=potential)
     assert wedge.symmetry_operations == 8
     scale = np.abs(whole.current).max()
     assert scale > 1e-4

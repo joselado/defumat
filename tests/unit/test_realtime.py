@@ -136,7 +136,8 @@ def _silicon(pseudo_dir, ecut=6.0):
 
 
 @pytest.mark.slow
-def test_with_no_field_the_states_are_stationary(pseudo_dir):
+@pytest.mark.parametrize("potential", ["frozen", "hartree", "hxc"])
+def test_with_no_field_the_states_are_stationary(pseudo_dir, potential):
     """``J`` and the energy constant to round-off, the norm to the step's ``y^6/144``.
 
     Measured on two-atom silicon at 6 Ry, 2x2x2, 200 steps of 0.1 from exact
@@ -144,11 +145,14 @@ def test_with_no_field_the_states_are_stationary(pseudo_dir):
     is the norm the step loses at ``(dt (e - centre))^6/144`` a step on each
     band times its energy. The current is zero by symmetry on
     the whole grid, so its value says nothing; what is asserted of it is that
-    it does not move.
+    it does not move. With the potential updated the start is a fixed point by
+    the difference form, which this is the smoke test of rather than the
+    evidence for: the potential's informative number is the identity against
+    the dense self-consistent solve in ``tests/regression/test_realtime.py``.
     """
     calculation, states, weights, v_scf = _silicon(pseudo_dir)
     result = propagate(calculation, states, weights, v_scf, Kick(0.0), dt=0.1,
-                       duration=20.0, block_steps=100)
+                       duration=20.0, block_steps=100, potential=potential)
     assert np.abs(result.energy - result.energy[0]).max() < 1e-9
     assert result.norm_drift < 1e-8
     assert np.abs(result.current - result.current[0]).max() < 1e-10
@@ -156,19 +160,66 @@ def test_with_no_field_the_states_are_stationary(pseudo_dir):
 
 
 @pytest.mark.slow
-def test_the_work_done_is_the_energy_gained(pseudo_dir):
+@pytest.mark.parametrize("potential", ["frozen", "hxc"])
+def test_the_work_done_is_the_energy_gained(pseudo_dir, potential):
     """``Omega int J.E dt = Delta E`` for a pulse, to the trapezoid rule's ``dt^2``.
 
     Blind to the time unit and to any constant on ``J`` or ``E`` (a step
     under ``2H`` satisfies it); what it sees is a current that is not the
     ``kappa`` derivative of the Hamiltonian the step applies, and a step that
     is not unitary. Measured 2.4e-6 relative on the 12 Ry cell at ``dt = 0.1``.
+    With the potential updated the energy is the functional the dynamics
+    conserves (:mod:`defumat.realtime.selfconsistent`), so a potential that is
+    not its derivative fails here: measured at 5e12 W/cm^2 on the 6 Ry cell,
+    1.4e-6 at ``dt = 0.1`` and 2.8e-7 at 0.05 with the Hartree and
+    exchange-correlation potentials updated, against 1.2e-6 and 2.5e-7 frozen,
+    and the pulse deposits 8 per cent less energy with them (0.0538 against
+    0.0586 Ha).
     """
     calculation, states, weights, v_scf = _silicon(pseudo_dir)
     pulse = Sin2.from_intensity(1e12, 1.55, 2, (1.0, 0.0, 0.0))
-    result = propagate(calculation, states, weights, v_scf, pulse, dt=0.1, block_steps=500)
+    result = propagate(calculation, states, weights, v_scf, pulse, dt=0.1, block_steps=500,
+                       potential=potential)
     assert result.energy_gained > 1e-4, "the pulse did work"
     assert result.work == pytest.approx(result.energy_gained, rel=1e-4)
+
+
+@pytest.mark.slow
+def test_after_a_kick_the_updated_potential_conserves_the_energy(pseudo_dir):
+    """The energy after a kick of 0.05/bohr, field off, with the potential updated.
+
+    Two-atom silicon at 6 Ry, 2x2x2, 1000 steps of 0.1 and 2000 of 0.05, the
+    Hartree and exchange-correlation potentials updated. Measured, the largest
+    ``|E(t) - E(0)|`` in Hartree:
+
+    ===========================  ==========  ==========
+    step                         dt = 0.1    dt = 0.05
+    ===========================  ==========  ==========
+    frozen                       1.42e-7     4.5e-9
+    extrapolated (corrector 0)   1.60e-6     4.08e-7
+    corrected (corrector 1)      1.58e-7     5.0e-9
+    ===========================  ==========  ==========
+
+    The extrapolation alone falls by 3.9 per halving, the ``dt^2`` of a
+    second-order potential, and stays at 1.6e-6 over a run four times longer,
+    so it is bounded and not secular; with the corrector the drift is the
+    frozen one, the norm the Taylor step loses (``dt^5`` a run), so the
+    potential's own error is below it. The induced potential reaches 1.4e-2 Ry.
+    """
+    calculation, states, weights, v_scf = _silicon(pseudo_dir)
+    kick = Kick(strength=0.05, direction=(1.0, 0.0, 0.0))
+    drift = {}
+    for corrector in (0, 1):
+        for dt in (0.1, 0.05):
+            result = propagate(calculation, states, weights, v_scf, kick, dt=dt, start=0.0,
+                               duration=100.0, block_steps=50, potential="hxc",
+                               corrector=corrector)
+            drift[corrector, dt] = np.abs(result.energy - result.energy[0]).max()
+            assert result.extras["potential_change"] > 1e-3, "the potential moved"
+    ratio = drift[0, 0.1] / drift[0, 0.05]
+    assert 3.0 < ratio < 5.0, ratio
+    assert drift[1, 0.1] < 0.2 * drift[0, 0.1]
+    assert drift[1, 0.1] < 5e-7
 
 
 def test_a_step_past_the_stability_bound_is_refused(pseudo_dir):
@@ -245,8 +296,25 @@ def test_what_is_refused_is_refused_by_name(pseudo_dir):
     pulse = Sin2.from_intensity(1e11, 1.55, 1)
     with pytest.raises(NotImplementedError, match="symmetry-reduced"):
         _kset(silicon, pulse, silicon.kpoints, None, True)
-    _, rotations = _kset(silicon, pulse, None, (4, 4, 4), True)
+    _, rotations, group = _kset(silicon, pulse, None, (4, 4, 4), True)
     assert len(rotations) == 8, "a [100] field keeps eight of silicon's 48"
+    # the density's maps need the translations, and four of the eight have one
+    assert group.nsym == 8 and not group.symmorphic
+
+
+def test_what_the_updated_potential_refuses_is_refused_by_name(pseudo_dir):
+    """An unknown mode, a reduced k-set without its group, and a checkpoint."""
+    from defumat.realtime.selfconsistent import require_a_potential_mode
+
+    calculation, states, weights, v_scf = _silicon(pseudo_dir)
+    with pytest.raises(ValueError, match="one of"):
+        require_a_potential_mode(calculation, "rpa", None, None)
+    with pytest.raises(ValueError, match="little group"):
+        require_a_potential_mode(calculation, "hxc", np.eye(3)[None], None)
+    pulse = Sin2.from_intensity(1e11, 1.55, 1)
+    with pytest.raises(NotImplementedError, match="checkpoint"):
+        propagate(calculation, states, weights, v_scf, pulse, dt=0.2,
+                  potential="hxc", checkpoint="unused.npz")
 
 
 @pytest.mark.slow

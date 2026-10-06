@@ -48,7 +48,7 @@ from defumat.realtime.spectra import (
 from defumat.units import C_AU
 
 __all__ = ["run_realtime", "run_realtime_dielectric", "run_hhg", "run_harmonic_orders",
-           "run_third_harmonic", "ThirdHarmonic", "field_little_group",
+           "run_third_harmonic", "ThirdHarmonic", "field_little_group", "field_symmetries",
            "chi2_from_orders", "CHI3_AU_TO_SI"]
 
 #: One atomic unit of ``chi^(3)`` in m^2/V^2, in the SI convention
@@ -69,15 +69,17 @@ def _polarisations(pulse) -> list[np.ndarray]:
     raise ValueError(f"cannot read a polarisation off {type(pulse).__name__}")
 
 
-def field_little_group(system, pulse, tolerance: float = 1e-8):
-    """``(crystal rotations, cartesian rotations)`` that leave the pulse's field invariant.
+def field_symmetries(system, pulse, tolerance: float = 1e-8):
+    """The field's little group as :class:`~defumat.system.symmetry.Symmetries`.
 
     The crystal's operations (``System.symmetry_group``) whose cartesian
     rotation fixes every polarisation vector the pulse has, so that ``A(t)``
-    is invariant at every time. Time reversal is never in it. A ``nosym`` run
+    is invariant at every time, with their fractional translations, which the
+    density's symmetrisation needs (silicon's group along ``[100]`` has
+    nonsymmorphic members). Time reversal is never in it. A ``nosym`` run
     keeps the identity alone.
     """
-    from defumat.system.symmetry import cartesian_rotations
+    from defumat.system.symmetry import Symmetries, cartesian_rotations
 
     symmetries = system.symmetry_group()
     crystal = symmetries.rotation_array()
@@ -87,11 +89,27 @@ def field_little_group(system, pulse, tolerance: float = 1e-8):
             if all(np.linalg.norm(cartesian[s] @ v - v) < tolerance for v in vectors)]
     if system.nosym:
         keep = [s for s in keep if np.allclose(crystal[s], np.eye(3))]
-    return crystal[keep], cartesian[keep]
+    return Symmetries(rotations=tuple(symmetries.rotations[s] for s in keep),
+                      translations=tuple(symmetries.translations[s] for s in keep))
+
+
+def field_little_group(system, pulse, tolerance: float = 1e-8):
+    """``(crystal rotations, cartesian rotations)`` that leave the pulse's field invariant.
+
+    :func:`field_symmetries` as two arrays, ``(nsym, 3, 3)`` each.
+    """
+    from defumat.system.symmetry import cartesian_rotations
+
+    group = field_symmetries(system, pulse, tolerance)
+    return group.rotation_array(), cartesian_rotations(system.cell, group)
 
 
 def _kset(system, pulse, kpoints, grid, little_group: bool):
-    """The k-set a run propagates and the rotations its current is averaged over."""
+    """``(k-set, cartesian rotations, Symmetries)``: what a run propagates and its group.
+
+    The rotations average the current and the group completes the density
+    when the potential is updated; both are ``None`` on a whole k-set.
+    """
     from defumat.system.kpoints import KPoints, for_spin, is_reduced
 
     cell = system.cell
@@ -105,7 +123,7 @@ def _kset(system, pulse, kpoints, grid, little_group: bool):
                 "time reversal does not hold under a field, so the wedge must be "
                 "the field's own little group's. Pass grid= instead, which "
                 "builds it, or the whole unshifted grid")
-        return for_spin(kpoints, system.nspin), None
+        return for_spin(kpoints, system.nspin), None, None
     if grid is None:
         grid = getattr(system.kpoints, "grid", None)
         shift = tuple(int(x) for x in (getattr(system.kpoints, "shift", None) or (0, 0, 0)))
@@ -114,7 +132,7 @@ def _kset(system, pulse, kpoints, grid, little_group: bool):
                 raise NotImplementedError(
                     "the run's own k-set is reduced and carries no grid to "
                     "rebuild the whole one from; pass grid= or kpoints=")
-            return for_spin(system.kpoints, system.nspin), None
+            return for_spin(system.kpoints, system.nspin), None, None
         if little_group and any(shift):
             raise NotImplementedError(
                 "the little group of the field on a shifted Monkhorst-Pack grid is "
@@ -124,15 +142,19 @@ def _kset(system, pulse, kpoints, grid, little_group: bool):
                 "propagate the whole shifted grid, whose k-points are independent "
                 "at a frozen potential, or grid= for an unshifted one")
     grid = tuple(int(n) for n in grid)
+    group = None
     if little_group:
-        crystal, rotations = field_little_group(system, pulse)
-        kset = KPoints.automatic(grid, (0, 0, 0), cell, rotations=crystal,
+        from defumat.system.symmetry import cartesian_rotations
+
+        group = field_symmetries(system, pulse)
+        rotations = cartesian_rotations(cell, group)
+        kset = KPoints.automatic(grid, (0, 0, 0), cell, rotations=group.rotation_array(),
                                  time_reversal=False)
         if len(rotations) <= 1:
-            rotations = None
+            rotations, group = None, None
     else:
         kset = KPoints.automatic(grid, shift, cell)
-    return for_spin(kset, system.nspin), rotations
+    return for_spin(kset, system.nspin), rotations, group
 
 
 def _occupied_states(system, pseudos, density, kset, *, nbnd, conv_thr, k_batch,
@@ -199,8 +221,9 @@ def run_realtime(system, pseudos, density, pulse: Pulse, *, dt: float = 0.1,
                  nbnd: int | None = None, conv_thr: float = 1.0e-10,
                  k_batch="default", block_steps: int = 400,
                  propagator: str = "taylor4", checkpoint=None,
+                 potential: str = "frozen", corrector: int = 1,
                  calculation=None) -> RealTimeResult:
-    """The current ``J(t)`` of a crystal driven by ``pulse``, at the ground state's potential.
+    """The current ``J(t)`` of a crystal driven by ``pulse``.
 
     Args:
         system, pseudos, density: the converged ground state.
@@ -217,15 +240,23 @@ def run_realtime(system, pseudos, density, pulse: Pulse, *, dt: float = 0.1,
             perturbation that oscillates at interband frequencies for the whole
             run, so a current asserted to some digits needs it tight.
         checkpoint: a path the driver saves its progress to after every k-chunk.
+        potential: ``'frozen'`` at the ground state's, the independent-particle
+            response; ``'hartree'`` with the Hartree potential updated in time
+            (local fields); ``'hxc'`` with the Hartree and exchange-correlation
+            potentials updated, the adiabatic functional
+            (:mod:`defumat.realtime.selfconsistent`).
+        corrector: with the potential updated, the corrections of the midpoint
+            potential after its extrapolation; 0 is the extrapolation alone.
     """
-    kset, rotations = _kset(system, pulse, kpoints, grid, little_group)
+    kset, rotations, group = _kset(system, pulse, kpoints, grid, little_group)
     calc, states, weights, v_scf = _occupied_states(
         system, pseudos, density, kset, nbnd=nbnd, conv_thr=conv_thr,
         k_batch=k_batch, calculation=calculation)
     return propagate(calc, states, weights, v_scf, pulse, dt=dt, duration=duration,
                      start=start, propagator=propagator, k_batch=k_batch,
                      block_steps=block_steps, checkpoint=checkpoint,
-                     symmetrise=rotations)
+                     symmetrise=rotations, potential=potential, corrector=corrector,
+                     density_symmetry=group)
 
 
 def run_realtime_dielectric(system, pseudos, density, *, direction=(1.0, 0.0, 0.0),
@@ -236,6 +267,7 @@ def run_realtime_dielectric(system, pseudos, density, *, direction=(1.0, 0.0, 0.
                             little_group: bool = True, nbnd: int | None = None,
                             conv_thr: float = 1.0e-10, k_batch="default",
                             block_steps: int = 1000, subtract_static: bool = False,
+                            potential: str = "frozen", corrector: int = 1,
                             calculation=None) -> KickResponse:
     """``sigma(w + i eta)`` and ``eps`` from a kick, Elk's task 481.
 
@@ -246,7 +278,9 @@ def run_realtime_dielectric(system, pseudos, density, *, direction=(1.0, 0.0, 0.
     is in it and no strength has to be chosen small; a number runs a finite
     kick of that many 1/bohr, as Elk does. The run lasts ``22/eta`` unless
     ``duration`` says otherwise, which leaves ``exp(-22)`` of the window
-    uncovered.
+    uncovered. ``potential`` is :func:`run_realtime`'s: with ``'hartree'`` or
+    ``'hxc'`` the result is ``eps_M`` with local fields, the applied field
+    being the whole macroscopic one.
     """
     eta = float(broadening) * EV_TO_HA
     if frequencies is None:
@@ -258,21 +292,22 @@ def run_realtime_dielectric(system, pseudos, density, *, direction=(1.0, 0.0, 0.
     unit = unit / np.linalg.norm(unit)
     kick = Kick(strength=1.0 if strength is None else float(strength),
                 direction=tuple(unit))
-    kset, rotations = _kset(system, kick, kpoints, grid, little_group)
+    kset, rotations, group = _kset(system, kick, kpoints, grid, little_group)
     calc, states, weights, v_scf = _occupied_states(
         system, pseudos, density, kset, nbnd=nbnd, conv_thr=conv_thr,
         k_batch=k_batch, calculation=calculation)
+    update = dict(potential=potential, corrector=corrector, symmetrise=rotations,
+                  density_symmetry=group)
     if strength is None:
         orders = propagate_orders(calc, states, weights, v_scf, kick, dt=dt, order=1,
                                   start=0.0, duration=duration, k_batch=k_batch,
-                                  block_steps=block_steps)
+                                  block_steps=block_steps, **update)
         times, current = orders.times, orders.currents[1]
     else:
         result = propagate(calc, states, weights, v_scf, kick, dt=dt, start=0.0,
-                           duration=duration, k_batch=k_batch, block_steps=block_steps)
+                           duration=duration, k_batch=k_batch, block_steps=block_steps,
+                           **update)
         times, current = result.times, result.current
-    if rotations is not None:
-        current = np.einsum("sab,tb->ta", rotations, current) / len(rotations)
     return conductivity_from_kick(times, current, kick.strength, unit, frequencies, eta,
                                   subtract_static=subtract_static)
 
@@ -281,7 +316,8 @@ def run_hhg(system, pseudos, density, pulse: Pulse, *, dt: float = 0.1,
             duration: float | None = None, window: str = "hann", highest: int = 40,
             samples: int = 4000, kpoints=None, grid=None, little_group: bool = True,
             nbnd: int | None = None, conv_thr: float = 1.0e-10, k_batch="default",
-            block_steps: int = 400, checkpoint=None, calculation=None) -> HarmonicSpectrum:
+            block_steps: int = 400, checkpoint=None, potential: str = "frozen",
+            corrector: int = 1, calculation=None) -> HarmonicSpectrum:
     """The high-harmonic spectrum ``|w J(w)|^2`` of a crystal driven by ``pulse``.
 
     The propagation of :func:`run_realtime`, then
@@ -299,6 +335,7 @@ def run_hhg(system, pseudos, density, pulse: Pulse, *, dt: float = 0.1,
                           kpoints=kpoints, grid=grid, little_group=little_group,
                           nbnd=nbnd, conv_thr=conv_thr, k_batch=k_batch,
                           block_steps=block_steps, checkpoint=checkpoint,
+                          potential=potential, corrector=corrector,
                           calculation=calculation)
     spectrum = harmonic_spectrum(result.times, result.current, float(omega),
                                  window=window, highest=highest, samples=samples)
@@ -312,7 +349,8 @@ def run_harmonic_orders(system, pseudos, density, *, frequency: float,
                         steps_per_period: int | None = None, kpoints=None, grid=None,
                         little_group: bool = True, nbnd: int | None = None,
                         conv_thr: float = 1.0e-10, k_batch="default",
-                        block_steps: int = 400, calculation=None) -> OrdersResult:
+                        block_steps: int = 400, potential: str = "frozen",
+                        corrector: int = 1, calculation=None) -> OrdersResult:
     """``J^(n)(t)`` under the adiabatic field ``lam exp(eta t) cos(w t) e``, ``n <= order``.
 
     ``frequency`` and ``broadening`` in eV. The run starts ``eta_t/eta``
@@ -334,7 +372,7 @@ def run_harmonic_orders(system, pseudos, density, *, frequency: float,
     length = math.ceil(float(eta_t) / eta / period) * period
     shape = Adiabatic(amplitude=1.0, omega=omega, eta=eta, eta_t=length * eta,
                       polarization=tuple(unit))
-    kset, rotations = _kset(system, shape, kpoints, grid, little_group)
+    kset, rotations, group = _kset(system, shape, kpoints, grid, little_group)
     calc, states, weights, v_scf = _occupied_states(
         system, pseudos, density, kset, nbnd=nbnd, conv_thr=conv_thr,
         k_batch=k_batch, calculation=calculation)
@@ -346,9 +384,9 @@ def run_harmonic_orders(system, pseudos, density, *, frequency: float,
     result = propagate_orders(calc, states, weights, v_scf, shape,
                               dt=period / int(steps_per_period), order=order,
                               start=-length, duration=length, k_batch=k_batch,
-                              block_steps=block_steps)
-    if rotations is not None:
-        result.currents = np.einsum("sab,ntb->nta", rotations, result.currents) / len(rotations)
+                              block_steps=block_steps, potential=potential,
+                              corrector=corrector, symmetrise=rotations,
+                              density_symmetry=group)
     return result
 
 
@@ -431,6 +469,7 @@ def run_third_harmonic(system, pseudos, density, *, frequency: float,
                        kpoints=None, grid=None, little_group: bool = True,
                        nbnd: int | None = None, conv_thr: float = 1.0e-10,
                        k_batch="default", block_steps: int = 400,
+                       potential: str = "frozen", corrector: int = 1,
                        calculation=None) -> ThirdHarmonic:
     """``chi^(3)`` of a cubic crystal at ``frequency`` (eV) by the real-time route.
 
@@ -443,7 +482,8 @@ def run_third_harmonic(system, pseudos, density, *, frequency: float,
     options = dict(frequency=frequency, broadening=broadening, eta_t=eta_t,
                    steps_per_period=steps_per_period, kpoints=kpoints, grid=grid,
                    little_group=little_group, nbnd=nbnd, conv_thr=conv_thr,
-                   k_batch=k_batch, block_steps=block_steps, calculation=calculation)
+                   k_batch=k_batch, block_steps=block_steps, potential=potential,
+                   corrector=corrector, calculation=calculation)
     along = run_harmonic_orders(system, pseudos, density, direction=(1.0, 0.0, 0.0),
                                 **options)
     third, first = chi3_from_orders(along, axis=0)
