@@ -4145,6 +4145,23 @@ print(run.work, run.energy_gained)          # Omega int J.E dt against E(T) - E(
 print(run.norm_drift, run.excited)          # electrons per cell left across the gap
 \end{pycode}
 
+\textbf{Where each piece is.} The five \code{Calculator} methods of this section
+delegate to \code{run\_realtime}, \code{run\_realtime\_dielectric},
+\code{run\_hhg}, \code{run\_harmonic\_orders} and \code{run\_third\_harmonic}
+(\code{defumat.workflows.realtime}, which also has \code{field\_little\_group},
+\code{chi3\_from\_orders}, \code{chi2\_from\_orders} and \code{CHI3\_AU\_TO\_SI}),
+and those to \code{propagate} and \code{propagate\_orders} (\code{defumat.realtime}),
+which take a \code{Calculation}, the states, their weights and the potential to
+freeze, and return a \code{RealTimeResult} or an \code{OrdersResult}
+(\code{fourier\_component} projects an order on a harmonic). \code{conductivity\_from\_kick}
+and \code{harmonic\_spectrum} turn a current into a \code{KickResponse} or a
+\code{HarmonicSpectrum}. The pulses are behind \code{get\_pulse} and
+\code{register\_pulse}, the steps behind \code{get\_propagator} and
+\code{register\_propagator} (\code{taylor4}, with \code{largest\_stable\_step}
+saying how long a step the cell admits), the projectors' table is
+\code{radial\_table}, and the dense frequency-domain hierarchy the orders are
+checked against is \code{dense\_orders}.
+
 \textbf{The k-set} is a whole unshifted grid, because the current is a polar
 vector and time reversal does not hold under a field (the state at
 $-\mathbf k$ evolves under $-\boldsymbol\kappa$). What reduces it is the
