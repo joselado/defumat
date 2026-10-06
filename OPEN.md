@@ -7423,7 +7423,10 @@ What the agents of this sweep's follow-up found outside their items, recorded ra
 
 ## Found in passing, 2026-10-06
 
-- **Derivatives of `H(k)` above the first are wrong on the row `k + G = 0`.** Found by the review
+- ~~**Derivatives of `H(k)` above the first are wrong on the row `k + G = 0`.**~~ **Closed
+  2026-10-06 by `d0f8492` (P134)**, the repair proposed below: on `si2-nosym` at Gamma the second
+  and third derivatives against a central difference read 1.05e-8 and 1.64e-8 at `h = 3e-4`, where
+  master reads 2.56e-2 and 9.28e-2 at every step. Found by the review
   of `HARMONICS-NEXT.md` and reproduced the same day with the same script. On `si2-nosym.in`
   (4x4x4, `ecutwfc = 12`, starting wavefunctions, eight bands), `VelocityOperator.second_matrix_elements`
   `xx` against a central difference of `matrix_elements` at `k +- h x`: at `Gamma` the two differ by
@@ -7442,3 +7445,70 @@ What the agents of this sweep's follow-up found outside their items, recorded ra
   regular solid harmonic times `g_l(q^2) = f_l(q)/q^l`, which needs no guard at any order
   (`HARMONICS-NEXT.md`, "The row at k + G = 0"); its test is the measurement above at `Gamma`, at
   second and at third order.
+
+- **The shift current's recorded numbers do not move with the rows at `k + G = 0` rewritten
+  (`d0f8492`), and what moves is Gamma's own two transitions and nothing else** (measured
+  2026-10-06 on D22, cores 2 and 3, master `532dca3` against `d0f8492`, `run_shift_current` on
+  `alas-raman.in` at 10 Ry, the whole unshifted mesh, 14 bands, `window = 0.9`, `nw = 180`, a
+  Gaussian of 0.01 Ry). At Gamma the states are bit-identical and `dH/dk` moves by 6.2e-17 Ry bohr
+  while `w^ab` moves by up to 8.4e-2 Ry bohr^2, on the elements pairing the `Gamma_1` states with
+  the `Gamma_15` triplets, so the tensor moves only where `Gamma_15v -> Gamma_1c` (2.85 eV, the
+  edge) and `Gamma_15v` to the upper `Gamma_1` (9.04 eV) contribute: Gamma's resonance at the edge
+  is scaled by 1.0077 (1.010 at 16 and 22 Ry), and the move falls as Gamma's weight does, 5.89e-8,
+  1.75e-8 and 7.36e-9 A/V^2 on 4x4x4, 6x6x6 and 8x8x8 (ratios 3.37 and 8.0 against 216/64 and
+  512/64). Every recorded figure holds at its printed precision on both arms: notebook 32's
+  44.2 uA/V^2 at 3.56 eV, the sweep's 33.93, 33.73, 34.90 and 35.08 at 4.17 eV (so the entry above's
+  "35.1 has not been taken again" now reads **35.08 on both**), the 6x6x6 peak 1.145e-4 at 4.38 eV,
+  the forbidden components, the silicon control and the spin sum. The one figure that moves is the
+  2 eV tail, Gamma's edge Gaussian alone, 4.285e-24 to 4.318e-24 on 6x6x6, which still prints as
+  4.3e-24. A mesh shifted by 1/8 gives a bit-identical tensor. The diamagnetic weight
+  `conductivity.py`, P51 and `test_conductivity.py:166` quote is taken by a central difference whose
+  arms lie outside the guard and was right on master (0.942320 on both arms); only its nested-`jvp`
+  form moved, which no production path reads. Raman tensors and the dielectric tensor agree across
+  the arms to 2.1e-15.
+
+- **The Hubbard projectors have the first-order form of the same defect, and nothing repairs it.**
+  `pseudo/atomic.py` builds `wfcU` from the guarded modulus and the guarded harmonics with no origin
+  rule, so an `l = 1` orbital's row at `k + G = 0` has a zero tangent where it should have
+  `c g_1(0)`. Measured 2026-10-06 on `bn-ldau-noncol.in` (N-2p, U = 2 eV) at Gamma, against a central
+  difference on the same frozen sphere: with `HUBBARD atomic` the p_x column's row at `G = 0` reads
+  1.251 against a tangent of 7.1e-3, the same at `h = 1e-3` and `3e-4`; as committed,
+  `ortho-atomic`, the two spinor rows are off by 1.42 and every other row by 0.45 through the
+  tangent of `O^{-1/2}`; at `(0.05, 0.02, 0)` both read the stencil's `h^2`. In the operator,
+  `<psi_m|dH/dk_x|psi_n>` at Gamma with the converged `ns` differs from the difference by
+  **4.5e-2 on a largest element of 0.24 Ry bohr**, 19 per cent. Only a p shell shows it, in the
+  Hubbard manifold or anywhere in an `ortho-atomic` set: `bn-ldau-noncol.in` and `n2-ldau-texture.in`
+  have it, the nickel cells (4s, 3d) read zero where zero is right. The consumers are the optical
+  conductivity, the Kubo curvature and `band_velocities` with `ns=` on a mesh holding Gamma; no
+  recorded number uses them, and the DFT+U force and stress are safe. The repair is `d0f8492`'s
+  with `chi` for `beta`, `i^l` for `(-i)^l` and `atomic_form_factors`' 10-bohr mesh for `kkbeta`,
+  and the real-time refusal of DFT+U waits on it.
+
+- **`get_shg`'s sum over states is short of the complete answer by the projectors' curvature, 5 to
+  9 per cent on AlAs, and its sign is the opposite of the physical electron's.** Found 2026-10-06 by
+  the second-order step of P135's ladder. The real-time `chi^(2)`, which agrees with the dense
+  frequency-domain hierarchy to 3e-4 and 6e-5 on AlAs at 12 Ry, is `-conj(chi_get_shg)` at every
+  frequency, broadening, mesh and cutoff tried: the conjugate is `second_harmonic`'s `w - i eta` in
+  both denominators (`response/shg.py:493`, Elk's `nonlinopt.f90:203`), and the minus is the charge,
+  which `chi^(2)` is odd in and which neither `shg.py:658` nor Elk's `t0 = wkptnr/omega` carries, so
+  below the gap `chi_xyz` of AlAs with Al at the origin is negative in `get_shg` and in Elk and
+  positive for an electron of charge -1. With every band of the sphere the two still differ by 7.5,
+  6.8 and 5.0 per cent at 0.4, 0.7 and 1.5 eV (12 Ry, 4x4x4, `eta` 0.2 eV), 8.6, 8.2 and 5.9 on
+  8x8x8, 6.8 to 6.0 at 16 Ry: not the mesh. With `D_ij = 0` and the local potential tripled to keep
+  a gap the same comparison closes to 6.2e-4 at 12 Ry and 2.2e-5 at 8 Ry, so it is the projectors,
+  and by elimination their curvature: the Hughes and Sipe sum rule puts the free-electron
+  `delta_ab` where `<n|d^2H/dk_a dk_b|m>` belongs, which is the substitution `photocurrent.py`'s
+  docstring names as wrong for a nonlocal pseudopotential. A truncated sum looks better than a
+  complete one (1.35, 0.68, 1.20 per cent at 23, 40, 80 bands), because the truncation cancels part
+  of the missing term. Two decisions are the user's: whether `get_shg` carries the
+  `<n|d^2 V_NL/dk_a dk_b|m>` term (the operator exists, `VelocityOperator.second_matrix_elements`),
+  and whether its sign is flipped to the electron's or documented. The test
+  `tests/regression/test_realtime_shg.py` asserts the relation as it stands, `-conj` to 4e-2.
+
+- **Three recorded shift-current figures do not reproduce on master on D22**, the same on both
+  arms of the comparison above, so they are not the repair: notebook 32's forbidden components and
+  spread, recorded 4.0e-9 and 8.1e-10 of the allowed, read 9.7e-10 and 4.0e-10 by the notebook's own
+  route; `_GRID_RESIDUE_SHIFT`'s silicon residues, 1.2e-8, 1.1e-11 and 5.3e-12 A/V^2, read 8.4e-9,
+  6.2e-12 and 1.76e-11 at `run_shift_current`'s defaults, so the settings they were taken at were
+  not recovered; and `test_photocurrent.py`'s spinor docstring says 4.6e-9 where it has read 4.5e-9
+  since `27eeaa2`.

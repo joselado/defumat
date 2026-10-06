@@ -4095,12 +4095,20 @@ potential in time is not here.
 
 \textbf{The step} is the fourth-order Taylor expansion of
 $\exp[-iH(t+\Delta t/2)\,\Delta t]$, four Hamiltonian applications, which is
-stable for $|\Delta t\,\rho| \le 2\sqrt2$ with $\rho$ the spectral radius of $H$
-about the centre the step subtracts. The run bounds the spectrum before it
-starts (the kinetic, local and nonlocal terms separately, by Weyl's
-inequality) and refuses a step past the bound by name, since a Taylor
-instability grows exponentially and reads as physics for the first thousand
-steps. \code{dt} is in Hartree atomic units of time, 24.189~as, as Elk's
+stable for $|\Delta t\,(\epsilon-c)| \le 2\sqrt2$ for every eigenvalue $\epsilon$,
+with $c$ the energy the step subtracts. $c$ is the carried states' mean energy
+over every k-point and is never moved: a component at $\epsilon$ loses
+$(\Delta t(\epsilon-c))^6/144$ of its norm a step, so a centre pushed off the
+bands to keep a long step stable damps the very states the current is made of,
+which on AlAs at 12~Ry took the first-order current from $9.5\times10^{-9}$ to
+$2\times10^{-20}$ in 800 steps of 0.305 that a half-width criterion accepted. So
+the run bounds the spectrum before it starts (the top by Weyl's inequality on the
+kinetic, local and nonlocal terms; the bottom from the carried states, since the
+local potential's minimum puts Weyl's bottom ten times too low), refuses a step
+for which the farther edge is out of reach of $c$, warns when the carried bands
+will lose more than $10^{-4}$ of their norm over the run, and stops if a norm
+grows, since a Taylor instability grows exponentially and reads as physics for
+the first thousand steps. \code{dt} is in Hartree atomic units of time, 24.189~as, as Elk's
 \code{dtimes} is; the published silicon runs use 0.08 to 0.1. The projectors at
 $\mathbf k+\boldsymbol\kappa$ come from a Chebyshev table of the radial
 functions in $q^2$ built once per dataset, within $10^{-13}$ of the radial
@@ -4112,9 +4120,15 @@ here (\code{Gaussian}: a Gaussian-enveloped sine with a phase and a chirp,
 \code{genafieldt.f90}'s; \code{Ramp}, a polynomial ramp; \code{Kick}, a step in
 $\mathbf A$), the $\sin^2$ envelope of the high-harmonic literature
 (\code{Sin2}), and the adiabatic switch-on $e^{\eta t}\cos\omega t$
-(\code{Adiabatic}) the perturbative orders use. A peak intensity in W/cm$^2$
-becomes $E_0 = \sqrt{I/3.51\times10^{16}}$ atomic units, which is what Elk
-prints as the peak power density.
+(\code{Adiabatic}) the perturbative orders use, all importable as
+\code{from defumat.realtime import Sin2}. A peak intensity in W/cm$^2$ becomes
+$E_0 = \sqrt{I/3.51\times10^{16}}$ atomic units, which is what Elk prints as the
+peak power density. \textbf{The sign of the coupling is the electron's and is not
+Elk's}: here an electron of charge $-1$ sees $H(\mathbf k+\mathbf A/c)$, where
+Elk adds $-\mathbf A\cdot\mathbf p/c$ and writes $\sum\langle\mathbf p\rangle -
+\mathbf A N/c$ with no charge; for the same $\mathbf A$ the conductivity, the
+dielectric function and the odd orders agree in sign with Elk's
+\code{JTOT\_TD}$/\Omega$, and the even orders are opposite.
 
 \begin{pycode}
 from defumat import Calculator
@@ -4219,6 +4233,19 @@ print(hhg.cutoff(floor=1e-6))     # the highest odd order above 1e-6 of the firs
 print(hhg.realtime.excited)       # electrons per cell promoted by the pulse
 \end{pycode}
 
+Notebook 50 runs silicon and AlAs under the same eight-cycle 800~nm pulse at
+$3\times10^{12}$~W/cm$^2$ along $[111]$, which keeps the same six operations in both
+crystals: silicon's comb is odd to the 19th harmonic (29~eV) at a floor of
+$10^{-6}$ of the fundamental, its 4th harmonic 0.0095 of its 5th, where AlAs's is
+0.26 and its 8th 0.35 of its 7th. The direction is not a free choice: what forbids
+an even harmonic is any operation that reverses the field, and along $[100]$
+zincblende's two-fold axis about $[010]$ does, so AlAs along $[100]$ is odd-only
+(its 4th, 6th and 8th harmonics $1.5\times10^{-2}$, $7\times10^{-4}$ and
+$9\times10^{-5}$ of the fundamental, against 0.45, 0.12 and 0.033 along $[111]$).
+The plateau's end moves with the field (9, 15, 19, 27 and 31 from 1 to
+$5\times10^{12}$~W/cm$^2$ on silicon's $4^3$ grid) and with the basis (the 19th at
+12~Ry, the 23rd at 20).
+
 Two properties of a solid's spectrum belong here rather than in a surprise. The
 spectrum of one cell without dephasing is noisy above the gap and converges
 slowly in k, and published work either adds a dephasing time of a few
@@ -4291,6 +4318,53 @@ steps a period and to $4.9\times10^{-6}$ to $7.6\times10^{-6}$ at 800, the midpo
 rule's $\Delta t^2$. The even orders there are the size of the odd ones, so they
 are compared and not a residue.
 
+\textbf{The second order against \code{get\_shg}} pins the factors the
+first order cannot: the $\tfrac12$ and $\tfrac14$ of the cosine, $J = \dot P$ and
+the normalisation of $\chi^{(2)}$. With $\chi^{(2)}(-2\omega;\omega,\omega) =
+-2iJ_{(2,2)}/z^3$ (\code{chi2\_from\_orders}) on AlAs at 12~Ry, $4^3$, along
+$[111]$, the propagation reads $124.92+20.12i$~pm/V at 0.7~eV against the dense
+hierarchy's $124.93+20.16i$, and the relation to \code{get\_shg} is
+$\chi^{\mathrm{RT}} = -\overline{\chi^{\mathrm{SoS}}}$ at every frequency,
+broadening, mesh and cutoff tried. The conjugate is the sum over states' time
+convention ($\omega-i\eta$ in both denominators, as Elk's \code{nonlinopt.f90}
+writes it); the minus is the charge, to which $\chi^{(2)}$ is odd and which the
+sum over states does not carry, so below the gap the real-time $\chi_{xyz}$ of
+AlAs with Al at the origin is positive where \code{get\_shg}'s and Elk's are
+negative. And with every band of the sphere the sum over states is still 5 to 9
+per cent short, on every mesh: with the projectors switched off the two close to
+$2\times10^{-5}$, so what the sum misses is the projectors' curvature
+$\langle n|\partial^2V_{NL}/\partial k_a\partial k_b|m\rangle$, which its sum
+rule replaces by the free electron's $\delta_{ab}$. A truncated sum agrees better
+(1.35 per cent at 23 bands) because the truncation cancels part of the missing
+term; the regression test pins the relation as it stands.
+
+\textbf{The third order against a finite difference} of four full runs at
+$\lambda = \pm h, \pm2h$, which shares the propagator and checks only the
+differentiation: $6.5\times10^{-6}$ at $h = 3\times10^{-4}$ over the whole
+$J^{(3)}(t)$, falling as $h^2$ above that.
+
+\textbf{Silicon at 1.55~eV} against arXiv:1810.06500, whose LDA values are
+$|\chi^{(3)}_{xxxx}(\omega)| = 2.2\times10^{-18}$ and
+$|\chi^{(3)}_{xxxx}(3\omega)| = 1.3\times10^{-18}$~m$^2$/V$^2$. Converged in the
+mesh at 12~Ry ($20^3$ to $28^3$, the field's wedge), the frozen potential gives
+$0.94\times10^{-18}$ and $0.66\times10^{-18}$ at $\eta = 0.2$~eV and
+$1.36\times10^{-18}$ and about $1.0\times10^{-18}$ at 0.1~eV (the third harmonic
+oscillating by 10 per cent with the mesh there), with the phase delays 0.52 and
+0.64~fs against the paper's 0.6 and 0.7, and $\chi^{(1)} = 14.3$ against its
+15.2. It is the same scale and smaller by about two, and three differences
+could not be separated from that factor: their potential is updated in time (no
+local fields and no ALDA kernel here), their lattice is 10.26~bohr against 10.2,
+and their extraction is a fit to a filtered 20~fs pulse where this is a
+Lorentzian $\eta$ per photon. Those mesh points come from the dense hierarchy,
+which agrees with the propagation on every cell both were run on
+($4.8\times10^{-5}$ on $2^3$ at $\eta T = 12$) and costs 0.35~s a k-point at
+169 plane waves, two orders of magnitude below the propagation at this cutoff.
+\textbf{The velocity gauge's mesh artefact is the size of the answer on a coarse
+mesh}: the band-curvature term of the linear response is 135, 30, 7.5 and 1.8 in
+$\chi^{(1)}$ on $2^3$ to $8^3$, and its quartic sibling as large as the whole
+$\chi^{(3)}(3\omega)$ on $2^3$, so a third harmonic on a mesh below $12^3$ is not
+silicon's.
+
 \textbf{What it costs.} One run serves one frequency, and its length is
 $T = \ln(C/\varepsilon)/\eta$ for a start transient of relative size
 $\varepsilon$, which does not decay because the evolution is unitary: at
@@ -4311,7 +4385,9 @@ published pulse's peak $\kappa = 0.11$~bohr$^{-1}$, which is the size of what is
 missing. \textbf{\code{nspin} = 2 and spinors}: two channels or one spinor
 Hamiltonian with no new physics, refused for want of a linear reference to check
 them against, since the optical conductivity and $\chi^0$ both refuse collinear
-spin. \textbf{DFT+$U$}, until its linear check is run. \textbf{A spin spiral} and
+spin. \textbf{DFT+$U$}, until the Hubbard projectors' own row at
+$\mathbf k+\mathbf G=0$ is repaired (their first derivative at $\Gamma$ is 19 per
+cent off for a p shell) and the linear check is run. \textbf{A spin spiral} and
 \textbf{gamma-only storage}. \textbf{A ground state converged under a magnetic
 field or a constrained moment}, for the response stack's reason.
 \textbf{A symmetry-reduced k-set passed as \code{kpoints}} (pass \code{grid=}, which

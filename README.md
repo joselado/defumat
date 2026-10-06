@@ -476,6 +476,16 @@ adiabatic local kernel can. `calc.get_absorption(frequencies)`, notebook
   much of the light shone on a crystal comes back at twice the frequency, a
   polar rank-3 tensor that vanishes in any centrosymmetric crystal.
   `calc.get_shg()`, notebook [33](notebooks/33_second_harmonic_generation.ipynb).
+- **High-harmonic generation**, the light a crystal emits at multiples of a laser's
+  frequency when driven hard: the occupied states propagated in time under
+  $H(\mathbf k + \mathbf A(t)/c)$, a plateau of odd harmonics in silicon and every
+  order in zincblende AlAs, and the dielectric function from a kick on the way.
+  `calc.get_hhg(pulse)`, `calc.get_realtime(pulse)`, notebook
+  [50](notebooks/50_high_harmonics.ipynb).
+- **The third harmonic**, $\chi^{(3)}(-3\omega;\omega,\omega,\omega)$, and the
+  intensity-dependent index $\chi^{(3)}(-\omega;\omega,\omega,-\omega)$, taken as
+  derivatives of the propagation with respect to the field strength.
+  `calc.get_third_harmonic(frequency)`.
 
 ### Topology and polarization
 

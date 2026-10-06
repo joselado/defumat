@@ -463,10 +463,12 @@ The validation is a ladder and the order is the point of it:
    algebra with every band, against the nested `jvp` of the propagation on the same
    cell. This is the check of the model carried to the code, and it is what would show
    the origin row if its repair were incomplete.
-4. $J^{(3)}$ on silicon at 1.55 eV against arXiv:1810.06500, which reports
-   $\chi^{(3)}_{1111}(\omega)=2.5\times10^{-18}$ and
-   $\chi^{(3)}_{1111}(3\omega)=3.0\times10^{-18}$ m$^2$/V$^2$ in the LDA
-   ($5.2\times10^{-19}$ and $1.2\times10^{-18}$ with TB-mBJ). That calculation updates
+4. $J^{(3)}$ on silicon at 1.55 eV against arXiv:1810.06500, whose own TDDFT values
+   (Table V) are $|\chi^{(3)}_{1111}(\omega)|=2.2\times10^{-18}$ and
+   $|\chi^{(3)}_{1111}(3\omega)|=1.3\times10^{-18}$ m$^2$/V$^2$ in the LDA
+   ($8.6\times10^{-19}$ and $1.4\times10^{-18}$ with TB-mBJ). *Corrected 2026-10-06
+   (P135): this item first quoted 2.5e-18 and 3.0e-18, which are the table's
+   optical-polarizability column and its $3\chi_{1122}(\omega)$ row.* That calculation updates
    the Hartree and exchange-correlation potentials and extracts from pulses, so it is a
    check of scale and not of digits, and at this frequency $3\omega$ is above the LDA
    gap, so the value depends on $\eta$. Their $\chi^{(3)}(\omega)$ is the $(3,1)$
