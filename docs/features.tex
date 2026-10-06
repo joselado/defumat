@@ -4170,7 +4170,8 @@ has to be chosen small; \code{strength=} runs a finite kick as Elk does.
 
 \begin{pycode}
 eps = calc.get_realtime_dielectric(direction=(1, 0, 0), broadening=0.5,
-                                   window=10.0, nw=200, grid=(4, 4, 4), dt=0.2)
+                                   window=10.0, nw=200, grid=(4, 4, 4), dt=0.2,
+                                   subtract_static=True)
 print(eps.frequencies_ev[:3], eps.epsilon[:3, 0])   # eps_xx(w + i eta)
 \end{pycode}
 
@@ -4188,9 +4189,12 @@ on a coarse one: a spurious Drude term. Measured on two-atom silicon at 6~Ry on
 two k-points, against the Kubo resolvent sum fed every eigenstate of the dense
 $H(\mathbf k)$ and $D$ from a difference of the dense eigenvalues: the two agree
 to $1.6\times10^{-5}$ of the scale from 0.5 to 16~eV with the term, and differ by
-the whole scale, 0.81 against 0.81, without it. \code{subtract\_static=True}
+the whole scale, 0.81 against 0.81, without it. On the $4^3$ grid of the
+snippet the term makes $\epsilon_{xx}$ at $\omega\to0$ read $-278$ with
+$\eta = 0.5$~eV, since it grows as $1/\eta^2$ there; \code{subtract\_static=True}
 removes the constant part of $\mathbf J$ first, as Elk's \code{jtconst0} does,
-which is right only once the current has settled to it.
+which is right only once the current has settled to it, and on a converged
+mesh it is not needed.
 
 \subsection{The high-harmonic spectrum}
 
