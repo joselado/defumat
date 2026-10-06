@@ -32,7 +32,7 @@ from pathlib import Path
 import numpy as np
 
 from defumat import Calculator
-from defumat.realtime.pulse import EV_TO_HA
+from defumat.realtime.orders import fourier_component
 from defumat.workflows.realtime import CHI3_AU_TO_SI
 
 repo = Path(__file__).resolve().parents[2]
@@ -63,6 +63,13 @@ for grid, eta in cases:
     z = orders.shape.omega + 1j * orders.shape.eta
     chi1 = 4.0 * math.pi * 2.0 * complex(orders.component(1, 1, axis=0)) / z**2
     third, first = result.chi_xxxx_3w, result.chi_xxxx_w
+    # the steady state is exp(3 eta t) times a periodic function, so its
+    # coefficient projected over the period before the last is the same; what
+    # differs is the start transient, which does not decay
+    per = int(round(2.0 * math.pi / orders.shape.omega / orders.dt))
+    earlier = {m: abs(complex(fourier_component(orders.times[:-per], orders.currents[3][:-per],
+                                                3, m, orders.shape.omega, orders.shape.eta)[0])
+                      / complex(orders.component(3, m, axis=0)) - 1.0) for m in (3, 1)}
     record = {
         "ecut": ecut, "grid": grid, "eta_eV": eta, "eta_t": eta_t,
         "steps_per_period": steps_per_period, "dt": orders.dt,
@@ -79,6 +86,7 @@ for grid, eta in cases:
         "J31": [complex(orders.component(3, 1, axis=0)).real,
                 complex(orders.component(3, 1, axis=0)).imag],
         "transverse_J3_max": float(np.abs(orders.currents[3][:, 1:]).max()),
+        "transient_J33": earlier[3], "transient_J31": earlier[1],
         "chi3_au_to_si": CHI3_AU_TO_SI,
     }
     records.append(record)
