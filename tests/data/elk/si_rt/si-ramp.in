@@ -1,0 +1,26 @@
+! Silicon at the settings of Elk's examples/TDDFT-time-evolution/Si-ramp, for the
+! current under a vector potential growing as 0.001 t^2 along x (Elk's ramp, a
+! field growing linearly in time).
+!
+! Matched to the Elk input: the lattice (a = 10.26 bohr), PBE (Elk's xctype 20),
+! the unshifted 12x12x12 grid. The cutoff is set by the shift and not by the
+! ground state: at t = 500 the field has moved the crystal momentum by
+! kappa = 250/137.036 = 1.82 1/bohr, so the frozen sphere's cutoff along the
+! field is (sqrt(ecutwfc) - 1.82)^2, 13.4 Ry at ecutwfc = 30.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.26, nat = 2, ntyp = 1,
+    ecutwfc = 30.0
+ /
+ &electrons
+    conv_thr = 1.0d-11
+ /
+ATOMIC_SPECIES
+ Si 28.086 Si.pbe-rrkj.UPF
+ATOMIC_POSITIONS crystal
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS (automatic)
+ 12 12 12 0 0 0
