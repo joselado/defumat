@@ -57,6 +57,7 @@ missing, are indexed at the head of `PLAN.md` §3.
 | what is left to do about GPU memory after `memory_mode`, sized and ranked | `GPU-MEMORY-NEXT.md` |
 | what is left to do about GPU speed and the Davidson stall, sized, and the replay tools | `GPU-SPEED-NEXT.md` |
 | which mixer a cell with vacuum wants, what the literature has, and what is left | `VACUUM-MIXING-NEXT.md` |
+| the plan for real-time propagation, high harmonics and the third harmonic, with what was checked | `HARMONICS-NEXT.md` |
 
 **The claims in this project are numbers, not adjectives.** A phase is done when it has a
 concrete figure against `pw.x`, against Elk, or against an identity that shares no

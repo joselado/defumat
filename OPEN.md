@@ -7420,3 +7420,25 @@ What the agents of this sweep's follow-up found outside their items, recorded ra
   2026-10-03 and nothing caught it, since the file is in the slow set; the commit is not found (the
   bisection is over master's history, with this file's test as the probe).
 
+
+## Found in passing, 2026-10-06
+
+- **Derivatives of `H(k)` above the first are wrong on the row `k + G = 0`.** Found by the review
+  of `HARMONICS-NEXT.md` and reproduced the same day with the same script. On `si2-nosym.in`
+  (4x4x4, `ecutwfc = 12`, starting wavefunctions, eight bands), `VelocityOperator.second_matrix_elements`
+  `xx` against a central difference of `matrix_elements` at `k +- h x`: at `Gamma` the two differ by
+  **3.46e-2 Ry bohr^2** in one element, on a block of Frobenius norm 5.15, the same at `h = 1e-3` and
+  at `3e-4`; at k-points 1 and 5 they differ by 2.4e-7 and 2.6e-7 at `1e-3` and by 2.1e-8 and 2.3e-8
+  at `3e-4`, which is the stencil's `h^2`. Both arms of the stencil are outside the guard, so the
+  finite difference is the derivative and the nested `jvp` is what is wrong. The mechanism:
+  `gvectors.modulus` returns a flat zero inside `|q|^2 <= ORIGIN_TOL` (`basis/gvectors.py:107`), the
+  harmonics zero a vector with no direction, and `_origin_tangent_rule` (`pseudo/projectors.py:568`)
+  puts back only the first tangent of the `l = 1` column, so the curvature of the `l = 0` form factor
+  at `q = 0`, the `q_a q_b` growth of `l = 2` and the cubic part of `l = 1` are differentiated as zero.
+  The consumer today is the shift current (`response/photocurrent.py:647`), on a full unshifted mesh,
+  which always contains `Gamma`. **Whether any recorded number moves has not been measured**: P53's
+  8.9e-9 agreement of `apply_second` with a central difference was evidently taken away from `Gamma`,
+  and AlAs's 35.1 uA/V^2 has not been taken again. The repair proposed is to write the column as a
+  regular solid harmonic times `g_l(q^2) = f_l(q)/q^l`, which needs no guard at any order
+  (`HARMONICS-NEXT.md`, "The row at k + G = 0"); its test is the measurement above at `Gamma`, at
+  second and at third order.
