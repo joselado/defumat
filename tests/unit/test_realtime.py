@@ -232,3 +232,26 @@ def test_what_is_refused_is_refused_by_name(pseudo_dir):
         _kset(silicon, pulse, silicon.kpoints, None, True)
     _, rotations = _kset(silicon, pulse, None, (4, 4, 4), True)
     assert len(rotations) == 8, "a [100] field keeps eight of silicon's 48"
+
+
+def test_a_checkpoint_resumes_after_the_chunks_it_records(pseudo_dir, tmp_path):
+    """A run that finds its own checkpoint returns the recorded current unchanged.
+
+    The unit of restart is a finished k-chunk, which in the frozen mode is
+    independent of every other: the file holds the current and the energy
+    summed over the chunks done, and a run on the same time grid and k-set
+    starts after them. A file from another grid is ignored.
+    """
+    calculation, states, weights, v_scf = _silicon(pseudo_dir)
+    pulse = Sin2.from_intensity(1e11, 1.55, 1)
+    path = tmp_path / "rt.npz"
+    first = propagate(calculation, states, weights, v_scf, pulse, dt=0.2,
+                      block_steps=200, k_batch=4, checkpoint=path)
+    saved = np.load(path)
+    assert int(saved["done"]) == 2
+    again = propagate(calculation, states, weights, v_scf, pulse, dt=0.2,
+                      block_steps=200, k_batch=4, checkpoint=path)
+    np.testing.assert_array_equal(again.current, first.current)
+    other = propagate(calculation, states, weights, v_scf, pulse, dt=0.25,
+                      block_steps=200, k_batch=4, checkpoint=path)
+    assert other.current.shape != first.current.shape

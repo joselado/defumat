@@ -44,6 +44,18 @@ Hamiltonian is in Ry, and the step exponentiates ``H_Ry dt_Ry`` with
 ``dt_Ry = dt / 2``, the internal time unit being ``hbar/Ry`` = 48.4 as. That is
 the one conversion.
 
+**Memory.** Nothing is differentiated in reverse through time, so there is
+no tape: the current is one small gradient in ``kappa`` per step, and the
+perturbative orders are forward mode. The resident set is the states,
+``16 nk nbnd npwx`` bytes for the whole mesh (``2^n`` times that inside
+:mod:`defumat.realtime.orders` at order ``n``), and what is in flight is one
+k-chunk: the four Taylor terms and their sum, ``5 x 16 nk_chunk nbnd npwx``,
+``vkb`` at ``k + kappa`` for the chunk, ``16 nk_chunk npwx nkb``, one FFT box
+per band in flight, and the table's Clenshaw recurrence on ``(nk_chunk, npwx,
+nbeta)``, which the current's gradient keeps once per term (32 of them). The
+current is accumulated over chunks on the host as ``(nt, 3)``, never per
+k-point.
+
 **The step** is the fourth-order Taylor expansion of
 ``exp(-i H(t + dt/2) dt)`` (:mod:`defumat.realtime.propagators`), with the
 centre of the spectrum subtracted. The spectrum is bounded rigorously before
