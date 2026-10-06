@@ -547,6 +547,13 @@ class NonlinearSpectrum:
     residual: np.ndarray
     computed_bands: int
     volume: float
+    #: With the potential updated, the same run's currents at the ground
+    #: state's potential, ``{(1, 1): (nw, 3)}``; the shift between the two is
+    #: free of the frozen route's band-curvature term. ``None`` otherwise.
+    frozen_components: dict | None = None
+    #: With the potential updated, the outer GMRES products of each frequency.
+    outer: np.ndarray | None = None
+    potential: str = "frozen"
 
     def _z(self):
         return (np.asarray(self.frequencies) + 1j * float(self.broadening)) * EV_TO_HA
@@ -559,6 +566,23 @@ class NonlinearSpectrum:
         if np.ndim(axis) == 0:
             return value[:, int(axis)]
         return value @ np.asarray(axis, dtype=float)
+
+    def epsilon(self, axis=0, frozen: bool = False):
+        """``eps(w + i eta)`` along ``axis`` from ``J_(1,1)``: ``1 + 8 pi J / z^2``.
+
+        With ``E(z) = i z lam/2``, ``sigma = J_(1,1) / E`` and
+        ``eps = 1 + 4 pi i sigma / z``. With the potential updated it is ``eps_M``
+        with local fields; ``frozen = True`` gives the same run's frozen value.
+        On a coarse mesh both carry the velocity gauge's band-curvature term,
+        ``i D/(Omega z)`` in ``sigma``, and their difference does not.
+        """
+        z = self._z()
+        source = self.frozen_components if frozen else self.components
+        if source is None:
+            raise ValueError("no frozen currents: this run is at the frozen potential already")
+        value = np.asarray(source[(1, 1)])
+        current = value[:, int(axis)] if np.ndim(axis) == 0 else value @ np.asarray(axis, dtype=float)
+        return 1.0 + 8.0 * math.pi * current / z**2
 
     def chi2(self, axis=0):
         """``chi^(2)(-2w; w, w)`` in pm/V along ``axis``, :func:`chi2_from_orders`'s formula."""
@@ -595,19 +619,21 @@ def run_nonlinear_spectrum(system, pseudos, density, *, frequencies, broadening:
     ground-state occupations, so there is no occupation response, as in the
     real-time route.
     """
-    from defumat.realtime.hierarchy import hierarchy_orders
+    from defumat.realtime.hierarchy import hierarchy_linear_self_consistent, hierarchy_orders
 
-    if potential != "frozen":
+    if potential != "frozen" and order != 1:
         raise NotImplementedError(
-            "the frequency-domain hierarchy with the potential updated is not implemented: "
-            "it needs the induced potentials at w, 2w and 3w, each a fixed point of its own "
-            "at every frequency. The real-time route has it at one frequency a run "
+            "the frequency-domain hierarchy with the potential updated is implemented at "
+            "first order only: the second and third orders need the induced potentials at 2w "
+            "and 3w, each a fixed point at every frequency, and they would carry the velocity "
+            "gauge's second-order density artefact, 7 per cent of rho on a 2x2x2 mesh. The "
+            "real-time route has them at one frequency a run "
             "(get_harmonic_orders(potential='hxc'))")
     frequencies = np.atleast_1d(np.asarray(frequencies, dtype=float))
     unit = np.asarray(direction, dtype=float)
     unit = unit / np.linalg.norm(unit)
     kick = Kick(strength=1.0, direction=tuple(unit))
-    kset, rotations, _ = _kset(system, kick, kpoints, grid, little_group)
+    kset, rotations, group = _kset(system, kick, kpoints, grid, little_group)
     if nbnd is None:
         nelec_guess = sum(pseudos[t].z_valence for t in system.structure.types)
         nbnd = 3 * int(math.ceil(nelec_guess / 2)) + 4
@@ -619,12 +645,22 @@ def run_nonlinear_spectrum(system, pseudos, density, *, frequencies, broadening:
         raise ValueError(
             f"nbnd = {bands.shape[1]} leaves no conduction band below the top four for the "
             "hierarchy's projector; pass a larger nbnd")
-    out = hierarchy_orders(calc, bands[:, :computed], energies[:, :computed], weights, v_scf,
-                           omegas=frequencies * EV_TO_HA, eta=float(broadening) * EV_TO_HA,
-                           direction=unit, order=order, tolerance=tolerance,
-                           max_iterations=max_iterations, symmetrise=rotations,
-                           k_batch=k_batch)
+    common = dict(omegas=frequencies * EV_TO_HA, eta=float(broadening) * EV_TO_HA,
+                  direction=unit, tolerance=tolerance, max_iterations=max_iterations,
+                  symmetrise=rotations, k_batch=k_batch)
+    if potential == "frozen":
+        out = hierarchy_orders(calc, bands[:, :computed], energies[:, :computed], weights,
+                               v_scf, order=order, **common)
+        return NonlinearSpectrum(frequencies=frequencies, broadening=float(broadening),
+                                 direction=unit, components=out["components"],
+                                 iterations=out["iterations"], residual=out["residual"],
+                                 computed_bands=computed, volume=out["volume"])
+    out = hierarchy_linear_self_consistent(calc, bands[:, :computed], energies[:, :computed],
+                                           weights, v_scf, potential=potential,
+                                           density_symmetry=group, **common)
     return NonlinearSpectrum(frequencies=frequencies, broadening=float(broadening),
                              direction=unit, components=out["components"],
-                             iterations=out["iterations"], residual=out["residual"],
-                             computed_bands=computed, volume=out["volume"])
+                             iterations=out["iterations"], residual=out["outer_residual"],
+                             computed_bands=computed, volume=out["volume"],
+                             frozen_components=out["frozen"], outer=out["outer"],
+                             potential=potential)

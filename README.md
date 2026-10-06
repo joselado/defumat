@@ -674,7 +674,7 @@ note, the routine or task in the other code's source, is in
 | **Raman tensors** | `calc.get_raman_tensors()` | (✓)¹⁰ | |
 | **Raman and infrared spectra** | `calc.get_vibrational_spectrum()` | ✓ | |
 | **LO-TO splitting and the static dielectric constant** | `calc.get_vibrational_spectrum(loto_direction=...)` | ✓ | (✓)¹¹ |
-| **Optical absorption spectra with excitons** | `calc.get_absorption(frequencies)` | | ✓ |
+| **Optical absorption spectra with excitons** | `calc.get_absorption(frequencies)`; with local fields and the adiabatic kernel band-complete, from the steady state, `calc.get_nonlinear_spectrum(frequencies, order=1, potential='hxc')` | | ✓ |
 | **Optical conductivity**, the Kerr angle and the anomalous Hall conductivity | `calc.get_optical_conductivity()` | (✓)¹² | ✓ |
 | **Shift current** | `calc.get_shift_current()` | ¹³ | |
 | **Second-harmonic generation** | `calc.get_shg()`, and with every band and the projectors' curvature `calc.get_nonlinear_spectrum(frequencies, order=2)` | (✓)¹⁴ | ✓ |

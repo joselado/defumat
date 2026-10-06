@@ -8,7 +8,10 @@ Two comparisons, each an identity rather than an agreement:
   orders one to three at three frequencies, and the result unchanged when the
   projector on the computed bands holds half as many;
 * the spectrum's second and third orders against the real-time route's at one
-  frequency, which shares the table of the projectors and nothing of the solve.
+  frequency, which shares the table of the projectors and nothing of the solve;
+* the first order with the induced potential, self-consistent, against the dense
+  self-consistent solve of :func:`~defumat.realtime.dense.dense_first_order`, and
+  its static shift against the Sternheimer stack's.
 
 ``PLAN.md`` P137 has the measurements.
 """
@@ -25,8 +28,10 @@ import pytest
 
 from defumat.io.pwin import read_pw_input
 from defumat.pseudo import read_upf
-from defumat.realtime.dense import dense_ground_states, dense_hamiltonians, dense_orders
-from defumat.realtime.hierarchy import HierarchyError, hierarchy_orders
+from defumat.realtime.dense import (
+    dense_first_order, dense_ground_states, dense_hamiltonians, dense_orders)
+from defumat.realtime.hierarchy import (
+    HierarchyError, hierarchy_linear_self_consistent, hierarchy_orders)
 from defumat.scf import Calculation
 from defumat.system import build_system
 from defumat.system.kpoints import KPoints
@@ -166,3 +171,75 @@ def test_the_spectrum_is_the_propagation_at_one_frequency(pseudo_dir, tmp_path):
         value = spectrum.component(*key, axis=0)[0]
         scale = max(abs(v) for k, v in references.items() if k[0] == key[0])
         assert abs(value - references[key]) < 3e-4 * scale, (key, value, references[key])
+
+
+@pytest.mark.parametrize("potential", ["hartree", "hxc"])
+def test_the_self_consistent_first_order_is_the_dense_one(pseudo_dir, potential):
+    """``J_(1,1)`` with ``dv_+ = K drho_+`` against ``dense_first_order``, AlAs at 4 Ry.
+
+    Gamma and a general point, ``eta = 0.01`` Ha, at 0.02, 0.05 and 0.11 Ha.
+    Measured: **9e-12 to 5e-11** against the dense self-consistent solve, in 9
+    to 12 outer GMRES products, where the induced potential moves the current
+    by 2.1 to 11.5 per cent with the Hartree kernel and 0.08 to 2.1 per cent
+    with the exchange-correlation one; the same run's frozen current against
+    the dense frozen one 2e-13 to 5e-13.
+    """
+    calculation, v_scf, _, basis, energies = _dense_cell(pseudo_dir, "alas-shg", 4.0, 12)
+    terms = calculation.local_terms(v_scf)
+    nocc = int(round(calculation.nelec / 2))
+    weights = np.repeat(np.asarray(calculation.system.kpoints.weights)[:, None], nocc, axis=1)
+    volume = float(calculation.system.cell.volume)
+    direction = np.array([1.0, 0.0, 0.0])
+    omegas, eta = (0.02, 0.05, 0.11), 0.01
+    out = hierarchy_linear_self_consistent(calculation, basis, energies, weights, v_scf,
+                                           omegas=omegas, eta=eta, direction=direction,
+                                           potential=potential)
+    for iw, omega in enumerate(omegas):
+        reference, _, residual = dense_first_order(calculation, terms, direction, 2 * omega,
+                                                   2 * eta, nocc, potential=potential)
+        frozen, _, _ = dense_first_order(calculation, terms, direction, 2 * omega, 2 * eta, nocc)
+        reference, frozen = -reference / (2.0 * volume), -frozen / (2.0 * volume)
+        value = out["components"][(1, 1)][iw, 0]
+        assert abs(value - reference) < 1e-9 * abs(reference), (omega, value, reference)
+        assert abs(out["frozen"][(1, 1)][iw, 0] - frozen) < 1e-11 * abs(frozen)
+        assert abs(reference - frozen) > 5e-4 * abs(frozen), "the update is load-bearing"
+
+
+def test_the_self_consistent_static_shift_is_the_sternheimer_shift(pseudo_dir):
+    """The local fields' shift of ``eps`` at 0.1 eV against the static Sternheimer one.
+
+    Two-atom silicon at 12 Ry on its 4x4x4 mesh's [100] wedge (eight operations,
+    so the induced density is completed by the field's little group), 0.1 eV
+    and ``eta = 0.1`` eV. The shift ``eps - eps_frozen`` of one run carries
+    none of the velocity gauge's band-curvature term, which is the size of
+    ``eps`` itself on this mesh (``-3760i`` at 0.1 eV), and the static
+    response with every band is ``get_dielectric_tensor`` with
+    ``screening = 'none'``, ``'hartree'`` and ``'full'``: 23.7876, 21.6676 and
+    22.9042. Measured: the hierarchy's shifts -2.119995 - 0.0054i and
+    -0.883446 - 0.0018i against -2.120012 and -0.883444, **8e-6 and 2e-6**,
+    what ``|z|^2`` over the gap squared leaves at that frequency and less.
+    """
+    from defumat import Calculator
+
+    calculator = Calculator.from_file(CASES / "si2-symmetric.in", pseudo_dir=pseudo_dir,
+                                      announce=False)
+    calculator.get_scf(conv_thr=1e-12)
+    static = {screening: float(calculator.get_dielectric_tensor(
+        screening=screening, born_charges=False, threshold=1e-14).epsilon[0, 0])
+        for screening in ("none", "hartree", "full")}
+    for potential, screening in (("hartree", "hartree"), ("hxc", "full")):
+        spectrum = calculator.get_nonlinear_spectrum([0.1], broadening=0.1, order=1,
+                                                     potential=potential, conv_thr=1e-12)
+        shift = complex(spectrum.epsilon(0)[0] - spectrum.epsilon(0, frozen=True)[0])
+        reference = static[screening] - static["none"]
+        assert abs(shift.real - reference) < 5e-5 * abs(reference), (potential, shift, reference)
+        assert abs(shift.imag) < 1e-2 * abs(reference)
+
+
+def test_the_updated_potential_above_first_order_is_refused(pseudo_dir):
+    from defumat import Calculator
+
+    calculator = Calculator.from_file(CASES / "si2-symmetric.in", pseudo_dir=pseudo_dir,
+                                      announce=False)
+    with pytest.raises(NotImplementedError, match="first order only"):
+        calculator.get_nonlinear_spectrum([1.0], order=2, potential="hxc")
