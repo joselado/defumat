@@ -479,13 +479,19 @@ adiabatic local kernel can. `calc.get_absorption(frequencies)`, notebook
 - **High-harmonic generation**, the light a crystal emits at multiples of a laser's
   frequency when driven hard: the occupied states propagated in time under
   $H(\mathbf k + \mathbf A(t)/c)$, a plateau of odd harmonics in silicon and every
-  order in zincblende AlAs, and the dielectric function from a kick on the way.
+  order in zincblende AlAs, and the dielectric function from a kick on the way,
+  at the ground state's potential or with the Hartree and exchange-correlation
+  potentials rebuilt from the density at every step (local fields and the
+  adiabatic kernel, `potential='hxc'`).
   `calc.get_hhg(pulse)`, `calc.get_realtime(pulse)`, notebook
   [50](notebooks/50_high_harmonics.ipynb).
 - **The third harmonic**, $\chi^{(3)}(-3\omega;\omega,\omega,\omega)$, and the
   intensity-dependent index $\chi^{(3)}(-\omega;\omega,\omega,-\omega)$, taken as
-  derivatives of the propagation with respect to the field strength.
-  `calc.get_third_harmonic(frequency)`.
+  derivatives of the propagation with respect to the field strength at one
+  frequency, or as a spectrum from the steady state solved directly at every
+  frequency, which carries the projectors' curvature a sum over states misses.
+  `calc.get_third_harmonic(frequency)`, `calc.get_nonlinear_spectrum(frequencies)`,
+  notebook [51](notebooks/51_nonlinear_spectra.ipynb).
 
 ### Topology and polarization
 
@@ -671,9 +677,9 @@ note, the routine or task in the other code's source, is in
 | **Optical absorption spectra with excitons** | `calc.get_absorption(frequencies)` | | ✓ |
 | **Optical conductivity**, the Kerr angle and the anomalous Hall conductivity | `calc.get_optical_conductivity()` | (✓)¹² | ✓ |
 | **Shift current** | `calc.get_shift_current()` | ¹³ | |
-| **Second-harmonic generation** | `calc.get_shg()` | (✓)¹⁴ | ✓ |
-| **Real-time response to a laser pulse**: the current in time, the dielectric function from a kick, the high-harmonic spectrum | `calc.get_realtime(pulse)`, `calc.get_realtime_dielectric()`, `calc.get_hhg(pulse)` | | (✓)¹⁹ |
-| **Third-harmonic susceptibility** $\chi^{(3)}$, and the perturbative orders of the current | `calc.get_third_harmonic(frequency)`, `calc.get_harmonic_orders(frequency)` | | |
+| **Second-harmonic generation** | `calc.get_shg()`, and with every band and the projectors' curvature `calc.get_nonlinear_spectrum(frequencies, order=2)` | (✓)¹⁴ | ✓ |
+| **Real-time response to a laser pulse**: the current in time, the dielectric function from a kick, the high-harmonic spectrum, at the ground state's potential or with the Hartree and exchange-correlation potentials updated in time | `calc.get_realtime(pulse)`, `calc.get_realtime_dielectric()`, `calc.get_hhg(pulse)`, each with `potential='hxc'` | | (✓)¹⁹ |
+| **Third-harmonic susceptibility** $\chi^{(3)}$, and the perturbative orders of the current, at one frequency or as a spectrum | `calc.get_third_harmonic(frequency)`, `calc.get_harmonic_orders(frequency)`, `calc.get_nonlinear_spectrum(frequencies)` | | |
 | **Berry curvature and Chern numbers** | `calc.get_chern()` | | |
 | **$\mathbb{Z}_2$ invariants** in 2D and 3D | `calc.get_z2()` | | |
 | **Berry-phase polarization** | `calc.get_polarization()` | ✓ | ✓ |
@@ -740,8 +746,9 @@ Where a tick is qualified, in one sentence each; the routines behind them are in
   are not the same sum.
 - ¹⁹ Elk propagates in time (tasks 460 to 463) and transforms the current to a
   dielectric function (tasks 480 and 481), with the field coupled linearly in a
-  basis of ground-state bands; it writes the current a harmonic spectrum is read
-  from, and no task reads the harmonics off. `TDDFPT` in Quantum ESPRESSO is
+  basis of ground-state bands and the potential updated at every step; it writes
+  the current a harmonic spectrum is read from, and no task reads the harmonics
+  off. `TDDFPT` in Quantum ESPRESSO is
   the Liouville-Lanczos route to a linear spectrum and propagates nothing.
 
 The variants under each row, which smearing or tetrahedron method fixes the

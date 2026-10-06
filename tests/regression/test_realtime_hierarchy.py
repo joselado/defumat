@@ -128,8 +128,24 @@ def test_the_spectrum_is_the_propagation_at_one_frequency(pseudo_dir, tmp_path):
 
     1.5 eV and ``eta = 0.3`` eV, ``eta_t = 12``, the field along [111], whose
     little group keeps six operations; the propagation's error is its ``dt^2``
-    and its start transient, ``exp(-eta_t)`` times a resonance factor. Measured:
-    XXMEASUREDXX.
+    and its start transient, ``exp(-eta_t)`` times a resonance factor. Measured,
+    relative to each component, at 400 and 800 steps a period:
+
+    ======  ==========  ==========
+    (n,m)   400         800
+    ======  ==========  ==========
+    (1,1)   3.5e-5      4.2e-6
+    (2,2)   1.1e-4      1.6e-5
+    (2,0)   9.6e-4      1.7e-5
+    (3,3)   5.6e-5      4.1e-5
+    (3,1)   3.5e-5      1.2e-5
+    ======  ==========  ==========
+
+    falling with the step except ``(3,3)``, which sits on the start transient;
+    ``(2,0)`` is a fifth of ``(2,2)`` here, so each component is asserted
+    against the largest of its order. The hierarchy took 13.6 s for this
+    frequency, the fixed-density solve included, and the propagation 302 s at
+    400 steps a period (four of this workstation's efficiency cores).
     """
     from defumat import Calculator
 
@@ -145,7 +161,8 @@ def test_the_spectrum_is_the_propagation_at_one_frequency(pseudo_dir, tmp_path):
     spectrum = calculator.get_nonlinear_spectrum([1.5], order=3, **options)
     orders = calculator.get_harmonic_orders(1.5, order=3, eta_t=12.0, steps_per_period=400,
                                             **options)
+    references = {key: complex(orders.component(*key, axis=0)) for key in COMPONENTS}
     for key in COMPONENTS:
         value = spectrum.component(*key, axis=0)[0]
-        reference = complex(orders.component(*key, axis=0))
-        assert abs(value - reference) < 1e-3 * abs(reference), (key, value, reference)
+        scale = max(abs(v) for k, v in references.items() if k[0] == key[0])
+        assert abs(value - references[key]) < 3e-4 * scale, (key, value, references[key])

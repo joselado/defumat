@@ -10,10 +10,16 @@ A plan written on 2026-10-06 for the session that implements it.
 > Chebyshev table of g_l(q^2) rather than from `at_kcart`, since the rebuild by the radial
 > transform was three quarters of a step; and the linear identity against the Kubo sum
 > carries the mesh sum of band curvature, `sigma_RT = sigma_Kubo + i D/(Omega z)`, which on
-> two k-points is the size of the answer. What is left is the stage "Updating the
-> potential in time", the third phase (the frequency-domain hierarchy with its complex
-> shifted solver), and the list "What is left for later". The rest of this file is the
-> plan as written.
+> two k-points is the size of the answer. The stage "Updating the potential in time" is
+> `PLAN.md` P136 (2026-10-06 night), with one departure, measured: the potential is
+> `v_scf + U[rho(t)] - U[rho0]` rather than `U[rho(t)]`, because the propagated states'
+> density is the ground state's only on its own mesh (1.0e-2 Ry apart on a 6x6x6 mesh of
+> silicon converged on 4x4x4). The third phase, the frequency-domain hierarchy, is P137
+> (2026-10-07): the computed bands held exactly by a projector and the rest of the sphere by
+> a right-preconditioned BiCGStab, both chosen by a review that measured the candidates
+> (QE's GMRES(4) of `solve_e_fpol.f90` took about a thousand products above the gap where
+> this takes 40 to 50). What is left is the self-consistent hierarchy and the list "What is
+> left for later". The rest of this file is the plan as written.
 
 When written, nothing below was implemented: the package had no real-time propagation, no
 $\chi^{(3)}$ and no entry point for either, and `README.md` listed real-time propagation

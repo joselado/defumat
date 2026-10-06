@@ -4099,8 +4099,9 @@ independent-particle response. It is what the published silicon calculation
 found sufficient for its conditions (arXiv:1609.09298, for one material, the
 LDA and one weak mid-infrared pulse), and it is what makes the k-points
 independent, so a chunk of them is propagated through the whole pulse at a
-time and the peak memory is one chunk whatever the mesh. The update of the
-potential in time is not here.
+time and the peak memory is one chunk whatever the mesh. The potential can be
+updated in time instead, with \code{potential="hxc"}; its own subsection, at the
+end of this section, says what that changes and what it costs.
 
 \textbf{The step} is the fourth-order Taylor expansion of
 $\exp[-iH(t+\Delta t/2)\,\Delta t]$, four Hamiltonian applications, which is
@@ -4407,9 +4408,217 @@ $T = \ln(C/\varepsilon)/\eta$ for a start transient of relative size
 $\varepsilon$, which does not decay because the evolution is unitary: at
 $\eta T = 6$ the same comparison reads 0.4 to 4.6 per cent. Order $n$ of nested
 forward mode carries $2^n$ copies of each state. A converged spectrum of
-$\chi^{(3)}$ is therefore the job of the frequency-domain hierarchy with an
-iterative solver, which is not here; this route is the one it will be checked
-against.
+$\chi^{(3)}$ is therefore the job of the frequency-domain hierarchy below, and
+this route is the one it is checked against.
+
+\subsection{The spectrum of the orders: the frequency-domain hierarchy}
+
+One propagation gives the orders at one frequency, and a spectrum of
+$\chi^{(3)}$ is the same steady state solved directly at every frequency. We
+will now see that route, which shares the physics of the previous subsection
+and none of its time stepping. At order $N$ and harmonic $M$ the steady-state
+component of each occupied state solves
+\begin{equation*}
+\big(\epsilon_n + M\omega + iN\eta - H_0\big)\,c^{(N)}_M
+ = \sum_{p=1}^{N}\frac{1}{p!\,2^p}\sum_{s=0}^{p}\binom{p}{s}\,h_p\,
+   c^{(N-p)}_{M-(2s-p)},\qquad
+h_p = \frac{\partial^p H(\mathbf k + x\hat{\mathbf e})}{\partial x^p}\Big|_{x=0},
+\end{equation*}
+meaning that each order is driven by the lower ones through the derivatives of
+the Bloch Hamiltonian along the field, and the current of order $N$ at harmonic
+$M$ is the occupation-weighted sum of
+$\langle c^{(n_1)}_{m_1}|\partial_{\boldsymbol\kappa}h_p|c^{(n_2)}_{m_2}\rangle$ over the
+pairs with $n_1+n_2+p = N$. A frequency then costs nine linear solves per band
+and k-point, $c^{(1)}_{\pm1}$, $c^{(2)}_{\pm2,0}$, $c^{(3)}_{\pm3,\pm1}$, where the
+propagation pays a run of $\eta T\approx 12$ to 20 for each.
+
+\textbf{The bands the ground-state solve resolved are held exactly, and the
+rest of the sphere is a Krylov solve.} Each component is split as $c = Pc +
+(1-P)c$, with $P$ the projector on the computed bands (the occupied ones and the
+conduction bands below the top four of \code{nbnd}, which an unconverged root
+would occupy): $Pc = \sum_j|u_j\rangle\langle u_j|\mathrm{rhs}\rangle/(z-\epsilon_j)$ is
+arithmetic, and $(1-P)c$ solves $(H_0 - z + \alpha P)\,x = -(1-P)\,\mathrm{rhs}$,
+Quantum ESPRESSO's \code{cch\_psi\_all} operator with $\alpha$ past every $M\omega$.
+The two ill-conditioned pieces of the hierarchy are both in $P$, where they are
+exact: the secular $1/(2i\eta)$ of $c^{(2)}_0$ along the state itself, and the
+denominators between two occupied states, which cancel only in the sum over
+bands. $H_0 - z$ is complex, normal and indefinite above the gap, so the
+conjugate gradients of the static response do not apply; the solve is BiCGStab,
+right-preconditioned with the kinetic preconditioner of the Sternheimer stack and
+batched over the bands and harmonics of one order. It was chosen on two-atom
+silicon against the alternatives: with twelve computed bands it takes 40 to 52
+matrix-vector products to a relative residual of $10^{-10}$ at 40~Ry and
+$\eta = 0.1$~eV, 1.3 times full GMRES, while the restarted GMRES(4) of
+\code{solve\_e\_fpol.f90}, written for an imaginary frequency, takes about a
+thousand above the gap. The derivatives $h_p$ are kinetic and nonlocal only,
+since the local potential carries no $\mathbf k$, and come from the table of the
+projectors with no transform.
+
+\begin{pycode}
+spec = calc.get_nonlinear_spectrum([1.0, 1.55, 2.0], broadening=0.3, grid=(4, 4, 4))
+third, first = spec.chi3(axis=0)          # m^2/V^2, chi_xxxx(3w) and chi_xxxx(w)
+print(abs(third), abs(first))
+print(spec.iterations, spec.computed_bands)
+\end{pycode}
+
+\code{spec.component(n, m)} is $\mathbf J_{(n,m)}$ at every frequency, with the same
+normalisation as \code{get\_harmonic\_orders}' \code{component}, and
+\code{chi2(axis)} and \code{chi3(axis)} apply the formulas above to it (pm/V and
+m$^2$/V$^2$). \code{iterations} is the largest BiCGStab count of each frequency.
+On the $4^3$ mesh of the snippet the numbers are the mesh's and not silicon's
+(the previous subsection says why); the route is what makes the mesh that
+converges them affordable.
+
+\textbf{The check is the dense hierarchy, as an identity.} On zincblende AlAs at
+4~Ry at $\Gamma$ and a general point, all five components $(1,1)$, $(2,2)$,
+$(2,0)$, $(3,3)$, $(3,1)$ at 0.02, 0.05 and 0.11~Ha with $\eta = 0.01$~Ha agree
+with \code{dense\_orders}, which solves with every band of the sphere, to
+$10^{-13}$ to $8\times10^{-12}$, in 18 to 21 BiCGStab iterations; with half the
+computed bands in $P$ to $2\times10^{-10}$, so the projector moves the iteration
+count and not the answer. \textbf{Against the propagation} at one frequency, on
+AlAs at 6~Ry on the $2^3$ mesh along $[111]$ at 1.5~eV and $\eta = 0.3$~eV, the
+five components agree to $3.5\times10^{-5}$ to $9.6\times10^{-4}$ at 400 steps a
+period and to $4.2\times10^{-6}$ to $4.1\times10^{-5}$ at 800, the propagation's
+step and its start transient at $\eta T = 12$; the hierarchy took 13.6~s for
+that frequency and the propagation 302~s. On AlAs at 8~Ry on the $4^3$ mesh along
+$[111]$ the second harmonic at 1.5~eV and $\eta = 0.3$~eV is
+$\chi_{xyz} = 145.2015+119.0707i$~pm/V, the dense hierarchy's to every printed
+digit and the propagation's $145.1967+119.0447i$ to $1.4\times10^{-4}$, in 15~s
+for two frequencies against the propagation's minutes for one.
+
+\textbf{What it costs.} A frequency is the nine solves, each about 20 to 50
+BiCGStab iterations of two Hamiltonian applications, so a few hundred
+applications per band and k-point where the propagation pays tens of thousands;
+the current's assembly needs no transform and is a few per cent of a call. The
+k-points are independent and are walked one at a time, each frequency starting
+from the previous one's solutions, and what is resident per k-point is the nine
+components, BiCGStab's six vectors for the largest order and the computed bands,
+\code{(10 + 24) nocc + nb} vectors of \code{npwx}.
+
+\subsection{The potential updated in time: local fields and the adiabatic kernel}
+
+So far the potential was the ground state's. We will now see what changes when
+the Hartree and exchange-correlation potentials are rebuilt from the density at
+every step, which is what makes the response carry local fields (the density
+the field induces inside a cell screens it) and, with the exchange-correlation
+part, the adiabatic kernel of the ground state's functional (the ALDA for an
+LDA run). Every method of this section takes
+\begin{itemize}
+\item \code{potential="frozen"}, the default, the independent-particle response;
+\item \code{potential="hartree"}, the Hartree potential updated and the
+  exchange-correlation potential kept at the ground state's, which is the
+  Dyson route's \code{rpa} kernel with local fields;
+\item \code{potential="hxc"}, both updated, the Dyson route's \code{alda} for an
+  LDA run and the adiabatic GGA for a PBE one;
+\end{itemize}
+and \code{corrector}, below. The potential is written as the ground state's plus
+the change,
+\begin{equation*}
+v(t) = v_{\mathrm{scf}} + U[\rho(t)] - U[\rho_0],\qquad
+\rho(t) = \sum_{n\mathbf k} w_{n\mathbf k}\,|u_{n\mathbf k}(\mathbf r,t)|^2,
+\end{equation*}
+with $U$ the Hartree potential or the Hartree and exchange-correlation one and
+$\rho_0$ the propagated states' own density at the start, meaning that the start
+is a stationary state on any k-mesh. Written as $v(t) = U[\rho(t)]$ it would not
+be: the states come from a fixed-density solve on the propagated mesh, whose
+density is the ground state's only on the ground state's own mesh, and on a
+$6^3$ mesh of two-atom silicon converged on $4^3$ the two potentials differ by
+$10^{-2}$~Ry, which a run with no field would start to follow. The energy the
+dynamics conserves is
+$E = E_{\mathrm{kin+NL}}(\boldsymbol\kappa) + \int(v_{\mathrm{loc}} + v_{\mathrm{scf}} - U[\rho_0])\rho
++ E_U[\rho]$, whose derivative in $\rho$ is the potential the states feel, and it
+is what \code{energy} carries.
+
+\textbf{The applied field is the whole macroscopic field.} The Hartree potential
+has no $\mathbf G=0$ term, so the induced macroscopic field is not fed back, the
+current over the applied field is the macroscopic conductivity, and the
+dielectric function from a kick is $\epsilon_M$ with local fields,
+$1/[\epsilon^{-1}]_{00}$, which is what \code{get\_absorption} and
+\code{get\_dielectric\_tensor} compute and what Elk's propagation does with
+\code{tafindt} off.
+
+\textbf{The k-points are no longer independent}, since every step needs the
+density of all of them, so the whole state set is resident and the run walks
+time outside and the k-chunks inside each step. \textbf{The step} is the same
+midpoint rule with the potential at the midpoint extrapolated from the last two,
+$\tfrac32 v(t) - \tfrac12 v(t-\Delta t)$, the states stepped, the density and
+potential rebuilt at $t+\Delta t$, and with \code{corrector=1} (the default) the
+step taken again from $t$ at $\tfrac12[v(t)+v(t+\Delta t)]$. Both are second order
+in $\Delta t$; the corrector costs a second step and buys a smaller constant. On a
+wedge of the field's little group the density is completed with that group and
+its fractional translations, and never with the crystal's whole group, under
+which the first-order density of a field along $x$ in silicon, odd under
+inversion, would average to zero.
+
+\begin{pycode}
+eps = calc.get_realtime_dielectric(direction=(1, 0, 0), broadening=0.5,
+                                   window=10.0, nw=200, grid=(4, 4, 4), dt=0.2,
+                                   subtract_static=True, potential="hxc")
+print(eps.epsilon[:3, 0])        # eps_M(w + i eta) with local fields and the ALDA
+\end{pycode}
+
+\textbf{The check is a dense self-consistent solve that shares no time step.} At
+first order each occupied state's components at $\pm\omega$ solve
+$(\epsilon_n \pm \omega + i\eta - H_0)c_\pm = \tfrac12 h_1 c_0 + \delta v_\pm c_0$
+with $\delta v_+ = K\,\delta\rho_+$,
+$\delta\rho_+ = \sum w\,(c_0^* c_+ + c_-^* c_0)$ and $\delta v_- = \delta v_+^*$,
+$K$ the Hartree kernel or the derivative of the whole potential at $\rho_0$,
+solved densely with every band of each sphere and to self-consistency by GMRES
+(\code{realtime.dense.dense\_first\_order}). On AlAs at 4~Ry, $\Gamma$ and a
+general point, $\omega = 0.05$ and $\eta = 0.01$~Ha: the propagation's first order
+agrees with it to $1.36\times10^{-5}$ (Hartree) and $1.64\times10^{-5}$ (Hartree and
+exchange-correlation) at 400 steps a period, as the frozen potential does
+($1.37\times10^{-5}$), and to $8.3\times10^{-7}$ and $3.7\times10^{-6}$ at 800,
+while the local fields move the current by 3.5 per cent and 0.35 per cent from
+the frozen value: on that cell the exchange-correlation kernel undoes most of
+what the Hartree term does. The higher orders go through the second and third
+derivatives of the functional, which a finite difference of full self-consistent
+runs in the field amplitude checks: the third order agrees with the stencil to
+$7.7\times10^{-6}$ over the whole series ($9.0\times10^{-6}$ and $5.4\times10^{-6}$ on
+$J_{(3,3)}$ and $J_{(3,1)}$), falling by 3.9 when the stencil halves, against
+$6.5\times10^{-6}$ at a frozen potential. After a kick of 0.05~bohr$^{-1}$ with the field off the energy is
+conserved to the frozen route's own floor with the corrector
+($1.6\times10^{-7}$~Ha over 1000 steps of 0.1, against $1.4\times10^{-7}$ frozen,
+both the norm the Taylor step loses) and to a bounded $1.6\times10^{-6}$ without
+it, which falls by 3.9 when the step is halved; and the work a pulse does is the
+energy it deposits to $1.4\times10^{-6}$ at $\Delta t = 0.1$, as at a frozen
+potential. \textbf{Against the static response of the Sternheimer stack}, which
+is band-complete and shares only the functional's derivative: on two-atom
+silicon at 12~Ry on its $4^3$ mesh the local fields lower the static
+$\epsilon_{xx}$ from 23.788 (\code{get\_dielectric\_tensor(screening="none")}) to
+21.668 with the Hartree kernel alone and 22.904 with the exchange-correlation one
+(\code{"hartree"}, \code{"full"}), and the first order of the propagation at
+$\omega = 0.5$, $\eta = 0.2$~eV moves $\epsilon$ by $-2.176-0.057i$ and
+$-0.902-0.019i$ from the frozen value, 2.6 and 2.0 per cent from the static shifts,
+which is what $|z|^2$ over the square of the gap leaves at that frequency. The
+shift and not $\epsilon$ itself is compared, because at first order the update
+leaves the band-curvature term of the frozen route untouched and the shift is free
+of it.
+
+\textbf{Against Elk, now like for like in the physics.} Elk's propagation updates
+its potential, so the \code{Si-dielectric} run of the previous subsection is
+repeated with \code{potential="hxc"} (the same 100 points and 4000 steps of 0.2,
+through the same transcription of Elk's task 481). Below the absorption edge the
+update lowers $\epsilon_{xx}$ by 4.6 to 5.7 per cent (14.38 against 15.10 at 0.5~eV,
+21.39 against 22.42 at 2~eV), and Elk's real-time spectrum lies 1.5 to 5.9 per cent
+below its own independent-particle one there; the largest $\mathrm{Im}\,\epsilon$ falls
+from 64.0 to 61.7, against 62.6 in Elk's real-time spectrum. What is left between
+the two codes is what was there at a frozen potential, the basis (LAPW in 25
+bands against the plane-wave sphere), about 3 per cent below the edge and
+0.07 to 0.2~eV in the peak positions. The lowest frequencies, below 0.5~eV, are
+not compared: there the transform of a finite run divides the run's last
+oscillation by $\omega^2$ in both codes, and Elk's own real-time value at
+$\omega\to0$ is $-4.13$.
+
+\textbf{What it costs.} The whole mesh's states are resident, twice inside a
+step, and $2^n$ times at order $n$ of the orders; each step is $1+$\code{corrector}
+Taylor steps and as many densities and potentials, about twice the frozen
+step: on Elk's \code{Si-dielectric} run 2.16 times, 1294 against 598~s back to
+back on one core of a machine other jobs shared, against Elk's 1300~s on a quiet
+core, so the clean pair is about 1050~s against 1300 and is not yet measured as
+one. With \code{corrector=0} a step is one Taylor step and one density, 1.08
+times the frozen one on silicon's whole $4^3$ mesh against 2.04 with the corrector,
+at the price of the extrapolation's ten times larger energy drift above.
 
 \begin{refuses}
 \textbf{Refuses.} An \textbf{ultrasoft or PAW} dataset: with the projectors at
@@ -4432,7 +4641,17 @@ builds the field's own wedge) and \textbf{a shifted grid}, which is not closed
 under the group. \textbf{\code{occupations = 'fixed'} cutting a degenerate
 multiplet}: the current would depend on the rotation the eigensolver returned.
 A metal runs with its ground-state occupations held, and its intraband response
-converges slowly in k.
+converges slowly in k. With the potential updated: \textbf{a meta-GGA} with
+\code{potential="hxc"} (a potential-only one has no energy to conserve, and
+either kind would need $\tau(t)$ propagated beside $\rho(t)$) and \textbf{a
+checkpoint}, since every state and two potentials would have to be saved. The
+frequency-domain hierarchy refuses \textbf{a component whose solve does not
+converge} (\code{HierarchyError}, with its residual and count, since an
+unconverged first order is amplified by $1/(2\eta)$ into the second),
+\textbf{the potential updated in time} (the induced potentials at $\omega$,
+$2\omega$ and $3\omega$ would each be a fixed point at every frequency; the
+propagation has it at one frequency a run), \textbf{an order above three}, and an
+\code{nbnd} that leaves no conduction band below the top four.
 \end{refuses}
 
 % =====================================================================

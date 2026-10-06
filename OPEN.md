@@ -7502,7 +7502,11 @@ What the agents of this sweep's follow-up found outside their items, recorded ra
   complete one (1.35, 0.68, 1.20 per cent at 23, 40, 80 bands), because the truncation cancels part
   of the missing term. Two decisions are the user's: whether `get_shg` carries the
   `<n|d^2 V_NL/dk_a dk_b|m>` term (the operator exists, `VelocityOperator.second_matrix_elements`),
-  and whether its sign is flipped to the electron's or documented. The test
+  and whether its sign is flipped to the electron's or documented. **Since P137 (2026-10-07) the
+  complete answer has a production route**: `get_nonlinear_spectrum(frequencies, order=2)` solves
+  the steady state on the whole sphere with the projectors' curvature in it, at a few seconds a
+  frequency on a 4x4x4 mesh, so the first decision is now whether `get_shg` is kept as the
+  sum over states it is, documented as such, or repaired. The test
   `tests/regression/test_realtime_shg.py` asserts the relation as it stands, `-conj` to 4e-2.
 
 - **Three recorded shift-current figures do not reproduce on master on D22**, the same on both

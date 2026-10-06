@@ -205,12 +205,50 @@ in this notebook that needs a larger basis before it is quoted, and AlAs's 10 Ry
 has not been checked at all.
 
 What the calculation leaves out is the rest of the physics of a real sample. The
-gap is the LDA's, less than half of the 1.17 eV measured in silicon; the potential is held
-fixed, so the excited carriers do not screen the field and there are no excitons;
-and nothing dephases, so the coherence the pulse builds between the bands lasts to
+gap is the LDA's, less than half of the 1.17 eV measured in silicon; the potential is the
+ground state's in the runs above, which the next section changes, and no adiabatic local
+kernel binds an exciton; and nothing dephases, so the coherence the pulse builds between the bands lasts to
 the end of the run. Published calculations add a dephasing time of a few
 femtoseconds, or propagate the pulse through the sample, and converge the mesh far
 beyond this one.
+
+## What the screening does
+
+So far the potential the electrons feel was the ground state's. The pulse moves charge
+inside each cell, and that charge has a potential of its own, which pushes back against
+the field: this is what local fields are, and an exchange-correlation potential rebuilt
+from the same density goes with it. Rebuilding both at every step is one argument, and
+a two-cycle pulse of the same intensity is enough to see what it does.
+
+
+```python
+short = Sin2.from_intensity(3e12, 1.55, 2, polarization=(1, 1, 1))
+runs = {mode: silicon.get_realtime(short, dt=0.2, nbnd=8, potential=mode)
+        for mode in ("frozen", "hxc")}
+peak = {mode: abs(run.current).max() for mode, run in runs.items()}
+print(f"peak current with the potential updated over frozen: {peak['hxc'] / peak['frozen']:.3f}")
+print(f"electrons left excited per cell: {runs['frozen'].excited:.3f} frozen, "
+      f"{runs['hxc'].excited:.3f} updated")
+```
+
+    peak current with the potential updated over frozen: 0.948
+    electrons left excited per cell: 0.215 frozen, 0.199 updated
+
+
+The induced charge lowers the peak current by about five per cent and leaves fewer
+electrons excited, which is screening and nothing more exotic. Over the eight-cycle pulse
+of the spectra above, measured offline on the same mesh, the fundamental's intensity falls
+to 0.70 of the frozen one and the electrons left excited from 0.31 to 0.28 per cell, while
+the odd harmonics from the 11th up rise against the fundamental by factors of 1.7 to 2.3:
+the plateau keeps its shape and its parity, and its end at a millionth of the fundamental
+moves from the 19th to the 25th, which on this mesh is inside the noise of the orders
+between them. The published silicon calculation found the spectrum unchanged by this for a
+weak mid-infrared pulse; here, at 800 nm and above the gap, the change is real and still
+smaller than what the 4x4x4 mesh does to the low harmonics. The same argument gives the
+dielectric function with local fields from a kick, which below the absorption edge comes
+out 5 per cent below the frozen one, where the all-electron code Elk, whose propagation
+updates its potential too, has its own 2 to 6 per cent below its independent-particle
+spectrum.
 
 ## What it refuses
 
@@ -232,4 +270,6 @@ minus the derivative of the vector potential, a state with no field staying
 stationary, the work the field does against the energy the crystal gains),
 `tests/unit/test_realtime_radial.py`, and `tests/regression/test_realtime.py`, where
 the current on the field's little group is compared with the whole mesh's and the
-linear response after a kick with a sum over states.
+linear response after a kick with a sum over states. With the potential updated, the same
+files hold the energy conserved after a kick and the first order against a dense
+self-consistent solve that shares no time step.

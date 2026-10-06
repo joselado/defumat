@@ -77,6 +77,11 @@ from defumat.eager import compiled_function
 __all__ = ["hierarchy_orders", "HierarchyError"]
 
 
+#: The smallest right-hand side, relative to the largest of its batch, that a
+#: row is converged against on its own scale.
+FLOOR = 1e-12
+
+
 class HierarchyError(RuntimeError):
     """A component's solve did not converge within its budget."""
 
@@ -97,7 +102,10 @@ def _bicgstab(apply, b, precondition, tolerance, max_iterations, start=None):
     def norm(a):
         return jnp.sqrt(jnp.real(dot(a, a)))
 
-    bnorm = norm(b)
+    # a row whose right-hand side is round-off against the batch's largest (a
+    # component a symmetry forces to zero at one k-point) is solved to the
+    # batch's scale rather than its own, which it could never reach
+    bnorm = jnp.maximum(norm(b), FLOOR * jnp.max(norm(b)))
     target = tolerance * bnorm
     zero = jnp.zeros_like(b)
     x0 = zero if start is None else start.astype(b.dtype)

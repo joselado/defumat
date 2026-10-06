@@ -57,7 +57,7 @@ missing, are indexed at the head of `PLAN.md` §3.
 | what is left to do about GPU memory after `memory_mode`, sized and ranked | `GPU-MEMORY-NEXT.md` |
 | what is left to do about GPU speed and the Davidson stall, sized, and the replay tools | `GPU-SPEED-NEXT.md` |
 | which mixer a cell with vacuum wants, what the literature has, and what is left | `VACUUM-MIXING-NEXT.md` |
-| real-time propagation, high harmonics and the third harmonic: the plan, and what is left of it (the update of the potential, the frequency-domain hierarchy) | `HARMONICS-NEXT.md` |
+| real-time propagation, high harmonics and the third harmonic: the plan, and what is left of it (the frequency-domain hierarchy) | `HARMONICS-NEXT.md` |
 
 **The claims in this project are numbers, not adjectives.** A phase is done when it has a
 concrete figure against `pw.x`, against Elk, or against an identity that shares no
@@ -230,7 +230,7 @@ in `docs/features.tex`'s amber boxes.
   is the bare vector the right-hand side was built from plus the converged `dV_scf`, so
   nothing new is differentiated. Refused: a metal at `q = 0` (`ef_shift`), ultrasoft/PAW,
   spin, and the zone sum (`alpha^2 F`, `T_c`).
-- **Real-time propagation, high harmonics and the third harmonic** (P134, P135,
+- **Real-time propagation, high harmonics and the third harmonic** (P134 to P137,
   `defumat/realtime/`, `workflows/realtime.py`): the occupied states under
   `H(k + kappa(t))`, `kappa = A/c`, on the sphere built for `k`, at the ground state's
   potential. Four rules bind it. **The current is `jax.grad` in `kappa` of the kinetic and
@@ -244,8 +244,15 @@ in `docs/features.tex`'s amber boxes.
   static field that differs per chunk retraces every block. **The perturbative orders are
   nested `jvp` in the field amplitude** under `exp(eta t) cos(w t)`, checked against the
   dense hierarchy of `realtime/dense.py`. Times are Hartree a.u. at the boundary, the step
-  is `H_Ry dt/2`. Refused: ultrasoft/PAW (`P_kappa`), `nspin = 2`, spinors, DFT+U, the
-  potential updated in time.
+  is `H_Ry dt/2`. **The potential updated in time** (P136, `realtime/selfconsistent.py`,
+  `potential = 'hartree' | 'hxc'`) is written `v_scf + U[rho(t)] - U[rho0]`, never
+  `U[rho(t)]`, so the start is stationary on any mesh, and the wedge's density is completed
+  with the field's little group and its translations, never the crystal's group, which
+  averages the response away. **The spectrum of the orders** (P137, `realtime/hierarchy.py`,
+  `get_nonlinear_spectrum`) is the steady state solved at each frequency: the computed bands
+  exactly through a projector, the rest by BiCGStab, and a solve that reaches its budget is
+  refused rather than used, since `1/(2 eta)` amplifies it. Refused: ultrasoft/PAW
+  (`P_kappa`), `nspin = 2`, spinors, DFT+U.
 - **Converging a cell with vacuum** (P129, `mixing_mode = 'ldos'`): Herbst and Levitt's
   preconditioner, screening built from the LDOS at `e_F` out of the density's own pass. Two
   rules bind it. The LDOS is a **Gaussian** whatever the run smears with, because the inner

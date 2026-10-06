@@ -95,6 +95,7 @@ instead, which means the physics is selected in the input file rather than at th
 | A photocurrent with no junction: the bulk photovoltaic effect | `get_shift_current()` | [32](32_shift_current.ipynb) |
 | Second-harmonic generation: red light in, blue light out | `get_shg()` | [33](33_second_harmonic_generation.ipynb) |
 | Light at many times the laser frequency: the high-harmonic spectrum of a crystal under a strong pulse, and which harmonics its symmetry lets through | `get_hhg()` | [50](50_high_harmonics.ipynb) |
+| The second and third harmonic as spectra, from the steady state of the electrons under a weak field at every frequency | `get_nonlinear_spectrum()` | [51](51_nonlinear_spectra.ipynb) |
 | The electric polarization of a crystal, and Born charges from it | `get_polarization()` | [34](34_electric_polarization.ipynb) |
 | Electricity from magnetism: the magnetoelectric effect | `get_magnetoelectric_tensor()` | [35](35_magnetoelectric_effect.ipynb) |
 | An effective mass | `get_effective_mass()` | [29](29_effective_mass_and_angular_momenta.ipynb) |
@@ -183,7 +184,8 @@ want a number.
 | [`47_turning_a_magnet.ipynb`](47_turning_a_magnet.ipynb) | A magnet let go turns on its own: every spin turned together by the torque on the whole texture, as atoms are moved along their forces, so tetragonal cobalt started 51.6 degrees off its long axis lands on it in eight steps, and the energy it gains on the way gives the anisotropy constants; and a self-consistent run with spin-orbit coupling that wanders when left alone and converges on the easy axis when its moments are turned by the same torque |
 | [`48_spiral_chirality.ipynb`](48_spiral_chirality.ipynb) | Spin-orbit coupling added to first order on a spin spiral in its own one-atom cell: on a nickel chain with an iodine beside each bond the energy is a vector along the normal to the plane of the atoms, so only the cycloid in that plane feels it, the mirror-image spiral costs exactly the opposite, and a four-cell supercell and the coupling scaled to zero both land on the same number; the number itself is not converged in cutoff or k-mesh and is shown as the method's, not the chain's |
 | [`49_electron_phonon.ipynb`](49_electron_phonon.ipynb) | Electron-phonon coupling in fcc aluminium at two wavevectors: the linewidth and `lambda` of each mode at ten broadenings of the Fermi surface, against `ph.x` 7.5 on the same input, `lambda` to every digit it prints and the linewidths to 0.007 GHz, and what the dependence on the broadening says about the k-mesh |
-| [`50_high_harmonics.ipynb`](50_high_harmonics.ipynb) | High harmonics: silicon under an 800 nm pulse emits only odd multiples of the laser frequency because inversion reverses the field, zincblende AlAs emits every one along [111] and only the odd ones along [100], where a rotation reverses it instead, and the end of the plateau moves with the field and is the one number here that needs a larger basis before it is quoted |
+| [`50_high_harmonics.ipynb`](50_high_harmonics.ipynb) | High harmonics: silicon under an 800 nm pulse emits only odd multiples of the laser frequency because inversion reverses the field, zincblende AlAs emits every one along [111] and only the odd ones along [100], where a rotation reverses it instead, the end of the plateau moves with the field and is the one number here that needs a larger basis before it is quoted, and the charge the pulse moves screens it when the potential is rebuilt in time |
+| [`51_nonlinear_spectra.ipynb`](51_nonlinear_spectra.ipynb) | The second harmonic of AlAs across the spectrum, with its two-photon and one-photon edges, from the steady state at every frequency, against the sum over states, which converges in the band count and still misses the curvature of the pseudopotential; and silicon's third harmonic, whose coarse-mesh numbers are the mesh's |
 
 ## Conventions
 
@@ -292,8 +294,8 @@ order of magnitude it is rather than as current to the second.
 | `42` | 13 | `31` | 34 | `13` | 131 | `35` | 276 |
 | `16` | 18 | `40` | 34 | `30` | 232 | `20` | 282 |
 | `00` | 22 | `23` | 35 | `39` | 151 | `49` | 194 |
-| `07` | 22 | `32` | 84 | `41` | 110 |  |  |
-| `46` | 61 | `47` | 260 | `48` | 121 | `50` | 373 |
+| `07` | 22 | `32` | 84 | `41` | 110 | `51` | 281 |
+| `46` | 61 | `47` | 260 | `48` | 121 | `50` | 509 |
 
 `32` and `33` read **84 s** and **401 s** on 2026-10-04, through
 `tools/export_notebooks.sh` on a machine carrying other work at a load of about 11, so
@@ -309,6 +311,16 @@ and 168 s for AlAs. A trial at a load of 3 to 7 took 386 s. The AlAs run along
 [100], the 8x8x8 mesh, the 20 Ry cutoff, the smaller step and the five intensities
 are quoted from offline runs rather than repeated, since any one of them would put
 the notebook near or past the ceiling.
+
+`50` gained the section on the screening on 2026-10-07 and reads **509 s**, through
+`tools/export_notebooks.sh` on four cores while two other jobs held eight more, so it is an
+upper bound and near the ceiling: the two propagations of two cycles it adds, one of them
+with the potential rebuilt at every step, are about a third of the eight-cycle pair. The
+eight-cycle spectrum with the potential updated is quoted from an offline run, since it
+alone would put the notebook past the ceiling. `51` reads **281 s** the same night, its first
+measurement, on four cores beside the same jobs: the AlAs spectrum at 25 frequencies, the
+sum over states at 60 bands and silicon at three frequencies; silicon's converged mesh is
+quoted from offline runs.
 
 `48` reads **121 s** on 2026-09-27, its first measurement, unpinned through
 `tools/export_notebooks.sh`: one spiral SCF of the nickel-iodine chain and one
