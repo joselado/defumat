@@ -281,7 +281,7 @@ def _preconditioner(chunk, occupied):
 def hierarchy_orders(calculation, basis, energies, weights, v_scf, *, omegas, eta: float,
                      direction, order: int = 3, tolerance: float = 1e-10,
                      max_iterations: int = 500, kcart=None, symmetrise=None,
-                     warm: bool = True) -> dict:
+                     warm: bool = True, k_batch="default") -> dict:
     """``J_(N,M)`` at every frequency, Hartree atomic units, the whole set of k-points.
 
     Args:
@@ -302,19 +302,23 @@ def hierarchy_orders(calculation, basis, energies, weights, v_scf, *, omegas, et
         warm: start each frequency's solves from the previous frequency's
             solutions at the same k-point; the answer is the same to the
             tolerance either way.
+        k_batch: how many k-points are solved together, one ``vmap`` over
+            them; the calculation's dial by default, one on a CPU. On a card a
+            single k-point's transforms are too small to fill it.
 
     Returns ``{"components": {(N, M): (nw, 3) complex}, "iterations": (nw,)
     largest BiCGStab iteration count, "residual": (nw,) largest final residual,
     "volume": ...}``; the currents are ``-(1/(2 Omega)) sum``, the real-time
     route's ``J_(N,M)`` (:meth:`~defumat.realtime.orders.OrdersResult.component`).
     """
-    from defumat.realtime.propagate import _Chunk, _prepare
+    from defumat.batching import k_chunks
+    from defumat.realtime.propagate import _batch, _Chunk, _prepare
 
     basis = np.asarray(basis)
     energies = np.asarray(energies, dtype=float)
     weights = np.asarray(weights, dtype=float)
     omegas = np.atleast_1d(np.asarray(omegas, dtype=float))
-    nk, nb, _ = basis.shape
+    nk, nb, npwx = basis.shape
     nocc = weights.shape[1]
     if order > 3:
         raise NotImplementedError("the hierarchy is written to third order")
@@ -330,27 +334,52 @@ def hierarchy_orders(calculation, basis, energies, weights, v_scf, *, omegas, et
     # P (e_j - Re z + alpha) comes near zero and amplifies what leaks into P
     alpha = 2.0 * (float(energies.max()) - float(energies[:, :nocc].min())) \
         + 3.0 * float(omegas_ry.max()) + 1.0
+    batch = _batch(calculation, k_batch)
+    batch = nk if batch is None else max(1, min(int(batch), nk))
 
     def at(chunk, u, e, w, precondition, omega, eta_, alpha_, direction_, starts):
         return _orders_at(chunk, u, e, w, precondition, omega, eta_, alpha_, direction_,
                           starts, nocc=nocc, order=order, tolerance=float(tolerance),
                           max_iterations=int(max_iterations))
 
+    if batch > 1:
+        # one vmap over the k-points of a chunk: each row is a one-point chunk,
+        # so the program is the one-point one with a batch axis, and a padded
+        # row carries zero weight
+        at = jax.vmap(at, in_axes=(0, 0, 0, 0, 0, None, None, None, None, 0))
+        preconditioner = jax.vmap(_preconditioner)
+    else:
+        preconditioner = _preconditioner
+
+    def one(ik):
+        if ik == 0:
+            return setup.first
+        return _Chunk.build(calculation, np.asarray([ik]), setup.terms, setup.table, setup.kcart)
+
     totals = {}
     iterations = np.zeros(len(omegas), dtype=int)
     residual = np.zeros(len(omegas))
     run = None
-    for ik in range(nk):
-        chunk = setup.first if ik == 0 else _Chunk.build(calculation, np.asarray([ik]),
-                                                          setup.terms, setup.table,
-                                                          setup.kcart)
-        u = jnp.asarray(basis[ik])
-        precondition = _preconditioner(chunk, u[:nocc]).astype(real)
-        fixed = (chunk, u, jnp.asarray(energies[ik], dtype=real),
-                 jnp.asarray(weights[ik], dtype=real), precondition)
-        # each frequency starts from the previous one's solution at this k-point,
-        # which a sweep finer than the broadening makes a good guess
-        starts = tuple(jnp.zeros(((n + 1) * nocc, u.shape[-1]), dtype=u.dtype)
+    for rows, live in k_chunks(nk, batch):
+        if batch > 1:
+            chunk = jax.tree_util.tree_map(lambda *xs: jnp.stack(xs), *[one(ik) for ik in rows])
+            w = np.where(np.arange(len(rows))[:, None] < live, weights[rows], 0.0)
+            u = jnp.asarray(basis[rows])
+            e = jnp.asarray(energies[rows], dtype=real)
+            occupied = u[:, :nocc]
+            shape = (len(rows),)
+        else:
+            chunk = one(int(rows[0]))
+            w = weights[rows[0]]
+            u = jnp.asarray(basis[rows[0]])
+            e = jnp.asarray(energies[rows[0]], dtype=real)
+            occupied = u[:nocc]
+            shape = ()
+        precondition = preconditioner(chunk, occupied).astype(real)
+        fixed = (chunk, u, e, jnp.asarray(w, dtype=real), precondition)
+        # each frequency starts from the previous one's solution at these
+        # k-points, which a sweep finer than the broadening makes a good guess
+        starts = tuple(jnp.zeros(shape + ((n + 1) * nocc, npwx), dtype=u.dtype)
                        for n in range(1, order + 1))
         for iw, omega in enumerate(omegas_ry):
             arguments = fixed + (jnp.asarray(omega, dtype=real), jnp.asarray(eta_ry, dtype=real),
@@ -362,18 +391,24 @@ def hierarchy_orders(calculation, basis, energies, weights, v_scf, *, omegas, et
             if not warm:
                 starts = tuple(jnp.zeros_like(x) for x in starts)
             count, res = np.asarray(count), np.asarray(res)
+            if batch > 1:
+                count, res = count[:live], res[:live]
             if res.max() > 10.0 * tolerance:
                 raise HierarchyError(
-                    f"a component did not converge at k-point {ik}, w = {omega / 2.0:.5f} Ha: "
-                    f"relative residual {res.max():.2e} after {int(count.max())} BiCGStab "
-                    f"iterations against {tolerance:.1e} (max_iterations = {max_iterations}). "
-                    "An unconverged first order is amplified by 1/(2 eta) into the second; "
-                    "raise max_iterations or the number of computed bands")
+                    f"a component did not converge at k-points {list(rows[:live])}, "
+                    f"w = {omega / 2.0:.5f} Ha: relative residual {res.max():.2e} after "
+                    f"{int(count.max())} BiCGStab iterations against {tolerance:.1e} "
+                    f"(max_iterations = {max_iterations}). An unconverged first order is "
+                    "amplified by 1/(2 eta) into the second; raise max_iterations or the "
+                    "number of computed bands")
             iterations[iw] = max(iterations[iw], int(count.max()))
             residual[iw] = max(residual[iw], float(res.max()))
             for key, value in out.items():
+                value = np.asarray(value)
+                if batch > 1:
+                    value = value.sum(axis=0)  # the padded rows carry zero weight
                 totals.setdefault(key, np.zeros((len(omegas), 3), dtype=complex))
-                totals[key][iw] += np.asarray(value)
+                totals[key][iw] += value
     volume = setup.volume
     components = {key: -value / (2.0 * volume) for key, value in totals.items()}
     if symmetrise is not None:

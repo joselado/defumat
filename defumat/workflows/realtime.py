@@ -622,7 +622,8 @@ def run_nonlinear_spectrum(system, pseudos, density, *, frequencies, broadening:
     out = hierarchy_orders(calc, bands[:, :computed], energies[:, :computed], weights, v_scf,
                            omegas=frequencies * EV_TO_HA, eta=float(broadening) * EV_TO_HA,
                            direction=unit, order=order, tolerance=tolerance,
-                           max_iterations=max_iterations, symmetrise=rotations)
+                           max_iterations=max_iterations, symmetrise=rotations,
+                           k_batch=k_batch)
     return NonlinearSpectrum(frequencies=frequencies, broadening=float(broadening),
                              direction=unit, components=out["components"],
                              iterations=out["iterations"], residual=out["residual"],
