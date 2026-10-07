@@ -567,6 +567,29 @@ def _energies_of(chunk, psi):
     return jnp.real(jnp.einsum("kng,kng->kn", jnp.conj(psi), hpsi))
 
 
+def _generalised_top(chunk, x, iterations: int = 40):
+    """The largest generalised eigenvalue of ``H x = e S x`` at every k-point, by the power method.
+
+    ``x`` is one start vector per k-point, ``(nk, 1, ndim)``; the Rayleigh
+    quotient ``<x|H|x>/<x|S|x>`` of the last iterate, ``(nk,)`` in Ry, which
+    approaches the edge from below.
+    """
+    zero = jnp.zeros(3, dtype=chunk.k0.dtype)
+    ham = chunk.hamiltonian(zero)
+
+    def step(_, y):
+        y = chunk.inverse_overlap(zero, chunk.applied(zero, y, ham), ham.projectors)
+        norm = jnp.sqrt(jnp.real(jnp.einsum("kng,kng->k", jnp.conj(y),
+                                            chunk.overlap(zero, y, ham.projectors))))
+        return y / norm[:, None, None]
+
+    x = jax.lax.fori_loop(0, iterations, step, x)
+    hx = chunk.applied(zero, x, ham)
+    sx = chunk.overlap(zero, x, ham.projectors)
+    return (jnp.real(jnp.einsum("kng,kng->k", jnp.conj(x), hx))
+            / jnp.real(jnp.einsum("kng,kng->k", jnp.conj(x), sx)))
+
+
 def _flat_blocks(matrix):
     """``(npol, npol, nkb, nkb)`` as the ``(npol nkb)^2`` matrix, spin outside the channel."""
     matrix = np.asarray(matrix)
@@ -604,7 +627,15 @@ def _chunk_spectrum(chunk, psi, terms, kappa_max):
         if overlap is not None:
             s_min = min(s_min, 1.0 + float(np.linalg.eigvalsh(root @ overlap @ root).min()))
     energies = np.asarray(compiled_function(_energies_of, chunk, psi)(chunk, psi))
-    return energies, kinetic_max, nl_min, nl_max, s_min
+    top = None
+    if overlap is not None:
+        rng = np.random.default_rng(7)
+        mask = np.asarray(chunk.hamiltonian(jnp.zeros(3, dtype=chunk.k0.dtype)).state_mask)
+        start = rng.normal(size=mask.shape) + 1j * rng.normal(size=mask.shape)
+        start = jnp.asarray(np.where(mask, start, 0.0)[:, None, :], dtype=psi.dtype)
+        top = float(np.max(np.asarray(compiled_function(_generalised_top, chunk, start)(
+            chunk, start))))
+    return energies, kinetic_max, nl_min, nl_max, s_min, top
 
 
 def _potential_maximum(potential) -> float:
@@ -629,8 +660,12 @@ def spectral_bounds(calculation, states, weights, terms, table, kcart, chunks,
     on any sphere, the largest value of the local potential on the smooth grid,
     and the largest eigenvalue of the nonlocal term ``G^(1/2) D G^(1/2)`` at
     ``kappa = 0``, widened by ten per cent for the shift. With an overlap the
-    spectrum is the generalised one, ``H x = e S x``, so a positive edge is
-    divided by the smallest eigenvalue of ``S`` (again ten per cent wider).
+    spectrum is the generalised one, ``H x = e S x``, whose edge Weyl's bound on
+    ``H`` does not bound: the rigorous ``max H / min S`` is four to six times
+    the edge on ultrasoft and PAW AlAs (``min S`` = 0.39 there, and the edge
+    *below* ``H``'s own, 11.7 against 16.1 Ry at 10 Ry), so the edge is
+    estimated instead, by the power method at ``kappa = 0``, and the larger of
+    Weyl's bound and that estimate widened by ten per cent is taken.
     ``lower`` is the lowest
     carried energy less the largest drop the kinetic energy can take under the
     shift, ``2 |k+G| kappa_max + kappa_max^2``, and one Rydberg: the carried states
@@ -646,21 +681,24 @@ def spectral_bounds(calculation, states, weights, terms, table, kcart, chunks,
     silicon (found in review).
     """
     energies = np.zeros(states.shape[:2])
-    kinetic_max, nl_min, nl_max, s_min = 0.0, 0.0, 0.0, 1.0
-    radius = 0.0
+    kinetic_max, nl_min, nl_max = 0.0, 0.0, 0.0
+    radius, top = 0.0, None
     for rows, live in chunks:
         chunk = _Chunk.build(calculation, rows, terms, table, kcart, channel, dipole)
-        values, kin, low, high, smallest = _chunk_spectrum(
+        values, kin, low, high, _, edge = _chunk_spectrum(
             chunk, jnp.asarray(states[rows]), terms, kappa_max)
         energies[rows[:live]] = values[:live]
         kinetic_max = max(kinetic_max, kin)
         radius = max(radius, math.sqrt(kin) - kappa_max)
         nl_min, nl_max = min(nl_min, low), max(nl_max, high)
-        s_min = min(s_min, smallest)
+        if edge is not None:
+            # the shift's growth of the kinetic energy rides on the estimate too
+            top = max(top if top is not None else -np.inf,
+                      edge + kin - (math.sqrt(kin) - kappa_max) ** 2)
     potential = terms.potentials[0 if len(terms.potentials) == 1 else channel]
     upper = kinetic_max + _potential_maximum(potential) + 1.1 * nl_max
-    if s_min < 1.0 and upper > 0.0:
-        upper = upper / (0.9 * s_min)
+    if top is not None:
+        upper = max(upper, 1.1 * top)
     drop = 2.0 * radius * kappa_max + kappa_max**2
     lower = float(energies.min()) - drop - 1.0
     total = max(float(np.sum(weights)), 1e-300)

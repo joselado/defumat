@@ -167,7 +167,7 @@ def test_the_current_between_eigenstates_is_the_generalised_velocity(pseudo_dir,
     psi = jnp.asarray(psi)
     # dH/dk on every band at once, then the matrix elements
     slope = jax.jacfwd(lambda k: chunk.kinetic_nonlocal(k, psi))(zero)  # (nk, nb, ndim, 3)
-    mine = np.asarray(jnp.einsum("kng,kmga->aknm", jnp.conj(psi), slope))
+    mine = np.array(jnp.einsum("kng,kmga->aknm", jnp.conj(psi), slope))
     hpsi = chunk.applied(zero, psi)
     for axis in range(3):
         unit = jnp.zeros(3).at[axis].set(1.0)

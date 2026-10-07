@@ -1,0 +1,36 @@
+! Trigonal selenium with spin-orbit coupling, for the harmonic routes' spinor checks.
+!
+! The one committed norm-conserving fully-relativistic dataset that makes an
+! insulating crystal: SG15's `Se.rel-pbe-nc-sg15`. Trigonal Se is a chiral
+! semiconductor, three atoms on helical chains along c (P3_121, x = 0.2254 at
+! the experimental a = 4.366 A and c = 4.954 A), with no inversion centre, so
+! every order of the current is nonzero, the second included; the spin-orbit
+! coupling sits in the 2x2 `dvan_so` and nowhere else, which is what a spinor
+! route has to carry beyond the scalar one.
+!
+! `ecutwfc = 20` is far from converged for SG15 selenium (about 40 Ry is) and is
+! chosen for identities, which hold at any cutoff; `nosym`/`noinv` and an
+! unshifted grid, for the polar tensors' sake (P24).
+ &control
+    calculation = 'scf'
+    prefix = 'se'
+ /
+ &system
+    ibrav = 4, celldm(1) = 8.2509, celldm(3) = 1.1345,
+    nat = 3, ntyp = 1,
+    ecutwfc = 20.0,
+    noncolin = .true., lspinorb = .true.,
+    nosym = .true., noinv = .true.,
+ /
+ &electrons
+    conv_thr = 1.0d-12
+    mixing_beta = 0.5
+ /
+ATOMIC_SPECIES
+ Se 78.97 Se.rel-pbe-nc-sg15.UPF
+ATOMIC_POSITIONS (crystal)
+ Se  0.2254  0.0000  0.333333333
+ Se  0.0000  0.2254  0.666666667
+ Se -0.2254 -0.2254  0.000000000
+K_POINTS (automatic)
+ 2 2 2 0 0 0

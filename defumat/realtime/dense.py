@@ -41,24 +41,26 @@ __all__ = ["dense_hamiltonians", "dense_ground_states", "dense_orders",
 
 
 def dense_hamiltonians(calculation, terms, ik: int, direction, order: int,
-                       kcart=None) -> list[np.ndarray]:
+                       kcart=None, channel: int = 0) -> list[np.ndarray]:
     """``[h_0, ..., h_order]`` at k-point ``ik``, each ``(npw, npw)`` on the sphere.
 
     ``h_p = d^p H(k + x e)/dx^p`` at ``x = 0`` on the frozen sphere of ``ik``,
-    restricted to its real plane waves (the padding of ``npwx`` dropped).
-    ``terms`` is :meth:`~defumat.scf.driver.Calculation.local_terms` of the frozen
-    potential; ``direction`` is cartesian, 1/bohr per unit of ``x``.
+    restricted to its real plane waves (the padding of ``npwx`` dropped; both
+    components of a spinor, ``2 npw``). ``terms`` is
+    :meth:`~defumat.scf.driver.Calculation.local_terms` of the frozen potential;
+    ``direction`` is cartesian, 1/bohr per unit of ``x``; ``channel`` the
+    collinear spin channel.
     """
     row = calculation.at_rows([ik])
     if kcart is None:
         kcart = calculation.system.kpoints.cartesian(calculation.system.cell)
     k0 = jnp.asarray(np.asarray(kcart)[[ik]])
     e = jnp.asarray(direction, dtype=k0.dtype)
-    keep = np.flatnonzero(np.asarray(calculation.basis.planewaves.mask[ik]))
+    keep = np.flatnonzero(np.asarray(row.hamiltonian_from(terms)[channel].state_mask[0]))
 
     def matrix(x):
         moved = row.at_kcart(k0 + x * e[None, :])
-        return moved.hamiltonian_from(terms)[0].matrix(0)
+        return moved.hamiltonian_from(terms)[channel].matrix(0)
 
     out = []
     f = matrix
