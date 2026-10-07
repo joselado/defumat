@@ -25104,7 +25104,9 @@ coefficient, against the 1e-13 asked.
    (`test_realtime_regimes.py::test_the_spectrum_is_the_propagation_at_one_frequency`, bound 5e-4 of
    each order's largest component) one cell at a time on D22's card, master `4e7816c` (selenium
    with `b887272`'s test), 2026-10-07
-   evening, with no other process on the card (`nvidia-smi` read before each run). The largest
+   evening, with no other process on the card when each run started (`nvidia-smi`); a Blender render
+   joined it at 21:05 with 1.75 GB, during the last 40 of selenium's 48 minutes, so selenium's
+   time overstates the card's cost. The largest
    difference over the five components `(1,1)`, `(2,2)`, `(2,0)`, `(3,3)`, `(3,1)`, relative to the
    largest component of its order:
 

@@ -10968,7 +10968,8 @@ does. The real-time orders, one long call each and so timed on a first call, rea
 48 / 97 s (the magnet) at `eta_t = 4`.
 
 **The hierarchy against the orders at the full switch-on** (`PLAN.md` P141, item 3), one frequency to
-third order on the card with nothing else on it, first calls (compilation included): the hierarchy
+third order on the card, first calls (compilation included), with nothing else on the card but a
+render that joined during the last 40 of selenium's 48 minutes: the hierarchy
 12, 22, 21 and 14 s against the real-time orders' 57, 185, 186 and 2884 s at `eta_t = 12` for the
 magnet, ultrasoft and PAW AlAs and selenium with spin-orbit coupling, at the same answer to 1.2e-4,
 2.5e-5, 2.0e-5 and 5.3e-5. The hierarchy, warm, is
