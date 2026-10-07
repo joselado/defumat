@@ -146,9 +146,10 @@ def radial_table(pseudos, volume: float, s_max: float, *, tolerance: float = 1e-
 
     The number of terms doubles from ``start`` until the last eighth of the
     coefficients is below ``tolerance`` times the largest, which for an entire
-    function is the series having converged; ``limit`` refuses a dataset whose
-    transform will not converge on the range, by name rather than with a table
-    that is quietly wrong. The coefficients fall to the transform's own
+    function is the series having converged, or until a tail below 1e-11 has
+    stopped falling, which is the transform's round-off floor; ``limit``
+    refuses a dataset whose transform will not converge on the range, by name
+    rather than with a table that is quietly wrong. The coefficients fall to the transform's own
     round-off and stop there, about 1e-14 of the largest by the twentieth term
     on ``Si.pz-vbc`` at 12 Ry, so ``tolerance`` sits above that floor, and every
     term is kept: the ones below the floor cost a multiply each.
@@ -160,14 +161,25 @@ def radial_table(pseudos, volume: float, s_max: float, *, tolerance: float = 1e-
                            lm_of=jnp.zeros((0,), int), s_max=jnp.asarray(float(s_max)),
                            lmax=lmax)
     n = start
+    previous = None
     while True:
         nodes = np.cos(np.pi * (np.arange(n) + 0.5) / n)
         s = 0.5 * float(s_max) * (nodes + 1.0)
         coefficients = _chebyshev(_radial_values(datasets, s, volume))
         scale = np.abs(coefficients).max(axis=-1, keepdims=True)
         tail = np.abs(coefficients[:, -max(1, n // 8):]).max(axis=-1, keepdims=True)
-        if np.all(tail <= tolerance * np.maximum(scale, 1e-300)):
+        relative = float(np.max(tail / np.maximum(scale, 1e-300)))
+        if relative <= tolerance:
             break
+        # **A floor is convergence too.** The coefficients fall to the
+        # transform's own round-off and stop, and that floor is the dataset's:
+        # 1e-14 on ``Si.pz-vbc``, 4e-13 of the largest on the psl ultrasoft Al
+        # and As at 12.9 bohr^-2, where doubling the terms from 256 to 512 left
+        # the tail where it was. A tail that has stopped falling and is below
+        # 1e-11 is that floor, and more terms buy nothing.
+        if previous is not None and relative < 1e-11 and relative > 0.25 * previous:
+            break
+        previous = relative
         if n >= limit:
             raise ValueError(
                 f"the radial table of g_l(q^2) did not converge in {limit} Chebyshev "
