@@ -10925,3 +10925,51 @@ workstation's efficiency cores beside other work). It is therefore not the cheap
 linear spectrum, where one kick with the potential updated gives every frequency (1085 s on Elk's
 100-point wedge, above); it is the route to `eps_M` with every band at a handful of frequencies and at
 the low-frequency end, where a finite kick divides its last oscillation by `w^2`.
+
+## The harmonic routes on magnets, spin-orbit coupling, ultrasoft and PAW (D22, CPU and RTX A2000, 2026-10-07)
+
+**What an augmented step costs** (`PLAN.md` P141, item 5). The real-time orders on AlAs at 10 Ry
+(169 plane waves), Gamma and a general point, four bands, 200 steps of `dt = 0.1`, the second call
+in the process, one D22 performance core (`taskset -c 0`, `OMP_NUM_THREADS=1`, nothing else
+running), `orders_cost.py` in D22's `/l/ladovj1/review/hspin/svo12/`:
+
+| dataset | projectors | first order, a step | third order, a step | peak RSS, first / third |
+|---|---|---|---|---|
+| norm-conserving (`pz-vbc`, `pz-bhs`) | 8 | 4.0 ms | 17.0 ms | 1.20 / 1.47 GB |
+| ultrasoft (psl 1.0.0) | 26 | 16.1 ms | 92.0 ms | 1.83 / 2.94 GB |
+| PAW (psl 1.0.0) | 26 | 15.8 ms | 90.2 ms | 1.82 / 3.35 GB |
+
+So an augmented step is 4.0 norm-conserving ones at first order and 5.4 at third, on the same
+plane waves, with three times the projectors and, in every application of `S^-1 [H - rate.X]`, the
+Woodbury solve, `X` and the projectors' derivative beside `H`. PAW costs what ultrasoft costs, its
+one-centre `D` being frozen with the potential. The two datasets are not the same physics (LDA
+against PBE), which does not matter for the cost of a step.
+
+**On the card against the CPU** (`PLAN.md` P141, "On a card"): each regime on D22's A2000 and on
+its twelve performance threads (`JAX_PLATFORMS=cpu`), the same script, second calls. The hierarchy
+is one frequency (1.5 eV) to third order on the 2x2x2 mesh; the pulse is a `Sin2` of 5e11 W/cm^2 at
+1.55 eV, two cycles, `dt = 0.1`, on the field's wedge of that mesh. Card / CPU:
+
+| regime | hierarchy | pulse, frozen | pulse, `hxc` |
+|---|---|---|---|
+| selenium, spin-orbit (778 plane waves a component) | 8.3 / 22.8 s | 124 / 315 s | 265 / 664 s |
+| ultrasoft AlAs, 10/40 Ry | 9.0 / 6.7 s | 8.2 / 36.1 s | |
+| ultrasoft AlAs, spin-orbit | 9.8 / 8.8 s | 22.1 / 110 s | |
+| PAW AlAs, 10/44 Ry | 9.4 / 6.8 s | 8.9 / 27.8 s | |
+| magnet (AlAs, `tot_magnetization = 2`, 6 Ry) | 5.7 / 3.4 s | 7.0 / 16.8 s | 12.9 / 34.2 s |
+
+So the propagation is 2.4 to 5.0 times faster on the card and the hierarchy is not, at these sizes,
+except on selenium (2.7 times), the largest cell; why the smaller ones do not gain was not
+measured. The
+selenium and PAW card times were taken while a render used 0.6 to 1.9 GB of the card and overstate
+its cost; the card runs float64 at 1/70 of float32, so none of this says what a data-centre card
+does. The real-time orders, one long call each and so timed on a first call, read 1065 / 3792 s
+(selenium), 94 / 616 s (ultrasoft), 327 / 1306 s (ultrasoft with spin-orbit), 167 / 558 s (PAW) and
+48 / 97 s (the magnet) at `eta_t = 4`.
+
+**The hierarchy against the orders at the full switch-on** (`PLAN.md` P141, item 3), one frequency to
+third order on the card with nothing else on it, first calls (compilation included): the hierarchy
+12, 22 and 21 s against the real-time orders' 57, 185 and 186 s at `eta_t = 12` for the magnet,
+ultrasoft and PAW AlAs, at the same answer to 1.2e-4, 2.5e-5 and 2.0e-5. The hierarchy, warm, is
+5.7 to 9.8 s on the card for every regime above, so it stays the route to a spectrum and the
+propagation the route to a strong field.

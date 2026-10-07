@@ -24999,8 +24999,14 @@ returns cannot carry the flag for anything downstream.
    - the first order with the induced potential, **3.2e-12** (Hartree) and **2.5e-12** (Hartree
      and exchange-correlation), where the update moves `J_(1,1)` by 2.4 and 3.4 per cent, in 15
      and 16 GMRES products on both routes;
-   - the real-time orders, frozen and with the potential updated: **not yet measured** (the run
-     stopped on a step past the propagator's bound and was not repeated before D22 went down).
+   - the real-time orders, orders one and two, frozen and with the potential updated (D22's card,
+     2026-10-07 evening): at 400 steps a period **3.6e-6 and 2.1e-6** frozen, **4.2e-6 and 1.8e-6**
+     updated; at 800, **2.1e-7 and 9.3e-8** frozen, **2.1e-7 and 8.5e-8** updated, so a halved step
+     takes the difference down 17 to 22 times, the fourth-order Taylor step's 16. It is the step's
+     own error and differs between the routes because the step is centred on the carried states'
+     mean energy (`propagate.py`, `spectral_bounds`), one centre per channel in the collinear route
+     and one for both channels in the spinor route. (The first attempt stopped at 200 steps a
+     period on the propagator's bound.)
    This is P139's check as much as this phase's: the two routes share neither the Hamiltonian
    (`Hamiltonian` against `SpinorHamiltonian`), the density (two scalar channels against four
    components), nor the kernel's structure.
@@ -25014,7 +25020,7 @@ returns cannot carry the flag for anything downstream.
 4. **The hierarchy against the propagation** on selenium: **not yet measured** (at 400 steps a
    period the step is past the bound, 520 needed; the rerun was cut off by D22's outage).
 
-### P141 -- The harmonic routes on ultrasoft and PAW datasets: the overlap's motion in the equation of motion and in the current. ✅ DONE at a frozen potential, 2026-10-07, against the Kubo sum with P99's generalised velocity and by the work identity; the hierarchy against the propagation is not yet measured, and the potential updated in time is refused by name.
+### P141 -- The harmonic routes on ultrasoft and PAW datasets: the overlap's motion in the equation of motion and in the current. ✅ DONE at a frozen potential, 2026-10-07, against the Kubo sum with P99's generalised velocity and by the work identity; the hierarchy against the propagation agrees at the full switch-on (2026-10-07 evening), and the potential updated in time is refused by name.
 
 **The equation.** In the length gauge an augmented dataset evolves as `i S dpsi/dt = (H + E.r~) psi`,
 `r~ = r + sum |b_i>(d_ij + R q_ij)<b_j|` the position operator of the augmented density. The
@@ -25081,8 +25087,10 @@ coefficient, against the 1e-13 asked.
    ultrasoft AlAs at 10/40 Ry (161 plane waves, Gamma and a general point, `eta = 0.02` Ha,
    `dt = 0.05`), **2.4e-6** of the scale, the sum alone 1.003 of the scale off; the
    norm-conserving silicon control on the same script 1.4e-6 (the test's recorded 1.6e-5 at its
-   own settings). With spin-orbit coupling (`alas-epsilon-us-soc.in`): inside the test's bound of
-   5e-5 on D22's card and on Triton's Skylake CPU (2026-10-07), the value itself not printed.
+   own settings). With spin-orbit coupling (`alas-epsilon-us-soc.in`, 322 plane waves a spinor,
+   eight occupied spinor bands, the same settings): **2.5e-6**, the sum alone 1.003 off,
+   `<phi|S|phi>` constant to 5.4e-9, on D22's card (258 s of propagation, 2026-10-07 evening);
+   inside the test's bound of 5e-5 on Triton's Skylake CPU as well.
 2. **The work identity** on a strong pulse (`Sin2`, 5e12 W/cm^2, 1.55 eV, 4 fs, `kappa` up to
    0.21 bohr^-1, 0.84 electrons a cell promoted), ultrasoft AlAs, `dt = 0.05`: `Omega int J.E dt`
    against `E(T) - E(0)`, **2.7e-7**, `<phi|S|phi>` constant to **7.1e-9**. With `X` removed from
@@ -25118,8 +25126,46 @@ coefficient, against the 1e-13 asked.
    D22's twelve performance threads, read at 4.8 GB resident mid-run (not a peak), and 167 s on its
    card beside a render. The hierarchy, warm, takes 7 s for the frequency on that CPU and 9 s on the
    card, so it stays the route to use.
-4. **The datasets against each other** (chi^(3) of AlAs with norm-conserving, ultrasoft and PAW
-   datasets): not yet measured.
+4. **The datasets against each other**: ultrasoft against PAW, both pslibrary 1.0.0 PBE, on one
+   cell (`alas-epsilon-us.in` with only the datasets and the cutoffs changed; the PAW input puts As
+   at the inverted site, which flips the sign of chi^(2)), the hierarchy at 1.5 eV, `eta = 0.3` eV,
+   [111], the 2x2x2 mesh, on D22's card (`datasets.py`, 2026-10-07 evening). The norm-conserving arm
+   was dropped at the user's choice: the committed norm-conserving AlAs datasets are LDA, so it would
+   measure the functional. `chi^(2)_[111]x` in pm/V and `chi^(3)` in m^2/V^2:
+
+   | `ecutwfc` / `ecutrho` (Ry) | ultrasoft chi^(2) | PAW chi^(2) | ultrasoft chi^(3) | PAW chi^(3) |
+   |---|---|---|---|---|
+   | 20 / 160 | -163.4 + 576.7i | -165.7 + 580.6i | (0.9549 + 2.1273i)e-18 | (0.9547 + 2.1287i)e-18 |
+   | 30 / 240 | -166.4 + 579.8i | -168.8 + 583.8i | (0.9386 + 2.1377i)e-18 | (0.9383 + 2.1391i)e-18 |
+   | 40 / 320 | -166.8 + 580.3i | -169.1 + 584.4i | (0.9362 + 2.1385i)e-18 | (0.9359 + 2.1399i)e-18 |
+
+   From 30 to 40 Ry each dataset moves by 0.10 to 0.11 per cent in both, while the two stay **0.77 per
+   cent** apart in chi^(2) (4.7 pm/V of 604) and **6.2e-4** apart in chi^(3) at every cutoff, and
+   6.1e-4 apart in the first order's `J_(1,1)`: what is left is the datasets and not the cutoff. The
+   hierarchy took 20 to 23 BiCGStab iterations on both, and 77 to 83 s with the ultrasoft datasets
+   against 22 to 23 s with PAW at every cutoff, first calls each in its own process; with equal
+   iterations the difference is outside the solves, and whether it is compilation was not
+   isolated.
+5. **The cost of a step**, `realtime/orders.py` on AlAs at 10 Ry (169 plane waves), Gamma and a
+   general point, four bands, 200 steps of `dt = 0.1`, the second call in the process, one D22
+   performance core (`taskset -c 0`, `OMP_NUM_THREADS=1`, nothing else running), 2026-10-07
+   evening (`orders_cost.py`):
+
+   | dataset | projectors | first order | third order | peak RSS, first / third |
+   |---|---|---|---|---|
+   | norm-conserving (`pz-vbc`, `pz-bhs`) | 8 | 4.0 ms | 17.0 ms | 1.20 / 1.47 GB |
+   | ultrasoft (psl 1.0.0) | 26 | 16.1 ms | 92.0 ms | 1.83 / 2.94 GB |
+   | PAW (psl 1.0.0) | 26 | 15.8 ms | 90.2 ms | 1.82 / 3.35 GB |
+
+   So an augmented step costs 4.0 times a norm-conserving one at first order and 5.4 times at
+   third, on the same plane waves: the projectors are three times as many and every
+   application of `S^-1 [H - rate.X]` carries the Woodbury solve, `X` and the projectors'
+   derivative beside `H`. PAW costs what ultrasoft costs, its one-centre `D` being frozen. A
+   first call is 3 to 8 times the second (compilation). An earlier reading of 50 ms for the
+   ultrasoft first order (11:07 that day, beside 4.8 ms for norm-conserving) was taken before the
+   radial table's recurrence became a loop and dropped its round-off tail (`cbf1f5d`, 11:20), on
+   four threads of a D22 that went into swap minutes later; which of the two made it three times
+   this one was not isolated.
 
 **On a card** (D22's RTX A2000, 2026-10-07, master `4e7816c`; float64 runs there at 1/70 of
 float32, so the times are not a data-centre card's). The twelve identity tests of P139 to P141
@@ -25159,9 +25205,7 @@ D22's `/l/ladovj1/review/hspin/card/`.
 **What is outstanding**, beside the measurements marked above: notebook 52 (selenium with and
 without spin-orbit coupling, drafted), the timing against Elk's task 460 with spin-orbit coupling
 (the deliverable P141's routes owe, since Elk has no ultrasoft dataset and the pair is the spinor
-route's), and the cost of an augmented step against a norm-conserving one (`orders_cost.py` on
-D22: norm-conserving AlAs at 10 Ry, two k-points, four bands, first order, 4.8 ms a step and
-1.2 GB; the ultrasoft arms did not finish).
+route's).
 
 **Refused**, by name: the potential updated in time with an augmented dataset (the augmentation
 charge of `rho(t)` from the projections at `k + kappa(t)`, `newd`'s `D(t)` every step, PAW's
