@@ -25210,10 +25210,17 @@ with `RESOURCE_EXHAUSTED`, once instantiating a CUDA graph and once loading a ke
 and overstate the card's cost (the magnet's are from a clean run). The scripts and results are in
 D22's `/l/ladovj1/review/hspin/card/`.
 
-**What is outstanding**, beside the measurements marked above: notebook 52 (selenium with and
-without spin-orbit coupling, drafted), the timing against Elk's task 460 with spin-orbit coupling
-(the deliverable P141's routes owe, since Elk has no ultrasoft dataset and the pair is the spinor
-route's).
+**The timing against Elk** (the spinor route's, since Elk has no ultrasoft dataset): trigonal
+selenium with spin-orbit coupling and the potential updated, one D22 core each, 1837 s against
+Elk's task 460 at 3396 s (0.54x), with the currents 0.8 per cent apart after the pulse and a term
+proportional to `kappa(t)` in Elk's during it that falls as Elk's basis grows; `PERFORMANCE.md`,
+"The harmonic routes on magnets, spin-orbit coupling, ultrasoft and PAW", has the pair and what is
+not comparable.
+
+**What is outstanding**: notebook 52 (selenium with and without spin-orbit coupling, drafted in
+D22's `/l/ladovj1/review/hspin/handoff/make_nb52.py`) and the execution of the guide's selenium
+snippet, both left at the user's choice of 2026-10-07; and why the ultrasoft hierarchy took 77 to
+83 s against PAW's 22 s on one cell at equal iteration counts (item 4), first calls not isolated.
 
 **Refused**, by name: the potential updated in time with an augmented dataset (the augmentation
 charge of `rho(t)` from the projections at `k + kappa(t)`, `newd`'s `D(t)` every step, PAW's

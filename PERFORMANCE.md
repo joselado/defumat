@@ -10975,3 +10975,41 @@ magnet, ultrasoft and PAW AlAs and selenium with spin-orbit coupling, at the sam
 2.5e-5, 2.0e-5 and 5.3e-5. The hierarchy, warm, is
 5.7 to 9.8 s on the card for every regime above, so it stays the route to a spectrum and the
 propagation the route to a strong field.
+
+**Spin-orbit coupling against Elk, one core each** (`PLAN.md` P140; D22's core 0, 2026-10-07 23:13 to
+2026-10-08 01:28, only the virus scanner running, on CPU 13, and nothing on the card, `ps`,
+`uptime` and `nvidia-smi` before and after every run; the silicon frozen control of the Elk pair
+above read 1.297 and 1.299 ms per k-point and step before and after, so the load did not move).
+Trigonal selenium (`se-trigonal-soc.in` as committed, 20 Ry, symmetry on), a Gaussian pulse along
+c, 1.55 eV, 1e10 W/cm^2, 1 fs FWHM peaking at 3 fs, Elk's `AFIELDT/c` equal to `kappa` to 7e-11,
+2000 steps of 0.125 Hartree a.u. on the 15 points of the field's wedge of the 3x3x3 mesh, the
+potential updated in both (`potential = 'hxc'`; Elk's task 460 always updates it), each from its
+own converged ground state (`tools/realtime/elk_se_soc/`, `jobA4b.sh` and `jobA7.sh`):
+
+| | Elk 11.0.2, task 460, `nempty 16`, `rgkmax 7` | defumat, `get_realtime` |
+|---|---|---|
+| wall clock | **3396 s**, its setup 37 s | **1837 s**, the fixed-density solve 5.1 s |
+| per k-point and step | 112 ms (72 ms at `nempty 8`, 2181 s) | 61 ms |
+| ground state | 25.6 s (task 0) | 3.1 s (`conv_thr = 1e-12`, second call) |
+
+So **0.54x** (0.84x against Elk at `nempty 8`), task 0 and task 460 together 3422 s against 1840 s.
+The defumat time is the second call of the process; the first, a 400-step block that compiles every
+program, took 388 s and is not counted. Elk's setup (`rhostatic`'s four one-iteration ground states,
+the eigenvectors, `kmat`, `pmat`) is a two-step run with the pulse peaking at `t = 0`, because a
+two-step run of the timed pulse sees no field and reduces with the whole D3 group (9 points
+instead of 15). **What is not the same work.** Elk propagates 146 second-variational states, 48 of
+them occupied, since its selenium carries the 3d shell, and diagonalises `H(t)` in that basis each
+step, where defumat carries the 18 occupied spinor bands on 841 plane waves a component; Elk's
+spin-orbit term is not minimally coupled to the field (it stays at `k`, Krieger et al.,
+arXiv:1406.6607, Eq. 1) where defumat's projectors sit at `k + A/c`; and Elk updates a magnetization
+(`m_z` up to 2.1e-4 Bohr magnetons) that this `nspin_mag = 1` run does not carry. **The physics
+agrees where it should**: the gap on the mesh is 1.3983 eV here and 1.4006 eV in Elk, the currents
+across the field are below 3e-21 in both, and after the pulse, where `kappa` is back to zero and
+nothing is fitted, `J_z` agrees to **0.8 per cent** (relative L2 norm, 1.5 per cent at `nempty 8`).
+During the pulse the raw difference is 12 per cent (37 per cent at `nempty 8`), and it is almost all
+one term proportional to `kappa(t)`: a least-squares coefficient `c` of `kappa` fitted to the
+difference gives `c Omega` = 0.95 electrons at `nempty 16` and 2.9 at 8 (5.4, 3.1 and 0.8 at 4, 8 and
+16 on the 2x2x2 mesh), and the residual after it is 2.2 per cent. A diamagnetic-like term that falls
+as Elk's basis grows is what an incomplete sum over states leaves of the f-sum rule, which is the
+reading, not a measurement; the falsifier would be `c` reaching zero as `nempty` grows further,
+which was not affordable here. Memory was not measured; every run was under an 8 GB cap.
