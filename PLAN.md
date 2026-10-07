@@ -25078,7 +25078,8 @@ coefficient, against the 1e-13 asked.
    ultrasoft AlAs at 10/40 Ry (161 plane waves, Gamma and a general point, `eta = 0.02` Ha,
    `dt = 0.05`), **2.4e-6** of the scale, the sum alone 1.003 of the scale off; the
    norm-conserving silicon control on the same script 1.4e-6 (the test's recorded 1.6e-5 at its
-   own settings). With spin-orbit coupling (`alas-epsilon-us-soc.in`): **not yet measured**.
+   own settings). With spin-orbit coupling (`alas-epsilon-us-soc.in`): inside the test's bound of
+   5e-5 on D22's card and on Triton's Skylake CPU (2026-10-07), the value itself not printed.
 2. **The work identity** on a strong pulse (`Sin2`, 5e12 W/cm^2, 1.55 eV, 4 fs, `kappa` up to
    0.21 bohr^-1, 0.84 electrons a cell promoted), ultrasoft AlAs, `dt = 0.05`: `Omega int J.E dt`
    against `E(T) - E(0)`, **2.7e-7**, `<phi|S|phi>` constant to **7.1e-9**. With `X` removed from
@@ -25089,11 +25090,50 @@ coefficient, against the 1e-13 asked.
    ultrasoft and PAW AlAs: **not yet measured**. The PAW hierarchy alone took 54 s for its frequency
    after the batching above (192 s before); its third-order propagation sat at 15 GB resident for
    over an hour with the table at 512 terms and drove D22 into swap twice, which is why the table's
-   recurrence is now a loop and its round-off tail is dropped (`realtime/radial.py`), and that
-   change is not yet run. **Until it is, an augmented third order by the real-time route is not
-   known to be affordable**; the hierarchy is the route to use.
+   recurrence is now a loop and its round-off tail is dropped (`realtime/radial.py`). After that
+   change a shorter run of the same third order, `eta_t = 4` and 520 steps a period, takes 558 s on
+   D22's twelve performance threads, read at 4.8 GB resident mid-run (not a peak), and 167 s on its
+   card; whether the table's loop is what changed the memory was not isolated, and the `eta_t = 12`
+   the comparison wants should be roughly three times as long by the length of the switch-on, which
+   is not measured. The hierarchy, warm, takes 7 s for the frequency on that CPU and 9 s on the
+   card, so it stays the route to use.
 4. **The datasets against each other** (chi^(3) of AlAs with norm-conserving, ultrasoft and PAW
    datasets): not yet measured.
+
+**On a card** (D22's RTX A2000, 2026-10-07, master `4e7816c`; float64 runs there at 1/70 of
+float32, so the times are not a data-centre card's). The twelve identity tests of P139 to P141
+(`test_realtime_operators.py`, `test_spin_channels.py`, the three Kubo sums of item 1 and the
+magnet written as spinors) pass on the card in 17 min, and on eight Skylake cores on Triton in
+1 h 26 min. Each regime was then run on the card and on D22's CPU (`JAX_PLATFORMS=cpu`, twelve
+threads) through the hierarchy (orders one to three, 1.5 eV, `eta = 0.3` eV, [111], the 2x2x2
+mesh), the real-time orders at `eta_t = 4` (a parity check, not item 3's comparison), a `Sin2`
+pulse (5e11 W/cm^2, 1.55 eV, two cycles, `dt = 0.1`) at a frozen potential and, for the two
+norm-conserving cells, with the potential updated (`hxc`) and the hierarchy's first order with it.
+The largest difference of the current between card and CPU, over the five components or the
+pulse's time series, relative to its largest value:
+
+| regime | hierarchy | orders | pulse | `hxc` pulse, first order | orders, card / CPU |
+|---|---|---|---|---|---|
+| selenium, SOC | 4.5e-10 | 4.2e-10 | 9.7e-10 | 1.2e-9, 3.3e-10 | 1065 / 3792 s |
+| ultrasoft AlAs | 1.3e-8 | 1.3e-8 | 4.2e-9 | | 94 / 616 s |
+| ultrasoft AlAs, SOC | 4.6e-11 | 7.3e-11 | 1.2e-9 | | 327 / 1306 s |
+| PAW AlAs | 1.1e-11 | 5.5e-12 | 1.8e-10 | | 167 / 558 s |
+| magnet, one density | 1.1e-11 | | 1.3e-9 | | 56 / 111 s |
+
+with equal norm drifts and BiCGStab counts within one of each other. Ultrasoft AlAs's 1.3e-8 is the
+same in both routes, so it is in the states they start from and not in either route. Two things in
+the run are not the code. **The magnet (AlAs at `tot_magnetization = 2`, `nosym`) is not a parity
+cell**: its fifth majority electron breaks the cubic symmetry, and the two platforms converged to
+mirror images of one state, energies 9e-14 Ry apart with `J_x` and `J_y` exchanged, 12 per cent apart
+in `J_x`. Started from the CPU's saved state, the card's own SCF lands 6e-6 away in the hierarchy and
+the orders and 3e-5 in the pulse, since the minority channel's gap at its occupation cut is
+0.79 mRy; the row above is the
+hierarchy and the pulse from one density with no SCF on the card. **The card was shared** for part of
+the run with a render using 0.6 to 1.9 GB of it: two runs died at JAX's default pool of 75 per cent
+with `RESOURCE_EXHAUSTED`, once instantiating a CUDA graph and once loading a kernel, and ran at
+`XLA_PYTHON_CLIENT_MEM_FRACTION=0.6`; the selenium and PAW card times were taken beside the render
+and overstate the card's cost (the magnet's are from a clean run). The scripts and results are in
+D22's `/l/ladovj1/review/hspin/card/`.
 
 **What is outstanding**, beside the measurements marked above: notebook 52 (selenium with and
 without spin-orbit coupling, drafted), the timing against Elk's task 460 with spin-orbit coupling
