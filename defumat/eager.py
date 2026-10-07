@@ -36,8 +36,8 @@ for a loop that calls one closure many times and should trace it once
   the stored jaxpr is already the derivative and is evaluated primal only
   (``Sternheimer.response_density``).
 * A nested jaxpr's own constants are *hashed into the key*. A ``jit`` that
-  closes over an array, or builds one from a static argument
-  (``pseudo.projectors._with_origin_tangent``'s index array), keeps it inside its
+  closes over an array, or builds one from a static argument (the projectors'
+  first-order origin rule built its axes that way until 2026-10-06), keeps it inside its
   ``ClosedJaxpr`` rather than hoisting it, and the printed form shows its type
   and not its value, so two calls with different arrays there would print
   alike. Their bytes go into the key, and past ``NESTED_LIMIT`` of them the call

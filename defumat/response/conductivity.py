@@ -477,10 +477,13 @@ def optical_conductivity(
         calculation: the :class:`~defumat.scf.driver.Calculation` the states
             belong to, on the **whole** k-grid.
         wavefunctions: ``(nspin, nk, nbnd, ndim)``. ``ndim`` is ``2 npwx`` for
-            a spinor, which is the regime a magneto-optical spectrum wants.
+            a spinor, which is the regime a magneto-optical spectrum wants;
+            ``nspin = 2`` is a collinear run, whose two channels' conductivities
+            add.
         eigenvalues: ``(nspin, nk, nbnd)`` or the squeezed ``(nk, nbnd)``, Ry.
         v_scf: the converged potential ``dH/dk`` is built at.
-        fermi_energy: in Ry, for the Drude term's delta function.
+        fermi_energy: in Ry, for the Drude term's delta function; one per
+            channel when a collinear run's moment is fixed.
         frequencies: ``(nw,)`` in Ry. Defaults to a uniform grid from zero to
             ``window``, which is what makes ``sigma[0]`` the static limit.
         window: the top of that default grid, in Ry.
@@ -533,15 +536,12 @@ def optical_conductivity(
     # device array, and cross to the device a k-chunk at a time below.
     if wavefunctions.ndim == 3:
         wavefunctions = wavefunctions[None]
-    if eigenvalues.shape[0] != 1:
-        raise NotImplementedError(
-            "the optical conductivity of a collinear spin-polarized run is "
-            "not implemented: the two channels are two independent band "
-            "structures whose conductivities add, which is a loop this "
-            "assembly does not have. A spinor run (noncolin = .true.) is the "
-            "regime a magneto-optical spectrum wants anyway, since sigma_xy "
-            "needs spin-orbit coupling and nspin = 2 has none"
-        )
+    # A collinear spin-polarized run is two band structures, one per channel,
+    # whose conductivities add: every array below keeps the channel axis, the
+    # velocity operator builds each channel's elements with its own Hamiltonian
+    # (``VelocityOperator._hamiltonians``), and the contraction sums over the
+    # channels as it sums over k.
+    nspin = int(eigenvalues.shape[0])
 
     nbnd = int(eigenvalues.shape[-1])
     precision = calculation.system.cell.precision
@@ -552,7 +552,9 @@ def optical_conductivity(
     # valence/conduction split, so it is applied above the Fermi level.
     shifted = eigenvalues
     if scissor:
-        above = eigenvalues > precision.as_real(fermi_energy)
+        level = np.broadcast_to(np.asarray(fermi_energy, dtype=float).reshape(-1),
+                                (nspin,))[:, None, None]
+        above = eigenvalues > precision.as_real(level)
         shifted = jnp.where(above, eigenvalues + precision.as_real(scissor),
                             eigenvalues)
 
@@ -572,9 +574,9 @@ def optical_conductivity(
     terms = calculation.local_terms(v_scf, ddd_paw)
 
     wg, _ = calculation.occupations(shifted)
-    wg = jnp.asarray(wg)[0]  # (nk, nbnd), summing to nelec
+    wg = jnp.asarray(wg)  # (nspin, nk, nbnd), summing to nelec over both
     wk = jnp.asarray(calculation.system.kpoints.weights)  # (nk,)
-    filling = wg / wk[:, None]  # in [0, 1]
+    filling = wg / wk[None, :, None]  # in [0, 1]
     # On the host, where each chunk takes its rows from.
     wg, wk, filling = np.asarray(wg), np.asarray(wk), np.asarray(filling)
 
@@ -600,12 +602,15 @@ def optical_conductivity(
 
     # The Fermi-surface delta of the Drude term, ``(nk, nbnd)``, or ``None``
     # when there is no intraband term to build.
-    delta = _fermi_surface_delta(
-        calculation, fermi_energy, shifted[0],
-        enabled=intraband and method == "frequency",
-    )
-    bare = np.asarray(eigenvalues[0])
-    moved_host = np.asarray(shifted[0])
+    # One Fermi level, or one per channel when ``tot_magnetization`` fixes the
+    # moment and the two channels are occupied separately.
+    levels = np.broadcast_to(np.asarray(fermi_energy, dtype=float).reshape(-1), (nspin,))
+    deltas = [_fermi_surface_delta(calculation, float(levels[s]), shifted[s],
+                                   enabled=intraband and method == "frequency")
+              for s in range(nspin)]
+    delta = None if deltas[0] is None else np.stack(deltas)  # (nspin, nk, nbnd)
+    bare = np.asarray(eigenvalues)
+    moved_host = np.asarray(shifted)
 
     # ``<n|dH_a - e_m dS_a|m> + (e_m - e_n) K^a_{nm}``, which is ``<n|dH_a|m>``
     # unchanged on a norm-conserving dataset and the whole generalised velocity
@@ -621,9 +626,9 @@ def optical_conductivity(
                                 kcart=kcart, dipole=dipole, local_terms=terms)
 
     def tangents_of(rowset, psi, energies, kcart):
-        """``<n|dH_a - e_m dS_a|m>`` on one chunk, ``(3, 1, chunk, nb, nb)``."""
+        """``<n|dH_a - e_m dS_a|m>`` on one chunk, ``(3, nspin, chunk, nb, nb)``."""
         return velocity_on(rowset, kcart).tangent_elements(
-            psi, energies[None], sequential=True)
+            psi, energies, sequential=True)
 
     def connections_of(tangents, rowset, psi, kcart):
         """The augmentation dipole's connection on one chunk, the same shape."""
@@ -633,8 +638,14 @@ def optical_conductivity(
         """One chunk's ``(interband, dropped pairs[, raw plasma tensor])``."""
         connections = rest[0] if augmented else None
         energies, moved, weight, fill, *drude = rest[1:] if augmented else rest
-        elements = with_connections(tangents, energies[None], connections)
-        elements = jnp.moveaxis(elements[:, 0], 0, 1)  # (chunk, 3, nb, nb)
+        elements = with_connections(tangents, energies, connections)
+        # (nspin, chunk, 3, nb, nb), then the channel folded into the k axis:
+        # each channel's pairs are its own, and the sums are linear in them
+        elements = jnp.moveaxis(elements, 0, 2)
+        flat = (-1,) + elements.shape[2:]
+        elements = elements.reshape(flat)
+        energies, moved = (x.reshape((-1,) + x.shape[2:]) for x in (energies, moved))
+        weight, fill = (x.reshape((-1,) + x.shape[2:]) for x in (weight, fill))
         if scissor:
             elements = _renormalise(elements, energies, moved)
         # ``sum_k`` tree-maps its accumulator, so the pair count adds over k
@@ -643,6 +654,8 @@ def optical_conductivity(
         if not drude:
             return inter, dropped
         wk_chunk, delta_chunk = drude
+        wk_chunk = jnp.tile(wk_chunk, nspin)
+        delta_chunk = delta_chunk.reshape((-1,) + delta_chunk.shape[2:])
         return inter, dropped, _plasma_sum(wk_chunk, delta_chunk, moved,
                                            elements, tol)
 
@@ -652,12 +665,13 @@ def optical_conductivity(
         # and the pair guard does not count them. ``filling`` is taken from the
         # unzeroed arrays, since ``wg / 0`` there would be ``nan``.
         rowset, psi = row_leaves(calculation, rows), store_rows(wavefunctions, rows)
-        energies, kc = jnp.asarray(bare[rows]), jnp.asarray(kcart[rows])
-        last = (energies, jnp.asarray(moved_host[rows]),
-                jnp.asarray(padded(wg, rows, live)), jnp.asarray(filling[rows]))
+        energies, kc = jnp.asarray(bare[:, rows]), jnp.asarray(kcart[rows])
+        last = (energies, jnp.asarray(moved_host[:, rows]),
+                jnp.asarray(padded(wg, rows, live, axis=1)),
+                jnp.asarray(filling[:, rows]))
         if delta is not None:
             last = last + (jnp.asarray(padded(wk, rows, live)),
-                           jnp.asarray(delta[rows]))
+                           jnp.asarray(delta[:, rows]))
         if augmented:
             return (rowset, psi, energies, kc), (rowset, psi, kc), last
         return (rowset, psi, energies, kc), last

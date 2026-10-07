@@ -48,7 +48,7 @@ import jax.numpy as jnp
 
 from defumat.units import FPI
 
-__all__ = ["real_spherical_harmonics", "lm_index"]
+__all__ = ["real_spherical_harmonics", "real_solid_harmonics", "lm_index"]
 
 _EPS = 1.0e-9
 
@@ -147,3 +147,68 @@ def real_spherical_harmonics(vectors: jnp.ndarray, lmax: int) -> jnp.ndarray:
             ylm.append(base * sin_m[m])
 
     return jnp.stack(ylm, axis=-1)
+
+
+def real_solid_harmonics(vectors: jnp.ndarray, lmax: int) -> jnp.ndarray:
+    """``|v|^l Y_lm(vhat)``, the regular solid harmonics, shaped ``(..., (lmax+1)^2)``.
+
+    The same functions as :func:`real_spherical_harmonics`, in the same
+    ordering and with the same signs, multiplied by ``|v|^l``, which makes each
+    a homogeneous polynomial of degree ``l`` in the components of ``v``. It is
+    therefore smooth to every order at ``v = 0``, where the spherical ones have
+    no value at all, and that is what it is for: a projector column
+    ``Y_lm(qhat) f_l(|q|)`` is ``S_lm(q) g_l(q^2)`` with ``g_l = f_l/q^l``
+    analytic in ``q^2``, and this is the form that can be differentiated at
+    ``k + G = 0`` (``pseudo.projectors._with_origin_rows``).
+
+    The recursion is :func:`real_spherical_harmonics`' one with ``cos theta``
+    replaced by ``z`` and the ``Q(l-2, m)`` term carrying ``|v|^2``: the stored
+    ``Q(l, m) / sin^m theta`` is a polynomial of degree ``l - m`` in
+    ``cos theta`` with that parity, so ``|v|^(l-m)`` times it is a polynomial
+    in ``z`` and ``|v|^2``, and the azimuthal factor times ``|v|^m`` is
+    ``Re, Im (x + iy)^m``. No square root and no division appear.
+    """
+    if lmax < 0:
+        raise ValueError(f"lmax must be non-negative, got {lmax}")
+
+    vectors = jnp.asarray(vectors)
+    x, y, z = vectors[..., 0], vectors[..., 1], vectors[..., 2]
+    norm2 = x * x + y * y + z * z
+    if lmax == 0:
+        return jnp.full(vectors.shape[:-1] + (1,), 1.0 / jnp.sqrt(FPI),
+                        dtype=vectors.dtype)
+
+    size = (lmax + 1) ** 2
+    q = [None] * size
+    q[0] = jnp.ones_like(z)
+    q[1] = z
+    q[3] = jnp.full_like(z, -1.0 / jnp.sqrt(2.0))
+
+    for l in range(2, lmax + 1):
+        for m in range(0, l - 1):
+            lm, lm1, lm2 = l**2 + 2 * m, (l - 1) ** 2 + 2 * m, (l - 2) ** 2 + 2 * m
+            denominator = jnp.sqrt(float(l * l - m * m))
+            q[lm] = (
+                z * (2 * l - 1) / denominator * q[lm1]
+                - jnp.sqrt(float((l - 1) ** 2 - m * m)) / denominator * norm2 * q[lm2]
+            )
+        lm, lm1, lm2 = l**2 + 2 * l, l**2 + 2 * (l - 1), (l - 1) ** 2 + 2 * (l - 1)
+        q[lm1] = z * jnp.sqrt(float(2 * l - 1)) * q[lm2]
+        q[lm] = -jnp.sqrt((2 * l - 1) / (2.0 * l)) * q[lm2]
+
+    cos_m = [jnp.ones_like(z)]
+    sin_m = [jnp.zeros_like(z)]
+    for m in range(1, lmax + 1):
+        cos_m.append(cos_m[-1] * x - sin_m[-1] * y)
+        sin_m.append(sin_m[-1] * x + cos_m[-2] * y)
+
+    solid = [jnp.broadcast_to(q[0] / jnp.sqrt(FPI), z.shape)]
+    for l in range(1, lmax + 1):
+        c = jnp.sqrt((2 * l + 1) / FPI)
+        solid.append(c * q[l**2])
+        for m in range(1, l + 1):
+            base = c * jnp.sqrt(2.0) * q[l**2 + 2 * m]
+            solid.append(base * cos_m[m])
+            solid.append(base * sin_m[m])
+
+    return jnp.stack(solid, axis=-1)

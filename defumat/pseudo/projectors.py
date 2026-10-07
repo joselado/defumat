@@ -32,9 +32,8 @@ import numpy as np
 
 from defumat.basis.gvectors import ORIGIN_TOL, GVectors, modulus
 from defumat.basis.planewaves import PlaneWaveBasis
-from defumat.pseudo.formfactors import (
-    _origin_integrals, projector_form_factors)
-from defumat.pseudo.harmonics import real_spherical_harmonics
+from defumat.pseudo.formfactors import origin_series, projector_form_factors
+from defumat.pseudo.harmonics import real_solid_harmonics, real_spherical_harmonics
 from defumat.pseudo.upf import Pseudopotential
 from defumat.system.cell import Cell
 from defumat.system.kpoints import KPoints
@@ -102,7 +101,7 @@ def _projector_dataset_key(pseudo: Pseudopotential) -> tuple:
 
     **The key is exactly what the columns read and nothing else**:
     :func:`~defumat.pseudo.formfactors.projector_form_factors` and
-    :func:`~defumat.pseudo.formfactors._origin_integrals` integrate each
+    :func:`~defumat.pseudo.formfactors.origin_series` integrate each
     ``beta[:kkbeta]`` against ``r[:kkbeta]`` with Simpson weights from
     ``rab[:kkbeta]``, and the channels fix the ``l``, the ``lm`` column and the
     ``(-i)^l`` phase. ``D_ij`` is not in it, because :func:`_expand_dij` is
@@ -381,11 +380,14 @@ def build_projector_core(
     the sphere. A spin spiral's ``dE/dq`` is the caller
     (:mod:`defumat.forces.spiral`).
 
-    ``origin_tangent`` carries the ``l = 1`` tangent at ``k + G = 0``, which is
-    the default and is the derivative the operator actually has: the product
-    ``f_1(q) Y_1m(qhat)`` goes to ``c sqrt(3/4pi) q_m``, linear in the vector
-    ``q``, so its gradient at the origin is ``c sqrt(3/4pi) delta_m,alpha``
-    rather than zero (see :func:`_with_origin_tangent`).
+    ``origin_tangent`` carries the derivatives at ``k + G = 0``, to every
+    order, which is the default and is the operator the projectors actually
+    are: the product ``f_l(q) Y_lm(qhat)`` is ``S_lm(q) g_l(q^2)``, a solid
+    harmonic times a function analytic in ``q^2``, smooth at the origin where
+    both of its guarded factors are not. Its first derivative is the ``l = 1``
+    tangent ``c sqrt(3/4pi) delta_m,alpha``, and its second and higher ones are
+    the curvature of ``l = 0``, the ``q_a q_b`` of ``l = 2`` and the cubic part
+    of ``l = 1`` (see :func:`_with_origin_rows`).
 
     **``origin_tangent=False`` is Quantum ESPRESSO's convention and is there so
     that a ``ph.x`` comparison stays exact.** QE zeroes that row twice over --
@@ -467,14 +469,14 @@ def build_projector_core(
 
     columns = _species_columns(ylm, radial, jnp.asarray(beta_of), jnp.asarray(lm_of))
     phase_of_column = jnp.asarray((-1j) ** np.asarray(l_of))
-    # The identity, owning the ``l = 1`` tangent at ``k + G = 0`` that the two
-    # origin guards drop between them. See :func:`_with_origin_tangent`.
-    # ``origin_tangent=False`` is QE's convention and drops it again, which is
-    # what a ``ph.x`` comparison on a Gamma-containing mesh is held to.
-    axes, slopes = _origin_slopes(dataset_pseudos, dataset_channels, cell.volume)
-    if not origin_tangent:
-        axes = ()
-    columns = _with_origin_tangent(columns, kg, slopes, axes)
+    # The rows at ``k + G = 0``, where both factors of a column are guarded and
+    # every derivative of the product is lost, rewritten as a polynomial in the
+    # vector ``q`` that has them (:func:`_with_origin_rows`).
+    # ``origin_tangent=False`` is QE's convention and keeps the guarded rows,
+    # which is what a ``ph.x`` comparison on a Gamma-containing mesh is held to.
+    if origin_tangent and _has_origin_rows(kg):
+        series = _origin_columns(dataset_pseudos, beta_of, l_of, cell.volume)
+        columns = _with_origin_rows(columns, kg, series, jnp.asarray(lm_of), lmax)
 
     # One row per projector channel, in QE's order: atoms outermost, then the
     # channels of that atom's species. The column comes from the species'
@@ -555,137 +557,98 @@ def _species_columns(ylm, radial, beta_of, lm_of, l_phase=None):
     return columns if l_phase is None else columns * l_phase
 
 
-#: For an ``l = 1`` harmonic, the cartesian axis it is proportional to and the
-#: sign, in this module's ``lm`` ordering. Read off
-#: :func:`~defumat.pseudo.harmonics.real_spherical_harmonics` rather than
-#: derived: at the unit vectors it returns ``Y_1 = +c z``, ``Y_2 = -c x`` and
-#: ``Y_3 = -c y`` with ``c = sqrt(3/4pi)``, and the two minus signs are
-#: ``ylmr2``'s ``-sent/sqrt(2)`` surviving into the ``m = 1`` pair.
-_P_AXIS = {1: (2, 1.0), 2: (0, -1.0), 3: (1, -1.0)}
+def _has_origin_rows(kg) -> bool:
+    """Whether any row of ``kg`` can be at ``k + G = 0``.
+
+    A traced ``kg`` -- a moved k-point under ``at_kcart``, a strained cell --
+    can put any row there, so the answer is yes without looking. A concrete one
+    is read, and a mesh with no such row (any shifted one) skips
+    :func:`_with_origin_rows` entirely, so its projectors are the bytes they
+    were before the rows were rewritten.
+    """
+    if isinstance(kg, jax.core.Tracer):
+        return True
+    return bool(jnp.any(jnp.sum(kg * kg, axis=-1) <= ORIGIN_TOL))
 
 
-@partial(jax.custom_jvp, nondiff_argnums=(3,))
-def _origin_tangent_rule(columns, kg, slopes, axes):
-    """``columns`` itself, carrying the tangent the origin guards lose.
+def _origin_columns(pseudos, beta_of, l_of, volume):
+    """The Taylor coefficients of ``g_l(q^2)`` for every column, ``(ncols, terms)``.
+
+    :func:`~defumat.pseudo.formfactors.origin_series` for each dataset, with the
+    ``4 pi / sqrt(Omega)`` of :func:`~defumat.pseudo.formfactors.projector_form_factors`
+    (traced under a strain), gathered by each column's radial index. **The
+    constant term of an** ``l = 0`` **column is removed**, because the guarded
+    column already holds ``Y_00 f_0(0)`` there: what :func:`_with_origin_rows`
+    adds is the rest of the series, which is exactly zero at ``q = 0``, so the
+    value at the origin is the transform's own and not a second evaluation of
+    it.
+    """
+    table = jnp.concatenate([origin_series(p) for p in pseudos])
+    series = jnp.take(table, jnp.asarray(beta_of), axis=0) * (FPI / jnp.sqrt(volume))
+    keep_constant = np.asarray([l != 0 for l in l_of], dtype=float)
+    return series.at[:, 0].multiply(jnp.asarray(keep_constant))
+
+
+@partial(jax.jit, static_argnames=("lmax",))
+def _with_origin_rows(columns, kg, series, lm_of, lmax):
+    """``columns`` with the rows at ``k + G = 0`` written as ``S_lm(q) g_l(q^2)``.
 
     A projector column is ``Y_lm(qhat) f_l(|q|)`` and **both factors guard the
     origin by zeroing** -- :func:`~defumat.basis.gvectors.modulus` because
     ``sqrt`` has an infinite derivative there, and
     :func:`~defumat.pseudo.harmonics.real_spherical_harmonics` because a zero
     vector has no direction. Each guard is right about its own factor and the
-    primal is right too, since ``f_l(0) = 0`` kills the finite harmonic. **The
-    product is what carries the derivative.** For ``l = 1``, ``f_1(q) -> c q``
-    and ``Y_1m(qhat) = sqrt(3/4pi) q_alpha/q``, so the product is
-    ``sqrt(3/4pi) c q_alpha`` -- a linear function of the *vector* ``q``, whose
-    derivative is ``sqrt(3/4pi) c`` and not zero. The chain rule computes
-    ``Y df + dY f`` with both terms zero and returns zero. ``l = 0`` is
-    genuinely flat (``f_0`` is even in ``q``) and ``l >= 2`` genuinely vanishes
-    (the product goes as ``q^l``), so ``l = 1`` is the only channel affected,
-    and it is in almost every dataset.
+    value is right too, since ``f_l(0) = 0`` kills the finite harmonic. **The
+    product is what carries the derivatives**, and the chain rule through two
+    guarded factors returns zero for every one of them.
 
-    Measured before this correction, on ``si2-nosym.in`` at Gamma against a
-    central difference of the same operator at a frozen sphere: the
-    ``Gamma_1``-by-``Gamma_15`` block of ``<psi|dH/dk|psi>`` came out at
-    **0.3695** of its value (0.16957 against 0.45892, Frobenius over the three
-    axes), the worst entry being 0.13245 Ry bohr out of 1.0775, and it did not
-    move with the step size. ``OPEN.md`` Part XIV has the controls.
+    The product is ``S_lm(q) g_l(q^2)``, with ``S_lm = |q|^l Y_lm`` the regular
+    solid harmonic, a polynomial in the components of ``q``
+    (:func:`~defumat.pseudo.harmonics.real_solid_harmonics`), and
+    ``g_l = f_l/q^l`` the transform's own Taylor series in ``q^2``
+    (:func:`~defumat.pseudo.formfactors.origin_series`). That is differentiable
+    to every order at the origin. On the rows
+    :data:`~defumat.basis.gvectors.ORIGIN_TOL` selects, the same test
+    ``modulus`` uses, the guarded column is replaced by itself **plus** the
+    series without the ``l = 0`` constant, which the guarded column already
+    holds: at ``q = 0`` exactly the sum is that column's own value (the added
+    terms are a zero, of either sign), and away from it it is the function.
 
-    **The primal is the identity**, returned unchanged rather than added to, so
-    that no value can move for a structural reason rather than an arithmetic
-    one -- and so that the whole column array is not allocated a second time on
-    a path a 157-atom slab takes. The rule fires on the rows
-    :data:`~defumat.basis.gvectors.ORIGIN_TOL` selects, which is the same test
-    ``modulus`` uses, so a row is corrected if and only if it was guarded. A
-    **strain** derivative reaches it and gets nothing, correctly: ``k + G = 0``
-    scales to ``0`` under any strain, so ``dkg`` is zero on exactly those rows.
+    **What was wrong without it, measured** on ``si2-nosym.in`` at Gamma. To
+    first order, against a central difference of the same operator at a frozen
+    sphere, the ``Gamma_1``-by-``Gamma_15`` block of ``<psi|dH/dk|psi>`` came
+    out at **0.3695** of its value (0.16957 against 0.45892, Frobenius over the
+    three axes) and did not move with the step; a ``custom_jvp`` that put back
+    the ``l = 1`` tangent alone repaired it (``OPEN.md`` Part XIV). To second
+    order ``second_matrix_elements`` ``xx`` was off by **3.46e-2 Ry bohr^2** in
+    one element of a block of norm 5.15, the same at ``h = 1e-3`` and
+    ``3e-4``, while two other k-points sat at the stencil's 2e-7 and 2e-8
+    (``HARMONICS-NEXT.md``, "The row at k + G = 0"), and the shift current
+    consumes that operator. This form covers both and every order above, where
+    a second custom rule would have covered order two only.
 
-    ``axes`` is the cartesian axis of each column, packed as a static tuple;
-    ``slopes`` carries ``sign sqrt(3/4pi) f_1'(0)`` and is **zero for every
-    column that is not an ``l = 1`` channel**, so the arithmetic is uniform and
-    the branch lives in the data rather than in a mask.
+    The primal on a row *inside* the guard but off the origin, ``0 < |q|^2 <=
+    1e-8``, also changes: the guarded ``l = 1`` column there was zero, and it
+    is now ``c q``, which a finite difference with a step below 1e-4 around
+    Gamma reaches and a field ``kappa(t)`` passing through zero reaches once
+    per crossing.
+
+    **What it costs** is a solid harmonic and a four-term polynomial per row
+    and column, beside a Bessel transform of a few hundred mesh points per row
+    and radial channel, and nothing on a mesh with no such row
+    (:func:`_has_origin_rows`). A **strain** derivative reaches it and gets
+    nothing, correctly: ``k + G = 0`` scales to ``0`` under any strain, so
+    ``dkg`` is zero on exactly those rows, and the ``Omega`` in the series
+    multiplies terms that vanish there.
     """
-    return columns
-
-
-@_origin_tangent_rule.defjvp
-def _origin_tangent_jvp(axes, primals, tangents):
-    columns, kg, slopes = primals
-    dcolumns, dkg, _ = tangents
-    if not axes:
-        return columns, dcolumns
-    at_origin = jnp.sum(kg * kg, axis=-1) <= ORIGIN_TOL
-    along = jnp.take(dkg, jnp.asarray(axes), axis=-1)
-    correction = jnp.where(at_origin[..., None], along * slopes, 0.0)
-    return columns, dcolumns + correction.astype(dcolumns.dtype)
-
-
-@partial(jax.jit, static_argnums=(3,))
-def _with_origin_tangent(columns, kg, slopes, axes):
-    """:func:`_origin_tangent_rule` under ``jit``.
-
-    **What this costs, measured rather than assumed**, because
-    ``build_projector_core`` runs eagerly and is rebuilt once per cartesian
-    direction inside a ``jvp``. One ``VelocityOperator.matrix_elements`` call,
-    median of 15 warm, on ``si-epsilon-unshifted`` (8 k-points, ``npwx = 360``):
-    **343 ms** with no correction at all, 389 ms with the ``custom_jvp``
-    boundary present and its rule trivial, 469 ms with the rule active, and
-    **465 ms** compiled -- so the cost is the boundary and its four array
-    operations rather than the dispatch, and ``jit`` buys 4 ms of it.
-
-    **It is a fixed cost per call and does not scale with the cell**, which is
-    what decides whether it matters: the same measurement on ``si2-nosym``
-    (64 k-points) is **1122.9 ms against 1149.7**, an overhead of 27 ms and
-    **2.4 per cent** where the eight-point cell paid 35. Precomputing the
-    slopes entirely -- the other candidate -- is worth 5 ms of the 125, so they
-    are not where the time goes.
-    """
-    return _origin_tangent_rule(columns, kg, slopes, axes)
-
-
-def _origin_slopes(pseudos, channels_by_species, volume):
-    """``(axes, slopes)`` for :func:`_with_origin_tangent`, one per column.
-
-    ``slopes`` is ``sign sqrt(3/4pi) lim_{q->0} f_1(q)/q`` on an ``l = 1``
-    channel and **zero on every other** -- real, because the columns it
-    corrects are real and their ``(-i)^l`` is applied afterwards, to the
-    tangent as to the value -- so the correction is inert wherever
-    the guarded product's tangent was right to begin with and the rule needs no
-    mask over channels.
-
-    **The signs are host arithmetic and the radial integrals are one batched
-    product**, since ``at_kcart`` rebuilds this inside a ``jvp`` once per
-    velocity call: a loop of JAX scalars here cost 1.30 ms per rebuild on
-    ``si-epsilon-unshifted`` against 1.01 ms like this. That is not where the
-    correction's cost is -- precomputing the whole thing saves 5 ms of 125 --
-    and it is written this way because the flat form is also the clearer one.
-    The integrals stay in ``jnp`` although every number in them is tabulated
-    and none is ever a tracer, since a pseudopotential is not a pytree: what
-    keeps them there is that their bytes, and every velocity tangent at
-    ``k + G = 0``, do not move (see
-    :func:`~defumat.pseudo.formfactors._origin_integrals`).
-    """
-    root = float(np.sqrt(3.0 / (4.0 * np.pi)))
-    offsets = np.cumsum([0] + [len(p.projectors) for p in pseudos])
-    axes, picks, coefficients = [], [], []
-    for species, channels in enumerate(channels_by_species):
-        for nb, l, lm in channels:
-            if l != 1:
-                # A column the guards never cost anything: zero coefficient, and
-                # the index is a placeholder that the zero annihilates.
-                axes.append(0)
-                picks.append(0)
-                coefficients.append(0.0)
-                continue
-            axis, sign = _P_AXIS[lm]
-            axes.append(axis)
-            picks.append(int(offsets[species]) + nb)
-            coefficients.append(sign * root)
-    if not axes:
-        return (), jnp.zeros((0,))
-    table = jnp.concatenate([_origin_integrals(p) for p in pseudos])
-    slopes = (jnp.take(table, jnp.asarray(picks))
-              * jnp.asarray(np.asarray(coefficients, dtype=float)))
-    return tuple(axes), slopes * (FPI / jnp.sqrt(volume))
+    s = jnp.sum(kg * kg, axis=-1)
+    at_origin = s <= ORIGIN_TOL
+    solid = jnp.take(real_solid_harmonics(kg, lmax), lm_of, axis=-1)
+    g = jnp.broadcast_to(series[:, -1], solid.shape)
+    for j in range(series.shape[1] - 2, -1, -1):
+        g = g * s[..., None] + series[:, j]
+    added = (solid * g).astype(columns.dtype)
+    return jnp.where(at_origin[..., None], columns + added, columns)
 
 
 @jax.jit

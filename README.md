@@ -474,8 +474,30 @@ adiabatic local kernel can. `calc.get_absorption(frequencies)`, notebook
   `calc.get_shift_current()`, notebook [32](notebooks/32_shift_current.ipynb).
 - **Second-harmonic generation**, $\chi^{(2)}_{abc}(-2\omega;\omega,\omega)$, how
   much of the light shone on a crystal comes back at twice the frequency, a
-  polar rank-3 tensor that vanishes in any centrosymmetric crystal.
+  polar rank-3 tensor that vanishes in any centrosymmetric crystal, on
+  norm-conserving, ultrasoft and PAW datasets and on collinear, spinor and
+  spin-orbit ground states.
   `calc.get_shg()`, notebook [33](notebooks/33_second_harmonic_generation.ipynb).
+- **High-harmonic generation**, the light a crystal emits at multiples of a laser's
+  frequency when driven hard: the occupied states propagated in time under
+  $H(\mathbf k + \mathbf A(t)/c)$, a plateau of odd harmonics in silicon and every
+  order in zincblende AlAs, and the dielectric function from a kick on the way,
+  at the ground state's potential or with the Hartree and exchange-correlation
+  potentials rebuilt from the density at every step (local fields and the
+  adiabatic kernel, `potential='hxc'`). A collinear magnet, a spinor run with
+  spin-orbit coupling or noncollinear magnetism, and an ultrasoft or PAW dataset,
+  whose moving overlap adds the augmentation's dipole to the equation of motion
+  and to the current, take the same route.
+  `calc.get_hhg(pulse)`, `calc.get_realtime(pulse)`, notebook
+  [50](notebooks/50_high_harmonics.ipynb).
+- **The third harmonic**, $\chi^{(3)}(-3\omega;\omega,\omega,\omega)$, and the
+  intensity-dependent index $\chi^{(3)}(-\omega;\omega,\omega,-\omega)$, taken as
+  derivatives of the propagation with respect to the field strength at one
+  frequency, or as a spectrum from the steady state solved directly at every
+  frequency, which carries the projectors' curvature a sum over states misses;
+  for magnets, spin-orbit coupling, ultrasoft and PAW as for the scalar case.
+  `calc.get_third_harmonic(frequency)`, `calc.get_nonlinear_spectrum(frequencies)`,
+  notebook [51](notebooks/51_nonlinear_spectra.ipynb).
 
 ### Topology and polarization
 
@@ -658,10 +680,12 @@ note, the routine or task in the other code's source, is in
 | **Raman tensors** | `calc.get_raman_tensors()` | (✓)¹⁰ | |
 | **Raman and infrared spectra** | `calc.get_vibrational_spectrum()` | ✓ | |
 | **LO-TO splitting and the static dielectric constant** | `calc.get_vibrational_spectrum(loto_direction=...)` | ✓ | (✓)¹¹ |
-| **Optical absorption spectra with excitons** | `calc.get_absorption(frequencies)` | | ✓ |
+| **Optical absorption spectra with excitons** | `calc.get_absorption(frequencies)`; with local fields and the adiabatic kernel band-complete, from the steady state, `calc.get_nonlinear_spectrum(frequencies, order=1, potential='hxc')` | | ✓ |
 | **Optical conductivity**, the Kerr angle and the anomalous Hall conductivity | `calc.get_optical_conductivity()` | (✓)¹² | ✓ |
 | **Shift current** | `calc.get_shift_current()` | ¹³ | |
-| **Second-harmonic generation** | `calc.get_shg()` | (✓)¹⁴ | ✓ |
+| **Second-harmonic generation** | `calc.get_shg()`, and with every band and the projectors' curvature `calc.get_nonlinear_spectrum(frequencies, order=2)` | (✓)¹⁴ | ✓ |
+| **Real-time response to a laser pulse**: the current in time, the dielectric function from a kick, the high-harmonic spectrum, at the ground state's potential or with the Hartree and exchange-correlation potentials updated in time, for collinear and spinor magnets, spin-orbit coupling, ultrasoft and PAW | `calc.get_realtime(pulse)`, `calc.get_realtime_dielectric()`, `calc.get_hhg(pulse)`, each with `potential='hxc'` | | (✓)¹⁹ |
+| **Third-harmonic susceptibility** $\chi^{(3)}$, and the perturbative orders of the current, at one frequency or as a spectrum, for collinear and spinor magnets, spin-orbit coupling, ultrasoft and PAW | `calc.get_third_harmonic(frequency)`, `calc.get_harmonic_orders(frequency)`, `calc.get_nonlinear_spectrum(frequencies)` | | |
 | **Berry curvature and Chern numbers** | `calc.get_chern()` | | |
 | **$\mathbb{Z}_2$ invariants** in 2D and 3D | `calc.get_z2()` | | |
 | **Berry-phase polarization** | `calc.get_polarization()` | ✓ | ✓ |
@@ -726,6 +750,12 @@ Where a tick is qualified, in one sentence each; the routines behind them are in
   $\delta(\omega_{\mathbf q\nu} + \varepsilon_{n\mathbf k} - \varepsilon_{m\mathbf k+\mathbf q})$,
   where `ph.x` and this code put both states at $E_F$, so the two linewidths
   are not the same sum.
+- ¹⁹ Elk propagates in time (tasks 460 to 463) and transforms the current to a
+  dielectric function (tasks 480 and 481), with the field coupled linearly in a
+  basis of ground-state bands and the potential updated at every step; it writes
+  the current a harmonic spectrum is read from, and no task reads the harmonics
+  off. `TDDFPT` in Quantum ESPRESSO is
+  the Liouville-Lanczos route to a linear spectrum and propagates nothing.
 
 The variants under each row, which smearing or tetrahedron method fixes the
 occupations, which projectors DFT+U uses, which constraint scheme holds a
@@ -779,7 +809,9 @@ to features, so a run that starts is one whose physics is all there, and the
 refusals of each quantity are the refusal notes of the guide.
 
 **Not yet:** a phonon dispersion (one wavevector works; the star of $\mathbf q$
-and the Fourier interpolation do not), exact exchange, real-time propagation.
+and the Fourier interpolation do not), exact exchange, and a real-time
+propagation that updates the potential in time (the propagation here holds the
+ground state's potential, which is the independent-particle response).
 
 **Substituted with a warning rather than refused:** `K_POINTS gamma` stores one
 plane wave of each $(\mathbf G, -\mathbf G)$ pair, which halves every array a

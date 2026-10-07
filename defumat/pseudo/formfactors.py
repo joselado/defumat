@@ -20,6 +20,8 @@ Conventions follow ``upflib``: ``vloc_mod.f90``, ``rhoat_mod.f90``,
 
 from __future__ import annotations
 
+import math
+
 from functools import partial
 
 import jax
@@ -533,6 +535,52 @@ def _origin_integrals(pseudo: Pseudopotential) -> jnp.ndarray:
     # the extra factor in ``_beta_kernel``'s integrand.
     powers = r[None, :] ** jnp.asarray(ls + 1)[:, None]
     return (beta * powers) @ weights / jnp.asarray(factorials)
+
+
+#: How many powers of ``q^2`` :func:`origin_series` keeps, ``s^0`` to
+#: ``s^(ORIGIN_TERMS - 1)``. A derivative of order ``n`` at ``q = 0`` reads the
+#: Taylor terms of total degree ``n`` and no others, so four terms are exact to
+#: order ``l + 7`` -- past the fourth derivative a third-order response needs
+#: for every ``l`` -- and on the rows the series is used for, ``|q|^2 <= 1e-8``,
+#: the first term dropped is ``(q r)^8`` below the last one kept.
+ORIGIN_TERMS = 4
+
+
+def origin_series(pseudo: Pseudopotential, terms: int = ORIGIN_TERMS) -> jnp.ndarray:
+    """The Taylor coefficients of ``g_l(s) = f_l(q)/q^l`` in ``s = q^2``, ``(nbeta, terms)``.
+
+    Without the ``4 pi / sqrt(Omega)`` prefactor, which the caller applies.
+    ``j_l(x) = x^l sum_j (-1)^j x^(2j) / (2^j j! (2l+2j+1)!!)``, so
+
+        g_l(s) = sum_j s^j (-1)^j / (2^j j! (2l+2j+1)!!) int dr (r beta)(r) r^(l+1+2j),
+
+    on the ``kkbeta`` range and with the Simpson weights
+    :func:`projector_form_factors` integrates over, so the ``j = 0`` column is
+    :func:`_origin_integrals` and the series is the transform's own expansion
+    rather than a second convention. ``g_l`` is an entire function of ``s``,
+    and this is the form of the projector that can be differentiated at
+    ``k + G = 0`` to any order (``pseudo.projectors._with_origin_rows``).
+    """
+    cutoff = pseudo.kkbeta
+    if not pseudo.projectors:
+        return jnp.zeros((0, terms))
+    r = jnp.asarray(pseudo.r[:cutoff])
+    weights = simpson_weights(jnp.asarray(pseudo.rab[:cutoff]))
+    beta = jnp.stack([
+        jnp.asarray(projector.beta[:cutoff]) for projector in pseudo.projectors
+    ])
+    columns = []
+    for j in range(terms):
+        ls = np.asarray([projector.l for projector in pseudo.projectors])
+        # ``(-1)^j / (2^j j! (2l+2j+1)!!)``, host constants since ``l`` is static.
+        coefficients = np.asarray([
+            (-1.0) ** j / (2.0**j * math.factorial(j)
+                           * float(np.prod(np.arange(1, 2 * l + 2 * j + 2, 2))))
+            for l in ls
+        ])
+        powers = r[None, :] ** jnp.asarray(ls + 1 + 2 * j)[:, None]
+        columns.append((beta * powers) @ weights * jnp.asarray(coefficients))
+    return jnp.stack(columns, axis=-1)
 
 
 def atomic_form_factors(pseudo: Pseudopotential, q, omega) -> jnp.ndarray:

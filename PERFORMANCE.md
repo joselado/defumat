@@ -10804,3 +10804,124 @@ through the facade**: `threaded_calculation` replaces a `k_batch` passed with `c
 calculation's own, so `get_vertical_transport(k_batch=None)` and `k_batch=2` both handed `_assemble`
 1 on `h-sheet.in` here, and on a card in speed mode the chunk was the whole axis whatever was asked
 (read off `memory_preset`, not measured). The assembly no longer reads it.
+
+## Real-time propagation against Elk's: one core each, and where a step goes (D22, 2026-10-06)
+
+**The pair.** Elk's `examples/TDDFT-time-evolution/Si-dielectric` at scissor 0 (a constant
+`A = 0.1` along x from `t = 0`, 4000 steps of 0.2 Hartree a.u., the 8x8x8 grid, 100 points of the
+field's wedge), against `tools/realtime/time_realtime.py` on `tests/data/elk/si_rt/si-dielectric.in`
+(the same lattice, the LDA, the same grid and the same 100-point wedge of eight operations,
+`Si.pz-vbc` at 16 Ry), both from a converged ground state, both on D22's core 0 with its SMT sibling
+idle, `OMP_NUM_THREADS=1`, nothing else running but the virus scanner (`ps` before and after),
+`tools/realtime/time_against_elk.sh`:
+
+| | Elk 11.0.2, tasks 450 and 460 | defumat, `get_realtime` |
+|---|---|---|
+| wall clock | **1300 s** | **486 s** (the fixed-density solve on the wedge 1.7 s, the propagation 485 s) |
+| per k-point and step | 3.3 ms | 1.21 ms |
+
+**Not the same work, and in both directions.** Elk rebuilds the density and the Kohn-Sham potential
+at every step (`tddft.f90` calls `rhomag` and `potkst`), so its propagation has local fields and the
+ALDA where this one holds the ground state's potential; and it propagates in 25 ground-state bands
+of an LAPW basis, building `H(t)` in that basis and diagonalising it each step, where this applies
+the Hamiltonian on the whole plane-wave sphere to the four occupied states. The two answers agree
+where they should (the static dielectric constant 15.11 here against Elk's independent-particle
+task 121 at 15.19, `PLAN.md` P134), so the 2.7x is a statement about these two algorithms on this
+cell and not about one doing less physics than it reports. defumat's run was the second call of the
+process (a short run compiled every program first); Elk's includes reading its ground state and
+setting up the 100 points (task 450 writes the vector potential).
+
+**Where a step goes, and what the radial table bought.** One D22 core, two-atom silicon, one
+k-point, the four occupied bands, warm medians of 31 (`tools/realtime/step_cost.py`):
+
+| | 12 Ry (`npwx` 180) | 30 Ry (`npwx` 736) |
+|---|---|---|
+| one Hamiltonian application on four bands | 0.17 ms | 1.05 ms |
+| `vkb` and `|k+G+kappa|^2` by the radial transform (`at_kcart`) / by the table | 0.80 / **0.048** ms | 3.21 / **0.12** ms |
+| the current, `jax.grad` of the band energy in `kappa`, through each | 2.15 / **0.10** ms | 8.48 / **0.25** ms |
+| one Taylor step (rebuild and four applications), through each | 1.43 / **0.69** ms | 7.45 / **4.47** ms |
+| a step and its current, through each | 3.58 / **0.79** ms | 15.9 / **4.72** ms |
+
+So a step at 30 Ry is now its four Hamiltonian applications (4.2 of 4.5 ms), which is the transform
+floor every other part of the code shares, and the projectors at `k + kappa` cost 3 per cent of it.
+The table is 32 Chebyshev terms per radial channel, within 1e-13 of the transform, `vkb` to 7.8e-15
+and the current to 1.7e-13 relative.
+
+**Memory.** The resident set is the states, `16 nk nbnd npwx` bytes in host memory for the whole
+mesh (`2^n` times that at order `n` of the perturbative orders), and one k-chunk is on the device at
+a time: the Taylor terms (`5 x 16 nk_chunk nbnd npwx`), `vkb` for the chunk and the FFT boxes. The
+two transforms of a current into a spectrum hold a block of 32 frequencies at a time; built whole
+they took 1.6 GB (`conductivity_from_kick` at 59867 steps and 400 frequencies) and 3.6 GB
+(`harmonic_spectrum` at 28501 steps and 4000 frequencies) of host memory.
+
+**On the card** (RTX A2000, float64 at 1/70 of float32): two-atom silicon at 12 Ry on the whole
+2x2x2 grid, a two-cycle pulse of 2207 steps, the second call 3.1 s against 14.9 s on two CPU threads,
+the current 8.9e-11 apart on a scale of 3.4e-3 (the two ground-state solves differ at their
+threshold). Not a claim about a data-centre card.
+
+**The third order** (P135): 18 to 25 ms per k-point and step on one D22 thread for silicon at 12 Ry
+against 5.4 ms at first order, eight copies of each state in nested forward mode; the dense
+frequency-domain hierarchy is 0.35 to 0.9 s a k-point at 169 plane waves, two orders cheaper there
+and `npw^3` in the cutoff.
+
+## The potential updated in time, and the frequency-domain hierarchy (D22 and CPU, 2026-10-07)
+
+**The potential updated in time (P136) against Elk, the same physics now.** Elk's `Si-dielectric`
+pair of the section above updates its potential at every step, so `potential = 'hxc'` is the
+like-for-like run (`tools/realtime/time_realtime.py <out> hxc`, the same 100 points and 4000 steps):
+
+| | Elk 11.0.2, tasks 450 and 460 | defumat, `'frozen'` | defumat, `'hxc'` |
+|---|---|---|---|
+| quiet core 0 of D22, back to back (2026-10-07 00:00, `ps` before and after) | **1300 s** (P134) | **505 s** (486 in P134) | **1085 s** |
+| back to back, another session's jobs on five to seven other cores | | 598 s | 1294 s |
+| a first run, another job joining near its end | | | 1163 s |
+
+**So the like-for-like pair is 1085 s against Elk's 1300**, 0.83x, for the same physics on the same
+100 points and 4000 steps, with LAPW in 25 bands against the whole plane-wave sphere the part that is
+not comparable, and Elk's step first order in the potential where this one is second. The ratio to
+the frozen run is 2.15 quiet and 2.16 loaded, which is the step's own count: each step is `1 + corrector` Taylor steps and as many densities and potentials.
+On silicon's whole 4x4x4 mesh (64 points resident, 12 Ry) it read 8.99 against 4.70 ms per k-point and
+step on four of this workstation's efficiency cores beside other work, 1.9x; measured again with the
+three in one process, 4.35 frozen, **4.69 with `corrector = 0`** (one Taylor step and one density a
+step, 1.08x) and 8.87 with the corrector (2.04x). The corrector buys a tenth of the energy drift after
+a kick (P136) for that factor, and it is the default. The memory
+the update adds is the whole mesh's states resident (twice inside a step) and three dense potentials,
+where the frozen route holds one chunk; Elk holds its 25-band vectors for every k-point too.
+
+**The frequency-domain hierarchy (P137) against the propagation it replaces.** No other code computes
+this spectrum (`pw.x` has no nonlinear optics beyond `el_opt`, and Elk's `nonlinopt` is a sum over
+states of the second order), so the comparison is with this code's own real-time route at the same
+frequency, AlAs at 6 Ry on its 2x2x2 mesh along [111], 1.5 eV, `eta = 0.3` eV, four of this
+workstation's efficiency cores, second calls:
+
+| | one frequency, orders 1 to 3 |
+|---|---|
+| `get_nonlinear_spectrum` (fixed-density solve included) | **13.6 s** |
+| `get_harmonic_orders`, `eta_t = 12`, 400 steps a period (4000 steps) | 302 s |
+| the same at 800 steps a period, the accuracy the hierarchy has to 1e-5 | 599 s |
+
+**Where a call goes**, one k-point of two-atom silicon at 12 Ry (`npw` 174, twelve computed bands):
+82, 198 and 364 ms for orders one to three, the current's assembly 21 ms of the last and the rest the
+BiCGStab solves' Hamiltonian applications (27 iterations of two applications on 8, 12 and 16 vectors;
+16 vectors cost 2.8 ms an application on those cores). So the hierarchy is at the transform floor the
+whole code shares, and what would make it cheaper is fewer iterations (the projector on more computed
+bands, a warm start, which took a fine AlAs sweep from 18 iterations to 16) or more vectors per
+transform, not the assembly.
+
+**On D22's RTX A2000**, second calls, against the same script on two CPU threads of the same machine
+(cores 0 and 1, while a hierarchy run held cores 2 to 11, so the CPU column is slow by the shared
+memory bandwidth and is a ratio, not a timing): silicon's two-cycle pulse on the 4x4x4 mesh's
+18-point wedge, **2.86 s frozen and 6.19 s with the potential updated on the card**, against 17.3 and
+36.6 s, the currents equal to 1e-13 and 3e-14; AlAs's spectrum at two frequencies to second order on
+its 4x4x4 mesh's 20 points at 8 Ry, 3.76 s on the card walking one k-point at a time against 3.57 s on
+the CPU, and **2.73 s** once the k-points of a chunk are one `vmap` (`k_batch`), `chi_xyz` equal to
+1e-10 on both, the solver's tolerance. The card runs double precision at 1/70 of single, so these say
+the routes run there unchanged and not what a data-centre card would do.
+
+**The first order with the induced potential (P138)** costs ten to thirty frozen first orders a
+frequency, one per outer GMRES product: on two-atom silicon's 18-point wedge at 12 Ry, 28 s and 16 s
+for two frequencies with the Hartree and the full kernel (9 to 10 and 7 to 8 products, four of this
+workstation's efficiency cores beside other work). It is therefore not the cheap route to a whole
+linear spectrum, where one kick with the potential updated gives every frequency (1085 s on Elk's
+100-point wedge, above); it is the route to `eps_M` with every band at a handful of frequencies and at
+the low-frequency end, where a finite kick divides its last oscillation by `w^2`.

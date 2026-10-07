@@ -29,6 +29,7 @@ the output to say which field was used.
 from functools import lru_cache
 from pathlib import Path
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -117,8 +118,8 @@ def test_an_ultrasoft_velocity_does_see_one_through_newd(pseudo_dir):
 # is in almost every dataset.
 
 
-def _gamma_states(pseudo_dir, case="si2-nosym", nbnd=10):
-    """Converged silicon, then `nbnd` states at Gamma on that density."""
+def _gamma_states(pseudo_dir, case="si2-nosym", nbnd=10, coords=None):
+    """Converged silicon, then `nbnd` states at Gamma (or at ``coords``) on that density."""
     from defumat import Calculator
     from defumat.system.kpoints import KPoints
     from defumat.workflows.nscf import fixed_density_states
@@ -126,7 +127,8 @@ def _gamma_states(pseudo_dir, case="si2-nosym", nbnd=10):
     calculator = Calculator.from_file(
         CASES / f"{case}.in", pseudo_dir=pseudo_dir, announce=False)
     scf = calculator.get_scf(conv_thr=1e-9)
-    gamma = KPoints(coords=np.zeros((1, 3)), weights=np.ones(1))
+    gamma = KPoints(coords=np.zeros((1, 3)) if coords is None
+                    else np.asarray([coords], dtype=float), weights=np.ones(1))
     return fixed_density_states(
         calculator.system, calculator.pseudos, scf.density, kpoints=gamma,
         nbnd=nbnd, conv_thr=1e-11) + (scf.density,)
@@ -260,65 +262,132 @@ def test_the_origin_slope_is_the_transform_of_the_same_table(pseudo_dir):
         assert len(closed) == len(pseudo.projectors)
 
 
-@pytest.mark.slow
-def test_the_correction_adds_exactly_zero_to_every_primal(pseudo_dir):
-    """It owns a ``jvp`` rule and nothing else, so no value may move.
+def test_the_origin_series_is_the_transform_expanded(pseudo_dir):
+    """``g_l(s) = f_l(q)/q^l`` as a series in ``s = q^2`` against the transform.
 
-    ``_with_origin_tangent``'s primal is ``return columns``; the whole repair
-    is its custom ``jvp`` rule. Measured across a norm-conserving, a mixed
-    PAW-and-norm-conserving and an ultrasoft cell, the total energy, the
-    eigenvalues, the forces and the stress are **bit-identical** before and
-    after. The stress is the one that had to be checked rather than argued: it
-    differentiates through ``modulus`` with respect to the *cell*, and it stays
-    exact because ``k + G = 0`` scales to zero under any strain, so the tangent
-    the rule fires on is itself zero there.
-
-    This test is the cheap standing version of that: the primal is compared
-    **byte for byte** with what was handed to it, which is the one comparison
-    that also separates ``-0.0`` from ``0.0`` and so would catch an earlier
-    draft of this that added an array of zeros instead. Beside it, the fact
-    that the rows the rule is about exist in this cell at all -- a zero that is
-    a statement about an empty set is the trap ``CLAUDE.md`` names.
+    :func:`~defumat.pseudo.formfactors.origin_series` is what the rows at
+    ``k + G = 0`` are rebuilt from, so its first three terms are checked
+    against a cubic fit in ``s`` of the transform itself at ``q`` from 0.01 to
+    0.06. Measured over the three kinds of dataset, the largest relative
+    differences are 3.3e-11, 7.2e-7 and 5.7e-3 for ``s^0``, ``s^1`` and
+    ``s^2``, which is the fit's own floor falling term by term. The ``j = 0``
+    column is the old first-order slope, :func:`projector_origin_slopes`, the
+    same integral.
     """
-    from defumat import Calculator
-    from defumat.pseudo.projectors import (
-        _origin_slopes, _projector_dataset_key, _with_origin_tangent,
-        projector_channels)
+    from defumat.pseudo.formfactors import (
+        origin_series, projector_form_factors, projector_origin_slopes)
+    from defumat.units import FPI
 
-    calculator = Calculator.from_file(
-        CASES / "si2-nosym.in", pseudo_dir=pseudo_dir, announce=False)
-    calculation = calculator.calculation
-    core = calculation.projector_core
-    # ``core.columns`` holds one block per distinct *dataset* and not one per
-    # species label, so the slopes are built over the same list, in the order
-    # ``build_projector_core`` makes it: each dataset once, where its first
-    # label is declared. On ``si2-nosym`` the two lists coincide, one label
-    # naming one file, but a list per label would give a cell with two labels
-    # on one file twice as many slopes as it has columns.
-    datasets, seen = [], set()
-    for pseudo in calculator.pseudos:
-        key = _projector_dataset_key(pseudo)
-        if key not in seen:
-            seen.add(key)
-            datasets.append(pseudo)
-    axes, slopes = _origin_slopes(
-        tuple(datasets),
-        [projector_channels(p) for p in datasets],
-        calculation.system.cell.volume,
-    )
-    out = np.asarray(_with_origin_tangent(core.columns, core.kg, slopes, axes))
-    before = np.asarray(core.columns)
-    assert out.shape[-1] == len(axes)
-    # **Byte for byte, not ``allclose``.** The primal is ``return columns``,
-    # so the claim is identity rather than agreement, and comparing the raw
-    # bytes is the one comparison that also separates ``-0.0`` from ``0.0`` --
-    # which is exactly what adding a zeros array would have changed.
-    assert out.tobytes() == before.tobytes()
-    # ...and the rows it is *about* exist in this cell, or the zero above is a
-    # statement about an empty set.
-    at_origin = np.asarray(np.sum(core.kg * core.kg, axis=-1)) <= 1.0e-8
+    q = np.linspace(0.01, 0.06, 11)
+    volume = 265.302
+    for name in ("Si.pz-vbc.UPF", "C.pz-rrkjus.UPF", "Pt.pbe-n-kjpaw_psl.0.1.UPF"):
+        pseudo = read_upf(pseudo_dir / name)
+        series = np.asarray(origin_series(pseudo)) * FPI / np.sqrt(volume)
+        np.testing.assert_allclose(
+            series[:, 0], np.asarray(projector_origin_slopes(pseudo, volume)),
+            rtol=1e-14, atol=0)
+        table = np.asarray(projector_form_factors(pseudo, q, volume))
+        for nb, projector in enumerate(pseudo.projectors):
+            l = projector.l
+            fitted = np.polyfit(q**2, table[nb] / q**l, 3)[::-1]
+            for j, tolerance in enumerate((1e-9, 1e-5, 2e-2)):
+                assert series[nb, j] == pytest.approx(fitted[j], rel=tolerance), (
+                    f"{name} channel {nb} (l = {l}), term s^{j}")
+
+
+def test_the_solid_harmonics_are_the_spherical_ones_times_q_to_the_l():
+    """``S_lm(q) = |q|^l Y_lm(qhat)``, same order and same signs, to ``l = 4``."""
+    from defumat.pseudo.harmonics import real_solid_harmonics, real_spherical_harmonics
+
+    v = jnp.asarray(np.random.default_rng(0).normal(size=(64, 3)))
+    norm = np.linalg.norm(np.asarray(v), axis=-1)
+    for lmax in range(5):
+        powers = np.concatenate([[l] * (2 * l + 1) for l in range(lmax + 1)])
+        np.testing.assert_allclose(
+            np.asarray(real_solid_harmonics(v, lmax)),
+            np.asarray(real_spherical_harmonics(v, lmax)) * norm[:, None] ** powers,
+            rtol=0, atol=1e-13 * max(1.0, float(norm.max()) ** lmax))
+
+
+def test_the_origin_rows_keep_every_value_at_the_origin(pseudo_dir):
+    """The rewritten rows change derivatives and no value at ``k + G = 0``.
+
+    At ``q = 0`` exactly the added series is a zero, of either sign, so the
+    columns built with the rows rewritten and with QE's guarded convention
+    must be **equal** as numbers (``array_equal``, which reads ``-0.0`` and
+    ``0.0`` alike). The rows the statement is about must exist, or it is a
+    statement about an empty set; and a shifted mesh, which has none, must not
+    even pass through the rewrite (``_has_origin_rows``), so its columns are
+    the same bytes.
+    """
+    rewritten = _calculation("si2-nosym", pseudo_dir, True).projector_core
+    guarded = _calculation("si2-nosym", pseudo_dir, False).projector_core
+    np.testing.assert_array_equal(np.asarray(rewritten.columns),
+                                  np.asarray(guarded.columns))
+    at_origin = np.asarray(np.sum(rewritten.kg * rewritten.kg, axis=-1)) <= 1.0e-8
     assert at_origin.any(), "si2-nosym's unshifted grid has a k + G = 0 row"
-    assert any(s != 0 for s in np.asarray(slopes)), "and an l = 1 channel"
+
+    from defumat.pseudo.projectors import _has_origin_rows
+
+    shifted = _calculation("si-epsilon", pseudo_dir, True).projector_core
+    assert not _has_origin_rows(shifted.kg)
+    assert (np.asarray(shifted.columns).tobytes()
+            == np.asarray(_calculation("si-epsilon", pseudo_dir, False)
+                          .projector_core.columns).tobytes())
+
+
+def _higher_against_difference(pseudo_dir, coords, h):
+    """``(second, third)`` k-derivatives of ``H`` against a difference of the order below.
+
+    Each is ``max|nested jvp - central difference|`` and the scale it is
+    against, for ``<psi_m|d^n H/dk_x^n|psi_n>`` on the ten lowest states of
+    converged silicon at one k-point, contracted inside the k map as
+    ``second_matrix_elements`` contracts it. The sphere is frozen on both
+    sides of every difference.
+    """
+    calculation, _, _, psi, density = _gamma_states(pseudo_dir, coords=coords)
+    psi = jnp.asarray(psi)
+    v = VelocityOperator(calculation, calculation.potential(jnp.asarray(density)).v_scf)
+    k0 = jnp.asarray(v.kcart)
+    along = jnp.zeros_like(k0).at[:, 0].set(1.0)
+
+    def operator(k):
+        return v._operator(psi, k, False, True)
+
+    def first(k):
+        return jax.jvp(operator, (k,), (along,))[1]
+
+    def second(k):
+        return jax.jvp(first, (k,), (along,))[1]
+
+    third = np.asarray(jax.jvp(second, (k0,), (along,))[1])
+    step = h * along
+    out = []
+    for lower, higher in ((first, np.asarray(second(k0))), (second, third)):
+        difference = (np.asarray(lower(k0 + step))
+                      - np.asarray(lower(k0 - step))) / (2.0 * h)
+        out.append((float(np.abs(higher - difference).max()),
+                    float(np.linalg.norm(difference))))
+    return out
+
+
+@pytest.mark.slow
+def test_the_second_and_third_derivatives_at_gamma_match_a_difference(pseudo_dir):
+    """Orders two and three at ``k + G = 0``, which were wrong before the series.
+
+    Measured on master before the rows were rewritten, ``xx`` and ``xxx`` at
+    Gamma against a central difference of the order below: **2.56e-2** on a
+    block of norm 5.95 and **9.28e-2** on 0.674, the same at ``h = 1e-3`` and
+    ``3e-4``, which is what separates a missing term from truncation, while the
+    offset point ``(0.1, 0, 0)`` sat at 1.0e-7 and 2.0e-7 at ``h = 1e-3``. After
+    it Gamma reads 1.17e-7 and 1.82e-7 at ``1e-3`` and 1.05e-8 and 1.64e-8 at
+    ``3e-4``, falling as ``h^2`` like the offset point. ``nbnd = 10`` reaches
+    the conduction bands for the reason the first-order test gives.
+    """
+    (second, scale2), (third, scale3) = _higher_against_difference(
+        pseudo_dir, None, 3.0e-4)
+    assert scale2 > 1.0 and scale3 > 0.1, "the scales the comparisons are against"
+    assert second < 1e-7 and third < 1e-7, (second, third)
 
 
 def _velocity(case: str, pseudo_dir: Path, origin_tangent: bool):
