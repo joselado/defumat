@@ -24919,3 +24919,189 @@ band and no transient at the low-frequency end, where the kick divides the last 
 three a mesh step, so no affordable mesh validates them), two FFT grids (the induced potential would
 cross from the dense grid to the smooth one at every product, which nothing checks yet), an outer
 solve that does not reach its tolerance (`HierarchyError`), and a meta-GGA kernel.
+
+### P139 -- The harmonic routes on a collinear magnet: `nspin = 2` in the propagation, its orders, the hierarchy, the potential updated in time, and the two channel sums (`get_shg`, `optical_conductivity`). ✅ DONE, 2026-10-07, as identities: an unpolarized crystal both ways, and a collinear magnet against itself written as spinors (P140).
+
+The user's request of 2026-10-07: the second- and third-harmonic routes "compatible with spin
+polarization, non-collinear magnetism, spin orbit coupling, PAW, ultrasoft". The plan went to a
+fable review before any code (it answered seven questions with measurements, below where they
+bear) and to a literature search (P141); the runs were on D22 at the user's request, not on the
+workstation.
+
+**The physics is two band structures.** At a frozen potential the channels are independent and
+every order of the current is the sum of the channels'; with the potential updated they couple
+through the density, the Hartree potential of the sum and the LSDA potential of both. Nothing is
+new in the equation of motion, which is why the work is bookkeeping and why the check is an
+identity.
+
+**What changed.** `realtime/propagate.py:_Chunk` takes a `channel` (the collinear channel's
+`hamiltonian_from(terms)[c]`); `channel_arrays` cuts each channel to the bands that carry weight,
+since with `tot_magnetization` the two carry different numbers; `propagate`, `propagate_orders`,
+`largest_stable_step` and `hierarchy_orders` loop over channels and add (each channel its own
+spectral bound and centre); `workflows/realtime.py:_solved_states` returns
+`(nchannel, nk, nb, ndim)` with the carried count read off the occupations, per channel, and
+refuses a degenerate cut per channel. **The `nelec/2` it used before was right for `nspin = 1`
+alone** -- a spinor band holds one electron -- which the review asked to be fixed with the
+spinors. `realtime/selfconsistent.py:_Run` holds one stacked state set per channel and builds the
+density per channel and stacks it, as the review recommended against padding (a zero row of zero
+weight passes the step but `_preconditioner` divides by its kinetic energy); `hierarchy_linear_
+self_consistent` carries the induced potential as `(nspin_mag, grid)`, a channel's own component
+acting on it, the uniform part dropped per channel (a channel's global phase). `get_shg` and
+`optical_conductivity` fold the channel axis into the k axis of their contractions, the velocity
+elements of each channel being built with its own Hamiltonian (`VelocityOperator` already did).
+
+**The numbers.**
+
+1. **An unpolarized crystal both ways.** AlAs at 10 Ry, 2x2x2, `tot_magnetization = 0`:
+   `get_shg` at nbnd = 9, a clean cut (gap to the tenth band 4.9e-3 Ry), **1.4e-9** of the largest
+   component apart from `nspin = 1`; at 12, 13 and 16 bands, each a cut inside a multiplet
+   (`band_cut_gap` 1e-15), 1.3e-2, 8.4e-3 and 5e-4, the cut's rotation and not the channels.
+   The SCF energies agree to 1e-15 Ry. (`tests/regression/test_spin_channels.py`.)
+2. **A collinear magnet as spinors** (P140, item 2) is the check of everything above with the
+   channels genuinely different.
+
+### P140 -- The harmonic routes on spinors: spin-orbit coupling and noncollinear magnetism in the propagation, the orders, the hierarchy and the potential updated in time. ✅ DONE, 2026-10-07, as identities against the collinear route and against the Kubo sum.
+
+**No new term.** A spinor run is one Hamiltonian on `2 npwx`; both components sit on the sphere of
+`k` and meet the same projectors at `k + kappa`, through the 2x2 `deeq_nc` (`dvan_so` with
+spin-orbit coupling). So the spin-orbit coupling is minimally coupled, as the nonlocal potential is
+(Ismail-Beigi, Chang and Louie, PRL 87, 087402 (2001), Eq. 18, for uniform `A` the projectors at
+`k + A/c`), which agrees with Jeong et al., arXiv:2605.03539, who find the gauge term "quantitatively
+essential". **Elk's real-time spin-orbit term is not minimally coupled** (Krieger, Dewhurst,
+Elliott, Sharma and Gross, arXiv:1406.6607, Eq. 1: `sigma.(grad v x i grad)` with the canonical
+momentum), which is a difference between the codes in physics, to be said beside any number
+compared with Elk.
+
+**What changed.** `_Chunk` gained the operators every route now goes through, written on components
+`(..., npol, npwx)` with `D` and `qq` as `(npol, npol, nkb, nkb)`, so the collinear case is
+`npol = 1`: `kinetic_nonlocal`, `band_form` (whose real part is `kappa_energy`, whose gradient is
+the current), `overlap`, `inverse_overlap`, `position` (P141). The spectral bound reads the 2x2
+local potential's larger eigenvalue `v + |m|` and the 2x2 `D` on two copies of the Gram matrix.
+The hierarchy's `h0`, masks and preconditioner use the spinor layout; its induced potential acts
+as `v + m.sigma` (`_spinor_field`), its cross density has four components (`_spinor_density`),
+and the uniform part of the magnetization's potential is kept, since it turns the spins. The
+potential updated in time builds `(n, m)` from the spinors (`smooth_density` already did) and
+symmetrises it with `_symmetrize_noncollinear`. **The field's little group drops every operation
+of a magnetic group that needs time reversal** (`t_rev = 1`), which `field_symmetries` passed as
+unitary before (the review found it): the field breaks time reversal, and the `Symmetries` it
+returns cannot carry the flag for anything downstream.
+
+**The numbers.**
+
+1. **A collinear magnet written as spinors**, AlAs at 6 Ry with `tot_magnetization = 2` (five
+   electrons up, three down), its states made `(u, 0)` and `(0, u)` and its noncollinear potential
+   built from `(n, 0, 0, m)` -- the LSDA's `v0 +- B_z` reproduce the channels' to 6.7e-16 -- on the
+   whole 2x2x2 mesh at 1.5 eV, `eta = 0.3` eV, [111]:
+   - the frozen hierarchy, every component of orders one to three, **1.1e-12 to 6.1e-12**;
+   - the first order with the induced potential, **3.2e-12** (Hartree) and **2.5e-12** (Hartree
+     and exchange-correlation), where the update moves `J_(1,1)` by 2.4 and 3.4 per cent, in 15
+     and 16 GMRES products on both routes;
+   - the real-time orders, frozen and with the potential updated: **not yet measured** (the run
+     stopped on a step past the propagator's bound and was not repeated before D22 went down).
+   This is P139's check as much as this phase's: the two routes share neither the Hamiltonian
+   (`Hamiltonian` against `SpinorHamiltonian`), the density (two scalar channels against four
+   components), nor the kernel's structure.
+3. **Spin-orbit coupling against the Kubo sum**: trigonal selenium (`se-trigonal-soc.in`, SG15's
+   fully-relativistic dataset at 12 Ry, 778 plane waves a component, Gamma and a general point,
+   18 occupied spinor bands), the first order of a kick against `optical_conductivity`'s resolvent
+   sum fed every state of the dense spinor `H(k)`, plus the band curvature, at `eta = 0.02` Ha and
+   `dt = 0.05`, 0.02 to 0.6 Ha: **1.5e-7** of the scale, where the sum without the curvature term
+   is off by the whole scale (0.9988), so the term is the answer on two k-points and not a
+   correction. The propagation took 1592 s of D22's performance cores.
+4. **The hierarchy against the propagation** on selenium: **not yet measured** (at 400 steps a
+   period the step is past the bound, 520 needed; the rerun was cut off by D22's outage).
+
+### P141 -- The harmonic routes on ultrasoft and PAW datasets: the overlap's motion in the equation of motion and in the current. ✅ DONE at a frozen potential, 2026-10-07, against the Kubo sum with P99's generalised velocity and by the work identity; the hierarchy against the propagation is not yet measured, and the potential updated in time is refused by name.
+
+**The equation.** In the length gauge an augmented dataset evolves as `i S dpsi/dt = (H + E.r~) psi`,
+`r~ = r + sum |b_i>(d_ij + R q_ij)<b_j|` the position operator of the augmented density. The
+gauge transformation `psi = e^{i kappa.r} phi` takes every operator from `k` to `k + kappa`
+(projectors at `k + kappa`) and leaves
+
+    i S dphi/dt = [H - kappadot . X] phi,     X = r~ - S r = sum_ij |b_i>[d_ij <b_j| + i q_ij <db_j/dk|],
+
+every operator at `k + kappa(t)`, `db/dk` the projectors' derivative about their own atom. `X` is
+`i` times P99's connection `K` and the term `adddvepsi_us.f90` adds; `X - X^dag = [r, S] = i dS/dk`,
+so its anti-Hermitian part cancels `dS/dt` and `<phi|S|phi>` is conserved. The current is
+`J = -(1/Omega) sum w [<dH/dk> - 2 Im <H S^-1 X>]`, the PAW pull-back `<T^dag (dH_AE/dk) T>` with
+`T^-1 dT/dk = -i S^-1 X`; between eigenstates it is P99's `<n|dH - e_m dS|m> + (e_m - e_n) K_nm`,
+and along the motion `dE/dt = kappadot . sum w J-operator`, the work identity. The literature
+search found this exactly as the moving-ion term of ultrasoft TDDFT, `P = -i T^dag dT/dt` (Qian, Li,
+Lin and Yip, PRB 73, 035408 (2006), arXiv:cond-mat/0510643, Eqs. 19 to 22, the same sign), and
+GPAW's (arXiv:1109.6157, Eqs. 49 to 51); **Abinit's real-time PAW** (arXiv:2507.08578, its
+`src/80_rttddft` read on 2026-10-07) rebuilds the projectors and `S^-1` at `k + A` but **has no
+`dS/dt` term**, and its current, with the all-electron partial waves, is the same operator as this
+one. Nobody writes the velocity-gauge current in the `H S^-1 X` form; it is derived here and
+checked below.
+
+**The review's numbers on the operators** (dense, `alas-epsilon-us.in` at 10/40 Ry): `X psi`
+against `B dpqq B^dag + i B Q dB^dag` 1.4e-16; `X - X^dag = i dS/dk` against a central difference
+of `S` **5.2e-11** (2.6e-2 with the `i q` term's sign flipped); Woodbury's `S^-1` 2.5e-15; the current
+operator between generalised eigenstates against `generalised_matrix_elements` **5.8e-15** (6.8e-3
+to 1.3e-2 without its correction); PAW's `dpqq` against the all-electron partial-wave dipole
+`int (phi_i phi_j - phit_i phit_j) r^3 dr` from `PP_FULL_WFC` 2e-17 on the psl Al and As datasets and
+6e-8 on `Si.pbe-n-kjpaw_psl.0.1`, so PAW needs nothing US has not. The review also measured what the
+first-order check can see: each of `s_1` with the wrong frequency, `X` dropped, `X` with the wrong
+sign, `X` a quarter of itself and the current's correction dropped moves the first order by 1.2e-3 to
+3.1e-3 of `sigma`, and nothing cancels between the equation and the current; what it cannot see is
+`dpqq` itself, which both sides read from `_augmentation_dipole` and which P99's finite difference of
+the overlap pins.
+
+**What changed.** `_Chunk.generator(kappa, rate)` is `x -> S^-1 [H - rate . X] x`, its projector
+derivative along `rate` and Woodbury's matrix (`sm1_psi.f90`'s `Q (1 + G Q)^-1`) built once a step;
+`_Chunk.current` adds the correction; `rate` is `(kappa(t + dt) - kappa(t))/dt_Ry` on the run's own
+grid, unit-free (the plan had `-E/2`, a factor of four wrong, which the review caught; a wrong
+factor shows as a drift of `<phi|S|phi>`). **A kick is a step in `kappa`** the field's grid cannot
+hold, under which the all-electron state does not move, so the augmented states cross it by
+`dphi/dkappa = i S^-1 X phi` (`_Chunk.jump`, one fourth-order Runge-Kutta step, exact for every order
+this code takes); a kick after the start is refused for an augmented dataset. The norm check, the
+energy and `excited` read `S(kappa)`. **The spectral edge**: the rigorous `max H / min S` is four to
+six times the generalised spectrum's edge on these cells (`min S` = 0.39, the edge 11.7 Ry against
+`H`'s own 16.1 at 10 Ry, the bound it gave 67.6), so the edge is estimated by forty power-method
+steps on `S^-1 H` and the larger of that and Weyl's bound on `H` taken; at 10 Ry the step then needs
+470 a period at 1.5 eV where norm-conserving AlAs takes 400. PAW's one-centre `D` is threaded from the
+ground state's `becsum` (`_prepare` dropped `ddd_paw` before). **The hierarchy** solves
+`(z S0 - H0) c = sum coef (h_p - z' s_p) c' + i sum coef (m' w + i q eta) X_(q-1) c'` with `z'` the
+frequency of the component acted on, the projector `sum |u_j><u_j| S0`, the complement's operator
+`H0 - z S0 + alpha S0 Pu S0` (`ch_psi_all.f90`'s; the plan's text had one `S0` too many on each side,
+which the review measured at 1.4e-2 to 2.0e-2 against a direct solve), and the current form
+`<c1|dH|c2> + i(<H c1|S^-1 X c2> - <S^-1 X c1|H c2>)`. Its pairs of components are now evaluated in one
+batch per order of the field derivative, which took PAW AlAs's frequency from 192 s to 54 s.
+**The radial table** stops at the transform's round-off floor (a tail below 1e-11 that no longer
+falls) where it refused before: the psl ultrasoft Al and As plateau at 4e-13 of the largest
+coefficient, against the 1e-13 asked.
+
+**The numbers.**
+
+1. **The first order against the Kubo sum**, `sigma_RT(z) = sigma_Kubo(z) + i D/(Omega z)` with
+   P99's generalised velocity and every generalised eigenstate of the dense `H(k)`, `S(k)`:
+   ultrasoft AlAs at 10/40 Ry (161 plane waves, Gamma and a general point, `eta = 0.02` Ha,
+   `dt = 0.05`), **2.4e-6** of the scale, the sum alone 1.003 of the scale off; the
+   norm-conserving silicon control on the same script 1.4e-6 (the test's recorded 1.6e-5 at its
+   own settings). With spin-orbit coupling (`alas-epsilon-us-soc.in`): **not yet measured**.
+2. **The work identity** on a strong pulse (`Sin2`, 5e12 W/cm^2, 1.55 eV, 4 fs, `kappa` up to
+   0.21 bohr^-1, 0.84 electrons a cell promoted), ultrasoft AlAs, `dt = 0.05`: `Omega int J.E dt`
+   against `E(T) - E(0)`, **2.7e-7**, `<phi|S|phi>` constant to **7.1e-9**. With `X` removed from
+   the equation and the current the norm grows past `1 + 1e-6` within 400 steps and the run is
+   stopped by its own check, which is the measurement the refusal of the first version asked
+   for: the term is load-bearing at the first step that has a field.
+3. **The hierarchy against the propagation**, 1.5 eV, `eta = 0.3` eV, [111], 500 steps a period, on
+   ultrasoft and PAW AlAs: **not yet measured**. The PAW hierarchy alone took 54 s for its frequency
+   after the batching above (192 s before); its third-order propagation sat at 15 GB resident for
+   over an hour with the table at 512 terms and drove D22 into swap twice, which is why the table's
+   recurrence is now a loop and its round-off tail is dropped (`realtime/radial.py`), and that
+   change is not yet run. **Until it is, an augmented third order by the real-time route is not
+   known to be affordable**; the hierarchy is the route to use.
+4. **The datasets against each other** (chi^(3) of AlAs with norm-conserving, ultrasoft and PAW
+   datasets): not yet measured.
+
+**What is outstanding**, beside the measurements marked above: notebook 52 (selenium with and
+without spin-orbit coupling, drafted), the timing against Elk's task 460 with spin-orbit coupling
+(the deliverable P141's routes owe, since Elk has no ultrasoft dataset and the pair is the spinor
+route's), and the cost of an augmented step against a norm-conserving one (`orders_cost.py` on
+D22: norm-conserving AlAs at 10 Ry, two k-points, four bands, first order, 4.8 ms a step and
+1.2 GB; the ultrasoft arms did not finish).
+
+**Refused**, by name: the potential updated in time with an augmented dataset (the augmentation
+charge of `rho(t)` from the projections at `k + kappa(t)`, `newd`'s `D(t)` every step, PAW's
+one-centre `D(t)`), and a kick after the start.
