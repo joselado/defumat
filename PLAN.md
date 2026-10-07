@@ -25102,8 +25102,9 @@ coefficient, against the 1e-13 asked.
 3. **The hierarchy against the propagation**, 1.5 eV, `eta = 0.3` eV, [111], the 2x2x2 mesh,
    orders one to three, the real-time orders at `eta_t = 12`: run as the test file
    (`test_realtime_regimes.py::test_the_spectrum_is_the_propagation_at_one_frequency`, bound 5e-4 of
-   each order's largest component) one cell at a time on D22's card, master `4e7816c` (selenium
-   with `b887272`'s test), 2026-10-07
+   each order's largest component; every component printed by the pytest plugin
+   `tools/realtime/regimes/svo_report.py`, the queues beside it) one cell at a time on D22's card,
+   master `4e7816c` (selenium with `b887272`'s test), 2026-10-07
    evening, with no other process on the card when each run started (`nvidia-smi`); a Blender render
    joined it at 21:05 with 1.75 GB, during the last 40 of selenium's 48 minutes, so selenium's
    time overstates the card's cost. The largest
@@ -25150,10 +25151,12 @@ coefficient, against the 1e-13 asked.
    From 30 to 40 Ry each dataset moves by 0.10 to 0.11 per cent in both, while the two stay **0.77 per
    cent** apart in chi^(2) (4.7 pm/V of 604) and **6.2e-4** apart in chi^(3) at every cutoff, and
    6.1e-4 apart in the first order's `J_(1,1)`: what is left is the datasets and not the cutoff. The
-   hierarchy took 20 to 23 BiCGStab iterations on both, and 77 to 83 s with the ultrasoft datasets
-   against 22 to 23 s with PAW at every cutoff, first calls each in its own process; with equal
-   iterations the difference is outside the solves, and whether it is compilation was not
-   isolated.
+   hierarchy took 20 to 23 BiCGStab iterations on both, and **10.0 s (ultrasoft) against 9.7 s (PAW)
+   on a second call** at 30 Ry. The sweep's first calls read 77 to 83 s against 22 to 23 s, which was
+   the persistent kernel cache: the ultrasoft run came first at each cutoff and compiled, and the PAW
+   run, on the same cell and shapes, found its programs there; rerun with the cache filled, the
+   ultrasoft first call is 21.5 s. The scripts are `tools/realtime/regimes/` (`datasets.py`, and
+   `twice.sh` for the second calls), the runs D22's `/l/ladovj1/review/hspin/svo12/`.
 5. **The cost of a step**, `realtime/orders.py` on AlAs at 10 Ry (169 plane waves), Gamma and a
    general point, four bands, 200 steps of `dt = 0.1`, the second call in the process, one D22
    performance core (`taskset -c 0`, `OMP_NUM_THREADS=1`, nothing else running), 2026-10-07
@@ -25219,8 +25222,7 @@ not comparable.
 
 **What is outstanding**: notebook 52 (selenium with and without spin-orbit coupling, drafted in
 D22's `/l/ladovj1/review/hspin/handoff/make_nb52.py`) and the execution of the guide's selenium
-snippet, both left at the user's choice of 2026-10-07; and why the ultrasoft hierarchy took 77 to
-83 s against PAW's 22 s on one cell at equal iteration counts (item 4), first calls not isolated.
+snippet, both left at the user's choice of 2026-10-07.
 
 **Refused**, by name: the potential updated in time with an augmented dataset (the augmentation
 charge of `rho(t)` from the projections at `k + kappa(t)`, `newd`'s `D(t)` every step, PAW's

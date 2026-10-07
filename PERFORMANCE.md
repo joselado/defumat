@@ -10956,16 +10956,18 @@ is one frequency (1.5 eV) to third order on the 2x2x2 mesh; the pulse is a `Sin2
 | ultrasoft AlAs, 10/40 Ry | 9.0 / 6.7 s | 8.2 / 36.1 s | |
 | ultrasoft AlAs, spin-orbit | 9.8 / 8.8 s | 22.1 / 110 s | |
 | PAW AlAs, 10/44 Ry | 9.4 / 6.8 s | 8.9 / 27.8 s | |
-| magnet (AlAs, `tot_magnetization = 2`, 6 Ry) | 5.7 / 3.4 s | 7.0 / 16.8 s | 12.9 / 34.2 s |
+| magnet (AlAs, `tot_magnetization = 2`, 6 Ry) | 3.8 / 3.4 s | 4.9 / 16.4 s | 9.1 / 33.5 s |
 
-So the propagation is 2.4 to 5.0 times faster on the card and the hierarchy is not, at these sizes,
+So the propagation is 2.5 to 5.0 times faster on the card and the hierarchy is not, at these sizes,
 except on selenium (2.7 times), the largest cell; why the smaller ones do not gain was not
 measured. The
 selenium and PAW card times were taken while a render used 0.6 to 1.9 GB of the card and overstate
 its cost; the card runs float64 at 1/70 of float32, so none of this says what a data-centre card
 does. The real-time orders, one long call each and so timed on a first call, read 1065 / 3792 s
 (selenium), 94 / 616 s (ultrasoft), 327 / 1306 s (ultrasoft with spin-orbit), 167 / 558 s (PAW) and
-48 / 97 s (the magnet) at `eta_t = 4`.
+56 / 111 s (the magnet) at `eta_t = 4`. The magnet's row is its clean second run on each platform
+(`mag-*.free.json`), the run `PLAN.md` P141's table quotes; each platform converged its own SCF, to
+mirror states, which does not change a time.
 
 **The hierarchy against the orders at the full switch-on** (`PLAN.md` P141, item 3), one frequency to
 third order on the card, first calls (compilation included), with nothing else on the card but a
@@ -10973,7 +10975,7 @@ render that joined during the last 40 of selenium's 48 minutes: the hierarchy
 12, 22, 21 and 14 s against the real-time orders' 57, 185, 186 and 2884 s at `eta_t = 12` for the
 magnet, ultrasoft and PAW AlAs and selenium with spin-orbit coupling, at the same answer to 1.2e-4,
 2.5e-5, 2.0e-5 and 5.3e-5. The hierarchy, warm, is
-5.7 to 9.8 s on the card for every regime above, so it stays the route to a spectrum and the
+3.8 to 9.8 s on the card for every regime above, so it stays the route to a spectrum and the
 propagation the route to a strong field.
 
 **Spin-orbit coupling against Elk, one core each** (`PLAN.md` P140; D22's core 0, 2026-10-07 23:13 to
