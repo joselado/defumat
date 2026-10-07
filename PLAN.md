@@ -25017,8 +25017,10 @@ returns cannot carry the flag for anything downstream.
    `dt = 0.05`, 0.02 to 0.6 Ha: **1.5e-7** of the scale, where the sum without the curvature term
    is off by the whole scale (0.9988), so the term is the answer on two k-points and not a
    correction. The propagation took 1592 s of D22's performance cores.
-4. **The hierarchy against the propagation** on selenium: **not yet measured** (at 400 steps a
-   period the step is past the bound, 520 needed; the rerun was cut off by D22's outage).
+4. **The hierarchy against the propagation** on selenium, `eta_t = 12`, 520 steps a period (the
+   test asked for 400 until it first ran as a file, where the propagator refused the step, 503
+   being the least it admits): **5.3e-5** of the first order's scale at `(1,1)`, the rest at most
+   3.2e-5 (P141, item 3, has the table).
 
 ### P141 -- The harmonic routes on ultrasoft and PAW datasets: the overlap's motion in the equation of motion and in the current. ✅ DONE at a frozen potential, 2026-10-07, against the Kubo sum with P99's generalised velocity and by the work identity; the hierarchy against the propagation agrees at the full switch-on (2026-10-07 evening), and the potential updated in time is refused by name.
 
@@ -25100,7 +25102,8 @@ coefficient, against the 1e-13 asked.
 3. **The hierarchy against the propagation**, 1.5 eV, `eta = 0.3` eV, [111], the 2x2x2 mesh,
    orders one to three, the real-time orders at `eta_t = 12`: run as the test file
    (`test_realtime_regimes.py::test_the_spectrum_is_the_propagation_at_one_frequency`, bound 5e-4 of
-   each order's largest component) one cell at a time on D22's card, master `4e7816c`, 2026-10-07
+   each order's largest component) one cell at a time on D22's card, master `4e7816c` (selenium
+   with `b887272`'s test), 2026-10-07
    evening, with no other process on the card (`nvidia-smi` read before each run). The largest
    difference over the five components `(1,1)`, `(2,2)`, `(2,0)`, `(3,3)`, `(3,1)`, relative to the
    largest component of its order:
@@ -25110,9 +25113,12 @@ coefficient, against the 1e-13 asked.
    | magnet (P139: AlAs, `tot_magnetization = 2`, 6 Ry) | 400 | 1.2e-4, `(1,1)` | 2.5e-5 | 20 | 12 / 57 s |
    | ultrasoft AlAs, 10/40 Ry | 500 | 2.5e-5, `(3,1)` | 4.6e-6 | 21 | 22 / 185 s |
    | PAW AlAs, 10/44 Ry | 500 | 2.0e-5, `(3,1)` | 4.3e-6 | 19 | 21 / 186 s |
+   | selenium, spin-orbit (P140), 12 Ry | 520 | 5.3e-5, `(1,1)` | 1.3e-5 | 24 | 14 / 2884 s |
 
-   The rest of each row is at most 2.7e-5 (the magnet) and 1.9e-5 (the two augmented cells). So the
-   augmented equation of motion, its current and the augmented hierarchy agree at the level
+   The rest of each row is at most 2.7e-5 (the magnet), 1.9e-5 (the two augmented cells) and
+   3.2e-5 (selenium). Selenium first failed in 22 s, the test asking for 400 steps a period where its
+   spectrum, reaching 24.9 Ry at 12 Ry, admits 503 at least; it now takes 520. So the spinor and the
+   augmented equations of motion, their currents and their hierarchies agree at the level
    norm-conserving AlAs reached between the same two routes, 3.5e-5 to 1.9e-4 at 400 steps a period
    (`test_realtime_hierarchy.py`), and what is left is the propagation's own step and switch-on. The
    times are each process's first calls, compilation included. The magnet's SCF re-solved one of
