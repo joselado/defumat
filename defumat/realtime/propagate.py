@@ -408,34 +408,44 @@ class _Chunk(eqx.Module):
         out = components + self._expand(vkb, self._contract(self._q(), self._project(vkb, components)))
         return self._join(jnp.where(self.mask[:, None, None, :], out, 0.0))
 
-    def inverse_overlap(self, kappa, x, projectors=None):
-        """``S(k + kappa)^-1 x`` by Woodbury, ``sm1_psi.f90``: an ``npol nkb`` solve per k-point.
+    def woodbury(self, projectors):
+        """``W = Q (1 + G Q)^-1`` per k-point, ``(nk, P, P)`` with ``P = npol nkb``.
 
-        ``S = 1 + B Q B^dag`` gives ``S^-1 = 1 - B Q (1 + B^dag B Q)^-1 B^dag``,
-        with ``B`` the projectors on each spinor component and ``Q`` the
-        ``qq`` (``qq_so``) matrix of the channels.
+        ``S = 1 + B Q B^dag`` gives ``S^-1 = 1 - B W B^dag`` (``sm1_psi.f90``),
+        with ``B`` the projectors on each spinor component, ``G = B^dag B`` and
+        ``Q`` the ``qq`` (``qq_so``) matrix of the channels; built once per
+        ``kappa`` and used by every application at it.
         """
+        vkb = projectors.vkb
+        nk, nkb = vkb.shape[0], vkb.shape[-1]
+        npol = self.npol
+        size = npol * nkb
+        q = self._q().astype(vkb.dtype)
+        # the spin index outside the channel one
+        q_flat = jnp.transpose(q, (0, 2, 1, 3)).reshape(size, size)
+        gram = jnp.einsum("kgi,kgj->kij", jnp.conj(vkb), vkb)
+        gram_flat = jnp.einsum("ab,kij->kaibj", jnp.eye(npol, dtype=gram.dtype),
+                               gram).reshape(nk, size, size)
+        matrix = jnp.eye(size, dtype=vkb.dtype)[None] + gram_flat @ q_flat[None]
+        return q_flat[None] @ jnp.linalg.inv(matrix)
+
+    def inverse_overlap(self, kappa, x, projectors=None, woodbury=None):
+        """``S(k + kappa)^-1 x`` by Woodbury (:meth:`woodbury`); ``x`` for a norm-conserving dataset."""
         if not self.augmented:
             return x
         if projectors is None:
             _, projectors = self.moved(kappa)
+        if woodbury is None:
+            woodbury = self.woodbury(projectors)
         vkb = projectors.vkb
         components = self._components(x)
         becp = self._project(vkb, components)  # (nk, n, npol, nkb)
         nk, n, npol, nkb = becp.shape
-        q = self._q().astype(becp.dtype)
-        # (npol nkb)^2 per k-point, the spin index outside the channel one
-        q_flat = jnp.transpose(q, (0, 2, 1, 3)).reshape(npol * nkb, npol * nkb)
-        gram = jnp.einsum("kgi,kgj->kij", jnp.conj(vkb), vkb)
-        gram_flat = jnp.einsum("ab,kij->kaibj", jnp.eye(npol, dtype=gram.dtype),
-                               gram).reshape(nk, npol * nkb, npol * nkb)
-        matrix = jnp.eye(npol * nkb, dtype=becp.dtype)[None] + gram_flat @ q_flat[None]
-        solved = jnp.linalg.solve(matrix, jnp.swapaxes(becp.reshape(nk, n, npol * nkb), 1, 2))
-        coefficients = jnp.swapaxes(q_flat[None] @ solved, 1, 2).reshape(nk, n, npol, nkb)
-        out = components - self._expand(vkb, coefficients)
+        coefficients = jnp.einsum("kij,knj->kni", woodbury, becp.reshape(nk, n, npol * nkb))
+        out = components - self._expand(vkb, coefficients.reshape(nk, n, npol, nkb))
         return self._join(jnp.where(self.mask[:, None, None, :], out, 0.0))
 
-    def position(self, kappa, x, direction, projectors=None):
+    def position(self, kappa, x, direction, projectors=None, derivative=None):
         """``e.X(k + kappa) x``, the augmentation's share of the position operator.
 
         ``X = r~ - S r = sum_ij |b_i> [dpqq_ij <b_j| + i q_ij <db_j/dk|]``, the
@@ -444,7 +454,8 @@ class _Chunk(eqx.Module):
         derivative about its own atom. It is ``i`` times the connection
         :meth:`~defumat.response.velocity.VelocityOperator.augmentation_connection`
         and the term ``adddvepsi_us.f90`` adds; ``X - X^dag = i dS/dk``. Zero
-        for a norm-conserving dataset.
+        for a norm-conserving dataset. ``derivative`` is
+        :meth:`projector_derivative` along ``direction`` when the caller has it.
         """
         if not self.augmented:
             return jnp.zeros_like(x)
@@ -452,7 +463,8 @@ class _Chunk(eqx.Module):
             _, projectors = self.moved(kappa)
         vkb = projectors.vkb
         direction = jnp.asarray(direction)
-        derivative = self.projector_derivative(kappa, direction)
+        if derivative is None:
+            derivative = self.projector_derivative(kappa, direction)
         components = self._components(x)
         becp = self._project(vkb, components)
         moving = self._project(derivative, components)
@@ -484,17 +496,25 @@ class _Chunk(eqx.Module):
         factor ``e^{i kappa.r}`` that takes every operator from ``k`` to
         ``k + kappa`` meets the time derivative through ``S``, and leaves
         ``-kappadot . (r~ - S r)`` where ``r~`` is the position operator of the
-        augmented density (:meth:`position`). ``rate`` is ``dkappa/dt`` in the
-        Rydberg time unit. For a norm-conserving dataset this is ``H``.
+        augmented density (:meth:`position`). It is ``P = -i T^dag dT/dt`` of the
+        moving-ion equation (Qian, Li, Lin and Yip, PRB 73, 035408 (2006),
+        arXiv:cond-mat/0510643, Eqs. 21 and 22) with the field's ``kappa`` in
+        place of the ions' coordinates. ``rate`` is ``dkappa/dt`` in the
+        Rydberg time unit. The projectors, their derivative along ``rate`` and
+        Woodbury's matrix are built once here for every application of the
+        step. For a norm-conserving dataset this is ``H``.
         """
         ham = self.hamiltonian(kappa)
+        if not self.augmented:
+            return lambda x: self.applied(kappa, x, ham)
+        projectors = ham.projectors
+        derivative = self.projector_derivative(kappa, rate)
+        woodbury = self.woodbury(projectors)
 
         def apply(x):
             out = self.applied(kappa, x, ham)
-            if not self.augmented:
-                return out
-            out = out - self.position(kappa, x, rate, ham.projectors)
-            return self.inverse_overlap(kappa, out, ham.projectors)
+            out = out - self.position(kappa, x, rate, projectors, derivative)
+            return self.inverse_overlap(kappa, out, projectors, woodbury)
         return apply
 
     def current(self, kappa, psi, weights):
@@ -503,8 +523,8 @@ class _Chunk(eqx.Module):
         ``<dH/dk_a>`` at frozen states, which is ``jax.grad`` of the kinetic
         and nonlocal band energy, and, for an augmented dataset,
         ``- 2 Im <phi| H S^-1 X_a |phi>``: the velocity of the states
-        ``T|phi>`` the augmented density is made of, whose matrix element
-        between two eigenstates is
+        ``T|phi>`` the augmented density is made of, ``<T^dag (dH_AE/dk) T>``,
+        whose matrix element between two eigenstates is
         :meth:`~defumat.response.velocity.VelocityOperator.generalised_matrix_elements`'s
         ``<n|dH - e_m dS|m> + (e_m - e_n) K_nm``. The energy the field does work
         against obeys ``dE/dt = kappadot . current`` along the motion of
@@ -514,12 +534,13 @@ class _Chunk(eqx.Module):
         if not self.augmented:
             return slope
         ham = self.hamiltonian(kappa)
-        chi = self.inverse_overlap(kappa, self.applied(kappa, psi, ham), ham.projectors)
+        projectors = ham.projectors
+        chi = self.inverse_overlap(kappa, self.applied(kappa, psi, ham), projectors)
         w = weights.astype(psi.dtype)
         tails = []
         for axis in range(3):
             unit = jnp.zeros(3, dtype=kappa.dtype).at[axis].set(1.0)
-            moved = self.position(kappa, psi, unit, ham.projectors)
+            moved = self.position(kappa, psi, unit, projectors)
             tails.append(-2.0 * jnp.imag(jnp.einsum("kn,kng,kng->", w, jnp.conj(chi), moved)))
         return slope + jnp.stack(tails).astype(slope.dtype)
 
