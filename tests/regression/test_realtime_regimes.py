@@ -169,9 +169,10 @@ def test_the_spectrum_is_the_propagation_at_one_frequency(pseudo_dir, tmp_path, 
         "se": ("se-trigonal-soc", 12.0, None, "", (), None),
     }
     case, ecut, ecutrho, extra, drop, grid = cells[variant]
-    # an augmented dataset's generalised spectrum reaches 23 Ry at 10 Ry, and the
-    # step at 400 a period is just past the propagator's bound there
-    steps = 500 if variant in ("us", "paw") else 400
+    # an augmented dataset's generalised spectrum reaches 23 Ry at 10 Ry, and
+    # selenium's 24.9 Ry at 12 Ry, so the step at 400 a period is past the
+    # propagator's bound on both (selenium refuses below 503)
+    steps = {"us": 500, "paw": 500, "se": 520}.get(variant, 400)
     path = _input(tmp_path, case, ecut, ecutrho, extra, drop, grid)
     calculator = Calculator.from_file(path, pseudo_dir=pseudo_dir, announce=False)
     calculator.get_scf(conv_thr=1e-12)

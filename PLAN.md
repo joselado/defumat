@@ -24959,6 +24959,9 @@ elements of each channel being built with its own Hamiltonian (`VelocityOperator
    The SCF energies agree to 1e-15 Ry. (`tests/regression/test_spin_channels.py`.)
 2. **A collinear magnet as spinors** (P140, item 2) is the check of everything above with the
    channels genuinely different.
+3. **The hierarchy against the propagation** on the same magnet, `eta_t = 12`, 400 steps a period:
+   **1.2e-4** of the first order's scale at `(1,1)`, the rest at most 2.7e-5 (P141, item 3, has the
+   table).
 
 ### P140 -- The harmonic routes on spinors: spin-orbit coupling and noncollinear magnetism in the propagation, the orders, the hierarchy and the potential updated in time. ✅ DONE, 2026-10-07, as identities against the collinear route and against the Kubo sum.
 
@@ -25086,16 +25089,34 @@ coefficient, against the 1e-13 asked.
    the equation and the current the norm grows past `1 + 1e-6` within 400 steps and the run is
    stopped by its own check, which is the measurement the refusal of the first version asked
    for: the term is load-bearing at the first step that has a field.
-3. **The hierarchy against the propagation**, 1.5 eV, `eta = 0.3` eV, [111], 500 steps a period, on
-   ultrasoft and PAW AlAs: **not yet measured**. The PAW hierarchy alone took 54 s for its frequency
+3. **The hierarchy against the propagation**, 1.5 eV, `eta = 0.3` eV, [111], the 2x2x2 mesh,
+   orders one to three, the real-time orders at `eta_t = 12`: run as the test file
+   (`test_realtime_regimes.py::test_the_spectrum_is_the_propagation_at_one_frequency`, bound 5e-4 of
+   each order's largest component) one cell at a time on D22's card, master `4e7816c`, 2026-10-07
+   evening, with no other process on the card (`nvidia-smi` read before each run). The largest
+   difference over the five components `(1,1)`, `(2,2)`, `(2,0)`, `(3,3)`, `(3,1)`, relative to the
+   largest component of its order:
+
+   | cell | steps a period | largest difference | norm drift | BiCGStab | hierarchy / orders, card |
+   |---|---|---|---|---|---|
+   | magnet (P139: AlAs, `tot_magnetization = 2`, 6 Ry) | 400 | 1.2e-4, `(1,1)` | 2.5e-5 | 20 | 12 / 57 s |
+   | ultrasoft AlAs, 10/40 Ry | 500 | 2.5e-5, `(3,1)` | 4.6e-6 | 21 | 22 / 185 s |
+   | PAW AlAs, 10/44 Ry | 500 | 2.0e-5, `(3,1)` | 4.3e-6 | 19 | 21 / 186 s |
+
+   The rest of each row is at most 2.7e-5 (the magnet) and 1.9e-5 (the two augmented cells). So the
+   augmented equation of motion, its current and the augmented hierarchy agree at the level
+   norm-conserving AlAs reached between the same two routes, 3.5e-5 to 1.9e-4 at 400 steps a period
+   (`test_realtime_hierarchy.py`), and what is left is the propagation's own step and switch-on. The
+   times are each process's first calls, compilation included. The magnet's SCF re-solved one of
+   its eight k-points by canonical orthogonalisation (the Cholesky route's warning), which a
+   comparison of two routes on one ground state does not see.
+   The PAW hierarchy alone took 54 s for its frequency
    after the batching above (192 s before); its third-order propagation sat at 15 GB resident for
    over an hour with the table at 512 terms and drove D22 into swap twice, which is why the table's
    recurrence is now a loop and its round-off tail is dropped (`realtime/radial.py`). After that
    change a shorter run of the same third order, `eta_t = 4` and 520 steps a period, takes 558 s on
    D22's twelve performance threads, read at 4.8 GB resident mid-run (not a peak), and 167 s on its
-   card; whether the table's loop is what changed the memory was not isolated, and the `eta_t = 12`
-   the comparison wants should be roughly three times as long by the length of the switch-on, which
-   is not measured. The hierarchy, warm, takes 7 s for the frequency on that CPU and 9 s on the
+   card beside a render. The hierarchy, warm, takes 7 s for the frequency on that CPU and 9 s on the
    card, so it stays the route to use.
 4. **The datasets against each other** (chi^(3) of AlAs with norm-conserving, ultrasoft and PAW
    datasets): not yet measured.
