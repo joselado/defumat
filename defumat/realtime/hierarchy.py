@@ -74,6 +74,7 @@ import numpy as np
 
 from defumat.basis.fft import g_to_r, r_to_g
 from defumat.eager import compiled_function
+from defumat.realtime.propagate import _times_i
 
 __all__ = ["hierarchy_orders", "hierarchy_linear_self_consistent", "HierarchyError"]
 
@@ -166,12 +167,12 @@ def _derivative(f, order: int):
 def _orders_at(chunk, basis, energies, weights, precondition, omega, eta, alpha, direction,
                starts, induced=None, *, nocc: int, order: int, tolerance: float,
                max_iterations: int):
-    """At one k-point: ``{(N, M): sum_n w <..|d_kappa h_p|..>}`` (3,), iterations, residuals.
+    """At one k-point: ``{(N, M): sum_n w <..|J|..>}`` (3,), iterations, residuals.
 
-    ``basis`` is ``(nb, npwx)``, the computed bands with the occupied first,
+    ``basis`` is ``(nb, ndim)``, the computed bands with the occupied first,
     ``energies`` their ``(nb,)`` energies in Ry, ``weights`` the ``(nocc,)``
     occupations times the k-weight, ``omega`` and ``eta`` in Ry. ``starts`` is
-    one ``((N+1) nocc, npwx)`` first iterate per order, the complement's
+    one ``((N+1) nocc, ndim)`` first iterate per order, the complement's
     solution at the previous frequency of a sweep, and the new ones are
     returned beside the currents. ``induced``, at first order only, is the
     local potential ``dv_+`` the field induces, complex on the FFT box, which
@@ -179,42 +180,86 @@ def _orders_at(chunk, basis, energies, weights, precondition, omega, eta, alpha,
     weighted cross density ``sum_n w (conj(u0) u_+ + u0 conj(u_-))`` of those
     components is returned last, the first-order density at ``e^{-iwt}`` times
     the cell volume.
+
+    **With an overlap** (ultrasoft, PAW) the components solve
+    ``(z S0 - H0) c = rhs``, with ``h_p - z' s_p`` where ``h_p`` stands alone
+    above and the augmentation's position term ``i (m' w + i q eta) X_(q-1)``
+    beside them (:meth:`~defumat.realtime.propagate._Chunk.generator`'s
+    equation in the frequency domain), ``z'`` the frequency of the component
+    the term acts on; the projector on the computed bands is ``P = sum |u_j>
+    <u_j| S0`` and the complement's operator ``H0 - z S0 + alpha S0 P S0``.
+    The current is :meth:`~defumat.realtime.propagate._Chunk.current`'s
+    bilinear form, ``<c1|dH|c2> + i (<H c1|S^-1 X c2> - <S^-1 X c1|H c2>)``,
+    expanded in the field the same way. Every one of these is the
+    norm-conserving expression when ``S`` is the identity.
     """
     real = energies.dtype
     zero3 = jnp.zeros(3, dtype=real)
-    mask = chunk.mask[0]
     ham0 = chunk.hamiltonian(zero3)
-    coefficients = chunk.template.coefficients.astype(basis.dtype)
+    mask = ham0.state_mask[0]
+    augmented = chunk.augmented
     e = direction.astype(real)
+
+    def one(f):
+        """``f`` of a ``(n, ndim)`` block through the chunk's ``(1, n, ndim)`` operators."""
+        return lambda kappa, x: f(kappa, x[None])[0]
+
+    kinetic_nonlocal = one(chunk.kinetic_nonlocal)
+    overlap = one(chunk.overlap)
+    inverse_overlap = one(chunk.inverse_overlap)
+
+    def position(kappa, x, along):
+        return chunk.position(kappa, x[None], along)[0]
 
     def h0(x):
         return jnp.where(mask, ham0.apply(x, 0), 0.0)
 
-    def kinetic_nonlocal(kappa, x):
-        kinetic, projectors = chunk.moved(kappa)
-        vkb = projectors.vkb[0]
-        becp = jnp.einsum("gi,ng->ni", jnp.conj(vkb), x)
-        out = kinetic[0][None, :] * x + jnp.einsum("gi,ij,nj->ng", vkb, coefficients, becp)
-        return jnp.where(mask, out, 0.0)
+    def s0(x):
+        return overlap(zero3, x)
+
+    def along_field(f, p, x):
+        """``d^p f(s e, x)/ds^p`` at ``s = 0``."""
+        return _derivative(lambda t: f(t * e, x), p)(jnp.zeros((), real))
 
     def h_p(p, x):
-        return _derivative(lambda s: kinetic_nonlocal(s * e, x), p)(jnp.zeros((), real))
+        return along_field(kinetic_nonlocal, p, x)
+
+    def s_p(p, x):
+        return along_field(overlap, p, x)
+
+    def x_p(p, x):
+        return along_field(lambda kappa, y: position(kappa, y, e), p, x)
+
+    w = weights.astype(basis.dtype)
 
     def form(kappa, c1, c2):
-        kinetic, projectors = chunk.moved(kappa)
-        vkb = projectors.vkb[0]
-        b1 = jnp.einsum("gi,ng->ni", jnp.conj(vkb), c1)
-        b2 = jnp.einsum("gi,ng->ni", jnp.conj(vkb), c2)
-        kin = jnp.einsum("n,ng,g,ng->", weights.astype(basis.dtype), jnp.conj(c1),
-                         kinetic[0].astype(basis.dtype), c2)
-        nl = jnp.einsum("n,ni,ij,nj->", weights.astype(basis.dtype), jnp.conj(b1),
-                        coefficients, b2)
-        return kin + nl
+        return chunk.band_form(kappa, c1[None], c2[None], weights[None])
 
-    def current(p, c1, c2):
-        def along(kappa):
-            return _derivative(lambda s: form(kappa + s * e, c1, c2), p)(jnp.zeros((), real))
-        return jax.jacfwd(along, holomorphic=False)(zero3)
+    # The local potential carries no kappa, so ``H(kappa) c`` is ``V c`` from
+    # one transform, taken once per component before any derivative, and the
+    # kinetic and nonlocal parts at kappa.
+    local_of = {}
+
+    def full_current(kappa, k1, c1, k2, c2):
+        slope = jax.jacfwd(lambda k: form(k, c1, c2), holomorphic=False)(kappa)
+        if not augmented:
+            return slope
+        hc1 = local_of[k1] + kinetic_nonlocal(kappa, c1)
+        hc2 = local_of[k2] + kinetic_nonlocal(kappa, c2)
+        tails = []
+        for axis in range(3):
+            unit = jnp.zeros(3, dtype=real).at[axis].set(1.0)
+            y1 = inverse_overlap(kappa, position(kappa, c1, unit))
+            y2 = inverse_overlap(kappa, position(kappa, c2, unit))
+            tail = (jnp.einsum("n,ng,ng->", w, jnp.conj(hc1), y2)
+                    - jnp.einsum("n,ng,ng->", w, jnp.conj(y1), hc2))
+            tails.append(_times_i(tail))
+        return slope + jnp.stack(tails)
+
+    def current(p, k1, c1, k2, c2):
+        def along(s):
+            return full_current(s * e, k1, c1, k2, c2)
+        return _derivative(along, p)(jnp.zeros((), real))
 
     occupied = basis[:nocc]
     e_occ = energies[:nocc]
@@ -222,12 +267,16 @@ def _orders_at(chunk, basis, energies, weights, precondition, omega, eta, alpha,
     def solve(rhs, z, band, start):
         coefficient = jnp.einsum("jg,vg->vj", jnp.conj(basis), rhs)
         inside = jnp.einsum("vj,jg->vg", coefficient / (z[:, None] - energies[None, :]), basis)
-        outside = -(rhs - jnp.einsum("vj,jg->vg", coefficient, basis))
+        held = jnp.einsum("vj,jg->vg", coefficient, basis)
+        outside = -(rhs - (s0(held) if augmented else held))
 
         def apply(x):
-            projected = jnp.einsum("vj,jg->vg", jnp.einsum("jg,vg->vj", jnp.conj(basis), x),
+            sx = s0(x) if augmented else x
+            projected = jnp.einsum("vj,jg->vg", jnp.einsum("jg,vg->vj", jnp.conj(basis), sx),
                                    basis)
-            return h0(x) - z[:, None] * x + alpha * projected
+            if augmented:
+                projected = s0(projected)
+            return h0(x) - z[:, None] * sx + alpha * projected
 
         x, count, residual = _bicgstab(apply, outside, precondition[band], tolerance,
                                        max_iterations, start)
@@ -242,16 +291,27 @@ def _orders_at(chunk, basis, energies, weights, precondition, omega, eta, alpha,
             applied[(p, key)] = h_p(p, components[key])
         return applied[(p, key)]
 
+    def apply_s(p, key):
+        if ("s", p, key) not in applied:
+            applied[("s", p, key)] = s_p(p, components[key])
+        return applied[("s", p, key)]
+
+    def apply_x(p, key):
+        if ("x", p, key) not in applied:
+            applied[("x", p, key)] = x_p(p, components[key])
+        return applied[("x", p, key)]
+
     if induced is not None:
         if order != 1:
             raise NotImplementedError("an induced potential is written at first order only")
         fft_index, grid = chunk.template.fft_index[0], chunk.template.grid
+        mask_pw = chunk.mask[0]
 
         def to_r(c):
-            return g_to_r(jnp.where(mask, c, 0.0), fft_index, grid)
+            return g_to_r(jnp.where(mask_pw, c, 0.0), fft_index, grid)
 
-        def local(field, c):
-            return jnp.where(mask, r_to_g(field[None] * to_r(c), fft_index), 0.0)
+        def local_field(field, c):
+            return jnp.where(mask_pw, r_to_g(field[None] * to_r(c), fft_index), 0.0)
 
     for n in range(1, order + 1):
         harmonics = list(range(-n, n + 1, 2))
@@ -261,11 +321,19 @@ def _orders_at(chunk, basis, energies, weights, precondition, omega, eta, alpha,
             for p in range(1, n + 1):
                 for s in range(p + 1):
                     key = (n - p, m - (2 * s - p))
-                    if key in components:
-                        total = total + (math.comb(p, s) / (math.factorial(p) * 2**p)
-                                         * apply_h(p, key))
+                    if key not in components:
+                        continue
+                    weight = math.comb(p, s) / (math.factorial(p) * 2**p)
+                    term = apply_h(p, key)
+                    if augmented:
+                        # the frequency of the component the term acts on
+                        z_source = (e_occ + key[1] * omega + 1j * key[0] * eta).astype(basis.dtype)
+                        term = term - z_source[:, None] * apply_s(p, key)
+                        rate = (2 * s - p) * omega + 1j * p * eta
+                        term = term + _times_i(rate * apply_x(p - 1, key))
+                    total = total + weight * term
             if induced is not None and n == 1:
-                total = total + local(induced if m == 1 else jnp.conj(induced), occupied)
+                total = total + local_field(induced if m == 1 else jnp.conj(induced), occupied)
             rhs.append(total)
         z = jnp.concatenate([e_occ + m * omega + 1j * n * eta for m in harmonics])
         band = jnp.tile(jnp.arange(nocc), len(harmonics))
@@ -279,10 +347,13 @@ def _orders_at(chunk, basis, energies, weights, precondition, omega, eta, alpha,
 
     totals = {}
     keys = list(components)
+    if augmented:
+        for key in keys:
+            local_of[key] = h0(components[key]) - kinetic_nonlocal(zero3, components[key])
     for k1 in keys:
         for k2 in keys:
             for p in range(0, order - k1[0] - k2[0] + 1):
-                value = current(p, components[k1], components[k2])
+                value = current(p, k1, components[k1], k2, components[k2])
                 for s in range(p + 1):
                     big = (k1[0] + k2[0] + p, -k1[1] + (2 * s - p) + k2[1])
                     weight = math.comb(p, s) / (math.factorial(p) * 2**p)
@@ -297,8 +368,12 @@ def _orders_at(chunk, basis, energies, weights, precondition, omega, eta, alpha,
 
 
 def _preconditioner(chunk, occupied):
-    """``1 / max(1, |k+G|^2 / eprec_n)``, ``eprec_n = 1.35 <c_n|T|c_n>``, ``(nocc, npwx)``."""
+    """``1 / max(1, |k+G|^2 / eprec_n)``, ``eprec_n = 1.35 <c_n|T|c_n>``, ``(nocc, ndim)``.
+
+    A spinor's kinetic energy is laid out once per component.
+    """
     kinetic = jnp.asarray(chunk.moved(jnp.zeros(3, dtype=chunk.k0.dtype))[0][0])
+    kinetic = jnp.tile(kinetic, chunk.npol)
     expectation = jnp.real(jnp.einsum("ng,g,ng->n", jnp.conj(occupied), kinetic, occupied))
     eprec = 1.35 * expectation
     return 1.0 / jnp.maximum(1.0, kinetic[None, :] / eprec[:, None])
@@ -307,7 +382,7 @@ def _preconditioner(chunk, occupied):
 def hierarchy_orders(calculation, basis, energies, weights, v_scf, *, omegas, eta: float,
                      direction, order: int = 3, tolerance: float = 1e-10,
                      max_iterations: int = 500, kcart=None, symmetrise=None,
-                     warm: bool = True, k_batch="default") -> dict:
+                     warm: bool = True, k_batch="default", ddd_paw=None) -> dict:
     """``J_(N,M)`` at every frequency, Hartree atomic units, the whole set of k-points.
 
     Args:
@@ -332,11 +407,49 @@ def hierarchy_orders(calculation, basis, energies, weights, v_scf, *, omegas, et
             them; the calculation's dial by default, one on a CPU. On a card a
             single k-point's transforms are too small to fill it.
 
+        ddd_paw: PAW's one-centre ``D`` of the ground state.
+
+    A collinear ``nspin = 2`` run hands ``basis``, ``energies`` and ``weights``
+    with a leading channel axis, and the channels, independent at a frozen
+    potential, add (:func:`~defumat.realtime.propagate.channel_arrays`).
+
     Returns ``{"components": {(N, M): (nw, 3) complex}, "iterations": (nw,)
     largest BiCGStab iteration count, "residual": (nw,) largest final residual,
     "volume": ...}``; the currents are ``-(1/(2 Omega)) sum``, the real-time
     route's ``J_(N,M)`` (:meth:`~defumat.realtime.orders.OrdersResult.component`).
     """
+    from defumat.realtime.propagate import channel_arrays
+
+    basis = np.asarray(basis)
+    energies = np.asarray(energies, dtype=float)
+    weights = np.asarray(weights, dtype=float)
+    if basis.ndim == 3:
+        basis, energies, weights = basis[None], energies[None], weights[None]
+    pairs = channel_arrays(calculation, basis, np.concatenate(
+        [weights, np.zeros(weights.shape[:2] + (basis.shape[2] - weights.shape[2],))], axis=2))
+    outs = []
+    for channel, (_, carried) in enumerate(pairs):
+        nocc = carried.shape[1]
+        outs.append(_hierarchy_channel(
+            calculation, basis[channel], energies[channel], weights[channel][:, :nocc], v_scf,
+            omegas=omegas, eta=eta, direction=direction, order=order, tolerance=tolerance,
+            max_iterations=max_iterations, kcart=kcart, symmetrise=symmetrise, warm=warm,
+            k_batch=k_batch, channel=channel, ddd_paw=ddd_paw))
+    if len(outs) == 1:
+        return outs[0]
+    out = dict(outs[0])
+    out["components"] = {key: sum(o["components"][key] for o in outs)
+                         for key in outs[0]["components"]}
+    out["iterations"] = np.max([o["iterations"] for o in outs], axis=0)
+    out["residual"] = np.max([o["residual"] for o in outs], axis=0)
+    out["nocc"] = tuple(o["nocc"] for o in outs)
+    return out
+
+
+def _hierarchy_channel(calculation, basis, energies, weights, v_scf, *, omegas, eta,
+                       direction, order, tolerance, max_iterations, kcart, symmetrise,
+                       warm, k_batch, channel, ddd_paw) -> dict:
+    """:func:`hierarchy_orders` for one channel's computed bands, ``(nk, nb, ndim)``."""
     from defumat.batching import k_chunks
     from defumat.realtime.propagate import _batch, _Chunk, _prepare
 
@@ -351,7 +464,7 @@ def hierarchy_orders(calculation, basis, energies, weights, v_scf, *, omegas, et
     if nb <= nocc:
         raise ValueError("the computed bands must include more than the occupied ones")
     setup = _prepare(calculation, basis[:, :nocc], weights, v_scf, 0.0, None, "taylor4",
-                     1, kcart, bounds=False)
+                     1, kcart, bounds=False, channel=channel, ddd_paw=ddd_paw)
     real = setup.real
     unit = np.asarray(direction, dtype=float)
     unit = unit / np.linalg.norm(unit)
@@ -378,9 +491,7 @@ def hierarchy_orders(calculation, basis, energies, weights, v_scf, *, omegas, et
         preconditioner = _preconditioner
 
     def one(ik):
-        if ik == 0:
-            return setup.first
-        return _Chunk.build(calculation, np.asarray([ik]), setup.terms, setup.table, setup.kcart)
+        return setup.chunk(ik, np.asarray([ik]))
 
     totals = {}
     iterations = np.zeros(len(omegas), dtype=int)
@@ -487,6 +598,13 @@ def hierarchy_linear_self_consistent(calculation, basis, energies, weights, v_sc
 
     if potential not in POTENTIALS or potential == "frozen":
         raise ValueError(f"potential must be 'hartree' or 'hxc', not {potential!r}")
+    from defumat.realtime.selfconsistent import _one_channel, require_a_potential_mode
+
+    require_a_potential_mode(calculation, potential, symmetrise, density_symmetry)
+    basis, energies = np.asarray(basis), np.asarray(energies, dtype=float)
+    if basis.ndim == 4:
+        _, weights = _one_channel(basis[:, :, :np.asarray(weights).shape[-1]], weights)
+        basis, energies = basis[0], energies[0]
     if potential == "hxc" and calculation.functional.is_meta:
         raise NotImplementedError("the exchange-correlation kernel of a meta-GGA is not here")
     dense, smooth = calculation.basis.dense, calculation.basis.smooth

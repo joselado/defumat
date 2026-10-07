@@ -323,15 +323,22 @@ def test_a_second_self_consistent_run_compiles_nothing(pseudo_dir):
 
 
 def test_what_is_refused_is_refused_by_name(pseudo_dir):
-    """An ultrasoft dataset, a collinear run and a wedge passed as the k-set."""
+    """An ultrasoft dataset with the potential updated, and a wedge passed as the k-set.
+
+    An ultrasoft dataset runs at a frozen potential (``PLAN.md`` P141); what is
+    refused is the update, whose density, ``D`` and one-centre terms move.
+    """
     from defumat.realtime.propagate import require_a_realtime_regime
+    from defumat.realtime.selfconsistent import require_a_potential_mode
     from defumat.workflows.realtime import _kset
     from defumat.realtime.pulse import Sin2
 
     system = build_system(read_pw_input(CASES / "si2-us.in"))
     pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species)
+    ultrasoft = Calculation(system, pseudos)
+    require_a_realtime_regime(ultrasoft)
     with pytest.raises(NotImplementedError, match="ultrasoft or PAW"):
-        require_a_realtime_regime(Calculation(system, pseudos))
+        require_a_potential_mode(ultrasoft, "hxc", None, None)
     silicon = build_system(read_pw_input(CASES / "si2-symmetric.in"))
     pulse = Sin2.from_intensity(1e11, 1.55, 1)
     with pytest.raises(NotImplementedError, match="symmetry-reduced"):

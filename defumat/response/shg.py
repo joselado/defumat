@@ -60,8 +60,9 @@ conductivity carries ``1/w_nm`` once and this carries it three times.
 Scope
 -----
 
-Norm-conserving, ultrasoft or PAW; ``nspin = 1`` or a spinor run; an
-**insulator** with fixed occupations, on a k-grid closed under the point group.
+Norm-conserving, ultrasoft or PAW; ``nspin = 1``, a collinear ``nspin = 2``
+(whose two channels add) or a spinor run; an **insulator** with fixed
+occupations, on a k-grid closed under the point group.
 Refused by name, each for its own missing term, in
 :func:`require_an_shg_regime`.
 
@@ -605,12 +606,12 @@ def second_harmonic(
     # device array, and cross to the device a k-chunk at a time below.
     if eigenvalues.ndim == 2:
         eigenvalues, wavefunctions = eigenvalues[None], wavefunctions[None]
-    if eigenvalues.shape[0] != 1:
-        raise NotImplementedError(
-            "the second-harmonic tensor of a collinear spin-polarized run is "
-            "not implemented: the two channels are two band structures whose "
-            "susceptibilities add, which is a loop this assembly does not have"
-        )
+    # A collinear spin-polarized run is two band structures, one per channel,
+    # whose susceptibilities add: the channel axis is kept below, each
+    # channel's velocity elements are built with its own Hamiltonian
+    # (``VelocityOperator._hamiltonians``), and the contraction folds the
+    # channels into the k axis, since every term is a sum over one channel's
+    # bands at one k-point.
 
     precision = calculation.system.cell.precision
     volume = float(calculation.system.cell.volume)
@@ -631,11 +632,11 @@ def second_harmonic(
     terms = calculation.local_terms(v_scf, ddd_paw)
 
     wg, _ = calculation.occupations(eigenvalues)
-    wg = jnp.asarray(wg)[0]
+    wg = jnp.asarray(wg)  # (nspin, nk, nbnd)
     wk = jnp.asarray(calculation.system.kpoints.weights)
-    filling = wg / wk[:, None]  # in [0, 1] per spin channel
+    filling = wg / wk[None, :, None]  # in [0, 1] per spin channel
 
-    bare = jnp.asarray(eigenvalues)[0]
+    bare = jnp.asarray(eigenvalues)
     if scissor:
         # Which bands are empty is read from the occupations rather than from
         # a Fermi level, because this branch runs only for fixed occupations.
@@ -689,9 +690,9 @@ def second_harmonic(
                                 kcart=kcart, dipole=dipole, local_terms=terms)
 
     def tangents_of(rowset, psi, energies, kcart):
-        """``<n|dH_a - e_m dS_a|m>`` on one chunk, ``(3, 1, chunk, nb, nb)``."""
+        """``<n|dH_a - e_m dS_a|m>`` on one chunk, ``(3, nspin, chunk, nb, nb)``."""
         return velocity_on(rowset, kcart).tangent_elements(
-            psi, energies[None], sequential=True)
+            psi, energies, sequential=True)
 
     def connections_of(tangents, rowset, psi, kcart):
         """The augmentation dipole's connection on one chunk, the same shape."""
@@ -707,8 +708,14 @@ def second_harmonic(
             """One chunk's share of the three parts, summed over ``bands`` bands."""
             connections = args[1] if augmented else None
             energies, moved, fill, weight = args[position:]
-            v = with_connections(args[0], energies[None], connections)[:, 0]
-            arrays = (moved, energies, jnp.moveaxis(v, 0, 1), fill, weight)
+            v = with_connections(args[0], energies, connections)
+            # (nspin, chunk, 3, nb, nb), the channel folded into the k axis
+            v = jnp.moveaxis(v, 0, 2)
+            v = v.reshape((-1,) + v.shape[2:])
+            nspin = energies.shape[0]
+            energies, moved, fill = (x.reshape((-1,) + x.shape[2:])
+                                     for x in (energies, moved, fill))
+            arrays = (moved, energies, v, fill, jnp.tile(weight, nspin))
             return sum_k(one_k(bands), arrays, batch=batch)
         return stage
 
@@ -716,8 +723,8 @@ def second_harmonic(
         # The padded rows are a repeat of a real one and carry zero ``w_k``,
         # which multiplies the whole of a k-point's term.
         rowset, psi = row_leaves(calculation, rows), store_rows(wavefunctions, rows)
-        energies, kc = jnp.asarray(bare[rows]), jnp.asarray(kcart[rows])
-        last = (energies, jnp.asarray(shifted[rows]), jnp.asarray(filling[rows]),
+        energies, kc = jnp.asarray(bare[:, rows]), jnp.asarray(kcart[rows])
+        last = (energies, jnp.asarray(shifted[:, rows]), jnp.asarray(filling[:, rows]),
                 jnp.asarray(padded(wk, rows, live)))
         first = ((rowset, psi, energies, kc),) + (((rowset, psi, kc),) if augmented else ())
         return first + (last,) * len(band_counts)

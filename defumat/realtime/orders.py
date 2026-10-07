@@ -34,6 +34,7 @@ route and nothing else.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from dataclasses import dataclass
 
@@ -43,8 +44,9 @@ import numpy as np
 
 from defumat.eager import compiled_function
 from defumat.realtime.propagate import (
-    _Chunk, _block_function, _check_growth, _chunk_weights, _padded_grid, _prepare,
-    _warn_damping, time_grid)
+    _block_function, _check_growth, _chunk_weights, _norms_of, _padded, _padded_grid,
+    _prepare, _warn_damping, channel_arrays, kappa_rate, require_a_smooth_field,
+    time_grid)
 
 __all__ = ["OrdersResult", "propagate_orders", "fourier_component"]
 
@@ -156,7 +158,7 @@ def propagate_orders(calculation, states, weights, v_scf, shape, *, dt: float,
                      start: float | None = None, propagator: str = "taylor4",
                      k_batch="default", block_steps: int = 400,
                      kcart=None, potential: str = "frozen", corrector: int = 1,
-                     symmetrise=None, density_symmetry=None) -> OrdersResult:
+                     symmetrise=None, density_symmetry=None, ddd_paw=None) -> OrdersResult:
     """``J^(n)(t)`` for ``n <= order`` under ``kappa(t) = lam * shape(t)``, at ``lam = 0``.
 
     ``shape`` is a :class:`~defumat.realtime.pulse.Pulse` whose amplitude is the
@@ -167,7 +169,9 @@ def propagate_orders(calculation, states, weights, v_scf, shape, *, dt: float,
     vector each. With ``potential`` other than ``'frozen'`` the orders are those
     of the self-consistent propagation
     (:func:`~defumat.realtime.selfconsistent.propagate_orders_self_consistent`),
-    where ``density_symmetry`` completes the wedge's density.
+    where ``density_symmetry`` completes the wedge's density. A collinear
+    ``nspin = 2`` run's channels are independent at a frozen potential and
+    their orders add.
     """
     if potential != "frozen":
         from defumat.realtime.selfconsistent import propagate_orders_self_consistent
@@ -178,62 +182,88 @@ def propagate_orders(calculation, states, weights, v_scf, shape, *, dt: float,
             block_steps=block_steps, kcart=kcart, symmetrise=symmetrise,
             density_symmetry=density_symmetry, potential=potential,
             corrector=corrector)
+    results = [
+        _orders_channel(calculation, own, carried, v_scf, shape, dt=dt, order=order,
+                        duration=duration, start=start, propagator=propagator,
+                        k_batch=k_batch, block_steps=block_steps, kcart=kcart,
+                        symmetrise=symmetrise, channel=channel, ddd_paw=ddd_paw)
+        for channel, (own, carried) in enumerate(channel_arrays(calculation, states, weights))]
+    if len(results) == 1:
+        return results[0]
+    return dataclasses.replace(
+        results[0], currents=sum(np.asarray(r.currents) for r in results),
+        norm_drift=max(r.norm_drift for r in results))
+
+
+def _orders_channel(calculation, states, weights, v_scf, shape, *, dt, order, duration,
+                    start, propagator, k_batch, block_steps, kcart, symmetrise, channel,
+                    ddd_paw) -> OrdersResult:
+    """:func:`propagate_orders` at a frozen potential for one channel's states."""
     states = np.asarray(states)
     weights = np.asarray(weights, dtype=float)
-    nk = states.shape[0]
     times, a_t, a_mid, _ = time_grid(shape, dt, duration, start)
+    require_a_smooth_field(calculation, shape, times[0])
     nsteps = len(times) - 1
     # The primal is the unperturbed evolution: the field is zero at lam = 0, so
     # the spectrum the step has to be stable for is that of H(k).
     setup = _prepare(calculation, states, weights, v_scf, 0.0, dt, propagator,
-                     k_batch, kcart)
+                     k_batch, kcart, channel=channel, ddd_paw=ddd_paw)
     real = setup.real
     a_mid_p, a_end_p, dts, nblocks = _padded_grid(a_mid, a_t[1:], nsteps, block_steps,
                                                   setup.dt_ry)
+    a_rate_p = _padded(kappa_rate(shape, times), nsteps, block_steps)
     base = _block_function(setup.step_fn, setup.centre)
     depth = int(order)
 
-    def lifted(chunk, w, tower, lam, amid, aend, steps):
+    def lifted(chunk, w, tower, lam, amid, aend, arate, steps):
         def f(psi, l):
-            return base(chunk, w, psi, l * amid, l * aend, steps)
+            return base(chunk, w, psi, l * amid, l * aend, l * arate, steps)
         return _lift(f, depth)(tower, lam)
 
     def initial(chunk, w, tower, lam, a0):
+        # the step in kappa the run starts with (an augmented dataset's states
+        # cross it by a transformation of their own), then the current there
         def f(psi, l):
-            return psi, jax.grad(chunk.kappa_energy)(l * a0, psi, w)
-        return _lift(f, depth)(tower, lam)[1]
+            moved = chunk.jump(jnp.zeros_like(a0), l * a0, psi)
+            return moved, chunk.current(l * a0, moved, w)
+        return _lift(f, depth)(tower, lam)
 
     raw = np.zeros((depth + 1, nsteps + 1, 3))
     drift = 0.0
     _warn_damping(setup, nsteps)
-    run = start_run = None
+    run = start_run = norms_of = None
     lam = jnp.zeros((), dtype=real)
     for index, (rows, live) in enumerate(setup.chunks):
-        chunk = setup.first if index == 0 else _Chunk.build(
-            calculation, rows, setup.terms, setup.table, setup.kcart)
+        chunk = setup.chunk(index, rows)
         w = _chunk_weights(weights, rows, live, real)
         tower = _tower(jnp.asarray(states[rows]), depth)
         a0 = jnp.asarray(a_t[0], dtype=real)
         if run is None:
             args = (chunk, w, tower, lam, jnp.asarray(a_mid_p[:block_steps], dtype=real),
                     jnp.asarray(a_end_p[:block_steps], dtype=real),
+                    jnp.asarray(a_rate_p[:block_steps], dtype=real),
                     jnp.asarray(dts[:block_steps], dtype=real))
             run = compiled_function(lifted, *args)
             start_run = compiled_function(initial, chunk, w, tower, lam, a0)
-        out = start_run(chunk, w, tower, lam, a0)
+            norms_of = compiled_function(_norms_of, chunk, _derivative(tower, 0, depth),
+                                         jnp.zeros(3, dtype=real))
+        tower, out = start_run(chunk, w, tower, lam, a0)
         for k in range(depth + 1):
             raw[k, 0] += np.asarray(_derivative(out, k, depth))
         for b in range(nblocks):
             sl = slice(b * block_steps, (b + 1) * block_steps)
             tower, out = run(chunk, w, tower, lam, jnp.asarray(a_mid_p[sl], dtype=real),
                              jnp.asarray(a_end_p[sl], dtype=real),
+                             jnp.asarray(a_rate_p[sl], dtype=real),
                              jnp.asarray(dts[sl], dtype=real))
             stop = min((b + 1) * block_steps, nsteps)
             for k in range(depth + 1):
                 raw[k, b * block_steps + 1:stop + 1] += np.asarray(
                     _derivative(out, k, depth))[:stop - b * block_steps]
-            norms = _check_growth(_derivative(tower, 0, depth), live,
-                                  f"after step {stop} of k-chunk {index}")
+            # the zeroth order is the unperturbed evolution, at kappa = 0
+            norms = _check_growth(
+                norms_of(chunk, _derivative(tower, 0, depth), jnp.zeros(3, dtype=real)),
+                live, f"after step {stop} of k-chunk {index}")
         drift = max(drift, float(np.abs(norms - 1.0).max()))
 
     factorials = np.asarray([math.factorial(k) for k in range(depth + 1)], dtype=float)

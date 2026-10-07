@@ -158,27 +158,54 @@ def _kset(system, pulse, kpoints, grid, little_group: bool):
     return for_spin(kset, system.nspin), rotations, group
 
 
-def _occupied_states(system, pseudos, density, kset, *, nbnd, conv_thr, k_batch,
-                     calculation):
-    """``(calculation, states (nk, nb, npwx), weights (nk, nb), v_scf)`` with fixed occupations.
+def _occupied_count(system, nelec: float) -> int:
+    """The most bands a channel of ``system`` fills: one electron a spinor band, two a scalar one.
 
-    For an insulator with ``occupations = 'fixed'`` the occupied bands alone,
-    and a cut through a degenerate multiplet refused by name; for a smeared
-    run every band carrying weight above ``1e-10``, held at its ground-state
-    occupation.
+    A collinear ``nspin = 2`` channel holds one electron a band, and the
+    majority channel holds ``(nelec + m)/2`` of them with ``m`` the moment, two
+    when it is not fixed.
     """
-    calc, states, weights, v_scf, _, _ = _solved_states(
+    if system.noncolin:
+        return int(math.ceil(nelec))
+    if system.nspin == 2:
+        moment = getattr(system, "tot_magnetization", None)
+        moment = 2.0 if moment is None or float(moment) < 0.0 else float(moment)
+        return int(math.ceil((nelec + moment) / 2.0))
+    return int(math.ceil(nelec / 2.0))
+
+
+def _occupied_states(system, pseudos, density, kset, *, nbnd, conv_thr, k_batch,
+                     calculation, becsum=()):
+    """``(calculation, states, weights, v_scf, ddd_paw)`` with fixed occupations.
+
+    ``states`` is ``(nchannel, nk, nb, ndim)`` and ``weights``
+    ``(nchannel, nk, nb)``, one channel for ``nspin = 1`` and for a spinor run,
+    two for a collinear ``nspin = 2`` one, the shorter padded with zero
+    weights. For an insulator with ``occupations = 'fixed'`` the occupied bands
+    alone, and a cut through a degenerate multiplet refused by name; for a
+    smeared run every band carrying weight above ``1e-10``, held at its
+    ground-state occupation.
+    """
+    calc, states, weights, v_scf, _, _, ddd_paw = _solved_states(
         system, pseudos, density, kset, nbnd=nbnd, conv_thr=conv_thr, k_batch=k_batch,
-        calculation=calculation)
-    return calc, states, weights, v_scf
+        calculation=calculation, becsum=becsum)
+    return calc, states, weights, v_scf, ddd_paw
 
 
 def _solved_states(system, pseudos, density, kset, *, nbnd, conv_thr, k_batch,
-                   calculation):
+                   calculation, becsum=()):
     """:func:`_occupied_states` and every band the solve resolved, with their energies.
 
-    The last two are ``(nk, nbnd, npwx)`` and ``(nk, nbnd)`` in Ry, for the
-    frequency-domain hierarchy's projector on the computed bands.
+    Returns ``(calculation, states, weights, v_scf, bands, energies, ddd_paw)``:
+    the last three are ``(nchannel, nk, nbnd, ndim)``, ``(nchannel, nk, nbnd)``
+    in Ry, for the frequency-domain hierarchy's projector on the computed bands,
+    and PAW's one-centre ``D`` from the ground state's ``becsum`` (``None``
+    without PAW), frozen with the potential.
+
+    **How many bands a channel carries is read off its occupations**, since a
+    collinear run with ``tot_magnetization`` fills its two channels to
+    different counts and a spinor band holds one electron where a scalar band
+    holds two (``nelec / 2`` was right for ``nspin = 1`` alone).
     """
     from defumat.workflows.nscf import fixed_density_states, threaded_calculation
 
@@ -188,7 +215,7 @@ def _solved_states(system, pseudos, density, kset, *, nbnd, conv_thr, k_batch,
         # Four past the occupied: two ended inside a degenerate conduction pair
         # at three of AlAs's twenty wedge points, where the solve then reports
         # an unconverged root (found writing the harmonic notebook).
-        nbnd = int(math.ceil(nelec_guess / 2)) + (4 if fixed else 6)
+        nbnd = _occupied_count(system, nelec_guess) + (4 if fixed else 6)
     # The caller's own calculation, when handed one, is moved to this k-set
     # rather than a second one built beside it.
     calculation, moved, kpoints, k_batch = threaded_calculation(
@@ -198,36 +225,44 @@ def _solved_states(system, pseudos, density, kset, *, nbnd, conv_thr, k_batch,
         kpoints = None
     calc, _, eigenvalues, wavefunctions = fixed_density_states(
         moved, pseudos, density, kpoints=kpoints, nbnd=nbnd, conv_thr=conv_thr,
-        k_batch=k_batch, calculation=calculation)
+        k_batch=k_batch, calculation=calculation, becsum=becsum)
     require_a_realtime_regime(calc)
     eigenvalues = np.asarray(eigenvalues)
     if eigenvalues.ndim == 2:
         eigenvalues = eigenvalues[None]
+    wavefunctions = np.asarray(wavefunctions)
+    if wavefunctions.ndim == 3:
+        wavefunctions = wavefunctions[None]
     wg, _ = calc.occupations(jnp.asarray(eigenvalues))
-    wg = np.asarray(wg)[0]
-    if fixed:
-        nocc = int(round(calc.nelec / 2))
-        gaps = eigenvalues[0, :, nocc] - eigenvalues[0, :, nocc - 1]
-        if np.min(gaps) < 1e-5:
+    wg = np.asarray(wg)
+    channels, nb = eigenvalues.shape[0], eigenvalues.shape[-1]
+    keeps = []
+    for c in range(channels):
+        carrying = np.flatnonzero(np.any(wg[c] > 1e-10, axis=0))
+        keep = int(carrying[-1]) + 1 if len(carrying) else 0
+        if keep >= nb:
             raise ValueError(
-                "occupations = 'fixed' cuts a degenerate multiplet at some k-point "
-                f"(gap {float(np.min(gaps)):.2e} Ry between bands {nocc} and "
-                f"{nocc + 1}): the weights then differ inside a multiplet and the "
-                "current depends on the rotation the eigensolver returned. Use a "
-                "smearing, or a k-set on which the occupied manifold is gapped")
-        keep = nocc
-    else:
-        carrying = np.any(wg > 1e-10, axis=0)
-        keep = int(np.flatnonzero(carrying)[-1]) + 1
-        if keep >= eigenvalues.shape[-1]:
-            raise ValueError(
-                f"every one of the {eigenvalues.shape[-1]} bands carries weight; "
-                "pass a larger nbnd so the propagated set ends where the "
-                "occupations do")
-    states = np.asarray(wavefunctions)[0, :, :keep]
+                f"every one of the {nb} bands of channel {c} carries weight; pass a "
+                "larger nbnd so the propagated set ends where the occupations do")
+        if fixed and keep > 0:
+            gaps = eigenvalues[c, :, keep] - eigenvalues[c, :, keep - 1]
+            if np.min(gaps) < 1e-5:
+                raise ValueError(
+                    "occupations = 'fixed' cuts a degenerate multiplet at some k-point "
+                    f"(gap {float(np.min(gaps)):.2e} Ry between bands {keep} and "
+                    f"{keep + 1}" + (f" of channel {c}" if channels > 1 else "") + "): "
+                    "the weights then differ inside a multiplet and the current depends "
+                    "on the rotation the eigensolver returned. Use a smearing, or a "
+                    "k-set on which the occupied manifold is gapped")
+        keeps.append(keep)
+    keep = max(keeps)
+    weights = np.zeros((channels,) + wg.shape[1:2] + (keep,))
+    for c in range(channels):
+        weights[c, :, :keeps[c]] = wg[c, :, :keeps[c]]
+    states = wavefunctions[:, :, :keep]
     v_scf = calc.potential(jnp.asarray(density)).v_scf
-    return (calc, states, wg[:, :keep], v_scf, np.asarray(wavefunctions)[0],
-            eigenvalues[0])
+    _, ddd_paw = calc.onecenter(becsum)
+    return calc, states, weights, v_scf, wavefunctions, eigenvalues, ddd_paw
 
 
 def run_realtime(system, pseudos, density, pulse: Pulse, *, dt: float = 0.1,
@@ -237,7 +272,7 @@ def run_realtime(system, pseudos, density, pulse: Pulse, *, dt: float = 0.1,
                  k_batch="default", block_steps: int = 400,
                  propagator: str = "taylor4", checkpoint=None,
                  potential: str = "frozen", corrector: int = 1,
-                 calculation=None) -> RealTimeResult:
+                 calculation=None, becsum=()) -> RealTimeResult:
     """The current ``J(t)`` of a crystal driven by ``pulse``.
 
     Args:
@@ -264,14 +299,14 @@ def run_realtime(system, pseudos, density, pulse: Pulse, *, dt: float = 0.1,
             potential after its extrapolation; 0 is the extrapolation alone.
     """
     kset, rotations, group = _kset(system, pulse, kpoints, grid, little_group)
-    calc, states, weights, v_scf = _occupied_states(
+    calc, states, weights, v_scf, ddd_paw = _occupied_states(
         system, pseudos, density, kset, nbnd=nbnd, conv_thr=conv_thr,
-        k_batch=k_batch, calculation=calculation)
+        k_batch=k_batch, calculation=calculation, becsum=becsum)
     return propagate(calc, states, weights, v_scf, pulse, dt=dt, duration=duration,
                      start=start, propagator=propagator, k_batch=k_batch,
                      block_steps=block_steps, checkpoint=checkpoint,
                      symmetrise=rotations, potential=potential, corrector=corrector,
-                     density_symmetry=group)
+                     density_symmetry=group, ddd_paw=ddd_paw)
 
 
 def run_realtime_dielectric(system, pseudos, density, *, direction=(1.0, 0.0, 0.0),
@@ -283,7 +318,7 @@ def run_realtime_dielectric(system, pseudos, density, *, direction=(1.0, 0.0, 0.
                             conv_thr: float = 1.0e-10, k_batch="default",
                             block_steps: int = 1000, subtract_static: bool = False,
                             potential: str = "frozen", corrector: int = 1,
-                            calculation=None) -> KickResponse:
+                            calculation=None, becsum=()) -> KickResponse:
     """``sigma(w + i eta)`` and ``eps`` from a kick, Elk's task 481.
 
     ``broadening`` and ``frequencies`` (or ``window`` and ``nw``) are in eV.
@@ -308,11 +343,13 @@ def run_realtime_dielectric(system, pseudos, density, *, direction=(1.0, 0.0, 0.
     kick = Kick(strength=1.0 if strength is None else float(strength),
                 direction=tuple(unit))
     kset, rotations, group = _kset(system, kick, kpoints, grid, little_group)
-    calc, states, weights, v_scf = _occupied_states(
+    calc, states, weights, v_scf, ddd_paw = _occupied_states(
         system, pseudos, density, kset, nbnd=nbnd, conv_thr=conv_thr,
-        k_batch=k_batch, calculation=calculation)
+        k_batch=k_batch, calculation=calculation, becsum=becsum)
     update = dict(potential=potential, corrector=corrector, symmetrise=rotations,
                   density_symmetry=group)
+    if potential == "frozen":
+        update["ddd_paw"] = ddd_paw
     if strength is None:
         orders = propagate_orders(calc, states, weights, v_scf, kick, dt=dt, order=1,
                                   start=0.0, duration=duration, k_batch=k_batch,
@@ -332,7 +369,7 @@ def run_hhg(system, pseudos, density, pulse: Pulse, *, dt: float = 0.1,
             samples: int = 4000, kpoints=None, grid=None, little_group: bool = True,
             nbnd: int | None = None, conv_thr: float = 1.0e-10, k_batch="default",
             block_steps: int = 400, checkpoint=None, potential: str = "frozen",
-            corrector: int = 1, calculation=None) -> HarmonicSpectrum:
+            corrector: int = 1, calculation=None, becsum=()) -> HarmonicSpectrum:
     """The high-harmonic spectrum ``|w J(w)|^2`` of a crystal driven by ``pulse``.
 
     The propagation of :func:`run_realtime`, then
@@ -351,7 +388,7 @@ def run_hhg(system, pseudos, density, pulse: Pulse, *, dt: float = 0.1,
                           nbnd=nbnd, conv_thr=conv_thr, k_batch=k_batch,
                           block_steps=block_steps, checkpoint=checkpoint,
                           potential=potential, corrector=corrector,
-                          calculation=calculation)
+                          calculation=calculation, becsum=becsum)
     spectrum = harmonic_spectrum(result.times, result.current, float(omega),
                                  window=window, highest=highest, samples=samples)
     spectrum.realtime = result
@@ -365,7 +402,7 @@ def run_harmonic_orders(system, pseudos, density, *, frequency: float,
                         little_group: bool = True, nbnd: int | None = None,
                         conv_thr: float = 1.0e-10, k_batch="default",
                         block_steps: int = 400, potential: str = "frozen",
-                        corrector: int = 1, calculation=None) -> OrdersResult:
+                        corrector: int = 1, calculation=None, becsum=()) -> OrdersResult:
     """``J^(n)(t)`` under the adiabatic field ``lam exp(eta t) cos(w t) e``, ``n <= order``.
 
     ``frequency`` and ``broadening`` in eV. The run starts ``eta_t/eta``
@@ -388,20 +425,22 @@ def run_harmonic_orders(system, pseudos, density, *, frequency: float,
     shape = Adiabatic(amplitude=1.0, omega=omega, eta=eta, eta_t=length * eta,
                       polarization=tuple(unit))
     kset, rotations, group = _kset(system, shape, kpoints, grid, little_group)
-    calc, states, weights, v_scf = _occupied_states(
+    calc, states, weights, v_scf, ddd_paw = _occupied_states(
         system, pseudos, density, kset, nbnd=nbnd, conv_thr=conv_thr,
-        k_batch=k_batch, calculation=calculation)
+        k_batch=k_batch, calculation=calculation, becsum=becsum)
     if steps_per_period is None:
         from defumat.realtime.propagate import largest_stable_step
 
-        largest = largest_stable_step(calc, states, weights, v_scf, k_batch=k_batch)
+        largest = largest_stable_step(calc, states, weights, v_scf, k_batch=k_batch,
+                                      ddd_paw=ddd_paw)
         steps_per_period = max(200, int(math.ceil(period / (0.9 * largest))))
+    extra = {"ddd_paw": ddd_paw} if potential == "frozen" else {}
     result = propagate_orders(calc, states, weights, v_scf, shape,
                               dt=period / int(steps_per_period), order=order,
                               start=-length, duration=length, k_batch=k_batch,
                               block_steps=block_steps, potential=potential,
                               corrector=corrector, symmetrise=rotations,
-                              density_symmetry=group)
+                              density_symmetry=group, **extra)
     return result
 
 
@@ -485,7 +524,7 @@ def run_third_harmonic(system, pseudos, density, *, frequency: float,
                        nbnd: int | None = None, conv_thr: float = 1.0e-10,
                        k_batch="default", block_steps: int = 400,
                        potential: str = "frozen", corrector: int = 1,
-                       calculation=None) -> ThirdHarmonic:
+                       calculation=None, becsum=()) -> ThirdHarmonic:
     """``chi^(3)`` of a cubic crystal at ``frequency`` (eV) by the real-time route.
 
     A field along ``[100]`` gives ``chi_xxxx``; one along ``[110]`` gives
@@ -498,7 +537,7 @@ def run_third_harmonic(system, pseudos, density, *, frequency: float,
                    steps_per_period=steps_per_period, kpoints=kpoints, grid=grid,
                    little_group=little_group, nbnd=nbnd, conv_thr=conv_thr,
                    k_batch=k_batch, block_steps=block_steps, potential=potential,
-                   corrector=corrector, calculation=calculation)
+                   corrector=corrector, calculation=calculation, becsum=becsum)
     along = run_harmonic_orders(system, pseudos, density, direction=(1.0, 0.0, 0.0),
                                 **options)
     third, first = chi3_from_orders(along, axis=0)
@@ -605,7 +644,8 @@ def run_nonlinear_spectrum(system, pseudos, density, *, frequencies, broadening:
                            grid=None, little_group: bool = True, nbnd: int | None = None,
                            conv_thr: float = 1.0e-10, k_batch="default",
                            tolerance: float = 1.0e-10, max_iterations: int = 500,
-                           potential: str = "frozen", calculation=None) -> NonlinearSpectrum:
+                           potential: str = "frozen", calculation=None,
+                           becsum=()) -> NonlinearSpectrum:
     """The orders of the current, ``chi^(2)`` and ``chi^(3)`` over ``frequencies`` (eV).
 
     The frequency-domain hierarchy at the ground state's frozen potential, the
@@ -636,12 +676,12 @@ def run_nonlinear_spectrum(system, pseudos, density, *, frequencies, broadening:
     kset, rotations, group = _kset(system, kick, kpoints, grid, little_group)
     if nbnd is None:
         nelec_guess = sum(pseudos[t].z_valence for t in system.structure.types)
-        nbnd = 3 * int(math.ceil(nelec_guess / 2)) + 4
-    calc, states, weights, v_scf, bands, energies = _solved_states(
+        nbnd = 3 * _occupied_count(system, nelec_guess) + 4
+    calc, states, weights, v_scf, bands, energies, ddd_paw = _solved_states(
         system, pseudos, density, kset, nbnd=nbnd, conv_thr=conv_thr, k_batch=k_batch,
-        calculation=calculation)
-    computed = bands.shape[1] - 4
-    if computed <= weights.shape[1]:
+        calculation=calculation, becsum=becsum)
+    computed = bands.shape[-2] - 4
+    if computed <= weights.shape[-1]:
         raise ValueError(
             f"nbnd = {bands.shape[1]} leaves no conduction band below the top four for the "
             "hierarchy's projector; pass a larger nbnd")
@@ -649,13 +689,14 @@ def run_nonlinear_spectrum(system, pseudos, density, *, frequencies, broadening:
                   direction=unit, tolerance=tolerance, max_iterations=max_iterations,
                   symmetrise=rotations, k_batch=k_batch)
     if potential == "frozen":
-        out = hierarchy_orders(calc, bands[:, :computed], energies[:, :computed], weights,
-                               v_scf, order=order, **common)
+        out = hierarchy_orders(calc, bands[:, :, :computed], energies[:, :, :computed],
+                               weights, v_scf, order=order, ddd_paw=ddd_paw, **common)
         return NonlinearSpectrum(frequencies=frequencies, broadening=float(broadening),
                                  direction=unit, components=out["components"],
                                  iterations=out["iterations"], residual=out["residual"],
                                  computed_bands=computed, volume=out["volume"])
-    out = hierarchy_linear_self_consistent(calc, bands[:, :computed], energies[:, :computed],
+    out = hierarchy_linear_self_consistent(calc, bands[:, :, :computed],
+                                           energies[:, :, :computed],
                                            weights, v_scf, potential=potential,
                                            density_symmetry=group, **common)
     return NonlinearSpectrum(frequencies=frequencies, broadening=float(broadening),

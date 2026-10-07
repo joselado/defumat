@@ -106,6 +106,13 @@ def require_a_potential_mode(calculation, potential: str, symmetrise, density_sy
         raise ValueError(f"potential must be one of {POTENTIALS}, not {potential!r}")
     if potential == "frozen":
         return
+    if getattr(calculation, "augmentation", None) is not None:
+        raise NotImplementedError(
+            "the potential updated in time is not implemented for an ultrasoft or "
+            "PAW dataset: rho(t) needs the augmentation charge from becsum at "
+            "k + kappa(t), D(t) has to be rebuilt by newd from v(t) at every step, "
+            "and PAW's one-centre D(t) from the one-centre densities. "
+            "potential = 'frozen' runs")
     if potential == "hxc" and calculation.functional.is_meta:
         raise NotImplementedError(
             "the exchange-correlation potential updated in time is not implemented "
@@ -171,6 +178,24 @@ class _KPart(eqx.Module):
                                            potential_wave=terms.waves[0])
         return _Chunk(k0=self.k0, gcart=self.gcart, mask=self.mask, core=self.core,
                       template=template, table=table, positions=positions, nk=self.nk)
+
+
+def _one_channel(states, weights):
+    """The states of a one-channel run as ``(nk, nbnd, ndim)``, from either layout."""
+    states, weights = np.asarray(states), np.asarray(weights, dtype=float)
+    if states.ndim == 4:
+        if states.shape[0] != 1:
+            raise NotImplementedError(
+                "the potential updated in time is not implemented for a collinear "
+                "nspin = 2 run yet")
+        states, weights = states[0], weights[0]
+    return states, weights
+
+
+def _plain_norms(states):
+    """``<u|u>`` of host states ``(nk, nbnd, ndim)``: the potential is updated for norm-conserving runs only."""
+    states = np.asarray(states)
+    return np.real(np.einsum("kng,kng->kn", np.conj(states), states))
 
 
 def _stack(trees):
@@ -344,8 +369,7 @@ def propagate_self_consistent(calculation, states, weights, v_scf, pulse, *, dt:
         time_grid)
 
     require_a_potential_mode(calculation, potential, symmetrise, density_symmetry)
-    states = np.asarray(states)
-    weights = np.asarray(weights, dtype=float)
+    states, weights = _one_channel(states, weights)
     times, kappa_t, kappa_mid, efield = time_grid(pulse, dt, duration, start)
     nsteps = len(times) - 1
     kappa_max = float(np.max(np.linalg.norm(np.concatenate([kappa_t, kappa_mid]), axis=-1)))
@@ -383,7 +407,7 @@ def propagate_self_consistent(calculation, states, weights, v_scf, pulse, *, dt:
         energy[b + 1] = float(measure(*fixed, carry[0],
                                       jnp.asarray(kappa_t[stop], dtype=real)))
         final = run.flat(carry[0])
-        norms = _check_growth(final, run.nk, f"after step {stop}")
+        norms = _check_growth(_plain_norms(final), run.nk, f"after step {stop}")
 
     overlap = np.einsum("kmg,kng->kmn", np.conj(states), final)
     kept = np.sum(np.abs(overlap) ** 2, axis=1)
@@ -424,8 +448,7 @@ def propagate_orders_self_consistent(calculation, states, weights, v_scf, shape,
         _check_growth, _padded_grid, _prepare, _warn_damping, time_grid)
 
     require_a_potential_mode(calculation, potential, symmetrise, density_symmetry)
-    states = np.asarray(states)
-    weights = np.asarray(weights, dtype=float)
+    states, weights = _one_channel(states, weights)
     times, a_t, a_mid, _ = time_grid(shape, dt, duration, start)
     nsteps = len(times) - 1
     setup = _prepare(calculation, states, weights, v_scf, 0.0, dt, propagator,
@@ -471,7 +494,7 @@ def propagate_orders_self_consistent(calculation, states, weights, v_scf, shape,
         for k in range(depth + 1):
             raw[k, b * block_steps + 1:stop + 1] = np.asarray(
                 _derivative(out, k, depth))[:stop - b * block_steps]
-        norms = _check_growth(run.flat(_derivative(tower, 0, depth)[0]), run.nk,
+        norms = _check_growth(_plain_norms(run.flat(_derivative(tower, 0, depth)[0])), run.nk,
                               f"after step {stop}")
 
     factorials = np.asarray([math.factorial(k) for k in range(depth + 1)], dtype=float)

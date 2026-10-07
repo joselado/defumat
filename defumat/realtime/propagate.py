@@ -78,7 +78,9 @@ import numpy as np
 
 from defumat.batching import k_chunks, map_k
 from defumat.eager import compiled_function
+from defumat.hamiltonian.noncollinear import SpinorHamiltonian
 from defumat.realtime.propagators import get_propagator
+from defumat.realtime.pulse import Kick, Sum
 from defumat.realtime.radial import radial_table
 from defumat.units import AU_SEC
 
@@ -165,16 +167,14 @@ class RealTimeResult:
 
 
 def require_a_realtime_regime(calculation) -> None:
-    """Refuse, by name, every regime whose missing term is known (``HARMONICS-NEXT.md``)."""
-    if calculation.augmentation is not None or calculation.is_paw:
-        raise NotImplementedError(
-            "real-time propagation with an ultrasoft or PAW dataset is not "
-            "implemented: with the projectors at k + kappa(t) the overlap S moves "
-            "with time, and the equation of motion gains a term, "
-            "i S dpsi/dt = (H + P) psi with P built from the augmentation dipole "
-            "and the projectors' kappa derivative, which is derived and not "
-            "sourced (HARMONICS-NEXT.md, 'What is refused'). Use a "
-            "norm-conserving dataset")
+    """Refuse, by name, every regime whose missing term is known (``HARMONICS-NEXT.md``).
+
+    Collinear spin, spinors (spin-orbit coupling and noncollinear magnetism)
+    and ultrasoft and PAW datasets run (``PLAN.md`` P139 to P141): the first is
+    two independent channels at a frozen potential, the second one Hamiltonian
+    on ``2 npwx`` whose coupling to the field is the scalar one, and the third
+    the generalised equation of motion of :meth:`_Chunk.generator`.
+    """
     if calculation.spiral:
         raise NotImplementedError(
             "real-time propagation of a spin spiral is not implemented: the two "
@@ -185,13 +185,6 @@ def require_a_realtime_regime(calculation) -> None:
             "H(k + kappa) is not real at kappa != 0, so half of each (G, -G) "
             "pair does not describe the state; run the cell with an explicit "
             "k = 0 (K_POINTS automatic 1 1 1 0 0 0)")
-    if calculation.nspin != 1:
-        raise NotImplementedError(
-            "real-time propagation is implemented for nspin = 1 only: a collinear "
-            "or a spinor run is two channels or one spinor Hamiltonian with no "
-            "new physics, and neither has a linear-response reference here to be "
-            "checked against (optical_conductivity and chi_0 both refuse "
-            "collinear spin), so both are refused for lack of a number")
     if calculation.is_hubbard:
         raise NotImplementedError(
             "real-time propagation with DFT+U is not implemented: at a frozen "
@@ -225,6 +218,11 @@ def time_grid(pulse, dt: float, duration: float | None, start: float | None = No
     return times, pulse.kappa(times), pulse.kappa(midpoints), pulse.efield(times)
 
 
+def _times_i(x):
+    """``i x`` by exchanging the parts, so the dtype is the array's own (``config.py``)."""
+    return jax.lax.complex(-x.imag, x.real)
+
+
 class _Chunk(eqx.Module):
     """``H(k + kappa)`` for a few k-points, with the projectors from the table.
 
@@ -236,6 +234,21 @@ class _Chunk(eqx.Module):
     with nothing to say so). As a pytree argument every chunk of one shape
     shares one program and one trace. ``at_kcart`` would do the same arithmetic
     with the radial transform and a copy of the whole calculation per step.
+
+    **One Hamiltonian problem, whatever the spin regime.** ``channel`` picks the
+    collinear channel of an ``nspin = 2`` run (each is its own band structure
+    at a frozen potential); a spinor run has one channel, and its template is
+    the :class:`~defumat.hamiltonian.noncollinear.SpinorHamiltonian`, whose
+    states are ``2 npwx`` long with both components on the same sphere and the
+    same projectors, coupled by the 2x2 ``D`` and, for an augmented dataset,
+    the 2x2 ``qq_so``. Every operator below works on components
+    ``(..., npol, npwx)`` with ``D`` and ``qq`` as ``(npol, npol, nkb, nkb)``,
+    so the collinear case is the spinor one at ``npol = 1``.
+
+    **An augmented dataset** (ultrasoft or PAW) adds an overlap that moves with
+    ``kappa`` and the position operator's augmentation tail ``X``
+    (:meth:`position`), whose dipole is :attr:`dipole`; ``None`` for a
+    norm-conserving one, where neither exists.
     """
 
     k0: jnp.ndarray
@@ -246,9 +259,13 @@ class _Chunk(eqx.Module):
     table: object
     positions: jnp.ndarray
     nk: int = eqx.field(static=True)
+    channel: int = eqx.field(static=True, default=0)
+    #: ``dpqq`` as ``(3, nkb, nkb)``, or ``dpqq_so`` as ``(3, 2, 2, nkb, nkb)``
+    #: for a spinor (:func:`~defumat.response.efield._augmentation_dipole`).
+    dipole: jnp.ndarray | None = None
 
     @classmethod
-    def build(cls, calculation, rows, terms, table, kcart):
+    def build(cls, calculation, rows, terms, table, kcart, channel: int = 0, dipole=None):
         row = calculation.at_rows(rows)
         cell = calculation.system.cell
         indices = row.basis.planewaves.indices
@@ -260,11 +277,69 @@ class _Chunk(eqx.Module):
             # ``npw`` is the eigensolver's cap and nothing else reads it; it is
             # static and is each chunk's own smallest sphere, so leaving it would
             # give every chunk its own tree and send each block through a retrace
-            template=dataclasses.replace(row.hamiltonian_from(terms)[0], npw=None),
+            template=dataclasses.replace(row.hamiltonian_from(terms)[channel], npw=None),
             table=table,
             positions=jnp.asarray(calculation.system.structure.positions),
             nk=len(rows),
+            channel=int(channel),
+            dipole=dipole,
         )
+
+    # -- the shape of a state ---------------------------------------------
+
+    @property
+    def spinor(self) -> bool:
+        """Whether the states are two-component spinors, ``2 npwx`` long."""
+        return isinstance(self.template, SpinorHamiltonian)
+
+    @property
+    def npol(self) -> int:
+        return 2 if self.spinor else 1
+
+    @property
+    def augmented(self) -> bool:
+        """Whether there is an overlap ``S`` other than the identity."""
+        return self.template.has_overlap
+
+    def _components(self, x):
+        """``(nk, n, npol * npwx)`` as ``(nk, n, npol, npwx)``, the padding zeroed."""
+        npwx = self.mask.shape[-1]
+        components = x.reshape(x.shape[:-1] + (self.npol, npwx))
+        return jnp.where(self.mask[:, None, None, :], components, 0.0)
+
+    @staticmethod
+    def _join(components):
+        return components.reshape(components.shape[:-2] + (-1,))
+
+    def _d(self):
+        """``D`` as ``(npol, npol, nkb, nkb)``: ``deeq_nc`` for a spinor."""
+        if self.spinor:
+            return self.template.deeq
+        return self.template.coefficients[None, None]
+
+    def _q(self):
+        """``qq`` as ``(npol, npol, nkb, nkb)``: ``qq_so`` for a spinor; ``None`` without one."""
+        if self.spinor:
+            return self.template.qq
+        qq = self.template.projectors.qq
+        return None if qq is None else qq[None, None]
+
+    @staticmethod
+    def _project(vkb, components):
+        """``<beta_i|x^a>``, ``(nk, n, npol, nkb)``."""
+        return jnp.einsum("kgi,knag->knai", jnp.conj(vkb), components)
+
+    @staticmethod
+    def _expand(vkb, coefficients):
+        """``sum_i |beta_i> c^a_i``, ``(nk, n, npol, npwx)``."""
+        return jnp.einsum("kgi,knai->knag", vkb, coefficients)
+
+    @staticmethod
+    def _contract(matrix, becp):
+        """``sum_bj M^{ab}_ij becp^b_j`` for ``M`` of shape ``(npol, npol, nkb, nkb)``."""
+        return jnp.einsum("abij,knbj->knai", matrix.astype(becp.dtype), becp)
+
+    # -- the operators at k + kappa ----------------------------------------
 
     def moved(self, kappa):
         """``(|k+G+kappa|^2, projectors at k+G+kappa)`` for every k-point of the chunk."""
@@ -272,22 +347,122 @@ class _Chunk(eqx.Module):
         kinetic = jnp.where(self.mask, jnp.sum(kg * kg, axis=-1), 0.0)
         columns = self.table.columns(kg).astype(self.core.columns.dtype)
         core = eqx.tree_at(lambda c: (c.columns, c.kg), self.core, (columns, kg))
-        return kinetic.astype(self.template.kinetic.dtype), core.at_positions(self.positions)
+        # ``qq`` rides on the projector set, and the collinear operator's ``S``
+        # reads it from there: rebuilt without it, an ultrasoft chunk would
+        # propagate with the identity for an overlap and say nothing.
+        qq = self.template.projectors.qq
+        return kinetic.astype(self.template.kinetic.dtype), core.at_positions(self.positions, qq=qq)
+
+    def projector_derivative(self, kappa, direction):
+        """``d vkb/dk`` along ``direction`` about each projector's own atom, ``(nk, npwx, nkb)``.
+
+        The derivative of the table's columns, with the structure factor of
+        the atom left where it is, which is what
+        :meth:`~defumat.response.velocity.VelocityOperator.projectors` returns
+        from the radial transform.
+        """
+        kg = self.gcart + (self.k0 + kappa)[:, None, :]
+        tangent = jnp.broadcast_to(jnp.asarray(direction, dtype=kg.dtype), kg.shape)
+        columns = jax.jvp(self.table.columns, (kg,), (tangent,))[1]
+        core = eqx.tree_at(lambda c: (c.columns, c.kg), self.core,
+                           (columns.astype(self.core.columns.dtype), kg))
+        return core.at_positions(self.positions).vkb
 
     def hamiltonian(self, kappa):
         kinetic, projectors = self.moved(kappa)
         return dataclasses.replace(self.template, kinetic=kinetic, projectors=projectors)
 
-    def kappa_energy(self, kappa, psi, weights):
-        """The kinetic and nonlocal band energy at ``k + kappa``, Ry; ``psi`` is ``(nk, nbnd, npwx)``."""
+    def kinetic_nonlocal(self, kappa, x):
+        """``(T + V_NL)(k + kappa) x`` for ``x`` of shape ``(nk, n, ndim)``, no transform."""
         kinetic, projectors = self.moved(kappa)
-        density = jnp.real(jnp.conj(psi) * psi)
-        kin = jnp.einsum("kg,kng,kn->", kinetic, density, weights)
-        becp = jnp.einsum("kgi,kng->kni", jnp.conj(projectors.vkb), psi)
-        coefficients = self.template.coefficients
-        nonlocal_ = jnp.real(jnp.einsum("kni,ij,knj,kn->", jnp.conj(becp),
-                                        coefficients.astype(becp.dtype), becp, weights))
+        vkb = projectors.vkb
+        components = self._components(x)
+        becp = self._project(vkb, components)
+        out = (kinetic[:, None, None, :].astype(components.dtype) * components
+               + self._expand(vkb, self._contract(self._d(), becp)))
+        return self._join(jnp.where(self.mask[:, None, None, :], out, 0.0))
+
+    def band_form(self, kappa, c1, c2, weights):
+        """``sum_kn w <c1|T + V_NL|c2>`` at ``k + kappa``, complex, Ry; no transform."""
+        kinetic, projectors = self.moved(kappa)
+        vkb = projectors.vkb
+        a, b = self._components(c1), self._components(c2)
+        w = weights.astype(a.dtype)
+        kin = jnp.einsum("kn,knag,kg,knag->", w, jnp.conj(a), kinetic.astype(a.dtype), b)
+        nonlocal_ = jnp.einsum("kn,knai,knai->", w, jnp.conj(self._project(vkb, a)),
+                               self._contract(self._d(), self._project(vkb, b)))
         return kin + nonlocal_
+
+    def kappa_energy(self, kappa, psi, weights):
+        """The kinetic and nonlocal band energy at ``k + kappa``, Ry; ``psi`` is ``(nk, nbnd, ndim)``."""
+        return jnp.real(self.band_form(kappa, psi, psi, weights))
+
+    def overlap(self, kappa, x, projectors=None):
+        """``S(k + kappa) x``; ``x`` itself for a norm-conserving dataset."""
+        if not self.augmented:
+            return x
+        if projectors is None:
+            _, projectors = self.moved(kappa)
+        vkb = projectors.vkb
+        components = self._components(x)
+        out = components + self._expand(vkb, self._contract(self._q(), self._project(vkb, components)))
+        return self._join(jnp.where(self.mask[:, None, None, :], out, 0.0))
+
+    def inverse_overlap(self, kappa, x, projectors=None):
+        """``S(k + kappa)^-1 x`` by Woodbury, ``sm1_psi.f90``: an ``npol nkb`` solve per k-point.
+
+        ``S = 1 + B Q B^dag`` gives ``S^-1 = 1 - B Q (1 + B^dag B Q)^-1 B^dag``,
+        with ``B`` the projectors on each spinor component and ``Q`` the
+        ``qq`` (``qq_so``) matrix of the channels.
+        """
+        if not self.augmented:
+            return x
+        if projectors is None:
+            _, projectors = self.moved(kappa)
+        vkb = projectors.vkb
+        components = self._components(x)
+        becp = self._project(vkb, components)  # (nk, n, npol, nkb)
+        nk, n, npol, nkb = becp.shape
+        q = self._q().astype(becp.dtype)
+        # (npol nkb)^2 per k-point, the spin index outside the channel one
+        q_flat = jnp.transpose(q, (0, 2, 1, 3)).reshape(npol * nkb, npol * nkb)
+        gram = jnp.einsum("kgi,kgj->kij", jnp.conj(vkb), vkb)
+        gram_flat = jnp.einsum("ab,kij->kaibj", jnp.eye(npol, dtype=gram.dtype),
+                               gram).reshape(nk, npol * nkb, npol * nkb)
+        matrix = jnp.eye(npol * nkb, dtype=becp.dtype)[None] + gram_flat @ q_flat[None]
+        solved = jnp.linalg.solve(matrix, jnp.swapaxes(becp.reshape(nk, n, npol * nkb), 1, 2))
+        coefficients = jnp.swapaxes(q_flat[None] @ solved, 1, 2).reshape(nk, n, npol, nkb)
+        out = components - self._expand(vkb, coefficients)
+        return self._join(jnp.where(self.mask[:, None, None, :], out, 0.0))
+
+    def position(self, kappa, x, direction, projectors=None):
+        """``e.X(k + kappa) x``, the augmentation's share of the position operator.
+
+        ``X = r~ - S r = sum_ij |b_i> [dpqq_ij <b_j| + i q_ij <db_j/dk|]``, the
+        position operator of the augmented density less ``S`` times the bare
+        one, with ``<b_j|(r - R)`` written as ``-i`` times the projector's
+        derivative about its own atom. It is ``i`` times the connection
+        :meth:`~defumat.response.velocity.VelocityOperator.augmentation_connection`
+        and the term ``adddvepsi_us.f90`` adds; ``X - X^dag = i dS/dk``. Zero
+        for a norm-conserving dataset.
+        """
+        if not self.augmented:
+            return jnp.zeros_like(x)
+        if projectors is None:
+            _, projectors = self.moved(kappa)
+        vkb = projectors.vkb
+        direction = jnp.asarray(direction)
+        derivative = self.projector_derivative(kappa, direction)
+        components = self._components(x)
+        becp = self._project(vkb, components)
+        moving = self._project(derivative, components)
+        along = jnp.einsum("a,a...->...", direction.astype(self.dipole.dtype), self.dipole)
+        if not self.spinor:
+            along = along[None, None]
+        coefficients = (self._contract(along, becp)
+                        + _times_i(self._contract(self._q(), moving)))
+        out = self._expand(vkb, coefficients)
+        return self._join(jnp.where(self.mask[:, None, None, :], out, 0.0))
 
     def energy(self, kappa, psi, weights):
         """``sum w <u|H(k+kappa)|u>`` in Ry."""
@@ -295,48 +470,168 @@ class _Chunk(eqx.Module):
         hpsi = map_k(lambda ik: ham.apply(psi[ik], ik), jnp.arange(self.nk), batch=None)
         return jnp.real(jnp.einsum("kng,kng,kn->", jnp.conj(psi), hpsi, weights))
 
+    def applied(self, kappa, psi, ham=None):
+        """``H(k + kappa) psi`` for the chunk's states, ``(nk, n, ndim)``, one transform a band."""
+        if ham is None:
+            ham = self.hamiltonian(kappa)
+        return map_k(lambda ik: ham.apply(psi[ik], ik), jnp.arange(self.nk), batch=None)
+
+    def generator(self, kappa, rate):
+        """``x -> S^-1 [H - kappadot . X] x`` at ``k + kappa``, on ``(nk, n, ndim)``.
+
+        The right-hand side of ``i S dphi/dt = (H - kappadot . X) phi``, the
+        velocity gauge's equation of motion for an augmented dataset: the gauge
+        factor ``e^{i kappa.r}`` that takes every operator from ``k`` to
+        ``k + kappa`` meets the time derivative through ``S``, and leaves
+        ``-kappadot . (r~ - S r)`` where ``r~`` is the position operator of the
+        augmented density (:meth:`position`). ``rate`` is ``dkappa/dt`` in the
+        Rydberg time unit. For a norm-conserving dataset this is ``H``.
+        """
+        ham = self.hamiltonian(kappa)
+
+        def apply(x):
+            out = self.applied(kappa, x, ham)
+            if not self.augmented:
+                return out
+            out = out - self.position(kappa, x, rate, ham.projectors)
+            return self.inverse_overlap(kappa, out, ham.projectors)
+        return apply
+
+    def current(self, kappa, psi, weights):
+        """``sum w <phi|J_a|phi>`` up to ``-1/Omega``, ``(3,)`` in Ry bohr.
+
+        ``<dH/dk_a>`` at frozen states, which is ``jax.grad`` of the kinetic
+        and nonlocal band energy, and, for an augmented dataset,
+        ``- 2 Im <phi| H S^-1 X_a |phi>``: the velocity of the states
+        ``T|phi>`` the augmented density is made of, whose matrix element
+        between two eigenstates is
+        :meth:`~defumat.response.velocity.VelocityOperator.generalised_matrix_elements`'s
+        ``<n|dH - e_m dS|m> + (e_m - e_n) K_nm``. The energy the field does work
+        against obeys ``dE/dt = kappadot . current`` along the motion of
+        :meth:`generator`, which is the same statement.
+        """
+        slope = jax.grad(self.kappa_energy)(kappa, psi, weights)
+        if not self.augmented:
+            return slope
+        ham = self.hamiltonian(kappa)
+        chi = self.inverse_overlap(kappa, self.applied(kappa, psi, ham), ham.projectors)
+        w = weights.astype(psi.dtype)
+        tails = []
+        for axis in range(3):
+            unit = jnp.zeros(3, dtype=kappa.dtype).at[axis].set(1.0)
+            moved = self.position(kappa, psi, unit, ham.projectors)
+            tails.append(-2.0 * jnp.imag(jnp.einsum("kn,kng,kng->", w, jnp.conj(chi), moved)))
+        return slope + jnp.stack(tails).astype(slope.dtype)
+
+    def jump(self, kappa_from, kappa_to, psi, steps: int = 1):
+        """The states after ``kappa`` jumps from ``kappa_from`` to ``kappa_to``.
+
+        A step in ``A`` is a delta in the field, under which the all-electron
+        state does not move, so the augmented states follow
+        ``dphi/dkappa = i S^-1 X phi`` along the jump (``T(kappa) phi`` held
+        fixed, ``T^-1 dT/dk = -i S^-1 X``); taken here by the classical
+        fourth-order Runge-Kutta rule in ``steps`` steps, which is exact to
+        fourth order in the jump, and so for every perturbative order this
+        code takes. The identity for a norm-conserving dataset, whose states
+        are the all-electron ones.
+        """
+        if not self.augmented:
+            return psi
+        delta = (kappa_to - kappa_from) / steps
+
+        def rate(kappa, x):
+            return _times_i(self.inverse_overlap(kappa, self.position(kappa, x, delta)))
+
+        for n in range(steps):
+            kappa = kappa_from + n * delta
+            k1 = rate(kappa, psi)
+            k2 = rate(kappa + 0.5 * delta, psi + 0.5 * k1)
+            k3 = rate(kappa + 0.5 * delta, psi + 0.5 * k2)
+            k4 = rate(kappa + delta, psi + k3)
+            psi = psi + (k1 + 2.0 * k2 + 2.0 * k3 + k4) / 6.0
+        return psi
+
+    def norms(self, kappa, psi):
+        """``<u|S(k + kappa)|u>`` for every state, ``(nk, n)``."""
+        return jnp.real(jnp.einsum("kng,kng->kn", jnp.conj(psi), self.overlap(kappa, psi)))
+
 
 def _energies_of(chunk, psi):
-    """``<u_n|H(k)|u_n>`` in Ry for every k-point of a chunk, ``(nk, nbnd)``."""
+    """``<u_n|H(k)|u_n>`` in Ry for every k-point of a chunk, ``(nk, nbnd)``.
+
+    The carried states are ``S``-normalised, so for an augmented dataset this is
+    their generalised eigenvalue as it is the ordinary one otherwise.
+    """
     ham = chunk.hamiltonian(jnp.zeros(3, dtype=chunk.k0.dtype))
     hpsi = map_k(lambda ik: ham.apply(psi[ik], ik), jnp.arange(chunk.nk), batch=None)
     return jnp.real(jnp.einsum("kng,kng->kn", jnp.conj(psi), hpsi))
 
 
+def _flat_blocks(matrix):
+    """``(npol, npol, nkb, nkb)`` as the ``(npol nkb)^2`` matrix, spin outside the channel."""
+    matrix = np.asarray(matrix)
+    npol, nkb = matrix.shape[0], matrix.shape[-1]
+    return matrix.transpose(0, 2, 1, 3).reshape(npol * nkb, npol * nkb)
+
+
 def _chunk_spectrum(chunk, psi, terms, kappa_max):
-    """``(energies, kinetic_max, nl_min, nl_max)`` of one chunk, on the host.
+    """``(energies, kinetic_max, nl_min, nl_max, s_min)`` of one chunk, on the host.
 
     The carried states' energies at ``kappa = 0``, the largest ``|k+G| + kappa_max``
-    squared over the chunk's spheres, and the extreme eigenvalues of
+    squared over the chunk's spheres, the extreme eigenvalues of
     ``G^(1/2) D G^(1/2)``, ``G = vkb^dagger vkb``, over its k-points at
-    ``kappa = 0``.
+    ``kappa = 0``, with ``D`` the 2x2 block matrix of a spinor run on the
+    two components' copies of ``G``, and the smallest eigenvalue of ``S``,
+    ``1 + min eig G^(1/2) qq G^(1/2)`` (one without an overlap).
     """
     norms = np.linalg.norm(np.asarray(chunk.gcart + chunk.k0[:, None, :]), axis=-1)
     norms = np.where(np.asarray(chunk.mask), norms, 0.0)
     kinetic_max = float((norms.max() + kappa_max) ** 2)
     _, projectors = chunk.moved(jnp.zeros(3, dtype=chunk.k0.dtype))
     vkb = np.asarray(projectors.vkb)
-    coefficients = np.asarray(chunk.template.coefficients)
-    nl_min, nl_max = 0.0, 0.0
+    coefficients = _flat_blocks(chunk._d())
+    q = chunk._q()
+    overlap = None if q is None else _flat_blocks(q)
+    npol = chunk.npol
+    nl_min, nl_max, s_min = 0.0, 0.0, 1.0
     for ik in range(vkb.shape[0]):
         gram = vkb[ik].conj().T @ vkb[ik]
         values, vectors = np.linalg.eigh(gram)
         root = (vectors * np.sqrt(np.clip(values, 0.0, None))) @ vectors.conj().T
+        root = np.kron(np.eye(npol), root)
         eig = np.linalg.eigvalsh(root @ coefficients @ root)
         nl_min, nl_max = min(nl_min, float(eig.min())), max(nl_max, float(eig.max()))
+        if overlap is not None:
+            s_min = min(s_min, 1.0 + float(np.linalg.eigvalsh(root @ overlap @ root).min()))
     energies = np.asarray(compiled_function(_energies_of, chunk, psi)(chunk, psi))
-    return energies, kinetic_max, nl_min, nl_max
+    return energies, kinetic_max, nl_min, nl_max, s_min
+
+
+def _potential_maximum(potential) -> float:
+    """The largest eigenvalue of the local potential anywhere on the grid.
+
+    One component for a collinear channel; for a spinor's ``(v, m_x, m_y, m_z)``
+    the 2x2 matrix ``v + m.sigma`` at each point, whose larger eigenvalue is
+    ``v + |m|``.
+    """
+    potential = np.asarray(potential)
+    if potential.ndim == 4 and potential.shape[0] == 4:
+        return float((potential[0] + np.linalg.norm(potential[1:], axis=0)).max())
+    return float(potential.max())
 
 
 def spectral_bounds(calculation, states, weights, terms, table, kcart, chunks,
-                    kappa_max: float):
+                    kappa_max: float, channel: int = 0, dipole=None):
     """``(lower, upper, centre, carried)`` in Ry, over **every** k-point of the run.
 
     ``upper`` is Weyl's inequality on the three terms of ``H(k + kappa)`` for
     ``|kappa| <= kappa_max``: the largest kinetic energy ``(|k+G| + kappa_max)^2``
     on any sphere, the largest value of the local potential on the smooth grid,
     and the largest eigenvalue of the nonlocal term ``G^(1/2) D G^(1/2)`` at
-    ``kappa = 0``, widened by ten per cent for the shift. ``lower`` is the lowest
+    ``kappa = 0``, widened by ten per cent for the shift. With an overlap the
+    spectrum is the generalised one, ``H x = e S x``, so a positive edge is
+    divided by the smallest eigenvalue of ``S`` (again ten per cent wider).
+    ``lower`` is the lowest
     carried energy less the largest drop the kinetic energy can take under the
     shift, ``2 |k+G| kappa_max + kappa_max^2``, and one Rydberg: the carried states
     are the bottom of each k-point's spectrum, which Weyl's bound on the same
@@ -350,25 +645,26 @@ def spectral_bounds(calculation, states, weights, terms, table, kcart, chunks,
     current by 3.9e-7 of its size between ``k_batch`` 1 and 8 on two-atom
     silicon (found in review).
     """
-    nk = states.shape[0]
     energies = np.zeros(states.shape[:2])
-    kinetic_max, nl_min, nl_max = 0.0, 0.0, 0.0
+    kinetic_max, nl_min, nl_max, s_min = 0.0, 0.0, 0.0, 1.0
     radius = 0.0
     for rows, live in chunks:
-        chunk = _Chunk.build(calculation, rows, terms, table, kcart)
-        values, kin, low, high = _chunk_spectrum(
+        chunk = _Chunk.build(calculation, rows, terms, table, kcart, channel, dipole)
+        values, kin, low, high, smallest = _chunk_spectrum(
             chunk, jnp.asarray(states[rows]), terms, kappa_max)
         energies[rows[:live]] = values[:live]
         kinetic_max = max(kinetic_max, kin)
         radius = max(radius, math.sqrt(kin) - kappa_max)
         nl_min, nl_max = min(nl_min, low), max(nl_max, high)
-    potential = np.asarray(terms.potentials[0])
-    upper = kinetic_max + float(potential.max()) + 1.1 * nl_max
+        s_min = min(s_min, smallest)
+    potential = terms.potentials[0 if len(terms.potentials) == 1 else channel]
+    upper = kinetic_max + _potential_maximum(potential) + 1.1 * nl_max
+    if s_min < 1.0 and upper > 0.0:
+        upper = upper / (0.9 * s_min)
     drop = 2.0 * radius * kappa_max + kappa_max**2
     lower = float(energies.min()) - drop - 1.0
     total = max(float(np.sum(weights)), 1e-300)
     centre = float(np.sum(weights * energies)) / total
-    del nk
     return lower, upper, centre, (float(energies.min()), float(energies.max()))
 
 
@@ -378,19 +674,24 @@ def _reach(lower, upper, centre):
 
 
 def largest_stable_step(calculation, states, weights, v_scf, kappa_max: float = 0.0,
-                        propagator: str = "taylor4", k_batch="default", kcart=None) -> float:
+                        propagator: str = "taylor4", k_batch="default", kcart=None,
+                        ddd_paw=None) -> float:
     """The largest ``dt`` in Hartree atomic units the propagator is stable for here.
 
     ``2 bound / reach`` with ``reach`` the distance from the centre of the step
     (the carried energies) to the farther edge of the spectrum
     (:func:`spectral_bounds`), which is what :func:`propagate` refuses a step
-    against. A caller that has a period to divide
+    against; the smallest over the channels of an ``nspin = 2`` run. A caller
+    that has a period to divide
     (:func:`~defumat.workflows.realtime.run_harmonic_orders`) reads it to choose
     its steps rather than be refused.
     """
-    setup = _prepare(calculation, np.asarray(states), np.asarray(weights, dtype=float),
-                     v_scf, kappa_max, None, propagator, k_batch, kcart)
-    return 2.0 * setup.bound / _reach(setup.lower, setup.upper, setup.centre)
+    steps = []
+    for channel, (own, carried) in enumerate(channel_arrays(calculation, states, weights)):
+        setup = _prepare(calculation, own, carried, v_scf, kappa_max, None, propagator,
+                         k_batch, kcart, channel=channel, ddd_paw=ddd_paw)
+        steps.append(2.0 * setup.bound / _reach(setup.lower, setup.upper, setup.centre))
+    return min(steps)
 
 
 def _batch(calculation, k_batch):
@@ -448,17 +749,31 @@ class _Setup:
     effective_cutoff: float
     real: object
     kcart: np.ndarray
+    calculation: object = None
+    channel: int = 0
+    dipole: object = None
+
+    def chunk(self, index: int, rows):
+        """The ``index``-th k-chunk's :class:`_Chunk`, the first one already built."""
+        if index == 0:
+            return self.first
+        return _Chunk.build(self.calculation, rows, self.terms, self.table, self.kcart,
+                            self.channel, self.dipole)
 
 
 def _prepare(calculation, states, weights, v_scf, kappa_max, dt, propagator,
-             k_batch, kcart, bounds: bool = True) -> _Setup:
+             k_batch, kcart, bounds: bool = True, channel: int = 0,
+             ddd_paw=None) -> _Setup:
     """The table, the k-chunks, the spectrum and the centre; refuses an unstable step.
 
     ``dt = None`` skips the refusal, for :func:`largest_stable_step`;
     ``bounds = False`` skips the spectrum as well, a pass over every k-point
     that the frequency-domain hierarchy, which takes no time step, has no use
-    for.
+    for. ``channel`` is the collinear spin channel the states belong to and
+    ``ddd_paw`` PAW's one-centre ``D``, frozen with the potential.
     """
+    from defumat.response.efield import _augmentation_dipole
+
     require_a_realtime_regime(calculation)
     step_fn, bound = get_propagator(propagator)
     cell = calculation.system.cell
@@ -470,7 +785,10 @@ def _prepare(calculation, states, weights, v_scf, kappa_max, dt, propagator,
     kcart = np.asarray(kcart)
     nk = states.shape[0]
 
-    terms = calculation.local_terms(v_scf)
+    terms = calculation.local_terms(v_scf, ddd_paw)
+    dipole = _augmentation_dipole(calculation)
+    if dipole is not None:
+        dipole = dipole.astype(cell.precision.complex)
     planewaves = calculation.basis.planewaves
     gnorm = np.linalg.norm(
         np.asarray(calculation.basis.smooth.cartesian(cell))[np.asarray(planewaves.indices)]
@@ -486,10 +804,11 @@ def _prepare(calculation, states, weights, v_scf, kappa_max, dt, propagator,
     effective_cutoff = max(0.0, radius - kappa_max) ** 2
 
     chunks = list(k_chunks(nk, _batch(calculation, k_batch)))
-    first = _Chunk.build(calculation, chunks[0][0], terms, table, kcart)
+    first = _Chunk.build(calculation, chunks[0][0], terms, table, kcart, channel, dipole)
     if bounds:
         lower, upper, centre, carried = spectral_bounds(
-            calculation, states, weights, terms, table, kcart, chunks, kappa_max)
+            calculation, states, weights, terms, table, kcart, chunks, kappa_max,
+            channel, dipole)
     else:
         lower = upper = centre = float("nan")
         carried = (float("nan"), float("nan"))
@@ -521,12 +840,17 @@ def _prepare(calculation, states, weights, v_scf, kappa_max, dt, propagator,
     return _Setup(terms=terms, table=table, chunks=chunks, first=first, step_fn=step_fn,
                   bound=bound, lower=lower, upper=upper, centre=centre, carried=carried,
                   dt_ry=dt_ry, volume=volume, effective_cutoff=effective_cutoff,
-                  real=cell.precision.real, kcart=kcart)
+                  real=cell.precision.real, kcart=kcart, calculation=calculation,
+                  channel=channel, dipole=dipole)
 
 
-def _check_growth(psi, live, where: str):
-    """Refuse to go on if a norm has grown: a Taylor step past its region is unitary nowhere."""
-    norms = np.real(np.einsum("kng,kng->kn", np.conj(np.asarray(psi)), np.asarray(psi)))[:live]
+def _check_growth(norms, live, where: str):
+    """Refuse to go on if a norm has grown: a Taylor step past its region is unitary nowhere.
+
+    ``norms`` are ``<u|S|u>`` at the current ``kappa`` (:meth:`_Chunk.norms`),
+    ``<u|u>`` for a norm-conserving dataset.
+    """
+    norms = np.asarray(norms)[:live]
     if norms.max() > 1.0 + 1e-6:
         raise FloatingPointError(
             f"a state's norm grew to {norms.max():.8f} {where}: the step is unstable "
@@ -535,31 +859,35 @@ def _check_growth(psi, live, where: str):
 
 
 def _block_function(step_fn, centre):
-    """``block(chunk, w, psi, kappa_mid, kappa_end, steps) -> (psi, gradients)``, one ``lax.scan``.
+    """``block(chunk, w, psi, kappa_mid, kappa_end, rate, steps) -> (psi, currents)``, one ``lax.scan``.
 
     Each step applies the propagator at ``H(k + kappa_mid)`` and records the
-    ``kappa`` gradient of the kinetic and nonlocal band energy at ``kappa_end``
-    on the stepped states, ``(nsteps, 3)`` in Ry bohr. A step of length zero is
-    the identity, which is how a block is padded to one shape. Everything with
-    a k index arrives as an argument (``chunk``, ``w``), so one kept program
-    serves every chunk; only the propagator and the centre, the same for the
-    whole run, are closed over.
+    current at ``kappa_end`` on the stepped states (:meth:`_Chunk.current`,
+    ``(nsteps, 3)`` in Ry bohr). For an augmented dataset the step's generator
+    is :meth:`_Chunk.generator`, which needs ``rate``, ``dkappa/dt`` at the
+    midpoint in the Rydberg time unit; a norm-conserving one never reads it. A
+    step of length zero is the identity, which is how a block is padded to one
+    shape. Everything with a k index arrives as an argument (``chunk``, ``w``),
+    so one kept program serves every chunk; only the propagator and the
+    centre, the same for the whole run, are closed over.
     """
     # an array rather than a float, so that it is a constant of the kept
     # program and not a literal in it: a run from other states, or a second
     # run, then reuses the program
     centre = jnp.asarray(centre)
 
-    def block(chunk, w, psi, kmid, kend, steps):
+    def block(chunk, w, psi, kmid, kend, rate, steps):
         def body(state, x):
-            k_mid, k_end, step = x
-            ham = chunk.hamiltonian(k_mid)
-            moved = map_k(
-                lambda ik: step_fn(lambda v: ham.apply(v, ik), state[ik], step, centre),
-                jnp.arange(chunk.nk), batch=None)
-            gradient = jax.grad(chunk.kappa_energy)(k_end, moved, w)
-            return moved, gradient
-        return jax.lax.scan(body, psi, (kmid, kend, steps))
+            k_mid, k_end, k_rate, step = x
+            if chunk.augmented:
+                moved = step_fn(chunk.generator(k_mid, k_rate), state, step, centre)
+            else:
+                ham = chunk.hamiltonian(k_mid)
+                moved = map_k(
+                    lambda ik: step_fn(lambda v: ham.apply(v, ik), state[ik], step, centre),
+                    jnp.arange(chunk.nk), batch=None)
+            return moved, chunk.current(k_end, moved, w)
+        return jax.lax.scan(body, psi, (kmid, kend, rate, steps))
     return block
 
 
@@ -568,7 +896,52 @@ def _energy_of(chunk, w, psi, kappa):
 
 
 def _gradient_of(chunk, w, psi, kappa):
-    return jax.grad(chunk.kappa_energy)(kappa, psi, w)
+    return chunk.current(kappa, psi, w)
+
+
+def _norms_of(chunk, psi, kappa):
+    return chunk.norms(kappa, psi)
+
+
+def _overlapped_of(chunk, psi, kappa):
+    return chunk.overlap(kappa, psi)
+
+
+def _jumped(chunk, psi, kappa_from, kappa_to):
+    return chunk.jump(kappa_from, kappa_to, psi)
+
+
+def kappa_rate(pulse, times) -> np.ndarray:
+    """``dkappa/dt`` at the midpoints of ``times``, in 1/bohr per Rydberg time unit.
+
+    ``-E`` in Hartree units times two, the Rydberg time unit being half the
+    Hartree one; the augmented equation of motion reads it
+    (:meth:`_Chunk.generator`).
+    """
+    times = np.asarray(times, dtype=float)
+    midpoints = times[:-1] + 0.5 * np.diff(times)
+    return -2.0 * np.asarray(pulse.efield(midpoints))
+
+
+def require_a_smooth_field(calculation, pulse, start: float) -> None:
+    """Refuse a step in ``kappa`` after the start for an augmented dataset.
+
+    A step is a delta in the field that the time grid cannot hold, and the
+    augmented states have to cross it with :meth:`_Chunk.jump`; the one at the
+    start is crossed that way, a later one would be missed. A norm-conserving
+    run crosses any step unchanged, since its states are the all-electron ones.
+    """
+    if getattr(calculation, "augmentation", None) is None:
+        return
+    pulses = pulse.pulses if isinstance(pulse, Sum) else (pulse,)
+    for part in pulses:
+        if isinstance(part, Kick) and float(part.time) > float(start) + 1e-12:
+            raise NotImplementedError(
+                "a kick after the start of the run is not implemented for an "
+                "ultrasoft or PAW dataset: its step in kappa is a delta in the field "
+                "that the augmented states cross by a transformation of their own "
+                "(the jump at the start does it), and the time grid cannot hold a "
+                "delta. Start the run at the kick")
 
 
 def _chunk_weights(weights, rows, live, real):
@@ -580,13 +953,15 @@ def _chunk_weights(weights, rows, live, real):
 def _padded_grid(kappa_mid, kappa_end, nsteps, block_steps, dt_ry):
     """``(kappa_mid, kappa_end, steps, nblocks)`` padded to whole blocks with zero steps."""
     nblocks = int(math.ceil(nsteps / block_steps))
-    pad = nblocks * block_steps - nsteps
+    steps = np.concatenate([np.full(nsteps, dt_ry), np.zeros(nblocks * block_steps - nsteps)])
+    return (_padded(kappa_mid, nsteps, block_steps), _padded(kappa_end, nsteps, block_steps),
+            steps, nblocks)
 
-    def padded_array(a):
-        return np.concatenate([a, np.repeat(a[-1:], pad, axis=0)]) if pad else a
 
-    steps = np.concatenate([np.full(nsteps, dt_ry), np.zeros(pad)])
-    return padded_array(kappa_mid), padded_array(kappa_end), steps, nblocks
+def _padded(a, nsteps, block_steps):
+    """``a`` padded to whole blocks by repeating its last row."""
+    pad = int(math.ceil(nsteps / block_steps)) * block_steps - nsteps
+    return np.concatenate([a, np.repeat(a[-1:], pad, axis=0)]) if pad else a
 
 
 def _warn_damping(setup, nsteps: int, tolerance: float = 1e-4) -> None:
@@ -611,19 +986,68 @@ def _warn_damping(setup, nsteps: int, tolerance: float = 1e-4) -> None:
             stacklevel=3)
 
 
+def channel_arrays(calculation, states, weights):
+    """``[(states, weights)]``, one pair per Hamiltonian problem, each cut to its carried bands.
+
+    ``states`` is ``(nk, nbnd, ndim)`` for a run with one channel (``nspin = 1``
+    or a spinor) or ``(nchannel, nk, nbnd, ndim)`` with ``weights``
+    ``(nchannel, nk, nbnd)``; a collinear ``nspin = 2`` run has two channels,
+    whose band counts differ when ``tot_magnetization`` fixes the moment, and
+    the shorter one arrives padded with bands of zero weight. Those are cut
+    here, so a channel propagates the bands it carries and no others.
+    """
+    states = np.asarray(states)
+    weights = np.asarray(weights, dtype=float)
+    channels = 1 if getattr(calculation, "noncolin", False) else int(calculation.nspin)
+    if states.ndim == 3:
+        states, weights = states[None], weights[None]
+    if states.shape[0] != channels:
+        raise ValueError(
+            f"{states.shape[0]} channels of states for a calculation with {channels}: "
+            "an nspin = 2 run takes (2, nk, nbnd, npwx), one per spin channel")
+    pairs = []
+    for c in range(channels):
+        carrying = np.flatnonzero(np.any(weights[c] != 0.0, axis=0))
+        keep = int(carrying[-1]) + 1 if len(carrying) else 0
+        pairs.append((states[c][:, :keep], weights[c][:, :keep]))
+    return pairs
+
+
+def _combined(results: list) -> "RealTimeResult":
+    """The channels' runs as one: the currents and energies add, the drifts are the worst."""
+    if len(results) == 1:
+        return results[0]
+    first = results[0]
+    return dataclasses.replace(
+        first,
+        current=sum(np.asarray(r.current) for r in results),
+        energy=sum(np.asarray(r.energy) for r in results),
+        norm_drift=max(r.norm_drift for r in results),
+        excited=sum(r.excited for r in results),
+        nelec=sum(r.nelec for r in results),
+        spectrum=(min(r.spectrum[0] for r in results), max(r.spectrum[1] for r in results)),
+        step_radius=max(r.step_radius for r in results),
+        effective_cutoff=min(r.effective_cutoff for r in results),
+        extras={**first.extras, "channels": results},
+    )
+
+
 def propagate(calculation, states, weights, v_scf, pulse, *, dt: float,
               duration: float | None = None, start: float | None = None,
               propagator: str = "taylor4", k_batch="default",
               block_steps: int = 400, kcart=None, checkpoint=None,
               symmetrise=None, potential: str = "frozen", corrector: int = 1,
-              density_symmetry=None) -> RealTimeResult:
+              density_symmetry=None, ddd_paw=None) -> RealTimeResult:
     """Propagate ``states`` under ``pulse`` at the frozen potential ``v_scf``.
 
     Args:
         calculation: the :class:`~defumat.scf.driver.Calculation` the states
             belong to, on the k-set to be propagated.
-        states: ``(nk, nbnd, npwx)``, the occupied states at ``t = start``.
-        weights: ``(nk, nbnd)``, occupation times k-weight, held fixed.
+        states: ``(nk, nbnd, ndim)``, the occupied states at ``t = start``; for
+            a collinear ``nspin = 2`` run ``(2, nk, nbnd, npwx)``, one block per
+            channel, padded with zero weights (:func:`channel_arrays`).
+        weights: ``(nk, nbnd)`` (``(2, nk, nbnd)``), occupation times k-weight,
+            held fixed.
         v_scf: the potential to freeze, the ground state's.
         pulse: a :class:`~defumat.realtime.pulse.Pulse`.
         dt: the step in Hartree atomic units of time (Elk's ``dtimes``).
@@ -648,6 +1072,8 @@ def propagate(calculation, states, weights, v_scf, pulse, *, dt: float,
         density_symmetry: with the potential updated on a reduced k-set, the
             :class:`~defumat.system.symmetry.Symmetries` of the field's little
             group, which completes the density.
+        ddd_paw: PAW's one-centre ``D`` of the ground state, frozen with the
+            potential (``Calculation.onecenter``).
     """
     if potential != "frozen":
         from defumat.realtime.selfconsistent import (
@@ -665,25 +1091,43 @@ def propagate(calculation, states, weights, v_scf, pulse, *, dt: float,
             block_steps=block_steps, kcart=kcart, symmetrise=symmetrise,
             density_symmetry=density_symmetry, potential=potential,
             corrector=corrector)
+    pairs = channel_arrays(calculation, states, weights)
+    results = []
+    for channel, (own, carried) in enumerate(pairs):
+        path = checkpoint
+        if checkpoint is not None and len(pairs) > 1:
+            path = Path(f"{checkpoint}.channel{channel}")
+        results.append(_propagate_channel(
+            calculation, own, carried, v_scf, pulse, dt=dt, duration=duration,
+            start=start, propagator=propagator, k_batch=k_batch,
+            block_steps=block_steps, kcart=kcart, checkpoint=path,
+            symmetrise=symmetrise, channel=channel, ddd_paw=ddd_paw))
+    return _combined(results)
+
+
+def _propagate_channel(calculation, states, weights, v_scf, pulse, *, dt, duration, start,
+                       propagator, k_batch, block_steps, kcart, checkpoint, symmetrise,
+                       channel, ddd_paw) -> RealTimeResult:
+    """:func:`propagate` at a frozen potential for one channel's states, ``(nk, nbnd, ndim)``."""
     # The states stay where they are, a host array in the frozen mode, and go to
     # the device one chunk at a time: the peak is one chunk whatever the mesh.
     states = np.asarray(states)
     weights = np.asarray(weights, dtype=float)
-    nk, nbnd, _ = states.shape
     times, kappa_t, kappa_mid, efield = time_grid(pulse, dt, duration, start)
+    require_a_smooth_field(calculation, pulse, times[0])
     nsteps = len(times) - 1
     kappa_max = float(np.max(np.linalg.norm(np.concatenate([kappa_t, kappa_mid]), axis=-1)))
     setup = _prepare(calculation, states, weights, v_scf, kappa_max, dt, propagator,
-                     k_batch, kcart)
-    terms, table, chunks, first = setup.terms, setup.table, setup.chunks, setup.first
-    step_fn, centre, dt_ry, volume = setup.step_fn, setup.centre, setup.dt_ry, setup.volume
-    kcart, real = setup.kcart, setup.real
+                     k_batch, kcart, channel=channel, ddd_paw=ddd_paw)
+    chunks, step_fn, centre = setup.chunks, setup.step_fn, setup.centre
+    dt_ry, volume, kcart, real = setup.dt_ry, setup.volume, setup.kcart, setup.real
     lower, upper = setup.lower, setup.upper
     effective_cutoff = setup.effective_cutoff
     _warn_damping(setup, nsteps)
 
     kappa_mid_p, kappa_end_p, dts, nblocks = _padded_grid(
         kappa_mid, kappa_t[1:], nsteps, block_steps, dt_ry)
+    rate_p = _padded(kappa_rate(pulse, times), nsteps, block_steps)
 
     current = np.zeros((nsteps + 1, 3))
     energy_index = [0] + [min((b + 1) * block_steps, nsteps) for b in range(nblocks)]
@@ -692,7 +1136,7 @@ def propagate(calculation, states, weights, v_scf, pulse, *, dt: float,
     signature = _checkpoint_signature(
         np.asarray(times), np.asarray(kappa_t), np.asarray(kappa_mid), propagator,
         block_steps, np.concatenate([rows for rows, _ in chunks]), centre,
-        states, weights, kcart)
+        states, weights, kcart, channel)
     if checkpoint is not None and Path(checkpoint).exists():
         saved = np.load(checkpoint)
         if str(saved["signature"]) == signature:
@@ -700,11 +1144,12 @@ def propagate(calculation, states, weights, v_scf, pulse, *, dt: float,
             norm_drift, excited, done = (float(saved["norm_drift"]),
                                          float(saved["excited"]), int(saved["done"]))
 
-    run = measure = slope = None
+    run = measure = slope = norms_of = overlapped = jump = None
+    zero = jnp.zeros(3, dtype=real)
     for index, (rows, live) in enumerate(chunks):
         if index < done:
             continue
-        chunk = first if index == 0 else _Chunk.build(calculation, rows, terms, table, kcart)
+        chunk = setup.chunk(index, rows)
         w = _chunk_weights(weights, rows, live, real)
         psi = jnp.asarray(states[rows])
         initial = states[rows]
@@ -712,10 +1157,18 @@ def propagate(calculation, states, weights, v_scf, pulse, *, dt: float,
         if run is None:
             args = (chunk, w, psi, jnp.asarray(kappa_mid_p[:block_steps], dtype=real),
                     jnp.asarray(kappa_end_p[:block_steps], dtype=real),
+                    jnp.asarray(rate_p[:block_steps], dtype=real),
                     jnp.asarray(dts[:block_steps], dtype=real))
             run = compiled_function(_block_function(step_fn, centre), *args)
             measure = compiled_function(_energy_of, chunk, w, psi, kappa0)
             slope = compiled_function(_gradient_of, chunk, w, psi, kappa0)
+            norms_of = compiled_function(_norms_of, chunk, psi, kappa0)
+            if chunk.augmented:
+                overlapped = compiled_function(_overlapped_of, chunk, psi, kappa0)
+                jump = compiled_function(_jumped, chunk, psi, zero, kappa0)
+        if jump is not None:
+            # the step in kappa a run starts with, from the ground state's zero
+            psi = jump(chunk, psi, zero, kappa0)
 
         current[0] += np.asarray(slope(chunk, w, psi, kappa0))
         energy[0] += float(measure(chunk, w, psi, kappa0))
@@ -723,16 +1176,21 @@ def propagate(calculation, states, weights, v_scf, pulse, *, dt: float,
             sl = slice(b * block_steps, (b + 1) * block_steps)
             psi, gradients = run(chunk, w, psi, jnp.asarray(kappa_mid_p[sl], dtype=real),
                                  jnp.asarray(kappa_end_p[sl], dtype=real),
+                                 jnp.asarray(rate_p[sl], dtype=real),
                                  jnp.asarray(dts[sl], dtype=real))
             stop = min((b + 1) * block_steps, nsteps)
             # the padded steps of the last block are the identity and their
             # current is a repeat; it is dropped here
             current[b * block_steps + 1:stop + 1] += np.asarray(gradients)[:stop - b * block_steps]
-            energy[b + 1] += float(measure(chunk, w, psi, jnp.asarray(kappa_t[stop], dtype=real)))
-            norms = _check_growth(psi, live, f"after step {stop} of k-chunk {index}")
+            kappa_stop = jnp.asarray(kappa_t[stop], dtype=real)
+            energy[b + 1] += float(measure(chunk, w, psi, kappa_stop))
+            norms = _check_growth(norms_of(chunk, psi, kappa_stop), live,
+                                  f"after step {stop} of k-chunk {index}")
 
         norm_drift = max(norm_drift, float(np.abs(norms - 1.0).max()))
-        overlap = np.einsum("kmg,kng->kmn", np.conj(np.asarray(initial)), np.asarray(psi))
+        final = psi if overlapped is None else overlapped(
+            chunk, psi, jnp.asarray(kappa_t[-1], dtype=real))
+        overlap = np.einsum("kmg,kng->kmn", np.conj(np.asarray(initial)), np.asarray(final))
         kept = np.sum(np.abs(overlap) ** 2, axis=1)  # (nk, nbnd)
         excited += float(np.sum(np.asarray(w) * (1.0 - kept)))
         if checkpoint is not None:
