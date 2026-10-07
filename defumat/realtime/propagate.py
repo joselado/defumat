@@ -911,16 +911,19 @@ def _jumped(chunk, psi, kappa_from, kappa_to):
     return chunk.jump(kappa_from, kappa_to, psi)
 
 
-def kappa_rate(pulse, times) -> np.ndarray:
-    """``dkappa/dt`` at the midpoints of ``times``, in 1/bohr per Rydberg time unit.
+def kappa_rate(kappa_t, dt_ry: float) -> np.ndarray:
+    """``dkappa/dt`` at the midpoints, ``(kappa(t + dt) - kappa(t))/dt`` in the Rydberg time unit.
 
-    ``-E`` in Hartree units times two, the Rydberg time unit being half the
-    Hartree one; the augmented equation of motion reads it
-    (:meth:`_Chunk.generator`).
+    The difference on the run's own grid rather than the pulse's field, which
+    is unit-free and second order at the midpoint as the step is; the
+    augmented equation of motion reads it (:meth:`_Chunk.generator`). A wrong
+    factor here shows as a drift of ``<phi|S|phi>``, since the term's
+    anti-Hermitian part has to cancel ``dS/dt`` exactly.
     """
-    times = np.asarray(times, dtype=float)
-    midpoints = times[:-1] + 0.5 * np.diff(times)
-    return -2.0 * np.asarray(pulse.efield(midpoints))
+    kappa_t = np.asarray(kappa_t, dtype=float)
+    if dt_ry == 0.0:
+        return np.zeros_like(kappa_t[1:])
+    return (kappa_t[1:] - kappa_t[:-1]) / float(dt_ry)
 
 
 def require_a_smooth_field(calculation, pulse, start: float) -> None:
@@ -1127,7 +1130,7 @@ def _propagate_channel(calculation, states, weights, v_scf, pulse, *, dt, durati
 
     kappa_mid_p, kappa_end_p, dts, nblocks = _padded_grid(
         kappa_mid, kappa_t[1:], nsteps, block_steps, dt_ry)
-    rate_p = _padded(kappa_rate(pulse, times), nsteps, block_steps)
+    rate_p = _padded(kappa_rate(kappa_t, dt_ry), nsteps, block_steps)
 
     current = np.zeros((nsteps + 1, 3))
     energy_index = [0] + [min((b + 1) * block_steps, nsteps) for b in range(nblocks)]

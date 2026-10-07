@@ -77,8 +77,12 @@ def field_symmetries(system, pulse, tolerance: float = 1e-8):
     rotation fixes every polarisation vector the pulse has, so that ``A(t)``
     is invariant at every time, with their fractional translations, which the
     density's symmetrisation needs (silicon's group along ``[100]`` has
-    nonsymmorphic members). Time reversal is never in it. A ``nosym`` run
-    keeps the identity alone.
+    nonsymmorphic members). Time reversal is never in it, **and neither is an
+    operation of a magnetic group that is a symmetry only when followed by
+    time reversal** (``t_rev = 1``): the field breaks time reversal, so such an
+    operation does not map the driven state onto itself, and the returned
+    object cannot carry the flag for anything downstream to see. A ``nosym``
+    run keeps the identity alone.
     """
     from defumat.system.symmetry import Symmetries, cartesian_rotations
 
@@ -86,8 +90,10 @@ def field_symmetries(system, pulse, tolerance: float = 1e-8):
     crystal = symmetries.rotation_array()
     cartesian = cartesian_rotations(system.cell, symmetries)
     vectors = _polarisations(pulse)
+    t_rev = np.asarray(symmetries.t_rev_array())
     keep = [s for s in range(len(crystal))
-            if all(np.linalg.norm(cartesian[s] @ v - v) < tolerance for v in vectors)]
+            if t_rev[s] == 0
+            and all(np.linalg.norm(cartesian[s] @ v - v) < tolerance for v in vectors)]
     if system.nosym:
         keep = [s for s in keep if np.allclose(crystal[s], np.eye(3))]
     return Symmetries(rotations=tuple(symmetries.rotations[s] for s in keep),

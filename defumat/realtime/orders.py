@@ -211,7 +211,7 @@ def _orders_channel(calculation, states, weights, v_scf, shape, *, dt, order, du
     real = setup.real
     a_mid_p, a_end_p, dts, nblocks = _padded_grid(a_mid, a_t[1:], nsteps, block_steps,
                                                   setup.dt_ry)
-    a_rate_p = _padded(kappa_rate(shape, times), nsteps, block_steps)
+    a_rate_p = _padded(kappa_rate(a_t, setup.dt_ry), nsteps, block_steps)
     base = _block_function(setup.step_fn, setup.centre)
     depth = int(order)
 
