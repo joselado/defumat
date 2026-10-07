@@ -205,9 +205,9 @@ because that is what decides whether it is a session or a phase.
 
 - **Wyckoff input** (P6, the one part of that phase not done).
 - **Real-time propagation** (P134 frozen, P136 with the potential updated, P137 the spectrum of the
-  orders at a frozen potential): ultrasoft and PAW (`P_kappa`, the term an overlap moving with
-  `kappa` adds to the equation of motion, derived and not sourced; shifting the projectors alone moves
-  `<psi|S|psi>` by 1.6e-3), `nspin = 2` and spinors (a linear reference first), DFT+U (the Hubbard
+  orders at a frozen potential, P139 to P141 collinear magnets, spinors and ultrasoft and PAW
+  datasets): the potential updated in time with an ultrasoft or PAW dataset (the augmentation charge
+  of `rho(t)` from the projections at `k + kappa(t)`, `newd`'s `D(t)`, PAW's one-centre `D(t)`), DFT+U (the Hubbard
   projectors' own row at `k + G = 0`, `OPEN.md`), re-centring the sphere for a `kappa` past half a
   reciprocal vector, a checkpoint of a self-consistent run, and **the self-consistent
   frequency-domain hierarchy above first order** (P138 has the first: the induced potentials at `2w`

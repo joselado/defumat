@@ -106,10 +106,18 @@ class RadialTable(eqx.Module):
         s = jnp.where(s <= self.s_max, s, self.s_max)
         x = (2.0 * s / self.s_max - 1.0)[..., None]
         c = self.coefficients
+        n = c.shape[1]
         b1 = jnp.zeros(x.shape[:-1] + (c.shape[0],), dtype=c.dtype)
-        b2 = b1
-        for k in range(c.shape[1] - 1, 0, -1):
-            b1, b2 = 2.0 * x * b1 - b2 + c[:, k], b1
+
+        # A loop rather than the recurrence written out: written out, a table of
+        # 512 terms was 512 steps of every program that evaluates the projectors,
+        # under every derivative taken of them, and an augmented dataset's
+        # third-order propagation did not finish compiling in an hour.
+        def step(i, pair):
+            first, second = pair
+            return 2.0 * x * first - second + c[:, n - 1 - i], first
+
+        b1, b2 = jax.lax.fori_loop(0, n - 1, step, (b1, b1), unroll=min(8, max(1, n - 1)))
         return x * b1 - b2 + c[:, 0]
 
     def columns(self, kg):
@@ -151,8 +159,9 @@ def radial_table(pseudos, volume: float, s_max: float, *, tolerance: float = 1e-
     refuses a dataset whose transform will not converge on the range, by name
     rather than with a table that is quietly wrong. The coefficients fall to the transform's own
     round-off and stop there, about 1e-14 of the largest by the twentieth term
-    on ``Si.pz-vbc`` at 12 Ry, so ``tolerance`` sits above that floor, and every
-    term is kept: the ones below the floor cost a multiply each.
+    on ``Si.pz-vbc`` at 12 Ry, so ``tolerance`` sits above that floor; the
+    terms past the last coefficient above the tail's level are then dropped,
+    since they are round-off and each costs a step of the recurrence.
     """
     datasets, beta_of, lm_of, l_of = column_layout(pseudos)
     lmax = max([0] + [p.lmax for p in datasets])
@@ -186,6 +195,14 @@ def radial_table(pseudos, volume: float, s_max: float, *, tolerance: float = 1e-
                 f"terms on [0, {s_max:.4g}] bohr^-2 (tail {float(np.max(tail / scale)):.2e} "
                 f"of the largest coefficient)")
         n *= 2
+    # **The terms past the floor are round-off, and each costs a step of the
+    # recurrence.** Kept, a table that converged on its floor at 512 terms ran
+    # 512 steps of Clenshaw at every evaluation and every derivative, which is
+    # most of an augmented step's work; the coefficients past the last one above
+    # the tail's own level are dropped, which moves the series by round-off.
+    above = np.abs(coefficients) > tail
+    keep = max(2, int(np.max(np.where(above.any(axis=0))[0], initial=0)) + 1)
+    coefficients = coefficients[:, :keep]
     return RadialTable(coefficients=jnp.asarray(coefficients),
                        beta_of=jnp.asarray(beta_of), lm_of=jnp.asarray(lm_of),
                        s_max=jnp.asarray(float(s_max)), lmax=lmax)
