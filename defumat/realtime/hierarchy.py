@@ -238,14 +238,12 @@ def _orders_at(chunk, basis, energies, weights, precondition, omega, eta, alpha,
     # The local potential carries no kappa, so ``H(kappa) c`` is ``V c`` from
     # one transform, taken once per component before any derivative, and the
     # kinetic and nonlocal parts at kappa.
-    local_of = {}
-
-    def full_current(kappa, k1, c1, k2, c2):
+    def full_current(kappa, c1, local1, c2, local2):
         slope = jax.jacfwd(lambda k: form(k, c1, c2), holomorphic=False)(kappa)
         if not augmented:
             return slope
-        hc1 = local_of[k1] + kinetic_nonlocal(kappa, c1)
-        hc2 = local_of[k2] + kinetic_nonlocal(kappa, c2)
+        hc1 = local1 + kinetic_nonlocal(kappa, c1)
+        hc2 = local2 + kinetic_nonlocal(kappa, c2)
         tails = []
         for axis in range(3):
             unit = jnp.zeros(3, dtype=real).at[axis].set(1.0)
@@ -256,9 +254,9 @@ def _orders_at(chunk, basis, energies, weights, precondition, omega, eta, alpha,
             tails.append(_times_i(tail))
         return slope + jnp.stack(tails)
 
-    def current(p, k1, c1, k2, c2):
+    def current(p, c1, local1, c2, local2):
         def along(s):
-            return full_current(s * e, k1, c1, k2, c2)
+            return full_current(s * e, c1, local1, c2, local2)
         return _derivative(along, p)(jnp.zeros((), real))
 
     occupied = basis[:nocc]
@@ -356,17 +354,29 @@ def _orders_at(chunk, basis, energies, weights, precondition, omega, eta, alpha,
 
     totals = {}
     keys = list(components)
-    if augmented:
-        for key in keys:
-            local_of[key] = h0(components[key]) - kinetic_nonlocal(zero3, components[key])
-    for k1 in keys:
-        for k2 in keys:
-            for p in range(0, order - k1[0] - k2[0] + 1):
-                value = current(p, k1, components[k1], k2, components[k2])
-                for s in range(p + 1):
-                    big = (k1[0] + k2[0] + p, -k1[1] + (2 * s - p) + k2[1])
-                    weight = math.comb(p, s) / (math.factorial(p) * 2**p)
-                    totals[big] = totals.get(big, 0.0) + weight * value
+    # The local potential carries no kappa, so ``H(kappa) c`` is ``V c`` from
+    # one transform, taken once per component, and the kinetic and nonlocal
+    # parts at kappa; only an augmented current reads it.
+    local_of = {key: (h0(components[key]) - kinetic_nonlocal(zero3, components[key])
+                      if augmented else jnp.zeros((), dtype=basis.dtype))
+                for key in keys}
+    # Every pair of components at one order of the field derivative ``p`` in
+    # one batched evaluation of the form: the pairs are the program's largest
+    # loop, and traced one by one they made a program a pair long.
+    for p in range(order + 1):
+        pairs = [(k1, k2) for k1 in keys for k2 in keys if k1[0] + k2[0] + p <= order]
+        if not pairs:
+            continue
+        stacked = [jnp.stack([components[k] for k, _ in pairs]),
+                   jnp.stack([local_of[k] for k, _ in pairs]),
+                   jnp.stack([components[k] for _, k in pairs]),
+                   jnp.stack([local_of[k] for _, k in pairs])]
+        values = jax.vmap(lambda c1, l1, c2, l2, p=p: current(p, c1, l1, c2, l2))(*stacked)
+        for index, (k1, k2) in enumerate(pairs):
+            for s in range(p + 1):
+                big = (k1[0] + k2[0] + p, -k1[1] + (2 * s - p) + k2[1])
+                weight = math.comb(p, s) / (math.factorial(p) * 2**p)
+                totals[big] = totals.get(big, 0.0) + weight * values[index]
     if induced is None:
         return totals, jnp.concatenate(counts), jnp.concatenate(residuals), tuple(outsides)
     u0, up, um = to_r(occupied), to_r(components[(1, 1)]), to_r(components[(1, -1)])
