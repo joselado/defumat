@@ -306,12 +306,20 @@ def _orders_at(chunk, basis, energies, weights, precondition, omega, eta, alpha,
             raise NotImplementedError("an induced potential is written at first order only")
         fft_index, grid = chunk.template.fft_index[0], chunk.template.grid
         mask_pw = chunk.mask[0]
+        npwx = mask_pw.shape[0]
 
         def to_r(c):
-            return g_to_r(jnp.where(mask_pw, c, 0.0), fft_index, grid)
+            """``(n, ndim)`` to ``(n, npol, n1, n2, n3)``, each component through the grid."""
+            parts = c.reshape(c.shape[0], chunk.npol, npwx)
+            return jax.vmap(lambda a: g_to_r(jnp.where(mask_pw, a, 0.0), fft_index, grid),
+                            in_axes=1, out_axes=1)(parts)
 
         def local_field(field, c):
-            return jnp.where(mask_pw, r_to_g(field[None] * to_r(c), fft_index), 0.0)
+            """The induced potential on ``c``: a scalar per channel, a 2x2 for a spinor."""
+            moved = _spinor_field(field, to_r(c)) if chunk.spinor else field[None, None] * to_r(c)
+            back = jax.vmap(lambda a: jnp.where(mask_pw, r_to_g(a, fft_index), 0.0),
+                            in_axes=1, out_axes=1)(moved)
+            return back.reshape(c.shape)
 
     for n in range(1, order + 1):
         harmonics = list(range(-n, n + 1, 2))
@@ -333,6 +341,7 @@ def _orders_at(chunk, basis, energies, weights, precondition, omega, eta, alpha,
                         term = term + _times_i(rate * apply_x(p - 1, key))
                     total = total + weight * term
             if induced is not None and n == 1:
+                # the field at -w is the Hermitian conjugate of the one at w
                 total = total + local_field(induced if m == 1 else jnp.conj(induced), occupied)
             rhs.append(total)
         z = jnp.concatenate([e_occ + m * omega + 1j * n * eta for m in harmonics])
@@ -361,10 +370,40 @@ def _orders_at(chunk, basis, energies, weights, precondition, omega, eta, alpha,
     if induced is None:
         return totals, jnp.concatenate(counts), jnp.concatenate(residuals), tuple(outsides)
     u0, up, um = to_r(occupied), to_r(components[(1, 1)]), to_r(components[(1, -1)])
-    cross = jnp.einsum("n,nxyz->xyz", weights.astype(basis.dtype),
-                       jnp.conj(u0) * up + u0 * jnp.conj(um))
+    weights_c = weights.astype(basis.dtype)
+    if chunk.spinor:
+        count = induced.shape[0]
+        cross = (_spinor_density(u0, up, weights_c, count)
+                 + _spinor_density(um, u0, weights_c, count))
+    else:
+        cross = jnp.einsum("n,nxyz->xyz", weights_c,
+                           jnp.conj(u0[:, 0]) * up[:, 0] + u0[:, 0] * jnp.conj(um[:, 0]))
     return (totals, jnp.concatenate(counts), jnp.concatenate(residuals), tuple(outsides),
             cross)
+
+
+def _spinor_field(field, spinors):
+    """``(v + m.sigma) psi`` pointwise: ``field`` ``(nspin_mag, ...)``, ``spinors`` ``(n, 2, ...)``.
+
+    ``vloc_psi_nc``'s product with a complex field, the charge component alone
+    when the run carries no magnetization.
+    """
+    v = field[0]
+    if field.shape[0] == 1:
+        return v[None, None] * spinors
+    mx, my, mz = field[1], field[2], field[3]
+    up, down = spinors[:, 0], spinors[:, 1]
+    return jnp.stack([(v + mz) * up + (mx - 1j * my) * down,
+                      (mx + 1j * my) * up + (v - mz) * down], axis=1)
+
+
+def _spinor_density(a, b, weights, count):
+    """``sum_n w (a_n^dag b_n, a_n^dag sigma b_n)``, the first ``count`` of ``(n, m_x, m_y, m_z)``."""
+    au, ad, bu, bd = jnp.conj(a[:, 0]), jnp.conj(a[:, 1]), b[:, 0], b[:, 1]
+    parts = [au * bu + ad * bd]
+    if count == 4:
+        parts += [au * bd + ad * bu, -1j * au * bd + 1j * ad * bu, au * bu - ad * bd]
+    return jnp.einsum("n,cnxyz->cxyz", weights, jnp.stack(parts))
 
 
 def _preconditioner(chunk, occupied):
@@ -575,11 +614,18 @@ def hierarchy_linear_self_consistent(calculation, basis, energies, weights, v_sc
     operator between Krylov steps). Measured in review on two-atom silicon:
     10 to 28 products at 1 and 4 eV and on an interband transition, where the
     mixing of the static response (``ph.x``'s, history 4) took 200 and diverged
-    with the Hartree kernel. ``dv_+(G = 0)`` is set to zero: the Hartree
-    potential has none, and the uniform part of the exchange-correlation one
-    is a global phase. The density of a wedge is completed with
-    ``density_symmetry``, the field's little group, real and imaginary parts as
-    two channels (the symmetrisation keeps the real part of what it is given).
+    with the Hartree kernel. The uniform part of ``dv_+`` is set to zero where it
+    is a global phase: the Hartree potential has none, and a uniform shift of
+    the exchange-correlation potential of the charge, or of one collinear
+    channel, moves nothing; a spinor's uniform magnetic field is kept, since it
+    turns the spins. The density of a wedge is completed with
+    ``density_symmetry``, the field's little group, real and imaginary parts
+    as two densities (the symmetrisation keeps the real part of what it is
+    given), a spinor's magnetization as an axial vector.
+
+    The induced potential has the ground state's components: ``(up, down)`` for
+    a collinear ``nspin = 2`` run, whose channels it couples, and
+    ``(v, m_x, m_y, m_z)`` for a magnetic spinor run, acting as ``v + m.sigma``.
 
     Returns ``{"components": {(1, 1): (nw, 3)}, "frozen": {(1, 1): (nw, 3)},
     "outer": (nw,) products, "outer_residual": (nw,), ...}``, the frozen
@@ -590,21 +636,15 @@ def hierarchy_linear_self_consistent(calculation, basis, energies, weights, v_sc
 
     from defumat.basis.interpolate import to_dense
     from defumat.batching import k_chunks
-    from defumat.realtime.propagate import _batch, _Chunk, _prepare
-    from defumat.realtime.selfconsistent import POTENTIALS
-    from defumat.scf.driver import _symmetrize
-    from defumat.scf.potential import hartree
-    from defumat.system.symmetry import symmetry_maps
+    from defumat.realtime.propagate import _batch, _prepare, channel_arrays
+    from defumat.realtime.selfconsistent import POTENTIALS, require_a_potential_mode
+    from defumat.scf.driver import _symmetrize, _symmetrize_noncollinear
+    from defumat.scf.potential import as_potential_components, hartree
+    from defumat.system.symmetry import cartesian_rotations, symmetry_maps
 
     if potential not in POTENTIALS or potential == "frozen":
         raise ValueError(f"potential must be 'hartree' or 'hxc', not {potential!r}")
-    from defumat.realtime.selfconsistent import _one_channel, require_a_potential_mode
-
     require_a_potential_mode(calculation, potential, symmetrise, density_symmetry)
-    basis, energies = np.asarray(basis), np.asarray(energies, dtype=float)
-    if basis.ndim == 4:
-        _, weights = _one_channel(basis[:, :, :np.asarray(weights).shape[-1]], weights)
-        basis, energies = basis[0], energies[0]
     if potential == "hxc" and calculation.functional.is_meta:
         raise NotImplementedError("the exchange-correlation kernel of a meta-GGA is not here")
     dense, smooth = calculation.basis.dense, calculation.basis.smooth
@@ -619,103 +659,137 @@ def hierarchy_linear_self_consistent(calculation, basis, energies, weights, v_sc
     basis = np.asarray(basis)
     energies = np.asarray(energies, dtype=float)
     weights = np.asarray(weights, dtype=float)
+    if basis.ndim == 3:
+        basis, energies, weights = basis[None], energies[None], weights[None]
+    pairs = channel_arrays(calculation, basis, np.concatenate(
+        [weights, np.zeros(weights.shape[:2] + (basis.shape[2] - weights.shape[2],))], axis=2))
     omegas = np.atleast_1d(np.asarray(omegas, dtype=float))
-    nk, nb, npwx = basis.shape
-    nocc = weights.shape[1]
-    setup = _prepare(calculation, basis[:, :nocc], weights, v_scf, 0.0, None, "taylor4",
-                     1, kcart, bounds=False)
-    real = setup.real
-    volume = setup.volume
+    nk = basis.shape[1]
+    nspin_mag = calculation.nspin_mag
+    noncolin = bool(calculation.noncolin)
     unit = np.asarray(direction, dtype=float)
     unit = unit / np.linalg.norm(unit)
     omegas_ry, eta_ry = 2.0 * omegas, 2.0 * float(eta)
-    alpha = 2.0 * (float(energies.max()) - float(energies[:, :nocc].min())) \
-        + 3.0 * float(omegas_ry.max()) + 1.0
     batch = _batch(calculation, k_batch)
     batch = nk if batch is None else max(1, min(int(batch), nk))
     maps = None if density_symmetry is None else symmetry_maps(dense, density_symmetry)
+    rotations = None
+    if maps is not None and nspin_mag == 4:
+        cartesian = np.asarray(cartesian_rotations(calculation.system.cell, density_symmetry))
+        rotations = jnp.asarray(np.sign(np.linalg.det(cartesian))[:, None, None] * cartesian)
+
+    def symmetrize(rho):
+        if maps is None:
+            return rho
+        if rotations is not None:
+            return _symmetrize_noncollinear(rho, dense.fft_index, dense.grid, maps, rotations)
+        return _symmetrize(rho, dense.fft_index, dense.grid, maps)
+
+    channels = []
+    alpha = 0.0
+    densities = []
+    for channel, (_, carried) in enumerate(pairs):
+        nocc = carried.shape[1]
+        own, own_e, own_w = basis[channel], energies[channel], weights[channel][:, :nocc]
+        setup = _prepare(calculation, own[:, :nocc], own_w, v_scf, 0.0, None, "taylor4",
+                         1, kcart, bounds=False, channel=channel)
+        alpha = max(alpha, 2.0 * (float(own_e.max()) - float(own_e[:, :nocc].min())))
+        densities.append(calculation.smooth_density(
+            jnp.asarray(own[:, :nocc])[None], jnp.asarray(own_w, dtype=setup.real)[None]))
+        channels.append((setup, own, own_e, own_w, nocc))
+    alpha += 3.0 * float(omegas_ry.max()) + 1.0
+    real = channels[0][0].real
+    volume = channels[0][0].volume
+    dtype = basis.dtype
 
     # the states' own density, where the kernel is taken, completed as the
     # propagation completes it
-    flat_weights = jnp.asarray(weights, dtype=real)
-    rho0 = to_dense(calculation.smooth_density(jnp.asarray(basis[:, :nocc])[None],
-                                               flat_weights[None]), smooth, dense)
-    if maps is not None:
-        rho0 = _symmetrize(rho0, dense.fft_index, dense.grid, maps)
+    rho0 = symmetrize(to_dense(jnp.concatenate(densities), smooth, dense))
 
     if potential == "hxc":
         def kernel_real(x):
             return jax.jvp(lambda r: calculation.potential(r).v_scf, (rho0,),
-                           (x[None].astype(rho0.dtype),))[1][0]
+                           (x.astype(rho0.dtype),))[1]
     else:
         def kernel_real(x):
-            vg, _ = hartree(r_to_g(x, dense.fft_index), dense, calculation.system.cell)
-            return jnp.real(g_to_r(vg, dense.fft_index, dense.grid))
+            total = x[0] if noncolin or x.shape[0] == 1 else x.sum(axis=0)
+            vg, _ = hartree(r_to_g(total, dense.fft_index), dense, calculation.system.cell)
+            return as_potential_components(jnp.real(g_to_r(vg, dense.fft_index, dense.grid)),
+                                           nspin_mag)
+
+    # which components lose their uniform part: every collinear channel, a
+    # spinor's charge alone
+    phase_only = jnp.asarray([True] * nspin_mag if not noncolin
+                             else [True] + [False] * (nspin_mag - 1))
 
     @jax.jit
     def kernel(drho):
-        parts = jnp.stack([jnp.real(drho), jnp.imag(drho)])[:, None]
-        if maps is not None:
-            parts = jax.vmap(lambda f: _symmetrize(f, dense.fft_index, dense.grid, maps))(parts)
-        dv = kernel_real(parts[0, 0]) + 1j * kernel_real(parts[1, 0])
-        return dv - jnp.mean(dv)   # no uniform part: a global phase, and Hartree has none
-
-    def at(chunk, u, e, w, precondition, omega, eta_, alpha_, direction_, starts, induced):
-        return _orders_at(chunk, u, e, w, precondition, omega, eta_, alpha_, direction_,
-                          starts, induced, nocc=nocc, order=1, tolerance=float(tolerance),
-                          max_iterations=int(max_iterations))
-
-    if batch > 1:
-        at = jax.vmap(at, in_axes=(0, 0, 0, 0, 0, None, None, None, None, 0, None))
-        preconditioner = jax.vmap(_preconditioner)
-    else:
-        preconditioner = _preconditioner
-
-    def one(ik):
-        if ik == 0:
-            return setup.first
-        return _Chunk.build(calculation, np.asarray([ik]), setup.terms, setup.table, setup.kcart)
+        dv = (kernel_real(symmetrize(jnp.real(drho)))
+              + 1j * kernel_real(symmetrize(jnp.imag(drho))))
+        mean = jnp.mean(dv, axis=(1, 2, 3), keepdims=True)
+        return dv - jnp.where(phase_only[:, None, None, None], mean, 0.0)
 
     held = []
-    for rows, live in k_chunks(nk, batch):
-        if batch > 1:
-            chunk = jax.tree_util.tree_map(lambda *xs: jnp.stack(xs), *[one(ik) for ik in rows])
-            w = np.where(np.arange(len(rows))[:, None] < live, weights[rows], 0.0)
-            u = jnp.asarray(basis[rows])
-            e = jnp.asarray(energies[rows], dtype=real)
-            occupied, shape = u[:, :nocc], (len(rows),)
-        else:
-            chunk = one(int(rows[0]))
-            w = weights[rows[0]]
-            u = jnp.asarray(basis[rows[0]])
-            e = jnp.asarray(energies[rows[0]], dtype=real)
-            occupied, shape = u[:nocc], ()
-        precondition = preconditioner(chunk, occupied).astype(real)
-        starts = (jnp.zeros(shape + (2 * nocc, npwx), dtype=u.dtype),)
-        held.append(((chunk, u, e, jnp.asarray(w, dtype=real), precondition), starts, rows, live))
+    for channel, (setup, own, own_e, own_w, nocc) in enumerate(channels):
+        def at(chunk, u, e, w, precondition, omega, eta_, alpha_, direction_, starts, induced,
+               nocc=nocc):
+            return _orders_at(chunk, u, e, w, precondition, omega, eta_, alpha_, direction_,
+                              starts, induced, nocc=nocc, order=1, tolerance=float(tolerance),
+                              max_iterations=int(max_iterations))
 
-    run = None
-    size = int(np.prod(grid))
+        if batch > 1:
+            at = jax.vmap(at, in_axes=(0, 0, 0, 0, 0, None, None, None, None, 0, None))
+            preconditioner = jax.vmap(_preconditioner)
+        else:
+            preconditioner = _preconditioner
+        ndim = own.shape[-1]
+        pieces = []
+        for rows, live in k_chunks(nk, batch):
+            if batch > 1:
+                chunk = jax.tree_util.tree_map(lambda *xs: jnp.stack(xs),
+                                               *[setup.chunk(ik, np.asarray([ik])) for ik in rows])
+                w = np.where(np.arange(len(rows))[:, None] < live, own_w[rows], 0.0)
+                u = jnp.asarray(own[rows])
+                e = jnp.asarray(own_e[rows], dtype=real)
+                occupied, shape = u[:, :nocc], (len(rows),)
+            else:
+                chunk = setup.chunk(int(rows[0]), np.asarray([rows[0]]))
+                w = own_w[rows[0]]
+                u = jnp.asarray(own[rows[0]])
+                e = jnp.asarray(own_e[rows[0]], dtype=real)
+                occupied, shape = u[:nocc], ()
+            precondition = preconditioner(chunk, occupied).astype(real)
+            starts = (jnp.zeros(shape + (2 * nocc, ndim), dtype=u.dtype),)
+            pieces.append(((chunk, u, e, jnp.asarray(w, dtype=real), precondition), starts,
+                           rows, live))
+        held.append((at, pieces))
+
+    runs = [None] * len(held)
+    field_shape = (nspin_mag,) + grid
+    size = int(np.prod(field_shape))
 
     def sweep(omega, induced):
-        nonlocal run
-        totals, cross = {}, jnp.zeros(grid, dtype=basis.dtype)
+        totals = {}
+        cross = jnp.zeros(field_shape, dtype=dtype)
         worst, count_max = 0.0, 0
-        for fixed, starts, rows, live in held:
-            arguments = fixed + (jnp.asarray(omega, dtype=real), jnp.asarray(eta_ry, dtype=real),
-                                 jnp.asarray(alpha, dtype=real), jnp.asarray(unit, dtype=real),
-                                 starts, induced)
-            if run is None:
-                run = compiled_function(at, *arguments)
-            out, count, res, _, density = run(*arguments)
-            count, res = np.asarray(count), np.asarray(res)
-            if batch > 1:
-                count, res, density = count[:live], res[:live], density.sum(axis=0)
-                out = {key: value.sum(axis=0) for key, value in out.items()}
-            worst, count_max = max(worst, float(res.max())), max(count_max, int(count.max()))
-            cross = cross + density
-            for key, value in out.items():
-                totals[key] = totals.get(key, 0.0) + np.asarray(value)
+        for channel, (at, pieces) in enumerate(held):
+            field = induced if noncolin else induced[channel]
+            for fixed, starts, rows, live in pieces:
+                arguments = fixed + (jnp.asarray(omega, dtype=real),
+                                     jnp.asarray(eta_ry, dtype=real),
+                                     jnp.asarray(alpha, dtype=real),
+                                     jnp.asarray(unit, dtype=real), starts, field)
+                if runs[channel] is None:
+                    runs[channel] = compiled_function(at, *arguments)
+                out, count, res, _, density = runs[channel](*arguments)
+                count, res = np.asarray(count), np.asarray(res)
+                if batch > 1:
+                    count, res, density = count[:live], res[:live], density.sum(axis=0)
+                    out = {key: value.sum(axis=0) for key, value in out.items()}
+                worst, count_max = max(worst, float(res.max())), max(count_max, int(count.max()))
+                cross = cross + density if noncolin else cross.at[channel].add(density)
+                for key, value in out.items():
+                    totals[key] = totals.get(key, 0.0) + np.asarray(value)
         if worst > 10.0 * tolerance:
             raise HierarchyError(
                 f"an inner solve did not converge at w = {omega / 2.0:.5f} Ha: relative "
@@ -727,13 +801,13 @@ def hierarchy_linear_self_consistent(calculation, basis, energies, weights, v_sc
         return np.concatenate([x.real.ravel(), x.imag.ravel()])
 
     def unflat(x):
-        return jnp.asarray((x[:size] + 1j * x[size:]).reshape(grid), dtype=basis.dtype)
+        return jnp.asarray((x[:size] + 1j * x[size:]).reshape(field_shape), dtype=dtype)
 
     def finish(totals):
         components = {key: -np.asarray(value) / (2.0 * volume) for key, value in totals.items()}
         if symmetrise is not None:
-            rotations = np.asarray(symmetrise, dtype=float)
-            components = {key: np.einsum("sab,b->a", rotations, value) / len(rotations)
+            rotations_ = np.asarray(symmetrise, dtype=float)
+            components = {key: np.einsum("sab,b->a", rotations_, value) / len(rotations_)
                           for key, value in components.items()}
         return components
 
@@ -743,7 +817,7 @@ def hierarchy_linear_self_consistent(calculation, basis, energies, weights, v_sc
     outer_residual = np.zeros(len(omegas))
     inner = np.zeros(len(omegas), dtype=int)
     previous = None
-    zero = jnp.zeros(grid, dtype=basis.dtype)
+    zero = jnp.zeros(field_shape, dtype=dtype)
     for iw, omega in enumerate(omegas_ry):
         bare_totals, bare_density, inner[iw] = sweep(omega, zero)
         frozen[iw] = finish(bare_totals)[(1, 1)]
@@ -771,4 +845,5 @@ def hierarchy_linear_self_consistent(calculation, basis, energies, weights, v_sc
         previous = x
     return {"components": {(1, 1): sc}, "frozen": {(1, 1): frozen}, "outer": products,
             "outer_residual": outer_residual, "iterations": inner, "volume": volume,
-            "alpha": alpha, "nocc": nocc, "computed_bands": nb}
+            "alpha": alpha, "nocc": tuple(c[4] for c in channels),
+            "computed_bands": basis.shape[2]}

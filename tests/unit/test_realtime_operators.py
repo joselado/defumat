@@ -165,26 +165,16 @@ def test_the_current_between_eigenstates_is_the_generalised_velocity(pseudo_dir,
         jnp.asarray(psi)[None], jnp.asarray(energies)[None]))[:, 0]  # (3, nk, nb, nb)
 
     psi = jnp.asarray(psi)
-    weights = jnp.ones(energies.shape)
-
-    def element(kappa, a, b):
-        return chunk.band_form(kappa, a, b, jnp.ones(a.shape[:2]))
-
-    mine = np.zeros_like(reference)
-    for ik in range(mask.shape[0]):
-        for n in range(nb):
-            for m in range(nb):
-                a = jnp.zeros_like(psi).at[ik, 0].set(psi[ik, n])[:, :1]
-                b = jnp.zeros_like(psi).at[ik, 0].set(psi[ik, m])[:, :1]
-                slope = jax.jacfwd(lambda k: element(k, a, b))(zero)
-                ha, hb = chunk.applied(zero, a), chunk.applied(zero, b)
-                for axis in range(3):
-                    unit = jnp.zeros(3).at[axis].set(1.0)
-                    ya = chunk.inverse_overlap(zero, chunk.position(zero, a, unit))
-                    yb = chunk.inverse_overlap(zero, chunk.position(zero, b, unit))
-                    tail = 1j * (jnp.vdot(ha, yb) - jnp.vdot(ya, hb))
-                    mine[axis, ik, n, m] = slope[axis] + tail
-    del weights
+    # dH/dk on every band at once, then the matrix elements
+    slope = jax.jacfwd(lambda k: chunk.kinetic_nonlocal(k, psi))(zero)  # (nk, nb, ndim, 3)
+    mine = np.asarray(jnp.einsum("kng,kmga->aknm", jnp.conj(psi), slope))
+    hpsi = chunk.applied(zero, psi)
+    for axis in range(3):
+        unit = jnp.zeros(3).at[axis].set(1.0)
+        y = chunk.inverse_overlap(zero, chunk.position(zero, psi, unit))
+        tail = (jnp.einsum("kng,kmg->knm", jnp.conj(hpsi), y)
+                - jnp.einsum("kng,kmg->knm", jnp.conj(y), hpsi))
+        mine[axis] += np.asarray(1j * tail)
     scale = np.abs(reference).max()
     assert np.abs(mine - reference).max() < 1e-9 * scale
 

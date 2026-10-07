@@ -142,6 +142,7 @@ class _KPart(eqx.Module):
     core: object
     template: object
     nk: int = eqx.field(static=True)
+    channel: int = eqx.field(static=True, default=0)
 
     @classmethod
     def of(cls, chunk):
@@ -167,29 +168,21 @@ class _KPart(eqx.Module):
                                       dtype=core.columns.dtype),
                             jnp.zeros((chunk.nk, 1, 3), dtype=core.kg.dtype)))
         return cls(k0=chunk.k0, gcart=chunk.gcart, mask=chunk.mask, core=core,
-                   template=template, nk=chunk.nk)
+                   template=template, nk=chunk.nk, channel=chunk.channel)
 
     def chunk(self, table, positions, terms=None):
         from defumat.realtime.propagate import _Chunk
 
         template = self.template
         if terms is not None:
-            template = dataclasses.replace(template, potential=terms.potentials[0],
-                                           potential_wave=terms.waves[0])
+            # a collinear channel's own potential; a spinor's one, whose
+            # components are the charge's and the magnetization's
+            index = self.channel if len(terms.potentials) > 1 else 0
+            template = dataclasses.replace(template, potential=terms.potentials[index],
+                                           potential_wave=terms.waves[index])
         return _Chunk(k0=self.k0, gcart=self.gcart, mask=self.mask, core=self.core,
-                      template=template, table=table, positions=positions, nk=self.nk)
-
-
-def _one_channel(states, weights):
-    """The states of a one-channel run as ``(nk, nbnd, ndim)``, from either layout."""
-    states, weights = np.asarray(states), np.asarray(weights, dtype=float)
-    if states.ndim == 4:
-        if states.shape[0] != 1:
-            raise NotImplementedError(
-                "the potential updated in time is not implemented for a collinear "
-                "nspin = 2 run yet")
-        states, weights = states[0], weights[0]
-    return states, weights
+                      template=template, table=table, positions=positions, nk=self.nk,
+                      channel=self.channel)
 
 
 def _plain_norms(states):
@@ -205,51 +198,70 @@ def _stack(trees):
 class _Run:
     """What one self-consistent run needs, built once: the stacked chunks and the update.
 
-    ``density(psi)`` takes the stacked states ``(nchunks, kb, nbnd, npwx)`` and
-    returns the density on the dense grid, ``(1, n1, n2, n3)``, symmetrised with
-    the little group's maps when there are any; ``potential(rho)`` returns
-    ``(v(t), E_U[rho])``; ``local_energy(rho)`` is the part of the conserved
-    energy that is not the band's kinetic and nonlocal energy.
+    One entry per channel in ``parts``, ``w`` and ``psi``: a collinear
+    ``nspin = 2`` run has two, each with its own number of carried bands, and
+    every other run one. ``density(psi)`` takes the stacked states, one
+    ``(nchunks, kb, nbnd, ndim)`` per channel, and returns the density on the
+    dense grid, ``(nspin_mag, n1, n2, n3)`` -- the two channels' ``(up, down)``,
+    or a spinor's ``(n, m_x, m_y, m_z)`` -- symmetrised with the little group's
+    maps when there are any; ``potential(rho)`` returns ``(v(t), E_U[rho])``;
+    ``local_energy(rho)`` is the part of the conserved energy that is not the
+    band's kinetic and nonlocal energy.
     """
 
-    def __init__(self, calculation, setup, states, weights, v_scf, potential: str,
+    def __init__(self, calculation, setups, pairs, v_scf, potential: str,
                  density_symmetry):
-        from defumat.realtime.propagate import _Chunk, _chunk_weights
-        from defumat.scf.driver import _symmetrize
-        from defumat.scf.potential import hartree
-        from defumat.system.symmetry import symmetry_maps
+        from defumat.realtime.propagate import _chunk_weights
+        from defumat.scf.driver import _symmetrize, _symmetrize_noncollinear
+        from defumat.scf.potential import as_potential_components, hartree
+        from defumat.system.symmetry import cartesian_rotations, symmetry_maps
 
-        real = setup.real
+        real = setups[0].real
         self.calculation = calculation
         self.mode = potential
-        self.chunks = setup.chunks
-        built = [setup.first if i == 0 else _Chunk.build(calculation, rows, setup.terms,
-                                                          setup.table, setup.kcart)
-                 for i, (rows, _) in enumerate(self.chunks)]
-        self.parts = _stack([_KPart.of(c) for c in built])
-        self.table = setup.table
-        self.positions = built[0].positions
-        self.w = _stack([_chunk_weights(weights, rows, live, real)
-                         for rows, live in self.chunks])
-        self.psi = _stack([jnp.asarray(states[rows]) for rows, _ in self.chunks])
+        self.chunks = setups[0].chunks
+        self.table = setups[0].table
+        self.positions = jnp.asarray(calculation.system.structure.positions)
+        parts, ws, psis, flats = [], [], [], []
+        for setup, (states, weights) in zip(setups, pairs):
+            built = [setup.chunk(i, rows) for i, (rows, _) in enumerate(self.chunks)]
+            parts.append(_stack([_KPart.of(c) for c in built]))
+            ws.append(_stack([_chunk_weights(weights, rows, live, real)
+                              for rows, live in self.chunks]))
+            psis.append(_stack([jnp.asarray(states[rows]) for rows, _ in self.chunks]))
+            flats.append(jnp.asarray(weights, dtype=real))
+        self.parts, self.w, self.psi = tuple(parts), tuple(ws), tuple(psis)
         kb = len(self.chunks[0][0])
         self.order = np.asarray([i * kb + j for i, (_, live) in enumerate(self.chunks)
                                  for j in range(live)])
-        self.nk = states.shape[0]
-        self.weights = jnp.asarray(weights, dtype=real)
+        self.nk = pairs[0][0].shape[0]
+        self.weights = tuple(flats)
 
         dense, smooth = calculation.basis.dense, calculation.basis.smooth
         cell = calculation.system.cell
+        nspin_mag = calculation.nspin_mag
         maps = (None if density_symmetry is None
                 else symmetry_maps(dense, density_symmetry))
+        rotations = None
+        if maps is not None and nspin_mag == 4:
+            # an axial vector's rotation, ``det(R) R``; the field's little group
+            # has no operation that needs time reversal (``field_symmetries``)
+            cartesian = np.asarray(cartesian_rotations(cell, density_symmetry))
+            rotations = jnp.asarray(np.sign(np.linalg.det(cartesian))[:, None, None] * cartesian)
         order, flat_weights = self.order, self.weights
 
         def density(psi):
-            whole = psi.reshape((-1,) + psi.shape[2:])[order]
-            rho = to_dense(calculation.smooth_density(whole[None], flat_weights[None]),
-                           smooth, dense)
+            channels = []
+            for states, weights in zip(psi, flat_weights):
+                whole = states.reshape((-1,) + states.shape[2:])[order]
+                channels.append(calculation.smooth_density(whole[None], weights[None]))
+            rho = to_dense(jnp.concatenate(channels), smooth, dense)
             if maps is not None:
-                rho = _symmetrize(rho, dense.fft_index, dense.grid, maps)
+                if rotations is not None:
+                    rho = _symmetrize_noncollinear(rho, dense.fft_index, dense.grid, maps,
+                                                   rotations)
+                else:
+                    rho = _symmetrize(rho, dense.fft_index, dense.grid, maps)
             return rho
 
         if potential == "hxc":
@@ -258,15 +270,17 @@ class _Run:
                 return result.v_scf, result.ehart + result.etxc
         else:
             def field(rho):
-                vg, energy = hartree(r_to_g(rho[0], dense.fft_index), dense, cell)
-                return jnp.real(g_to_r(vg, dense.fft_index, dense.grid))[None], energy
+                total = rho[0] if calculation.noncolin or rho.shape[0] == 1 else rho.sum(axis=0)
+                vg, energy = hartree(r_to_g(total, dense.fft_index), dense, cell)
+                v = jnp.real(g_to_r(vg, dense.fft_index, dense.grid))
+                return as_potential_components(v, nspin_mag), energy
 
         self.density = density
         self.rho0 = compiled_function(density, self.psi)(self.psi)
         u0, _ = field(self.rho0)
         v_scf = jnp.asarray(v_scf)
         self.v_scf = v_scf
-        constant = jnp.asarray(calculation.vltot) + (v_scf - u0)[0]
+        constant = as_potential_components(jnp.asarray(calculation.vltot), nspin_mag) + (v_scf - u0)
         volume = float(cell.volume)
 
         def potential_of(rho):
@@ -275,44 +289,56 @@ class _Run:
 
         def local_energy(rho):
             _, energy = field(rho)
-            return volume / rho[0].size * jnp.sum(constant * rho[0]) + energy
+            return volume / rho[0].size * jnp.sum(constant * rho) + energy
 
         self.potential = potential_of
         self.local_energy = local_energy
         self.local_terms = calculation.local_terms
 
     def flat(self, psi):
-        """The stacked states as ``(nk, nbnd, npwx)`` on the host, the padding dropped."""
-        psi = np.asarray(psi)
-        return psi.reshape((-1,) + psi.shape[2:])[self.order]
+        """The stacked states of each channel as ``(nk, nbnd, ndim)`` on the host, the padding dropped."""
+        out = []
+        for states in psi:
+            states = np.asarray(states)
+            out.append(states.reshape((-1,) + states.shape[2:])[self.order])
+        return out
 
 
-def _advance(step_fn, centre, parts, table, positions, psi, terms, kappa, step):
-    """Every chunk's states one step on, at the local terms ``terms`` and ``kappa``."""
-    def one(args):
-        part, p = args
-        ham = part.chunk(table, positions, terms).hamiltonian(kappa)
-        return map_k(lambda ik: step_fn(lambda v: ham.apply(v, ik), p[ik], step, centre),
-                     jnp.arange(part.nk), batch=None)
-    return jax.lax.map(one, (parts, psi))
+def _advance(step_fn, centres, parts, table, positions, psi, terms, kappa, step):
+    """Every channel's and chunk's states one step on, at the local terms ``terms`` and ``kappa``."""
+    moved = []
+    for part_set, states, centre in zip(parts, psi, centres):
+        def one(args, centre=centre):
+            part, p = args
+            ham = part.chunk(table, positions, terms).hamiltonian(kappa)
+            return map_k(lambda ik: step_fn(lambda v: ham.apply(v, ik), p[ik], step, centre),
+                         jnp.arange(part.nk), batch=None)
+        moved.append(jax.lax.map(one, (part_set, states)))
+    return tuple(moved)
 
 
 def _slope(parts, table, positions, w, psi, kappa):
-    """``d/dkappa`` of the kinetic and nonlocal band energy, summed over chunks, Ry bohr."""
-    def one(args):
-        part, wk, p = args
-        return jax.grad(part.chunk(table, positions).kappa_energy)(kappa, p, wk)
-    return jnp.sum(jax.lax.map(one, (parts, w, psi)), axis=0)
+    """The current up to ``-1/Omega``, summed over channels and chunks, Ry bohr."""
+    total = 0.0
+    for part_set, wc, states in zip(parts, w, psi):
+        def one(args):
+            part, wk, p = args
+            return part.chunk(table, positions).current(kappa, p, wk)
+        total = total + jnp.sum(jax.lax.map(one, (part_set, wc, states)), axis=0)
+    return total
 
 
 def _band(parts, table, positions, w, psi, kappa):
-    def one(args):
-        part, wk, p = args
-        return part.chunk(table, positions).kappa_energy(kappa, p, wk)
-    return jnp.sum(jax.lax.map(one, (parts, w, psi)))
+    total = 0.0
+    for part_set, wc, states in zip(parts, w, psi):
+        def one(args):
+            part, wk, p = args
+            return part.chunk(table, positions).kappa_energy(kappa, p, wk)
+        total = total + jnp.sum(jax.lax.map(one, (part_set, wc, states)))
+    return total
 
 
-def _block_function(run: _Run, step_fn, centre, corrector: int):
+def _block_function(run: _Run, step_fn, centres, corrector: int):
     """``block(parts, table, positions, w, carry, kmid, kend, steps) -> (carry, gradients)``.
 
     ``carry`` is ``(psi, v_prev, v_now)``: the stacked states at ``t`` and the
@@ -320,7 +346,8 @@ def _block_function(run: _Run, step_fn, centre, corrector: int):
     and ``v_now`` where they are, which is how a block is padded.
     """
     density, potential_of, local_terms = run.density, run.potential, run.local_terms
-    centre = jnp.asarray(centre)  # a constant of the program, not a literal in it
+    # constants of the program, not literals in it, one per channel
+    centres = tuple(jnp.asarray(c) for c in centres)
 
     def block(parts, table, positions, w, carry, kmid, kend, steps):
         def body(state, x):
@@ -328,7 +355,7 @@ def _block_function(run: _Run, step_fn, centre, corrector: int):
             k_mid, k_end, step = x
 
             def advance(v_mid):
-                return _advance(step_fn, centre, parts, table, positions, psi,
+                return _advance(step_fn, centres, parts, table, positions, psi,
                                 local_terms(v_mid), k_mid, step)
 
             moved = advance(1.5 * v_now - 0.5 * v_prev)
@@ -350,6 +377,17 @@ def _energy_function(run: _Run):
     return energy
 
 
+def _setups(calculation, states, weights, v_scf, kappa_max, dt, propagator, k_batch, kcart):
+    """One :func:`~defumat.realtime.propagate._prepare` per channel, and the channels' states."""
+    from defumat.realtime.propagate import _prepare, channel_arrays
+
+    pairs = channel_arrays(calculation, states, weights)
+    setups = [_prepare(calculation, own, carried, v_scf, kappa_max, dt, propagator,
+                       k_batch, kcart, channel=channel)
+              for channel, (own, carried) in enumerate(pairs)]
+    return pairs, setups
+
+
 def propagate_self_consistent(calculation, states, weights, v_scf, pulse, *, dt: float,
                               duration=None, start=None, propagator: str = "taylor4",
                               k_batch="default", block_steps: int = 400, kcart=None,
@@ -363,29 +401,31 @@ def propagate_self_consistent(calculation, states, weights, v_scf, pulse, *, dt:
     cartesian rotations, for the current) then says; ``corrector`` how many
     times the midpoint potential is corrected after its extrapolation. The
     energy on the result is the conserved functional of the module docstring.
+    The states are :func:`~defumat.realtime.propagate.propagate`'s, one block
+    per channel of a collinear run, which the density couples.
     """
     from defumat.realtime.propagate import (
-        RealTimeResult, _check_growth, _padded_grid, _prepare, _reach, _warn_damping,
-        time_grid)
+        RealTimeResult, _check_growth, _padded_grid, _reach, _warn_damping, time_grid)
 
     require_a_potential_mode(calculation, potential, symmetrise, density_symmetry)
-    states, weights = _one_channel(states, weights)
     times, kappa_t, kappa_mid, efield = time_grid(pulse, dt, duration, start)
     nsteps = len(times) - 1
     kappa_max = float(np.max(np.linalg.norm(np.concatenate([kappa_t, kappa_mid]), axis=-1)))
-    setup = _prepare(calculation, states, weights, v_scf, kappa_max, dt, propagator,
-                     k_batch, kcart)
-    _warn_damping(setup, nsteps)
-    real = setup.real
-    run = _Run(calculation, setup, states, weights, v_scf, potential, density_symmetry)
+    pairs, setups = _setups(calculation, states, weights, v_scf, kappa_max, dt, propagator,
+                            k_batch, kcart)
+    for setup in setups:
+        _warn_damping(setup, nsteps)
+    real = setups[0].real
+    run = _Run(calculation, setups, pairs, v_scf, potential, density_symmetry)
     kappa_mid_p, kappa_end_p, dts, nblocks = _padded_grid(
-        kappa_mid, kappa_t[1:], nsteps, block_steps, setup.dt_ry)
+        kappa_mid, kappa_t[1:], nsteps, block_steps, setups[0].dt_ry)
 
     fixed = (run.parts, run.table, run.positions, run.w)
     carry = (run.psi, run.v_scf, run.v_scf)
     kappa0 = jnp.asarray(kappa_t[0], dtype=real)
     block = compiled_function(
-        _block_function(run, setup.step_fn, setup.centre, int(corrector)), *fixed, carry,
+        _block_function(run, setups[0].step_fn, [s.centre for s in setups], int(corrector)),
+        *fixed, carry,
         jnp.asarray(kappa_mid_p[:block_steps], dtype=real),
         jnp.asarray(kappa_end_p[:block_steps], dtype=real),
         jnp.asarray(dts[:block_steps], dtype=real))
@@ -407,23 +447,28 @@ def propagate_self_consistent(calculation, states, weights, v_scf, pulse, *, dt:
         energy[b + 1] = float(measure(*fixed, carry[0],
                                       jnp.asarray(kappa_t[stop], dtype=real)))
         final = run.flat(carry[0])
-        norms = _check_growth(_plain_norms(final), run.nk, f"after step {stop}")
+        norms = [_check_growth(_plain_norms(f), run.nk, f"after step {stop}") for f in final]
 
-    overlap = np.einsum("kmg,kng->kmn", np.conj(states), final)
-    kept = np.sum(np.abs(overlap) ** 2, axis=1)
-    excited = float(np.sum(weights * (1.0 - kept)))
-    volume = setup.volume
+    excited = 0.0
+    for (own, carried), f in zip(pairs, final):
+        overlap = np.einsum("kmg,kng->kmn", np.conj(own), f)
+        kept = np.sum(np.abs(overlap) ** 2, axis=1)
+        excited += float(np.sum(carried * (1.0 - kept)))
+    volume = setups[0].volume
     current = -current / (2.0 * volume)
     if symmetrise is not None:
         rotations = np.asarray(symmetrise, dtype=float)
         current = np.einsum("sab,tb->ta", rotations, current) / len(rotations)
+    lower = min(s.lower for s in setups)
+    upper = max(s.upper for s in setups)
     return RealTimeResult(
         times=times, kappa=kappa_t, efield=efield, current=current,
         energy_times=times[np.asarray(energy_index)], energy=0.5 * energy,
-        norm_drift=float(np.abs(norms - 1.0).max()), excited=excited, volume=volume,
-        nelec=float(weights.sum()), dt=float(dt), effective_cutoff=setup.effective_cutoff,
-        propagator=propagator, pulse=pulse, spectrum=(setup.lower, setup.upper),
-        step_radius=setup.dt_ry * _reach(setup.lower, setup.upper, setup.centre),
+        norm_drift=max(float(np.abs(n - 1.0).max()) for n in norms), excited=excited,
+        volume=volume, nelec=float(sum(np.sum(c) for _, c in pairs)), dt=float(dt),
+        effective_cutoff=min(s.effective_cutoff for s in setups),
+        propagator=propagator, pulse=pulse, spectrum=(lower, upper),
+        step_radius=max(s.dt_ry * _reach(s.lower, s.upper, s.centre) for s in setups),
         symmetry_operations=1 if symmetrise is None else len(symmetrise),
         extras={"potential": potential, "corrector": int(corrector),
                 "potential_change": float(np.abs(np.asarray(carry[2] - run.v_scf)).max())},
@@ -445,20 +490,20 @@ def propagate_orders_self_consistent(calculation, states, weights, v_scf, shape,
     """
     from defumat.realtime.orders import OrdersResult, _derivative, _lift, _tower
     from defumat.realtime.propagate import (
-        _check_growth, _padded_grid, _prepare, _warn_damping, time_grid)
+        _check_growth, _padded_grid, _warn_damping, time_grid)
 
     require_a_potential_mode(calculation, potential, symmetrise, density_symmetry)
-    states, weights = _one_channel(states, weights)
     times, a_t, a_mid, _ = time_grid(shape, dt, duration, start)
     nsteps = len(times) - 1
-    setup = _prepare(calculation, states, weights, v_scf, 0.0, dt, propagator,
-                     k_batch, kcart)
-    _warn_damping(setup, nsteps)
-    real = setup.real
-    run = _Run(calculation, setup, states, weights, v_scf, potential, density_symmetry)
+    pairs, setups = _setups(calculation, states, weights, v_scf, 0.0, dt, propagator,
+                            k_batch, kcart)
+    for setup in setups:
+        _warn_damping(setup, nsteps)
+    real = setups[0].real
+    run = _Run(calculation, setups, pairs, v_scf, potential, density_symmetry)
     a_mid_p, a_end_p, dts, nblocks = _padded_grid(a_mid, a_t[1:], nsteps, block_steps,
-                                                  setup.dt_ry)
-    base = _block_function(run, setup.step_fn, setup.centre, int(corrector))
+                                                  setups[0].dt_ry)
+    base = _block_function(run, setups[0].step_fn, [s.centre for s in setups], int(corrector))
     depth = int(order)
 
     def lifted(parts, table, positions, w, tower, lam, amid, aend, steps):
@@ -494,13 +539,14 @@ def propagate_orders_self_consistent(calculation, states, weights, v_scf, shape,
         for k in range(depth + 1):
             raw[k, b * block_steps + 1:stop + 1] = np.asarray(
                 _derivative(out, k, depth))[:stop - b * block_steps]
-        norms = _check_growth(_plain_norms(run.flat(_derivative(tower, 0, depth)[0])), run.nk,
-                              f"after step {stop}")
+        norms = [_check_growth(_plain_norms(f), run.nk, f"after step {stop}")
+                 for f in run.flat(_derivative(tower, 0, depth)[0])]
 
     factorials = np.asarray([math.factorial(k) for k in range(depth + 1)], dtype=float)
-    currents = -raw / (2.0 * setup.volume) / factorials[:, None, None]
+    currents = -raw / (2.0 * setups[0].volume) / factorials[:, None, None]
     if symmetrise is not None:
         rotations = np.asarray(symmetrise, dtype=float)
         currents = np.einsum("sab,ntb->nta", rotations, currents) / len(rotations)
     return OrdersResult(times=times, currents=currents, shape=shape, dt=float(dt),
-                        volume=setup.volume, norm_drift=float(np.abs(norms - 1.0).max()))
+                        volume=setups[0].volume,
+                        norm_drift=max(float(np.abs(n - 1.0).max()) for n in norms))
