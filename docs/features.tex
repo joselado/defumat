@@ -4665,18 +4665,97 @@ order in the potential where this one is second. With \code{corrector=0} a step 
 times the frozen one on silicon's whole $4^3$ mesh against 2.04 with the corrector,
 at the price of the extrapolation's ten times larger energy drift above.
 
+\subsection{Magnetic, spin-orbit, ultrasoft and PAW ground states}
+
+Which ground states can the field be applied to? Every route of this section,
+the propagation, its orders, the frequency-domain hierarchy and, for the second
+harmonic, \code{get\_shg}'s sum over states, takes a collinear spin-polarized
+run, a spinor run with spin-orbit coupling or noncollinear magnetism, an
+ultrasoft or PAW dataset, and their combinations. We will now see what each adds
+to the equation of motion and to the current; the entry points and their
+arguments are the ones above.
+
+\textbf{A collinear run} (\code{nspin = 2}) is two band structures, one per
+channel, each with its own potential. At a frozen potential they are independent
+and every order of the current is the sum of the channels', and with
+\code{tot\_magnetization} the two carry different numbers of bands, which the run
+reads off the occupations. With the potential updated in time they couple through
+the density: the Hartree potential of the two channels' sum and the
+exchange-correlation potential of both, the adiabatic local spin density kernel
+for an LSDA run.
+
+\textbf{A spinor run} is one Hamiltonian on twice the plane waves, and its
+coupling to the field is the scalar one: both components sit on the sphere of
+$\mathbf k$ and meet the same projectors at $\mathbf k+\boldsymbol\kappa$ through
+the $2\times2$ coefficients $D^{\sigma\sigma'}_{ij}$, which carry the spin-orbit
+coupling (\code{dvan\_so}). So the spin-orbit term is minimally coupled to the
+field, as the nonlocal potential is (Ismail-Beigi, Chang and Louie, PRL 87,
+087402 (2001)), where Elk's real-time spin-orbit term is written with the
+canonical momentum (arXiv:1406.6607), a difference between the two codes in the
+physics and not in the numerics. The magnetization enters through the local
+$2\times2$ potential $v + \mathbf m\cdot\boldsymbol\sigma$ alone, and with the
+potential updated the four components $(n, \mathbf m)$ are rebuilt from the
+spinors at every step. The field's little group of a magnetic run keeps no
+operation that is a symmetry only together with time reversal, since the field
+breaks it.
+
+\textbf{An ultrasoft or PAW dataset} has an overlap $S(\mathbf k+\boldsymbol\kappa)$
+that moves with the field, and the gauge factor $e^{i\boldsymbol\kappa\cdot\mathbf r}$
+that takes every operator from $\mathbf k$ to $\mathbf k+\boldsymbol\kappa$ meets
+the time derivative through it:
+\begin{equation*}
+i\,S\,\partial_t|\phi\rangle = \big[H - \dot{\boldsymbol\kappa}\cdot\mathbf X\big]|\phi\rangle,
+\qquad
+\mathbf X = \tilde{\mathbf r} - S\,\mathbf r
+ = \sum_{ij}|\beta_i\rangle\big[\mathbf d_{ij}\langle\beta_j|
+   + i\,q_{ij}\langle\partial_{\mathbf k}\beta_j|\big],
+\end{equation*}
+every operator at $\mathbf k+\boldsymbol\kappa(t)$, with $\mathbf d_{ij}$ the
+dipole of the augmentation charge about its atom and $\partial_{\mathbf k}\beta$
+the projectors' derivative about their own atom, meaning that $\mathbf X$ is what
+the augmented density adds to the position operator beyond $S\mathbf r$. It is
+the moving-ion term of ultrasoft real-time propagation (Qian, Li, Lin and Yip,
+PRB 73, 035408 (2006)) with $\boldsymbol\kappa$ in the place of the ions'
+coordinates, and its anti-Hermitian part, $-\tfrac i2\,\partial_t S$, is exactly
+what keeps $\langle\phi|S|\phi\rangle$ constant. The current is the velocity of
+the augmented states,
+\begin{equation*}
+\mathbf J = -\frac1\Omega\sum_{n\mathbf k} w_{n\mathbf k}\Big[
+\langle\phi|\partial_{\mathbf k}H|\phi\rangle
+- 2\,\mathrm{Im}\,\langle\phi|H S^{-1}\mathbf X|\phi\rangle\Big],
+\end{equation*}
+whose matrix element between two eigenstates is the generalised velocity
+$\langle n|\partial H - \epsilon_m\partial S|m\rangle + (\epsilon_m-\epsilon_n)K_{nm}$
+the optical conductivity is built from, and whose work on the field is the
+energy the states gain. $S^{-1}$ is applied by Woodbury's identity, one small
+solve per k-point and time, as \code{sm1\_psi.f90} does; PAW's one-centre
+coefficients are the ground state's, frozen with the potential; a kick is a step
+in $\boldsymbol\kappa$, which the augmented states cross by the same equation
+without $H$ (the all-electron state does not move under it). The frequency-domain
+hierarchy solves the same equation expanded in the field, with $S$, its
+derivatives and those of $\mathbf X$ beside the Hamiltonian's.
+
+\begin{pycode}
+from defumat import Calculator
+
+calc = Calculator.from_file("se-trigonal-soc.in")   # spin-orbit, three atoms
+calc.get_scf()
+spec = calc.get_nonlinear_spectrum([0.8, 1.2], broadening=0.2,
+                                   direction=(1, 0, 0), grid=(2, 2, 2))
+print(spec.chi2(0))       # chi_xxx(-2w; w, w), pm/V
+print(spec.chi3(0)[0])    # chi_xxxx(-3w; w, w, w), m^2/V^2
+\end{pycode}
+
+XXXNUMBERS
+
 \begin{refuses}
-\textbf{Refuses.} An \textbf{ultrasoft or PAW} dataset: with the projectors at
-$\mathbf k+\boldsymbol\kappa(t)$ the overlap moves with time and the equation of
-motion gains a term built from the augmentation dipole and the projectors'
-$\kappa$ derivative, which is derived and not sourced. Shifting the projectors
-alone moves $\langle\psi|S|\psi\rangle$ of ultrasoft silicon by up to
-$1.6\times10^{-3}$ at a general k-point and $1.7\times10^{-4}$ at $\Gamma$ at the
-published pulse's peak $\kappa = 0.11$~bohr$^{-1}$, which is the size of what is
-missing. \textbf{\code{nspin} = 2 and spinors}: two channels or one spinor
-Hamiltonian with no new physics, refused for want of a linear reference to check
-them against, since the optical conductivity and $\chi^0$ both refuse collinear
-spin. \textbf{DFT+$U$}, until the Hubbard projectors' own row at
+\textbf{Refuses.} With an \textbf{ultrasoft or PAW} dataset, \textbf{the potential
+updated in time}: the augmentation charge of $\rho(t)$ would come from the
+projections at $\mathbf k+\boldsymbol\kappa(t)$, $D(t)$ would be rebuilt by
+\code{newd} at every step and PAW's one-centre $D$ from the one-centre densities,
+none of which is written; and \textbf{a kick after the start of the run}, whose
+step the augmented states cross by a transformation the time grid cannot hold.
+\textbf{DFT+$U$}, until the Hubbard projectors' own row at
 $\mathbf k+\mathbf G=0$ is repaired (their first derivative at $\Gamma$ is 19 per
 cent off for a p shell) and the linear check is run. \textbf{A spin spiral} and
 \textbf{gamma-only storage}. \textbf{A ground state converged under a magnetic

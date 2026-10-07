@@ -571,16 +571,15 @@ wedge is detected with `is_reduced` and not from the weights.
 
 ### What is left for later, each with what it needs first
 
-- Ultrasoft and PAW. See "What is refused" for the missing terms.
-- Collinear `nspin = 2` and spinors: the frozen mode is two independent channels, or
-  one spinor Hamiltonian, with no new physics, and neither has a linear reference in
-  this code to be checked against (`optical_conductivity` and `chi_0` both refuse
-  collinear spin), so both are refused in the first version for lack of a number
-  rather than for a missing term. A fully-relativistic norm-conserving dataset should
-  run on `SpinorHamiltonian`, and with the potential
-  updated it is laser-driven spin dynamics, Elk's main use of this machinery. It needs
-  its own checks (the spin sum rule, a comparison with Elk's `Ni-laser-pulse`) and is
-  not part of the first phase.
+- Ultrasoft and PAW, collinear `nspin = 2` and spinors: **done at a frozen potential**
+  (`PLAN.md` P139 to P141, 2026-10-07), and with the potential updated for `nspin = 2` and
+  spinors. The term the moving overlap adds is the one derived below, `P_kappa = E.X`, now
+  checked rather than only derived: against the Kubo sum with P99's generalised velocity at
+  first order, and the hierarchy against the propagation above it. What is left of the
+  item is the potential updated for an ultrasoft or PAW dataset (the augmentation charge of
+  `rho(t)` from the projections at `k + kappa(t)`, `newd`'s `D(t)` every step, PAW's
+  one-centre `D(t)`), and laser-driven spin dynamics against Elk's `Ni-laser-pulse`, for
+  which the spinor route with the potential updated is the machinery.
 - Re-centring the sphere when $\boldsymbol\kappa$ crosses a reciprocal lattice vector's
   half, which is a shift of Miller index of the kind P16 does at the zone edge, for
   mid-infrared pulses whose $\kappa_0$ approaches the zone size.
@@ -593,6 +592,12 @@ wedge is detected with `is_reduced` and not from the weights.
 
 ## What is refused, by name, in the first version
 
+*Updated 2026-10-07 (P139 to P141): the first two items below are no longer refused at a
+frozen potential. The derivation is kept because it is the one the code follows, with the
+signs checked: `X = sum |b_i>[d_ij <b_j| + i q_ij <db_j/dk|]` is `i` times P99's connection,
+`X - X^dag = i dS/dk` holds to 5e-11 against a finite difference of `S`, and the current
+`<dH/dk> - 2 Im <H S^-1 X>` is P99's generalised velocity between eigenstates.*
+
 - Ultrasoft and PAW datasets. With the projectors at
   $\mathbf k+\boldsymbol\kappa(t)$ the overlap $S$ depends on time, and the equation of
   motion gains a term,
@@ -601,28 +606,19 @@ wedge is detected with `is_reduced` and not from the weights.
   where $\mathbf d_{ij}$ is the dipole of the augmentation function about its atom and
   $(\mathbf r-\mathbf R)$ stands to the right of the bra and acts on the state, so that
   $\langle\beta_j|(\mathbf r-\mathbf R)$ is $i\,\partial_{\boldsymbol\kappa}\langle\beta_j|$.
-  The overall signs were not checked. This
-  form was derived twice while planning, independently, and is not written out in any
-  source that was read; the confirmed analogue is the moving-ion term of
-  arXiv:cond-mat/0510643, and the Abinit PAW implementation (arXiv:2507.08578) says only
-  that its expression differs "due to some subtleties related to gauge invariance and
-  non-local potentials", pointing at Sato (Comput. Mater. Sci. 194, 110274) and Pela and
-  Draxl (Electron. Struct. 3, 037001), which are the leads to read. The refusal should
-  carry a measurement that needs no reference: shifting the projectors alone does not
-  conserve $\langle\psi|S_\kappa|\psi\rangle$, and the drift on one ultrasoft cell under
-  a pulse is the number to quote. That drift sees only the anti-Hermitian part of
-  $P_\kappa$, which is $-(i/2)\,dS/dt$; the dipole term and the Hermitian half of the
-  $q_{ij}$ term leave the norm alone, so a version with zero drift can still be missing
-  both. The drift is a reason to refuse and is not a test of completeness; the test of
-  the Hermitian parts is the linear response against `optical_conductivity`, which
-  accepts an ultrasoft dataset.
+  The overall signs were not checked when this was written; they are now (above). The
+  published form is Qian, Li, Lin and Yip's moving-ion term, PRB 73, 035408 (2006),
+  arXiv:cond-mat/0510643, Eqs. 19 to 22, `P = -i T^dag dT/dt`, with the field's
+  `kappa` for the ions' coordinates; GPAW's (arXiv:1109.6157, Eqs. 49 to 51) is the same
+  construction. Abinit's real-time PAW (arXiv:2507.08578, and its `src/80_rttddft` read on
+  2026-10-07) rebuilds the projectors and `S^-1` at `k + A` but carries no `dS/dt` term.
 - A symmetry-reduced or shifted k-set, until the little-group stage.
 - A spin spiral and gamma-only storage, which `at_kcart` already refuses.
 - DFT+U with the potential updated in time. At a frozen potential and a fixed
   occupation matrix the machinery exists, since `at_kcart` rebuilds `wfcU` at the traced
   k-point (`driver.py:4208`) and the velocity operator carries the Hubbard term, so that
   mode is refused in the first version only until its linear check is run.
-- Collinear `nspin = 2` and spinors, for the reason given in the list of later work.
+- Collinear `nspin = 2` and spinors: no longer refused (P139, P140).
 - `occupations = 'fixed'` cutting a degenerate multiplet, by the diagnosis that already
   exists: the weights then differ inside a multiplet and $\mathbf J$ depends on the
   rotation the eigensolver returned.

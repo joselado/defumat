@@ -474,7 +474,9 @@ adiabatic local kernel can. `calc.get_absorption(frequencies)`, notebook
   `calc.get_shift_current()`, notebook [32](notebooks/32_shift_current.ipynb).
 - **Second-harmonic generation**, $\chi^{(2)}_{abc}(-2\omega;\omega,\omega)$, how
   much of the light shone on a crystal comes back at twice the frequency, a
-  polar rank-3 tensor that vanishes in any centrosymmetric crystal.
+  polar rank-3 tensor that vanishes in any centrosymmetric crystal, on
+  norm-conserving, ultrasoft and PAW datasets and on collinear, spinor and
+  spin-orbit ground states.
   `calc.get_shg()`, notebook [33](notebooks/33_second_harmonic_generation.ipynb).
 - **High-harmonic generation**, the light a crystal emits at multiples of a laser's
   frequency when driven hard: the occupied states propagated in time under
@@ -482,14 +484,18 @@ adiabatic local kernel can. `calc.get_absorption(frequencies)`, notebook
   order in zincblende AlAs, and the dielectric function from a kick on the way,
   at the ground state's potential or with the Hartree and exchange-correlation
   potentials rebuilt from the density at every step (local fields and the
-  adiabatic kernel, `potential='hxc'`).
+  adiabatic kernel, `potential='hxc'`). A collinear magnet, a spinor run with
+  spin-orbit coupling or noncollinear magnetism, and an ultrasoft or PAW dataset,
+  whose moving overlap adds the augmentation's dipole to the equation of motion
+  and to the current, take the same route.
   `calc.get_hhg(pulse)`, `calc.get_realtime(pulse)`, notebook
   [50](notebooks/50_high_harmonics.ipynb).
 - **The third harmonic**, $\chi^{(3)}(-3\omega;\omega,\omega,\omega)$, and the
   intensity-dependent index $\chi^{(3)}(-\omega;\omega,\omega,-\omega)$, taken as
   derivatives of the propagation with respect to the field strength at one
   frequency, or as a spectrum from the steady state solved directly at every
-  frequency, which carries the projectors' curvature a sum over states misses.
+  frequency, which carries the projectors' curvature a sum over states misses;
+  for magnets, spin-orbit coupling, ultrasoft and PAW as for the scalar case.
   `calc.get_third_harmonic(frequency)`, `calc.get_nonlinear_spectrum(frequencies)`,
   notebook [51](notebooks/51_nonlinear_spectra.ipynb).
 
@@ -678,8 +684,8 @@ note, the routine or task in the other code's source, is in
 | **Optical conductivity**, the Kerr angle and the anomalous Hall conductivity | `calc.get_optical_conductivity()` | (✓)¹² | ✓ |
 | **Shift current** | `calc.get_shift_current()` | ¹³ | |
 | **Second-harmonic generation** | `calc.get_shg()`, and with every band and the projectors' curvature `calc.get_nonlinear_spectrum(frequencies, order=2)` | (✓)¹⁴ | ✓ |
-| **Real-time response to a laser pulse**: the current in time, the dielectric function from a kick, the high-harmonic spectrum, at the ground state's potential or with the Hartree and exchange-correlation potentials updated in time | `calc.get_realtime(pulse)`, `calc.get_realtime_dielectric()`, `calc.get_hhg(pulse)`, each with `potential='hxc'` | | (✓)¹⁹ |
-| **Third-harmonic susceptibility** $\chi^{(3)}$, and the perturbative orders of the current, at one frequency or as a spectrum | `calc.get_third_harmonic(frequency)`, `calc.get_harmonic_orders(frequency)`, `calc.get_nonlinear_spectrum(frequencies)` | | |
+| **Real-time response to a laser pulse**: the current in time, the dielectric function from a kick, the high-harmonic spectrum, at the ground state's potential or with the Hartree and exchange-correlation potentials updated in time, for collinear and spinor magnets, spin-orbit coupling, ultrasoft and PAW | `calc.get_realtime(pulse)`, `calc.get_realtime_dielectric()`, `calc.get_hhg(pulse)`, each with `potential='hxc'` | | (✓)¹⁹ |
+| **Third-harmonic susceptibility** $\chi^{(3)}$, and the perturbative orders of the current, at one frequency or as a spectrum, for collinear and spinor magnets, spin-orbit coupling, ultrasoft and PAW | `calc.get_third_harmonic(frequency)`, `calc.get_harmonic_orders(frequency)`, `calc.get_nonlinear_spectrum(frequencies)` | | |
 | **Berry curvature and Chern numbers** | `calc.get_chern()` | | |
 | **$\mathbb{Z}_2$ invariants** in 2D and 3D | `calc.get_z2()` | | |
 | **Berry-phase polarization** | `calc.get_polarization()` | ✓ | ✓ |

@@ -194,9 +194,10 @@ crystal momentum that their difference does not.
 The second and third orders are solved at the ground state's potential; with the potential
 responding to the field the induced potentials at $2\omega$ and $3\omega$ would each be a
 fixed point at every frequency, and that is refused by name (a laser pulse propagated in time
-has it, one frequency a run, notebook 50). It needs a norm-conserving pseudopotential and no
-spin, as the propagation does, and it refuses a solve that has not converged, since an
-unconverged first order is amplified into the second by one over the broadening.
+has it, one frequency a run, notebook 50). Magnets, spin-orbit coupling and ultrasoft or PAW
+datasets are solved as the propagation solves them (notebook 52), and it refuses a solve that
+has not converged, since an unconverged first order is amplified into the second by one over
+the broadening.
 
 ---
 The checks behind this notebook are in `tests/regression/test_realtime_hierarchy.py`, where the

@@ -252,12 +252,14 @@ spectrum.
 
 ## What it refuses
 
-The propagation needs a norm-conserving dataset: with ultrasoft or PAW projectors
-moving with $\mathbf k+\boldsymbol\kappa(t)$ the overlap changes in time and the
-equation of motion gains a term, which is refused by name rather than dropped. It
-also refuses spin, collinear and spinor alike, DFT+U, a spin spiral, a ground
-state converged under a magnetic field or a constrained moment, and a run stored
-at $\Gamma$ alone. The k-set has to be a whole unshifted Monkhorst-Pack grid or the
+A magnet, collinear or noncollinear, a crystal with spin-orbit coupling and an
+ultrasoft or PAW dataset run the same propagation (notebook 52 has the second and
+third harmonic of one with spin-orbit coupling); with ultrasoft or PAW projectors
+the overlap moves with $\mathbf k+\boldsymbol\kappa(t)$ and the equation of motion
+carries the term that keeps the norm, but the potential is then held at the ground
+state's, and updating it is refused by name. The propagation refuses DFT+U, a spin
+spiral, a ground state converged under a magnetic field or a constrained moment,
+and a run stored at $\Gamma$ alone. The k-set has to be a whole unshifted Monkhorst-Pack grid or the
 little group of the field built from one: the field breaks both the crystal's
 group and time reversal, so a wedge of the crystal's own group is refused, and a
 shifted grid is refused because the group does not map it onto itself. A fixed
