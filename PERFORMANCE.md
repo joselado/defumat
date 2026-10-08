@@ -11067,3 +11067,28 @@ second run, `multiply`, `less_equal`, `greater_equal`, `bitwise_and`, `true_divi
 5.394043942634951e-08 against 5.39404394262972e-08: the card does not reproduce its own last bit
 from run to run, and the property the test guards, that a run at four times the amplitude is not
 handed the first run's current, holds.
+
+**Against the size of the cell** (the same day, job 20839471 on `gpu45`, commit `70bcae0`,
+`tools/gpu/thg-cells-gpu.sbatch`). The silicon supercells of `benchmarks/` at the same 12 Ry and
+450 steps a period, every one on the field's wedge of one 2x2x1 mesh (3 points for the fcc cell, 4
+for the others), so what grows is the cell. `eta_t = 6` (3600 steps) up to 16 atoms, `eta_t = 1`
+(900 steps) beyond, which times a step and checks nothing:
+
+| atoms | bands x plane waves | ms a point and step | the call | warm-up | card peak | against the hierarchy |
+|---|---|---|---|---|---|---|
+| 2 | 4 x 190 | 0.78 | 8.5 s | 32 s | 0.12 GB | 6.5e-3 |
+| 8 | 16 x 768 | 1.62 | 23.3 s | 33 s | 0.29 GB | 9.1e-3 |
+| 16 | 32 x 1524 | 4.61 | 66.7 s | 44 s | 1.12 GB | 6.9e-3 |
+| 32 | 64 x 3004 | 20.2 | 73.7 s | 80 s | 4.41 GB | (1.8e-1 at `eta_t = 1`) |
+| 64 | 128 x 5988 | 80.3 | 291 s | 225 s | 17.9 GB | (1.8e-1) |
+| 128 | 256 x 11968 | 356 | 1289 s | 890 s | **62.7 GB** | (5.1e-1) |
+
+Past 16 atoms the step goes as the square of the cell, 4.4x, 4.0x and 4.4x a doubling, which is
+bands times plane waves, the product of the occupied states with the Hamiltonian applied to them;
+below it the card is not full and a doubling costs 2 to 3x. The card's peak goes the same way, 3.9x,
+4.1x and 3.5x a doubling, and is the limit: 62.7 GB of 80 at 128 atoms on four points, so a
+256-atom cell at this mesh does not fit one H100, and 128 atoms on a mesh of more than five points
+does not either unless the k-chunk is narrowed. The 2-atom cell's 0.78 ms against 0.205 on 4^3 is
+the batching of the table above it, 3 points against 18. The 16-atom cell's fixed-density solve for
+the hierarchy warned that 2 of 4 k-points left the Cholesky route of the subspace solve, and its
+answer is 6.9e-3 from the propagation, the start transient at `eta_t = 6`.

@@ -17,7 +17,7 @@
 #
 # The run length is per cell: eta_t 6 (3600 steps) up to 16 atoms, where the check
 # against the hierarchy means something (8e-3 at 6 on the 2-atom cell), and eta_t 1
-# (600 steps) from 32 atoms, a timing only, since on D22's A2000 the 32-atom cell took
+# (900 steps) from 32 atoms, a timing only, since on D22's A2000 the 32-atom cell took
 # over 50 minutes at eta_t 0.5 where the 8-atom one took 3 (37.6 ms a point and step).
 # The cells run smallest first and each record is written as it finishes, so the
 # time limit can only cost the largest.
