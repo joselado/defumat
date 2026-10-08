@@ -105,3 +105,45 @@ def test_the_table_differentiates_at_the_origin_like_the_rewritten_rows(pseudo_d
     a, b = np.asarray(second(by_table)), np.asarray(second(by_series))
     assert np.abs(a).max() > 1e-2, "the l = 0 curvature is not zero"
     np.testing.assert_allclose(a, b, rtol=1e-9, atol=1e-12 * np.abs(a).max())
+
+
+def test_a_second_evaluation_outside_jit_compiles_nothing(pseudo_dir):
+    """The columns of a second k-chunk, evaluated eagerly, reuse the first one's programs.
+
+    The setup of every k-chunk evaluates the table outside any ``jit``, and
+    with the Clenshaw loop a ``fori_loop`` over a closure that compiled two
+    ``jit(scan)`` programs a chunk (248 in an 8^3 third harmonic on a CPU).
+    The counter is validated on the first evaluation, which must compile.
+    """
+    import logging
+
+    pseudo = read_upf(pseudo_dir / "Si.pz-vbc.UPF")
+    table = radial_table((pseudo,), 270.0, 25.0)
+    rng = np.random.default_rng(0)
+    chunks = [jnp.asarray(rng.normal(size=(2, 37, 3))) for _ in range(3)]
+    count = [0]
+
+    class Counter(logging.Handler):
+        def emit(self, record):
+            if "Finished XLA compilation" in record.getMessage():
+                count[0] += 1
+
+    handler = Counter()
+    logger = logging.getLogger("jax")
+    previous = logger.level
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+    jax.config.update("jax_log_compiles", True)
+    counts = []
+    try:
+        jax.clear_caches()
+        for kg in chunks:
+            before = count[0]
+            table.columns(kg).block_until_ready()
+            counts.append(count[0] - before)
+    finally:
+        jax.config.update("jax_log_compiles", False)
+        logger.removeHandler(handler)
+        logger.setLevel(previous)
+    assert counts[0] > 0, "the counter saw the first evaluation compile"
+    assert counts[1] == counts[2] == 0, counts

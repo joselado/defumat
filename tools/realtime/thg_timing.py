@@ -19,13 +19,12 @@ timed apart from the propagation.
 program the timed run uses, since the time grid is padded to whole blocks and
 the field reaches the kept block as an argument; the timed call then runs
 under ``jax_log_compiles`` with a counter on the ``jax`` logger, which prints
-each program it compiled and its seconds. At ``9efd6bc`` the count is not zero:
-``RadialTable.radial`` (``realtime/radial.py``), a ``fori_loop`` over a
-closure, is called outside any ``jit`` while each k-chunk is set up, so two
-``jit(scan)`` programs are traced and loaded again per chunk and per call, 5.5
-ms each and about 28 mappings each on D22 (18 points on a CPU: 36 programs in
-a 101 s call). That is the eager-closure trap at a size that does not move a
-time; it is counted rather than hidden.
+each program it compiled and its seconds. Up to ``9efd6bc`` the count grew with
+the mesh: ``RadialTable.radial`` (``realtime/radial.py``) ran its Clenshaw loop
+as a ``fori_loop`` over a closure outside any ``jit``, one ``jit(scan)`` a
+k-chunk and a call, 248 compiles in the 8^3 CPU case; it is compiled once at
+module level now, and what is left (12 programs on 4^3) is the elementwise
+algebra of the longer time grid, once a call.
 
 **The check** (``--hierarchy``): the frequency-domain hierarchy
 (``get_nonlinear_spectrum``) at the same frequency, broadening, grid and

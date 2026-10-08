@@ -103,28 +103,44 @@ class RadialTable(eqx.Module):
         so no live plane wave reaches the edge in a run; a caller that builds a
         smaller table is clamped without a word.
         """
-        s = jnp.where(s <= self.s_max, s, self.s_max)
-        x = (2.0 * s / self.s_max - 1.0)[..., None]
-        c = self.coefficients
-        n = c.shape[1]
-        b1 = jnp.zeros(x.shape[:-1] + (c.shape[0],), dtype=c.dtype)
-
-        # A loop rather than the recurrence written out: written out, a table of
-        # 512 terms was 512 steps of every program that evaluates the projectors,
-        # under every derivative taken of them, and an augmented dataset's
-        # third-order propagation did not finish compiling in an hour.
-        def step(i, pair):
-            first, second = pair
-            return 2.0 * x * first - second + c[:, n - 1 - i], first
-
-        b1, b2 = jax.lax.fori_loop(0, n - 1, step, (b1, b1), unroll=min(8, max(1, n - 1)))
-        return x * b1 - b2 + c[:, 0]
+        return _clenshaw(self.coefficients, self.s_max, s)
 
     def columns(self, kg):
         """``S_lm(q) g_l(|q|^2)`` for every column, ``(..., ncols)``, real."""
         s = jnp.sum(kg * kg, axis=-1)
         solid = jnp.take(real_solid_harmonics(kg, self.lmax), self.lm_of, axis=-1)
         return solid * jnp.take(self.radial(s), self.beta_of, axis=-1)
+
+
+@jax.jit
+def _clenshaw(c, s_max, s):
+    """``sum_n c_n T_n(2 s / s_max - 1)`` for every row of ``c``, ``(..., nbeta)``.
+
+    **Compiled once per shape, at module level.** The recurrence is a
+    ``fori_loop`` over a function that closes over ``x`` and ``c``, and called
+    outside any ``jit``, which the setup of every k-chunk does, such a loop is
+    traced and compiled again at every call, since the closure is a new
+    function each time: two ``jit(scan)`` programs a k-chunk, 248 in one 8^3
+    third harmonic on a CPU and 14,920 mappings by its end (``PERFORMANCE.md``,
+    the third harmonic on an H100). Here the arrays are arguments, so a second
+    chunk of the same shape reuses the program, and under an outer ``jit`` it is
+    inlined as before.
+    """
+    s = jnp.where(s <= s_max, s, s_max)
+    x = (2.0 * s / s_max - 1.0)[..., None]
+    n = c.shape[1]
+    b1 = jnp.zeros(x.shape[:-1] + (c.shape[0],), dtype=c.dtype)
+
+    # A loop rather than the recurrence written out: written out, a table of
+    # 512 terms was 512 steps of every program that evaluates the projectors,
+    # under every derivative taken of them, and an augmented dataset's
+    # third-order propagation did not finish compiling in an hour.
+    def step(i, pair):
+        first, second = pair
+        return 2.0 * x * first - second + c[:, n - 1 - i], first
+
+    b1, b2 = jax.lax.fori_loop(0, n - 1, step, (b1, b1), unroll=min(8, max(1, n - 1)))
+    return x * b1 - b2 + c[:, 0]
 
 
 def _chebyshev(values):

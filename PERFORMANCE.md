@@ -11049,13 +11049,19 @@ on both. Against the hierarchy the propagation is 7.5e-3, 3.1e-3 and 1.6e-3 off 
 
 **Memory and compiles.** The card's peak is 131 MB at 4^3, 508 MB at 8^3 and 1.52 GB at 12^3; the
 host's resident set is 4.3 GB on the card's side and 1.5 to 1.8 GB on the CPU's. The timed call
-compiles 50 programs on the card whatever the mesh and **84 and 248** on the CPU, about 2.5 a
-k-point: `RadialTable.radial` (`realtime/radial.py`) is a `fori_loop` over a closure called outside
-any `jit` once per k-chunk, the eager-closure trap, and a CPU chunk is one point (the card's 50 do
+logs 50 compilation lines on the card whatever the mesh and **84 and 248** on the CPU (the driver
+counts a "Compiling" and a "Finished" line, two a program, so 25, 42 and 124 programs), one
+`jit(scan)` a k-point on the CPU beside 24 that are not: `RadialTable.radial` (`realtime/radial.py`) is a `fori_loop` over a closure called outside
+any `jit` once per k-chunk, the eager-closure trap, and a CPU chunk is one point (the card's 50 lines do
 not grow from 18 points to 294, which says its chunk holds the wedge; which of them are the radial
 table was not read). It costs a few per cent of the CPU's warm-up and nothing
 measurable of its propagation, and it is what grows the process's mappings: 14,920 at the end of
-the 8^3 CPU run against 1,201 on the card, a quarter of Triton's 65,530.
+the 8^3 CPU run against 1,201 on the card, a quarter of Triton's 65,530. **Fixed the same day** (`_clenshaw`,
+compiled once at module level with the arrays as arguments): the 4^3 case at `eta_t = 1` on four of
+D22's performance cores compiles 24 programs in the timed call instead of 42 (the 18 `jit(scan)`, one
+a k-point, are gone; the rest are the time grid's elementwise algebra, once a call), propagates at
+9.34 against 9.37 ms a point and step, ends at 4,830 mappings against 5,195, and gives the same
+`chi(3w)` to every printed digit. The two compile-count tests below pass on D22's card with it.
 
 **The tests on the card** (the same job, after the timings): `tests/regression/test_realtime.py`,
 `test_realtime_orders_fd.py`, `test_realtime_hierarchy.py` and `test_realtime_regimes.py` pass, 23
