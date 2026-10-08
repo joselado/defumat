@@ -11087,8 +11087,8 @@ Past 16 atoms the step goes as the square of the cell, 4.4x, 4.0x and 4.4x a dou
 bands times plane waves, the product of the occupied states with the Hamiltonian applied to them;
 below it the card is not full and a doubling costs 2 to 3x. The card's peak goes the same way, 3.9x,
 4.1x and 3.5x a doubling, and is the limit: 62.7 GB of 80 at 128 atoms on four points, so a
-256-atom cell at this mesh does not fit one H100, and 128 atoms on a mesh of more than five points
-does not either unless the k-chunk is narrowed. The 2-atom cell's 0.78 ms against 0.205 on 4^3 is
+256-atom cell at this mesh, at about four times that, does not fit one H100 unless the k-chunk
+narrows to fewer points, which was not tried. The 2-atom cell's 0.78 ms against 0.205 on 4^3 is
 the batching of the table above it, 3 points against 18. The 16-atom cell's fixed-density solve for
 the hierarchy warned that 2 of 4 k-points left the Cholesky route of the subspace solve, and its
 answer is 6.9e-3 from the propagation, the start transient at `eta_t = 6`.
