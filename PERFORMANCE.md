@@ -11015,3 +11015,55 @@ difference gives `c Omega` = 0.95 electrons at `nempty 16` and 2.9 at 8 (5.4, 3.
 as Elk's basis grows is what an incomplete sum over states leaves of the f-sum rule, which is the
 reading, not a measurement; the falsifier would be `c` reaching zero as `nempty` grows further,
 which was not affordable here. Memory was not measured; every run was under an 8 GB cap.
+
+## The third harmonic on an H100 against four CPU cores (Triton, 2026-10-08)
+
+`GPU.md` §2.3's metric for the real-time route: the same commit (`02bec95`), the same input and
+the same steps on both sides, the time per k-point and step of the second call, compilation on its
+own line (`tools/realtime/thg_timing.py`, `tools/gpu/thg-gpu.sbatch`, `thg-cpu.sbatch`). Two-atom
+silicon at 12 Ry (`si2-symmetric.in`), `chi_xxxx(-3w; w, w, w)` at 1.55 eV, 0.2 eV broadening, the
+field's wedge of the mesh, 450 steps a period (`dt = 0.245` Hartree a.u.; 360 is past the
+propagator's bound at this cutoff and refused). The card is one H100 80GB HBM3 (`gpu47`), the CPU
+side four Xeon Gold 6248 cores of a `batch-csl` node that was **shared**: 37 to 40 of its 40 cores
+allocated and a load of 18 at the start, 37 at the end of the longer run, so its time is a time
+beside neighbours and is, if anything, pessimistic.
+
+| mesh, `eta_t` | points x steps | H100, ms a point and step | 4 CPU cores | ratio | warm-up, card / CPU |
+|---|---|---|---|---|---|
+| 4^3, 6 | 18 x 3600 | 0.205 (13.3 s) | 15.40 (998 s) | **75x** | 35 / 242 s |
+| 8^3, 6 | 100 x 3600 | 0.097 (34.8 s) | 15.51 (5584 s) | **160x** | 40 / 1395 s |
+| 4^3, 12 | 18 x 6750 | 0.192 (23.4 s) | | | 10 s |
+| 12^3, 6 | 294 x 3600 | 0.080 (84.9 s) | | | 51 s |
+
+The CPU walks one k-point at a time (`k_batch = 1`), so its cost a point and step is flat in the
+mesh; the card holds every point of the wedge at once and its cost a point falls by 2.6x from 18
+points to 294, so the ratio grows with the mesh and 75x is its floor here. The frequency-domain
+hierarchy at the same frequency costs 1.8 / 5.1 s (4^3) and 3.3 / 24.5 s (8^3), card / CPU, 2.8x
+and 7.4x: it is a few BiCGStab solves (20 to 23 iterations to 1e-10) and has less to batch.
+
+**The answers are the same.** Card against CPU, `chi(3w)` differs by 4.1e-11 (4^3) and 7.6e-12
+(8^3), `chi(w)` by 7.4e-12 and 3.3e-12, the linear `chi^(1)` by 6e-13, and the norm drift is 2.9e-6
+on both. Against the hierarchy the propagation is 7.5e-3, 3.1e-3 and 1.6e-3 off at `eta_t = 6`
+(4^3, 8^3, 12^3) and **2.8e-5** at `eta_t = 12`, the start transient of `PLAN.md` P135 (8e-3 and
+5e-5 on the earlier record).
+
+**Memory and compiles.** The card's peak is 131 MB at 4^3, 508 MB at 8^3 and 1.52 GB at 12^3; the
+host's resident set is 4.3 GB on the card's side and 1.5 to 1.8 GB on the CPU's. The timed call
+compiles 50 programs on the card whatever the mesh and **84 and 248** on the CPU, about 2.5 a
+k-point: `RadialTable.radial` (`realtime/radial.py`) is a `fori_loop` over a closure called outside
+any `jit` once per k-chunk, the eager-closure trap, and a CPU chunk is one point (the card's 50 do
+not grow from 18 points to 294, which says its chunk holds the wedge; which of them are the radial
+table was not read). It costs a few per cent of the CPU's warm-up and nothing
+measurable of its propagation, and it is what grows the process's mappings: 14,920 at the end of
+the 8^3 CPU run against 1,201 on the card, a quarter of Triton's 65,530.
+
+**The tests on the card** (the same job, after the timings): `tests/regression/test_realtime.py`,
+`test_realtime_orders_fd.py`, `test_realtime_hierarchy.py` and `test_realtime_regimes.py` pass, 23
+tests in 28 minutes. `tests/unit/test_realtime.py` fails 3 of 19, none on a number:
+`test_a_second_k_chunk_compiles_nothing` (two compiles a chunk, 298 against 300, the radial table
+above), `test_a_second_self_consistent_run_compiles_nothing` (8 eager elementwise programs on the
+second run, `multiply`, `less_equal`, `greater_equal`, `bitwise_and`, `true_divide`), and
+`test_a_checkpoint_of_another_run_is_not_resumed`, which asserts two runs bit-identical and gets
+5.394043942634951e-08 against 5.39404394262972e-08: the card does not reproduce its own last bit
+from run to run, and the property the test guards, that a run at four times the amplitude is not
+handed the first run's current, holds.
