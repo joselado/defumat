@@ -35,9 +35,14 @@ start transient: 8e-3 in ``chi(3w)`` at ``eta_t = 6`` and 5e-5 at 12 on silicon
 (``PLAN.md`` P135).
 
     python3 tools/realtime/thg_timing.py OUT.json GRID ETA_T [--eta 0.2] [--ecut 12]
-        [--steps 450] [--hierarchy]
+        [--steps 450] [--hierarchy] [--input benchmarks/si8-1k.in] [--grid3 2 2 1]
 
-Each case appends one record to ``OUT.json``.
+``--input`` replaces the two-atom cell by another norm-conserving input (the
+supercells of ``benchmarks/``), whose own ``K_POINTS`` carry the ground state;
+``--grid3`` gives the propagation's mesh axis by axis where ``GRID`` gives a
+cube, for the 1x1xN stacks. Each case appends one record to ``OUT.json``,
+written once the propagation is timed and again after the check, so a check
+that refuses does not lose the timing.
 """
 import argparse
 import json
@@ -67,6 +72,10 @@ parser.add_argument("--eta", type=float, default=0.2, help="broadening in eV")
 parser.add_argument("--ecut", type=float, default=12.0)
 parser.add_argument("--steps", type=int, default=450, help="steps a period")
 parser.add_argument("--hierarchy", action="store_true")
+parser.add_argument("--input", type=Path, default=None,
+                    help="another input in place of tests/data/qe/si2-symmetric.in")
+parser.add_argument("--grid3", type=int, nargs=3, default=None,
+                    help="the propagation's mesh, axis by axis, in place of GRID^3")
 args = parser.parse_args()
 
 repo = Path(__file__).resolve().parents[2]
@@ -79,7 +88,9 @@ except OSError:
 print(f"{device.platform} {device.device_kind}, jax {jax.__version__}, commit {commit}, "
       f"affinity {len(os.sched_getaffinity(0))} CPUs", flush=True)
 
-text = (repo / "tests/data/qe/si2-symmetric.in").read_text()
+source = args.input if args.input is not None else repo / "tests/data/qe/si2-symmetric.in"
+mesh = tuple(args.grid3) if args.grid3 is not None else (args.grid,) * 3
+text = Path(source).read_text()
 text = re.sub(r"ecutwfc\s*=\s*[0-9.dD+-]+", f"ecutwfc = {args.ecut}", text)
 path = Path(tempfile.gettempdir()) / f"si2-thg-{args.ecut:g}-{os.getpid()}.in"
 path.write_text(text)
@@ -107,7 +118,7 @@ def timed(*a, **kw):
 
 workflow._occupied_states = timed
 options = dict(broadening=args.eta, both_directions=False, steps_per_period=args.steps,
-               grid=(args.grid,) * 3)
+               grid=mesh)
 
 # the warm-up: one period on the same grid, padded to the same block
 start = time.perf_counter()
@@ -168,6 +179,7 @@ record = {
          if line.startswith("model name")), ""),
     "affinity_cpus": len(os.sched_getaffinity(0)),
     "slurm_cpus": os.environ.get("SLURM_CPUS_PER_TASK"),
+    "input": Path(source).name, "nat": int(re.search(r"nat\s*=\s*(\d+)", text).group(1)), "mesh": list(mesh),
     "ecut": args.ecut, "grid": args.grid, "eta_eV": args.eta, "eta_t": args.eta_t,
     "steps_per_period": args.steps, "frequency_eV": FREQUENCY,
     "points": points, "states_shape": marks["states_shape"], "k_batch": marks["k_batch"],
@@ -187,11 +199,32 @@ print(f"third harmonic {total_s:.1f} s: fixed density {marks['fixed_density_s']:
 for line in compiled:
     print("  compiled in the timed call:", line, flush=True)
 
+
+def save():
+    """Append (or, on the second call, replace) this case's record in ``OUT.json``."""
+    if device.platform != "cpu":
+        stats = device.memory_stats() or {}
+        record["device_peak_bytes"] = stats.get("peak_bytes_in_use")
+    record["host_peak_rss_kb"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    # a Triton node allows 65,530 mappings (CLAUDE.local.md), and every executable
+    # a process loads stays mapped
+    record["process_mappings"] = len(Path("/proc/self/maps").read_text().splitlines())
+    records = json.loads(args.out.read_text()) if args.out.exists() else []
+    if records and records[-1].get("_id") == record["_id"]:
+        records[-1] = record
+    else:
+        records.append(record)
+    args.out.write_text(json.dumps(records, indent=1))
+
+
+record["_id"] = f"{os.getpid()}-{time.time()}"
+save()
+
 if args.hierarchy:
     def spectrum():
         return calculator.get_nonlinear_spectrum(
             [FREQUENCY], broadening=args.eta, direction=(1.0, 0.0, 0.0), order=3,
-            grid=(args.grid,) * 3)
+            grid=mesh)
 
     t0 = time.perf_counter()
     spectrum()
@@ -210,16 +243,7 @@ if args.hierarchy:
           f"{hierarchy_compiles} compiles); chi(3w) = {h3w:.6e}, the propagation "
           f"{record['rel_diff_3w']:.2e} from it, chi(w) {record['rel_diff_w']:.2e}", flush=True)
 
-if device.platform != "cpu":
-    stats = device.memory_stats() or {}
-    record["device_peak_bytes"] = stats.get("peak_bytes_in_use")
-record["host_peak_rss_kb"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-# a Triton node allows 65,530 mappings (CLAUDE.local.md), and every executable
-# a process loads stays mapped
-record["process_mappings"] = len(Path("/proc/self/maps").read_text().splitlines())
-records = json.loads(args.out.read_text()) if args.out.exists() else []
-records.append(record)
-args.out.write_text(json.dumps(records, indent=1))
+save()
 print(json.dumps(record), flush=True)
 path.unlink(missing_ok=True)
 print("CASE DONE", flush=True)
