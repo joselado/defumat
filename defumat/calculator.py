@@ -548,7 +548,8 @@ class Calculator:
         fit" for an input too large to build.
 
         ``options`` are :func:`~defumat.sizing.estimate_size`'s: ``nbnd``,
-        ``k_batch``, ``davidson_basis`` and ``band_batch``.
+        ``k_batch``, ``davidson_basis``, ``band_batch`` and, for the host
+        line, ``mixing_mode``, ``mixing_ndim`` and ``mixing_space``.
 
         **What is not given is taken from this calculator's own defaults**, not
         from the library's, because the question this answers is "will *this
@@ -566,6 +567,10 @@ class Calculator:
 
         options.setdefault("davidson_basis", self.defaults.get("david"))
         options.setdefault("nbnd", self.defaults.get("nbnd"))
+        # The mixer's history is a host line (``OPEN.md`` S2), sized at the
+        # depth and mode this run's SCF would build its mixer with.
+        options.setdefault("mixing_mode", self.defaults.get("mixing_mode"))
+        options.setdefault("mixing_ndim", self.defaults.get("mixing_ndim"))
         # The dials below are resolved through this calculator's memory mode,
         # which is the preset the run's own ``"default"`` dials come from: the
         # answer describes *this run*, not the library's defaults.

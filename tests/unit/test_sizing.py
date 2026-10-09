@@ -168,9 +168,14 @@ def test_a_tabulated_run_is_sized_as_one_and_not_as_the_stored_array(
     # same table; it may reach further than this cell's G set needs.
     assert counted == pytest.approx(held, rel=0.05)
 
-    assert estimate.arrays["augmentation phases (nat,npad)"] == (
-        built.augmentation.phases.nbytes
+    # The structure factor is built a chunk at a time from the positions, so
+    # what is held is the positions and an empty array carrying the dtype
+    # (``OPEN.md`` S3), where it was ``(nat, npad)`` complex.
+    assert built.augmentation.phases.size == 0
+    assert estimate.arrays["augmentation positions (nat,3)"] == (
+        built.augmentation.positions.nbytes
     )
+    assert "augmentation phases (nat,npad)" not in estimate.arrays
     # And the point: sized for the scheme that runs, not the one that does not.
     stored_would_be = (
         built.projectors.nkb**2 * estimate.ngm * 16 // len(calculator.pseudos)
@@ -421,3 +426,78 @@ def test_the_per_k_tables_and_the_hubbard_projectors_are_counted_exactly(pseudo_
     assert estimate.arrays["per-k basis tables (nk,npwx)"] == tables
     assert (estimate.arrays["Hubbard projectors wfcU (nk,ndim,nwfcU)"]
             == built.wfcU.nbytes)
+
+
+@pytest.mark.parametrize("element", ["Si", "Al"], ids=["nonsymmorphic", "symmorphic"])
+def test_the_symmetry_maps_hold_int32_and_no_phase_a_symmorphic_group_does_not_need(
+        element, pseudo_dir):
+    """``OPEN.md`` S1: what the run keeps for its symmetrisation, and that it is exact.
+
+    Diamond silicon's group has fractional translations and keeps its phases;
+    fcc aluminium's has none, and keeps one column of ones in their place. The
+    indices are int32 in both. The average is held to the one the int64
+    indices and the whole phase table give, to the bit, and the estimate's
+    line to the bytes held.
+    """
+    from defumat.system.symmetry import apply_symmetry_maps
+
+    text = SILICON
+    if element == "Al":
+        text = (SILICON.replace("Si 28.086 Si.pz-vbc.UPF", "Al 26.98 Al.pz-vbc.UPF")
+                .replace("nat = 2", "nat = 1")
+                .replace(" Si 0.00 0.00 0.00\n Si 0.25 0.25 0.25", " Al 0.00 0.00 0.00")
+                .replace("celldm(1) = 10.20", "celldm(1) = 7.50"))
+    calculator = _calculator(text, pseudo_dir)
+    built = calculator.calculation
+    permutations, phases = built._symmetry_maps
+    nsym, ngm = permutations.shape
+    assert permutations.dtype == np.int32
+    translations = built.symmetries.translation_array()
+    assert np.any(translations) == (element == "Si")
+    assert phases.shape == ((nsym, ngm) if element == "Si" else (nsym, 1))
+
+    miller = np.asarray(built.basis.dense.miller)
+    whole = np.exp(-2j * np.pi * (miller @ translations.T)).T
+    rng = np.random.default_rng(3)
+    field = rng.standard_normal(ngm) + 1j * rng.standard_normal(ngm)
+    old = np.asarray(apply_symmetry_maps(
+        field, np.asarray(permutations).astype(np.int64), whole))
+    np.testing.assert_array_equal(
+        np.asarray(apply_symmetry_maps(field, permutations, phases)), old)
+
+    estimate = calculator.estimate()
+    assert (estimate.arrays["symmetry maps (nsym,ngm)"]
+            == permutations.nbytes + phases.nbytes)
+
+
+def test_the_mixer_history_is_counted_on_the_host(pseudo_dir):
+    """``OPEN.md`` S2: Anderson's history, held against a real mixer's lists.
+
+    ``mixing_ndim`` input states and as many residuals, each the packed state
+    ``_mix`` hands the mixer -- here the dense density and PAW silicon's
+    ``becsum`` -- in host RAM, which the report gave as nothing. Six steps
+    through a depth of four, so the lists are full and trimmed, and the line is
+    the bytes they hold. It is not part of the device peak.
+    """
+    from defumat.scf.driver import _mix
+    from defumat.scf.mixing import get_mixer
+
+    calculator = _calculator(SILICON_PAW, pseudo_dir)
+    built = calculator.calculation
+    rho = built.starting_density()
+    becsum = built.starting_becsum()
+    rng = np.random.default_rng(7)
+    mixer = get_mixer("anderson", history=4)
+    for _ in range(6):
+        noise = rng.standard_normal(np.shape(rho)) * 1.0e-3
+        out = tuple(None if b is None else b * (1.0 + rng.uniform(-1e-3, 1e-3))
+                    for b in becsum)
+        rho, becsum, _, _ = _mix(mixer, rho, rho + noise, becsum, out)
+    held = sum(np.asarray(v).nbytes for v in mixer._densities + mixer._residuals)
+    assert len(mixer._densities) == 4
+
+    estimate = calculator.estimate(mixing_ndim=4)
+    assert estimate.host_arrays == {"mixer history (4 x rho_in, residual)": held}
+    assert "Host memory" in estimate.report()
+    assert calculator.estimate(mixing_ndim=8).peak_bytes == estimate.peak_bytes
+    assert calculator.estimate(mixing_mode="linear").host_arrays == {}

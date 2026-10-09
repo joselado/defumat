@@ -66,15 +66,33 @@ def _minimum_image_distances(points: np.ndarray, positions: np.ndarray,
     folded into the unit cell, and then compared against the eight corners --
     which is the minimum image for any cell whose difference vector has been
     folded, and is what QE does rather than a general neighbour search.
+
+    **A block of points at a time.** The corner comparison holds an
+    ``(npoint, nat, 8, 3)`` float64 array, 2.6 GB of host memory for nine atoms
+    on a 1.5-million-point grid and about 30 GB for 45 atoms on 3.5 million,
+    built at the first ``site_moments`` of a run (found by
+    ``tools/gpu/stage_peaks.py`` as a host kill after iteration 1, ``OPEN.md``
+    Part VII item 1). Each point's distance is its own, so the blocks give the
+    same numbers to the bit.
     """
-    difference = positions[None, :, :] - points[:, None, :]
-    difference = difference - np.floor(difference)
-    cartesian = difference @ at
     corners = np.array([
         [-i, -j, -k] for i in (0, 1) for j in (0, 1) for k in (0, 1)
     ]) @ at
-    shifted = cartesian[:, :, None, :] + corners[None, None, :, :]
-    return np.sqrt(np.min(np.sum(shifted**2, axis=-1), axis=-1))
+    out = np.empty((len(points), len(positions)))
+    for start in range(0, len(points), _DISTANCE_BLOCK):
+        block = points[start:start + _DISTANCE_BLOCK]
+        difference = positions[None, :, :] - block[:, None, :]
+        difference = difference - np.floor(difference)
+        cartesian = difference @ at
+        shifted = cartesian[:, :, None, :] + corners[None, None, :, :]
+        out[start:start + len(block)] = np.sqrt(
+            np.min(np.sum(shifted**2, axis=-1), axis=-1))
+    return out
+
+
+#: Points per block of :func:`_minimum_image_distances`: ``nat x 192`` bytes a
+#: point at the peak, so 6 MB a block per atom.
+_DISTANCE_BLOCK = 32768
 
 
 def default_radii(cell: Cell, structure: Structure) -> np.ndarray:

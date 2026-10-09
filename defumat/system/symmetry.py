@@ -1040,6 +1040,18 @@ def symmetry_maps(gvectors: "GVectors", symmetries: Symmetries):
             "a symmetry operation maps a G-vector outside the cutoff sphere; "
             "the operation is not a symmetry of the reciprocal lattice"
         )
+    # **What is resident for the run** (``OPEN.md`` S1): the indices as int32,
+    # since a G list is far below 2^31 entries, and no phases at all for a
+    # symmorphic group, whose every phase is exactly ``1 + 0j`` -- a ``(nsym, 1)``
+    # column of ones broadcasts against the gather in every average below, and
+    # multiplying by exactly one changes no bit. Int64 indices and the whole
+    # ``(nsym, ngm)`` complex table were 4.07 GB at ``ngm = 3.5e6`` and 48
+    # operations, against 0.68 GB this way.
+    if len(miller) >= np.iinfo(np.int32).max:  # pragma: no cover - 2^31 G-vectors
+        raise ValueError("a G list this long does not fit int32 indices")
+    permutations = permutations.astype(np.int32)
+    if not np.any(translations):
+        return jnp.asarray(permutations), jnp.ones((len(rotations), 1), dtype=complex)
     phases = np.exp(-2j * np.pi * (miller @ translations.T)).T
     return jnp.asarray(permutations), jnp.asarray(phases)
 

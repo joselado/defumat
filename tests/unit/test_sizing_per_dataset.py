@@ -252,3 +252,32 @@ def test_each_line_is_keyed_on_what_its_own_setup_reads(pseudo_dir):
     _like_for_like(shared, projector)
     assert projector.arrays[COLUMNS] == 2 * shared.arrays[COLUMNS]
     assert projector.arrays[ONECENTRE] == shared.arrays[ONECENTRE]
+
+
+def test_the_onecentre_line_follows_the_build_not_the_precision_policy(pseudo_dir):
+    """``OPEN.md`` Part XVIII item 2: under ``single`` the tables are still float64.
+
+    ``build_paw`` does not read the policy, so what it holds is the same at
+    either precision, and the line has to be too; sized at the policy's real
+    width it was half of what is resident. The real lines beside it do halve,
+    which is what shows the system really is single.
+    """
+    from defumat.config import SINGLE
+    from defumat.io.pwin import parse_pw_input
+    from defumat.system.builder import build_system
+
+    text = _input(PAW, two_labels=False)
+    calculator = _calculator(text, pseudo_dir)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        single = build_system(parse_pw_input(text), precision=SINGLE)
+        functional = resolve_functional(
+            [p.functional for p in calculator.pseudos], single.input_dft)
+        paw = build_paw(calculator.pseudos, single.structure, functional)
+        halved = estimate_size(single, calculator.pseudos)
+    assert single.cell.precision.name == "single"
+    double = _estimate(calculator)
+    assert halved.arrays[COLUMNS] * 2 == double.arrays[COLUMNS]
+    assert halved.arrays[ONECENTRE] == double.arrays[ONECENTRE]
+    (species,) = {id(s): s for s in paw.species if s is not None}.values()
+    assert species.radial_ps.dtype == np.float64

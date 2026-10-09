@@ -120,15 +120,20 @@ the peak a converging run reaches: the loose starting threshold is a **different
 calculation** from the tight one it schedules towards. Where a card is chosen on
 this estimate, choose it for the tight end.
 
-**A gap against a measured peak is not automatically a model error, and on the
-one large cell where that was tested it mostly was not.** The same 45-atom
-spinor PAW slab reported 49.52 GB against a 77.63 GB measured peak, which looked
-like a 60 per cent shortfall in this module. It was not: **21.40 GB of the 28.11
-GB gap was one allocation**, the eigensolver's finiteness guard, which sat
-*outside* the executable this module sizes and so appeared in no line of the
-report at all. Folding that guard into the solver removed it. What is left is
-**4.78 GiB, 6.6 per cent of the peak**, inside the eigensolver fit's own error
-bar. ``OPEN.md`` Part VII item 1 has the subtraction and the caveat on it.
+**The 45-atom slab's gap is not explained, and an explanation of it was
+withdrawn.** That slab reported 49.52 GB against a 77.63 GB measured peak. It
+was put down to one allocation, the eigensolver's finiteness guard (21.40 GB
+asked from outside the executable this module sizes), and the guard was folded
+into the solver -- but the A/B that closure predicted, Triton jobs 20252129
+against 20244588 on one architecture, gave **byte-identical** per-iteration
+peaks with and without it (79.14 / 79.43 GB). So the 21.40 GB was served from
+space the solver had already freed, and "resident + temp + guard" was three
+numbers summing to the right total with no evidence they were ever live
+together. What stands from that cell is the eigensolver's 23.18 GiB at
+``david 2 / band_batch 16``, measured twice independently (above), and the
+arena read of 57.24 GB in use at the instant of the request. ``OPEN.md`` Part
+VII item 1 has the account, and ``tools/gpu/stage_peaks.py`` is the instrument
+that puts the estimate and the allocator's stage-by-stage peak in one file.
 
 The lesson for anyone extending this module is the one that generalises: **the
 first thing to look for in a gap is a whole term that lives outside the sized
@@ -295,6 +300,12 @@ class SizeEstimate:
     projectors: str = "store"
     #: ``name -> bytes`` for each array whose size the basis fixes.
     arrays: dict = field(default_factory=dict)
+    #: ``name -> bytes`` held in **host** RAM for the life of the run, which
+    #: no device line counts and :attr:`peak_bytes` does not include: the
+    #: mixer's history (``OPEN.md`` S2), NumPy arrays the driver keeps between
+    #: iterations. A card is chosen on :attr:`peak_bytes`; a node's RAM on
+    #: this plus whatever the store streams.
+    host_arrays: dict = field(default_factory=dict)
     #: The compiled eigensolver's single contiguous XLA temp buffer, estimated
     #: from the fit in the module docstring, times ``k_batch``. It is **not** a
     #: member of ``arrays``: it supersedes the two Davidson entries there rather
@@ -490,6 +501,10 @@ class SizeEstimate:
             "        with tools/gpu/davidson_memory.py.",
             f"  {'PEAK (resident + the larger)':<34s}{gb(self.peak_bytes)}",
         ]
+        if self.host_arrays:
+            lines += ["", "Host memory, not on the card and not in the peak above"]
+            for name, size in sorted(self.host_arrays.items(), key=lambda kv: -kv[1]):
+                lines.append(f"  {name:<34s}{gb(size)}")
         return "\n".join(lines)
 
 
@@ -502,6 +517,9 @@ def estimate_size(
     band_batch: int | None | str = "default",
     projectors: str | None = "default",
     wfc_store: str | None = "default",
+    mixing_mode: str | None = None,
+    mixing_ndim: int | None = None,
+    mixing_space: str | None = None,
 ) -> SizeEstimate:
     """Size a run from its input alone, allocating nothing on the device.
 
@@ -541,6 +559,10 @@ def estimate_size(
             (memory mode on an accelerator) keeps it in host RAM, so the device
             holds one chunk of it; sizing the whole set there would count a
             store that is not on the card.
+        mixing_mode, mixing_ndim, mixing_space: ``run_scf``'s, for the one
+            host line, the mixer's history. ``None`` is what ``run_scf`` does
+            with each unset: ``'anderson'``, its own depth of 8, and the
+            mixer's default space.
 
     Returns:
         a :class:`SizeEstimate`. Its counts are exact; its bytes are a floor.
@@ -719,12 +741,18 @@ def estimate_size(
     # still grows with the mesh in memory mode.
     arrays["per-k basis tables (nk,npwx)"] = (
         nk * npwx * (zr + 4 + 1 + (4 if gamma_only else 0)))
-    # The density's symmetrisation: a permutation of the dense G set (int64)
-    # and its translation phases, per operation of the run's group.
+    # The density's symmetrisation: a permutation of the dense G set (int32)
+    # per operation of the run's group, and its translation phases, which a
+    # symmorphic group does not store (``symmetry_maps``, ``OPEN.md`` S1: one
+    # column of ones). The phases are complex128 whatever the policy, being
+    # built by NumPy from the Miller indices.
     if not system.nosym:
-        nsym = system.symmetry_group().nsym
+        group = system.symmetry_group()
+        nsym = group.nsym
         if nsym > 1:
-            arrays["symmetry maps (nsym,ngm)"] = nsym * ngm * (8 + zc)
+            phases = ngm if np.any(group.translation_array()) else 1
+            arrays["symmetry maps (nsym,ngm)"] = nsym * (
+                ngm * 4 + phases * _COMPLEX_BYTES["double"])
     # DFT+U's projectors ``S|phi>``, the same layout as ``vkb`` with the
     # Hubbard manifold's columns: resident, and read by every ``h_psi``.
     from defumat.hubbard.manifold import build_hubbard_setup
@@ -822,7 +850,9 @@ def estimate_size(
             arrays["augmentation table (nbeta,nbeta,nl,nqx)"] = sum(
                 pseudo.nbeta**2 * nl * nqx * zr for pseudo, nl, _ in datasets
             )
-            arrays["augmentation phases (nat,npad)"] = len(structure.types) * npad * zc
+            # No ``(nat, npad)`` structure factor: the scan builds each chunk's
+            # from the positions (``OPEN.md`` S3), 2.55 GB on the 45-atom slab.
+            arrays["augmentation positions (nat,3)"] = len(structure.types) * 3 * zr
             arrays["augmentation G set (npad,3)"] = npad * 3 * zr + npad * zr
             # What one block of the rebuild holds. Since the scan contracts in
             # the radial basis (``augmentation._tabulated_charge``) it forms no
@@ -863,10 +893,11 @@ def estimate_size(
     # Left out: each dataset's seven ``(mesh,)`` radial vectors, its angular
     # quadrature's tables, and the sphere workspace inside ``_paw_onecenter``,
     # an XLA temporary this module cannot see for the same reason it cannot
-    # see the eigensolver's. The bytes are ``zr``, as on every real line here,
-    # but ``_build_species`` builds through NumPy and does not read the
-    # precision policy, so under ``single`` the tables it allocates are still
-    # float64 and this line is half of them.
+    # see the eigensolver's. **The bytes are double's whatever the policy**,
+    # unlike every other real line here: ``_build_species`` builds through NumPy
+    # and does not read the precision policy, so under ``single`` the tables it
+    # allocates are still float64, and this line at ``zr`` was half of them
+    # (``OPEN.md`` Part XVIII item 2). It follows the build, not the policy.
     from defumat.paw.onecenter import _lmax_rho, _paw_dataset_key
 
     onecentre_bytes, paw_datasets = 0, set()
@@ -889,7 +920,7 @@ def estimate_size(
             nlm * nh * nh + nh * nbeta
             + nbeta * nbeta * pseudo.mesh * (1 + nlm + int(relativistic))
             + int(functional.is_meta) * (nlm * nh * nh + 4 * nh * pseudo.mesh)
-        ) * zr
+        ) * _REAL_BYTES["double"]
     if onecentre_bytes:
         arrays["PAW one-centre tables"] = onecentre_bytes
 
@@ -963,8 +994,43 @@ def estimate_size(
         start_fixed + _boxes_in_flight(band_batch, start_vectors) * band_box_bytes
     )
 
+    # **The mixer's history, on the host** (``OPEN.md`` S2). Anderson keeps
+    # ``mixing_ndim`` input states and as many residuals, each the whole packed
+    # state ``_mix`` hands it as NumPy: the density (the dense box in real space,
+    # or ``ngms`` reals a channel under ``mixing_space = 'g'``), every augmented
+    # species' ``becsum`` ``(nspin_mag, nat_t, nh, nh)``, and ``tau`` on a
+    # meta-GGA. Sixteen dense densities on the 157-atom slab are 3.18 GB, which
+    # this report used to give as zero. With ``rho_ddot``'s fit switched on
+    # (``RHO_DDOT_FIT``) each residual also keeps its fit vector, the density's
+    # coefficients on the sphere as reals, counted at the head's size. DFT+U's
+    # ``ns`` is left out (``nslot ldmx^2`` a channel, kilobytes). A mixer that
+    # is not Anderson's keeps no such list and gets no line.
+    from defumat.scf.mixing import AndersonMixer, get_mixer, resolve_mixing_space
+
+    mixer = get_mixer(mixing_mode or "anderson", history=mixing_ndim)
+    if isinstance(mixer, AndersonMixer) and mixer.history:
+        space = resolve_mixing_space(mixing_space, mixer)
+        head = nspin_mag * (ngms if space == "g" else int(np.prod(dense_grid)))
+        packed = head + int(functional.is_meta) * nspin_mag * int(np.prod(dense_grid))
+        for index in sorted(set(structure.types)):
+            pseudo = pseudos[index]
+            if pseudo.is_ultrasoft and projector_channels(pseudo):
+                nh = len(projector_channels(pseudo))
+                nat_t = sum(1 for t in structure.types if t == index)
+                packed += nspin_mag * nat_t * nh * nh
+        from defumat.scf.driver import RHO_DDOT_FIT
+
+        per_entry = packed * 2 + (head if RHO_DDOT_FIT else 0)
+        host_arrays = {
+            f"mixer history ({mixer.history} x rho_in, residual)":
+                int(mixer.history) * per_entry * zr,
+        }
+    else:
+        host_arrays = {}
+
     return SizeEstimate(
         nat=len(structure.types), nsp=len(pseudos), nelec=nelec, nbnd=int(nbnd),
+        host_arrays=host_arrays,
         nspin=nspin, npol=npol, nspin_mag=nspin_mag, nk=nk,
         ngm=ngm, ngms=ngms, npwx=npwx, npw=tuple(int(n) for n in npw), nkb=nkb,
         dense_grid=tuple(int(n) for n in dense_grid),

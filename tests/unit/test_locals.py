@@ -406,3 +406,28 @@ def test_a_nonmagnetic_relaxation_records_nothing_per_site(pseudo_dir):
     assert relax.steps[0].site_moments is None
     assert relax.steps[0].site_charges is None
     assert site_moment_report(None) == ""
+
+
+def test_the_distances_walked_in_blocks_are_the_whole_array_to_the_bit(monkeypatch):
+    """``OPEN.md`` Part VII item 1: the corner comparison a block of points at a time.
+
+    Held all at once it was an ``(npoint, nat, 8, 3)`` float64 array, 2.6 GB of
+    host memory on nine atoms of NiI2 and enough to kill the run at its first
+    ``site_moments``. Each point's distance is its own, so a block size that
+    splits the points unevenly must give the same array bit for bit.
+    """
+    from defumat.scf import locals as module
+
+    rng = np.random.default_rng(4)
+    points = rng.random((1000, 3))
+    positions = rng.random((5, 3))
+    at = np.array([[3.0, 0.1, 0.0], [-1.4, 2.7, 0.0], [0.2, 0.0, 9.0]])
+    difference = positions[None, :, :] - points[:, None, :]
+    difference = difference - np.floor(difference)
+    corners = np.array([[-i, -j, -k] for i in (0, 1) for j in (0, 1)
+                        for k in (0, 1)]) @ at
+    shifted = (difference @ at)[:, :, None, :] + corners[None, None, :, :]
+    whole = np.sqrt(np.min(np.sum(shifted**2, axis=-1), axis=-1))
+
+    monkeypatch.setattr(module, "_DISTANCE_BLOCK", 333)
+    np.testing.assert_array_equal(_minimum_image_distances(points, positions, at), whole)

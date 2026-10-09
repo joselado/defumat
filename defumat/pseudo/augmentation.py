@@ -735,7 +735,7 @@ class TabulatedAugmentation(AugmentationCharge):
     slower", and because the stored path is what every validated number in this
     project was measured with.
 
-    ``gcart`` and ``phases`` are stored **padded** to a whole number of chunks,
+    ``gcart`` is stored **padded** to a whole number of chunks,
     with ``mask`` zero on the padding. A padded G is the origin, where
     ``Q_ij(G)`` is emphatically not zero, so the padding is killed in the
     contraction rather than left to vanish on its own.
@@ -752,6 +752,12 @@ class TabulatedAugmentation(AugmentationCharge):
     beta_of: tuple = ()  # per species, (nh,) -- which radial projector a channel is
     gcart: jnp.ndarray = None  # (npad, 3) cartesian G, padded; carries the cell
     mask: jnp.ndarray = None  # (npad,) 1.0 on a real G, 0.0 on the padding
+    #: ``(nat, 3)`` cartesian, the atoms the structure factor is built from **a
+    #: chunk at a time inside the scan** (``OPEN.md`` S3). ``phases`` is then an
+    #: empty ``(nat, 0)`` array that carries only the dtype: the ``(nat, npad)``
+    #: table it held was read by nothing but the scan's ``dynamic_slice``, and
+    #: on the 45-atom NiBr2 slab it was 2.55 GB resident for the run.
+    positions: jnp.ndarray = None
     ngm: int = eqx.field(static=True, default=0)
     chunk: int = eqx.field(static=True, default=1)
     lmax2: int = eqx.field(static=True, default=0)  # the ylm order, 2 lmax
@@ -795,9 +801,10 @@ class TabulatedAugmentation(AugmentationCharge):
                 continue
             factors, nbeta, nl = self._factors(t)
             contribution = _tabulated_charge(
-                factors, self.gcart, self.mask, self.phases[jnp.asarray(atoms)],
+                factors, self.gcart, self.mask, self.positions[jnp.asarray(atoms)],
                 becsum[t].astype(self.phases.dtype), self.coefficients[t],
                 self.beta_of[t], nbeta, nl, self.chunk, self.ngm,
+                dtype=self.phases.dtype,
             )
             total = contribution if total is None else total + contribution
         if total is None:
@@ -818,8 +825,9 @@ class TabulatedAugmentation(AugmentationCharge):
             result.append(
                 _tabulated_integrals(
                     factors, self.gcart, self.mask, padded,
-                    self.phases[jnp.asarray(atoms)], self.volume, self.chunk,
+                    self.positions[jnp.asarray(atoms)], self.volume, self.chunk,
                     self.coefficients[t], self.beta_of[t], nbeta, nl,
+                    dtype=self.phases.dtype,
                 )
             )
         return tuple(result)
@@ -839,23 +847,26 @@ class TabulatedAugmentation(AugmentationCharge):
             result.append(
                 _tabulated_integrals(
                     factors, self.gcart, self.mask, padded,
-                    self.phases[jnp.asarray(atoms)], self.volume, self.chunk,
+                    self.positions[jnp.asarray(atoms)], self.volume, self.chunk,
                     self.coefficients[t], self.beta_of[t], nbeta, nl, real=False,
+                    dtype=self.phases.dtype,
                 )
             )
         return tuple(result)
 
     def at_positions(self, positions: jnp.ndarray, gcart: jnp.ndarray):
-        """As the base class, except the G set is padded with the phases.
+        """As the base class, except the G set is padded and the phases are not held.
 
         The displacement goes on **before** the padding, so the pad lands at
         ``b`` rather than at the origin -- where ``mask`` kills it either way,
-        and where the radial interpolation is asked for a modulus it has.
+        and where the radial interpolation is asked for a modulus it has. The
+        new positions are what the scan builds each chunk's structure factor
+        from.
         """
         shifted = self._shifted(gcart)
         padded = jnp.pad(shifted, ((0, self.mask.shape[0] - self.ngm), (0, 0)))
-        phases = _atom_phases(padded, positions).astype(self.phases.dtype)
-        return eqx.tree_at(lambda a: (a.phases, a.gcart), self, (phases, padded))
+        return eqx.tree_at(lambda a: (a.positions, a.gcart), self,
+                           (jnp.asarray(positions), padded))
 
 
 def _beta_basis(coefficients, becsum, beta_of, nbeta: int, nl: int):
@@ -873,8 +884,8 @@ def _beta_basis(coefficients, becsum, beta_of, nbeta: int, nl: int):
                       expand, expand)
 
 
-def _tabulated_charge(factors, gcart, mask, phases, becsum, coefficients, beta_of,
-                      nbeta, nl, chunk, ngm):
+def _tabulated_charge(factors, gcart, mask, positions, becsum, coefficients, beta_of,
+                      nbeta, nl, chunk, ngm, dtype=None):
     """``rho_aug(G)`` for one species, scanning over blocks of G without forming ``Q_ij(G)``.
 
     ``sum_ij Q_ij(G) sum_a b_aij e^{-iG.tau_a}``, with ``Q_ij(G) = sum_LM (-i)^L
@@ -897,6 +908,12 @@ def _tabulated_charge(factors, gcart, mask, phases, becsum, coefficients, beta_o
     the residuals are the body's inputs, which are closed over and
     loop-invariant (``tests/unit/test_augmentation_remat.py``).
 
+    **The structure factor is built here, a chunk at a time**, from the atoms'
+    ``positions`` (``OPEN.md`` S3): ``e^{-i G . tau_a}`` on the chunk's own G,
+    the same expression :func:`_atom_phases` evaluates on the whole set, so the
+    ``(nat, npad)`` table is never resident. ``becsum``'s dtype is the
+    complex one the phases take unless ``dtype`` names it.
+
     **What it buys under a strain**, compile only on the CPU, ultrasoft AlAs at
     200 Ry (aluminium's ``nh = 18``, ``nbeta = 6``, 2048 vectors a chunk), the
     ``jvp`` of the augmented density's strain gradient: 67.7 MB of temporaries
@@ -905,14 +922,15 @@ def _tabulated_charge(factors, gcart, mask, phases, becsum, coefficients, beta_o
     (:func:`_aug_chunk`, ``nh^2`` complex), so it is conservative here.
     """
     nchunks = mask.shape[0] // chunk
-    nat = phases.shape[0]
-    basis = _beta_basis(coefficients, becsum.astype(phases.dtype), beta_of, nbeta, nl)
+    nat = positions.shape[0]
+    dtype = becsum.dtype if dtype is None else dtype
+    basis = _beta_basis(coefficients, becsum.astype(dtype), beta_of, nbeta, nl)
 
     @jax.checkpoint
     def body(carry, index):
         start = index * chunk
         gcart_chunk = jax.lax.dynamic_slice(gcart, (start, 0), (chunk, 3))
-        phase_chunk = jax.lax.dynamic_slice(phases, (0, start), (nat, chunk))
+        phase_chunk = _chunk_phases(gcart_chunk, positions).astype(dtype)
         mask_chunk = jax.lax.dynamic_slice(mask, (start,), (chunk,))
         ylm, radial = factors(gcart_chunk)
         per_atom = jnp.zeros((nat, chunk), dtype=phase_chunk.dtype)
@@ -928,8 +946,9 @@ def _tabulated_charge(factors, gcart, mask, phases, becsum, coefficients, beta_o
     return blocks.reshape(-1)[:ngm]
 
 
-def _tabulated_integrals(factors, gcart, mask, potential_g, phases, volume, chunk,
-                         coefficients, beta_of, nbeta, nl, real: bool = True):
+def _tabulated_integrals(factors, gcart, mask, potential_g, positions, volume, chunk,
+                         coefficients, beta_of, nbeta, nl, real: bool = True,
+                         dtype=None):
     """``int V(r) Q_ij^a(r) dr`` for one species, scanning over blocks of G.
 
     ``real = False`` keeps the imaginary part, which is what a displaced table
@@ -948,13 +967,13 @@ def _tabulated_integrals(factors, gcart, mask, potential_g, phases, volume, chun
     the one any reverse-mode consumer of ``newd`` reaches.
     """
     nchunks = mask.shape[0] // chunk
-    nat = phases.shape[0]
+    nat = positions.shape[0]
 
     @jax.checkpoint
     def body(carry, index):
         start = index * chunk
         gcart_chunk = jax.lax.dynamic_slice(gcart, (start, 0), (chunk, 3))
-        phase_chunk = jax.lax.dynamic_slice(phases, (0, start), (nat, chunk))
+        phase_chunk = _chunk_phases(gcart_chunk, positions).astype(dtype)
         mask_chunk = jax.lax.dynamic_slice(mask, (start,), (chunk,))
         potential_chunk = jax.lax.dynamic_slice(potential_g, (start,), (chunk,))
         shifted = potential_chunk[None, :] * jnp.conj(phase_chunk) * mask_chunk
@@ -973,12 +992,12 @@ def _tabulated_integrals(factors, gcart, mask, potential_g, phases, volume, chun
     # up in the sixth decimal -- under a float32 precision policy it does not
     # run at all.
     total, _ = jax.lax.scan(
-        body, jnp.zeros((nat, nl * nl, nbeta, nbeta), dtype=phases.dtype),
+        body, jnp.zeros((nat, nl * nl, nbeta, nbeta), dtype=dtype),
         jnp.arange(nchunks))
     phase = np.concatenate([np.full(2 * l + 1, (1j) ** l) for l in range(nl)])
     gathered = total[:, :, beta_of[:, None], beta_of[None, :]]  # (nat, nl^2, nh, nh)
-    block = jnp.einsum("m,mij,amij->aij", jnp.asarray(phase, dtype=phases.dtype),
-                       coefficients[: nl * nl].astype(phases.dtype), gathered)
+    block = jnp.einsum("m,mij,amij->aij", jnp.asarray(phase, dtype=dtype),
+                       coefficients[: nl * nl].astype(dtype), gathered)
     return volume * (jnp.real(block) if real else block)
 
 
@@ -1114,7 +1133,10 @@ def _build_tabulated_augmentation(
                       else jnp.real(at_origin[:, :, 0]))
         )
 
-    phases = _atom_phases(gcart, structure.positions).astype(cell.precision.complex)
+    # No ``(nat, npad)`` structure factor: the scans build it a chunk at a time
+    # from the positions, and ``phases`` keeps only the dtype (``OPEN.md`` S3).
+    positions = jnp.asarray(structure.positions)
+    phases = jnp.zeros((positions.shape[0], 0), dtype=cell.precision.complex)
     types = np.asarray(structure.types)
     species_atoms = tuple(
         tuple(int(a) for a in np.flatnonzero(types == t)) for t in range(structure.ntyp)
@@ -1134,6 +1156,7 @@ def _build_tabulated_augmentation(
         beta_of=tuple(beta_of),
         gcart=gcart,
         mask=mask,
+        positions=positions,
         ngm=int(gvectors.ngm),
         chunk=int(chunk),
         lmax2=int(2 * lmax),
@@ -1393,3 +1416,8 @@ def _atom_phases(gcart, positions):
     stress are unchanged in time.
     """
     return jnp.exp(-1j * (positions @ gcart.T))
+
+
+def _chunk_phases(gcart_chunk, positions):
+    """:func:`_atom_phases` on one chunk of G, inside a scan body that is rematted already."""
+    return jnp.exp(-1j * (positions @ gcart_chunk.T))
