@@ -83,12 +83,14 @@ CASES = [
     ("pw_lda+U", "lda+U-noU.in"),
     ("pw_lda+U", "lda+U.in"),
     ("pw_lda+U", "lda+U-user_ns.in"),
-    ("pw_lda+U", "lda+U_force.in"),
     (None, "ni-ldau-nospin.in"),
     (None, "ni-ldau-ortho.in"),
     (None, "ni-ldau-j0.in"),
     ("pw_lda+U", "lda+U_kind1_collin.in"),
     (None, "feo-kind1-J.in"),
+    # Last, so that it is still in ``_converged``'s two slots when the two force
+    # tests below come back to it after the sweep.
+    ("pw_lda+U", "lda+U_force.in"),
 ]
 
 IDS = [f"{directory or 'local'}/{name}" for directory, name in CASES]
@@ -130,9 +132,8 @@ def _reference_path(directory, name):
 
 
 # ``CLAUDE.md``: 2, never more. The module-scoped ``case`` fixture below walks the
-# cells one at a time, so two is all a sweep needs; only ``test_forces`` and
-# ``test_analytic_forces_are_refused`` come back to ``lda+U_force.in`` after it
-# may have been evicted, which costs one SCF.
+# cells one at a time, so two is all a sweep needs, and ``lda+U_force.in`` is last
+# in ``CASES`` so that the two force tests after the sweep still find it.
 @lru_cache(maxsize=2)
 def _converged(directory, name, qe_testsuite, pseudo_dir):
     pwin = read_pw_input(_input_path(directory, name, qe_testsuite))
