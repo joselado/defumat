@@ -3919,7 +3919,21 @@ state with nothing applied and stays there, is real and is not the ultracell's; 
 a genuine instability of LDA nickel at this cutoff or an SCF that stalls in a broken state is
 not settled here.
 
-## 3. At a dual the reference supercell is on a different box, and reads 2.2e-6 Ry per cell high **[opened 2026-09-20, P88 stage 9]**
+## 3. At a dual the reference supercell is on a different box, and reads 2.2e-6 Ry per cell high **[opened 2026-09-20, P88 stage 9; closed 2026-10-09: on the tiled box the spinor ladder is positive at every rung, +3.7e-8 Ry at `nbnd = 192` where the dual-8 box read -2.0e-7]**
+
+**The run this entry asked for, 2026-10-09** (D22-0161, `tools/cluster/ultracell_dual.py`
+with one case added, `si-us-spinor-dual12`: ultrasoft spinor silicon at
+`ecutrho = 12 ecutwfc`, where the supercell's box `(64, 32, 32)` *is* the tiled one; output in
+`review/open-a/x3/`). The supercell's null offset is **+2.44e-8** Ry per cell, the same as PAW
+collinear's at 12, and the modulation energy at `nbnd = 24, 48, 96, 192` is **+3.083e-5,
++3.505e-6, +3.332e-7, +3.737e-8**, positive and falling by about ten a rung, against
++3.912e-5, +3.376e-6, +9.226e-8 and -2.035e-7 at `ecutrho = 8 ecutwfc`. So the negative last
+rung at the dual was the box's offset cancelling to first order only, as this entry proposed,
+and not an error of the modulated state: on a box both sides share, the difference of
+differences is clean down to 4e-8. What is left at 12 is the 2.4e-8 offset of the two
+spheres (23835 G-vectors in the supercell against 23870 tiled, `OPEN.md` Part X item 1's
+convention), which this rung is now the same size as, so a gap below about 3e-8 on this cell
+says nothing at either dual. The density error falls 2.6e-2, 1.2e-2, 3.0e-3, 6.7e-4 alongside.
 
 **What it is.** A supercell chooses its own dense FFT grid, and at
 `ecutrho = 8 ecutwfc` on the two-atom silicon cell that is `(54, 25, 25)` where the
