@@ -3329,10 +3329,8 @@ class Calculation:
         # The spiral gradient's compiled kernel closes over *this* calculation --
         # its local potential, its Ewald sum, its projector positions -- so it
         # cannot follow the atoms, and would otherwise be evaluated in silence at
-        # the geometry it was built at. The analytic force's kernel closes over
-        # the calculation the same way; it needs no pop here because it is keyed
-        # on the calculation it captured and the copy below is a different
-        # object. The autodiff force's and stress's take the geometry as
+        # the geometry it was built at. The autodiff force's and stress's, and
+        # since 2026-10-09 the analytic force's, take the geometry as
         # arguments and are keyed on what they still close over
         # (:class:`~defumat.forces.energy.GeometryKey`), so they follow the move.
         moved.__dict__.pop("_spiral_gradient", None)
