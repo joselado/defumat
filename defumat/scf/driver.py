@@ -6424,7 +6424,8 @@ def _solve_residual(
 
 
 def _onecenter_torque(calculation, becsum_in, becsum_out, meta_c=None,
-                      wavefunctions=None, weights=None) -> np.ndarray:
+                      wavefunctions=None, weights=None,
+                      _whole_set: bool = False) -> np.ndarray:
     """PAW's share of the orientation torque: the one-centre field on the output.
 
     The band energy pairs the one-centre coefficients with the output
@@ -6449,12 +6450,22 @@ def _onecenter_torque(calculation, becsum_in, becsum_out, meta_c=None,
     through them, ``becsum_in + becsum(U(w) psi_out) - becsum_out``, which is the
     input turned the way the electrons turn; without them, as a vector, which is
     right for a source converged without the coupling.
+
+    **Through the states, a k-chunk at a time in forward mode, wherever they
+    live** (``OPEN.md`` Part XXII item 1). The whole-set ``jax.grad`` below kept
+    the reverse tape of ``becsum(U(w) psi)`` over every output state: on nine
+    atoms of spinor PAW NiI2 (``plans/open-d-inputs/nii2-3cell-paw.in``, two
+    k-points, 116 bands) it raised the card's in-use bytes from 0.88 to 5.40
+    GiB once an iteration, twice the run's whole estimated peak, and on the
+    fifteen-cell NiBr2 source it was 19.50 GiB. The chunked route takes three
+    forward derivatives per chunk instead (:func:`_streamed_onecenter_torque`),
+    the same derivative regrouped; ``_whole_set`` keeps the old route for the
+    test that holds the two to each other.
     """
     from defumat.forces.torque import rotate_texture, rotation_near
     from defumat.scf.orientation import spin_turned
 
-    if wavefunctions is not None and (is_host_store(wavefunctions)
-                                      or isinstance(wavefunctions, PoolStore)):
+    if wavefunctions is not None and not _whole_set:
         return _streamed_onecenter_torque(
             calculation, becsum_in, becsum_out, meta_c, wavefunctions, weights)
     if wavefunctions is not None:
@@ -6474,7 +6485,16 @@ def _onecenter_torque(calculation, becsum_in, becsum_out, meta_c=None,
         _, ddd_paw = calculation.onecenter(turned_becsum(omega), meta_c)
         return _paw_deband(ddd_paw, calculation.augmentation, becsum_out)
 
-    return -np.asarray(jax.grad(pairing)(jnp.zeros(3)))
+    zero = jnp.zeros(3)
+    if _whole_set:
+        return -np.asarray(jax.grad(pairing)(zero))
+    # Three forward derivatives, one per generator, rather than one reverse
+    # pass: the reverse pass through the one-centre calculation kept its tape,
+    # 4.2 GiB on nine atoms of spinor PAW NiI2 where the calculation itself
+    # holds a few MB (``OPEN.md`` Part XXII item 1). Three components is where
+    # forward mode costs what reverse mode does.
+    return -np.array([float(jax.jvp(pairing, (zero,), (axis,))[1])
+                      for axis in jnp.eye(3)])
 
 
 def _streamed_onecenter_torque(calculation, becsum_in, becsum_out, meta_c,
@@ -6492,6 +6512,7 @@ def _streamed_onecenter_torque(calculation, becsum_in, becsum_out, meta_c,
     from defumat.scf.orientation import spin_turned
 
     pooled = isinstance(store, PoolStore)
+    on_host = pooled or is_host_store(store)
     if pooled:
         # **A k-point pool's rows.** The base ``becsum`` of the output states is
         # ``becsum_out`` itself, to the order of the sums over k, so the turned
@@ -6502,7 +6523,10 @@ def _streamed_onecenter_torque(calculation, becsum_in, becsum_out, meta_c,
         turned0 = tuple(becsum_in)
     else:
         array, held = store, np.arange(store.shape[1])
-        base = stream_becsum(calculation, store, weights)
+        # A device store is the whole set already: its ``becsum`` is one call,
+        # with no derivative and so no tape.
+        base = (stream_becsum(calculation, store, weights) if on_host
+                else calculation.becsum(store, weights))
         turned0 = tuple(None if a is None else a + (t - o)
                         for a, t, o in zip(becsum_in, base, becsum_out))
 
@@ -6510,7 +6534,6 @@ def _streamed_onecenter_torque(calculation, becsum_in, becsum_out, meta_c,
         _, ddd_paw = calculation.onecenter(turned, meta_c)
         return _paw_deband(ddd_paw, calculation.augmentation, becsum_out)
 
-    gradient = jax.grad(pairing)(turned0)
     weights = np.asarray(weights)
     zero = jnp.zeros(3)
     tangents = None
@@ -6519,7 +6542,8 @@ def _streamed_onecenter_torque(calculation, becsum_in, becsum_out, meta_c,
         w = weights[:, rows].copy()
         w[:, live:] = 0.0
         w = jnp.asarray(w)
-        psi = jax.device_put(np.ascontiguousarray(array[:, positions]))
+        psi = (jax.device_put(np.ascontiguousarray(array[:, positions])) if on_host
+               else jnp.asarray(array)[:, jnp.asarray(positions)])
 
         def raw(omega, psi=psi, w=w, rows=rows):
             return calculation.becsum(spin_turned(psi, omega), w, rows=rows,
@@ -6530,12 +6554,14 @@ def _streamed_onecenter_torque(calculation, becsum_in, becsum_out, meta_c,
             jax.tree_util.tree_map(jnp.add, a, b) for a, b in zip(tangents, part)]
     if pooled:
         tangents = list(current_pools().allreduce_sum(tuple(tangents)))
+    # The pairing's derivative along each finished tangent, in forward mode: the
+    # one-centre calculation's reverse tape was 4.2 GiB on nine atoms of spinor
+    # PAW NiI2, and three directions are all that is asked of it.
     torque = []
     for tangent in tangents:
         finished = calculation.finish_becsum(tangent)
-        torque.append(sum(
-            float(jnp.sum(g * t)) for g, t in zip(gradient, finished)
-            if g is not None and t is not None))
+        direction = tuple(None if b is None else t for b, t in zip(turned0, finished))
+        torque.append(float(jax.jvp(pairing, (turned0,), (direction,))[1]))
     return -np.asarray(torque)
 
 
@@ -8138,10 +8164,20 @@ def run_scf(
                 exchange_torque(rho_out, potential.v_scf,
                                 calculation.system.cell).total)
             if calculation.is_paw:
+                # **Through the states only where the coupling is on**
+                # (``OPEN.md`` Part XXII item 1). Without it ``becsum``'s three
+                # magnetization components turn as a vector exactly (2.8e-16,
+                # ``test_orientation_paw.py``), so the vector turn of the input
+                # is the derivative itself, with no reverse pass through
+                # ``becsum(U(w) psi)`` over every output state: that tape was
+                # 19.50 GiB on the fifteen-cell NiBr2 source at ``soc_scale = 0``
+                # and stopped it before its first iteration, for a number only
+                # the history recorded.
                 torque_now = torque_now + _onecenter_torque(
                     calculation, becsum_state, becsum_out,
                     _meta_c(potential, calculation.functional.is_meta),
-                    wavefunctions=fetch_wavefunctions(wavefunctions), weights=wg)
+                    **({"wavefunctions": fetch_wavefunctions(wavefunctions),
+                        "weights": wg} if report_orientation else {}))
             if pooled:
                 # The stepper keeps a quasi-Newton history of the torques it is
                 # handed, so a torque that differs between pools in its last bit
