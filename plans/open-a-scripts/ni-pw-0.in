@@ -1,0 +1,23 @@
+&control
+   calculation = 'scf'
+   outdir = '/l/ladovj1/review/open-a/pwtmp'
+/
+&system
+   ibrav = 6, celldm(1) = 4.70, celldm(3) = 1.30, nat = 1, ntyp = 1,
+   noncolin = .true., lspinorb = .true., nosym = .true.,
+   ecutwfc = 40.0, ecutrho = 320.0,
+   occupations = 'smearing', smearing = 'mv', degauss = 0.02,
+   starting_magnetization(1) = 0.05,
+   angle1(1) = 0.0, angle2(1) = 0.0,
+/
+&electrons
+   conv_thr = 1.0e-10
+   mixing_beta = 0.3
+   electron_maxstep = 200
+/
+ATOMIC_SPECIES
+Ni 58.6934 Ni.rel-pbe-spn-kjpaw_psl.1.0.0.UPF
+ATOMIC_POSITIONS crystal
+Ni 0.0 0.0 0.0
+K_POINTS automatic
+3 3 2 0 0 0

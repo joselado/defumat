@@ -3020,7 +3020,21 @@ asked for, and a run that needs the asked-for angles needs a hard constraint on 
 instead. Whether that pattern is anisotropy bunching the helix or the Br sublattice is not
 established.
 
-## 3. A noncollinear ultracell's rigid spin rotation has no restoring force, and a small `mixing_beta` cannot cross it **[opened 2026-09-14, P88 stage 3b]**
+## 3. A noncollinear ultracell's rigid spin rotation has no restoring force, and a small `mixing_beta` cannot cross it **[opened 2026-09-14, P88 stage 3b; measured 2026-10-09: no traversal on the Kramers-closed basis (10 iterations in either frame), the weak field is the escape from the ferromagnet (no convergence in 1500, 9 seeded); plan in `plans/open-a-vi3.md`]**
+
+**Re-measured on the default basis, 2026-10-09** (D22-0161, `review/open-a/vi3.py`,
+`vi3b.py`; the tables are in the plan). The seeded four-cell helix converges in **10**
+iterations on the Kramers-closed basis with the reference along `z` and along
+`(1,1,1)/sqrt(3)` alike, the two states equal to 4.1e-9 after one global rotation and the
+second returned in the seed's own frame, so there is nothing left to traverse; the old basis
+gives 14 and, where this entry says 290, no convergence in 400. The weak turning field (0.002
+Ry, `(4, 2, 2)` folded grid, reference along `(1,1,1)/sqrt(3)`, no seed) converges on neither
+basis at `mixing_beta = 0.3` in 400 iterations, nor on the closed basis at 0.7 in 1500, where it
+limit-cycles at `dr2` 1e-8 to 1e-7 among textures of uneven length with the charge and magnetic
+halves within a factor of three; **seeded with the helix it converges in 9**. So what is slow is
+leaving the tiled ferromagnet, the supercell's bill as well (the paragraph above, 400
+iterations from a ferromagnetic seed), and the projection this entry proposes has no target in
+the ultracell. What is left is the warning's advice, which quotes the old basis.
 
 **The mechanism, and it is physics rather than a bug.** Without spin-orbit coupling or
 magnetic anisotropy, turning *every* moment in the cell together by the same angle costs
@@ -3905,7 +3919,21 @@ state with nothing applied and stays there, is real and is not the ultracell's; 
 a genuine instability of LDA nickel at this cutoff or an SCF that stalls in a broken state is
 not settled here.
 
-## 3. At a dual the reference supercell is on a different box, and reads 2.2e-6 Ry per cell high **[opened 2026-09-20, P88 stage 9]**
+## 3. At a dual the reference supercell is on a different box, and reads 2.2e-6 Ry per cell high **[opened 2026-09-20, P88 stage 9; closed 2026-10-09: on the tiled box the spinor ladder is positive at every rung, +3.7e-8 Ry at `nbnd = 192` where the dual-8 box read -2.0e-7]**
+
+**The run this entry asked for, 2026-10-09** (D22-0161, `tools/cluster/ultracell_dual.py`
+with one case added, `si-us-spinor-dual12`: ultrasoft spinor silicon at
+`ecutrho = 12 ecutwfc`, where the supercell's box `(64, 32, 32)` *is* the tiled one; output in
+`review/open-a/x3/`). The supercell's null offset is **+2.44e-8** Ry per cell, the same as PAW
+collinear's at 12, and the modulation energy at `nbnd = 24, 48, 96, 192` is **+3.083e-5,
++3.505e-6, +3.332e-7, +3.737e-8**, positive and falling by about ten a rung, against
++3.912e-5, +3.376e-6, +9.226e-8 and -2.035e-7 at `ecutrho = 8 ecutwfc`. So the negative last
+rung at the dual was the box's offset cancelling to first order only, as this entry proposed,
+and not an error of the modulated state: on a box both sides share, the difference of
+differences is clean down to 4e-8. What is left at 12 is the 2.4e-8 offset of the two
+spheres (23835 G-vectors in the supercell against 23870 tiled, `OPEN.md` Part X item 1's
+convention), which this rung is now the same size as, so a gap below about 3e-8 on this cell
+says nothing at either dual. The density error falls 2.6e-2, 1.2e-2, 3.0e-3, 6.7e-4 alongside.
 
 **What it is.** A supercell chooses its own dense FFT grid, and at
 `ecutrho = 8 ecutwfc` on the two-atom silicon cell that is `(54, 25, 25)` where the
@@ -6179,7 +6207,27 @@ the run above on NiBr2**, where spin-orbit coupling is on and the partners remov
 preference between `+e_0` and `-e_0`; it needs that project's inputs on Triton. The
 default stays off until it has been measured.
 
-## 2. A noncollinear supercell under a scalar modulation keeps a transverse magnetization of 2e-5 **[opened 2026-09-26, `PLAN.md` P121]**
+## 2. A noncollinear supercell under a scalar modulation keeps a transverse magnetization of 2e-5 **[opened 2026-09-26, `PLAN.md` P121; closed 2026-10-09: a stop point, not a fixed point, 3.1e-7 at `conv_thr = 1e-14`]**
+
+**Measured, 2026-10-09** (D22-0161, `review/open-a/xx2.py`, `xx2b.py`, `xx2c.py`; the
+reference supercell of the test, `nbnd = 32`). The premise below is wrong: **it is a stop
+point.** At the test's `conv_thr = 1e-11` the transverse part is 1.99e-5 with the seed in
+degrees and 1.99e-5 with `angle1 = 54.7356103172453`, the same to six digits, so the seed's
+rounding is not it; seeded along `z` it is 1.05e-5, along `x` 6.5e-6, and with no modulation
+2.1e-6. At 1e-12 it is 2.33e-5, which is what read as "identical". **At 1e-14 it is 3.1e-7
+(seed along `z`) and 3.7e-7 (along `(1,1,1)/sqrt(3)`)**, 13 iterations against 9. Read per
+iteration through the site moments, the canting grows from 1.8e-6 at the first iteration to
+1.6e-5 at the eleventh, while `ethr` is loose, and then falls to 7.5e-6 and 3.7e-7 in the two
+iterations after `dr2` passes about 1e-13, a factor of 40; `diago_full_acc` changes the final
+value by 24 per cent and not the shape. So the stopping test at 1e-11 to 1e-12 lands on the
+rising part of that curve. Where the canting comes from is not established: it keeps growing
+at iterations 10 and 11, where `dr2` is already 2e-13 and 7e-14, so the early loose
+diagonalisations alone do not account for it, and the full-accuracy arm does not separate it.
+With the reference at 1e-14, the test's own ladder reads its three magnetic components equal
+to **1.0003, 1.0007 and 1.0058** at 8, 16 and 32 bands, against 1.017, 1.037 and 1.276 at
+1e-11, so the 1.4 bound in the test is this residue and nothing of the ultracell's. Whether
+the test's reference moves to 1e-14 and the bound with it is a change to a committed
+comparison and is left to the user.
 
 Found through `test_the_noncollinear_ultracell_converges_to_the_supercell`, and it is the
 **reference's** residue, not the ultracell's. Two cells of hydrogen with the moment along
@@ -6210,7 +6258,29 @@ below 1e-6 (2.6e-7 at 8 bands, 3e-9 at 32) and bounds the 32-band component rati
 
 # Part XXI -- from the orientation torque's helix, 2026-09-26 (P122)
 
-## 1. An ultrasoft spin spiral and its unfolded supercell disagree at 7e-5 Ry, and more at a lower cutoff **[opened 2026-09-26]**
+## 1. An ultrasoft spin spiral and its unfolded supercell disagree at 7e-5 Ry, and more at a lower cutoff **[opened 2026-09-26; measured 2026-10-09: the transverse augmentation charge on two displaced spheres, 7.27e-5 Ry at 160 and 2.5e-8 at 320; plan in `plans/open-a-xxi1.md`]**
+
+**Reproduced and attributed, 2026-10-09** (D22-0161, `review/open-a/xxi1.py`). The worst
+eigenvalue of the supercell at the unfolded density against the union of the four spiral
+k-points reads 3.93e-3, 7.27e-5 and 2.5e-8 Ry at `ecutrho = 80, 160, 320` (`ecutwfc = 20`, the
+box the spiral's repeated at all three), and 1.77e-5 at 160 in LDA, so the functional is not
+the cause. What says which term it is: the transverse half of the supercell's
+output-minus-input density sits **99.5 per cent** (PBE) and **99.98 per cent** (LDA) of its
+power at 160 Ry on the 7 per cent of the sphere's G-vectors with `|G'| < G_rho` and
+`|G' + q| > G_rho`, the shell one sphere has and the displaced one does not, where the charge
+and `m_z` differences have 2e-5 there. So the spiral keeps its transverse augmentation charge
+on `|G| < G_rho` in the rotating frame and the supercell on its own sphere, the entry's
+truncation-shell hypothesis, and it falls as the tail of cobalt's `Q_ij(G)` at `G_rho`, by a
+factor of 2900 from 160 to 320 Ry, where the supercell then matches the spiral to the spiral's
+own self-consistency (1.4e-4 in the magnetization, the 320 Ry spiral stopping at 8.8e-9 in
+150 iterations). **P95's oxygen chain has it too, 2000 times smaller**: the same check on
+`o-chain-spiral-us.in` against `o-chain-90deg-us.in` at their 200 Ry gives a worst eigenvalue
+of 3.4e-8 Ry and a magnetization 6.7e-5 off (the spiral against itself 1.2e-6), with 99.8 per
+cent of the transverse difference on the shell displaced the other way, as its `q = +b3/4`
+requires. So the entry's contradiction with P95 dissolves: the identity P95 held to 1.65e-9
+Ry was a total energy, and the shell is there on its cell too, at a size an energy that close
+does not rule out. The change, keeping the transverse pair on the laboratory sphere, is planned in
+`plans/open-a-xxi1.md` and not made.
 
 Found while building the source for `ORIENTATION-NEXT.md` step 2. The four-cell cobalt
 helix converged in its one-atom cell by the generalized Bloch theorem
@@ -6264,7 +6334,22 @@ of the first-order energy at 30 Ry; for the cobalt cell, 25 along `c` in the cel
 the supercell on the dense grid and 18 and 72 on the smooth one, checked, so it is the repeat
 and this one is ruled out too). Both now warn.
 
-## 2. Route C does not reach `conv_thr` on PAW nickel **[opened 2026-09-26]**
+## 2. Route C does not reach `conv_thr` on PAW nickel **[opened 2026-09-26; measured 2026-10-09: the plain SCF stalls at every orientation and converges in 78 at `degauss = 0.05`; Route C does not fit 6 GB; plan in `plans/open-a-xxi2.md`]**
+
+**Measured, 2026-10-09** (D22-0161, `review/open-a/xxi2.py`; the tables are in the plan). The
+plain SCF on this cell at 40/320 does not reach `conv_thr` from 45 degrees (200 iterations,
+`dr2` 5.7e-9 to 4.8e-6 over the last 60, the energy spread 9e-4 Ry), nor in the plane on a
+mirror (200, median 3.8e-6), nor along `c` (120, median 1.3e-5, spread 2.4e-2 Ry), nor along
+`c` at the dataset's own 75/480 (150). On the two symmetry axes the residual split's rotation
+bin is 2e-6 to 2e-5 and the longitudinal and pointwise transverse bins are 2e-3, so the stall
+Route C inherits is the magnetic channel and not the angle; the 45-degree run adds a constant
+rotation residual of 2.2e-4 rad an iteration, the anisotropy's slow turn, which is what Route C
+is for. Along `c`, `mixing_beta = 0.1`, `mixing_beta_mag = 0.1` and `local-TF` do not converge
+it, `adaptive` diverges, a `6 6 4` mesh makes it worse, and **`degauss = 0.05` converges it in
+78**: the shape of a Stoner-enhanced longitudinal response. Route C itself was killed by the
+6 GB cap at iteration 4 to 22, its one-centre torque growing about 0.1 GB an iteration (Part
+XXII item 1's code). The serial `pw.x` on D22 diverges on this input from its first iteration at
+both cutoffs, so there is no reference for whether `pw.x` converges it.
 
 `run_scf(rotate_moments=True)` on fully-relativistic PAW nickel (`ni-tetragonal-relaxed-mae-paw.in`
 at 40/320 Ry, seeded 45 degrees off `c`) turns the moment into the basal plane on every
