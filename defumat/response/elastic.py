@@ -54,7 +54,7 @@ from defumat.forces.energy import FrozenState, energy_at
 
 from defumat.response.strain import StrainResponse, strain_tangent
 from defumat.units import RY_TO_KBAR
-from defumat.eager import compiled_jvp
+from defumat.eager import compiled_function
 
 __all__ = ["ElasticConstants", "elastic_constants",
            "require_a_measured_elastic_regime", "VOIGT"]
@@ -204,18 +204,33 @@ def elastic_constants(
     gradient = jax.grad(energy, argnums=0)
     volume = calculation.system.cell.volume
 
-    tensor = np.zeros((3, 3, 3, 3))
-    for (k, l) in VOIGT:
+    # **One trace for the six columns** (``OPEN.md`` Part III H7). Every column
+    # is the same program at the same primal with a different tangent, and
+    # :func:`~defumat.eager.compiled_jvp` traced the whole forward-over-reverse
+    # derivative again at each call to find the program it had kept: on
+    # ``si-electrostriction.in`` that was 0.84 s for the six against 0.29 s
+    # traced once, with the tensor identical to the bit and nothing new held.
+    # Sharing the primal as well (one ``vmap`` over the six tangents, or
+    # ``jax.linearize``) is faster again and is not this: it moves the last
+    # bits and holds more, which is the measurement the entry records.
+    def column_of(primals, tangents):
+        return jax.jvp(gradient, primals, tangents)
+
+    def tangent_states(k, l):
         # ``dpsi`` carries the occupied bands only, which is all the Sternheimer
         # equation solves for; the empty ones have zero weight in every term of
         # the functional, so padding with zeros is exact rather than an
         # approximation. P25's rule, verbatim.
-        states = jnp.zeros_like(psi).at[:, :, :nocc].set(
+        return jnp.zeros_like(psi).at[:, :, :nocc].set(
             jnp.asarray(response.dpsi[k, l])
         )
-        _, column = compiled_jvp(
-            gradient, (zero, psi), (strain_tangent(k, l), states)
-        )
+
+    first = VOIGT[0]
+    run = compiled_function(column_of, (zero, psi),
+                            (strain_tangent(*first), tangent_states(*first)))
+    tensor = np.zeros((3, 3, 3, 3))
+    for (k, l) in VOIGT:
+        _, column = run((zero, psi), (strain_tangent(k, l), tangent_states(k, l)))
         column = np.asarray(column) / volume
         # The gradient's own two indices are the *full-matrix* ones; the tensor
         # convention wants them symmetrised as the ``(k, l)`` pair already is.
