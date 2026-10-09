@@ -2360,7 +2360,7 @@ force"). That sentence is about the **default** `jax.grad` route. The analytic f
 "a relaxation recompiles at every ionic step" holds only for a relaxation that asked for
 the analytic force. Sibling of backlog item 7, at a fraction of its weight.
 
-### X2. The two bounds `CLAUDE.md` requires of a multi-cell test file exist in one file out of thirty-two **[partly, re-counted 2026-10-03: 49 files clear the caches and 41 use `maxsize=2`, 33 still use `maxsize=None` and 25 of those clear nothing; the count was wrong on the day, since 19 files already cleared at `9a854e2`, and which of the 25 run more than three cells is not checked]**
+### X2. The two bounds `CLAUDE.md` requires of a multi-cell test file exist in one file out of thirty-two **[partly, re-counted 2026-10-03: 49 files clear the caches and 41 use `maxsize=2`, 33 still use `maxsize=None` and 25 of those clear nothing; the count was wrong on the day, since 19 files already cleared at `9a854e2`, and which of the 25 run more than three cells is not checked; closed 2026-10-09 for the thirteen that run more than three: peaks down 10 to 65 per cent, `test_stress.py` from 51,555 mappings to 6,920, at 200 s over the thirteen]**
 
 `tests/regression/test_response.py:65` and thirty-one others. `CLAUDE.md` names two bounds
 for any file running more than ~three distinct cells: `jax.clear_caches()` in an autouse
@@ -2377,6 +2377,53 @@ and faster as well as smaller.
 file with `DEFUMAT_TEST_MEM_MAX=12G tools/run_regression.sh <file>` and read the `peak=` on
 the summary line, one file at a time and nothing else on the machine. This is the entry
 most likely to pay for itself, given that Part I item 2 is still open.
+
+**Closed 2026-10-09 for the thirteen files that sweep more than three cells, and
+measured file by file.** Of the 25 files with an unbounded cache and no clear, thirteen
+converge four to thirteen cells of different shapes in one process. `test_ldau.py` walks
+its cells through a module-scoped fixture, so it took both bounds (`b5ca498`, with the
+force cell moved last in `38147c3` so the two force tests after the sweep still find it
+cached). The other twelve come back to every cell once per parametrized test function,
+so `maxsize=2` there would rerun each SCF once per function; they took the autouse
+`jax.clear_caches()` only, and keep the results unbounded (`a6e58b6`, `6b09c2a`).
+`test_scf_solvers.py` lost a `maxsize=None` stacked over a `maxsize=1` on a function with
+no arguments. Measured on `D22-0161`, the kernel cache on and warmed by an identical
+run before, one process per file at an 8 G cap, cores 0 to 11, `aa08c82` against
+`6b09c2a`, and the second of two runs of each arm (the first agrees to within 6 per
+cent on every peak but one, `test_noncollinear_magnetism.py` with the clear, 2337
+against 2665 MB):
+
+| file | peak MB | mappings | wall s |
+|---|---|---|---|
+| `test_ldau.py` | 3259 -> 2942 | 9585 -> 6378 | 66.8 -> 92.8 |
+| `test_lsda.py` | 3204 -> 2166 | 13511 -> 4541 | 52.9 -> 72.7 |
+| `test_stress.py` | **5769 -> 2020** | **51555 -> 6920** | 61.6 -> 83.3 |
+| `test_magnetic_constraints.py` | 2354 -> 1776 | 9502 -> 5230 | 45.4 -> 57.6 |
+| `test_spinorbit.py` | 6295 -> 4876 | 18643 -> 6095 | 95.1 -> 109.3 |
+| `test_scf.py` | 1531 -> 1033 | 7509 -> 1487 | 10.3 -> 19.3 |
+| `test_noncollinear_magnetism.py` | 3575 -> 2665 | 10350 -> 5249 | 31.2 -> 43.9 |
+| `test_spin_spirals.py` | 2671 -> 1656 | 10866 -> 4061 | 28.6 -> 39.3 |
+| `test_forces.py` | 3120 -> 2116 | 12336 -> 3515 | 22.3 -> 50.6 |
+| `test_uspp.py` | 2876 -> 1708 | 14197 -> 6772 | 26.1 -> 45.3 |
+| `test_gga.py` | 2029 -> 1459 | 7521 -> 3470 | 13.2 -> 23.8 |
+| `test_vc_relax.py` | 2213 -> 1887 | 8166 -> 5390 | 301.7 -> 310.1 |
+| `test_pdos.py` | 2612 -> 1651 | 10901 -> 3561 | 22.5 -> 29.4 |
+
+Every test passes in both arms (73, 55, 25, 8, 27, 27, 10, 9, 33, 45, 25, 6 and 57). The
+mappings are `/proc/<pid>/maps` sampled every 2 s, so a lower bound. So the clear
+takes 10 to 65 per cent off each peak and two thirds off the mappings, and costs
+**200 s over the thirteen files**, 778 against 977 s, the worst being `test_forces.py`
+at 2.3 times, whose tests each compile a force again after the clear. The number that
+justifies it is `test_stress.py`'s mappings: 51,555 is 79 per cent of a Triton node's
+`vm.max_map_count`, which is Part XIII item 2's failure one cell away. Cold
+(`DEFUMAT_CACHE_DIR=off`) the time cost is larger, `test_ldau.py` 93 against 188 s
+with the reorder, because every clear is then a full recompile.
+
+The eleven left unbounded hold three cells or fewer, or cache a function with no
+arguments: `test_tddft`, `test_tetrahedra`, `test_basis`, `test_isolated_atom`,
+`test_spiral_relaxation`, `test_continuation`, `test_mbj`, `test_dos`, `test_relax`,
+and in `tests/unit/`, `test_continuation_machinery` and `test_stress_machinery`. Count
+now: 77 files clear the caches, 62 use `maxsize=2`, 31 still use `maxsize=None`.
 
 ### X3. A refusal test in the fast gate builds four full `Calculation`s to check four static guards **[closed 2026-09-23, `PLAN.md` P110, at the right boundary and not cheaper]**
 
@@ -4271,7 +4318,7 @@ where this entry should have started.
 
 # Part XIII -- from the 2026-09-18 audit fixes
 
-## 1. Two DFT+U regression files sit at or over the 12 GB per-file cap, and have for a fortnight
+## 1. Two DFT+U regression files sit at or over the 12 GB per-file cap, and have for a fortnight **[closed 2026-10-09: 3,259 and 4,042 MB at `aa08c82`, both passing under an 8 G cap]**
 
 `tools/run_regression.sh` on the DFT+U set, 2026-09-18, one capped process per file:
 `test_ldau.py` reaches **10,937 MB** of a 12 GB cap, so the in-process watchdog names
@@ -4295,7 +4342,21 @@ than half, which is what accumulation does to a cap. Selecting a subset with `-k
 where a larger number does not, because what is being bounded is how many distinct cells
 one process has compiled.
 
-## 2. The suite exhausts *mappings* rather than memory on a cluster node
+**Closed 2026-10-09, and the package closed it rather than the fixture.** The diagnosis
+above was half wrong when it was written: `test_ldau_flavours.py` already had both bounds
+(`23aeb73`, 2026-09-04), and it was killed at 12,423 MB with them, so accumulation across
+tests was not what drove it. On `D22-0161` at `aa08c82`, each file in its own process at
+an 8 G cap and with the QE tree copied over (D22 has none, so every earlier D22 summary
+line for `test_ldau.py`, `peak=648M` beside an empty pytest line, is a file that skipped
+whole and not a pass): `test_ldau.py` **73 passed, 1 skipped, at 3,259 MB** warm and
+3,411 cold, and `test_ldau_flavours.py` **9 passed at 4,042 MB**. That is a factor of
+three to five below this item's numbers with no change to either file, and the D22 slow
+set of 2026-10-04 already read `test_ldau_flavours.py` at 4,124 MB, so the fall is in the
+package between 2026-09-18 and 2026-10-04; which commits is not attributed. `test_ldau.py`
+now has both bounds as well (`b5ca498`, `38147c3`), worth 3,259 against 2,942 MB and
+9,585 against 6,378 mappings, at 67 against 93 s (X2 has the table).
+
+## 2. The suite exhausts *mappings* rather than memory on a cluster node **[measured 2026-10-09 off the cluster: the eight files peak at 5,180 to 11,375 of a node's 65,530 at `a6e58b6`; the node run is still owed]**
 
 Found by running the whole `slow` set on Triton, 2026-09-19, at a commit where
 every one of these tests passes on the workstation. Fifteen of
@@ -4508,6 +4569,34 @@ here says those files are wrong; and `test_ldau.py`'s and
 problem rather than this one, measured in bytes on a machine with no cgroup
 surprises. What the two share is the cause, which is accumulation, and therefore
 the fix.
+
+**Measured off the cluster, 2026-10-09, and the node run is still owed.** The question
+this item leaves is whether a file still compiles its way to a node's 65,530 mappings,
+and that can be read on any machine by counting the lines of `/proc/<pid>/maps`, since
+it is the count that fails and not the limit. On `D22-0161` (whose own limit is
+1,048,576, so nothing fails there), each file in its own process through
+`tools/run_regression.sh` at an 8 G cap, the count sampled every 2 s, so each figure is a
+lower bound on the true peak by whatever a test compiles and drops inside two seconds:
+
+| file | tests | peak mappings | was on the node, job `20336106` |
+|---|---|---|---|
+| `test_electrostriction.py` | 20 passed | 9,080 | 15 of 20 failed |
+| `test_spectra.py` | 9 passed, 6 skipped | 8,238 | aborted |
+| `test_gamma_only.py` | 21 passed | 5,180 | aborted |
+| `test_nonlinear.py` | 13 passed | 11,337 | 2 of 13 failed |
+| `test_dispersion.py` | 22 passed | 10,388 | 8 of 22 failed |
+| `test_response.py` | 34 passed, 1 skipped | 11,375 | 7 of 35 failed |
+| `test_lsda_response.py` | 11 passed | 5,622 | 3 of 7 failed |
+| `test_ten_site.py` | 27 passed | 6,279 | the memory outlier |
+
+So the worst of the eight sits at a sixth of the node's limit, where on the node each of
+them reached it, and the cause is the three changes this item already names (the fixture
+in all five files, `165dd85`; the clear inside the string loop, `04270f2`; and the eager
+closures compiled once, `7106cff` and `a0b857a`) rather than anything new. **The one file
+that came close is not on the item's list**: `test_stress.py` read **52,628** mappings at
+`aa08c82`, 80 per cent of a node's limit, and **6,966** once it clears its compiled code
+between tests (`a6e58b6`, X2 below). What is not measured is the same set on a node at
+this commit, which is the only thing that can close this item.
 
 ## 3. The piezoelectric tensor's response route is not converged in `k` at the mesh its own input asks for **[opened 2026-09-19, cause found the same day; closed 2026-10-09: the residual 1 per cent to the Berry value is the 10 Ry cutoff, and from 20 to 40 Ry the two routes agree within 0.25 per cent]**
 
@@ -5209,7 +5298,7 @@ with the augmentation removed from the density entirely.
 that the hypothesis space is much smaller than it was and that six of the
 obvious answers have been paid for.
 
-## 4. Eight cluster test failures are assertions, none of them is this session's work, and one is a stale test rather than the environment **[opened 2026-09-19, attributed the same day]**
+## 4. Eight cluster test failures are assertions, none of them is this session's work, and one is a stale test rather than the environment **[opened 2026-09-19, attributed the same day; measured 2026-10-09: all eight pass on `D22-0161` at `aa08c82`, the node run at that commit is not taken]**
 
 The whole `slow` set on a node (job `20336106`) failed in thirteen files, and
 item 2 above accounts for eight of them. These are the rest. **They have now
@@ -5274,6 +5363,33 @@ the rest of the claim is withdrawn until a workstation run is in the record.
 What the A/B does establish is the thing it was built for, which is that none of
 these is attributable to the session, and the remaining question is environment
 against pre-existing rather than environment against session.
+
+**The workstation run is now in the record, 2026-10-09, and all eight pass there.** On
+`D22-0161` at `aa08c82` (`a6e58b6` for the last two rows, which changes no file in the
+table), JAX 0.11.0 and NumPy 2.4.6, with the QE tree copied over so that the
+`test-suite/` inputs do not skip, each file in its own process at an 8 G cap:
+
+| file | at `aa08c82` | what else closed it in between |
+|---|---|---|
+| `test_relaxed_anisotropy.py` | 8 passed | Part XIV item 7, `PLAN.md` P115: 1.9e-10 meV |
+| `test_magnetic_constraints.py` | 8 passed | |
+| `test_ten_site.py` | 27 passed, 818 s, 4,110 MB | Part XIX item 1, P113 to P115 |
+| `test_stm.py` | 12 passed | |
+| `test_stress.py` | 25 passed | `2dc42e1`, above |
+| `test_lsda_response.py` | 11 passed | Part XIV item 4 is that test |
+| `test_spinor_dielectric.py` | the no-magnetization test passes | |
+
+So the question this item left open answers as "not reproduced at the head on a
+workstation", which for the five that no later commit names (the two magnetic
+constraint tests, `test_stm`, `test_lsda_response` and the spinor dielectric) cannot yet
+tell an environment effect from something fixed since `4773c75`; a node run at this
+commit is what would separate them, and it has not been taken. **One new failure in the
+same file, not this item's**: `test_spinor_dielectric.py::test_an_augmented_spinor_gives_the_scalar_run_s_dielectric_tensor[si-epsilon-us]`
+reads `1.5888026894117502e-08 < 1e-12` at `aa08c82`, the same to every digit with the
+kernel cache on and off, where in the D22 slow set at `30cffd2` (2026-10-04) it ran,
+slow-marked and with both parametrisations, and did not fail (the file read 1 failed,
+5 passed, the failure being the no-magnetization test); 217 commits lie
+between the two, and it is not bisected here.
 
 
 # Part XIV -- measured and left open, 2026-09-20
@@ -5694,7 +5810,7 @@ is the order of the 2.709e-07; but the code that ran on 2026-09-20, before P127 
 and scheduled the CG threshold, is not today's, so which leg stopped where that day cannot be
 reproduced, and on today's code the identity holds at round-off every time it is run.
 
-## 5. Seven files of the slow set are **unrun rather than failed**, and they all stopped at the same 12.4 GB
+## 5. Seven files of the slow set are **unrun rather than failed**, and they all stopped at the same 12.4 GB **[closed 2026-10-09: all seven pass at `aa08c82` under an 8 G cap, the largest at 4,380 MB]**
 
 The 2026-09-21 pass of `tools/run_regression.sh` (180 files, **1270 passed**) lost seven to
 `SIGKILL` at the 12 G cap: `test_ldau_flavours` (12425M), `test_lsda` (12427M),
@@ -5756,6 +5872,38 @@ green**, so they are candidates rather than defects -- the list is what a Gamma 
 into any of them would break. `test_tddft` is one and runs `si-epsilon-unshifted-nosym`,
 Gamma at a sixty-fourth, which closes one of the cells item 3 left unmeasured; `al2-metal`
 is the last one outstanding.
+
+**Closed 2026-10-09: all seven now run under an 8 G cap, at a third or less of what
+they took on Triton.** On `D22-0161` at `aa08c82`, the persistent kernel cache on, each
+file in its own process through `tools/run_regression.sh` at `DEFUMAT_TEST_MEM_MAX=8G`,
+with the QE tree copied over so that `test_lsda.py` runs its 55 tests rather than
+skipping 54 of them, as the D22 slow set of 2026-10-04 did:
+
+| file | 2026-09-22, Triton, cold | 2026-10-09, `D22-0161` | result |
+|---|---|---|---|
+| `test_ldau_flavours` | 20548M | **4042M** | 9 passed, 199 s |
+| `test_noncollinear_hubbard_resume` | 19823M | **3777M** | 3 passed, 89 s |
+| `test_ten_site` | 17231M | **4110M** | 27 passed, 818 s |
+| `test_piezoelectric_paw` | 15246M | **3037M** | 2 passed, 44 s |
+| `test_lsda` | 14179M | **3273M** | 55 passed, 75 s |
+| `test_spinor_forces` | 13061M | **4380M** | 21 passed, 380 s |
+| `test_piezoelectric_augmented` | 11247M | **1889M** | 3 passed, 70 s |
+
+The same five of these files that ran on D22 on 2026-10-04 at `30cffd2` read within 3
+per cent of this, so the fall happened between 2026-09-22 and 2026-10-04 and is the
+package's, not the tests': `test_ldau_flavours.py` had both of `CLAUDE.md`'s bounds
+already when Triton read 20.5 GB. Which commits account for it is not attributed here.
+**The sentence above that the cap "needs raising to about 24 G" is withdrawn**: the 12 G
+default holds every one of the seven with a factor of 2.7 to spare. **The
+warm-against-cold pair this item asked for is now taken on one file**, `test_ldau.py` at `aa08c82`:
+3,411 MB with `DEFUMAT_CACHE_DIR=off` against 3,317 and 3,265 MB in two runs with the
+cache on, so on this file the **hit is the cheaper one**, by about 100 to 150 MB, which
+is the opposite sign to `CLAUDE.md`'s "a cache miss is the cheaper one in memory" and
+nowhere near the gigabytes a 603 MB entry was once worth. `test_ten_site.py` is the one to watch: on 2026-10-04 it read 12,628 to
+12,847 MB at that night's integration head against 3,590 MB at the master the
+integration started from (`review/ten-ab/peaks.txt` on D22), and 4,116 MB in a later run
+(`review/integ-4`), so one file can triple and recover between commits without any
+assertion noticing.
 
 ## 6. Three failures the slow set found that are **not** the `k + G = 0` row **[closed 2026-09-22; both were budgets rather than defects]**
 
@@ -5880,7 +6028,7 @@ older tree gives -223.1388442371. That change is `gcc_spin`'s cut of points with
 The fifteen high and medium defects are closed and listed with their numbers in
 `PLAN.md` P109. What is open is below, in the order a wrong answer costs.
 
-## 1. The slow tests next to the fixes have not run **[opened 2026-09-23]**
+## 1. The slow tests next to the fixes have not run **[opened 2026-09-23; closed 2026-09-25 by Part XIX item 1, which ran all of them, and the heading was not updated until 2026-10-09]**
 
 Of the fifteen regression files that exercise the changed code, only `test_ultracell.py`
 ran, and its two failures are what `d36ce8e` fixed (both pass now). The other fourteen did
@@ -5918,6 +6066,21 @@ input's `conv_thr`; it now states its own 1e-12 (`PLAN.md` P110). The shared per
 `test_stress.py`, `test_uspp.py`, `test_paw_noncollinear.py` and the two spiral files,
 and the one-`Calculation` workflows reach `test_conductivity.py`, `test_tddft.py`,
 `test_shg.py`, `test_photocurrent.py` and `test_magnons.py`.
+
+**Closed, read 2026-10-09.** Every file this item names as owed, the fourteen of
+P109, the nine of P111 and the ones P110 adds, is in the 36-file list of
+`tools/cluster/owed.sbatch` (`93d882f`), which ran on `batch-milan` on 2026-09-24: Part
+XIX item 1 has the result, 29 files clean and six failures that the A/B there put on
+`1705a0a` rather than on P109 to P111, closed in P113 to P115. Since then the whole slow
+set has run on `D22-0161` at `30cffd2` (2026-10-04, 235 of 247 files clean), with one
+caveat that matters here: D22 had no QE tree, so every file that reads
+`test-suite/` skipped there, `test_ldau.py`, `test_scf.py` and `test_pdos.py` whole
+and `test_lsda.py` at 54 of 55. With the tree copied over,
+at `aa08c82` on 2026-10-09, the DFT+U and LSDA files of this list pass:
+`test_ldau.py` 73, `test_lsda.py` 55, `test_ldau_flavours.py` 9,
+`test_noncollinear_hubbard_resume.py` 3, `test_magnetic_constraints.py` 8,
+`test_relaxed_anisotropy.py` 8, `test_stress.py` 25, `test_spinorbit.py` 27,
+`test_noncollinear_magnetism.py` 10, `test_spin_spirals.py` 9.
 
 ## 2. The ultracell's multiplet ladder was measured under the wrong definition **[opened 2026-09-23]**
 

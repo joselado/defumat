@@ -171,6 +171,22 @@ def _reference_path(directory, name: str, qe_testsuite: Path) -> Path:
     return reference_output(directory, name, qe_testsuite)
 
 
+@pytest.fixture(autouse=True)
+def _bound_compilation_cache():
+    """Several cells of different shapes in one process; see ``CLAUDE.md`` on memory.
+
+    The converged states stay cached and only the compiled code is dropped, which
+    trades recompilation for a peak that does not grow with the number of cells.
+    The cache below stays unbounded because the parametrized tests come back to
+    every cell once per test function, so ``maxsize=2`` would rerun each SCF that
+    many times (``OPEN.md`` X2).
+    """
+    yield
+    import jax
+
+    jax.clear_caches()
+
+
 @lru_cache(maxsize=None)
 def _converged(directory, name: str, qe_testsuite: Path, pseudo_dir: Path):
     path = _input_path(directory, name, qe_testsuite)
