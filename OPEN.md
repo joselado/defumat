@@ -6207,7 +6207,25 @@ the run above on NiBr2**, where spin-orbit coupling is on and the partners remov
 preference between `+e_0` and `-e_0`; it needs that project's inputs on Triton. The
 default stays off until it has been measured.
 
-## 2. A noncollinear supercell under a scalar modulation keeps a transverse magnetization of 2e-5 **[opened 2026-09-26, `PLAN.md` P121]**
+## 2. A noncollinear supercell under a scalar modulation keeps a transverse magnetization of 2e-5 **[opened 2026-09-26, `PLAN.md` P121; closed 2026-10-09: a stop point, not a fixed point, 3.1e-7 at `conv_thr = 1e-14`]**
+
+**Measured, 2026-10-09** (D22-0161, `review/open-a/xx2.py`, `xx2b.py`, `xx2c.py`; the
+reference supercell of the test, `nbnd = 32`). The premise below is wrong: **it is a stop
+point.** At the test's `conv_thr = 1e-11` the transverse part is 1.99e-5 with the seed in
+degrees and 1.99e-5 with `angle1 = 54.7356103172453`, the same to six digits, so the seed's
+rounding is not it; seeded along `z` it is 1.05e-5, along `x` 6.5e-6, and with no modulation
+2.1e-6. At 1e-12 it is 2.33e-5, which is what read as "identical". **At 1e-14 it is 3.1e-7
+(seed along `z`) and 3.7e-7 (along `(1,1,1)/sqrt(3)`)**, 13 iterations against 9. Read per
+iteration through the site moments, the canting grows from 1.8e-6 at the first iteration to
+1.6e-5 at the eleventh, while `ethr` is loose, and then falls to 7.5e-6 and 3.7e-7 in the two
+iterations after `dr2` passes 1e-13; `diago_full_acc` changes it by 20 per cent and not in
+kind. So a collinear state takes a transverse residue from the loose early diagonalisations,
+and the stopping test at 1e-11 to 1e-12 ends the run before the iterations that remove it.
+With the reference at 1e-14, the test's own ladder reads its three magnetic components equal
+to **1.0003, 1.0007 and 1.0058** at 8, 16 and 32 bands, against 1.017, 1.037 and 1.276 at
+1e-11, so the 1.4 bound in the test is this residue and nothing of the ultracell's. Whether
+the test's reference moves to 1e-14 and the bound with it is a change to a committed
+comparison and is left to the user.
 
 Found through `test_the_noncollinear_ultracell_converges_to_the_supercell`, and it is the
 **reference's** residue, not the ultracell's. Two cells of hydrogen with the moment along
