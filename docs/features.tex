@@ -3249,11 +3249,15 @@ ladder costs what its densest rung costs: those two rungs took 73~s and 191~s
 and peaked at 14.4~GB, all of it the taped route's tape at 216 $k$-points, which
 is the case for \code{method = 'zstar\_eu'} on anything larger.
 \textbf{The last step is smaller than
-the error}: across this crystal's four rungs the steps are 10, 2.1 and 0.44 per
-cent while the densest is still 1.2 per cent from the Berry value, so the
-remaining distance runs about three times the last step and \code{settled}
-means the mesh has stopped being the largest thing wrong rather than that it is
-converged.
+the error}: across this crystal's rungs the steps are 10, 2.1, 0.44 and 0.12 per
+cent to $12\times12\times12$, a geometric approach that leaves about a third of
+the last step still to travel, so \code{settled} means the mesh has stopped
+being the largest thing wrong rather than that it is converged. The
+$10\times10\times10$ rung sits 1.2 per cent from the Berry value and that is
+the cell's 10~Ry cutoff, not the mesh: a finite difference at constant cutoff
+feels the basis change with the strain and the response does not, and at 30~Ry
+the $12\times12\times12$ rung and the Berry value agree to 0.25 per cent. A
+ladder converges the $k$-sum only; the cutoff is converged on its own.
 
 
 \begin{refuses}
