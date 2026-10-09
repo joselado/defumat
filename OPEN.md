@@ -6327,7 +6327,22 @@ of the first-order energy at 30 Ry; for the cobalt cell, 25 along `c` in the cel
 the supercell on the dense grid and 18 and 72 on the smooth one, checked, so it is the repeat
 and this one is ruled out too). Both now warn.
 
-## 2. Route C does not reach `conv_thr` on PAW nickel **[opened 2026-09-26]**
+## 2. Route C does not reach `conv_thr` on PAW nickel **[opened 2026-09-26; measured 2026-10-09: the plain SCF stalls at every orientation and converges in 78 at `degauss = 0.05`; Route C does not fit 6 GB; plan in `plans/open-a-xxi2.md`]**
+
+**Measured, 2026-10-09** (D22-0161, `review/open-a/xxi2.py`; the tables are in the plan). The
+plain SCF on this cell at 40/320 does not reach `conv_thr` from 45 degrees (200 iterations,
+`dr2` 5.7e-9 to 4.8e-6 over the last 60, the energy spread 9e-4 Ry), nor in the plane on a
+mirror (200, median 3.8e-6), nor along `c` (120, median 1.3e-5, spread 2.4e-2 Ry), nor along
+`c` at the dataset's own 75/480 (150). On the two symmetry axes the residual split's rotation
+bin is 2e-6 to 2e-5 and the longitudinal and pointwise transverse bins are 2e-3, so the stall
+Route C inherits is the magnetic channel and not the angle; the 45-degree run adds a constant
+rotation residual of 2.2e-4 rad an iteration, the anisotropy's slow turn, which is what Route C
+is for. Along `c`, `mixing_beta = 0.1`, `mixing_beta_mag = 0.1` and `local-TF` do not converge
+it, `adaptive` diverges, a `6 6 4` mesh makes it worse, and **`degauss = 0.05` converges it in
+78**: the shape of a Stoner-enhanced longitudinal response. Route C itself was killed by the
+6 GB cap at iteration 4 to 22, its one-centre torque growing about 0.1 GB an iteration (Part
+XXII item 1's code). The serial `pw.x` on D22 diverges on this input from its first iteration at
+both cutoffs, so there is no reference for whether `pw.x` converges it.
 
 `run_scf(rotate_moments=True)` on fully-relativistic PAW nickel (`ni-tetragonal-relaxed-mae-paw.in`
 at 40/320 Ry, seeded 45 degrees off `c`) turns the moment into the basal plane on every
