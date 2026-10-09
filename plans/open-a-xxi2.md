@@ -1,7 +1,8 @@
 # Route C on PAW nickel: the stall is the plain SCF's (`OPEN.md` Part XXI item 2)
 
 *Written 2026-10-09 on branch `open-a`, for a fable review before any code. Nothing below is
-implemented.*
+implemented. The scripts are in `plans/open-a-scripts/` (run on D22 through `run.sh`, which sets
+the environment and the 6 GB cap); their output is in `/l/ladovj1/review/open-a/` on D22.*
 
 ## What was measured
 
@@ -31,8 +32,8 @@ which is `OPEN.md` Part XXII item 1's code and the eager-closure trap.
 | 0, 0 (along `c`, on the four-fold axis) | 40/320 | 120, not | 2.6e-7, 1.3e-5, 3.0e-4 | 2.4e-2 | 7.4e-4 |
 | 0, 0 | **75/480**, the dataset's own | 150, not | `dr2` 7e-9 to 1e-6 at the end | about 1e-3 | |
 
-The 45-degree run carries a **constant rotation residual**, `c_y = 2.2e-4` rad per iteration
-about `y` from iteration 20 to 200 (the residual split's generator bin), while the moment's
+The 45-degree run carries a **constant rotation residual**, `c_y = 2.2e-4` to 2.5e-4 rad per
+iteration about `y` from iteration 29 to 200 (the residual split's generator bin), while the moment's
 polar angle random-walks between 44.78 and 45.99 degrees: that is the anisotropy's slow
 rotation, which only Route C can traverse in fewer than about ten thousand iterations. **But
 the two arms on a symmetry axis**, where the torque vanishes and the rotation bin reads 2e-6
@@ -48,8 +49,8 @@ magnetic channel of the plain SCF on this cell, and Route C inherits it.
 | `mixing_beta = 0.1` | not converged, `dr2` 3.5e-7 to 2.5e-6 at the end |
 | `mixing_beta_mag = 0.1` (the grid magnetization only; `becsum` keeps `beta`) | not converged, 1.2e-5 at the end |
 | `mixing_mode = 'local-TF'` | not converged, 1.5e-9 to 1.9e-6 at the end |
-| `mixing_mode = 'adaptive'` | diverged, `dr2` 4e4 to 6e4 Ry from iteration 20 |
-| `K_POINTS 6 6 4` | worse: `dr2` 1e-2 to 0.3 at 113 iterations, the moment leaving `c` |
+| `mixing_mode = 'adaptive'` | diverged, `dr2` 4e4 to 6e4 Ry from iteration 20; stopped at 72 |
+| `K_POINTS 6 6 4` | worse: `dr2` 9e-3 at 150 with excursions to 6.4, the moment leaving `c` |
 | **`degauss = 0.05`** | **converged in 78** |
 
 So the stall gets worse with a finer mesh and goes away with a wider smearing, which is what a

@@ -1,7 +1,8 @@
 # The transverse block of an augmented spiral on the laboratory sphere (`OPEN.md` Part XXI item 1)
 
 *Written 2026-10-09 on branch `open-a`, for a fable review before any code. Nothing below is
-implemented.*
+implemented. The scripts are in `plans/open-a-scripts/` (run on D22 through `run.sh`, which sets
+the environment and the 6 GB cap); their output is in `/l/ladovj1/review/open-a/` on D22.*
 
 ## What was measured, and what it says the cause is
 
@@ -33,8 +34,12 @@ and 99.98 per cent (LDA) on exactly the G-vectors one sphere has and the other d
 the charge and `m_z` differences have 2e-5 there (they are not displaced). It is the dense
 sphere's edge and not the smooth one's: at 160 Ry the smooth sphere has radius 8.94 1/bohr and
 the shell is at 12.64. It falls with `ecutrho` as the tail of cobalt's `Q_ij(G)` at `G_rho`,
-by 2900 between 160 and 320, which is why oxygen at 200 Ry (P95's 1.65e-9, an energy and so
-also a weaker test) did not show it. GGA is excluded by the LDA column.
+by 2900 between 160 and 320. GGA is excluded by the LDA column. **P95's oxygen chain has the
+same shell**, measured with the same script on `o-chain-spiral-us.in` against
+`o-chain-90deg-us.in` at their 200 Ry: worst eigenvalue 3.4e-8 Ry, magnetization 6.7e-5 off
+against the spiral's own 1.2e-6, and 99.8 per cent of the transverse difference on the shell
+displaced the other way (its `q` is `+b3/4`). P95's 1.65e-9 Ry was a total energy, and the shell
+is there on its cell too, so the entry's contradiction with P95 dissolves.
 
 ## What the change would be
 

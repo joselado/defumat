@@ -6218,9 +6218,11 @@ rounding is not it; seeded along `z` it is 1.05e-5, along `x` 6.5e-6, and with n
 (seed along `z`) and 3.7e-7 (along `(1,1,1)/sqrt(3)`)**, 13 iterations against 9. Read per
 iteration through the site moments, the canting grows from 1.8e-6 at the first iteration to
 1.6e-5 at the eleventh, while `ethr` is loose, and then falls to 7.5e-6 and 3.7e-7 in the two
-iterations after `dr2` passes 1e-13; `diago_full_acc` changes it by 20 per cent and not in
-kind. So a collinear state takes a transverse residue from the loose early diagonalisations,
-and the stopping test at 1e-11 to 1e-12 ends the run before the iterations that remove it.
+iterations after `dr2` passes about 1e-13, a factor of 40; `diago_full_acc` changes the final
+value by 24 per cent and not the shape. So the stopping test at 1e-11 to 1e-12 lands on the
+rising part of that curve. Where the canting comes from is not established: it keeps growing
+at iterations 10 and 11, where `dr2` is already 2e-13 and 7e-14, so the early loose
+diagonalisations alone do not account for it, and the full-accuracy arm does not separate it.
 With the reference at 1e-14, the test's own ladder reads its three magnetic components equal
 to **1.0003, 1.0007 and 1.0058** at 8, 16 and 32 bands, against 1.017, 1.037 and 1.276 at
 1e-11, so the 1.4 bound in the test is this residue and nothing of the ultracell's. Whether
@@ -6271,9 +6273,14 @@ on `|G| < G_rho` in the rotating frame and the supercell on its own sphere, the 
 truncation-shell hypothesis, and it falls as the tail of cobalt's `Q_ij(G)` at `G_rho`, by a
 factor of 2900 from 160 to 320 Ry, where the supercell then matches the spiral to the spiral's
 own self-consistency (1.4e-4 in the magnetization, the 320 Ry spiral stopping at 8.8e-9 in
-150 iterations). P95's oxygen chain did not show it because oxygen's table is small at
-`G_rho = 14` and an energy is the weaker test. The change, keeping the transverse pair on the
-laboratory sphere, is planned in `plans/open-a-xxi1.md` and not made.
+150 iterations). **P95's oxygen chain has it too, 2000 times smaller**: the same check on
+`o-chain-spiral-us.in` against `o-chain-90deg-us.in` at their 200 Ry gives a worst eigenvalue
+of 3.4e-8 Ry and a magnetization 6.7e-5 off (the spiral against itself 1.2e-6), with 99.8 per
+cent of the transverse difference on the shell displaced the other way, as its `q = +b3/4`
+requires. So the entry's contradiction with P95 dissolves: the identity P95 held to 1.65e-9
+Ry was a total energy, and the shell is there on its cell too, at a size an energy that close
+does not rule out. The change, keeping the transverse pair on the laboratory sphere, is planned in
+`plans/open-a-xxi1.md` and not made.
 
 Found while building the source for `ORIENTATION-NEXT.md` step 2. The four-cell cobalt
 helix converged in its one-atom cell by the generalized Bloch theorem

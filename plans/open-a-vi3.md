@@ -1,7 +1,8 @@
 # The noncollinear ultracell's slow cases on the Kramers-closed basis (`OPEN.md` Part VI item 3)
 
 *Written 2026-10-09 on branch `open-a`, for a fable review before any code. Nothing below is
-implemented.*
+implemented. The scripts are in `plans/open-a-scripts/` (run on D22 through `run.sh`, which sets
+the environment and the 6 GB cap); their output is in `/l/ladovj1/review/open-a/` on D22.*
 
 ## What was measured
 
