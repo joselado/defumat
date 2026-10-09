@@ -3846,7 +3846,10 @@ cause was found by reading and does not account for it: `stm.f90:146-149` sets `
 whose lowest band is already inside the window the previous point's `first_band` is kept; that
 happens at 6 of the 64 points here, and transcribing the stale rule
 onto this code's states in `pw.x`'s own k order takes the difference from 2.6e-3 to only
-2.1e-3. What the rest is has not been found.
+2.1e-3. **It is the unshifted grid and not `nosym`**: the same pair on the shifted 4x4x4 grid
+with `nosym` and `noinv`, 64 points again, agrees to **2.2e-10** on a peak of 3.54e-3. So what is
+left lives at the points only an unshifted grid holds (`Gamma`, `X` and `L` among them), and what
+the rest of it is has not been found; it is a candidate entry of its own rather than part of this timing.
 
 # Part X -- from the augmented ultracell, 2026-09-17 (P88 stage 5)
 
@@ -4305,7 +4308,7 @@ problem rather than this one, measured in bytes on a machine with no cgroup
 surprises. What the two share is the cause, which is accumulation, and therefore
 the fix.
 
-## 3. The piezoelectric tensor's response route is not converged in `k` at the mesh its own input asks for **[opened 2026-09-19, cause found the same day; closed 2026-10-09: the residual 1 per cent to the Berry value is the 10 Ry cutoff, and at 30 Ry the two routes agree to 0.25 per cent]**
+## 3. The piezoelectric tensor's response route is not converged in `k` at the mesh its own input asks for **[opened 2026-09-19, cause found the same day; closed 2026-10-09: the residual 1 per cent to the Berry value is the 10 Ry cutoff, and from 20 to 40 Ry the two routes agree within 0.25 per cent]**
 
 Measured on Triton (jobs `20336374`, `20336476` and the ladder `20337789`,
 `tools/cluster/piezo_measure.py`), and the full tables are in
@@ -4865,35 +4868,37 @@ extrapolated to a stop near -0.6691 and attributed to nothing. Today's code, the
 `review/open-c/piezo_rungs.py`; the Berry difference is `tools/cluster/piezo_measure.py` with
 `eps_4 = 0.01` unless marked:
 
-| `alas-raman.in`, `e_14` in C/m^2 | `ecutwfc = 10` (committed) | 20 | 30 |
-|---|---|---|---|
-| response, `8 8 8` | -0.672872 | -0.693080 | -0.696303 |
-| response, `10 10 10` | -0.669896 | | -0.691942 |
-| response, `12 12 12` | **-0.669096** | | **-0.690893** |
-| Berry, 15 strings over 8x8, ground state `8 8 8` | -0.663148 | -0.689116 | -0.689259 |
-| the same at `eps_4 = 0.005` | -0.662163 | | **-0.689188** |
-| Berry, 21 strings over 12x12 | -0.663382 | | |
-| Berry, ground state `12 12 12` | -0.663119 | | |
+| `alas-raman.in`, `e_14` in C/m^2 | `ecutwfc = 10` (committed) | 20 | 30 | 40 |
+|---|---|---|---|---|
+| response, `8 8 8` | -0.672872 | -0.693080 | -0.696303 | -0.697246 |
+| response, `10 10 10` | -0.669896 | -0.688705 | -0.691942 | |
+| response, `12 12 12` | **-0.669096** | **-0.687672** | **-0.690893** | |
+| Berry, 15 strings over 8x8, ground state `8 8 8` | -0.663148 | **-0.689116** | -0.689259 | -0.690229 |
+| the same at `eps_4 = 0.005` | -0.662163 | | **-0.689188** | |
+| Berry, 21 strings over 12x12 | -0.663382 | | | |
+| Berry, ground state `12 12 12` | -0.663119 | | | |
 
-**The `k` side converges geometrically, not as a slow tail.** At 10 Ry the steps are 0.44 and 0.12
-per cent from `8 8 8` to `12 12 12`, a ratio of 0.27 (0.24 at 30 Ry), so `12 12 12` is about 0.1
-per cent above a limit near -0.6688, and the earlier rungs reproduce today with the `l = 1`
-tangent at `k + G = 0` in (`8 8 8` -0.672872 against -0.672897 recorded, `10 10 10` -0.669896
-against -0.669907). The Berry value is converged in every dial it has at 10 Ry to a few parts in
-1e4 (strings 3.5e-4, ground-state mesh 4e-5) and in the strain step to 1.5e-3, which is why that
-step looked like a dial before. **And the 1 per cent between the two is the cutoff**: at 10 Ry the
-converged response sits 1.0 per cent beyond the Berry value, at 30 Ry the `12 12 12` rung sits
-**0.25 per cent** beyond it (0.17 after the step and string corrections), where the Berry value
-has stopped moving by 20 Ry (2e-4 from 20 to 30) and the response has not (0.46 per cent from 20
-to 30 at `8 8 8`). That is the expected shape: the finite difference runs one SCF per strained
-cell at a constant cutoff, so it carries the change of basis with the strain, the polarization's
-Pulay term, and the response is the derivative at a fixed set of plane waves, which does not, and
-the two meet only as the cutoff converges. The FD step's dependence falling from 1.5e-3 at 10 Ry
-to 1e-4 at 30 says the same.
+**The `k` side converges geometrically, not as a slow tail.** The steps from `8 8 8` to
+`12 12 12` are 0.44 and 0.12 per cent at 10 Ry, 0.63 and 0.15 at 20, 0.63 and 0.15 at 30, a ratio
+of a quarter at every cutoff, so a `12 12 12` rung is about 0.05 per cent from its own limit, and
+the earlier rungs reproduce today with the `l = 1` tangent at `k + G = 0` in (`8 8 8` -0.672872
+against -0.672897 recorded, `10 10 10` -0.669896 against -0.669907). The Berry value is converged
+in every dial it has at 10 Ry to a few parts in 1e4 (strings 3.5e-4, ground-state mesh 4e-5) and
+in the strain step to 1.5e-3, falling to 1e-4 at 30 Ry. **And the 1 per cent between the two at
+the committed cell is its 10 Ry cutoff**: the `12 12 12` rung sits 1.0 per cent beyond the Berry
+value at 10 Ry and **0.21 per cent short of it at 20 Ry and 0.25 per cent beyond it at 30**, and at
+`8 8 8` the gap is 1.02 per cent at both 30 and 40 Ry, where the two routes move together (0.14
+per cent each from 30 to 40), so it is not opening again above 30. What can be claimed is
+agreement within a quarter of a per cent at every converged cutoff, on both sides, which is the
+size of the cutoff's own residual motion; whether the last 0.2 per cent is anything is not
+resolvable with these dials. The finite difference runs one SCF per strained cell at a constant
+cutoff and the response is a derivative at a fixed set of plane waves, which is the usual reason
+two such routes meet only as the cutoff converges; that reading fits the table and was not tested
+separately.
 
-So the response route agrees with an independent reference to its own resolution once both are
-converged in the dials they have, the guard and the ladder are what this entry asked for, and
-nothing is open. **Three sentences of the record are falsified by it and corrected in the code and
+So the response route agrees with an independent reference once the cutoff is converged, the k
+dependence this entry was opened about is guarded and measurable with the ladder, and nothing is
+open. **Three sentences of the record are falsified by it and corrected in the code and
 the guide** (`KMESH_STEP`'s and `KMESH_CURVE`'s comments, the warning's text, `piezo_ladder.py`'s
 docstring, `docs/features.tex`): "the remaining distance runs about three times the last step,
 because the approach is a slow tail rather than a geometric one", "8 8 8 is 1.6 [per cent out]",

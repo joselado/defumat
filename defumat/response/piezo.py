@@ -226,7 +226,7 @@ def to_voigt(e: np.ndarray) -> np.ndarray:
 
 #: The last ladder step below which :func:`piezoelectric_tensor` stops warning.
 #:
-#: **It is a threshold on the step and the error is larger than the step**, which
+#: **It is a threshold on the step and the step is not the error**, which
 #: is the one thing to know before reading a silent run as a converged one. On
 #: zincblende AlAs, where the ladder and an independent Berry-phase value are
 #: both known, ``e_14`` moves 10 per cent from ``4 4 4`` to ``6 6 6``, 2.1 per
@@ -283,8 +283,8 @@ def _warn_about_the_kmesh(calculation, drift) -> None:
             "AlAs, against a Berry-phase finite difference that shares no "
             "machinery with it, e_14 reads "
             + ", ".join(f"{value:.4f}" for value in KMESH_CURVE)
-            + " C/m^2 at 4 4 4, 6 6 6, 8 8 8 and 10 10 10, approaching about "
-              "-0.6688, so a committed-quality 4 4 4 mesh is 14 per cent out "
+            + " C/m^2 at 4 4 4, 6 6 6, 8 8 8 and 10 10 10 and -0.6691 at "
+              "12 12 12, so a committed-quality 4 4 4 mesh is 14 per cent out "
               "there and 8 8 8 is 0.6"
         )
     else:

@@ -333,8 +333,10 @@ def test_chi0_matches_a_finite_difference_for_a_spin_polarized_insulator():
 #: was measured at before 2026-10-03, when ``tr2`` became ``ph.x``'s (a raw
 #: ``sum(dV^2)`` of 1e-14 is about 1e-24 in those units on these grids) and the
 #: CG threshold became scheduled. At the defaults both runs stop where ``ph.x``
-#: would and agree only to that level: the polarized and unpolarized dielectric constants of silicon to 1.3e-7,
-#: since ``nspin_mag = 2`` doubles ``ndimtot`` and halves ``dr2`` for the same potential (D22).
+#: would and agree only to that level: the polarized and unpolarized dielectric constants of silicon to 1.3e-7
+#: when this was written and to 4.24e-8 on D22 on 2026-10-09 (five passes each), since ``nspin_mag = 2``
+#: doubles ``ndimtot`` and halves ``dr2`` for the same potential. At these settings, 4.3e-14 (``OPEN.md``
+#: Part XIV item 4).
 IDENTITY = {"tr2": 1.0e-24, "threshold": 1.0e-12}
 
 
