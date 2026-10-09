@@ -1,0 +1,43 @@
+! OPEN.md Part VII item 1 and Part XXII item 2, at a size the 12 GB A2000 on D22 holds.
+! The NiI2 monolayer (nii2-spiral.in's cell and positions) three times along a1, with the
+! fully-relativistic PAW datasets in tests/data/pseudo (no Br one is committed), the Ni
+! moments 120 degrees apart in the plane: a spinor PAW slab with 46 bohr of vacuum, the
+! shape of the NiBr2 cells those entries were reported on, nine atoms instead of 45.
+&control
+    calculation = 'scf'
+/
+&system
+    ibrav = 0, nat = 9, ntyp = 4,
+    ecutwfc = 40.0, ecutrho = 320.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.01,
+    noncolin = .true., lspinorb = .true., nosym = .true., noinv = .true.,
+    starting_magnetization(1) = 0.15, angle1(1) = 90.0, angle2(1) = 0.0,
+    starting_magnetization(2) = 0.15, angle1(2) = 90.0, angle2(2) = 120.0,
+    starting_magnetization(3) = 0.15, angle1(3) = 90.0, angle2(3) = 240.0,
+/
+&electrons
+    conv_thr = 1.0d-8
+    mixing_beta = 0.3
+    diago_david_ndim = 2
+/
+ATOMIC_SPECIES
+ Ni1 58.693 Ni.rel-pbe-spn-kjpaw_psl.1.0.0.UPF
+ Ni2 58.693 Ni.rel-pbe-spn-kjpaw_psl.1.0.0.UPF
+ Ni3 58.693 Ni.rel-pbe-spn-kjpaw_psl.1.0.0.UPF
+ I  126.904 I.rel-pbe-n-kjpaw_psl.1.0.0.UPF
+CELL_PARAMETERS bohr
+  22.081449000  0.000000000  0.000000000
+  -3.680241500  6.374361079  0.000000000
+   0.000000000  0.000000000 46.255853000
+ATOMIC_POSITIONS crystal
+ Ni1 0.000000000 0.000000000 0.0000000
+ Ni2 0.333333333 0.000000000 0.0000000
+ Ni3 0.666666667 0.000000000 0.0000000
+ I   0.111111111 0.666666667 0.0615401
+ I   0.222222222 0.333333333 0.9384599
+ I   0.444444444 0.666666667 0.0615401
+ I   0.555555556 0.333333333 0.9384599
+ I   0.777777778 0.666666667 0.0615401
+ I   0.888888889 0.333333333 0.9384599
+K_POINTS automatic
+ 1 2 1 0 0 0

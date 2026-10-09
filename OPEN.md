@@ -1858,7 +1858,21 @@ the honest reading.
 All four are negligible on the small cells and none appears in `sizing.py`'s model. The
 cells they are priced on are the 157-atom slab and P73's 45-atom NiBr2.
 
-### S1. The symmetry maps are `(nsym, ngm)` int64 plus `(nsym, ngm)` complex, resident for the run **[half done, re-checked 2026-10-03: the per-iteration transient walks the operations past 64 MB (`90ed76a`) and `sizing.py` counts the maps (`08ef191`); the resident int64 indices and the all-ones phases are unchanged]**
+### S1. The symmetry maps are `(nsym, ngm)` int64 plus `(nsym, ngm)` complex, resident for the run **[closed 2026-10-09, branch `open-d`: int32 indices, and a symmorphic group keeps one `(nsym, 1)` column of ones in place of its phases; the average is bit-identical]**
+
+**Closed 2026-10-09.** `symmetry_maps` returns int32 indices, and when no operation of the
+group carries a fractional translation it returns `jnp.ones((nsym, 1))` for the phases,
+which broadcasts against the gather in every average and multiplies by exactly `1 + 0j`.
+So the resident set is `nsym ngm x 4` B for a symmorphic group, against `nsym ngm x 24`:
+at the entry's `ngm = 3 536 849` and 48 operations, **0.68 GB against 4.07**, the entry's
+own figure. A nonsymmorphic group keeps its whole complex table, `nsym ngm x 20` B (3.40 GB
+at the same size); storing phases only for the operations that translate is the remaining
+lever and is not taken. `sizing.py`'s line follows the same rule, at complex128 whatever
+the precision policy, since NumPy builds the phases. Held by
+`tests/unit/test_sizing.py::test_the_symmetry_maps_hold_int32_and_no_phase_a_symmorphic_group_does_not_need`,
+on diamond silicon (nonsymmorphic, phases kept) and fcc aluminium (symmorphic): the dtype,
+the phase shape, the estimate equal to the bytes held, and the average against the int64
+indices with the whole phase table **bit for bit**. Checked to fail on `aa08c82`.
 
 `defumat/system/symmetry.py:644`. `permutations` (int64) and `phases` (complex128), both
 on the **dense** G set, held for the life of the `Calculation` (`driver.py:1458`).
@@ -1872,7 +1886,24 @@ resident part to **0.68 GB**. Caveat stated by the entry rather than buried: tha
 particular run is a spin spiral and therefore `nosym`, so the figure is a projection onto
 a symmetric run of that size.
 
-### S2. The Anderson history is sixteen whole real-space densities on the host, reported as zero **[open, re-checked 2026-10-03: `mixing_ndim` is an input since `f10abe8`, `sizing.py` still has no line for the history, and above dual 4 it is larger than QE's, Part XXIII item 22]**
+### S2. The Anderson history is sixteen whole real-space densities on the host, reported as zero **[closed 2026-10-09, branch `open-d`: the report's half, a host line; the history itself is unchanged and `mixing_space = 'g'` (P127) is the lever]**
+
+**Closed 2026-10-09, the reporting half.** `SizeEstimate.host_arrays` is a new section of
+the report, below the device peak and not in it: `mixer history (N x rho_in, residual)`,
+`mixing_ndim` input states and as many residuals of the packed state `_mix` hands the
+mixer (the density, the dense box in real space or `ngms` reals a channel under
+`mixing_space = 'g'`; every augmented species' `becsum`; `tau` on a meta-GGA; the fit
+vectors when `RHO_DDOT_FIT` is set). `estimate_size` takes `mixing_mode`, `mixing_ndim` and
+`mixing_space`, and `Calculator.estimate` fills the first two from the run's own defaults;
+a mixer that is not Anderson's gets no line. On nine atoms of spinor PAW NiI2
+(`plans/open-d-inputs/nii2-3cell-paw.in`) the line reads 0.73 GiB at depth 8. Held by
+`tests/unit/test_sizing.py::test_the_mixer_history_is_counted_on_the_host`: six steps of a
+real `AndersonMixer` at depth 4 through `_mix` on PAW silicon, and the line equal to the
+bytes its two lists hold; the device peak does not move with the depth, and `linear` has no
+line. Checked to fail on `aa08c82`, where `estimate_size` takes no `mixing_ndim`, which is
+the line not existing. What is not done is making the history smaller, which
+is Part XXIII item 22's option and the user's decision of 2026-10-04 to keep real space by
+default.
 
 `defumat/scf/mixing.py:120`. `_densities` and `_residuals` each hold `history = 8` entries,
 and what is handed to them is the whole mixed state flattened -- real-space
@@ -1884,7 +1915,28 @@ fields -- **the omission is 5.3x what is reported**. `history = 4` halves it. Te
 on `si8-us-1k`. **Sibling of backlog item 5** in the sense that QE has a knob here
 (`mixing_ndim`) that this input parser does not read.
 
-### S3. The augmentation's `(nat, ngm)` structure factor is resident, and only a chunked scan reads it **[moves a number; open, re-checked 2026-10-03]**
+### S3. The augmentation's `(nat, ngm)` structure factor is resident, and only a chunked scan reads it **[closed 2026-10-09, branch `open-d`: built a chunk at a time inside the scan from the positions; the charge and the integrals bit-identical, a force-like gradient 2.6e-15 relative]**
+
+**Closed 2026-10-09.** `TabulatedAugmentation` keeps the atoms' positions, `(nat, 3)`,
+and `phases` is an empty `(nat, 0)` array carrying the dtype; `_tabulated_charge` and
+`_tabulated_integrals` build each chunk's `e^{-i G . tau}` inside their rematted scan
+bodies (`_chunk_phases`, the expression `_atom_phases` evaluates on the whole set), and
+`at_positions` moves the positions rather than rebuilding the table. The stored route,
+whose phases every contraction reads whole, is unchanged. The 2.55 GB line on the 45-atom
+slab goes to `nat x 24` B; `sizing.py` reports `augmentation positions (nat,3)` in its
+place. **Measured on D22 against `aa08c82` on the same cores** (PAW O2 at 25/200 Ry, one
+atom moved off its site, `DEFUMAT_AUG_MAX_BYTES=0` to force the tabulated route): the
+charge from the starting `becsum`, the integrals against a random potential and the cross
+integrals of a table displaced by `(0.1, -0.05, 0.02)` are **bit-identical**; the gradient
+of a scalar built from both through `at_positions` moves by 2.6e-13 on 99.4, **2.6e-15
+relative**, which is the number the entry's "moves a number" tag predicted and is the
+reassociation of the `positions @ gcart.T` product into chunks. `tests/unit/test_augmentation_remat.py`
+takes the positions (and still finds no `(nat, chunk)` residual stacked by the scan), and
+`tests/unit/test_sizing.py::test_a_tabulated_run_is_sized_as_one_and_not_as_the_stored_array`
+asserts the empty phases and the positions line; it fails on `aa08c82`. **On the card**,
+model-free: the live-array inventory after setup of nine-atom NiI2 on D22 held one
+`(9, 629760)` complex128 array, 0.084 GiB, before the change, and the in-use bytes after
+setup fell from 0.322 to 0.238 GiB with it, the same 0.084.
 
 `defumat/pseudo/augmentation.py:80`. On the 45-atom NiBr2 slab (`ngm = 3 536 849`) that is
 **2.55 GB** held for the life of the `Calculation` -- the largest resident line the
@@ -3226,7 +3278,26 @@ calls it, and the mid-SCF path was passing for the opposite reason -- it carried
 field for the refusal to see. Reading a refusal's source is not the same as watching it
 fire, which is `CLAUDE.md`'s own rule about guards, applied to a guard's absence.
 
-## 1. `sizing.py` reads 60 per cent low on a 45-atom spinor PAW slab **[REOPENED 2026-09-14 -- the closure below was withdrawn by the A/B it predicted, and the ~28 GB is still unexplained]**
+## 1. `sizing.py` reads 60 per cent low on a 45-atom spinor PAW slab **[measured 2026-10-09 on a nine-atom spinor PAW slab on D22, the instrument committed and two terms outside the model found and removed; the 45-atom slab's 28 GB is unexplained and its measurement is planned in `plans/open-d-vii1-sizing.md`]**
+
+**Measured 2026-10-09 (branch `open-d`).** The stage-peak instrument A17 says was never
+committed is now `tools/gpu/stage_peaks.py`: the estimate's report, the live device arrays
+after setup by shape, and every stage of the SCF bracketed by the allocator's in-use and peak
+bytes, with a thread recording host RSS so a killed stage is still named. Run on D22's A2000
+on nine atoms of fully-relativistic PAW NiI2 with a helix and 46 bohr of vacuum
+(`plans/open-d-inputs/nii2-3cell-paw.in`, `nbnd = 116`, `david 2`, band batch 16, `k_batch
+1`, device store), it found two terms no line of the report has, both now gone on this
+branch: the per-iteration PAW orientation torque's reverse tape (0.88 to 5.40 GiB in use,
+twice the estimated peak; Part XXII item 1), and on the host the first `site_moments` of the
+run, whose minimum-image search held an `(npoint, nat, 8, 3)` float64 array, 2.6 GB here and
+about 30 GB at the slab's 3.5 million dense points (now walked in blocks of points,
+bit-identical, `tests/unit/test_locals.py`). With both gone the run's peak is 2.767 GiB at
+the second diagonalisation against an estimate of 2.409, **15 per cent low, made of a floor
+0.33 GiB high and a `diagonalize` stage 0.68 GiB above the eigensolver's own executable**,
+whose temp buffer compiled at these shapes is 1.45 GiB against the fit's 1.444. Neither of
+those is the slab's 28 GB, which predates the torque and every memory mode; the plan is to
+run the instrument on that slab past the `ethr` tightening on an A100 and an H100 (an
+`sbatch` for the user to approve) and attribute by stage, never by a sum.
 
 > **Read this before the entry.** Everything from "Closed by subtraction" to the end of the
 > caveat is **retracted**, and the commit that carried it (`23fc3b0`, *"The size report was
@@ -4068,7 +4139,36 @@ differences needs no grid to agree.
 
 # Part XI -- from the seeded NiBr2 helix on a GPU, reported 2026-09-17 (P88 stage 8)
 
-## 1. A batched FFT plan fails to build at an ultracell's band count, and it is not an out-of-memory
+## 1. A batched FFT plan fails to build at an ultracell's band count, and it is not an out-of-memory **[measured 2026-10-09 on D22's 12 GB A2000: not reproduced; no shape this card can hold fails to plan, no cuFFT scratch is allocated, and the reported shape is far from cuFFT's 32-bit limits, so the wall is not where the entry put it and is still unlocated]**
+
+**Measured 2026-10-09 (branch `open-d`), and what it rules out.** The unit cell's smooth
+box at `ecutwfc = 45` is **32x54x200** (`fft_grid_dimensions` on `paw_n3_k3`'s vectors,
+345,600 points), so the failing call, 16 k-points by 56 bands by two spinor components, is
+1792 boxes and **6.2e8 complex elements** (9.9 GB at complex128), against 1280 boxes and
+4.4e8 at the `nbnd = 40` that planned. Neither is near 2^31 elements, or 2^31 reals, so a
+32-bit size limit in `cufftMakePlanMany` does not separate the two band counts. On the
+A2000, one transform per process, the batch doubled until the call failed, for the stick
+layout's `z` pass `(B, 700, 200)`, its `xy` pass `(B, 200, 32, 54)` and a fused box `(B, 32,
+54, 200)`, at pool fractions 0.6 and 0.3: **every plan built** up to 2048, 512 and 512
+boxes, every failure was `RESOURCE_EXHAUSTED` on the data's own allocation at the batch
+that no longer fitted (the failing batch halved with the pool, as data does), and the peak
+of every successful call was **input plus output to the byte**, so cuFFT asked XLA's
+scratch allocator for nothing at these shapes. A second probe squeezed what XLA leaves
+outside its pool, the memory `cufftMakePlanMany` allocates for itself, to 12 MB (fraction
+0.999): the same transforms at 128 to 256 boxes still planned. Scripts and logs are
+`/l/ladovj1/review/open-d/fft_walk.*` and `fft_squeeze.*` on D22.
+
+**So the three candidates the entry names are narrowed rather than settled.** The plan's
+own scratch is not it at these shapes (none is allocated); a size limit is not it at this
+element count; what is left is memory outside XLA's pool on the 80 GB card, at the 0.95
+fraction the same session also reported `jit_chunk` CUBIN loads failing at (Part XXII,
+"two smaller things"), or a shape the code built that differs from the one reconstructed
+here. **What would name it**, and needs a card above 24 GB: the same failing call with its
+stderr kept, since XLA logs `Failed to make cuFFT batched plan: <cufftResult>` (a size or
+an allocation failure inside cuFFT) or `Failed to allocate work area` (the scratch) one line
+before the `RET_CHECK` the report quotes, at `XLA_PYTHON_CLIENT_MEM_FRACTION` 0.95 and then
+0.75. Nothing in `batching.py` is changed: a cap sized from this card would be sized from a
+failure it cannot produce.
 
 **Reported by the NiBr2 session and not reproduced here** -- this workstation has no GPU, so
 what follows is their observation with their numbers, recorded because the batching dial it
@@ -6006,7 +6106,16 @@ centrosymmetric cell is zero on both codes. Beside it: `nosym` here gives the wh
 where `pw.x` still halves it with `k -> -k` unless `noinv`, which only `builder.py`'s
 `nosym_evc` row says.
 
-## 2. Two sizing gaps next to the one-centre line **[opened 2026-09-24]**
+## 2. Two sizing gaps next to the one-centre line **[closed 2026-10-09, branch `open-d`: the line is float64 whatever the policy, and the guide names every line]**
+
+**Closed 2026-10-09.** The one-centre line is sized at double's 8 bytes, which is what
+`_build_species` allocates through NumPy, so under `single` it no longer reports half of
+what is resident; `tests/unit/test_sizing_per_dataset.py::test_the_onecentre_line_follows_the_build_not_the_precision_policy`
+builds the system at `SINGLE`, checks a policy-sized line beside it halves (so the system
+really is single) and the one-centre line does not, and that `build_paw`'s tables are
+float64. Checked to fail on `aa08c82`. `docs/features.tex`'s list of what the floor covers
+now names the symmetry maps, the augmentation table and phases, the one-centre tables (and
+their float64), and the host section with the mixer's history.
 
 The one-centre tensors are built in float64 whatever the precision policy
 (`paw/onecenter.py:_build_species` never reads it), while the new line uses the policy's
@@ -6643,7 +6752,42 @@ fully-relativistic PAW, LDA, `ecutwfc = 45`, `ecutrho = 360`, `nbnd = 432`, `nos
 `DEFUMAT_K_BATCH=1`, band batch 16, projectors rebuilt per k-point, on the worktree
 `apps/defumat-orient`.
 
-## 1. `run_scf` computes the PAW one-centre orientation torque on every noncollinear iteration, used or not **[opened 2026-09-27]**
+## 1. `run_scf` computes the PAW one-centre orientation torque on every noncollinear iteration, used or not **[closed 2026-10-09, branch `open-d`: still computed, now with no tape; on nine atoms of spinor PAW NiI2 the torque took the card from 0.88 to 5.40 GiB in use and now to 0.95, below the iteration's own peak]**
+
+**Closed 2026-10-09, differently from the fix proposed below, and measured on a card.** The
+torque is kept in the history (the uncoupled run's zero is the control the loop's comment
+names), and its cost is removed instead, in three places in `scf/driver.py`:
+without the coupling (`lspinorb` off, or `soc_scale = 0`) `run_scf` no longer hands the
+states to `_onecenter_torque`, since `becsum` then turns as a vector exactly (2.8e-16, P122)
+and the vector turn of the input is the Harris-Foulkes derivative itself; with the coupling
+the states are turned **a k-chunk at a time in forward mode** on any store (the streamed
+route, which was only taken for a host store, regrouped from the whole-set reverse pass);
+and the one-centre pairing is differentiated by **three `jax.jvp`**, one per generator, on
+both routes, rather than by one `jax.grad`. Measured with `tools/gpu/stage_peaks.py` on
+D22's A2000, `plans/open-d-inputs/nii2-3cell-paw.in` (nine atoms, fully-relativistic PAW,
+coupling on, two k-points, 116 bands, `k_batch 1`, device store), in-use bytes at the
+torque's one-centre call against the run's peak so far (2.65 GiB, set by the first
+diagonalisation):
+
+| commit | the torque's route | in use (GiB) | peak (GiB) |
+|---|---|---|---|
+| `dce1eeb` (as on master) | whole-set `jax.grad` through `becsum(U(w) psi)` and the one-centre | **5.397** | 5.449 |
+| `8247a0f` | states chunked, forward; one-centre still `jax.grad` | 4.858 | 4.910 |
+| `6f7bd7db` | states chunked, forward; one-centre three `jvp` | **0.945** | 2.651 (unchanged) |
+
+So on this cell **4.2 of the 4.6 GiB were the one-centre calculation's reverse tape**, not
+the states'; the split is measured on nine atoms and is not extrapolated to the fifteen-cell
+source's 19.50 GiB, where both parts grow. The P122 identity still holds through the forward
+form (`test_orientation_paw.py::test_the_paw_torque_is_the_grid_s_plus_the_one_centre_field_s`,
+1e-9 relative to Route A), and so does the streamed against whole-set comparison, now with
+the device store on the chunked route (`test_streaming.py`, 1e-13). New:
+`tests/regression/test_orientation_torque_cost.py`, two tests that spy on `spin_turned`: an
+uncoupled PAW O2 texture turns no state at all, and a coupled PAW iodine atom on two
+k-points at `k_batch = 1` turns one k-point's states at a time; both fail on `aa08c82`
+(the whole set, `(1, 2, ...)`, under `jax.grad`). What is not done is the entry's own
+proposal, recording `None` when nothing reads the torque, which changes what the history
+holds and is left as a decision.
+
 
 `track_orientation` is set for any noncollinear magnetic run that is not a spiral
 (`driver.py:5643-5650` at `7b7bf6f`), and whenever it is, the loop calls
@@ -6663,7 +6807,20 @@ converges to unchanged. **What to do**: compute the torque only when something r
 otherwise; the test is that a `soc_scale = 0` PAW source's history carries no torque and its
 peak drops by the tape. **Found** by the NiBr2 session; not measured here.
 
-## 2. `orientation_torque` does not fit an H200 on the fifteen-cell helix, even at one k-point **[opened 2026-09-27]**
+## 2. `orientation_torque` does not fit an H200 on the fifteen-cell helix, even at one k-point **[measured 2026-10-09 on D22: reproduced on nine atoms, the three routes measured on the same states, plan in `plans/open-d-xxii2-orientation-torque.md`; which route is the user's decision]**
+
+**Measured 2026-10-09 (branch `open-d`, `tools/gpu/torque_tape.py`).** On D22's A2000 at one
+k-point of `plans/open-d-inputs/nii2-3cell-paw.in` (nine atoms, fully-relativistic PAW, 116
+spinor bands, a 6.96 GiB pool) the production `orientation_torque` runs out of the card: in
+use went from 0.36 to 6.95 GiB against a 6.96 GiB pool and the backward pass stopped with
+`RESOURCE_EXHAUSTED`, so the route did not fit and its tape has no number, only a lower
+bound of 6.6 GiB. On
+the same random orthonormal states the three routes below all fit, and all give the same
+torque to 2e-15 of its norm, as a derivative at frozen states must: the closed form (route
+1) raises the peak by 1.58 GiB in 25 s, three `jax.jvp` (route 2) by 1.26 GiB in 126 s
+(compiled temp 1.61 GB), and a checkpointed scan over blocks of 16 bands (route 3) by 1.47
+GiB in 141 s (1.83 GB). Route 1 is exact for a source converged without the coupling, which
+is Route A's; the plan says what it needs for a coupled one.
 
 After the `soc_scale = 0` source converged and `relax_orientation`'s first one-shot
 completed, the job died in `run_orientation_torque` -> `forces/torque.py:orientation_torque`

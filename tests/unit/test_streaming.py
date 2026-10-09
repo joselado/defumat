@@ -417,8 +417,13 @@ def test_the_paw_orientation_torque_walks_a_host_store():
     becsum_in = tuple(None if b is None else rotate_texture(b, rotation)
                       for b in becsum_out)
     whole = _onecenter_torque(calculation, becsum_in, becsum_out,
-                              wavefunctions=psi, weights=weights)
+                              wavefunctions=psi, weights=weights, _whole_set=True)
     streamed = _onecenter_torque(calculation, becsum_in, becsum_out,
                                  wavefunctions=np.array(psi), weights=weights)
+    # A device store takes the same chunked forward route since ``OPEN.md``
+    # Part XXII item 1, rather than the whole-set reverse pass.
+    device = _onecenter_torque(calculation, becsum_in, becsum_out,
+                               wavefunctions=psi, weights=weights)
     assert np.linalg.norm(whole) > 1e-3
     np.testing.assert_allclose(streamed, whole, atol=1e-13)
+    np.testing.assert_allclose(device, whole, atol=1e-13)

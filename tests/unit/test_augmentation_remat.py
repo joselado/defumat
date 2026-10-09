@@ -71,11 +71,17 @@ def _stacked_leading(jaxpr_text, leading=NCHUNKS):
 
 
 def _inputs():
+    """The scans take the atoms' positions and build each chunk's phases from them
+    (``OPEN.md`` S3); ``phases`` is that same structure factor on the whole set,
+    for the block form the scans are held to."""
     random = np.random.RandomState(0)
+    gcart = jnp.asarray(random.randn(NPAD, 3))
+    positions = jnp.asarray(random.randn(NAT, 3))
     return dict(
-        gcart=jnp.asarray(random.randn(NPAD, 3)),
+        gcart=gcart,
         mask=jnp.ones(NPAD),
-        phases=jnp.asarray(random.randn(NAT, NPAD) + 0j),
+        positions=positions,
+        phases=jnp.exp(-1j * (positions @ gcart.T)),
         becsum=jnp.asarray(random.randn(NAT, NH, NH)),
         potential=jnp.asarray(random.randn(NPAD) + 0j),
     )
@@ -84,8 +90,8 @@ def _inputs():
 def _charge(fn=_tabulated_charge):
     data = _inputs()
     return lambda becsum: fn(
-        _factors, data["gcart"], data["mask"], data["phases"], becsum,
-        COEFFICIENTS, BETA_OF, NBETA, NL, CHUNK, NPAD)
+        _factors, data["gcart"], data["mask"], data["positions"], becsum,
+        COEFFICIENTS, BETA_OF, NBETA, NL, CHUNK, NPAD, dtype=data["phases"].dtype)
 
 
 def test_the_charge_scan_does_not_stack_its_factors():
@@ -120,8 +126,8 @@ def test_the_integral_scan_does_not_stack_its_factors():
 
     def energy(potential):
         integrals = _tabulated_integrals(
-            _factors, data["gcart"], data["mask"], potential, data["phases"],
-            1.0, CHUNK, COEFFICIENTS, BETA_OF, NBETA, NL,
+            _factors, data["gcart"], data["mask"], potential, data["positions"],
+            1.0, CHUNK, COEFFICIENTS, BETA_OF, NBETA, NL, dtype=potential.dtype,
         )
         return jnp.sum(integrals ** 2)
 
@@ -160,8 +166,8 @@ def test_the_radial_basis_contraction_is_the_block_contraction():
     for real in (True, False):
         factored = _tabulated_integrals(
             _factors, data["gcart"], data["mask"], data["potential"],
-            data["phases"], 1.0, CHUNK, COEFFICIENTS, BETA_OF, NBETA, NL,
-            real=real)
+            data["positions"], 1.0, CHUNK, COEFFICIENTS, BETA_OF, NBETA, NL,
+            real=real, dtype=data["phases"].dtype)
         expected = jnp.real(integrals) if real else integrals
         assert float(jnp.max(jnp.abs(factored - expected))) < (
             1e-13 * float(jnp.max(jnp.abs(integrals))))
@@ -183,19 +189,19 @@ def test_the_remat_does_not_move_the_gradient():
     assert np.array_equal(rematted, plain)
 
 
-def _unrematted_charge(factors, gcart, mask, phases, becsum, coefficients, beta_of,
-                       nbeta, nl, chunk, ngm):
+def _unrematted_charge(factors, gcart, mask, positions, becsum, coefficients, beta_of,
+                       nbeta, nl, chunk, ngm, dtype=None):
     """:func:`_tabulated_charge` with its body written out and no ``jax.checkpoint``."""
-    from defumat.pseudo.augmentation import _beta_basis
+    from defumat.pseudo.augmentation import _beta_basis, _chunk_phases
 
     nchunks = mask.shape[0] // chunk
-    nat = phases.shape[0]
-    basis = _beta_basis(coefficients, becsum.astype(phases.dtype), beta_of, nbeta, nl)
+    nat = positions.shape[0]
+    basis = _beta_basis(coefficients, becsum.astype(dtype), beta_of, nbeta, nl)
 
     def body(carry, index):
         start = index * chunk
         gcart_chunk = jax.lax.dynamic_slice(gcart, (start, 0), (chunk, 3))
-        phase_chunk = jax.lax.dynamic_slice(phases, (0, start), (nat, chunk))
+        phase_chunk = _chunk_phases(gcart_chunk, positions).astype(dtype)
         mask_chunk = jax.lax.dynamic_slice(mask, (start,), (chunk,))
         ylm, radial = factors(gcart_chunk)
         per_atom = jnp.zeros((nat, chunk), dtype=phase_chunk.dtype)

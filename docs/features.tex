@@ -517,7 +517,13 @@ header states which assumptions it used. It reports $n_{gm}$,
 $n_{gms}$, $n_{pwx}$, $n_{bnd}$, $n_{kb}$ and both FFT grids --- \emph{exactly},
 from the same predicates the setup selects with, which is asserted against a
 real \code{Calculation} rather than trusted --- and a floor on the bytes for the
-wavefunctions, the projectors, the eigensolver's subspace and the fields. The
+wavefunctions, the projectors, the eigensolver's subspace, the fields, the
+symmetry maps, and on an ultrasoft or PAW dataset the augmentation charge's
+table and phases and PAW's one-centre tables (in float64 whatever the precision
+policy, since that is what their build allocates). Below the device peak it
+lists, separately, what the run keeps in \emph{host} RAM: the mixer's history,
+\code{mixing\_ndim} input densities and as many residuals, which is 3.18~GB on a
+157-atom slab and does not count against the card. The
 G-vector enumeration runs in slabs, so an input destined for a GPU can be sized
 on a laptop.
 
