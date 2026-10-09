@@ -32,6 +32,7 @@ from defumat.pseudo.projectors import (
     _content_digest,
     _radial_table,
     _species_columns,
+    first_declared_datasets,
 )
 from defumat.pseudo.spinorbit import LMAXX, rot_ylm, sph_ind, spinor
 from defumat.pseudo.upf import Pseudopotential
@@ -145,13 +146,7 @@ def atomic_wavefunctions(
     # select from the first's (see :func:`_atomic_dataset_key`). The datasets
     # keep the order in which their first label is declared, so on a cell with
     # one label per dataset this is the list of species unchanged.
-    datasets, slot_of, seen = [], [], {}
-    for species, pseudo in enumerate(pseudos):
-        key = _atomic_dataset_key(pseudo)
-        if key not in seen:
-            seen[key] = len(datasets)
-            datasets.append(species)
-        slot_of.append(seen[key])
+    datasets, slot_of = first_declared_datasets(pseudos, _atomic_dataset_key)
 
     shape = kg_norm.shape
     flat = kg_norm.reshape(-1)

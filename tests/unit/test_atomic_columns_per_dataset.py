@@ -345,3 +345,21 @@ def test_the_orbitals_key_reads_what_the_projectors_key_does_not(silicon):
     assert _atomic_dataset_key(nudged) != _atomic_dataset_key(pseudos[0])
     # ... and two reads of one file are one dataset under it.
     assert _atomic_dataset_key(pseudos[1]) == _atomic_dataset_key(pseudos[0])
+
+
+def test_the_three_column_builds_share_one_dataset_order():
+    """``first_declared_datasets`` is the one loop the projector core, the atomic
+    orbitals and the real-time radial table order their columns by.
+
+    The slots follow the first label that names each dataset, and a later
+    label on an earlier dataset reuses its slot: keys ``a b a c b`` give the
+    datasets ``0 1 3`` and the slots ``0 1 0 2 1``. The key is an argument
+    because the atomic orbitals fingerprint different parts of the file.
+    """
+    from defumat.pseudo.projectors import first_declared_datasets
+
+    datasets, slot_of = first_declared_datasets("abacb", key=lambda label: label)
+    assert datasets == [0, 1, 3]
+    assert slot_of == [0, 1, 0, 2, 1]
+    assert first_declared_datasets("xyz", key=lambda label: label) == (
+        [0, 1, 2], [0, 1, 2])

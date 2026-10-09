@@ -837,6 +837,20 @@ def _from_slots(slots: tuple[str, str, str, str], meta: str | None = None) -> Fu
     )
 
 
+def functional_of(system, pseudos) -> Functional:
+    """The functional a ``System`` runs on these pseudopotentials.
+
+    :func:`resolve_functional` on the datasets' headers and ``input_dft``, with
+    the ``tb09`` coefficient ``mbj_c`` attached. The one expression
+    ``Calculation.__init__`` and :class:`~defumat.response.piezo._Regime` both
+    use, so the refusals asked of an input read the functional the
+    calculation will run.
+    """
+    return resolve_functional(
+        [pseudo.functional for pseudo in pseudos], system.input_dft
+    ).with_meta_coefficient(getattr(system, "mbj_c", None))
+
+
 def resolve_functional(pseudo_dfts, input_dft: str | None = None) -> Functional:
     """Which functional a calculation runs, from its pseudopotentials and input.
 

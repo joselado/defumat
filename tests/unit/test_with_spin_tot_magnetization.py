@@ -209,3 +209,24 @@ def test_the_calculator_forwards_the_keyword(pseudo_dir):
                                     tot_magnetization=2)
     assert promoted.system.nspin == 2
     assert promoted.system.tot_magnetization == 2.0
+
+
+def test_the_drop_warning_names_the_script_through_the_calculator(pseudo_dir):
+    """Through ``Calculator.with_spin`` the warning names this line too.
+
+    ``OPEN.md`` Part XVIII item 3: the facade adds two frames of this package's
+    on top of equinox's ``BoundMethod``, and a fixed ``stacklevel = 3`` landed
+    the warning on ``calculator.py``'s forwarding line, one frame short of the
+    caller. The level is now found by walking out of the package.
+    """
+    from defumat import Calculator
+
+    calculator = Calculator.from_text(
+        _SILICON.format(extra=_FIXED_MOMENT, calculation="scf"), pseudo_dir,
+        announce=False)
+    with pytest.warns(RuntimeWarning,
+                      match="dropped on the way into nspin = 4") as record:
+        calculator.with_spin(4)
+    dropped = [w for w in record if "tot_magnetization" in str(w.message)]
+    assert len(dropped) == 1
+    assert os.path.basename(dropped[0].filename) == os.path.basename(__file__)

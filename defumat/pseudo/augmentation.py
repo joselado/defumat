@@ -1142,6 +1142,18 @@ def _build_tabulated_augmentation(
     )
 
 
+def is_augmented(pseudos, structure) -> bool:
+    """Whether :func:`build_augmentation` builds anything: an atom on an ultrasoft dataset.
+
+    Over the species the *atoms* carry, not every species declared, which is
+    where it differs from :func:`~defumat.paw.onecenter.has_paw`. One predicate
+    for the builder's early return and for
+    :class:`~defumat.response.piezo._Regime`, which asks it of an input before
+    any calculation is built.
+    """
+    return any(pseudos[t].is_ultrasoft for t in structure.types)
+
+
 def build_augmentation(
     pseudos: tuple[Pseudopotential, ...],
     structure: Structure,
@@ -1181,7 +1193,7 @@ def build_augmentation(
     stored route puts the whole array and its assembly on the tape -- and
     what :meth:`~defumat.scf.driver.Calculation.at_strain` asks for.
     """
-    if not any(pseudos[t].is_ultrasoft for t in structure.types):
+    if not is_augmented(pseudos, structure):
         return None
 
     if gvectors.gamma_only:

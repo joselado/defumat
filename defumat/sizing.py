@@ -630,14 +630,12 @@ def estimate_size(
     # dataset" is. Like the build, it runs over every species declared, whether
     # or not an atom carries it, and is empty when no atom has a projector
     # (the build's ``nkb == 0`` branch).
-    from defumat.pseudo.projectors import _projector_dataset_key
+    from defumat.pseudo.projectors import first_declared_datasets
 
-    ncs, projector_datasets = 0, set()
-    for pseudo in (pseudos if nkb else ()):
-        key = _projector_dataset_key(pseudo)
-        if key not in projector_datasets:
-            projector_datasets.add(key)
-            ncs += len(projector_channels(pseudo))
+    ncs = sum(
+        len(projector_channels(pseudos[species]))
+        for species in (first_declared_datasets(pseudos)[0] if nkb else ())
+    )
 
     from defumat.solvers.davidson import DAVID_NDIM
 

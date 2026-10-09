@@ -821,6 +821,17 @@ def _kinetic_angular_coefficients(angular, lm_of, nlm):
         "xl,ijx->lij", _np.asarray(angular.weighted_ylm)[:, :nlm], overlap))
 
 
+def has_paw(pseudos) -> bool:
+    """Whether :func:`build_paw` builds anything: any species declared is PAW.
+
+    Over every species given, whether or not an atom carries it, which is where
+    it differs from :func:`~defumat.pseudo.augmentation.is_augmented`. One
+    predicate for the builder's early return and for
+    :class:`~defumat.response.piezo._Regime`.
+    """
+    return any(p.is_paw for p in pseudos)
+
+
 def build_paw(
     pseudos, structure, functional: Functional, cell=None, soc_scale: float = 1.0
 ) -> PawCorrections | None:
@@ -843,7 +854,7 @@ def build_paw(
     two labels is the same arithmetic as two identical copies. The key is
     :func:`_paw_dataset_key`.
     """
-    if not any(p.is_paw for p in pseudos):
+    if not has_paw(pseudos):
         return None
 
     types = np.asarray(structure.types)

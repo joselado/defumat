@@ -12,6 +12,8 @@ Defaults come from ``Modules/input_parameters.f90``; the rules for combining
 from __future__ import annotations
 
 import dataclasses
+import os
+import sys
 import warnings
 
 import equinox as eqx
@@ -45,6 +47,33 @@ __all__ = ["System", "build_system", "system_from_file", "local_moments",
 #: dropping a ``STARTING_MOMENTS`` card is exactly that, and so is releasing a
 #: ``tot_magnetization`` (:meth:`System.with_spin`).
 _UNSET = object()
+
+
+#: The directories whose frames a warning raised here skips on its way to the
+#: line that asked: this package's own, and equinox's, which wraps every bound
+#: method of a ``Module`` in a ``BoundMethod`` frame of its own.
+_INTERNAL_DIRECTORIES = tuple(
+    os.path.dirname(os.path.abspath(module.__file__)) + os.sep
+    for module in (sys.modules["defumat"], eqx)
+)
+
+
+def _stacklevel_outside_package() -> int:
+    """The ``stacklevel`` that lands a warning on the first frame outside the package.
+
+    Counted from the caller of this function, which is the frame that calls
+    ``warnings.warn`` and is ``stacklevel = 1`` there. Walks past every frame in
+    this package or in equinox, so a method reached through the ``Calculator``
+    facade and the same method called on ``System`` both name the user's line.
+    ``warnings.warn``'s own ``skip_file_prefixes`` does this from Python 3.12,
+    and ``pyproject.toml`` still admits 3.10.
+    """
+    frame = sys._getframe(1)
+    level = 1
+    while frame is not None and frame.f_code.co_filename.startswith(_INTERNAL_DIRECTORIES):
+        frame = frame.f_back
+        level += 1
+    return level
 
 
 class System(eqx.Module):
@@ -337,6 +366,35 @@ class System(eqx.Module):
         """
         return axial_vectors(self.local_moments, self.atomic_b_field, self.b_field)
 
+    @property
+    def has_applied_field(self) -> bool:
+        """Whether a field acts on the spins: a constrained moment, ``B_field`` or the card.
+
+        QE's ``i_cons`` being set, read off the input: a constrained
+        magnetization, a nonzero uniform ``B_field``, or a
+        ``LOCAL_MAGNETIC_FIELDS`` card. It is
+        :meth:`~defumat.scf.driver.Calculation._build_magnetic_field`'s early
+        return, and :class:`~defumat.response.piezo._Regime` reads the same
+        property, so a guard asked of the input and the constructor cannot
+        disagree about whether there is a field.
+        """
+        return not (
+            self.constrained_magnetization == "none"
+            and not np.asarray(self.b_field, dtype=float).any()
+            and not self.atomic_b_field
+        )
+
+    @property
+    def two_fermi_energies(self) -> bool:
+        """Whether the magnetization is constrained (QE's ``two_fermi_energies``).
+
+        Set by ``tot_magnetization`` being given at all, not by its value:
+        ``input.f90`` turns the sentinel into the flag, and the flag decides
+        whether the channels share a Fermi level or each gets its own. Only at
+        ``nspin = 2``, the one regime with two collinear channels to split.
+        """
+        return int(self.nspin) == 2 and self.tot_magnetization is not None
+
     def with_soc_scale(self, soc_scale: float) -> "System":
         """The same run with the spin-orbit term scaled by ``soc_scale``.
 
@@ -553,13 +611,13 @@ class System(eqx.Module):
                 f"relaxes from it{after}. Pass tot_magnetization=None to drop "
                 "it without this warning",
                 RuntimeWarning,
-                # 3, not 2: ``System`` is an ``eqx.Module``, whose
+                # Not a fixed number: ``System`` is an ``eqx.Module``, whose
                 # ``__getattribute__`` wraps every bound method in equinox's
-                # ``BoundMethod``, and its ``__call__`` is one frame between
-                # this one and the caller. Through ``Calculator.with_spin``
-                # this lands on that method's forwarding line, one frame
-                # short of the script; only a frame walk gets both routes.
-                stacklevel=3,
+                # ``BoundMethod``, so a frame of equinox's sits between this one
+                # and the caller, and ``Calculator.with_spin`` adds two more of
+                # this package's. A fixed 3 named the script on the first route
+                # and ``calculator.py``'s forwarding line on the second.
+                stacklevel=_stacklevel_outside_package(),
             )
 
         # ``dataclasses.replace`` rather than ``eqx.tree_at``: most of what
