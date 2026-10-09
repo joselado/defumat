@@ -3020,7 +3020,21 @@ asked for, and a run that needs the asked-for angles needs a hard constraint on 
 instead. Whether that pattern is anisotropy bunching the helix or the Br sublattice is not
 established.
 
-## 3. A noncollinear ultracell's rigid spin rotation has no restoring force, and a small `mixing_beta` cannot cross it **[opened 2026-09-14, P88 stage 3b]**
+## 3. A noncollinear ultracell's rigid spin rotation has no restoring force, and a small `mixing_beta` cannot cross it **[opened 2026-09-14, P88 stage 3b; measured 2026-10-09: no traversal on the Kramers-closed basis (10 iterations in either frame), the weak field is the escape from the ferromagnet (no convergence in 1500, 9 seeded); plan in `plans/open-a-vi3.md`]**
+
+**Re-measured on the default basis, 2026-10-09** (D22-0161, `review/open-a/vi3.py`,
+`vi3b.py`; the tables are in the plan). The seeded four-cell helix converges in **10**
+iterations on the Kramers-closed basis with the reference along `z` and along
+`(1,1,1)/sqrt(3)` alike, the two states equal to 4.1e-9 after one global rotation and the
+second returned in the seed's own frame, so there is nothing left to traverse; the old basis
+gives 14 and, where this entry says 290, no convergence in 400. The weak turning field (0.002
+Ry, `(4, 2, 2)` folded grid, reference along `(1,1,1)/sqrt(3)`, no seed) converges on neither
+basis at `mixing_beta = 0.3` in 400 iterations, nor on the closed basis at 0.7 in 1500, where it
+limit-cycles at `dr2` 1e-8 to 1e-7 among textures of uneven length with the charge and magnetic
+halves within a factor of three; **seeded with the helix it converges in 9**. So what is slow is
+leaving the tiled ferromagnet, the supercell's bill as well (the paragraph above, 400
+iterations from a ferromagnetic seed), and the projection this entry proposes has no target in
+the ultracell. What is left is the warning's advice, which quotes the old basis.
 
 **The mechanism, and it is physics rather than a bug.** Without spin-orbit coupling or
 magnetic anisotropy, turning *every* moment in the cell together by the same angle costs
