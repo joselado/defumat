@@ -5,7 +5,8 @@ description: Check that a defumat phase actually left behind all five deliverabl
 
 # Phase audit
 
-A phase is not done when the code runs. `CLAUDE.md` names five deliverables, and the
+A phase is not done when the code runs. `CLAUDE.md` names five deliverables
+(the full rules for each are `deliverables.md` beside this file; read it first), and the
 reason this skill exists is that **each of the five has gone stale silently at least
 once**. So each is checked, never assumed.
 

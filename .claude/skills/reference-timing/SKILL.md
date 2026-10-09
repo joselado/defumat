@@ -11,6 +11,9 @@ performance discussion, not a summary of one. A number without the reference cod
 it does not say whether the cost is what the physics costs or what this implementation
 costs, and only the other code answers that.
 
+`CLAUDE.md`'s "Performance" section in full, including the rules about this code's own
+clock and memory figures, is `performance-rules.md` beside this file; read it first.
+
 ## Before measuring anything
 
 **Check the machine is quiet.** A timing taken next to a test run is not a timing - a

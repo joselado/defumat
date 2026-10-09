@@ -11,8 +11,8 @@ finite, correctly symmetric, often passes a sum rule, and is wrong. No test in t
 suite catches them automatically, which is why this is a checklist rather than a
 pytest file.
 
-`PLAN.md` holds the phase that found each. `CLAUDE.md`'s "The traps that recur"
-is the short form; this is how to actually look.
+`PLAN.md` holds the phase that found each. `CLAUDE.md`'s "The traps that recur" is the one-line index and `traps.md` beside this file is the full account, with
+the numbers; read it for any trap the diff touches. This is how to actually look.
 
 ## How to run it
 

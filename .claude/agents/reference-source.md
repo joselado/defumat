@@ -14,6 +14,10 @@ conclusion and the paths, never file dumps.
 
 ## Where to look
 
+**Start from the map.** `.claude/rules/reference-source-map.md` maps every subsystem
+this project has ported to its QE and Elk routines, with a note on each; read it first,
+since it often answers the question outright.
+
 **Quantum ESPRESSO 7.5** - `quantum_espresso/qe-7.5-ReleasePack/qe-7.5/`, relative to the
 defumat repository root. Read-only; never modify anything under it.
 
