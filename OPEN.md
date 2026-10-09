@@ -6210,7 +6210,24 @@ below 1e-6 (2.6e-7 at 8 bands, 3e-9 at 32) and bounds the 32-band component rati
 
 # Part XXI -- from the orientation torque's helix, 2026-09-26 (P122)
 
-## 1. An ultrasoft spin spiral and its unfolded supercell disagree at 7e-5 Ry, and more at a lower cutoff **[opened 2026-09-26]**
+## 1. An ultrasoft spin spiral and its unfolded supercell disagree at 7e-5 Ry, and more at a lower cutoff **[opened 2026-09-26; measured 2026-10-09: the transverse augmentation charge on two displaced spheres, 7.27e-5 Ry at 160 and 2.5e-8 at 320; plan in `plans/open-a-xxi1.md`]**
+
+**Reproduced and attributed, 2026-10-09** (D22-0161, `review/open-a/xxi1.py`). The worst
+eigenvalue of the supercell at the unfolded density against the union of the four spiral
+k-points reads 3.93e-3, 7.27e-5 and 2.5e-8 Ry at `ecutrho = 80, 160, 320` (`ecutwfc = 20`, the
+box the spiral's repeated at all three), and 1.77e-5 at 160 in LDA, so the functional is not
+the cause. What says which term it is: the transverse half of the supercell's
+output-minus-input density sits **99.5 per cent** (PBE) and **99.98 per cent** (LDA) of its
+power at 160 Ry on the 7 per cent of the sphere's G-vectors with `|G'| < G_rho` and
+`|G' + q| > G_rho`, the shell one sphere has and the displaced one does not, where the charge
+and `m_z` differences have 2e-5 there. So the spiral keeps its transverse augmentation charge
+on `|G| < G_rho` in the rotating frame and the supercell on its own sphere, the entry's
+truncation-shell hypothesis, and it falls as the tail of cobalt's `Q_ij(G)` at `G_rho`, by a
+factor of 2900 from 160 to 320 Ry, where the supercell then matches the spiral to the spiral's
+own self-consistency (1.4e-4 in the magnetization, the 320 Ry spiral stopping at 8.8e-9 in
+150 iterations). P95's oxygen chain did not show it because oxygen's table is small at
+`G_rho = 14` and an energy is the weaker test. The change, keeping the transverse pair on the
+laboratory sphere, is planned in `plans/open-a-xxi1.md` and not made.
 
 Found while building the source for `ORIENTATION-NEXT.md` step 2. The four-cell cobalt
 helix converged in its one-atom cell by the generalized Bloch theorem
