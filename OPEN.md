@@ -5089,8 +5089,9 @@ tell an environment effect from something fixed since `4773c75`; a node run at t
 commit is what would separate them, and it has not been taken. **One new failure in the
 same file, not this item's**: `test_spinor_dielectric.py::test_an_augmented_spinor_gives_the_scalar_run_s_dielectric_tensor[si-epsilon-us]`
 reads `1.5888026894117502e-08 < 1e-12` at `aa08c82`, the same to every digit with the
-kernel cache on and off, where the D22 slow set at `30cffd2`
-(2026-10-04) passed it and failed the no-magnetization test instead; 217 commits lie
+kernel cache on and off, where in the D22 slow set at `30cffd2` (2026-10-04) it ran,
+slow-marked and with both parametrisations, and did not fail (the file read 1 failed,
+5 passed, the failure being the no-magnetization test); 217 commits lie
 between the two, and it is not bisected here.
 
 
@@ -5580,8 +5581,9 @@ already when Triton read 20.5 GB. Which commits account for it is not attributed
 default holds every one of the seven with a factor of 2.7 to spare. **The
 warm-against-cold pair this item asked for is now taken on one file**, `test_ldau.py` at `aa08c82`:
 3,411 MB with `DEFUMAT_CACHE_DIR=off` against 3,317 and 3,265 MB in two runs with the
-cache on, so on this file the cache is worth about 100 MB, not the gigabytes a 603 MB
-entry was once worth. `test_ten_site.py` is the one to watch: on 2026-10-04 it read 12,628 to
+cache on, so on this file the **hit is the cheaper one**, by about 100 to 150 MB, which
+is the opposite sign to `CLAUDE.md`'s "a cache miss is the cheaper one in memory" and
+nowhere near the gigabytes a 603 MB entry was once worth. `test_ten_site.py` is the one to watch: on 2026-10-04 it read 12,628 to
 12,847 MB at that night's integration head against 3,590 MB at the master the
 integration started from (`review/ten-ab/peaks.txt` on D22), and 4,116 MB in a later run
 (`review/integ-4`), so one file can triple and recover between commits without any
