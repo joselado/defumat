@@ -3333,18 +3333,19 @@ Two iterations, and even twelve, said nothing about the arena three iterations l
 
 ## 2. `diago_david_ndim = 2` may degrade at the minimum subspace once `ethr` tightens **[measured 2026-10-09 at `aa08c82`: on `si16-1k-ecut30` it does not, at most 6 steps a call against `pw.x`'s 5]**
 
-**The ladder, measured 2026-10-09 on `D22-0161`** (four efficiency cores, `JAX_PLATFORMS=cpu`,
+**The ladder, measured 2026-10-09 on `D22-0161`** (CPUs 4 to 7, `JAX_PLATFORMS=cpu`,
 the committed input with `diago_david_ndim` added to `&electrons`, `conv_thr = 1e-10`; the
 serial `pw.x` 7.5 on the same three inputs). Davidson steps per call, iteration by
 iteration, with the `ethr` each was asked for:
 
 | `ndim` | defumat: steps at `ethr` | total | `pw.x`: steps at `ethr` | total |
 |---|---|---|---|---|
-| 2 | 3, 1, 2, 4 (7.1e-7), **6 (5.3e-9)**, 3, 3, **6 (2.7e-13)** | 28 in 8 | 2, 1, 1, 2, **5 (8.5e-7)**, **5 (1.6e-8)**, 3, 3, 2, 2, 4 (9.8e-12), 2, 2 | 34 in 13 |
-| 3 | 3, 1, 2, 2, 2, 2, 3, 3, 2 | 20 in 9 | 2, 1, 1, 2, 2, 3, 3, 2, 3, 2, 3, 2 | 26 in 12 |
-| 4 | 3, 1, 2, 2, 2, 2, 4, 3, 2 | 21 in 9 | the same as at 3 | 26 in 12 |
+| 2 | 3, 1, 2, 4 (7.1e-7), **6 (5.3e-9)**, 3, 3, **6 (2.7e-13)** | 28 in 8 | 2, 1, 1, 2, **5 (8.5e-7)**, **5 (1.6e-8)**, 3, 3, 2, 2, 4 (9.8e-12), 2, 2 | 34 in 13 calls |
+| 3 | 3, 1, 2, 2, 2, 2, 3, 3, 2 | 20 in 9 | 2, 1, 1, 2, 2, 3, 3, 2, 3, 2, 3, 2 | 26 in 12 calls |
+| 4 | 3, 1, 2, 2, 2, 2, 4, 3, 2 | 21 in 9 | the same as at 3 | 26 in 12 calls |
 
-(`pw.x` counts each of its restarted diagonalisations, which is why it has more calls.)
+(The `pw.x` column counts every `avg # of iterations` line, 13, 12 and 12 of them in
+12, 11 and 11 SCF iterations, so one of its iterations diagonalises twice.)
 **The answer to the entry's question is that the step count at `ndim = 2` does not climb
 toward 70 as `ethr` tightens on this cell, in either code**: it costs about 1.35x the steps
 of 3 or 4 in both (28/20.5 here, 34/26 in `pw.x`), the worst call is 6 steps here against 5
@@ -5803,7 +5804,7 @@ site; the same wedge with `_symmetrise_axial` replaced by the identity gives **0
 the arm that shows the completion fires; and the whole grid under `nosym` (four points,
 nothing completed) gives **1.1e-9** and **1.0e-9**, the measured Kramers cancellation. The
 site charges of the two runs agree to 2.7e-8 electrons and the energies to every printed
-digit, -77.2855187351 Ry; 8 s an SCF on four cores, so it is in the slow set. The `nosym`
+digit, -77.2855187351 Ry; 8 s an SCF on CPUs 4 to 7 of D22, so it is in the slow set. The `nosym`
 difference from `pw.x` that the entry notes beside it is now one sentence in
 `docs/features.tex`, after the refused symmetry switches.
 

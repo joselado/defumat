@@ -246,14 +246,6 @@ ignoring one left the k-mesh reduced with operations the input had excluded and
 benchmark generated from the same file, with nothing saying why. Anything QE
 defaults to is silent, so an ordinary input never reaches the refusal.
 
-Note that \code{nosym} itself is not read exactly as \code{pw.x} reads it, in
-one place: on an automatic grid \code{pw.x} still pairs $\mathbf k$ with
-$-\mathbf k$ unless \code{noinv} is set as well, while here \code{nosym} gives
-the whole grid, so a shifted \code{2 2 1 1 1 0} mesh is four points here and
-two in \code{pw.x}. The energy is the same either way, since time reversal is
-an exact symmetry of a nonmagnetic run, and what changes is the cost and the
-count of $\mathbf k$-points in a comparison of the two outputs.
-
 \textbf{Two more are refused because they are \emph{redundant} rather than
 unimplemented}, and both used to be dropped in silence. The first is the
 DFT+Hubbard spelling the \code{\&system} namelist carried before QE 7.1 ---
@@ -295,6 +287,14 @@ an \code{F}, then anything, so \code{lberry = F} is legal and is false. The
 bare spellings were missing from the converter, so \code{F} survived as the
 \emph{string} \code{'F'} and every truth test read it as true.
 \end{refuses}
+
+Note that \code{nosym} itself is not read exactly as \code{pw.x} reads it, in
+one place: on an automatic grid \code{pw.x} still pairs $\mathbf k$ with
+$-\mathbf k$ unless \code{noinv} is set as well, while here \code{nosym} gives
+the whole grid, so a shifted \code{2 2 1 1 1 0} mesh is four points here and
+two in \code{pw.x}. The energy is the same either way, since time reversal is
+an exact symmetry of a nonmagnetic run, and what changes is the cost and the
+count of $\mathbf k$-points in a comparison of the two outputs.
 
 \subsection*{One object, bound methods}
 
