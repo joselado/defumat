@@ -1964,7 +1964,17 @@ memory direction, which is the one still open.
 
 ## Y. `conv_thr` bounds a moment much more weakly than it bounds a charge, and the PAW one-centre terms not at all
 
-### Y1. `dr2 = 9e-11` on a magnetic cell left the total energy 1.15e-8 Ry out **[found by a test]**
+### Y1. `dr2 = 9e-11` on a magnetic cell left the total energy 1.15e-8 Ry out **[found by a test; closed 2026-10-09 as the measurement it is, the two questions it leaves are defaults and are the user's]**
+
+**Re-read 2026-10-09.** The test fix is in (`5f1036e`; `_nickel` in
+`test_angular_momenta.py` runs at `conv_thr = 1e-12`), and both halves of `dr2` are on
+`scf.history` as `charge_accuracy` and `magnetic_accuracy` (`scf/driver.py`, the history
+entry). What "What is not settled" below leaves is a default `conv_thr` for a magnetic run
+and an `ethr` schedule driven by the magnetic half, the second a deliberate departure from
+`pw.x`'s summed `rho_ddot`; both are the user's to decide and were handed back as options
+rather than measured, since a number for a default nobody has chosen to change measures
+nothing in particular.
+
 
 **Closed as a test fix, kept here as the measurement**, because the mechanism is general
 and the next person to pick a `conv_thr` for a magnetic quantity needs it.
@@ -2014,7 +2024,20 @@ magnetic cell, are both open and neither has a number. `pw.x` uses the same summ
 `rho_ddot` for its schedule, so this would be a deliberate departure rather than a
 correction.
 
-### Y2. `accuracy` cannot see the PAW one-centre half of `becsum` at all, and the docstring gave the wrong reason **[opened 2026-09-14; the run it was found on is *not* stalled on this, measured and retracted the same day]**
+### Y2. `accuracy` cannot see the PAW one-centre half of `becsum` at all, and the docstring gave the wrong reason **[opened 2026-09-14; the run it was found on is *not* stalled on this, measured and retracted the same day; closed 2026-09-22 in `624aae3`, found closed 2026-10-09]**
+
+**Closed by `624aae3` ("The becsum residual is reported, and fed to nothing") and
+`98468d4`, read 2026-10-09.** What the last paragraph asks for is what is there:
+`scf/residual_split.py:becsum_residual` returns `(total, magnetic)`, a plain Euclidean norm
+of the change in `becsum` over every species and of its magnetization channels alone; the
+SCF loop computes it every iteration (`scf/driver.py`, beside the `ethr` line), puts it on
+`scf.history` as `becsum_accuracy` and `becsum_magnetic_accuracy`, prints it on the log
+line, and feeds it to neither `ethr` nor the `conv_thr` test. A species with no
+augmentation (a mixed cell) is skipped rather than raising (`98468d4`), and
+`tests/unit/test_residual_split.py` holds the norm-conserving `None` and the zero for an
+unchanged `becsum`. `scf_accuracy_split`'s docstring now points at it. Nothing below is
+open.
+
 
 Y1 is about a half that is weighted a factor of 13.6 too lightly. This is about a half that
 is not in the number at all, and the two compound on exactly the same cells.
@@ -3308,7 +3331,32 @@ held a flat 77.63 GB at 21 s each; at iteration 10 `ethr` reached 2.30e-6 and th
 average went from **2.0 inner steps to 73.5**, and the iteration cost from 21 s to 390 s.
 Two iterations, and even twelve, said nothing about the arena three iterations later.
 
-## 2. `diago_david_ndim = 2` may degrade at the minimum subspace once `ethr` tightens
+## 2. `diago_david_ndim = 2` may degrade at the minimum subspace once `ethr` tightens **[measured 2026-10-09 at `aa08c82`: on `si16-1k-ecut30` it does not, at most 6 steps a call against `pw.x`'s 5]**
+
+**The ladder, measured 2026-10-09 on `D22-0161`** (four efficiency cores, `JAX_PLATFORMS=cpu`,
+the committed input with `diago_david_ndim` added to `&electrons`, `conv_thr = 1e-10`; the
+serial `pw.x` 7.5 on the same three inputs). Davidson steps per call, iteration by
+iteration, with the `ethr` each was asked for:
+
+| `ndim` | defumat: steps at `ethr` | total | `pw.x`: steps at `ethr` | total |
+|---|---|---|---|---|
+| 2 | 3, 1, 2, 4 (7.1e-7), **6 (5.3e-9)**, 3, 3, **6 (2.7e-13)** | 28 in 8 | 2, 1, 1, 2, **5 (8.5e-7)**, **5 (1.6e-8)**, 3, 3, 2, 2, 4 (9.8e-12), 2, 2 | 34 in 13 |
+| 3 | 3, 1, 2, 2, 2, 2, 3, 3, 2 | 20 in 9 | 2, 1, 1, 2, 2, 3, 3, 2, 3, 2, 3, 2 | 26 in 12 |
+| 4 | 3, 1, 2, 2, 2, 2, 4, 3, 2 | 21 in 9 | the same as at 3 | 26 in 12 |
+
+(`pw.x` counts each of its restarted diagonalisations, which is why it has more calls.)
+**The answer to the entry's question is that the step count at `ndim = 2` does not climb
+toward 70 as `ethr` tightens on this cell, in either code**: it costs about 1.35x the steps
+of 3 or 4 in both (28/20.5 here, 34/26 in `pw.x`), the worst call is 6 steps here against 5
+there, and it comes at 5e-9 and again at the floor 2.7e-13, not at the 2.3e-6 the
+observation was made at. The three runs end within 7e-12 Ry of each other and of `pw.x`'s
+-126.72076070. What this does not reach is the run the 70 steps were seen on, a 45-atom
+spinor PAW slab with 403 bands on an A100 before the band ladder (`07a4332`) and the
+parked-row bound (`90e2f8f`); an insulator with one k-point and 32 bands says nothing about
+whether that cell would still do it, and the arena-churn half of the entry is a card
+question that this ladder does not touch. The ladder's inputs and JSON are in
+`/l/ladovj1/review/open-b/ladder/` on D22.
+
 
 **Status, 2026-10-03: not measured, and the observation predates two changes to the solver.**
 The 70-plus steps were taken before the band ladder (`07a4332`, 2026-09-16) and before the
@@ -5676,7 +5724,22 @@ that saturates) has not been measured.
 Raised by the reviewers of P110's fixes, or found by its measurements, and not done.
 In the order a wrong answer costs.
 
-## 1. `_Regime` transcribes seven flags from `Calculation.__init__` and is pinned on one cell **[opened 2026-09-23; the cheaper fix done 2026-09-24, `PLAN.md` P111]**
+## 1. `_Regime` transcribes seven flags from `Calculation.__init__` and is pinned on one cell **[opened 2026-09-23; the cheaper fix done 2026-09-24, `PLAN.md` P111; the better fix and the `atomic_b_field` cell done 2026-10-09, branch `open-b`]**
+
+**Closed 2026-10-09.** `_Regime.of` now calls the function the constructor calls for every
+flag rather than a transcription of it: `functional_of` (`xc/functional.py`) for the
+functional, `System.two_fermi_energies` for the occupation rule (which
+`Calculation.two_fermi_energies` now returns), `System.has_applied_field` for the field
+(`_build_magnetic_field`'s early return), and `is_augmented` and `has_paw`, which are
+`build_augmentation`'s and `build_paw`'s early returns, for the two dataset kinds; the
+constructor still reads those two off whether the builder returned `None`, so the shared
+part is the predicate the builder decides with. `gamma_only`, `is_hubbard` and the group
+were already shared calls. `test_piezo_machinery.py` gains the `atomic-field` parity cell,
+`h2-texture-120` with its constraint off and a `LOCAL_MAGNETIC_FIELDS` card along `z`, which
+is the half no committed input reached, and a test that patches each shared predicate and
+sees the view and both builders move with it, which on the old code moved nothing on the
+view's side.
+
 
 `response/piezo.py:_Regime` reads `gamma_only`, the functional, the Hubbard setup, the
 field, `two_fermi_energies`, `is_ultrasoft` and `is_paw` the way the constructor does, so
@@ -5730,7 +5793,20 @@ ultracell calling `fixed_density_states` and `fixed_density_bands` with identica
 Raised by the reviewers of P111's five fixes, and not done. In the order a wrong answer
 costs.
 
-## 1. The nonmagnetic spinor site moment has no SCF behind its zero **[opened 2026-09-24]**
+## 1. The nonmagnetic spinor site moment has no SCF behind its zero **[opened 2026-09-24; closed 2026-10-09, `tests/regression/test_site_moments_kramers_scf.py`]**
+
+**Closed 2026-10-09** with the cell this entry proposed, on `I.rel-pbe-nc-dojo` at
+`conv_thr = 1e-10` and the `2 2 1 1 1 0` grid, measured on `D22-0161`: the wedge (two points,
+`nsym = 1`, time reversal alone halved it) gives exactly zero for `<L>` and `<S>` on every
+site; the same wedge with `_symmetrise_axial` replaced by the identity gives **0.239** in
+`<L>` and **0.0162** in `<S>` on the worst component, eight orders above the whole grid's, which is
+the arm that shows the completion fires; and the whole grid under `nosym` (four points,
+nothing completed) gives **1.1e-9** and **1.0e-9**, the measured Kramers cancellation. The
+site charges of the two runs agree to 2.7e-8 electrons and the energies to every printed
+digit, -77.2855187351 Ry; 8 s an SCF on four cores, so it is in the slow set. The `nosym`
+difference from `pw.x` that the entry notes beside it is now one sentence in
+`docs/features.tex`, after the refused symmetry switches.
+
 
 P111's zeroing is held by stub tests on a P1 and a `{E, I}` cell, and no committed input
 can carry an SCF test: every nonmagnetic spin-orbit input uses a fully-relativistic
@@ -5752,7 +5828,26 @@ real size, so under `single` it reports half of what is resident. Not reachable 
 input today. And `docs/features.tex`'s list of what the floor covers (around line 499)
 names neither the augmentation lines nor this one.
 
-## 3. `with_spin`'s rules are not the builder's in two places **[opened 2026-09-24]**
+## 3. `with_spin`'s rules are not the builder's in two places **[opened 2026-09-24; the warning half closed 2026-10-09, the refusal half is a decision for the user]**
+
+**The warning, closed 2026-10-09.** The `tot_magnetization` drop warning now finds its
+`stacklevel` by walking out of the package and equinox (`_stacklevel_outside_package` in
+`system/builder.py`; `warnings.warn`'s `skip_file_prefixes` would do it from Python 3.12,
+and `pyproject.toml` admits 3.10), and
+`test_the_drop_warning_names_the_script_through_the_calculator` asserts that the recorded
+warning names the test file through `Calculator.with_spin`, where the fixed 3 named
+`calculator.py`.
+
+**The refusal is not taken, and the reason is a committed route.** A check in
+`System.with_spin` that mirrors `input.f90:1506` would refuse
+`tests/regression/test_continuation.py`'s demotion of a converged spinor to `nspin = 2` with
+nothing passed, where the moment is *carried* from the state rather than seeded, and
+`System` cannot tell that route from a fresh one any more than it can tell an explicit 0.0
+from an absent value. The one direction that is unambiguous is from an `nspin = 1` source,
+which has no moment to carry, and `test_continuation_machinery.py` uses exactly that
+promotion with nothing passed (behind a faked `run_scf`). Which way to go is a change to
+the front door and was handed back as options.
+
 
 The builder refuses an SCF at `nspin = 2` with neither a starting magnetization nor a
 `tot_magnetization` (`input.f90:1506`); `with_spin` cannot repeat the check, because
@@ -5761,7 +5856,18 @@ value. And the drop warning points one frame short through the `Calculator`, at
 `calculator.py`'s forwarding line, since equinox's `BoundMethod` adds a frame and the
 package walks no frames.
 
-## 4. Small points **[opened 2026-09-24]**
+## 4. Small points **[opened 2026-09-24; both closed 2026-10-09]**
+
+**Closed 2026-10-09.** The copy in `test_velocity_locality.py` was already gone; the loop
+had meanwhile gained a fourth home in `realtime/radial.py:column_layout` and a set-based
+fifth in `sizing.py`. `projectors.first_declared_datasets(pseudos, key)` is now the one
+loop for all four, with the key an argument because the atomic orbitals fingerprint other
+parts of the file (`_atomic_dataset_key`); it is pure index bookkeeping, and the
+per-dataset files (`test_atomic_columns_per_dataset.py`, `test_sizing_per_dataset.py`,
+`test_realtime_radial.py`) are what hold the columns' bytes. The Hubbard docstring now
+names `at_kcart` and says that every caller of it takes a `jvp` or passes concrete
+k-points.
+
 
 * The first-declared-order dataset loop now exists three times (`build_projector_core`,
   `atomic_wavefunctions`, and inline in `test_velocity_locality.py`); one helper in
