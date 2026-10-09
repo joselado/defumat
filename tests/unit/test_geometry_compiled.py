@@ -13,6 +13,11 @@ starting count: without it the list's length is a new shape and both gradients
 compile again for that reason alone. What is checked beside the count of
 compilations is the thing the count could hide: that the reused gradient is
 the one *at the new geometry*, against a gradient compiled fresh there.
+
+The analytic force (`OPEN.md` Part III X1) follows the same rule since
+2026-10-09: it used to close over the calculation and be keyed on its identity,
+so every ``at_positions`` step of a relaxation that asked for it compiled the
+six-term kernel again.
 """
 
 from __future__ import annotations
@@ -28,6 +33,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from defumat.forces.analytic import _terms, analytic_forces
 from defumat.forces.autodiff import autodiff_forces
 from defumat.forces.energy import frozen_energy, hoisted, state_from_result, with_hoisted
 from defumat.io.pwin import parse_pw_input
@@ -171,3 +177,24 @@ def test_the_key_misses_when_what_the_gradient_closes_over_changes(stepped):
     lighter.ewald_sum = build_ewald(moved.system.cell, moved.system.structure,
                                     moved.basis.dense, moved.charges)
     assert key.matches(split_geometry(lighter)[0])
+
+
+def test_a_position_step_compiles_the_analytic_force_once(stepped):
+    """``method='analytic'`` reuses its kernel across ``at_positions`` (Part III X1)."""
+    base, _, state = stepped
+    first, _ = analytic_forces(base, state)
+    first = np.asarray(first)
+    moved = base.at_positions(base.system.structure.positions + jnp.asarray(SHIFT))
+    with counting_compiles() as names:
+        force, terms = analytic_forces(moved, state)
+        force = np.asarray(force)
+    assert names == [], f"the step compiled {names}"
+
+    # A stale geometry would answer with the first step's numbers ...
+    assert np.abs(force - first).max() > 1e-3
+    # ... and each term is the one the old closure over the moved calculation gives.
+    closed = jax.jit(lambda frozen: _terms(moved, frozen))(state)
+    assert closed.keys() == terms.keys()
+    for name in closed:
+        np.testing.assert_allclose(np.asarray(terms[name]), np.asarray(closed[name]),
+                                   rtol=0, atol=1e-12, err_msg=name)

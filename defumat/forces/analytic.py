@@ -45,7 +45,7 @@ import numpy as np
 
 from defumat.basis.fft import r_to_g
 from defumat.basis.gvectors import refuse_gamma_storage
-from defumat.forces.energy import reject_potential_only
+from defumat.forces.energy import geometry_compiled, hoisted, reject_potential_only
 from defumat.scf.potential import (
     as_potential_components,
     exchange_correlation,
@@ -68,9 +68,10 @@ def analytic_forces(calculation, state):
     evaluated one at a time. That is not a detail: each of them is a handful of
     contractions over the G-vector sphere, and run eagerly they cost more in
     dispatch and in intermediate buffers than in arithmetic. The compiled
-    version is cached on the calculation, keyed on the calculation it closed
-    over, so a moved or strained one recompiles instead of answering at the old
-    geometry.
+    version takes the geometry as arguments and is cached the way the autodiff
+    gradients are (:func:`~defumat.forces.energy.geometry_compiled`), so every
+    step of a relaxation that asked for this force reuses one kernel, at that
+    step's positions (``OPEN.md`` Part III X1).
     """
     refuse_gamma_storage(
         bool(getattr(calculation, "gamma_only", False)),
@@ -106,26 +107,35 @@ def analytic_forces(calculation, state):
             "autodiff method, which differentiates through the Hubbard "
             "projectors and gets the term for free"
         )
-    terms = _compiled_terms(calculation)(state)
+    compiled, geometry = _compiled_terms(calculation)
+    terms = compiled(state, hoisted(calculation), geometry)
     total = sum(terms.values())
     return total, terms
 
 
 def _compiled_terms(calculation):
-    """``jit`` of :func:`_terms` with the calculation captured, cached on it.
+    """``(jit of :func:`_terms`, its geometry arguments)``, compiled once per run.
 
-    The captured calculation is a *constant* of the compiled function -- its
-    positions, its projectors, its local potential -- so the cache is only valid
-    for the calculation it was built from. ``at_positions`` copies the instance
-    dict, so the entry carries the calculation it belongs to and is rebuilt when
-    it does not match; without that the force of every geometry after the first
-    is the first one's, silently.
+    The six terms read the positions, the projectors, the local potential, the
+    core charge, the augmentation phases and the Ewald sum, all of which
+    ``at_positions`` rebuilds. Until 2026-10-09 the kernel closed over the
+    calculation and was keyed on its identity, so every ionic step of a
+    relaxation with ``method='analytic'`` traced and compiled it again
+    (``OPEN.md`` Part III X1). It now takes the large fields
+    (:data:`~defumat.forces.energy.HOISTED_FIELDS`) and every float array the
+    geometry moves (:data:`~defumat.forces.energy.GEOMETRY_FIELDS`) as
+    arguments, under a :class:`~defumat.forces.energy.GeometryKey` of what it
+    still closes over, the same rule the autodiff force and stress follow; a
+    key that does not match recompiles rather than answering at the old
+    geometry.
     """
-    cached = calculation.__dict__.get("_analytic_terms")
-    if cached is None or cached[0] is not calculation:
-        cached = (calculation, jax.jit(partial(_terms, calculation)))
-        calculation._analytic_terms = cached
-    return cached[1]
+    def build(key):
+        def terms(state, big, geometry):
+            return _terms(key.rebuild(geometry, big), state)
+
+        return jax.jit(terms)
+
+    return geometry_compiled(calculation, "_analytic_terms", build)
 
 
 def _terms(calculation, state) -> dict:
