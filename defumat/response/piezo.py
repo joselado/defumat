@@ -230,18 +230,25 @@ def to_voigt(e: np.ndarray) -> np.ndarray:
 #: is the one thing to know before reading a silent run as a converged one. On
 #: zincblende AlAs, where the ladder and an independent Berry-phase value are
 #: both known, ``e_14`` moves 10 per cent from ``4 4 4`` to ``6 6 6``, 2.1 per
-#: cent to ``8 8 8`` and 0.44 per cent to ``10 10 10``, while the ``10 10 10``
-#: rung is still **1.2 per cent** from the Berry value: the remaining distance
-#: runs about three times the last step, because the approach is a slow tail
-#: rather than a geometric one. So one per cent here means a few per cent of
-#: error on that cell, and it is a place to stop warning rather than a claim of
-#: convergence.
+#: cent to ``8 8 8``, 0.44 per cent to ``10 10 10`` and 0.12 per cent to
+#: ``12 12 12`` (-0.669096, 2026-10-09), so the approach is geometric with a
+#: ratio of about a quarter and the distance left after a step is about a third
+#: of the step. The 1.2 per cent that ``10 10 10`` sat from the Berry value is
+#: the cell's ``ecutwfc = 10`` and not the mesh: at 30 Ry the ``12 12 12`` rung
+#: and the Berry value agree to 0.25 per cent (``OPEN.md`` Part XIII item 3).
+#: So one per cent here means a few tenths of a per cent of mesh error left on
+#: that cell, it says nothing about the cutoff, and it is a place to stop
+#: warning rather than a claim of convergence.
 KMESH_STEP = 0.01
 
 #: ``e_14`` in C/m^2 on zincblende AlAs at ``4 4 4``, ``6 6 6``, ``8 8 8`` and
 #: ``10 10 10``, against a Berry-phase finite difference of -0.6614 to -0.6620
-#: on the same cell (``PLAN.md`` P50, Triton ``20337789``). Quoted in the
-#: warning because a user with no ladder of their own still needs a number.
+#: on the same cell (``PLAN.md`` P50, Triton ``20337789``). The curve's own
+#: limit is about -0.6688 (``12 12 12`` reads -0.669096), and the 1 per cent
+#: between it and the Berry value is the 10 Ry cutoff, which a finite
+#: difference at constant cutoff feels and a derivative at a fixed basis does
+#: not. Quoted in the warning because a user with no ladder of their own still
+#: needs a number.
 KMESH_CURVE = (-0.763786, -0.687475, -0.672897, -0.669907)
 
 
@@ -276,16 +283,17 @@ def _warn_about_the_kmesh(calculation, drift) -> None:
             "AlAs, against a Berry-phase finite difference that shares no "
             "machinery with it, e_14 reads "
             + ", ".join(f"{value:.4f}" for value in KMESH_CURVE)
-            + " C/m^2 at 4 4 4, 6 6 6, 8 8 8 and 10 10 10 against the Berry "
-              "value's -0.6614 to -0.6620, so a committed-quality 4 4 4 mesh "
-              "is 13 per cent out there and 8 8 8 is 1.6"
+            + " C/m^2 at 4 4 4, 6 6 6, 8 8 8 and 10 10 10, approaching about "
+              "-0.6688, so a committed-quality 4 4 4 mesh is 14 per cent out "
+              "there and 8 8 8 is 0.6"
         )
     else:
         measured = (
             f"the last step of the ladder that was run moved the tensor by "
             f"{drift * 100:.1f} per cent, which is above the {KMESH_STEP * 100:.0f} "
-            "per cent this stops warning at, and the remaining error is larger "
-            "than the step rather than equal to it"
+            "per cent this stops warning at; the step measures the error "
+            "rather than equalling it (a third of it was left after the last "
+            "step on AlAs, more on a crystal that converges more slowly)"
         )
     warnings.warn(
         f"the piezoelectric tensor was integrated over {where} and {measured}. "

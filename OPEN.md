@@ -4305,7 +4305,7 @@ problem rather than this one, measured in bytes on a machine with no cgroup
 surprises. What the two share is the cause, which is accumulation, and therefore
 the fix.
 
-## 3. The piezoelectric tensor's response route is not converged in `k` at the mesh its own input asks for **[opened 2026-09-19, cause found the same day]**
+## 3. The piezoelectric tensor's response route is not converged in `k` at the mesh its own input asks for **[opened 2026-09-19, cause found the same day; closed 2026-10-09: the residual 1 per cent to the Berry value is the 10 Ry cutoff, and at 30 Ry the two routes agree to 0.25 per cent]**
 
 Measured on Triton (jobs `20336374`, `20336476` and the ladder `20337789`,
 `tools/cluster/piezo_measure.py`), and the full tables are in
@@ -4854,6 +4854,55 @@ crystal has been compared with anything outside this code. The test file ran on
 a node and passed there (``20347768_3``, ``batch-milan``, **2 passed in 4m32**
 at a peak of 12.1 GB, which is 180 MB under the workstation runner's cap and is
 why it lives in the cluster array).
+
+**Closed 2026-10-09, on D22, and the last open number turned out not to be about `k`.**
+Re-checked first: the three things "What is still open" listed are each answered above (the
+`10 10 10` rung, the ultrasoft refusal turned into `ULTRASOFT_MESH`, and the refusal text, which no
+longer names `strain.py`), and what was left is the first of them, whether the response route's
+`e_14` reaches the Berry value or stops 1.2 per cent short of it, which `AUDIT-2026-09-18.md`
+extrapolated to a stop near -0.6691 and attributed to nothing. Today's code, the contracted route
+(`method = 'zstar_eu'`, identical to the taped one to 1.9e-14 on this cell), whole grids,
+`review/open-c/piezo_rungs.py`; the Berry difference is `tools/cluster/piezo_measure.py` with
+`eps_4 = 0.01` unless marked:
+
+| `alas-raman.in`, `e_14` in C/m^2 | `ecutwfc = 10` (committed) | 20 | 30 |
+|---|---|---|---|
+| response, `8 8 8` | -0.672872 | -0.693080 | -0.696303 |
+| response, `10 10 10` | -0.669896 | | -0.691942 |
+| response, `12 12 12` | **-0.669096** | | **-0.690893** |
+| Berry, 15 strings over 8x8, ground state `8 8 8` | -0.663148 | -0.689116 | -0.689259 |
+| the same at `eps_4 = 0.005` | -0.662163 | | **-0.689188** |
+| Berry, 21 strings over 12x12 | -0.663382 | | |
+| Berry, ground state `12 12 12` | -0.663119 | | |
+
+**The `k` side converges geometrically, not as a slow tail.** At 10 Ry the steps are 0.44 and 0.12
+per cent from `8 8 8` to `12 12 12`, a ratio of 0.27 (0.24 at 30 Ry), so `12 12 12` is about 0.1
+per cent above a limit near -0.6688, and the earlier rungs reproduce today with the `l = 1`
+tangent at `k + G = 0` in (`8 8 8` -0.672872 against -0.672897 recorded, `10 10 10` -0.669896
+against -0.669907). The Berry value is converged in every dial it has at 10 Ry to a few parts in
+1e4 (strings 3.5e-4, ground-state mesh 4e-5) and in the strain step to 1.5e-3, which is why that
+step looked like a dial before. **And the 1 per cent between the two is the cutoff**: at 10 Ry the
+converged response sits 1.0 per cent beyond the Berry value, at 30 Ry the `12 12 12` rung sits
+**0.25 per cent** beyond it (0.17 after the step and string corrections), where the Berry value
+has stopped moving by 20 Ry (2e-4 from 20 to 30) and the response has not (0.46 per cent from 20
+to 30 at `8 8 8`). That is the expected shape: the finite difference runs one SCF per strained
+cell at a constant cutoff, so it carries the change of basis with the strain, the polarization's
+Pulay term, and the response is the derivative at a fixed set of plane waves, which does not, and
+the two meet only as the cutoff converges. The FD step's dependence falling from 1.5e-3 at 10 Ry
+to 1e-4 at 30 says the same.
+
+So the response route agrees with an independent reference to its own resolution once both are
+converged in the dials they have, the guard and the ladder are what this entry asked for, and
+nothing is open. **Three sentences of the record are falsified by it and corrected in the code and
+the guide** (`KMESH_STEP`'s and `KMESH_CURVE`'s comments, the warning's text, `piezo_ladder.py`'s
+docstring, `docs/features.tex`): "the remaining distance runs about three times the last step,
+because the approach is a slow tail rather than a geometric one", "8 8 8 is 1.6 [per cent out]",
+and "the remaining error is larger than the step". **One inference built on the same 1.2 per cent
+is not corrected here, because it sets a refusal**: `ULTRASOFT_MESH = 8` rests on the ultrasoft
+cell's deficit (1.26 per cent at `8 8 8`, at its own `ecutwfc = 25`) falling below the
+norm-conserving calibration's (1.62), and about 1.0 of that 1.62 is now the calibration's cutoff,
+not its mesh; whether to re-measure the ultrasoft cell's deficit at a converged cutoff before
+keeping the threshold is the user's.
 
 ## 5. An **ultrasoft** dielectric constant does not reproduce its own closed grid from a symmetry-reduced k-set, by 1.6e-05 relative **[opened 2026-09-19, found in passing; attributed to the dataset under control the same day, six candidates excluded, term not found]**
 

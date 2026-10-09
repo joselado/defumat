@@ -20,10 +20,14 @@ silences :func:`~defumat.response.piezo._warn_about_the_kmesh` once it is small
 enough to stop being the dominant error.
 
 **The step is not the error and the distance between them is measured.** On the
-cell above the ladder moves 10 per cent, 2.1 per cent and 0.44 per cent across
-its three steps while the last rung is still 1.2 per cent from the Berry value,
-so the remaining distance runs about three times the last step; the approach is
-a slow tail rather than a geometric one.
+cell above the ladder moves 10 per cent, 2.1 per cent, 0.44 per cent and 0.12
+per cent across four steps to ``12 12 12``, a geometric approach with a ratio of
+about a quarter, so the distance left after a step is about a third of the step.
+The 1.2 per cent the ``10 10 10`` rung sits from the Berry value is not the mesh
+at all but the cell's 10 Ry cutoff, which the finite difference feels and the
+response does not: at 30 Ry the ``12 12 12`` rung and the Berry value agree to
+0.25 per cent (``OPEN.md`` Part XIII item 3), so a ladder says nothing about the
+cutoff, which has to be converged on its own.
 :data:`~defumat.response.piezo.KMESH_STEP` is a place to stop warning and not a
 claim of convergence, and the honest reading of a quiet ladder is that the mesh
 is no longer the largest thing wrong.
