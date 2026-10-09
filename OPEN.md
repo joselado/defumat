@@ -1521,7 +1521,7 @@ calbec of that block is ~5.6 ms of a ~190 ms step and is wasted two steps in thr
 the per-operation table came from. Step count from `diagonalize(..., return_steps=True)`
 must not move; norm-conserving inputs are the control and must be bit-identical.
 
-### H6. The symmetry search runs twice for every `Calculation`, and more for a budgeted run **[open, re-checked 2026-10-03; Part XXIII item 16 multiplies it]**
+### H6. The symmetry search runs twice for every `Calculation`, and more for a budgeted run **[closed 2026-10-03 in `fbf44d9`; the heading re-read 2026-10-09: `find_symmetries` is an `lru_cache(maxsize=64)` at `system/symmetry.py:280`, 5 searches to 1 on a build and one estimate, and no test pins the count]**
 
 **Done 2026-10-03, `fbf44d9`.** `find_symmetries` is an `lru_cache(maxsize=64)` keyed on the cell, the folded positions, the types and the three tolerances read at call time. Building a system, its calculation and one size estimate ran 5 searches and runs 1; the groups are identical to the old module's on all 246 parseable committed inputs of up to 200 atoms.
 
@@ -1546,7 +1546,18 @@ the fix.
 `benchmarks/si128-1k.in`, `al-slab.in` and `si8-1k.in`, and see how it scales with `nat`.
 Then count the calls in one `Calculation` build (expect 2).
 
-### H7. Six columns of the elastic tensor each re-evaluate the identical primal **[measured 2026-09-24, `PLAN.md` P112: 2.1x faster, and not landed, because its memory gate is out by two orders]**
+### H7. Six columns of the elastic tensor each re-evaluate the identical primal **[measured again 2026-10-09, branch `open-e`: the six columns traced once (bit-identical, landed); sharing the primal is 3.9x on rBN at 3.5x the temporaries, not landed, the gate the user's]**
+
+**Re-checked 2026-10-09 on D22, one process per cell, `JAX_PLATFORMS=cpu`, cores 0-11, second calls, median of three.** Since `a0b857a` each column is `compiled_jvp`, which traces the whole forward-over-reverse derivative at every call to find its kept program, so the 2026-09-24 premise ("nothing in the file is jitted") no longer holds and the cost moved into six traces. Four forms of the six columns:
+
+| cell (`psi` shape, smooth grid) | six `compiled_jvp` | traced once | one `vmap` over six | `jax.linearize` | one `jvp` temp | `vmap` temp | linearise residuals |
+|---|---|---|---|---|---|---|---|
+| `si-electrostriction` (1, 8, 4, 190; 15^3) | 0.84 s | 0.29 s | 0.18 s | 0.16 s | 49.6 MB | 58.9 MB | 11.4 MB |
+| `si-epsilon-unshifted-nosym` (1, 64, 4, 360; 20^3) | 2.48 s | 1.82 s | 0.53 s | 0.55 s | 63.4 MB | 204.1 MB | 145.5 MB |
+| `rbn-electrostriction` (1, 8, 12, 4446; 27x27x108) | 10.88 s | 10.29 s | 2.76 s | 3.73 s | 459.3 MB | 1609.6 MB | 1373.0 MB |
+
+"Traced once" (`compiled_function`, one trace and six runs of the kept program) is the old tensor to the bit on all three cells and holds nothing new, so it is **landed** (`response/elastic.py`, `tests/regression/test_elastic_one_trace.py`: one trace where there were six, the tensor `assert_array_equal` to the old loop's). It buys little where the arithmetic dominates (1.06x on rBN). Sharing the primal is what pays, 3.9x on rBN by a `vmap` of the `jvp` over the six tangents inside one compiled program, but its temporaries are 3.5x one `jvp`'s (1.61 GB against 0.46 on rBN), and the linearisation's residuals 3.0x; the 329.8 MB of 2026-09-24 on `si-electrostriction` is 11.4 MB now, since the radial tables went into the radial basis (`bessel-jvp`). The `vmap` moves the tensor by 1.6e-11 on 26.2 (rBN). What a gate needs is now in hand: the compiled program's own `memory_analysis().temp_size_in_bytes`, read before running it, against a budget. Whether to land that, and at what budget, is a memory-against-speed default and is left to the user. Probes: D22 `/l/ladovj1/review/open-e/h7_probe.py`, `h7-*.json`.
+
 
 **One `jax.linearize` shared by the six columns was written and measured, and left out.**
 On `si-electrostriction.in` (norm-conserving silicon, eight k-points, one core, second
@@ -1765,7 +1776,7 @@ the right shape and time `mix()` alone -- no SCF, so it runs in seconds. Then in
 `benchmarks/al-slab.in`, whose history actually fills. The mixed density must be
 bit-identical and the iteration count identical.
 
-### M4. `calbec` conjugates the large operand where the same package's `project` conjugates the small one **[open, re-checked 2026-10-03]**
+### M4. `calbec` conjugates the large operand where the same package's `project` conjugates the small one **[closed 2026-10-03 in `32b5605`; the heading re-read 2026-10-09: `conjugated_contraction` at `hamiltonian/operator.py:146`, pinned by `tests/unit/test_becp_conjugate_side.py`]**
 
 **Done 2026-10-03, `32b5605`, and not a null**: the compiled Davidson materialised `conj(vkb)` (c128[1607, 64] on `si8-us-1k`) inside the loop once per rung. `conjugated_contraction` conjugates the smaller operand, decided from static shapes; loop-body copies 5 -> 0 on `si8-us-1k`, 4 -> 0 on `si8-1k`, 5 -> 3 on spinor `pt-so-1k` (whose widest rungs keep the old form), temp bytes 10.0 -> 8.4 MB on `si8-us-1k`; bit-identical.
 
@@ -1786,6 +1797,8 @@ against an `h_psi` measured at 146.3 ms.
 line. Bit-identical.
 
 ### M5. The preconditioner contracts a block-diagonal `D` as a dense `(nkb, nkb)` **[moves a number; open, re-checked 2026-10-03]**
+
+**Plan written 2026-10-09, branch `open-e`, `plans/open-e-m5.md`, not implemented**: a per-species batched contraction whose intermediate is `(npwx, nkb_s)` by construction, so the peak cannot exceed the dense form's whatever XLA fuses, checked first on `bi10-soc` under a 10 GB cap against master's 3.59 GB.
 
 **Reverted 2026-10-04 (`dacdd8b`), a measured regression.** On `bi10-soc` (`test_ten_site.py::test_spin_orbit_coupling_at_ten_sites`, ten bismuth atoms, 150 spinor bands, a 216x45x81 grid), compiled-kernel cache off, the block form peaks at 12.66 and 12.72 GB on D22 where master reads 3.59 and 3.60, and the dense einsum put back alone reads 3.49 GB on this workstation: the broadcast over (plane waves, atoms, channel, channel) is not fused on that cell, where it was on the two silicon cells it was measured on, so the small cells' 1.9 MB of temporaries cost 9 GB on a heavy spinor cell. The Hubbard diagonal built on it (`6f366df`) went with it. A form whose intermediate is bounded by construction (the batched einsum, `(npwx, nkb)` like the dense one, `npwx nkb nh` products) is the one to try next, measured on `bi10-soc` and not on silicon. What follows is the entry as it stood. **Done 2026-10-03, `680e01a`.** The diagonals are contracted atom block by atom block as one broadcast and one sum, which XLA fuses into a single reduction with no `(npwx, nkb)` intermediate (a batched einsum was measured worse, a dot not being fused on a CPU). Temp bytes 8.4 -> 6.5 MB on `si8-us-1k` and `si8-paw-1k`; energies within 6e-14 Ry, eigenvalues within 1e-13 (si16's 9.75e-13 is in pairs inside multiplets whose means agree to 6e-16, rule D4), iteration counts and every per-k Davidson step array unchanged on five cells. `hubbard/operator.py` has the same dense contraction on `v_ns` and is not changed.
 
@@ -1812,7 +1825,7 @@ instrument `davidson.py`'s working-set fit was made with. The converged total to
 and **the per-k Davidson step counts must not move**, which is what makes this a
 number-moving change rather than a free one.
 
-### M6. `return_steps` is a static `jit` argument, so a process that runs an SCF and then anything else compiles Davidson twice **[open, re-checked 2026-10-03; `workflows/nscf.py:308` and `scf/streaming.py:168` now pass `True` too, so a band structure no longer pays it and the residual solver, topology and electrostriction still do]**
+### M6. `return_steps` is a static `jit` argument, so a process that runs an SCF and then anything else compiles Davidson twice **[closed 2026-10-03 in `920bf31`; the heading re-read 2026-10-09: one `_every_k` whatever is asked, pinned by `tests/unit/test_davidson_one_executable.py`]**
 
 **Done 2026-10-03, `920bf31`.** The solver always carries the step count and the wrapper drops it, so an SCF and a residual solve share one `_every_k` (2 compiles -> 1), bit-identical. Test: `test_davidson_one_executable.py`.
 
@@ -1826,6 +1839,8 @@ duplicate executable; the only anchor is the 146.3 ms of arithmetic it holds. Th
 step is `JAX_LOG_COMPILES=1` on a script that does both, not a fix.
 
 ### M7. `sum_band` transforms the whole FFT box where `h_psi` uses sticks **[moves a number; done on a CPU in `90b50bd`, open on a card and under gamma storage, re-checked 2026-10-03]**
+
+**Re-read 2026-10-09: still open, as the heading says.** `band_density` still takes `sticks_density` only on a CPU with a plane chunk and a band batch of one, so a card and a gamma-only run transform the box; the card half's bound is the 63.9 against 70.3 ms already on record, and it waits with the layout decision for a float64 card. Not worked on here.
 
 **Half done.** `band_density` takes `sticks_density` only when a plane chunk is set and the band
 batch is one (`scf/density.py:61-66`), and `resolve_plane_chunk` returns `None` on any backend but
@@ -2254,7 +2269,9 @@ difference and no truncation in it, at one SCF and one gradient per rung instead
 
 ## X. Downgraded, and test-suite hygiene
 
-### X1. The analytic force recompiles per ionic step -- real, and not the severity the entry claims **[open, re-checked 2026-10-03; the autodiff force does too in a vc-relax, Part XXIII item 7]**
+### X1. The analytic force recompiles per ionic step -- real, and not the severity the entry claims **[closed 2026-10-09, branch `open-e`: 1 compile a step to 0]**
+
+**Closed 2026-10-09.** `_compiled_terms` now goes through `geometry_compiled` under the slot `_analytic_terms`, taking the hoisted fields and the geometry's float leaves as arguments, the rule the autodiff force and stress follow since Part XXIII item 7. On the ultrasoft two-atom cell of `tests/unit/test_geometry_compiled.py` an `at_positions` step compiled `jit(_terms)` once (0.33 s on one D22 core) at `aa08c82` and compiles nothing now; the new test fails on `aa08c82` with `the step compiled ['jit(_terms)']`. Against the old closure at the same geometry, five of the six terms are identical to the bit and the nonlocal one differs by 1.4e-17 Ry/bohr.
 
 `defumat/forces/analytic.py:112`. `_compiled_terms` keys its cache on object identity and
 `at_positions` returns a `copy.copy`, so the six-term kernel is traced and compiled again
@@ -3723,6 +3740,13 @@ by a pair, not a count. None of this reproduces 730 s an iteration either, so **
 one run of `nibr2_k161_localtf.scf.in` on Triton with this code**, reading the per-iteration time
 against the `anderson` law in the table above; on that PAW cell the solve also moves to the
 smooth grid, which is smaller than the dense one by about `(dual/4)^1.5`.
+
+**Re-read 2026-10-09: still open, and it cannot be done on D22.** The input is not in the
+repository, not on D22 and not on this workstation; it lives with the NiBr2 production runs on
+Triton (another session's project, `docs/triton-notes.local.md`, 2026-09-26). The cell is the
+45-atom spinor PAW slab whose run read about 28 GB, which D22's 31 GB cannot hold under a
+10 GB cap, and at the old rate twenty iterations are about 5 h. What it needs is one Triton
+submission of that input with this code, which is the user's to approve.
 
 ---
 
@@ -6801,7 +6825,10 @@ interpolation are saved.
 augmented half on `alas-epsilon-us.in` (`get_polarization`) and `bi111-bilayer-soc.in` (`get_z2`,
 the streamed Wilson loop), warm second call, one core; phases and Z2 bit-identical.
 
-### 13. `run_ultracell` solves the frozen states twice, the second time on a second `Calculation`, to read one band across the cut
+### 13. `run_ultracell` solves the frozen states twice, the second time on a second `Calculation`, to read one band across the cut **[first half closed 2026-10-03; second half measured 2026-10-09 and not landed: seeding is slower at `nbnd = 24`]**
+
+**The second half, measured 2026-10-09 on D22 (one core, warm third call, `h-mag-ultracell.in`, `(2, 1, 1)` on `(2, 2, 2)`) and reverted** (`16c658f`, reverted in `7953cf8` on branch `open-e`). The wider solve was seeded through a `span` argument of `fixed_density_states`: a Rayleigh-Ritz in the kept states topped up with one random vector. It does not leave Davidson one band to iterate, because the new band starts random and the loop runs every band until it settles. Wider solve, unseeded against seeded: 0.168 against 0.143 s at `nbnd = 8` (steps per k and spin not fewer, 246 against 247 summed over one channel), and **0.638 against 0.758 s at `nbnd = 24`, 371 against 474 steps** summed over k and spin; the multiplet gap moved at round-off (2.04e-10 to 1.74e-10 Ry). Probe: D22 `review/open-e/ultra_probe.py`, `ultra24-*.json`. What would make it pay is a solve that iterates only the new vector against a locked converged block, which this Davidson does not have.
+
 
 **First half done 2026-10-03, `2b34b2e`**: the wider solve reuses the basis calculation, 2 -> 1 constructors on `h-mag-ultracell.in`, the wider block, the multiplet gap (2.03e-10 Ry), the density and both cell moments bit-identical on a CPU (on a card the wider solve now re-checks the kept-band copy's dials rather than a fresh build's). The second half, seeding the wider Davidson with the kept states, is not done.
 
@@ -7028,6 +7055,8 @@ Davidson steps equal.
 
 ### 20. The Davidson step still forms `nbnd` Ritz vectors, residuals and projection rows, where `cegterg` forms `notcnv` **[confirmed in part: 1 to 2 per cent at sixteen atoms]**
 
+**Plan written 2026-10-09, branch `open-e`, `plans/open-e-xxiii-20.md`, not implemented**: permute the coefficients first, form `evc`, the residual and the projection rows at the band rung that covers `notcnv`, full width only at a refresh and the exit; accepted only if si64 gains about the 2 per cent the bound gives with the step counts and the solve's temp size unchanged.
+
 Sites: `solvers/davidson.py:255`, `:518-522`, `:619-646`, `:682`, `:744`, `:772-777`.
 
 `ritz` forms `evc` and `hevc` for all `nbnd` roots at every step, `expansion` builds residuals and
@@ -7200,7 +7229,10 @@ smaller than the mesh: `get_optical_conductivity()` and `get_absorption()`, one 
 
 ## The streamed store and the pools
 
-### 25. The streamed store crosses the bus through a fancy-index copy at every pass **[confirmed in part: the copy is real, the diagnosis is not]**
+### 25. The streamed store crosses the bus through a fancy-index copy at every pass **[confirmed in part: the copy is real, the diagnosis is not; the transfer measured on the A2000 2026-10-09]**
+
+**The transfer alone, measured 2026-10-09** (D22's A2000, nothing else on the card, `review/open-e/transfer_probe.py`): one chunk of three k-points of a `(1, 6, 128, 24000)` complex128 store, 147.5 MB, the si64 shape at `ecutwfc = 30`, median of nine after two warm calls. Through the old index copy 50.6 ms (2.9 GB/s), of which the host gather alone is 46.3 ms; as a view (what `c546917` does now) **27.6 ms, 5.3 GB/s**; a `pinned_host` buffer to the device **6.8 ms, 21.7 GB/s**, but filling that buffer from the pageable store costs 21.6 ms, so a staging buffer refilled every pass saves nothing over the view (28.4 against 27.6 ms). The card to the host by `np.asarray` is 19.3 ms (7.6 GB/s). So the remaining lever is not a staging buffer but a store that **lives** in pinned memory, which would take each crossing from 27.6 to about 7 ms, three crossings an iteration; that changes how the store is allocated and held (a jax array of `memory_kind='pinned_host'` rather than a numpy one, and every host-side write to it), and is a design for a later session, not done here. The fused density is not done.
+
 
 **The bit-identical half done 2026-10-03, `c546917`.** Every chunk that is a run of rows crosses as a view of the store (`streaming.rows_to_device`, also behind `forces/chunked._rows_of`), the padded last chunk keeps its index, and the write-backs go by slice. Host copies handed to `device_put`, before and after: 27 -> 9 a pass on silicon at `k_batch = 3` over 8 k-points, 96 -> 32 on the LSDA chain's solve, 12 -> 4 a gradient, all to 0 under two pools at `k_batch = 1`; the write side was already copy-free. Bit-identical serially and per rank under pools. **What it found**: in jax 0.11 on a CPU, `device_put` of an aligned contiguous array is zero-copy whatever `may_alias` says, so a view can be the store's own memory, a donated aliased block is copied by PjRt rather than written through, and the safety rests on one rule now in `_to_device`'s docstring: a host store's rows are written only with the output of the computation that read them (checked at every write in the walked response modules). At `nspin = 2` the density read stacks two channel views on the device, one two-channel block more of device transient than before, not measured on a card. The pinned buffer and the fused density are not done.
 
@@ -7237,6 +7269,8 @@ view against a pinned buffer at the si64 chunk's size. Then `DEFUMAT_WFC_STORE=s
 equal.
 
 ### 26. A pooled iteration moves the density twice in real space, the second time on the dense grid as an all-reduce of zeros
+
+**Plan written 2026-10-09, branch `open-e`, `plans/open-e-xxiii-26.md`, not implemented**: the first step is the two-node `comm_bench.py` on `eth0` and `ib0`, a Triton submission for the user to approve; the G-space payload is built only if `ib0` leaves an 83 MB all-reduce above about 100 ms.
 
 **Part done 2026-10-03, `d19a211`, bit-identical per rank at two and three pools**: `Pools.layout` computes every pool's rows locally and `gather_k` makes one byte-packed all-gather of the eigenvalues, step counts and unsettled counts, so a pooled iteration makes 7 collectives where it made 15 (all-gathers 9 -> 1). **The all-reduce pack is not bit-identical beyond two pools**: on three processes gloo's CPU all-reduce adds an element in an order that depends on its position in the buffer (1839 of 25140 sums moved in the last bit), so it was not done; at two pools it would be exact. The G-space payload is not done.
 
