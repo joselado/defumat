@@ -518,18 +518,22 @@ class _Regime:
     reads the G sphere, either FFT grid, ``vkb`` or ``Q_ij(G)``, which are what
     the constructor spends its time and memory on.
 
-    **Each field is the expression ``Calculation.__init__`` computes it with**,
-    so that the two cannot disagree on any ``System`` a calculation can be
-    built from. Three of them are not the builder called and tested for
-    ``None``, and each is that builder's own early return transcribed: ``is_ultrasoft``
-    is :func:`~defumat.pseudo.augmentation.build_augmentation`'s, which runs
-    over the *atoms'* species, and ``is_paw`` is
-    :func:`~defumat.paw.onecenter.build_paw`'s, which runs over every species
-    given -- the two are written differently there and are not unified here.
-    ``magnetic_field`` is ``_build_magnetic_field``'s early return and carries
-    only **whether** there is a field or a constrained moment (``True``) or
-    not (``None``): the rest of that method builds integration spheres on the
-    dense grid, and every guard asks ``is not None`` and nothing more.
+    **Each field is computed by the function ``Calculation.__init__`` itself
+    calls**, rather than by a transcription of it, so an edit to the rule moves
+    both (``OPEN.md`` Part XVII item 1). ``functional`` is
+    :func:`~defumat.xc.functional.functional_of`; ``two_fermi_energies`` and
+    ``magnetic_field`` are :attr:`System.two_fermi_energies` and
+    :attr:`System.has_applied_field`, the second being
+    ``_build_magnetic_field``'s early return, and carrying only **whether**
+    there is a field or a constrained moment (``True``) or not (``None``),
+    since the rest of that method builds integration spheres on the dense grid
+    and every guard asks ``is not None`` and nothing more. ``is_ultrasoft`` and
+    ``is_paw`` are :func:`~defumat.pseudo.augmentation.is_augmented` and
+    :func:`~defumat.paw.onecenter.has_paw`, the two builders' early returns,
+    where the constructor reads whether the builder returned ``None``; the
+    first runs over the *atoms'* species and the second over every species
+    given, and that difference is the builders'. ``gamma_only``, ``is_hubbard``
+    and ``symmetries`` call what the constructor calls.
 
     ``system`` is the input as given, **without** the ``K_POINTS gamma``
     substitution the constructor makes when it cannot consume the half-sphere
@@ -558,41 +562,31 @@ class _Regime:
     def of(cls, system, pseudos) -> "_Regime":
         """Build it the way ``Calculation.__init__`` builds each attribute."""
         from defumat.hubbard.manifold import build_hubbard_setup
+        from defumat.paw.onecenter import has_paw
+        from defumat.pseudo.augmentation import is_augmented
         from defumat.scf.driver import gamma_storage_is_consumable
-        from defumat.xc.functional import resolve_functional
+        from defumat.xc.functional import functional_of
 
         pseudos = tuple(pseudos)
-        nspin = int(system.nspin)
         noncolin = bool(system.noncolin)
-        field = not (
-            system.constrained_magnetization == "none"
-            and not np.asarray(system.b_field, dtype=float).any()
-            and not system.atomic_b_field
-        )
         return cls(
             system=system,
             symmetries=system.symmetry_group(),
-            functional=resolve_functional(
-                [pseudo.functional for pseudo in pseudos], system.input_dft
-            ).with_meta_coefficient(getattr(system, "mbj_c", None)),
-            nspin=nspin,
+            functional=functional_of(system, pseudos),
+            nspin=int(system.nspin),
             noncolin=noncolin,
             spiral=bool(system.spiral),
             gamma_only=gamma_storage_is_consumable(system, pseudos),
-            two_fermi_energies=(
-                nspin == 2 and system.tot_magnetization is not None
-            ),
-            is_ultrasoft=any(
-                pseudos[t].is_ultrasoft for t in system.structure.types
-            ),
-            is_paw=any(pseudo.is_paw for pseudo in pseudos),
+            two_fermi_energies=system.two_fermi_energies,
+            is_ultrasoft=is_augmented(pseudos, system.structure),
+            is_paw=has_paw(pseudos),
             # The builder rather than ``system.hubbard is not None``: a card
             # whose parameters are all zero resolves to ``None`` there, and
             # that is the case where the two would disagree.
             is_hubbard=build_hubbard_setup(
                 system.hubbard, system.structure, pseudos, noncolin=noncolin
             ) is not None,
-            magnetic_field=True if field else None,
+            magnetic_field=True if system.has_applied_field else None,
         )
 
 

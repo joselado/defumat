@@ -175,7 +175,7 @@ from defumat.scf.potential import (
 )
 from defumat.scf.residual_split import becsum_residual, residual_bins
 from defumat.xc.mgga import thomas_fermi_tau
-from defumat.xc.functional import resolve_functional
+from defumat.xc.functional import functional_of, resolve_functional
 from defumat.solvers import get_eigensolver
 from defumat.solvers.davidson import (
     ETHR_MIN,
@@ -2218,9 +2218,7 @@ class Calculation:
         # here, from the pseudopotentials and the input -- not defaulted to
         # anywhere downstream. Every consumer takes it as an argument, so a PBE
         # dataset cannot end up running under LDA by omission.
-        self.functional = resolve_functional(
-            [pseudo.functional for pseudo in self.pseudos], system.input_dft
-        ).with_meta_coefficient(getattr(system, "mbj_c", None))
+        self.functional = functional_of(system, self.pseudos)
 
         # QE's three spin numbers, kept apart (``set_spin_vars``): how many
         # regimes there are, how many components a *state* has, and how many a
@@ -3008,10 +3006,14 @@ class Calculation:
     def _build_hubbard_projectors(self, kcart=None) -> jnp.ndarray:
         """``wfcU`` at every k-point of this calculation.
 
-        ``kcart`` is for :meth:`at_strain` and for nothing else: the atomic
+        ``kcart`` is for :meth:`at_strain` and :meth:`at_kcart`: the atomic
         orbitals are built at ``k + G``, and under a strain the k-points move
         with the reciprocal cell while ``KPoints.coords`` -- being in units of a
-        *static* ``alat`` -- do not.
+        *static* ``alat`` -- do not, while ``at_kcart`` moves them directly.
+        Every caller of ``at_kcart`` either takes a ``jvp`` through it (the
+        velocity operator, ``realtime/dense.py``) or passes concrete k-points
+        (``workflows/nscf.py``), so no reverse-mode gradient reaches ``wfcU``
+        that way today.
         """
         return build_hubbard_projectors(
             self.hubbard, self.pseudos, self.system.structure, self.system.cell,
@@ -3110,7 +3112,7 @@ class Calculation:
             np.asarray(system.atomic_b_field, dtype=float)
             if system.atomic_b_field else None
         )
-        if constraint == "none" and not uniform.any() and atomic is None:
+        if not system.has_applied_field:
             return None
         if self.nspin == 1:
             raise ValueError(
@@ -6015,11 +6017,10 @@ class Calculation:
     def two_fermi_energies(self) -> bool:
         """Whether the magnetization is constrained (QE's ``two_fermi_energies``).
 
-        Set by ``tot_magnetization`` being given at all, not by its value:
-        ``input.f90`` turns the sentinel into the flag, and the flag decides
-        whether the channels share a Fermi level or each gets its own.
+        :attr:`System.two_fermi_energies <defumat.system.builder.System.two_fermi_energies>`,
+        which has the rule.
         """
-        return self.nspin == 2 and self.system.tot_magnetization is not None
+        return self.system.two_fermi_energies
 
     def occupations(self, eigenvalues):
         """Occupation weights, plus whichever level statistic applies.

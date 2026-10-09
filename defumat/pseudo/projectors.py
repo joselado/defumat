@@ -127,6 +127,31 @@ def _projector_dataset_key(pseudo: Pseudopotential) -> tuple:
     )
 
 
+def first_declared_datasets(pseudos, key=_projector_dataset_key):
+    """``(datasets, slot_of)``: the distinct datasets, in the order first declared.
+
+    ``datasets[slot]`` is the index of the first species whose ``key`` is new,
+    and ``slot_of[species]`` the slot that species' columns live in, so a cell
+    with one label per dataset gives ``datasets = slot_of = range(ntyp)`` and
+    every array built on it is what it was before labels shared columns.
+    ``key`` is :func:`_projector_dataset_key` for ``<k+G|beta>`` and
+    :func:`~defumat.pseudo.atomic._atomic_dataset_key` for ``<k+G|chi>``,
+    which read different parts of the file and must not be swapped. One
+    function for :func:`build_projector_core`,
+    :func:`~defumat.pseudo.atomic.atomic_wavefunctions` and
+    :func:`~defumat.realtime.radial.column_layout`, so the three cannot order
+    their columns differently.
+    """
+    datasets, slot_of, seen = [], [], {}
+    for species, pseudo in enumerate(pseudos):
+        fingerprint = key(pseudo)
+        if fingerprint not in seen:
+            seen[fingerprint] = len(datasets)
+            datasets.append(species)
+        slot_of.append(seen[fingerprint])
+    return datasets, slot_of
+
+
 class Projectors(eqx.Module):
     """The projectors ``<k+G|beta>`` and their coefficients ``D``.
 
@@ -436,13 +461,7 @@ def build_projector_core(
     # datasets keep the order in which their first label is declared, so on a
     # cell with one label per dataset this is the list of species unchanged
     # and every array below is what it was before the sharing existed.
-    datasets, slot_of, seen = [], [], {}
-    for species, pseudo in enumerate(pseudos):
-        key = _projector_dataset_key(pseudo)
-        if key not in seen:
-            seen[key] = len(datasets)
-            datasets.append(species)
-        slot_of.append(seen[key])
+    datasets, slot_of = first_declared_datasets(pseudos)
     dataset_pseudos = tuple(pseudos[species] for species in datasets)
     dataset_channels = [channels_by_species[species] for species in datasets]
 

@@ -94,17 +94,21 @@ def _input(case: str, edit: tuple[str, str] | None = None):
     """The ``System`` and its pseudopotentials: all the guard chain reads.
 
     ``edit`` is one ``(old, new)`` replacement in the committed file's text,
-    for a case that is a committed cell with one value changed. ``old`` has to
+    or a list of them, for a case that is a committed cell with a value or a
+    card changed. ``old`` has to
     be in the file, so an edit that stops matching fails here rather than
     quietly handing back the committed cell under the edited case's name.
     """
     if edit is None:
         pwin = read_pw_input(CASES / f"{case}.in")
     else:
-        old, new = edit
+        # One pair, or a list of pairs applied in turn.
+        edits = [edit] if isinstance(edit[0], str) else list(edit)
         text = (CASES / f"{case}.in").read_text()
-        assert old in text, f"{case}.in no longer carries {old!r}"
-        pwin = parse_pw_input(text.replace(old, new))
+        for old, new in edits:
+            assert old in text, f"{case}.in no longer carries {old!r}"
+            text = text.replace(old, new)
+        pwin = parse_pw_input(text)
     system = build_system(pwin)
     pseudos = tuple(
         read_upf(PSEUDO / sp.pseudo_file) for sp in system.structure.species
@@ -250,6 +254,22 @@ def _assert_the_view_reads_like_the_calculation(view, calculation):
                  and np.asarray(view.system.b_field, dtype=float).any()
                  and view.system.constrained_magnetization == "none",
                  id="uniform-field", marks=pytest.mark.slow),
+    # A ``LOCAL_MAGNETIC_FIELDS`` card and nothing else: the third term of the
+    # field test, which no committed input reaches. The constraint the
+    # texture cell carries is switched off, since the builder refuses it beside
+    # the card (both write the same per-atom slot), and the fields are along
+    # ``z`` on a ``nosym`` cell, so no rule about a transverse card applies.
+    pytest.param("h2-texture-120",
+                 [("constrained_magnetization = 'atomic'",
+                   "constrained_magnetization = 'none'"),
+                  ("\nSTARTING_MOMENTS\n",
+                   "\nLOCAL_MAGNETIC_FIELDS\n 0.0 0.0 0.01\n 0.0 0.0 -0.01\n"
+                   "STARTING_MOMENTS\n")],
+                 lambda view: view.magnetic_field is not None
+                 and bool(view.system.atomic_b_field)
+                 and not np.asarray(view.system.b_field, dtype=float).any()
+                 and view.system.constrained_magnetization == "none",
+                 id="atomic-field"),
     pytest.param("h-chain-spiral", None,
                  lambda view: view.spiral and view.noncolin,
                  id="spiral"),
@@ -281,6 +301,43 @@ def test_the_input_reads_the_way_the_calculation_does_off_the_defaults(
     view = _Regime.of(system, pseudos)
     assert off_its_default(view), case
     _assert_the_view_reads_like_the_calculation(view, Calculation(system, pseudos))
+
+
+def test_the_view_and_the_builders_ask_one_predicate_each(monkeypatch):
+    """``_Regime`` calls the rule the constructor's builders call, not a copy of it.
+
+    ``OPEN.md`` Part XVII item 1, the better fix: the parity tests above
+    compare the two sides on cells, and this one shows that each side reads
+    the same function, by changing the function and watching both move. On
+    the code before it the view transcribed each rule inline, so patching the
+    shared predicate moved nothing on that side.
+    """
+    import defumat.paw.onecenter as onecenter
+    import defumat.pseudo.augmentation as augmentation
+    from defumat.response.piezo import _Regime
+    from defumat.system.builder import System
+
+    system, pseudos = _input("h-chain-spiral")
+    plain = _Regime.of(system, pseudos)
+    assert not (plain.is_paw or plain.is_ultrasoft or plain.two_fermi_energies)
+    assert plain.magnetic_field is None
+
+    monkeypatch.setattr(onecenter, "has_paw", lambda pseudos: True)
+    monkeypatch.setattr(augmentation, "is_augmented", lambda pseudos, structure: True)
+    monkeypatch.setattr(System, "has_applied_field", property(lambda self: True))
+    monkeypatch.setattr(System, "two_fermi_energies", property(lambda self: True))
+    moved = _Regime.of(system, pseudos)
+    assert moved.is_paw and moved.is_ultrasoft and moved.two_fermi_energies
+    assert moved.magnetic_field is True
+
+    # And the builders' early returns are the same functions: told there is
+    # nothing to build, they build nothing on a cell that has something.
+    paw_system, paw_pseudos = _input("o2-paw-afm")
+    monkeypatch.setattr(onecenter, "has_paw", lambda pseudos: False)
+    monkeypatch.setattr(augmentation, "is_augmented", lambda pseudos, structure: False)
+    assert onecenter.build_paw(paw_pseudos, paw_system.structure, None) is None
+    assert augmentation.build_augmentation(
+        paw_pseudos, paw_system.structure, paw_system.cell, None) is None
 
 
 def test_a_system_without_its_pseudopotentials_is_not_guessed_at():

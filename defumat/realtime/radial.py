@@ -44,7 +44,7 @@ import numpy as np
 
 from defumat.pseudo.formfactors import projector_form_factors
 from defumat.pseudo.harmonics import real_solid_harmonics
-from defumat.pseudo.projectors import _projector_dataset_key, projector_channels
+from defumat.pseudo.projectors import first_declared_datasets, projector_channels
 
 __all__ = ["RadialTable", "radial_table", "column_layout", "max_error"]
 
@@ -58,12 +58,7 @@ def column_layout(pseudos):
     sit where the projector core's do (``ProjectorCore.column_of_channel``
     selects from them unchanged).
     """
-    datasets, seen = [], set()
-    for pseudo in pseudos:
-        key = _projector_dataset_key(pseudo)
-        if key not in seen:
-            seen.add(key)
-            datasets.append(pseudo)
+    datasets = [pseudos[species] for species in first_declared_datasets(pseudos)[0]]
     beta_of, lm_of, l_of = [], [], []
     offset = 0
     for pseudo in datasets:
