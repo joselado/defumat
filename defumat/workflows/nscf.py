@@ -98,6 +98,7 @@ def fixed_density_states(
     calculation: Calculation | None = None,
     keep_states: bool = True,
     wfc_store: str | None = "default",
+    span=None,
 ):
     """Diagonalise once at every k-point of ``system`` with ``density`` fixed.
 
@@ -180,6 +181,19 @@ def fixed_density_states(
     (a card in memory mode), each chunk of k-points is solved from scratch and
     its states dropped, so the set is never stacked on the device.
     :func:`fixed_density_bands` passes it.
+
+    ``span`` seeds the solve with vectors already in hand, through
+    :meth:`~defumat.scf.driver.Calculation.starting_wavefunctions`: a
+    Rayleigh-Ritz in their span, topped up with the random vectors a solve
+    with no seed starts from when they number fewer than ``nbnd``. It is how
+    the ultracell reads the gap across its cut (``OPEN.md`` Part XXIII item
+    13): the ``nbnd``-band states are converged already, so a solve at one
+    band more seeded with them iterates the one new band rather than every
+    band from a random start. It changes where the solve starts and not what
+    it converges to, so the eigenvalues agree with an unseeded solve to the
+    threshold, not to the bit. Only the stacked route takes it; a solve that
+    streams its k-points is refused, since the seed would have to be walked
+    with it.
     """
     if calculation is not None:
         _require_a_matching_calculation(calculation, kpoints, k_batch, david)
@@ -297,6 +311,12 @@ def fixed_density_states(
     if resolve_wfc_store(wfc_store, calculation.memory_mode) == "stream":
         from defumat.scf.streaming import stream_eigenvalues, stream_states
 
+        if span is not None:
+            raise ValueError(
+                "fixed_density_states was given a span to seed from on a run "
+                "whose states stream through the device a chunk at a time; the "
+                "seed is taken on the stacked route only (wfc_store='device')")
+
         if keep_states:
             eigenvalues, wavefunctions, steps, notcnv = stream_states(
                 calculation, hamiltonians, nbnd, ethr)
@@ -305,8 +325,10 @@ def fixed_density_states(
                 calculation, hamiltonians, nbnd, ethr)
             wavefunctions = None
     else:
+        psi0 = (None if span is None
+                else calculation.starting_wavefunctions(hamiltonians, nbnd, span=span))
         eigenvalues, wavefunctions, steps, notcnv = calculation.diagonalize(
-            hamiltonians, nbnd, None, ethr, return_steps=True)
+            hamiltonians, nbnd, psi0, ethr, return_steps=True)
     _say_what_did_not_converge(steps, notcnv, ethr, conv_thr, nbnd)
     return calculation, system, np.asarray(eigenvalues), wavefunctions
 

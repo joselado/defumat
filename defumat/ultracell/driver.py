@@ -1119,12 +1119,22 @@ def run_ultracell(
     # per run, both G sets, the grids, the symmetry search, the local potential,
     # the projector core and the augmentation tables (``OPEN.md`` Part XXIII
     # item 13). ``kpoints`` is therefore left out, as a threaded calculation
-    # requires.
+    # requires. **And it starts from the kept states** (the item's second half):
+    # they are converged at this potential already, so a Rayleigh-Ritz in their
+    # span with one random vector beside them leaves Davidson only band
+    # ``kept + 1`` to iterate, where an unseeded solve took every band from a
+    # random start. The gap then agrees with the unseeded one to the solve's
+    # threshold rather than to the bit. A run whose states stream holds them in
+    # host memory a chunk at a time, and keeps the unseeded solve.
+    from defumat.batching import resolve_wfc_store
+
+    seed = (None if resolve_wfc_store("default", calculation.memory_mode) == "stream"
+            else wavefunctions)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         _, _, wider = fixed_density_bands(
             folded_system, pseudos, jnp.asarray(reference.density), nbnd=kept + 1,
-            calculation=calculation,
+            calculation=calculation, span=seed,
             **{name: value for name, value in frozen.items() if name != "kpoints"},
         )
 
