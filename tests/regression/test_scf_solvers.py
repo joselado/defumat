@@ -60,7 +60,6 @@ NICKEL_U_NONMAGNETIC = BENCHMARKS / "ni-u-nonmagnetic.in"
 SLAB = BENCHMARKS / "al-slab.in"
 
 
-@lru_cache(maxsize=None)
 @lru_cache(maxsize=1)
 def _kicked_iron():
     """The iron saddle, and it displaced by ``KICK`` along the magnetization.

@@ -44,6 +44,22 @@ pytestmark = [pytest.mark.regression, pytest.mark.slow]
 CONSTRAINED_RY = 3e-7
 
 
+@pytest.fixture(autouse=True)
+def _bound_compilation_cache():
+    """Several cells of different shapes in one process; see ``CLAUDE.md`` on memory.
+
+    The converged states stay cached and only the compiled code is dropped, which
+    trades recompilation for a peak that does not grow with the number of cells.
+    The cache below stays unbounded because the parametrized tests come back to
+    every cell once per test function, so ``maxsize=2`` would rerun each SCF that
+    many times (``OPEN.md`` X2).
+    """
+    yield
+    import jax
+
+    jax.clear_caches()
+
+
 @lru_cache(maxsize=None)
 def _run(path: Path, pseudo_dir: Path, conv_thr: float = 1e-13, max_iterations: int = 200):
     """A constrained noncollinear run, converged tightly enough to be compared.
