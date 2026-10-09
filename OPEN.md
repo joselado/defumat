@@ -3796,7 +3796,7 @@ boundary, one showing an `energies=` list without `bias=` is untouched -- there 
 trapezoid there, so each energy is its own zero-bias conductance -- and one reading the
 order of the two calls off each entry point's source.
 
-## 2. The reference pair for a unit-cell tunnelling spectrum was not taken **[2026-09-15]**
+## 2. The reference pair for a unit-cell tunnelling spectrum was not taken **[2026-09-15; measured 2026-10-09: 41 biases through `pp.x` take 1.07 s and one `run_sts` call 0.95 s, and the two images disagree on an unshifted grid]**
 
 `pp.x` with `plot_num = 5`, run once per bias, is the honest reference for `run_sts` with an
 energy axis, and `pp.x` is built in the vendored tree. It was not measured because the machine
@@ -3805,6 +3805,48 @@ taken beside one is not a measurement (`PERFORMANCE.md` says so in the entry). W
 instead is this code's own two routes run back to back under the same load, where the **ratio**
 is robust and the absolute figures are for scale. Take the pair on a quiet machine: 41 biases
 through `pp.x` against one `run_sts` call, both single core, same cell.
+
+**Taken 2026-10-09 on D22** (`aa08c82`, `review/open-c/sts/`, one performance core each,
+`taskset -c 8`, nothing else of this session running, `OMP`/`OPENBLAS`/`MKL` threads 1 and
+`DEFUMAT_THREADS=off`). The cell is QE's fcc aluminium as `al-metal-nosym.in`: the whole unshifted
+4x4x4 grid, 64 points, because `run_sts` refuses a wedge and `pp.x` then sums the same states;
+Marzari-Vanderbilt at 0.05 Ry, `band_cutoff = 3` so the band sums are `stm.f90`'s, and the tip at
+every point of the 15^3 grid, 3375 points, so both sides produce the same field. `pp.x` is the
+vendored 7.5 build, run once per bias with `&inputpp` only (the `filplot` text dump, no `&plot`),
+41 biases from -0.1 to 0.1 Ry.
+
+| | wall clock |
+|---|---|
+| `pw.x`, the ground state, 7 iterations | 0.24 s |
+| this code's SCF, for scale | 4.8 s |
+| `pp.x`, 41 biases, six sweeps | **1.07 s** (1.068 to 1.102), 26 ms a bias |
+| `run_sts`, 1 energy, warm, median of 5 | 0.852 s |
+| `run_sts`, 11 energies | 0.891 s |
+| `run_sts`, 41 energies | **0.949 s** (0.979 in a second process) |
+| `run_sts`, 41 energies, first call | 1.31 s |
+
+**At 41 biases the two are level, 1.1x in this code's favour, and per image `pp.x` is 33x
+faster.** The spectrum's cost is a fixed 0.85 s, sampling 64 k-points' states at 3375 points one
+plane-wave sum at a time, and 2.4 ms an energy after that, so the axis is as cheap here as P90
+measured (41 energies 11 per cent over one); what is not cheap is the sampling. `pp.x`'s own
+clock gives 0.00 s to `STM` and 0.02 s to the whole `POST-PROC`, so its 26 ms a bias is start-up
+and file traffic around a sum that costs nothing on a cell this small. The crossover is
+about 35 biases on this cell, and it moves in this code's favour as the tip set shrinks towards
+what a spectrum is usually taken at, a point or a line (P90's `npoints` argument), and against it
+on a dense map.
+
+**The cross-check this pair was meant to carry does not close, and it is recorded rather than
+chased here.** The E_F row of `run_sts` times the width equals `get_stm`'s grid on the same run to
+1.1e-17, and on the shifted wedge of `al-metal.in` `pp.x` today reproduces the committed
+`reference.stm.al-metal` to 0.0 and this code's `get_stm` reproduces it to 1.7e-10. On the
+unshifted 64-point grid the same `sample_bias = 0` image differs from this code's by **2.6e-3 on
+a peak of 8.66e-3**, with the Fermi levels equal (7.9097 eV both) and six bands on both sides. One
+cause was found by reading and does not account for it: `stm.f90:146-149` sets `first_band` and
+`last_band` only when a band lies below `down1`/`up1` and never resets them per k, so at a k-point
+whose lowest band is already inside the window the previous point's `first_band` is kept; that
+happens at 6 of the 64 points here, and transcribing the stale rule
+onto this code's states in `pw.x`'s own k order takes the difference from 2.6e-3 to only
+2.1e-3. What the rest is has not been found.
 
 # Part X -- from the augmented ultracell, 2026-09-17 (P88 stage 5)
 
@@ -5361,7 +5403,7 @@ moved it further, the default being unchanged, and the size to expect is roughly
 quarter of `si10-epsilon`'s 2.2e-5 relative. It is one entry in the larger fact that the
 notebook set has not been re-executed over the twenty-eight fixes.
 
-## 4. A spin-polarized dielectric identity that read 2.709e-07 one day and passes the next
+## 4. A spin-polarized dielectric identity that read 2.709e-07 one day and passes the next **[measured 2026-10-09: 4.263e-14 in five fresh processes out of five, bit-identical, and 3.4e-14 on the other kind of core; the 2.709e-07 does not reproduce]**
 
 `tests/regression/test_lsda_response.py::test_the_polarized_dielectric_constant_reduces_to_the_unpolarized_one`
 compares `si-epsilon.in` run as `nspin = 1` and as `nspin = 2` with no magnetization, which
@@ -5377,6 +5419,25 @@ number sits near the tolerance rather than that it is fixed. **What would settle
 running the pair a few times and reading the spread, which is cheap and has not been done;
 until then a pass here does not discharge the failure seen there, which is this project's
 own "a check whose null result cannot be told from a pass" pointing the other way.
+
+**Run 2026-10-09 on D22** (`aa08c82`, `review/open-c/xiv4.py`), each run a fresh process so the
+test's `lru_cache` cannot make a repeat a null, at the test's own settings. Since `f3f470a` those
+are `IDENTITY = {tr2: 1e-24, threshold: 1e-12}`, which is the raw `sum(dV^2) < 1e-14` the test ran
+at on 2026-09-20 written in `ph.x`'s normalised units, so the regime is the reported one.
+
+| cores | runs | `eps`, both legs | difference | ground states | passes |
+|---|---|---|---|---|---|
+| 8-11 (performance) | 5 | 13.806646105235 | **4.263e-14** every run | 1.8e-15 Ry | 9 and 9 |
+| 12-13 (efficiency) | 2 | 13.806646105235 | **3.375e-14** every run | 0 | 9 and 9 |
+| 8-11, default `tr2` and CG threshold | 1 | 13.806654004 / 13.806653962 | 4.242e-08 | 1.8e-15 Ry | 5 and 5 |
+
+So the spread at the test's settings is zero to the last printed digit within one kind of core
+and 9e-15 between the two kinds, six orders under the 1e-8 tolerance, and nothing near 2.709e-07
+appears. The only regime that reaches that order is the loose one, the default row, where the
+two legs stop after five passes each 4.2e-8 apart (the test's comment quotes 1.3e-7 there), which
+is the order of the 2.709e-07; but the code that ran on 2026-09-20, before P127 normalised `dr2`
+and scheduled the CG threshold, is not today's, so which leg stopped where that day cannot be
+reproduced, and on today's code the identity holds at round-off every time it is run.
 
 ## 5. Seven files of the slow set are **unrun rather than failed**, and they all stopped at the same 12.4 GB
 
@@ -5618,12 +5679,54 @@ harmless, but it is a guard with no case that reaches it. **That last point is c
 makes the weights uniform, and `test_ultracell_guards.py` now asserts that the uneven set is
 refused with the wedge message, so the reasoning is held by a test.
 
-## 3. The spin-GGA fix is not sized in an SCF **[opened 2026-09-23]**
+## 3. The spin-GGA fix is not sized in an SCF **[opened 2026-09-23; measured 2026-10-09: the energy moves 1.1e-11 Ry and the occupied levels not at all, the empty minority levels 7.5e-4 to 4.0e-3 Ry on the H atom and 0.31 Ry on a triplet H2]**
 
 The minority `v1c` of a saturated point moved from -6.29e-3 to +0.532 Ry pointwise and the
 energy did not move. What that is worth in the empty minority eigenvalues and in the forces
 of a saturated PBE magnet (the H atom of `h-atom-lsda.in` run with PBE is the cheapest cell
 that saturates) has not been measured.
+
+**Measured 2026-10-09 on D22** (`aa08c82`, cores 8-11, `review/open-c/xvi3.py`). The old leg is
+today's code with the one term P109 added set to zero, `chain - stop_gradient(chain)` replaced by
+`stop_gradient(0 * chain)` in `_spin_correlation_energy`, so P110's cut beyond `|zeta| = 1` is in
+both legs and the two differ by that term alone; the pointwise control reproduces P109's pair,
+`v1c_down` = -6.293e-3 against +0.5324 Ry. Both cells are PBE (`input_dft`) on `H.pz-vbc` in the
+12 bohr cube at `ecutwfc = 25`, `occupations = 'fixed'`, so the minority channel is empty and
+`|zeta| = 1` exactly wherever there is charge, `conv_thr = 1e-12`.
+
+| H atom, `tot_magnetization = 1` | with the term | without | moved |
+|---|---|---|---|
+| total energy, Ry | -0.986831576222 | -0.986831576211 | 1.1e-11 |
+| majority levels, Ry | -0.5754758, -0.0558135 | -0.5754758, -0.0558134 | under 7e-8 |
+| minority (empty) levels, Ry | -0.1882379, 0.0400053, 0.1963751 | -0.1889899, 0.0360468, 0.1935515 | **7.5e-4, 4.0e-3, 2.8e-3** |
+| pressure, kbar | -1.2033824 | -1.2033003 | 8.2e-5 |
+| iterations | 26 | 26 | |
+
+So the energy and everything built from the occupied states stay where they were, as P109
+said, and the empty minority channel moves by up to 54 meV, which is what a spin-flip
+excitation energy or a minority-channel DOS read off such a run would carry. The atom has no
+force to move, by translation invariance.
+
+**A force needs two atoms, and the cell that has one has more than one self-consistent state,
+which is what the measurement found instead.** A triplet H2 (`tot_magnetization = 2`, the same box,
+cutoff and dataset) at a bond of 1.6 bohr converges with the term (70 iterations, -1.636990073 Ry)
+and not without it (100 iterations, oscillating between 7.2e-6 and 4.0e-5 Ry), which read at first
+as the term's doing; **`pw.x` does not converge it either** (the vendored 7.5, 100 iterations,
+hopping between -1.6959, -1.6957 and -1.6369 Ry). At 3.0 bohr, where the occupied majority pair
+sits 0.33 Ry under the next level, both legs converge, to -1.910791106 Ry with the term and
+-1.910966488 without, majority levels 0.025 Ry apart and forces of 0.07678 and 0.07597 Ry/bohr,
+and `pw.x` again does not (100 iterations, visiting -1.97273, -1.91097 and -1.91079 Ry). The two
+legs seeded from each other's converged density settle the attribution: **each lands on
+-1.910966510 Ry** in 5 and 10 iterations, occupied majority levels equal to 1e-6 Ry, so -1.910791 is a
+second, higher fixed point of the same functional that the fresh leg with the term happened to
+reach, not a state the term moves. On that one state the term leaves the occupied side alone again
+and moves the empty minority levels from (-0.2665, 0.0329) to (0.0461, 0.2998) Ry, the lowest by
+0.31 Ry, far more than on the atom. So what the fix is worth is in the empty channel only, up to a
+third of a rydberg on a molecule, and nothing on the energy or the occupied levels, so nothing on
+the force either, which is the same energy's derivative at the same states (not run on the seeded
+pair); and a triplet H2 in a box is not a cell to read a force difference off, since
+neither code converges it to one state. Neither force was compared with `pw.x`, which has none to
+give.
 
 ## 4. Three low-severity findings, not fixed **[opened 2026-09-23]**
 
@@ -6563,7 +6666,7 @@ history on that hypothetical cell. Nothing is measured.
 host-field route: `get_phonons()`, peak RSS and `len(history)` at history 8 against 4.
 `get_strain_response` on `si-electrostriction.in` for the six-against-nine fit.
 
-### 6. The walked third derivative builds a chunk's arguments once per tangent, and its strained Hamiltonian once per chunk **[confirmed in part]**
+### 6. The walked third derivative builds a chunk's arguments once per tangent, and its strained Hamiltonian once per chunk **[confirmed in part; re-checked 2026-10-09, still open: `chunked_third.py:91-123` is still tangent outer, chunk inner, and `51bfc6d`, the one later commit to the file, did not touch the order]**
 
 Sites: `response/chunked_third.py:91-123`, `:246-285`; `scf/driver.py:3383-3420`.
 
@@ -7277,7 +7380,7 @@ iteration count.
 
 What the agents of this sweep's follow-up found outside their items, recorded rather than lost.
 
-- **A nonzero second harmonic on centrosymmetric silicon is the FFT grid, not the assembly.** On
+- **[closed 2026-10-04, `bc4ce56`; re-checked 2026-10-09]** **A nonzero second harmonic on centrosymmetric silicon is the FFT grid, not the assembly.** On
   `si2-nosym.in` (unshifted 2x2x2, `nbnd = 8`) `get_shg` gave max |chi| 0.716 pm/V where inversion
   requires zero. Under `nosym` the grid is chosen without the fractional translations' factors (QE 7.5
   does the same, `setup.f90:606-611`), so diamond's quarter-lattice translation is not on the 15^3 grid,
@@ -7327,7 +7430,9 @@ What the agents of this sweep's follow-up found outside their items, recorded ra
   the same order, and was left. Notebooks 32
   and 33 now converge their silicon control with symmetry kept and pass the whole mesh as `kpoints=`
   (`tests/data/qe/si2-symmetric.in`), which is what the grid warning of `263b6a3` advises; the two
-  regression controls stay on `si2-nosym.in`, whose residue `test_shg.py` measures and bounds.
+  regression controls stay on `si2-nosym.in`, whose residue `test_shg.py` measures and bounds. **Re-checked 2026-10-09 on D22**: the two cases `bc4ce56` left at 14 bands, `alas-raman.in` on
+  the whole unshifted 4x4x4 mesh (`test_shg.py:133` and `:174`), cut in a gap, `band_cut_gap` = 6.66e-2 Ry
+  and no cut warning, so nothing else in the file sums over a split multiplet.
 - **Tetragonal cobalt relaxed from the identity returns the same free energy and torque to the last bit
   at steps 2 to 4**, in the old code and the new. Presumably a stationary start; not checked.
 - **Two failures that predate tonight**, both reproduced on master: `test_retention.py::
