@@ -137,12 +137,19 @@ def main() -> None:
 
         from defumat.eager import compiled_function
 
-        # Kept as the forward one is, so the second call compiles nothing.
+        # Kept as the forward one is, and traced again at every call as the
+        # forward one is, so the two second calls do the same work around it.
         origin = jnp.zeros(3)
-        gradient = compiled_function(jax.grad(
-            lambda omega: band_energy_at_rotation(
-                calculation, states, weights, texture, rotation, omega)), origin)
-        reverse_seconds, reverse = twice(lambda: -np.asarray(gradient(origin)))
+
+        def reverse_torque():
+            gradient = compiled_function(jax.grad(
+                lambda omega: band_energy_at_rotation(
+                    calculation, states, weights, texture, rotation, omega)), origin)
+            return -np.asarray(gradient(origin))
+
+        reverse_seconds, reverse = twice(reverse_torque)
+        print(f"forward torque {[repr(float(x)) for x in torque]}")
+        print(f"reverse torque {[repr(float(x)) for x in reverse]}")
         print(f"defumat reverse-mode torque {reverse_seconds:.2f} s, torque {reverse}, "
               f"forward/reverse time {grad_seconds / reverse_seconds:.2f}, "
               f"difference {np.linalg.norm(np.asarray(torque) - reverse) / np.linalg.norm(reverse):.2e} "
