@@ -3235,7 +3235,10 @@ digit. The uniform tilted field's closed arm runs the
 default and passes unchanged. Notebook 44 is not re-executed: D22's venv has no
 `nbconvert` and calculations are not run on the workstation in this stream, so its recorded
 "78 iterations; 28.2, 66.2, -42, -50.9 degrees" is now the tiled start's and stale for the
-default, which prints 11 iterations and 35.2, 125.2, -144.8, -54.8 degrees.
+default, which prints 11 iterations and 35.2, 125.2, -144.8, -54.8 degrees, and its prose
+("the moments manage roughly a third of that", the exchange stiffness) describes the tiled
+start. Notebooks 43 and 45 are not affected: 43's field run is an ordinary SCF and 45's
+ultracell field is collinear, where nothing is seeded.
 
 **Re-measured on the default basis, 2026-10-09** (D22-0161, `review/open-a/vi3.py`,
 `vi3b.py`; the tables are in the plan). The seeded four-cell helix converges in **10**
