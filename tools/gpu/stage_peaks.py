@@ -139,6 +139,16 @@ def main() -> None:
     parser.add_argument("--wfc-store", default=None)
     parser.add_argument("--projectors", default=None)
     parser.add_argument("--conv-thr", type=float, default=1.0e-14)
+    # **The production run's starting texture.** The 45-atom slab's runs on
+    # record start from a helix that a two-species input cannot express, built
+    # by ``helix_starting_density(calculator, seed_input, pseudo_dir)`` in that
+    # project's own driver (``NiBr2_defumat/run_scf.py``, not this
+    # repository). The ``ethr`` schedule and the Davidson step counts follow
+    # the density, so a run from the input's own guess would measure a
+    # different trajectory; these two name the function's file and its seed
+    # input, and the density it returns is passed as ``starting_density``.
+    parser.add_argument("--seed-script", type=Path, default=None)
+    parser.add_argument("--helix-seed", type=Path, default=None)
     parser.add_argument("--out", type=Path, default=None)
     arguments = parser.parse_args()
 
@@ -212,6 +222,9 @@ def main() -> None:
     sequence = [0]
     counter = defaultdict(int)
     last = {"stage": "setup", "max_rss": 0}
+    # The number of the ``diagonalize`` call, which is not the SCF iteration:
+    # a first iteration whose ``ethr`` was too large diagonalises twice, as
+    # ``electrons.f90`` does. The SCF's own iteration is in the verbose lines.
     iteration = [0]
 
     def bracket(original, label, on_result=None):
@@ -239,7 +252,7 @@ def main() -> None:
             rss = _rss()
             entry = {"stage": label, "call": counter[label], "depth": len(stack),
                      "parent": parent, "seq_open": seq_open, "seq_close": sequence[0],
-                     "iteration": iteration[0],
+                     "solve": iteration[0],
                      "in_use_before": before_use, "in_use": after_use,
                      "in_use_rise": after_use - before_use,
                      "peak_before": before_peak, "peak": after_peak,
@@ -272,7 +285,7 @@ def main() -> None:
         return wrapped
 
     def solver_counters(steps, unsettled, ethr, label):
-        line = {"label": label, "iteration": iteration[0],
+        line = {"label": label, "solve": iteration[0],
                 "ethr": _summary(ethr),
                 "steps_sum": None if steps is None else int(np.asarray(steps).sum()),
                 "steps_max": None if steps is None else int(np.asarray(steps).max()),
@@ -284,7 +297,7 @@ def main() -> None:
         record["solver"].append(line)
         ethr_text = ("n/a" if line["ethr"] is None
                      else f"{line['ethr'][0]:.2e}..{line['ethr'][1]:.2e}")
-        print(f"[dav] {label} iteration {iteration[0]}: ethr {ethr_text}  steps "
+        print(f"[dav] {label} solve {iteration[0]}: ethr {ethr_text}  steps "
               f"mean {line['steps_mean']} max {line['steps_max']}  unsettled "
               f"sum {line['unsettled_sum']} max {line['unsettled_max']}", flush=True)
         return {"ethr": line["ethr"], "steps_max": line["steps_max"],
@@ -382,7 +395,7 @@ def main() -> None:
         record["warnings"].append({"category": category.__name__,
                                    "message": str(message)[:400],
                                    "open": list(stack), "after": last["stage"],
-                                   "iteration": iteration[0]})
+                                   "solve": iteration[0]})
         dump()
         return show(message, category, filename, lineno, file, line)
 
@@ -409,9 +422,33 @@ def main() -> None:
     # does, on the streamed store.
     driver.stream_diagonalize = before_diagonalize(driver.stream_diagonalize)
 
+    scf_options = {}
+    if arguments.helix_seed is not None:
+        if arguments.seed_script is None:
+            raise SystemExit("--helix-seed needs --seed-script, the file that "
+                             "defines helix_starting_density")
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("seed_script",
+                                                      arguments.seed_script)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        before = _stats()
+        scf_options["starting_density"] = module.helix_starting_density(
+            calculator, str(arguments.helix_seed), arguments.pseudo_dir)
+        jax.block_until_ready(scf_options["starting_density"])
+        after = _stats()
+        record["helix_seed"] = {"script": str(arguments.seed_script),
+                                "seed": str(arguments.helix_seed),
+                                "stats_before": before, "stats": after}
+        print(f"[mem] helix seed  in_use {_use_peak(after)[0] / GIB:8.3f}  peak "
+              f"{_use_peak(after)[1] / GIB:8.3f} GiB", flush=True)
+        dump()
+
     clock = time.time()
     result = calculator.get_scf(max_iterations=arguments.iterations,
-                                conv_thr=arguments.conv_thr, verbose=True)
+                                conv_thr=arguments.conv_thr, verbose=True,
+                                **scf_options)
     jax.block_until_ready(result.density)
     stats = _stats()
     in_use, peak = _use_peak(stats)
