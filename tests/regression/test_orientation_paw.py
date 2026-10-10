@@ -56,7 +56,11 @@ def test_the_paw_torque_is_the_grid_s_plus_the_one_centre_field_s():
     grid's (1.1, -3.1, 0.2) x 1e-6, which is why the torque refused PAW until the
     one-centre coefficients were rebuilt inside the differentiated energy.
     """
-    from defumat.forces.torque import orientation_torque, rotate_texture
+    from defumat.forces.torque import (
+        band_energy_at_rotation,
+        orientation_torque,
+        rotate_texture,
+    )
     from defumat.scf.driver import _onecenter_torque
     from defumat.scf.spin_torque import exchange_torque
     from defumat.workflows.anisotropy import (
@@ -92,6 +96,22 @@ def test_the_paw_torque_is_the_grid_s_plus_the_one_centre_field_s():
     np.testing.assert_allclose(grid + one_centre, torque, rtol=1.0e-9,
                                atol=1.0e-9 * np.linalg.norm(torque))
     assert np.linalg.norm(one_centre) > np.linalg.norm(torque)
+
+    # **Forward against reverse on PAW** (``OPEN.md`` Part XXII item 2): the
+    # torque is three ``jax.jvp`` since 2026-10-10, and ``jax.grad`` of the
+    # same public energy, the one-centre coefficients rebuilt inside it, must
+    # agree to round-off, at the whole axis and at a chunk that does not
+    # divide the k-points.
+    nk = int(np.shape(states)[1])
+    chunk = next(c for c in (2, 3, 4, 5) if nk % c and c < nk)
+    reverse = -np.asarray(jax.grad(lambda omega: band_energy_at_rotation(
+        calculation, states, weights, texture, rotation, omega, becsum))(
+            jnp.zeros(3)))
+    for k_batch in (None, chunk):
+        forward = orientation_torque(calculation, states, weights, texture,
+                                     rotation, k_batch=k_batch, becsum=becsum)
+        np.testing.assert_allclose(forward, reverse, rtol=0,
+                                   atol=1.0e-10 * np.linalg.norm(reverse))
 
 
 def test_without_the_coupling_the_paw_torque_vanishes():

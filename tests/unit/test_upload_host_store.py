@@ -63,13 +63,13 @@ def test_a_device_array_and_a_tracer_are_left_alone(monkeypatch):
 
 
 #: The sites that still take a store whole, as ``(module, function)``: the two
-#: torque energies, whose chunked derivative walks indices into a device store.
+#: torque energies, whose forward derivative walks indices into a device store.
 #: Imported inside the test rather than here, so that a module that fails to
 #: import is one failing case and not a collection error that stops the whole
 #: run.
 UPLOADERS = [
     ("defumat.forces.torque", "_band_energy"),
-    ("defumat.forces.torque", "_chunked_value_and_grad"),
+    ("defumat.forces.torque", "_value_and_slopes"),
 ]
 
 #: The five sum-over-states assemblies, which walk the k axis and take one

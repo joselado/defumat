@@ -18,7 +18,12 @@ pool from that mask and ignores ``OMP_NUM_THREADS``. Every defumat timing is the
 **second** call of the same thing, so no compilation is in it (``CLAUDE.md``,
 never time a first call). ``pw.x``'s times are its own ``PWSCF ... WALL`` line.
 
-    python3 tools/compare_orientation.py
+    python3 tools/compare_orientation.py [--torque-only]
+
+``--torque-only`` skips ``pw.x`` and Route C and times the torque by its two
+modes on the same states, the forward derivative ``orientation_torque`` takes
+since 2026-10-10 against ``jax.grad`` of the same energy, which is the route it
+took before (``OPEN.md`` Part XXII item 2).
 """
 
 from __future__ import annotations
@@ -97,11 +102,14 @@ def main() -> None:
     assert "angle1(1) = 45.0" in spinor_text
 
     # Route A: pw.x's SCF without the coupling, then its lforcet one-shot.
-    with tempfile.TemporaryDirectory() as directory:
-        workdir = Path(directory)
-        scf_seconds, _ = pw_x(scalar_text, workdir)
-        nscf_seconds, _ = pw_x(spinor_text, workdir)
-    print(f"pw.x   scalar SCF {scf_seconds:.2f} s, lforcet one-shot {nscf_seconds:.2f} s")
+    torque_only = "--torque-only" in sys.argv
+    if not torque_only:
+        with tempfile.TemporaryDirectory() as directory:
+            workdir = Path(directory)
+            scf_seconds, _ = pw_x(scalar_text, workdir)
+            nscf_seconds, _ = pw_x(spinor_text, workdir)
+        print(f"pw.x   scalar SCF {scf_seconds:.2f} s, lforcet one-shot "
+              f"{nscf_seconds:.2f} s")
 
     scalar = Calculator.from_text(scalar_text, PSEUDO, announce=False)
     spinor = Calculator.from_text(
@@ -122,6 +130,24 @@ def main() -> None:
         calculation, states, weights, texture, rotation))
     print(f"defumat one-shot {shot_seconds:.2f} s, three-component torque "
           f"{grad_seconds:.2f} s, torque {torque}")
+    if torque_only:
+        import jax
+
+        from defumat.forces.torque import band_energy_at_rotation
+
+        from defumat.eager import compiled_function
+
+        # Kept as the forward one is, so the second call compiles nothing.
+        origin = jnp.zeros(3)
+        gradient = compiled_function(jax.grad(
+            lambda omega: band_energy_at_rotation(
+                calculation, states, weights, texture, rotation, omega)), origin)
+        reverse_seconds, reverse = twice(lambda: -np.asarray(gradient(origin)))
+        print(f"defumat reverse-mode torque {reverse_seconds:.2f} s, torque {reverse}, "
+              f"forward/reverse time {grad_seconds / reverse_seconds:.2f}, "
+              f"difference {np.linalg.norm(np.asarray(torque) - reverse) / np.linalg.norm(reverse):.2e} "
+              f"of the norm")
+        return
 
     # Route C: the same seed, 45 degrees off c, self-consistent with the coupling.
     oblique = (CASES / "co-tetragonal-relaxed-mae.in").read_text().replace(

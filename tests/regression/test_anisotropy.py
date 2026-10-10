@@ -962,22 +962,30 @@ def test_the_torque_is_the_gradient_of_the_energy_it_claims_to_be():
 
 
 @pytest.mark.slow
-def test_the_torque_is_the_same_chunked_as_taken_whole():
-    """The dial must not be visible in the answer, only in the working set.
+def test_the_forward_torque_is_the_reverse_gradient_at_every_chunk():
+    """The dial must not be visible in the answer, and neither must the mode.
 
     ``E(theta) = sum_k w_k <psi_k|H(theta)|psi_k>`` has no term coupling two
     k-points -- the potential comes from the ``density`` argument rather than
     from the states -- so chunking the k axis is exact rather than an
-    approximation, and the two routes must agree to round-off. That is what
-    makes it safe to bound the backward pass, whose tape otherwise holds one
-    real-space block per k-point *simultaneously*, at
-    ``nbnd x 2 x N_smooth`` each.
+    approximation. The torque is three (here one) ``jax.jvp`` since
+    2026-10-10 (``OPEN.md`` Part XXII item 2), and it is held to ``jax.grad``
+    of the same public energy taken here, at the whole axis and at chunks of
+    one, three, and four, which does not divide the eighteen k-points, so the
+    short tail is differentiated as well. Both modes differentiate one
+    function, so they agree to round-off; what checks the rules they share is
+    the central difference and the closed form elsewhere in this file.
 
-    The states are held fixed across the two calls, so what is compared is the
-    gradient and not a second NSCF.
+    The states are held fixed across the calls, so what is compared is the
+    derivative and not a second NSCF.
     """
     import jax.numpy as jnp
-    from defumat.forces.torque import torque_at_angle
+    from defumat.forces.torque import (
+        band_energy_at_angle,
+        band_energy_at_rotation,
+        orientation_torque,
+        torque_at_angle,
+    )
 
     from defumat.scf.continuation import nc_magnetization_from_lsda
     from defumat.workflows.anisotropy import _with_quantization_axis
@@ -995,13 +1003,28 @@ def test_the_torque_is_the_same_chunked_as_taken_whole():
     calculation, system, eigenvalues, states = fixed_density_states(
         system, spinor.pseudos, rotated, conv_thr=1.0e-10)
     weights, _ = calculation.occupations(jnp.asarray(eigenvalues))
+    assert np.shape(states)[1] == 18
 
-    whole = torque_at_angle(calculation, states, weights, scf.density, plane,
-                            angle, k_batch=None)
-    for chunk in (1, 3):
-        chunked = torque_at_angle(calculation, states, weights, scf.density,
+    reverse = -float(jax.grad(lambda value: band_energy_at_angle(
+        calculation, states, weights, scf.density, plane, value))(
+            jnp.asarray(angle)))
+    for chunk in (None, 1, 3, 4):
+        forward = torque_at_angle(calculation, states, weights, scf.density,
                                   plane, angle, k_batch=chunk)
-        assert chunked == pytest.approx(whole, rel=1.0e-9, abs=1.0e-12), chunk
+        assert forward == pytest.approx(reverse, rel=1.0e-10, abs=1.0e-15), chunk
+
+    # The vector, on the same states: the same rotation written as a turn of
+    # the collinear texture about ``y`` from ``c``.
+    texture = nc_magnetization_from_lsda(scf.density, (0.0, 0.0, 1.0))
+    base = _rotation_about_y(angle)
+    vector_reverse = -np.asarray(jax.grad(lambda omega: band_energy_at_rotation(
+        calculation, states, weights, texture, base, omega))(jnp.zeros(3)))
+    for chunk in (None, 4):
+        vector = orientation_torque(calculation, states, weights, texture, base,
+                                    k_batch=chunk)
+        np.testing.assert_allclose(vector, vector_reverse, rtol=0,
+                                   atol=1.0e-10 * np.linalg.norm(vector_reverse))
+    assert vector_reverse[1] == pytest.approx(reverse, rel=1.0e-9)
 
 
 def _tetragonal_states_at_45_degrees():

@@ -15,8 +15,8 @@ so a single calculation at **45 degrees** returns ``-K1``.
 **It is the same construction as the force, term for term**
 (:mod:`defumat.forces.spiral` says this of ``dE/dq`` and it is as true here):
 the energy is written as a function of the angle at *frozen* wavefunctions and
-the gradient is ``jax.grad`` of it. No expression is derived for any
-contribution. The literature's torque *is* such an expression --
+the derivative is taken of it by automatic differentiation. No expression is
+derived for any contribution. The literature's torque *is* such an expression --
 ``<psi| dH_SO/dtheta |psi>``, differentiated by hand -- so what this module adds
 to a known technique is the same thing P15 added to the force.
 
@@ -60,6 +60,35 @@ The derivative is only ever taken at ``w = 0``, where the rotation is written as
 value and in first derivative there, which is all a gradient at ``w = 0`` reads,
 and it contains no norm of ``w``: Rodrigues' formula puts ``sqrt(sum w^2)`` at
 the origin, whose gradient is ``0/0`` exactly where every call evaluates it.
+
+**Forward mode, one ``jax.jvp`` per generator** (``OPEN.md`` Part XXII item 2,
+the user's decision of 2026-10-10). The reverse pass this module used until then
+kept a tape of every band's real-space block in flight, and on the fifteen-cell
+NiBr2 helix it asked an H200 for 33.37 GiB more at one k-point; on nine atoms of
+spinor PAW NiI2 it ran out of a 6.96 GiB pool on D22's card. A ``jvp`` holds one
+primal and one tangent of each intermediate and frees both as it goes, so the
+derivative costs the working set of the energy it differentiates, twice over,
+for each of the three generators (one for the angle). Both modes differentiate
+the same function, and nothing on its path carries a ``custom_vjp`` or a host
+callback, while every ``custom_jvp`` on it (``pseudo/formfactors.py``,
+``pseudo/augmentation.py``) defines the forward rule reverse mode transposes, so
+the two agree to round-off whatever those rules are; what can catch a wrong
+rule is the closed form and a central difference, which the tests hold the
+forward torque to. On PAW the input ``becsum`` is turned as a vector inside the
+differentiated energy on every route of this module; turning it through the
+states is :func:`defumat.scf.driver._onecenter_torque`'s, with the coupling on,
+and has no counterpart here, which is exact for the source Route A takes at
+``soc_scale = 0`` (2.8e-16, P122).
+
+**Where the peak is, and the dial that sets it.** Under a ``jvp`` the k axis is
+a ``sum_k`` at ``k_batch`` and the band axis is :func:`~defumat.batching.map_bands`
+inside the Hamiltonian at its ``band_batch``, and neither stacks anything, so
+both dials are live, where under ``jax.grad`` the band dial was inert (the scan
+stacked its residuals). The largest term is the local potential's real-space
+block, about ``4 x k_batch x band_batch x npol x N_smooth`` complex numbers for
+the primal and the tangent of the field and its product; ``band_batch`` is the
+one the :class:`~defumat.scf.driver.Calculation` the states came from carries,
+chosen to fit the card in memory mode, or ``DEFUMAT_BAND_BATCH``.
 """
 
 from __future__ import annotations
@@ -169,7 +198,7 @@ def _hamiltonian_of(calculation, density, becsum=()):
     from the density and the one-centre coefficients ``ddd_paw`` from
     ``becsum``, and turning the texture turns both. Rebuilding ``ddd_paw`` here,
     inside the function a gradient is taken of, is what puts the one-centre
-    field's share of the torque into the same ``jax.grad`` as the grid's; built
+    field's share of the torque into the same derivative as the grid's; built
     once outside, it would be a constant the gradient passes through, and the
     torque would miss it.
     """
@@ -199,73 +228,63 @@ def _band_energy(calculation, states, weights, density, becsum=()):
         jnp.arange(psi.shape[0]))
 
 
-def _chunked_energy_and_slope(calculation, states, weights, density, plane,
-                              angle, k_batch: int):
-    """``(E, dE/dtheta)`` over ``k_batch`` k-points at a time, in one plane."""
-    def build(value):
-        return rotated_density(density, _direction(value, plane[0], plane[1])), ()
-
-    energy, slope = _chunked_value_and_grad(
-        calculation, states, weights, build, jnp.asarray(float(angle)), k_batch
-    )
-    return energy, float(slope)
-
-
-def _chunked_value_and_grad(calculation, states, weights, build, parameter,
-                            k_batch: int):
-    """``(E, dE/dp)`` accumulated over ``k_batch`` k-points at a time.
+def _value_and_slopes(calculation, states, weights, build, parameter, tangents,
+                      k_batch: int | None):
+    """``(E, [dE/dp . t for t in tangents])`` by forward mode, the k axis at ``k_batch``.
 
     ``build(p)`` is the pair ``(density, becsum)`` the Hamiltonian is made
     from, ``becsum`` empty except on PAW, and ``p`` is a scalar angle or a
-    rotation vector; the gradient comes back with its shape.
+    rotation vector. ``tangents`` is a stack of directions of ``p``'s shape, the
+    unit angle or the three generators, in the dtype of ``parameter``.
 
-    A Python loop of per-chunk ``value_and_grad`` calls, **not** one
-    ``value_and_grad`` around a ``lax.map``, for the reason
-    :func:`defumat.forces.spiral._chunked_energy_and_gradient` states: reverse
-    mode through a scan stacks every chunk's residuals for the backward pass, so
-    the mapped form holds the peak the single pass does. The loop discards each
-    chunk's tape before the next one starts.
+    **One ``jax.jvp`` per tangent, each over the whole k axis.** The energy
+    ``sum_k w_k <psi_k|H(p)|psi_k>`` has no term coupling two k-points, since the
+    potential comes from ``build`` and not from the states, so it is a
+    ``sum_k`` whose chunk is the k dial, and under a ``jvp`` a ``sum_k``
+    carries the running primal and tangent and stacks nothing: the reason this
+    function used to be a Python loop of per-chunk reverse passes, each
+    discarding its tape before the next, is gone, and the Hamiltonian is built
+    once a tangent rather than once a chunk. ``None`` maps the whole axis at
+    once, as everywhere else.
 
-    **It is exact rather than an approximation**, and what makes it so is that
-    the potential comes from the ``density`` argument rather than from the
-    states: ``E(theta) = sum_k w_k <psi_k|H(theta)|psi_k>`` has no term
-    coupling two k-points, so the chunk sums add and so do their derivatives.
-    Every chunk is padded to exactly ``k_batch`` with a repeat of its own first
-    k-point at **zero weight**, so all chunks share one shape and therefore one
-    compilation, and the padding contributes nothing to either number.
+    The derivative is kept once a process (:mod:`defumat.eager`) with the
+    tangent an **argument**, so the three generators and a later call on a new
+    ``calculation`` of the same shapes reuse one program; a tangent closed over
+    would be a nested constant of the key and three programs.
     """
     psi = upload(states)[0]
     occupation = jnp.asarray(weights)[0]
     nk = int(psi.shape[0])
 
-    def chunk(value, indices, live):
+    def energy(value):
         hamiltonian = _hamiltonian_of(calculation, *build(value))
-        total = 0.0
-        for slot in range(k_batch):
-            ik = indices[slot]
+
+        def one(ik):
             applied = hamiltonian.apply(psi[ik], ik)
             bands = jnp.real(jnp.sum(jnp.conj(psi[ik]) * applied, axis=-1))
-            total = total + live[slot] * jnp.sum(occupation[ik] * bands)
-        return total
+            return jnp.sum(occupation[ik] * bands)
 
-    # Traced once a call and kept once a process (:mod:`defumat.eager`): a
-    # ``jax.jit`` built here was a new program at every call, and every call
-    # builds a new ``calculation`` (``run_torque``, ``run_orientation_torque``),
-    # so a scan of directions or a relaxation compiled it once per step.
-    value_and_grad = jax.value_and_grad(chunk)
-    program = None
-    energy, slope = 0.0, 0.0
-    for start in range(0, nk, k_batch):
-        ks = np.arange(start, min(start + k_batch, nk))
-        pad = k_batch - len(ks)
-        indices = jnp.asarray(np.concatenate([ks, np.full(pad, ks[0], dtype=int)]))
-        live = jnp.asarray(np.concatenate([np.ones(len(ks)), np.zeros(pad)]))
-        if program is None:
-            program = compiled_function(value_and_grad, parameter, indices, live)
-        value, derivative = program(parameter, indices, live)
-        energy = energy + float(value)
-        slope = slope + np.asarray(derivative)
-    return energy, slope
+        return sum_k(one, jnp.arange(nk), batch=k_batch)
+
+    def derivative(value, tangent):
+        return jax.jvp(energy, (value,), (tangent,))
+
+    program = compiled_function(derivative, parameter, tangents[0])
+    value, slopes = None, []
+    for tangent in tangents:
+        value, slope = program(parameter, tangent)
+        slopes.append(np.asarray(slope))
+    return float(value), np.stack(slopes)
+
+
+def _resolved_chunk(k_batch, nk: int) -> int | None:
+    """The k dial for the forward derivative: ``None`` or a chunk below ``nk``."""
+    from defumat.batching import resolve_k_batch
+
+    resolved = resolve_k_batch(k_batch)
+    if resolved is None or resolved >= nk:
+        return None
+    return int(resolved)
 
 
 def torque_at_angle(calculation, states, weights, density, plane, angle,
@@ -276,35 +295,25 @@ def torque_at_angle(calculation, states, weights, density, plane, angle,
     towards larger ``theta`` -- so for ``E = K1 sin^2(theta)`` this returns
     ``-K1 sin(2 theta)`` and a measurement at ``pi/4`` gives ``-K1``.
 
-    ``k_batch`` bounds the backward pass. The energy above walks the k axis with
-    a Python loop, which is right for evaluating it and wrong for
-    differentiating it: the tape then holds, **simultaneously for every
-    k-point**, the real-space block ``SpinorHamiltonian._local_block`` builds,
-    which its own docstring sizes at ``nbnd x 2 x N_smooth`` -- 33 GB for one
-    k-point of the P74 cell. No dial reached it. ``k_batch`` stops at the NSCF
-    that produced the states and ``DEFUMAT_BAND_BATCH`` reaches ``map_bands``
-    inside the operator, where a scan stacks its residuals under ``jax.grad``
-    just the same, so a run that was given ``k_batch = 1`` to fit inside a
-    machine reached this function and asked for the whole axis anyway.
-    ``None`` is that behaviour, kept as the default of the *whole-axis* path and
-    reachable on purpose; an integer, or the dial's own ``"default"``, chunks.
+    ``k_batch`` is how many k-points the derivative holds at once
+    (:func:`_value_and_slopes`); ``None`` takes the whole axis in one ``vmap``
+    and an integer, or the dial's own ``"default"``, walks it in chunks. The
+    derivative is forward mode, so the chunk and the Hamiltonian's band dial
+    both bound its working set (the module docstring has the formula); until
+    2026-10-10 it was a reverse pass whose tape no band dial reached, which is
+    what ``OPEN.md`` Part XXII item 2 records.
     """
-    from defumat.batching import resolve_k_batch
-
-    resolved = resolve_k_batch(k_batch)
     nk = int(np.shape(states)[1])
-    if resolved is None or resolved >= nk:
-        def energy(value):
-            return band_energy_at_angle(
-                calculation, states, weights, density, plane, value
-            )
+    dtype = jnp.asarray(density).real.dtype
 
-        return -float(jax.grad(energy)(jnp.asarray(float(angle))))
+    def build(value):
+        return rotated_density(density, _direction(value, plane[0], plane[1])), ()
 
-    _, slope = _chunked_energy_and_slope(
-        calculation, states, weights, density, plane, angle, int(resolved)
+    _, slope = _value_and_slopes(
+        calculation, states, weights, build, jnp.asarray(float(angle), dtype=dtype),
+        jnp.ones((1,), dtype=dtype), _resolved_chunk(k_batch, nk),
     )
-    return -float(slope)
+    return -float(slope[0])
 
 
 def rotate_texture(field, rotation):
@@ -388,35 +397,27 @@ def orientation_torque(calculation, states, weights, texture, base,
     derivative at frozen occupations does not see the occupations' own change,
     which the entropy cancels.
 
-    ``k_batch`` chunks the backward pass exactly as it does for
-    :func:`torque_at_angle`, and ``None`` takes the whole k axis in one pass.
+    ``k_batch`` sets the k-points in flight exactly as it does for
+    :func:`torque_at_angle`, and ``None`` takes the whole k axis at once; the
+    three components are three ``jax.jvp``, one per generator.
     ``becsum`` is, on PAW, the one-centre occupations at the reference
     orientation, turned with the density inside the differentiated energy so
     that the one-centre coefficients' share of the torque is in it.
     """
-    from defumat.batching import resolve_k_batch
-
     texture = jnp.asarray(texture)
-    base = jnp.asarray(base, dtype=texture.real.dtype)
-    origin = jnp.zeros(3, dtype=texture.real.dtype)
-    resolved = resolve_k_batch(k_batch)
+    dtype = texture.real.dtype
+    base = jnp.asarray(base, dtype=dtype)
     nk = int(np.shape(states)[1])
-    if resolved is None or resolved >= nk:
-        def energy(value):
-            return band_energy_at_rotation(
-                calculation, states, weights, texture, base, value, becsum
-            )
-
-        return -np.asarray(jax.grad(energy)(origin))
 
     def build(value):
         rotation = rotation_near(value, base)
         return rotate_texture(texture, rotation), _turned_becsum(becsum, rotation)
 
-    _, slope = _chunked_value_and_grad(
-        calculation, states, weights, build, origin, int(resolved)
+    _, slopes = _value_and_slopes(
+        calculation, states, weights, build, jnp.zeros(3, dtype=dtype),
+        jnp.eye(3, dtype=dtype), _resolved_chunk(k_batch, nk),
     )
-    return -np.asarray(slope)
+    return -np.asarray(slopes)
 
 
 def frozen_generators(density, phase: bool = True, tolerance: float = 1.0e-3) -> np.ndarray:

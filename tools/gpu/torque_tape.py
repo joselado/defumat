@@ -1,25 +1,32 @@
 """What the orientation torque costs on the card, by route (``OPEN.md`` Part XXII item 2).
 
 The torque ``-dF/dw`` of a rigid turn of the texture, on one k-point of a spinor
-PAW cell, four ways, one process each:
+PAW cell, by several routes, one process each:
 
 * ``whole``: :func:`defumat.forces.torque.orientation_torque` as it is, the
-  reverse pass through ``sum w <psi|H(R)|psi>`` (what asked 33.37 GiB more on
-  the fifteen-cell NiBr2 helix at ``1 1 1``);
+  production call (three ``jax.jvp`` since 2026-10-10, a reverse pass before);
+* ``reverse``: ``jax.grad`` of the public energy ``band_energy_at_rotation``,
+  which is the route ``whole`` took until 2026-10-10 (what asked 33.37 GiB
+  more on the fifteen-cell NiBr2 helix at ``1 1 1``);
+* ``vmap``: the three ``jvp`` of ``whole`` taken together, a ``vmap`` over the
+  tangents, so the primal is evaluated once and the tangent three wide;
 * ``remat``: the same energy summed over blocks of ``--block`` bands in a scan
   whose body is ``jax.checkpoint``-ed, so the backward pass holds one block's
   residuals;
-* ``forward``: three ``jax.jvp``, one per generator;
+* ``forward``: three ``jax.jvp``, one per generator, over the same blocks;
 * ``closed``: no derivative of the band energy at all, the force theorem's closed
   form, ``integral m_out x B_xc[R rho]`` plus the one-centre pairing with the
   input ``becsum`` turned as a vector (exact without the coupling on the source,
   which is Route A's, P122).
 
-Each prints the torque (so the routes can be compared on the same states) and the
-device's ``peak_bytes_in_use`` before and after; the single-program routes also
-print the compiled ``memory_analysis()``. The states are random and orthonormal,
+Each prints the torque (so the routes can be compared on the same states), the
+calculation's resolved ``band_batch`` and ``k_batch`` (the forward routes' peak
+is set by the first), and the device's ``peak_bytes_in_use`` before and after;
+the single-program routes also print the compiled ``memory_analysis()``. With
+``--repeat 2`` the call is made twice and the second is timed as well, since
+the first includes the compilation. The states are random and orthonormal,
 which is enough for the memory: the torque is a derivative at frozen states, so
-all four routes give the same three numbers on any states (2e-15 of the norm on
+every route gives the same three numbers on any states (2e-15 of the norm on
 nine atoms of NiI2, 2026-10-09; ``plans/open-d-xxii2-orientation-torque.md``).
 
     python3 tools/gpu/torque_tape.py INPUT --pseudo-dir DIR --mode whole [--block 16]
@@ -57,7 +64,9 @@ def main() -> None:
     parser.add_argument("input", type=Path)
     parser.add_argument("--pseudo-dir", required=True)
     parser.add_argument("--mode", required=True,
-                        choices=("whole", "remat", "forward", "closed"))
+                        choices=("whole", "reverse", "vmap", "remat", "forward",
+                                 "closed"))
+    parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--block", type=int, default=16)
     parser.add_argument("--soc-scale", type=float, default=1.0)
     parser.add_argument("--out", type=Path, default=None)
@@ -101,20 +110,57 @@ def main() -> None:
     jax.block_until_ready((states, texture))
     in_use0, peak0 = _stats()
     record = {"mode": arguments.mode, "nbnd": nbnd, "ndim": ndim, "nk": nk,
+              "band_batch": calculation.band_batch, "k_batch": calculation.k_batch,
               "smooth_grid": list(calculation.basis.smooth.grid),
               "in_use_before": in_use0, "peak_before": peak0}
     print(json.dumps(record), flush=True)
 
     clock = time.time()
     try:
-        if arguments.mode == "whole":
+        if arguments.mode in ("whole", "reverse", "vmap"):
             # The production call, as ``run_orientation_torque`` makes it at one
-            # k-point: an eager ``jax.grad`` whose k loop is kept compiled by
-            # ``defumat.eager``. Not wrapped in a ``jit`` here, since a ``jit``
+            # k-point, kept compiled by ``defumat.eager``; the other two through
+            # the same keeper. Not wrapped in a ``jit`` here, since a ``jit``
             # closing over the states folds them in as constants and the compile
             # alone then exceeded 8 GB of host memory.
-            torque = orientation_torque(calculation, states, weights, texture, base,
-                                        k_batch=None, becsum=becsum)
+            from defumat.eager import compiled_function
+            from defumat.forces.torque import _hamiltonian_of, band_energy_at_rotation
+
+            def energy(value):
+                rotation = rotation_near(value, base)
+                hamiltonian = _hamiltonian_of(
+                    calculation, rotate_texture(texture, rotation),
+                    _turned_becsum(becsum, rotation))
+                total = 0.0
+                for ik in range(nk):
+                    applied = hamiltonian.apply(states[0, ik], ik)
+                    total = total + jnp.sum(weights[0, ik] * jnp.real(
+                        jnp.sum(jnp.conj(states[0, ik]) * applied, axis=-1)))
+                return total
+
+            def call():
+                if arguments.mode == "whole":
+                    return orientation_torque(calculation, states, weights, texture,
+                                              base, k_batch=None, becsum=becsum)
+                if arguments.mode == "reverse":
+                    gradient = compiled_function(jax.grad(
+                        lambda w: band_energy_at_rotation(
+                            calculation, states, weights, texture, base, w, becsum)),
+                        origin)
+                    return -np.asarray(gradient(origin))
+                program = compiled_function(
+                    lambda v, t: jax.vmap(lambda one: jax.jvp(energy, (v,), (one,))[1])(t),
+                    origin, jnp.eye(3, dtype=origin.dtype))
+                return -np.asarray(program(origin, jnp.eye(3, dtype=origin.dtype)))
+
+            torque = call()
+            jax.block_until_ready(jnp.asarray(torque))
+            record["first_seconds"] = time.time() - clock
+            for _ in range(arguments.repeat - 1):
+                again = time.time()
+                torque = call()
+                jax.block_until_ready(jnp.asarray(torque))
+                record["second_seconds"] = time.time() - again
         elif arguments.mode in ("remat", "forward"):
             from defumat.forces.torque import _hamiltonian_of
 
