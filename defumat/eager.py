@@ -168,6 +168,69 @@ def compiled_function(fn, *args):
     return run
 
 
+#: Executables :func:`sized_function` compiled ahead of time, by the same key
+#: :func:`_kept` uses; bounded as ``_PROGRAMS`` is, and smaller, since each
+#: entry is a whole compiled derivative.
+_SIZED: collections.OrderedDict = collections.OrderedDict()
+SIZED_CACHE_SIZE = 16
+
+
+def sized_function(fn, *args):
+    """``(run, temp_bytes)``: :func:`compiled_function`'s program, sized before it runs.
+
+    The program is compiled ahead of its first call and ``temp_bytes`` is the
+    compiler's ``memory_analysis().temp_size_in_bytes`` of it, the XLA scratch
+    the call would allocate on top of its arguments and outputs, so a caller can
+    decide whether to run it at all. ``run`` evaluates that same executable, so
+    nothing is compiled twice; a call whose arguments differ in structure,
+    shape or dtype goes through :func:`compiled`.
+
+    ``args`` may hold :class:`jax.ShapeDtypeStruct` leaves where only the shape
+    is known, so that an argument the caller would have to build in order to
+    run the program (the elastic tensor's six stacked first-order states) is
+    built only once the size says it will be used.
+
+    Returns ``None`` wherever :func:`compiled_function` would fall back to a
+    plain ``jax.jit`` (a call under a trace, a trace that needs values, a
+    callback, nested constants past ``NESTED_LIMIT``), and where the backend
+    reports no memory analysis: there is then no size to decide on.
+    """
+    if not _core.trace_state_clean():
+        return None
+    traced = _trace(fn, args)
+    if traced is None:
+        return None
+    closed, shape = traced
+    flat, in_tree = jax.tree_util.tree_flatten(args)
+    jaxpr, consts = closed.jaxpr, list(closed.consts)
+    nested = _nested_digest(jaxpr)
+    if nested is None:
+        return None
+    signature = (in_tree, tuple(_aval(x) for x in flat))
+    key = (hashlib.sha256(str(jaxpr).encode()).hexdigest(), nested, signature[1],
+           tuple(_aval(c) for c in consts))
+    executable = _SIZED.get(key)
+    if executable is None:
+        executable = _program(jaxpr).lower(consts, flat).compile()
+        _SIZED[key] = executable
+        while len(_SIZED) > SIZED_CACHE_SIZE:
+            _SIZED.popitem(last=False)
+    else:
+        _SIZED.move_to_end(key)
+    analysis = executable.memory_analysis()
+    if analysis is None:
+        return None
+    out_tree = jax.tree_util.tree_structure(shape)
+
+    def run(*call_args):
+        call_flat, call_tree = jax.tree_util.tree_flatten(call_args)
+        if (call_tree, tuple(_aval(x) for x in call_flat)) != signature:
+            return compiled(fn, *call_args)
+        return jax.tree_util.tree_unflatten(out_tree, executable(consts, call_flat))
+
+    return run, int(analysis.temp_size_in_bytes)
+
+
 def _trace(fn, args):
     """``(closed jaxpr, output shape)`` of ``fn(*args)``, or ``None`` where it needs values."""
     try:
@@ -273,6 +336,8 @@ def _program(jaxpr):
 
 
 def _aval(x):
+    if isinstance(x, jax.ShapeDtypeStruct):
+        return (tuple(x.shape), str(x.dtype), bool(getattr(x, "weak_type", False)))
     aval = jax.typeof(x)
     return (tuple(aval.shape), str(aval.dtype), bool(getattr(aval, "weak_type", False)))
 
@@ -320,4 +385,5 @@ def _jaxprs(value):
 def clear() -> None:
     """Drop every kept program (a test's isolation; ``jax.clear_caches`` frees them)."""
     _PROGRAMS.clear()
+    _SIZED.clear()
     _EVICTED.clear()

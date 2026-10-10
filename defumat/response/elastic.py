@@ -44,6 +44,7 @@ residual is the functional and the pseudopotential rather than the basis.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 import jax
@@ -54,13 +55,30 @@ from defumat.forces.energy import FrozenState, energy_at
 
 from defumat.response.strain import StrainResponse, strain_tangent
 from defumat.units import RY_TO_KBAR
-from defumat.eager import compiled_function
+from defumat.eager import compiled_function, sized_function
 
 __all__ = ["ElasticConstants", "elastic_constants",
-           "require_a_measured_elastic_regime", "VOIGT"]
+           "require_a_measured_elastic_regime", "VOIGT", "SHARED_PRIMAL_BYTES"]
 
 #: The six independent components of a symmetric strain, in Voigt order.
 VOIGT = ((0, 0), (1, 1), (2, 2), (1, 2), (0, 2), (0, 1))
+
+#: The most XLA scratch the six columns may hold at once, in bytes, for them to
+#: share their primal (``OPEN.md`` Part III H7; 1 GiB, the user's decision of
+#: 2026-10-10). The six columns are one ``jvp`` of the stress each at the same
+#: point, and evaluated as one ``vmap`` over the six tangents the forward-over-
+#: reverse primal is computed once instead of six times: against the
+#: one-trace loop, 3.7x on ``rbn-electrostriction``, 3.4x on
+#: ``si-epsilon-unshifted-nosym`` and 1.6x on ``si-electrostriction``
+#: (2026-10-09, D22, second calls), with the tensor moved by 1.6e-11 on 26.2.
+#: The price is the temporaries, 3.5x one column's on rBN (1.61 GB against
+#: 0.46, so rBN itself is above the default and runs the loop; the silicon
+#: cell's 204 MB is below it), and the shared form is taken only when the compiled program's own
+#: ``memory_analysis().temp_size_in_bytes``, read before it runs, is at most
+#: this; above it the columns run one at a time through one trace, the form
+#: this file had before. ``DEFUMAT_ELASTIC_SHARED_BYTES`` moves it, and 0
+#: turns the shared form off without compiling it.
+SHARED_PRIMAL_BYTES = int(os.environ.get("DEFUMAT_ELASTIC_SHARED_BYTES", str(1 << 30)))
 
 #: Ry/bohr^3 to GPa. ``RY_TO_KBAR`` is what the stress is printed in.
 RY_TO_GPA = RY_TO_KBAR / 10.0
@@ -105,6 +123,7 @@ class ElasticConstants:
 def elastic_constants(
     calculation, wavefunctions, eigenvalues, density, response: StrainResponse,
     allow_unconverged: bool = False,
+    shared_primal_bytes: int | None = None,
 ) -> ElasticConstants:
     """``C_ijkl`` from one ``jvp`` of the stress per independent strain.
 
@@ -116,6 +135,11 @@ def elastic_constants(
         density: the converged density.
         response: the strain response, whose ``dpsi`` and ``drho`` are the
             tangent's other two components.
+        shared_primal_bytes: the gate of :data:`SHARED_PRIMAL_BYTES` for this
+            call, in bytes of XLA scratch; ``None`` takes the module's, and 0
+            evaluates the six columns one at a time without compiling the
+            shared form. The two forms agree to round-off (1.6e-11 on 26.2 on
+            rBN), not to the bit.
 
     **The density is rebuilt inside, and this is where a strain parts company
     with a displacement.** :func:`~defumat.response.phonon._force_constants`
@@ -210,9 +234,11 @@ def elastic_constants(
     # derivative again at each call to find the program it had kept: on
     # ``si-electrostriction.in`` that was 0.84 s for the six against 0.29 s
     # traced once, with the tensor identical to the bit and nothing new held.
-    # Sharing the primal as well (one ``vmap`` over the six tangents, or
-    # ``jax.linearize``) is faster again and is not this: it moves the last
-    # bits and holds more, which is the measurement the entry records.
+    # **Sharing the primal as well, one ``vmap`` over the six tangents, is
+    # tried first** and taken when its temporaries are within
+    # :data:`SHARED_PRIMAL_BYTES` (:func:`_shared_primal_columns`); it moves
+    # the last bits and holds more, and the one-trace loop below is what runs
+    # above the gate.
     def column_of(primals, tangents):
         return jax.jvp(gradient, primals, tangents)
 
@@ -225,12 +251,17 @@ def elastic_constants(
             jnp.asarray(response.dpsi[k, l])
         )
 
-    first = VOIGT[0]
-    run = compiled_function(column_of, (zero, psi),
-                            (strain_tangent(*first), tangent_states(*first)))
+    columns = _shared_primal_columns(
+        gradient, zero, psi, tangent_states,
+        SHARED_PRIMAL_BYTES if shared_primal_bytes is None else shared_primal_bytes)
+    if columns is None:
+        first = VOIGT[0]
+        run = compiled_function(column_of, (zero, psi),
+                                (strain_tangent(*first), tangent_states(*first)))
+        columns = [run((zero, psi), (strain_tangent(k, l), tangent_states(k, l)))[1]
+                   for (k, l) in VOIGT]
     tensor = np.zeros((3, 3, 3, 3))
-    for (k, l) in VOIGT:
-        _, column = run((zero, psi), (strain_tangent(k, l), tangent_states(k, l)))
+    for (k, l), column in zip(VOIGT, columns):
         column = np.asarray(column) / volume
         # The gradient's own two indices are the *full-matrix* ones; the tensor
         # convention wants them symmetrised as the ``(k, l)`` pair already is.
@@ -238,6 +269,33 @@ def elastic_constants(
         tensor[:, :, k, l] = tensor[:, :, l, k] = column
 
     return _from_tensor(tensor)
+
+
+def _shared_primal_columns(gradient, zero, psi, tangent_states, budget):
+    """The six columns from one ``vmap`` of the ``jvp``, or ``None`` above ``budget``.
+
+    The program is compiled first with the six stacked first-order states as a
+    shape only (:func:`~defumat.eager.sized_function`), so a refusal builds
+    nothing of their size and runs nothing; the compile is paid either way,
+    once per shape in a process and once per machine with the kernel cache on.
+    What is compared with ``budget`` is the compiler's own temp size of the
+    whole program, which on rBN was 1609.6 MB against one column's 459.3 MB,
+    and on ``si-electrostriction`` 58.9 against 49.6.
+    """
+    if budget <= 0:
+        return None
+    strains = jnp.stack([strain_tangent(k, l) for (k, l) in VOIGT])
+    stacked = jax.ShapeDtypeStruct((len(VOIGT),) + psi.shape, psi.dtype)
+
+    def columns_of(primals, strains, states):
+        return jax.vmap(lambda s, d: jax.jvp(gradient, primals, (s, d))[1])(strains, states)
+
+    sized = sized_function(columns_of, (zero, psi), strains, stacked)
+    if sized is None or sized[1] > budget:
+        return None
+    run, _ = sized
+    states = jnp.stack([tangent_states(k, l) for (k, l) in VOIGT])
+    return list(run((zero, psi), strains, states))
 
 
 def _from_tensor(tensor) -> ElasticConstants:

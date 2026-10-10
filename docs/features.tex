@@ -528,7 +528,7 @@ G-vector enumeration runs in slabs, so an input destined for a GPU can be sized
 on a laptop.
 
 Two lines of that report are worth reading before believing a hand estimate.
-The Davidson subspace is $2\,n_{vecx}\,n_{dim}$ for $\psi$ and $H\psi$ at QE's
+The Davidson subspace is $2\,n_{vecx}\,n_{dim}$ for $\psi$ and $H\psi$ at the default
 $n_{vecx}=4\,n_{bnd}$, plus the Ritz block, and it is usually the largest
 single array --- on a 157-atom slab at $E_{\mathrm{cut}}=60$~Ry it is 139~GB
 against 23~GB of wavefunctions. And the eigensolver is \emph{not} doubled by
@@ -545,10 +545,16 @@ calc = Calculator.from_file("scf.in", david=2)   # or diago_david_ndim = 2
 
 \noindent It halves $\psi$ and $H\psi$ exactly, for one more SCF iteration on
 silicon and the same total energy to 7.3e-11~Ry --- the trade QE's
-documentation describes. Note that \code{INPUT\_PW.txt} gives its default as 2
-and is stale: \code{input\_parameters.f90} sets 4 and \code{input.f90} assigns
-it straight through, so the number \code{pw.x} runs is \textbf{4}, and that is
-the default here.
+documentation describes. The default here is \textbf{4} and \code{pw.x}'s is
+\textbf{2}: \code{input\_parameters.f90} declares 4, but
+\code{read\_namelists.f90}'s \code{electrons\_defaults} sets 2 before the
+namelist is read, which is what \code{INPUT\_PW.txt} says, so a step count
+against \code{pw.x} sets \code{diago\_david\_ndim} on both sides. The subspace
+is collapsed when it has no room for the bands still unconverged, which is
+\code{cegterg}'s test; at 2, where that room is smallest, this is what keeps the
+history between collapses (\code{PERFORMANCE.md}, ``The collapse condition is
+\code{cegterg}'s since 2026-10-10''), and 1 is refused, as \code{cegterg}
+refuses it.
 
 \noindent \textbf{The subspace is capped at the space it lives in}, which is
 $n_{pol}\,\min_{\mathbf k} n_{pw}$ --- the \emph{smallest} sphere on the k-set, not
@@ -3115,6 +3121,23 @@ measured 165.7 and 63.9; the three independent components of
 $\partial\epsilon/\partial\varepsilon$ match a central difference over
 re-converged strained cells to \textbf{2e-4}, which is that difference's own
 floor, and the rank-4 tensor is cubic to 3e-14 with nothing imposing it.
+
+\noindent The six columns of $C_{ijkl}$ are six \code{jvp}s of the stress at
+one point, and they are evaluated together, as one \code{vmap} over the six
+tangents, whenever the compiled program's own scratch
+(\code{memory\_analysis().temp\_size\_in\_bytes}, read before it runs) is at
+most \code{SHARED\_PRIMAL\_BYTES}, 1~GiB, and one at a time above it. The
+shared form computes the stress once instead of six times: 3.4x faster than
+the one-at-a-time form on silicon with 64 k-points and 204~MB of scratch, which
+it takes, and 3.7x on a rhombohedral boron nitride cell at 1.6~GB, 3.5 times
+one column's, which is
+above the gate and so runs one column at a time unless the gate is raised. It
+moves the tensor by round-off, 1.6e-11 on 26.2; \code{shared\_primal\_bytes=0} (or
+\code{DEFUMAT\_ELASTIC\_SHARED\_BYTES=0}) keeps the one-at-a-time form and its
+last bits. The gate costs the shared program's compile even when it refuses,
+once per shape with the kernel cache on. It applies where the states are held
+in memory; a run whose states are walked through host memory a chunk at a time
+takes its columns one at a time as before and never shares.
 
 \begin{refuses}
 \textbf{Refuses.} Both are \code{nspin = 1}, insulators and
