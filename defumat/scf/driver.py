@@ -1690,9 +1690,13 @@ class SCFResult:
     #: can reach ``conv_thr`` with it far from zero**, because the orientation is
     #: a soft mode ``dr2`` does not see; it is recorded per iteration in
     #: :attr:`history` too. Zero by rotation invariance without the coupling, to
-    #: the eigensolver's noise. On PAW the one-centre field's share is added.
-    #: ``None`` unless the run is noncollinear and magnetic, and on a spiral,
-    #: whose transverse magnetization is in the frame that turns with ``q``.
+    #: the eigensolver's noise. On PAW the one-centre field's share is added,
+    #: and on PAW it is computed only when something reads it: with
+    #: ``rotate_moments``, or with ``verbose`` and the coupling on, where the
+    #: iteration line prints ``|tau|``; otherwise ``None`` here and absent from
+    #: :attr:`history` (``OPEN.md`` Part XXII item 1). ``None`` unless the run
+    #: is noncollinear and magnetic, and on a spiral, whose transverse
+    #: magnetization is in the frame that turns with ``q``.
     orientation_torque: tuple | None = None
     #: ``-int B . m`` and the constraint penalty at the converged density, in
     #: Ry. **Neither is part of** :attr:`total_energy` -- QE prints ``etcon``
@@ -7491,8 +7495,19 @@ def run_scf(
         track_orientation and bool(calculation.system.lspinorb)
         and float(calculation.system.soc_scale) != 0.0
     )
+    # **On PAW, only when something reads it** (``OPEN.md`` Part XXII item 1,
+    # the user's decision of 2026-10-10): Route C's step and its convergence
+    # gate, or the printed ``|tau|``, which needs the coupling. The one-centre
+    # share is three ``jax.jvp`` an iteration, through the output states where
+    # the coupling is on, for a number that otherwise only the history held,
+    # so a PAW run that reads nothing records ``None``. The grid integral alone
+    # costs one pass over the density and is recorded on every other dataset
+    # as before, the uncoupled run's zero being the control named above.
+    record_orientation = track_orientation and (
+        not calculation.is_paw or rotate_moments
+        or (verbose and report_orientation))
     orientation_torque = None
-    if track_orientation:
+    if record_orientation:
         from defumat.scf.spin_torque import exchange_torque
     # ``rotate_moments``: Route C itself, the input density turned after every
     # mix by ``w = -H^-1 G`` (:mod:`defumat.scf.orientation`), so that a run
@@ -8155,7 +8170,7 @@ def run_scf(
         # the comment there says which density each is evaluated at.
         eband, deband, residual = (float(x) for x in iteration_terms)
 
-        if track_orientation:
+        if record_orientation:
             # ``potential`` is still the input's here, which is the field the
             # states were solved in; a field or constraint in the run is part
             # of it and its torque is included.

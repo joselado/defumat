@@ -7861,7 +7861,13 @@ property of plain self-consistency with the coupling and not an artefact of this
 Route C adds has no counterpart in `pw.x`, which converges nothing here in any time. **The
 torque costs more than the one-shot it differentiates**, 5.16 s against 3.33, which is P60's
 bill (a backward pass through `sum w <psi|H|psi>` on frozen states holds one real-space block
-per k-point in flight); in a relaxation it is paid once per step with the diagonalisation. The
+per k-point in flight); in a relaxation it is paid once per step with the diagonalisation.
+**Superseded 2026-10-10** (`OPEN.md` Part XXII item 2, branch `decided-h`): the torque is three
+`jax.jvp` now, the k axis inside one kept program per tangent, and on D22 (one core, second
+calls, `tools/compare_orientation.py --torque-only`) the same torque took **0.53 s against 1.81
+s** for the reverse route as it stood at `a1ba166`, beside a one-shot of 1.59 s on that machine,
+and against 0.32 s for the reverse gradient kept as one program, which the code does not take
+because of its memory on a card (the entry has the card's peaks). The
 7.7x per SCF iteration is this one-atom cell's, where fixed overheads dominate, and is not a
 statement about scaling. As a reference, P58's one-shot pair on the three-layer cobalt film
 was 50.0 s against 23.2 s, 2.2x.
@@ -9434,7 +9440,7 @@ are like for like):
 | `get_band_velocities`, `get_effective_mass` | `si-1k.in`, `si2-nosym.in` | 3, 6 | 0, 0 |
 | `get_spin_susceptibility`, `get_magnon_dispersion` | `h-fcc-magnon.in` | 1, 2 | 0, 0 |
 | `get_spiral_scan` | `h-chain-spiral.in` | 2 | 0 |
-| `get_torque`, `get_orientation_torque` | `co-tetragonal-anisotropy-sr.in` | 19, 19 | 1, 1 |
+| `get_torque`, `get_orientation_torque` | `co-tetragonal-anisotropy-sr.in` | 19, 19 | 1, 1; 0, 0 since 2026-10-10 (D22, the forward torque kept by `compiled_function`, 1.48 s and 1.73 s) |
 | a fresh calculator's `get_scf`, `nbnd` above the atomic orbitals, `nk > 1` | `h-sheet.in` | 1 | 0 |
 | `get_pdos` | `si2-nosym.in` | 1 | 0, same cores |
 
@@ -9442,7 +9448,7 @@ The last row corrects the Berry section's sentence that a warm second SCF compil
 cells tried there never topped up with random vectors, and `starting_wavefunctions`' top-up was an eager
 `map_k` too. **Left as they are**: the torque's and the spiral gradient's `jax.jit(jax.value_and_grad(
 chunk))`, built once per call and reused across the call's chunks (one compile a call; through
-`compiled` it would trace once per chunk instead). `get_pdos`'s one went through `compiled` afterwards,
+`compiled` it would trace once per chunk instead); the torque's went through `compiled_function` later, and since 2026-10-10 is a forward derivative with no chunk loop at all (`OPEN.md` Part XXII item 2). `get_pdos`'s one went through `compiled` afterwards,
 with the projections identical. **Values**, old code against
 new on the same inputs: the dielectric tensor to 3.6e-15 relative, Born charges 9.3e-15, the phonon
 matrix at Gamma 2.0e-14 and at L 8.3e-12 on 502, piezoelectric 4.5e-14, strain 1.8e-14, elastic 2.6e-14,

@@ -260,10 +260,11 @@ def test_a_second_chunked_torque_compiles_nothing():
     """``torque_at_angle`` jitted its chunk's ``value_and_grad`` afresh at every call.
 
     Two calls, each on a new calculation and a new density of the same shapes,
-    k-points one at a time: the second compiles nothing, and both match the
-    whole-axis gradient taken without chunks.
+    k-points one at a time: the second compiles nothing, and the forward
+    derivative, chunked and whole, matches the reverse-mode gradient of the
+    energy it differentiates, taken here and not by the torque.
     """
-    from defumat.forces.torque import torque_at_angle
+    from defumat.forces.torque import band_energy_at_angle, torque_at_angle
 
     nk, nbnd, npw = 3, 2, 5
     rng = np.random.default_rng(7)
@@ -283,8 +284,61 @@ def test_a_second_chunked_torque_compiles_nothing():
         chunked = torque_at_angle(*second, plane, 0.3, k_batch=1)
     assert names == []
     whole = torque_at_angle(*second, plane, 0.3, k_batch=None)
-    assert chunked == pytest.approx(whole, rel=1e-12)
+    reverse = -float(jax.grad(lambda angle: band_energy_at_angle(
+        *second, plane, angle))(jnp.asarray(0.3)))
+    assert chunked == pytest.approx(reverse, rel=1e-12)
+    assert whole == pytest.approx(reverse, rel=1e-12)
     assert abs(whole) > 1e-3
+
+
+def test_the_torque_takes_no_reverse_pass(monkeypatch):
+    """Forward mode at every k dial, equal to the reverse gradient it replaced.
+
+    ``OPEN.md`` Part XXII item 2: the reverse tape of ``sum w <psi|H(R)|psi>``
+    did not fit an H200 on the fifteen-cell NiBr2 helix. Both torques are
+    computed here with ``jax.grad``, ``jax.value_and_grad`` and ``jax.vjp``
+    made to fail, at a chunk of one, at a chunk of two that does not divide
+    three k-points (so the short tail is differentiated too) and at the whole
+    axis, and each is held to the reverse-mode gradient of the public energy
+    taken before the patch. The chunked calls failed on ``a1ba166``, which took
+    ``value_and_grad`` a chunk at a time and ``jax.grad`` of the whole axis.
+    """
+    from defumat.forces.torque import (
+        band_energy_at_angle,
+        band_energy_at_rotation,
+        orientation_torque,
+        torque_at_angle,
+    )
+
+    nk, nbnd, npw = 3, 2, 5
+    rng = np.random.default_rng(3)
+    plane = ((0.0, 0.0, 1.0), (1.0, 0.0, 0.0))
+    states = jnp.asarray(rng.normal(size=(1, nk, nbnd, npw))
+                         + 1j * rng.normal(size=(1, nk, nbnd, npw)))
+    weights = jnp.asarray(rng.random((1, nk, nbnd)))
+    density = jnp.asarray(1.0 + rng.random((2, 6)))
+    texture = jnp.asarray(rng.normal(size=(4, 6)))
+    base = jnp.asarray(np.linalg.qr(rng.normal(size=(3, 3)))[0])
+    calculation = _TurningCalculation(5, nk)
+
+    angle_reverse = -float(jax.grad(lambda angle: band_energy_at_angle(
+        calculation, states, weights, density, plane, angle))(jnp.asarray(0.3)))
+    vector_reverse = -np.asarray(jax.grad(lambda omega: band_energy_at_rotation(
+        calculation, states, weights, texture, base, omega))(jnp.zeros(3)))
+
+    def refused(*args, **kwargs):
+        pytest.fail("the torque took a reverse-mode derivative")
+
+    for name in ("grad", "value_and_grad", "vjp"):
+        monkeypatch.setattr(jax, name, refused)
+    for k_batch in (1, 2, None):
+        angle = torque_at_angle(calculation, states, weights, density, plane, 0.3,
+                                k_batch=k_batch)
+        vector = orientation_torque(calculation, states, weights, texture, base,
+                                    k_batch=k_batch)
+        assert angle == pytest.approx(angle_reverse, rel=1e-12), k_batch
+        np.testing.assert_allclose(vector, vector_reverse, rtol=1e-12, atol=0)
+    assert abs(angle_reverse) > 1e-3 and np.min(np.abs(vector_reverse)) > 1e-3
 
 
 def test_a_kept_function_takes_another_structure_through_compiled():
