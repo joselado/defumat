@@ -5672,7 +5672,11 @@ density frozen, so the torque on a rigid turn of that density is the closed form
 above, one integral per iteration, recorded as
 \code{SCFResult.orientation\_torque} and in \code{history}; it sits at
 $-3.3\times10^{-5}$~Ry per radian through that whole run, which is $-K_1$ of the
-self-consistent anisotropy read from one run. \code{rotate\_moments=True} turns
+self-consistent anisotropy read from one run. On PAW the torque has a one-centre
+share, three forward derivatives an iteration through every output state, so a
+PAW run computes it only when something reads it, \code{rotate\_moments} or the
+printed iteration line (\code{verbose} with the coupling on), and records
+\code{None} otherwise. \code{rotate\_moments=True} turns
 the input density by $\boldsymbol\omega=-H^{-1}\mathbf G$ after every mix, the
 density, \code{becsum}, the mixer's history and the carried states together,
 with $H$ built by BFGS from the torques and every step bounded by

@@ -806,7 +806,8 @@ ROTATE_SCRIPT = textwrap.dedent("""
     print(json.dumps({"rank": current_pools().rank,
                       "energy": float(result.total_energy),
                       "moment": list(map(float, result.magnetization_vector)),
-                      "torque": list(map(float, result.orientation_torque))}))
+                      "torque": (None if result.orientation_torque is None
+                                 else list(map(float, result.orientation_torque)))}))
 """)
 
 COBALT_OBLIQUE = (REPO / "tests" / "data" / "qe" / "co-tetragonal-relaxed-mae.in").read_text(
