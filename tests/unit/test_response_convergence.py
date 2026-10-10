@@ -76,6 +76,56 @@ def test_an_unscheduled_solver_keeps_its_own_threshold():
     assert pass_threshold(solver, [1.0e-6]) is None
 
 
+class _Charge:
+    """The one method :func:`~defumat.response.efield.vacuum_fraction` reads."""
+
+    def __init__(self, noncolin=False):
+        self.noncolin = noncolin
+
+    def charge_channel(self, field):
+        field = jnp.asarray(field)
+        if field.shape[0] == 2 and not self.noncolin:
+            return field[0] + field[1]
+        return field[0]
+
+
+def _box(fraction_empty, nspin=1, shape=(10, 10, 10)):
+    """A density with the given fraction of points at 1e-6 and the rest at 1e-2."""
+    total = np.full(int(np.prod(shape)), 1.0e-2)
+    total[: int(round(fraction_empty * total.size))] = 1.0e-6
+    total = total.reshape(shape)
+    if nspin == 2:
+        return np.stack([0.7 * total, 0.3 * total])
+    return total[None]
+
+
+def test_born_charges_on_a_cell_with_vacuum_default_to_1e_16():
+    """The user's decision of 2026-10-10, on synthetic densities.
+
+    The measured fractions on the committed cells are in
+    :data:`~defumat.response.efield.VACUUM_DENSITY`'s comment: 0 on bulk silicon,
+    AlAs and aluminium, 0.207 on the graphene bilayer and 0.563 on O2.
+    """
+    from defumat.response.efield import (TR2, VACUUM_FRACTION, VACUUM_TR2,
+                                         default_tr2, vacuum_fraction)
+
+    assert (TR2, VACUUM_TR2) == (1.0e-14, 1.0e-16)
+    calc = _Charge()
+    bulk, molecule = _box(0.0), _box(0.563)
+    assert vacuum_fraction(calc, bulk) == 0.0
+    assert vacuum_fraction(calc, molecule) == pytest.approx(0.563)
+    assert default_tr2(calc, molecule, born_charges=True) == VACUUM_TR2
+    # The decision is about Born charges: the same cell asked for epsilon alone,
+    # and a bulk cell asked for charges, keep ph.x's default.
+    assert default_tr2(calc, molecule, born_charges=False) == TR2
+    assert default_tr2(calc, bulk, born_charges=True) == TR2
+    # Either side of the fraction, and the two spin channels summed, not read
+    # one at a time: 0.7 of a vacuum point's charge is still below the line.
+    assert default_tr2(calc, _box(VACUUM_FRACTION + 0.02), True) == VACUUM_TR2
+    assert default_tr2(calc, _box(VACUUM_FRACTION - 0.02), True) == TR2
+    assert vacuum_fraction(calc, _box(0.563, nspin=2)) == pytest.approx(0.563)
+
+
 @pytest.mark.slow
 def test_a_new_threshold_and_start_reuse_the_compiled_solve(tmp_path):
     """Two passes of a schedule: the second compiles nothing.

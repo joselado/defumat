@@ -4707,7 +4707,7 @@ that came close is not on the item's list**: `test_stress.py` read **52,628** ma
 between tests (`a6e58b6`, X2 below). What is not measured is the same set on a node at
 this commit, which is the only thing that can close this item.
 
-## 3. The piezoelectric tensor's response route is not converged in `k` at the mesh its own input asks for **[opened 2026-09-19, cause found the same day; closed 2026-10-09: the residual 1 per cent to the Berry value is the 10 Ry cutoff, and from 20 to 40 Ry the two routes agree within 0.25 per cent]**
+## 3. The piezoelectric tensor's response route is not converged in `k` at the mesh its own input asks for **[opened 2026-09-19, cause found the same day; closed 2026-10-09: the residual 1 per cent to the Berry value is the 10 Ry cutoff, and from 20 to 40 Ry the two routes agree within 0.25 per cen; 2026-10-10, decided-i: the ultrasoft deficit at a converged cutoff is 0.86 per cent at `8 8 8` against the calibration's 1.01, so `ULTRASOFT_MESH = 8` still follows its rule, the choice handed to the user]**
 
 Measured on Triton (jobs `20336374`, `20336476` and the ladder `20337789`,
 `tools/cluster/piezo_measure.py`), and the full tables are in
@@ -5308,6 +5308,43 @@ norm-conserving calibration's (1.62), and about 1.0 of that 1.62 is now the cali
 not its mesh; whether to re-measure the ultrasoft cell's deficit at a converged cutoff before
 keeping the threshold is the user's.
 
+**Re-measured 2026-10-10 on D22 (decided-i), the user's decision; the constant is not changed.**
+The ultrasoft cell (`alas-piezo.in`, its datasets, `ecutrho = 8 ecutwfc`) at 25, 35 and 45 Ry, the
+contracted route on wedges (`review/decided-i/piezo_rungs_i.py`), and its own Berry value at each
+cutoff with the calibration's resolution, 15 strings over 8x8, `eps_4 = 0.01`, ground state on the
+symmetric `6 6 6` grid (`berry_us.py`, `piezo_measure.py`'s `us` case); the norm-conserving
+calibration at 30 Ry, its rungs 4 and 6 new and 8 to 12 from the entry above. The deficit is
+`(e_resp - e_Berry) / e_resp`, as the 2026-09-19 table had it, for both cells.
+
+| `e_14`, C/m^2 | 25 Ry | 35 Ry | 45 Ry |
+|---|---|---|---|
+| response, `4 4 4` (8 k) | 0.821241 | 0.821634 | 0.821515 |
+| response, `6 6 6` (16 k) | 0.722678 | 0.722922 | 0.722835 |
+| response, `8 8 8` (29 k) | 0.701821 | 0.701995 | 0.701902 |
+| Berry, 15 strings over 8x8 | **0.695774** | **0.695826** | **0.695853** |
+
+| deficit, per cent | `4 4 4` | `6 6 6` | `8 8 8` | `10 10 10` | `12 12 12` |
+|---|---|---|---|---|---|
+| ultrasoft, 25 / 35 / 45 Ry | 15.28 / 15.31 / 15.30 | 3.72 / 3.75 / 3.73 | **0.86 / 0.88 / 0.86** | | |
+| norm-conserving, 30 Ry | 14.54 | 3.65 | **1.01** | 0.39 | 0.24 |
+| ultrasoft minus norm-conserving | +0.75 | +0.08 | **-0.15** | | |
+
+Three things it says. **The ultrasoft cell was already converged in its cutoff at 25 Ry**: from 25
+to 45 Ry the response moves 2.5e-4 relative and the Berry value 1.1e-4, so the deficit holds to
+0.03 points; what moved its 8 8 8 deficit from the recorded 1.26 per cent to 0.86 is the Berry
+value's strings, 0.692986 over 7 strings on a 4x4 mesh against 0.695774 over 15 on 8x8, 0.40 per
+cent. **The rule the constant was set by still gives 8**: the ultrasoft deficit first falls below
+the calibration's at `8 8 8` (0.86 against 1.01, both cutoffs converged), and at `6 6 6` it is 0.08
+points above it (3.73 against 3.65). **And the premise of the refusal does not hold at any mesh
+measured**: "below eight the two are not separable" was a statement that the dataset's own error
+could not be told from the mesh's, and the two are now separated everywhere, the dataset's
+difference being 0.75, 0.08 and -0.15 points against mesh errors of 15, 3.7 and 0.9 per cent. So
+the number supports 8 under the rule as written, 6 if 0.08 points counts as agreement (it is about
+twice the strings' own 3.5e-4 on the calibration), and no ultrasoft mesh refusal at all if the
+question is whether the dataset is ever the larger error; which of the three is the user's. Peak
+4.0 GB at 35 Ry and 3.7 GB at 45 Ry on `8 8 8`, 145 to 329 s a rung on 8-11 shared with other
+work, and 12 to 18 minutes a Berry value; a `10 10 10` rung was not needed and was not run.
+
 ## 5. An **ultrasoft** dielectric constant does not reproduce its own closed grid from a symmetry-reduced k-set, by 1.6e-05 relative **[opened 2026-09-19, found in passing; attributed to the dataset under control the same day, six candidates excluded, term not found]**
 
 An unshifted Monkhorst-Pack grid is closed under the point group, so a
@@ -5407,7 +5444,7 @@ with the augmentation removed from the density entirely.
 that the hypothesis space is much smaller than it was and that six of the
 obvious answers have been paid for.
 
-## 4. Eight cluster test failures are assertions, none of them is this session's work, and one is a stale test rather than the environment **[opened 2026-09-19, attributed the same day; measured 2026-10-09: all eight pass on `D22-0161` at `aa08c82`, the node run at that commit is not taken]**
+## 4. Eight cluster test failures are assertions, none of them is this session's work, and one is a stale test rather than the environment **[opened 2026-09-19, attributed the same day; measured 2026-10-09: all eight pass on `D22-0161` at `aa08c82`, the node run at that commit is not take; 2026-10-10, decided-i: the `si-epsilon-us` spinor identity's 1.59e-8 bisected to `1705a0a`, a tolerance the test's `conv_thr` does not deliver, not a defect]**
 
 The whole `slow` set on a node (job `20336106`) failed in thirteen files, and
 item 2 above accounts for eight of them. These are the rest. **They have now
@@ -5499,6 +5536,47 @@ kernel cache on and off, where in the D22 slow set at `30cffd2` (2026-10-04) it 
 slow-marked and with both parametrisations, and did not fail (the file read 1 failed,
 5 passed, the failure being the no-magnetization test); 217 commits lie
 between the two, and it is not bisected here.
+
+**Bisected 2026-10-10 on D22 (decided-i), and it is a tolerance the test's own `conv_thr` never
+delivered, not a defect.** The test run alone, one process per commit, 8-11, about 50 s each
+(`review/decided-i/bisect.results`): `30cffd2` itself reads **2.46e-8**, so the range named above
+holds no change; the failure goes back to **`1705a0a`** ("Anderson fits on the density and carries
+becsum", P107, 2026-09-23), while its parent `783d81f` and the six other commits the bisection
+visited between `ee4524b` (where the test was written) and it read **0.000e+00**, scalar and spinor
+equal to every printed digit; the three it visited from `1705a0a` on read 2.46e-8. What
+`1705a0a` did is take `becsum`, 98 per cent and more of the squared residual, out of the Anderson
+fit, which is `pw.x`'s rule and is kept. Before it the fit was chosen by `becsum`, which the scalar
+and the spinor run compute identically, and the two SCF trajectories were the same arithmetic;
+since it the fit is chosen by the density alone, which differs between the two in its last digits
+(the two Davidsons, on `npw` and on `2 npw`, stop at different residuals above the 1e-13 floor:
+with the floor at 1e-16 the 1e-12 runs stay together, row six), and the trajectories part at the
+level the SCF is converged to. Measured with the test's response convergence (`tr2 = 1e-24`, CG at 1e-12),
+`review/decided-i/spinor_us*.log`, `us_ladder.log`:
+
+| SCF | scalar `epsilon` | spinor minus scalar | max density difference |
+|---|---|---|---|
+| `conv_thr = 1e-12` (the test's) | 14.325310287 | **1.59e-8** | 6.7e-11 |
+| 1e-14 | 14.325301409 | 9.2e-9 | 1.8e-11 |
+| 1e-16 | 14.325301460 | 1.56e-8 | 9.9e-12 |
+| 1e-18 | 14.325301367 | 2.8e-10 | 1.8e-13 |
+| 1e-12, `becsum` back in the fit (`driver.FIT_BECSUM`) | 14.325321337 | 1.2e-14 | 9.0e-17 |
+| 1e-12, Davidson floor `DEFUMAT_ETHR_MIN = 1e-16` | 14.325310357 | 3.7e-13 | 3.6e-16 |
+| 1e-16, Davidson floor 1e-16 | 14.325301177 | 4.4e-8 | 7.1e-11 |
+
+Three things this says. **The epsilon of this cell is itself converged only to about 1e-5 at the
+test's `conv_thr`**: the scalar run moves from 14.3253103 at 1e-12 to 14.3253014 at 1e-14 and then
+stays there within 1e-7, with `becsum` in the fit or not (14.3253015 at 1e-18 either way, 9.4e-8
+apart), so the value the test recorded before `1705a0a` (14.3253213) was 2.0e-5 from the converged
+one and the value after it is 8.8e-6 from it; a density 1e-10 off moves this epsilon by about 1e-7,
+600 to 900 times, which is what a first-order quantity in the potential does. **So the identity at
+1e-12 was a statement that two runs were the same arithmetic**, true while `becsum` chose the fit
+and true again whenever the two Davidsons happen to stop in step (the floor-1e-16 row at 1e-12),
+and not true in general (the same floor at 1e-16). And **the PAW parametrisation passes because its
+two runs stay bit-close** (1.8e-13, density 3.7e-16 at 1e-12), not because it is better
+converged. The 2026-10-04 slow set that read the ultrasoft case as passing at `30cffd2` ran the
+whole file in one process; a run that lands the two trajectories together is what that would be,
+and it was not reproduced. What the test should assert instead is the user's (`decisions_for_user`
+of the decided-i stream); the code is not changed.
 
 
 # Part XIV -- measured and left open, 2026-09-20
@@ -7363,7 +7441,7 @@ minutes against `ph.x`'s 279 s. Items 1 and 2 account for the two factors of tha
 passes and the CG steps a pass, and backlog item 8, scheduling the CG threshold, is the third
 piece and comes after item 1.
 
-### 1. The response loops test an un-normalised `|ddv_scf|^2`, eleven decades tighter than `ph.x` on the AlAs spinor cell **[moves a number; done 2026-10-03, branch `response-dr2`, `PLAN.md` P127]**
+### 1. The response loops test an un-normalised `|ddv_scf|^2`, eleven decades tighter than `ph.x` on the AlAs spinor cell **[moves a number; done 2026-10-03, branch `response-dr2`, `PLAN.md` P12; 2026-10-10, decided-i: Born charges on a cell with vacuum default to `tr2 = 1e-16`, O2 1.5e-4 from `ph.x` against 2.6e-3]**
 
 Sites: `response/efield.py:390` and `:403`, against `TR2 = 1e-14` (`:161`); `phonon.py:844`,
 `:857`; `strain.py:617`, `:627`; `phononq.py:715`, `:719`, which tests `max |dV|^2` instead.
@@ -7409,6 +7487,33 @@ response: 12 passes against 6 on AlAs (`PERFORMANCE.md`, P98), 9 against 5 on si
 of two calls of `get_dielectric_tensor(tr2=<ph.x's bar on the raw sum>, verbose=True)` against
 the default: `len(history)`, `average_iterations` and `epsilon` against the `ph.x` references.
 Then every response regression file through `tools/run_regression.sh`.
+
+**2026-10-10 (decided-i): Born charges on a cell with vacuum default to `tr2 = 1e-16`, the user's
+decision; every other solve keeps 1e-14.** Nothing in the package detected a vacuum (the mixers
+take the run's word for it through `mixing_mode`, and local-TF's only density threshold,
+`LOCAL_TF_EPS`, is 1e-32, which no pseudo-density reaches), so the test is new and is a number
+about the converged state, `response/efield.py`'s `vacuum_fraction`: the share of the dense grid
+holding less than `VACUUM_DENSITY = 1e-4` electrons/bohr^3, with a cell having vacuum above
+`VACUUM_FRACTION = 0.10`. The fractions below 1e-4 on the committed cells, D22: 0 on `si-epsilon`,
+`si-epsilon-us` and `alas-raman` (minima 1.4e-3, 3.5e-3, 1.0e-3) and on `al-metal-nosym`
+(minimum 2.1e-4); 0.563 on `o2-fixed-lsda`, 0.441 on `h-sheet` and 0.207 on
+`graphene-bilayer-electrostriction`, the thinnest vacuum here at 13.7 bohr. `dielectric_tensor`
+takes `tr2=None` and resolves it with `default_tr2`, an explicit value always wins, and the result
+carries the `tr2` it was tested against. Measured at `b69d7cc`, 8-11:
+
+| cell | `tr2` used | passes | `Z*` against `ph.x`, largest | |
+|---|---|---|---|---|
+| `si-epsilon`, default | 1e-14 | 5 | | history, `epsilon` and `Z*` bit-identical to an explicit `tr2 = 1e-14` |
+| O2, default (was 1e-14) | **1e-16** | 8 | **1.495e-4** | `Z*_zz` 0.200084 |
+| O2, `tr2 = 1e-14` | 1e-14 | 7 | 2.571e-3 | `Z*_zz` 0.197663, which fails the test's 5e-4 |
+
+`test_lsda_response.py::test_the_lsda_born_charges_match_ph_x` no longer passes `tr2` and asserts
+the result's is 1e-16; `test_response.py::test_the_born_charges_match_quantum_espresso` asserts the
+four bulk cells run at 1e-14 and have no vacuum point; `tests/unit/test_response_convergence.py`
+holds the rule on synthetic densities (both files pass on D22; with the old `efield.py` the O2
+test's default is the 2.571e-3 row). One `tr2` governs the solve, so the dielectric tensor that
+comes with the charges on a vacuum cell is converged to 1e-16 too (O2's `eps_zz` 1.198006849
+against 1.198021960 at 1e-14, `ph.x` 1.198004867); asked for alone it stays at 1e-14.
 
 ### 2. The Sternheimer CG starts every solve from zero, where `ph.x` starts each pass from the previous pass's `dpsi` **[moves a number; done 2026-10-03 with the CG schedule, branch `response-dr2`, `PLAN.md` P127]**
 
@@ -8477,3 +8582,62 @@ What the agents of this sweep's follow-up found outside their items, recorded ra
   6.2e-12 and 1.76e-11 at `run_shift_current`'s defaults, so the settings they were taken at were
   not recovered; and `test_photocurrent.py`'s spinor docstring says 4.6e-9 where it has read 4.5e-9
   since `27eeaa2`.
+
+
+# Part XXIV -- the STM image against `pp.x` on an unshifted grid, 2026-10-10
+
+## 1. `pp.x` leaves band 1 out at six `W` points of an unshifted grid, and this code's image is the right one **[opened and attributed 2026-10-10 (decided-i); the defect is in QE 7.5's `PP/src/stm.f90`, nothing here changed]**
+
+What was open (Part IX item 2): fcc aluminium on the whole unshifted 4x4x4 grid
+(`al-metal-nosym.in`, Marzari-Vanderbilt 0.05 Ry, six bands), zero bias, where `pp.x` and
+`get_stm` disagree by 2.6e-3 on a peak of 8.66e-3 while agreeing to 2.2e-10 on a shifted grid. The
+question was which side is wrong. The way we answer it is by taking the sum apart: `pp.x` with
+`plot_num = 7` writes `|psi_nk|^2 / omega` for one state at a time (`local_dos` with `iflag = 0`,
+`wg = 1`), so one run gives all 64 x 6 single-state densities, and `stm.f90`'s image can then be
+rebuilt from `pp.x`'s own states and `pw.x`'s own eigenvalues and weights (read from
+`data-file-schema.xml`), with the window rule written down two ways. `tools/stm/ppx_states.sh` and
+`tools/stm/ppx_state_sum.py`; the run is in `review/decided-i/sts/` on D22, `pp.x` the vendored
+7.5 build at `review/open-c/pp.x`.
+
+| image | max difference from `pp.x`'s own STM dump (`al.stm.b20`) |
+|---|---|
+| `pp.x`'s states, `stm.f90:146-149` as written (`first_band` not reset per k) | **1.2e-12** |
+| `pp.x`'s states, `first_band` reset at every k, which is every state within `3 degauss` of `E_F` | 2.602e-3 |
+| this code's `get_stm` | 2.602e-3 |
+| this code's `get_stm` against `pp.x`'s states with the window, not against `pp.x`'s dump | **3.2e-10** |
+
+So the whole gap is the stale `first_band` and none of it is the states, the weights or the Fermi
+level (7.9097 eV both, `E_F` 0.5813526 Ry to 7e-10): the literal rule reproduces `pp.x`'s dump to
+1.2e-12, and this code's image is the sum `stm.f90` means to take to 3.2e-10. What happens
+physically is the following. At the six `W` points of the grid (`pw.x`'s k 28, 31, 40, 46, 55
+and 58, `(-1/2, -1, 0) 2pi/a` and its images) the lowest band lies 0.0360 Ry below `E_F`, inside
+the window of `3 degauss` = 0.15 Ry, so no band at that k is below `down1` and the loop never
+assigns `first_band`; it keeps the previous k-point's value, 2, and band 1 is left out with a
+weight `wk w0gauss` of 0.0173 at each of the six. A shifted 4x4x4 grid has no k-point whose lowest
+band is within 0.15 Ry of `E_F` on this cell, which is why the two codes agree there. `stm.f90`'s
+own declaration calls `first_band` the "first band close enough to the specified energy range", so
+the intent is the window and this code's sum is that intent.
+
+**Why the emulation of 2026-10-09 stopped at 2.1e-3.** It applied the stale rule to this code's
+states, and at `W` bands 1 and 2 are degenerate (-0.0359578 Ry both, in `pw.x`). The rule drops
+one member of a degenerate pair, which is a quantity rule D4 says is not defined: which combination
+is "band 1" is the eigensolver's choice, `pw.x`'s and this code's differ, and so the dropped half
+differs too. Rebuilt on `pp.x`'s own states the same rule closes to 1.2e-12.
+
+**Nothing to fix here.** Whether to report the stale `first_band` to Quantum ESPRESSO is the
+user's. A reference image for an unshifted grid would have to be built from the single-state dumps
+with the window, as above, rather than taken from `pp.x`'s `plot_num = 5`.
+
+**What the states do disagree on, and why it does not touch the image.** Inside the window the
+eigenvalues agree to 2.8e-9 Ry. Above it the largest difference per band grows from 1.3e-9 Ry
+(band 1) through 4.3e-8, 3.2e-7, 3.2e-6 to 3.3e-5 (band 5), which is `pw.x` converging an empty
+band only to `max(5 ethr, 1e-5)` (`cegterg.f90:129`, `diago_full_acc = .false.`), and band 6, the
+top of the block, is 3.4e-2 Ry higher here than in `pw.x` at `W` (k 38, 1.9297 against 1.8953 Ry
+absolute, the same 97 plane waves): the highest state of a six-band block at a point with
+degenerate pairs is missed by one Davidson and found by the other. A six-band block misses a state
+in both codes alike, too: with `nbnd = 8` band 4 at `Gamma` comes down by 1.012e-1 Ry, from 1.0768
+to 0.9756 Ry above `E_F`, in `pw.x` and here to the same digits, so both six-band runs had only part
+of that multiplet. None of it reaches the window: `pw.x`'s eight-band run moves the states within
+`3 degauss` of `E_F` by at most 5.7e-9 Ry, there are 63 such states in all four runs, the eight-band
+eigenvalues of the two codes agree there to 3.6e-9 Ry, and `get_stm` at `nbnd = 8` reproduces the
+six-band image to 9.2e-11 (`review/decided-i/sts8/`, `sts_nbnd.py`).

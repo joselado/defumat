@@ -2526,7 +2526,20 @@ admits at the threshold is a residual of $\sqrt{N_{\mathrm{tot}}\,n_{\mathrm{per
 and $1.8\times10^{-4}$~Ry on an O$_2$ molecule's $45^3$ vacuum box at
 \code{nspin = 2}, so a quantity that is a small residue of large terms, such as
 the raw Born charge of a homonuclear molecule, can be a per cent short at the
-default, as it can be in \code{ph.x}; ask for a smaller \code{tr2} there. The CG threshold
+default, as it can be in \code{ph.x}. \textbf{Born charges on a cell with vacuum
+therefore default to $\mathtt{tr2}=10^{-16}$} (\code{VACUUM\_TR2}). A cell has
+vacuum when more than 10 per cent of its dense grid holds less than
+$10^{-4}$~electrons/bohr$^3$ of the converged charge; none of the four bulk cells
+measured (silicon norm-conserving and ultrasoft, AlAs, aluminium) has a single such
+point (silicon's minimum is $1.4\times10^{-3}$, aluminium's
+$2.1\times10^{-4}$), while 56 per cent of the O$_2$ box is below it and 21 per cent of
+the graphene bilayer's. On the O$_2$ molecule $10^{-16}$ takes \code{ph.x}'s eight
+passes and puts $Z^{\ast}$ $1.5\times10^{-4}$ from \code{ph.x}'s, where $10^{-14}$
+stops a pass earlier at $2.6\times10^{-3}$. One \code{tr2} governs the whole solve,
+so the dielectric tensor that comes with those charges is converged to $10^{-16}$
+as well; asked for alone (\code{born\_charges=False}) it keeps $10^{-14}$, an
+explicit \code{tr2} always wins, and the result's \code{tr2} says which was used.
+The CG threshold
 follows \code{ph.x}'s schedule, $10^{-2}$ on the first pass and
 $\min\big(0.1\sqrt{|\Delta\Delta V_{\mathrm{scf}}|^2},\,10^{-2}\big)$ after, and
 each solve starts from the previous pass's solution. A number for
