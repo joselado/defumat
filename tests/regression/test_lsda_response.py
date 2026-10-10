@@ -513,10 +513,12 @@ def test_the_lsda_born_charges_match_ph_x():
     ``Z*_xx`` reads 0.1011009 with the term and 0.1337198
     without it, against ``ph.x``'s 0.13367. `PLAN.md` P24.
     """
-    from defumat.response.efield import dielectric_tensor
+    from defumat.response.efield import VACUUM_TR2, dielectric_tensor
 
     _, _, calculation, result = _oxygen_molecule(origin_tangent=False)
-    # **The convergence the reference reached, not the default.** ``ph.x``'s
+    # **The convergence the reference reached, which is now the default for
+    # Born charges on a cell with vacuum** (2026-10-10, the user's decision;
+    # 56 per cent of this box is below ``VACUUM_DENSITY``). ``ph.x``'s
     # history here hovers above its ``tr2_ph`` (pass 7 at 1.14e-14 against
     # 1e-14) and its eighth pass lands at 4.0e-17, so its ``Z*`` is converged
     # past what 1e-14 promises. This code's pass 7 lands at 4.56e-15 and stops
@@ -532,8 +534,8 @@ def test_the_lsda_born_charges_match_ph_x():
     response = dielectric_tensor(
         calculation, result.wavefunctions, result.eigenvalues,
         result.density, result.becsum, born_charges=True, max_iterations=40,
-        tr2=1.0e-16,
     )
+    assert response.tr2 == VACUUM_TR2 == 1.0e-16
     charges = np.asarray(response.born_charges)
     # "Effective charges (d Force / dE) in cartesian axis without acoustic sum
     # rule applied (asr)", reference.out.ph-o2-fixed-lsda:181-192.

@@ -147,7 +147,7 @@ from defumat.scf.potential import hartree, total_charge
 from defumat.system.symmetry import cartesian_rotations, symmetrize_matrix
 from defumat.units import FPI
 
-__all__ = ["DielectricTensor", "dielectric_tensor",
+__all__ = ["DielectricTensor", "dielectric_tensor", "default_tr2", "vacuum_fraction",
            "require_a_measured_spinor_response",
            "require_a_symmetrisable_response"]
 
@@ -170,8 +170,55 @@ ALPHA_MIX = 0.7
 #: tr2)``: 3.8e-5 Ry on silicon's 20^3 grid and 1.8e-4 on O2's 45^3 vacuum box at
 #: ``nspin = 2``, where a residue-sized quantity (a homonuclear molecule's raw
 #: Born charge) can be a per cent short at the default, as it can be in ``ph.x``;
-#: such a quantity wants a smaller ``tr2`` (``PLAN.md`` P127).
+#: such a quantity wants a smaller ``tr2`` (``PLAN.md`` P127), which Born
+#: charges on a cell with vacuum now get by default (:data:`VACUUM_TR2`).
 TR2 = 1.0e-14
+
+#: The default ``tr2`` of a solve that returns **Born charges on a cell with
+#: vacuum** (:func:`default_tr2`), the user's decision of 2026-10-10. On triplet
+#: O2 in its 10-bohr box (``o2-fixed-lsda.in``) :data:`TR2` stops at pass 7 with
+#: ``Z*`` 2.57e-3 from ``ph.x``'s, and 1e-16 takes ``ph.x``'s eight passes and
+#: lands 1.51e-4 from it; a raw Born charge of a molecule is a residue, 0.2 left
+#: of an electronic 5.8 against an ionic 6 (``PLAN.md`` P127). Every other
+#: solve, and every bulk cell, keeps :data:`TR2`.
+VACUUM_TR2 = 1.0e-16
+
+#: A dense-grid point is **vacuum** when the converged charge there is below
+#: this, in electrons/bohr^3 (``r_s`` above 13 bohr), and a cell **has vacuum**
+#: when more than :data:`VACUUM_FRACTION` of its points are. Nothing else in
+#: the package detected a vacuum when this was written (the mixers take the
+#: run's word for it through ``mixing_mode``), so the two numbers are set on the
+#: converged densities of the committed cells, measured on D22 2026-10-10: no
+#: point of ``si-epsilon``, ``si-epsilon-us`` or ``alas-raman`` is below 1e-4
+#: (their minima 1.4e-3, 3.5e-3 and 1.0e-3), nor of fcc aluminium (minimum
+#: 2.1e-4), while 56.3 per cent of O2's box is, 44.1 of ``h-sheet``'s and 20.7
+#: of the graphene bilayer's, whose 13.7 bohr of vacuum is the thinnest here.
+VACUUM_DENSITY = 1.0e-4
+VACUUM_FRACTION = 0.10
+
+
+def vacuum_fraction(calculation, density) -> float:
+    """The fraction of the dense grid where the charge is below :data:`VACUUM_DENSITY`.
+
+    A number about the converged state, read on the host: it decides a default
+    and is not differentiated, so it must not be called on a traced density.
+    """
+    charge = np.asarray(calculation.charge_channel(jnp.asarray(density)))
+    return float(np.mean(charge < VACUUM_DENSITY))
+
+
+def default_tr2(calculation, density, born_charges: bool) -> float:
+    """``tr2`` when the caller gives none: :data:`VACUUM_TR2` for Born charges
+    of a cell with vacuum (:func:`vacuum_fraction` above :data:`VACUUM_FRACTION`),
+    :data:`TR2` otherwise.
+
+    The test is the solve's one ``tr2``, so the dielectric tensor of such a cell
+    comes out at 1e-16 as well when the charges are asked for; asked for alone
+    (``born_charges=False``) it keeps ``ph.x``'s 1e-14.
+    """
+    if born_charges and vacuum_fraction(calculation, density) > VACUUM_FRACTION:
+        return VACUUM_TR2
+    return TR2
 
 MAX_ITERATIONS = 40
 
@@ -203,6 +250,9 @@ class DielectricTensor:
     #: Mean CG iterations per band per solve, QE's ``av.it.``.
     average_iterations: float = 0.0
     converged: bool = False
+    #: The ``tr2`` the loop was tested against: the caller's, or
+    #: :func:`default_tr2`'s choice when the caller gave none.
+    tr2: float = TR2
     #: ``{"solver", "bare", "dpsi", "dvscf", "v_scf"}`` when the caller asked
     #: for them, and ``None`` otherwise. The self-consistent response *is* the
     #: expensive part of this calculation, and a **third** derivative needs the
@@ -239,7 +289,7 @@ def dielectric_tensor(
     density,
     becsum=(),
     alpha_mix: float = ALPHA_MIX,
-    tr2: float = TR2,
+    tr2: float | None = None,
     max_iterations: int = MAX_ITERATIONS,
     threshold: float | None = None,
     mixing_mode: str = DEFAULT_RESPONSE_MIXING,
@@ -289,7 +339,10 @@ def dielectric_tensor(
             as tight as the potential they solve at is converged. A number holds
             that threshold on every pass, which is what a test comparing two
             routes below ``ph.x``'s own convergence wants.
-        tr2: ``ph.x``'s ``tr2_ph``, in its units (:data:`TR2`).
+        tr2: ``ph.x``'s ``tr2_ph``, in its units. ``None``, the default, is
+            :data:`TR2`, except that a solve asked for Born charges on a cell
+            with vacuum takes :data:`VACUUM_TR2` (:func:`default_tr2`); the
+            value used is the result's ``tr2``.
     """
     eigenvalues = jnp.asarray(eigenvalues)
     if eigenvalues.ndim == 2:
@@ -333,6 +386,8 @@ def dielectric_tensor(
         )
     # After the refusals: they are checked on the *calculation* and must not
     # need a state, so that a caller can ask "is this supported?" cheaply.
+    if tr2 is None:
+        tr2 = default_tr2(calculation, density, born_charges)
     #
     # **The route is decided before anything converts the states**, because the
     # conversion is what it is about: a streamed store (a numpy array in host
@@ -481,6 +536,7 @@ def dielectric_tensor(
         history=history,
         average_iterations=field.iterations / max(field.solves, 1),
         converged=converged,
+        tr2=float(tr2),
     )
 
 

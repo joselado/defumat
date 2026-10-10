@@ -816,7 +816,14 @@ def test_the_born_charges_match_quantum_espresso(case):
     **+0.1625**, wrong in sign as well as size, which is what the machinery here
     has to beat and does: -0.079442 against -0.07945.
     """
-    _, response = _dielectric(case)
+    result, response = _dielectric(case)
+    # A bulk crystal keeps ph.x's default when it asks for charges: no point of
+    # these cells is vacuum, so the loop ran against the same tr2 as before the
+    # vacuum default existed and took the same passes.
+    from defumat.response.efield import TR2, VACUUM_DENSITY
+
+    assert response.tr2 == TR2
+    assert np.asarray(result.density)[0].min() > VACUUM_DENSITY
     charges = response.born_charges
     assert charges.shape == (2, 3, 3)
     for atom in range(2):
