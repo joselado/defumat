@@ -7368,7 +7368,12 @@ cell $3.1\times10^{-6}$~Ry from the ultracell's); but the tiled start's iterates
 on both sides pass through states lower in \code{E + field} than that helix,
 $0.54$~mRy per cell in the ultracell and $0.10$~mRy in the supercell, neither
 converging in 400 iterations, so at a field this weak the helix is a converged
-answer and not shown to be the lowest one. \code{seed\_from\_field = False} is
+answer and not shown to be the lowest one. \textbf{Where the field turns faster
+than the exchange lets the moments follow, the seed can be worse than the tiled
+start}: on two cells of the same hydrogen with the moment along $x$ and $0.01$~Ry
+along $+y$ in one cell and $-y$ in the other, the seeded loop converges in 8
+iterations to moments of $0.262$ where the reference has $0.623$, $0.35$~mRy per
+cell \emph{above} the canted ferromagnet the tiled start reaches in 3. \code{seed\_from\_field = False} is
 the start for a linear response about the reference's own state and for that
 comparison, and \code{result.seed\_origin} says which start a run took. A
 paramagnetic or compensated reference has no direction to turn from and runs

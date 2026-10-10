@@ -1409,12 +1409,20 @@ def test_a_turning_field_turns_the_magnetization(tmp_path, pseudo_dir):
         zero = np.zeros_like(sign)
         return amplitude * np.stack([zero, sign, zero], axis=-1)
 
+    # **The tiled start, asked for**: this is a linear response about the
+    # reference's own ferromagnet, and the field's own seed is not that here
+    # (``OPEN.md`` Part VI item 3, measured 2026-10-10). Seeded with the
+    # staggered +-y texture the loop converges in 8 iterations to a state whose
+    # moments have collapsed from 0.623 to 0.262, its charge moved by 6.6e-2,
+    # 0.35 mRy per cell *above* the canted ferromagnet the tiled start reaches
+    # in 3; this test's charge check is what caught it.
     result = run_ultracell(
         calculator.system, calculator.pseudos, scf, shape, kgrid,
         nbnd=16, conv_thr=1e-9, states_conv_thr=1e-8, mixing_beta=0.3,
-        magnetic_field=turning, max_iterations=120,
+        magnetic_field=turning, max_iterations=120, seed_from_field=False,
     )
     assert result.converged
+    assert result.seed_origin is None
 
     moments = result.cell_moments()
     # The field averages to ``+y`` over the first cell and ``-y`` over the

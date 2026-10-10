@@ -3211,10 +3211,28 @@ a state in the basis) and 0.10 mRy in the supercell, and neither converges. At 0
 of the kind was seen. Whether the default should stand at weak fields given that is handed
 back to the user.
 
-Fable's other checks: `test_a_turning_field_turns_the_magnetization` and the uniform-field
-test's closed arm run the default now, results in the slow-test record below;
-`test_a_turning_field_puts_the_moment_where_the_field_points` on paramagnetic PAW silicon now
-asserts it ran tiled and said why.
+**Where the default lands on a worse state, measured.** The two-cell field of
+`test_a_turning_field_turns_the_magnetization` (moment along `x`, 0.01 Ry along `+y` in one
+cell and `-y` in the other, `nbnd = 16`, `beta = 0.3`, `review/decided-g/turn2.py`) failed
+that test's charge check under the default: seeded with the staggered `+-y` texture the loop
+converges in 8 iterations to cell moments of length **0.262** (the reference's 0.623), the
+charge moved by 6.6e-2 of its maximum, and `E + field` **0.35 mRy per cell above** the canted
+ferromagnet the tiled start reaches in 3 (moments 0.623, cant 0.0171, charge moved 1.0e-4).
+So a field turning faster than the exchange lets the moments follow, here 180 degrees between
+neighbouring cells, can seed the loop into a higher fixed point, which is the fable review's
+bias concern measured. The test now asks for `seed_from_field=False`, since its subject is
+the linear response about the reference, and asserts the start it took. Whether the default
+should stand, or be narrowed, is handed back to the user.
+
+**The touched test files on D22**, cores 0-3, 6 GB scopes, `review/decided-g/tests-g.log`:
+the three unit files 55 passed; `test_ultracell.py` 33 passed and 1 failed (the two-cell test
+above, before it opted out), 486 s; `test_ultracell_augmented.py` 21 passed, 504 s, the
+paramagnetic PAW silicon run now asserting it ran tiled with "carries no moment";
+`test_ultracell_stm.py` 11 passed, 95 s. The uniform tilted field's closed arm runs the
+default and passes unchanged. Notebook 44 is not re-executed: D22's venv has no
+`nbconvert` and calculations are not run on the workstation in this stream, so its recorded
+"78 iterations; 28.2, 66.2, -42, -50.9 degrees" is now the tiled start's and stale for the
+default, which prints 11 iterations and 35.2, 125.2, -144.8, -54.8 degrees.
 
 **Re-measured on the default basis, 2026-10-09** (D22-0161, `review/open-a/vi3.py`,
 `vi3b.py`; the tables are in the plan). The seeded four-cell helix converges in **10**
