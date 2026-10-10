@@ -7055,7 +7055,7 @@ converges to unchanged. **What to do**: compute the torque only when something r
 otherwise; the test is that a `soc_scale = 0` PAW source's history carries no torque and its
 peak drops by the tape. **Found** by the NiBr2 session; not measured here.
 
-## 2. `orientation_torque` does not fit an H200 on the fifteen-cell helix, even at one k-point **[measured 2026-10-09 on D22: reproduced on nine atoms, the three routes measured on the same states, plan in `plans/open-d-xxii2-orientation-torque.md`; route 2 decided by the user and done 2026-10-10 on branch `decided-h`: three `jax.jvp`, +2.89 GiB at the card's band dial where `a1ba166` runs out of the card, 1.40 at 16; the eager evaluation, not the tape, was what did not fit]**
+## 2. `orientation_torque` does not fit an H200 on the fifteen-cell helix, even at one k-point **[measured 2026-10-09 on D22: reproduced on nine atoms, the three routes measured on the same states, plan in `plans/open-d-xxii2-orientation-torque.md`; route 2 decided by the user and done 2026-10-10 on branch `decided-h`: three `jax.jvp`, +2.89 GiB at the card's band dial where `a1ba166` runs out of the card, 1.40 at 16; on nine atoms the eager evaluation, not the tape, was what did not fit]**
 
 **Done 2026-10-10 (branch `decided-h`, route 2, the user's decision).** `orientation_torque`
 and `torque_at_angle` take the derivative of the band energy as one `jax.jvp` a tangent (the
@@ -7118,7 +7118,10 @@ touched files pass on D22's CPU.
 that failed; the `1 3 1` failure was a `jit_chunk` CUBIN load, which the same report saw
 vanish between memory fractions 0.95 and 0.85, so it may be executables rather than the tape,
 and that run should say which. At `band batch 16`, the NiBr2 session's own setting, the
-forward peak on that cell is not extrapolated here.
+forward peak on that cell is not extrapolated here. **Left as it was**: the derivative still
+takes the states with `upload(states)[0]`, which moves a streamed store to the device whole,
+where `_streamed_onecenter_torque` walks `k_chunks` on the host; harmless at one or three
+k-points, not at a mesh.
 
 **Measured 2026-10-09 (branch `open-d`, `tools/gpu/torque_tape.py`).** On D22's A2000 at one
 k-point of `plans/open-d-inputs/nii2-3cell-paw.in` (nine atoms, fully-relativistic PAW, 116
