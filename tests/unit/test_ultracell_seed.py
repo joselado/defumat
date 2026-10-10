@@ -16,8 +16,12 @@ import numpy as np
 import pytest
 
 from defumat.ultracell.grid import Ultracell
+from defumat.ultracell.driver import _noncollinear_advice
 from defumat.ultracell.seed import (
+    FIELD_NODE_TOL,
+    field_seed_axis,
     reference_axis,
+    seed_from_the_field,
     refuse_an_unmagnetized_reference,
     seeded_becsum,
     seeded_density,
@@ -393,3 +397,118 @@ def test_the_becsum_seed_reads_the_atoms_own_point(ultracell):
     assert np.abs(moment[:, 0] / reference - at_origin).max() < 1.0e-14
     assert np.abs(moment[:, 1] / reference - at_middle).max() < 1.0e-14
     assert np.abs(at_middle - at_origin).min() > 1.0e-3
+
+
+# --- the seed an applied field gives by default (OPEN.md Part VI item 3) -------
+
+
+def _turning_y(ultracell, amplitude=0.01):
+    """``+y`` in the first half of a two-cell period and ``-y`` in the second.
+
+    The field of ``test_a_turning_field_turns_the_magnetization``, which is
+    zero to round-off on the planes ``x = 0, 1, 2, 3`` of the box, the case a
+    ``B/|B|`` has to handle.
+    """
+    return _on_the_box(ultracell, lambda x: amplitude * np.stack([
+        np.zeros(x.shape[:-1]),
+        np.cos(2 * np.pi * x[..., 0] / 2 - np.pi / 2),
+        np.zeros(x.shape[:-1]),
+    ], axis=-1), components=3)
+
+
+def test_the_field_seed_is_its_direction_at_unit_length(ultracell):
+    """``B/|B|``, and the reference's own direction at a node of the field.
+
+    At unit length the seed turns each cell's moment onto the field and keeps
+    the reference's length, which is the hand-written helix the weak-field run
+    converged from in 9 iterations. A node of the field has no direction, and
+    the seed there is the reference's, the identity: a zero seed would be zero
+    magnetization (:func:`test_a_zero_seed_is_no_magnetization_rather_than_a_rotation`),
+    a hole punched in the moment where the field merely vanishes.
+    """
+    field = _turning_y(ultracell)
+    length = np.sqrt((field**2).sum(axis=0))
+    nodes = length <= FIELD_NODE_TOL * length.max()
+    # The field's own nodes, where the cosine is zero to round-off (6e-17 of
+    # the amplitude): its direction there is the direction of that residue.
+    assert nodes.any() and not nodes.all()
+    seed = seed_from_the_field(field, AXIS)
+    assert seed.dtype == np.float64
+    size = np.sqrt((seed**2).sum(axis=0))
+    assert np.abs(size - 1.0).max() < 1.0e-15
+    assert np.abs(seed[:, nodes] - AXIS[:, None]).max() == 0.0
+    live = ~nodes
+    assert np.abs(seed[:, live] - field[:, live] / length[live]).max() < 1.0e-15
+
+    # And it is a seed seeded_density accepts: unit length passes the |s| <= 1
+    # guard, and every point keeps the reference's moment length.
+    density = _noncollinear(ultracell, np.random.default_rng(11))
+    got = np.asarray(seeded_density(density, seed, 4, 1.0, axis=AXIS, closed=True))
+    assert np.abs(np.sqrt((got[1:] ** 2).sum(axis=0))
+                  - np.sqrt((density[1:] ** 2).sum(axis=0))).max() < 1.0e-15
+
+
+def test_the_field_seed_is_taken_in_float64_from_a_float32_field(ultracell):
+    """A float32 ``B/|B|`` reaches ``1 + 6e-8``, which the guard refuses at 1e-12."""
+    field = _turning_y(ultracell).astype(np.float32)
+    seed = seed_from_the_field(field, AXIS)
+    assert seed.dtype == np.float64
+    assert np.sqrt((seed**2).sum(axis=0)).max() <= 1.0 + 1.0e-12
+
+
+def test_the_field_seed_skips_a_reference_with_no_direction(ultracell):
+    """Where a hand-written seed is refused, the field's own is skipped, with a reason.
+
+    A field on a paramagnet or a compensated cell is the susceptibility a field
+    is for, so the default must not refuse it; what it must do is say why the
+    run started tiled. The ferromagnet is the null: an axis and no reason.
+    """
+    rng = np.random.default_rng(12)
+    density = _noncollinear(ultracell, rng)
+    axis, reason = field_seed_axis(density[1:], 1.0)
+    assert reason is None and np.abs(axis - AXIS).max() < 1.0e-12
+
+    empty = density.copy()
+    empty[1:] = 0.0
+    axis, reason = field_seed_axis(empty[1:], 1.0)
+    assert axis is None and "carries no moment" in reason
+
+    compensated = density.copy()
+    sign = np.ones(tuple(ultracell.cell_grid))
+    sign[:, 1::2] = -1.0
+    compensated[1:] = AXIS[:, None, None, None] * 0.25 * _tiled(ultracell, sign)
+    axis, reason = field_seed_axis(compensated[1:], 1.0)
+    assert axis is None and "residue of cancellation" in reason
+
+
+@pytest.mark.parametrize("case, present, absent", [
+    # The default basis, seeded from the field: a different texture by hand
+    # first, and the tiled start's measured cost.
+    (dict(kramers_pairs=True, seed_origin="magnetic_field", field_given=True,
+          opted_out=False, skipped=None),
+     ["seeded from the applied field", "seed_magnetization=", "1500"],
+     ["263", "Do not lower"]),
+    # The default basis, the tiled start asked for: the seed is the remedy.
+    (dict(kramers_pairs=True, seed_origin=None, field_given=True,
+          opted_out=True, skipped=None),
+     ["seed_from_field=False", "seed_magnetization=", "1500", "converged in 9"],
+     ["263"]),
+    # No direction to turn from: a seed is refused there too, so none is named.
+    (dict(kramers_pairs=True, seed_origin=None, field_given=True,
+          opted_out=False, skipped="the reference carries no moment"),
+     ["not seeded from the field", "carries no moment"],
+     ["seed_magnetization", "263"]),
+    # The old basis keeps its own numbers, labelled, and names the default.
+    (dict(kramers_pairs=False, seed_origin=None, field_given=True,
+          opted_out=False, skipped=None),
+     ["kramers_pairs=False", "263", "do not lower mixing_beta", "10 iterations"],
+     []),
+])
+def test_the_noncollinear_advice_follows_how_the_run_started(case, present, absent):
+    """The warning's four branches, each with its own first remedy."""
+    text = _noncollinear_advice(max_iterations=40, beta=0.7, nbnd=8,
+                                field_strength=0.002, **case)
+    for words in present:
+        assert words in text, (words, text)
+    for words in absent:
+        assert words not in text, (words, text)

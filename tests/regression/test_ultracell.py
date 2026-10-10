@@ -1440,6 +1440,71 @@ def test_a_turning_field_turns_the_magnetization(tmp_path, pseudo_dir):
 
 
 @pytest.mark.slow
+def test_a_weak_turning_field_starts_from_its_own_direction(tmp_path, pseudo_dir):
+    """The default seed under a weak field, and the warning's branches around it.
+
+    ``OPEN.md`` Part VI item 3. On the Kramers-closed basis the rigid rotation
+    has nothing to traverse (a seeded helix converges in 10 iterations in either
+    frame); what is slow under a weak turning field is **leaving the tiled
+    ferromagnet**. Four cells of hydrogen, the reference along
+    ``(1,1,1)/sqrt(3)``, under 0.002 Ry turning 90 degrees a cell: from the tiled
+    start no convergence in 1500 iterations at ``mixing_beta = 0.7``, a limit
+    cycle among textures of uneven length; seeded with the field's own texture,
+    9 iterations to a flat helix of 0.3465 per cell with no net moment. That
+    seed is now the default, so this run passes none and asserts it was taken,
+    that it converges within 15, and that what it converges to is the flat
+    helix -- an iteration count alone would be satisfied by a different state.
+
+    The warning is read on the two starts the default does not take, three
+    iterations each so that neither converges: the tiled start asked for
+    (``seed_from_field=False``), which names ``seed_magnetization`` first, and
+    the reference's states alone, which keep the old basis's 263 against 300.
+    """
+    n, kgrid = 4, (1, 2, 2)
+    shape = (n, 1, 1)
+    folded = tuple(a * b for a, b in zip(shape, kgrid))
+    calculator = _noncollinear(tmp_path, pseudo_dir, (1, 1, 1), folded,
+                               tag="weak_unit")
+    scf = calculator.get_scf(conv_thr=1e-11, nbnd=8, max_iterations=300)
+    assert scf.converged
+
+    def turning(x):
+        phase = 2 * np.pi * x[..., 0] / n
+        return 0.002 * np.stack([np.cos(phase), np.sin(phase),
+                                 np.zeros_like(phase)], axis=-1)
+
+    options = dict(conv_thr=1e-10, states_conv_thr=1e-8, mixing_beta=0.7,
+                   magnetic_field=turning)
+    result = run_ultracell(calculator.system, calculator.pseudos, scf, shape,
+                           kgrid, nbnd=8, max_iterations=40, **options)
+    assert result.seed_origin == "magnetic_field"
+    assert result.field_seed_skipped is None
+    assert result.converged and result.iterations <= 15, result.iterations
+    moments = np.asarray(result.cell_moments())
+    lengths = np.linalg.norm(moments, axis=1)
+    assert np.linalg.norm(moments.mean(axis=0)) < 1e-4 * lengths.mean(), moments
+    assert np.abs(lengths / lengths[0] - 1.0).max() < 1e-6, lengths
+    assert np.abs(_pitch(moments) - 360.0 / n).max() < 0.1, moments
+    assert np.abs(_cone(moments)).max() < 0.1, moments
+    jax.clear_caches()
+
+    with pytest.warns(UserWarning, match="did not converge") as record:
+        tiled = run_ultracell(calculator.system, calculator.pseudos, scf, shape,
+                              kgrid, nbnd=8, max_iterations=3,
+                              seed_from_field=False, **options)
+    assert tiled.seed_origin is None and not tiled.converged
+    text = " ".join(str(w.message) for w in record)
+    assert "seed_from_field=False" in text and "seed_magnetization=" in text, text
+    jax.clear_caches()
+
+    with pytest.warns(UserWarning, match="did not converge") as record:
+        run_ultracell(calculator.system, calculator.pseudos, scf, shape, kgrid,
+                      nbnd=16, max_iterations=3, kramers_pairs=False, **options)
+    text = " ".join(str(w.message) for w in record)
+    assert "kramers_pairs=False" in text and "263" in text, text
+
+
+@pytest.mark.slow
 def test_a_uniform_vector_field_is_the_unit_cell_under_the_same_field(
         tmp_path, pseudo_dir):
     """The applied field's sign and magnitude, against a route with no ultracell.
