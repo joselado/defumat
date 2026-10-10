@@ -5234,8 +5234,7 @@ the number supports 8 under the rule as written, 6 if 0.08 points counts as agre
 twice the strings' own 3.5e-4 on the calibration), and no ultrasoft mesh refusal at all if the
 question is whether the dataset is ever the larger error; which of the three is the user's. Peak
 4.0 GB at 35 Ry and 3.7 GB at 45 Ry on `8 8 8`, 145 to 329 s a rung on 8-11 shared with other
-work, and 12 to 18 minutes a Berry value, so a `10 10 10` rung at 45 Ry fits the 6 GB cap and was
-not needed.
+work, and 12 to 18 minutes a Berry value; a `10 10 10` rung was not needed and was not run.
 
 ## 5. An **ultrasoft** dielectric constant does not reproduce its own closed grid from a symmetry-reduced k-set, by 1.6e-05 relative **[opened 2026-09-19, found in passing; attributed to the dataset under control the same day, six candidates excluded, term not found]**
 
