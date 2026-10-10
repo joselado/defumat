@@ -7132,7 +7132,10 @@ one}. An applied field \emph{drives} a modulation, and what comes back is the
 $\mathbf Q$-resolved spin susceptibility: a response. A \emph{seed} hands the
 loop the texture as its initial condition and the loop keeps it: the ordered
 state itself. The field comes first here because it is the honest measurement of
-a susceptibility; the seed is under \emph{Seeding the texture} below.
+a susceptibility; the seed is under \emph{Seeding the texture} below. The two
+doors meet in one place: a \emph{noncollinear} run given a field and no seed
+starts in the field's own direction by default, which is under \emph{A texture,
+not just an amplitude} below.
 
 \code{magnetic\_field} is the first knob: a collinear $B(\mathbf r)$ in Ry,
 entering as $v_\uparrow \mathrel{-}= B$ and $v_\downarrow \mathrel{+}= B$, in
@@ -7329,42 +7332,68 @@ print(ulr.magnetization.shape)    # (3, *box): m_x, m_y, m_z on the grid
 \code{cell\_moments()} returns an $(N,3)$ array for a noncollinear run where it
 returns $(N,)$ for a collinear one, and \code{magnetization} likewise becomes the
 three cartesian components on the box. Neither needs a sphere or a radius: the
-cells tile the ultracell exactly, so the partition is the geometry. On the cell
-above the four moments come back at $28^\circ$, $66^\circ$, $-42^\circ$ and
-$-51^\circ$ in the plane the field turns in, with nothing out of that plane
-beyond $2\times10^{-6}$ (on the reference's states alone, $27^\circ$, $62^\circ$,
-$-40^\circ$ and $-48^\circ$, $0.30$~mRy higher in \code{E + field}), so they
-follow the field, but by less than the $90^\circ$ per cell it asks for.
-That is not a convergence failure: a hydrogen lattice at $5.5$~bohr is a close-
-packed ferromagnet whose inter-cell exchange is far larger than a $0.01$~Ry
-field, and what the run is measuring is the stiffness of the magnet against a
-long-wavelength twist. A texture that turns freely wants a crystal whose
-modulated axis is weakly coupled.
+cells tile the ultracell exactly, so the partition is the geometry.
 
-\textbf{A noncollinear ultracell converges slowly when the field is weak, and
-lowering \code{mixing\_beta} is the wrong response.} Without spin-orbit coupling
-or anisotropy, turning \emph{every} moment together by the same angle costs no
-energy, so the $\mathbf Q = 0$ transverse component of the magnetization has no
-restoring force and the self-consistent solution sits in a nearly flat manifold
-rather than at a point. The mixer has to \emph{traverse} that manifold to reach
-the place the field pins, and \code{mixing\_beta} is how fast it travels.
+\textbf{A field given with no seed is its own seed} (\code{seed\_from\_field},
+the default since 2026-10-10 for a noncollinear reference that carries a
+direction, on the Kramers-closed basis): the loop starts with every cell's
+moment turned onto the field, $\mathbf B/|\mathbf B|$ at the reference's own
+length, and the reference's direction kept where the field vanishes. On the cell
+above that run converges in \textbf{11} iterations to a flat helix, the four
+moments at $35.2^\circ$, $125.2^\circ$, $-144.8^\circ$ and $-54.8^\circ$, exactly
+$90^\circ$ apart, each of length $0.488$ with no net moment and nothing out of
+the plane. Started from the tiled reference instead, \code{seed\_from\_field =
+False}, the same call converges in 142 iterations to a compromise at $28^\circ$,
+$66^\circ$, $-42^\circ$ and $-51^\circ$ with a net moment of $0.25$, which is
+\textbf{2.15~mRy per cell higher} in \code{E + field} (the tiled start on the
+reference's states alone gave $27^\circ$, $62^\circ$, $-40^\circ$ and $-48^\circ$).
+The helix is not something the field imposes on a stiff ferromagnet: the same
+four hydrogens as a real supercell, seeded as a helix with no field at all, sit
+0.739~mRy per cell \emph{below} the ferromagnet, so what the field selects is the
+phase of a texture the lattice already prefers, and the compromise is a fixed
+point the tiled start stops at.
 
-On the four-cell hydrogen ultracell above, on the reference's states alone,
-every run given 300 iterations: at a $0.01$~Ry turning field every \code{beta}
-converges to the same state and the best is $0.5$ (36 iterations, against 48 at
-$0.7$ and 115 at $0.2$). At
-$0.002$~Ry --- a field five times weaker, pinning the direction five times less
---- \code{beta = 0.7} converges in \textbf{263} iterations and \code{beta =
-0.3} does \emph{not converge in 300}, its residual sitting between $2\times
-10^{-5}$ and $9\times10^{-5}$ for the whole run without ever leaving. The small
-\code{beta} is not stable where the large one is unstable; it is \textbf{stuck}.
+\textbf{What the default changes, and when to turn it off.} A run under a field
+that starts tiled is the response about the reference's own state; one seeded
+from the field is the state the loop relaxes to from the field's texture, and
+on a cell with more than one self-consistent solution the two need not be the
+same one. At $0.01$~Ry on four cells of hydrogen with the reference along
+$(1,1,1)/\sqrt3$ they are: 9 iterations seeded against 55 tiled, \code{E +
+field} equal to $2.8\times10^{-10}$~Ry and the moments to $1.4\times10^{-4}$
+after one global rotation. At $0.002$~Ry the seeded run converges in 9 to a flat
+helix of $0.347$ where the tiled one does not converge in 1500, and the helix is
+the state the exact four-atom supercell converges to under the same ladder of
+fields from a helical start (25 iterations, $90.0^\circ$ a site, \code{E} per
+cell $3.1\times10^{-6}$~Ry from the ultracell's); but the tiled start's iterates
+on both sides pass through states lower in \code{E + field} than that helix,
+$0.54$~mRy per cell in the ultracell and $0.10$~mRy in the supercell, neither
+converging in 400 iterations, so at a field this weak the helix is a converged
+answer and not shown to be the lowest one. \code{seed\_from\_field = False} is
+the start for a linear response about the reference's own state and for that
+comparison, and \code{result.seed\_origin} says which start a run took. A
+paramagnetic or compensated reference has no direction to turn from and runs
+tiled with \code{result.field\_seed\_skipped} saying so; on the reference's
+states alone (\code{kramers\_pairs=False}) nothing is seeded; with spin-orbit
+coupling the seed is taken with a warning, since an easy axis can hold the
+moment against a weak field and nothing there is measured.
 
-So a slow noncollinear run wants more iterations, or a stronger field to pin the
-direction with --- not a smaller \code{mixing\_beta}. The run says so by name
-when it fails to converge. \textbf{The default basis makes the manifold exactly
-flat}, since it prefers no direction where the reference's states alone prefer
-their own: the $0.01$~Ry run at \code{beta = 0.3} takes 78 iterations on it
-against 53 on the old basis, to a state $0.30$~mRy lower.
+\textbf{On the reference's states alone a noncollinear ultracell converges
+slowly when the field is weak, and lowering \code{mixing\_beta} is the wrong
+response.} That basis prefers the reference's own direction, so turning
+\emph{every} moment together is a nearly flat manifold the mixer has to
+\emph{traverse} to reach the place the field pins, and \code{mixing\_beta} is
+how fast it travels. On the four-cell hydrogen ultracell above, every run given
+300 iterations: at a $0.01$~Ry turning field every \code{beta} converges to the
+same state and the best is $0.5$ (36 iterations, against 48 at $0.7$ and 115 at
+$0.2$). At $0.002$~Ry \code{beta = 0.7} converges in \textbf{263} iterations
+and \code{beta = 0.3} does \emph{not converge in 300}, its residual sitting
+between $2\times10^{-5}$ and $9\times10^{-5}$ for the whole run without ever
+leaving: stuck rather than unstable. \textbf{The default basis has no such
+manifold}, since it prefers no direction: a seeded helix converges in 10
+iterations in either frame, and what is slow under a weak field there is
+leaving the tiled ferromagnet, which is what the field's own seed does in one
+step. The run says which of these applies by name when it fails to converge,
+and names \code{seed\_magnetization} first wherever a seed can be taken.
 
 \textbf{What a noncollinear run is checked against.} At $N=1$ a uniform vector
 field is the same physics as an ordinary SCF with \code{B\_field(1:3)}, which

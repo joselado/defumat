@@ -6478,18 +6478,30 @@ set up for would be a worse number than none, so what is recorded instead is the
 comparison that is like-for-like -- the ultracell against the supercell it approximates, in
 this code, above.
 
-**Lowering `mixing_beta` makes a noncollinear ultracell slower, and at a weak field it
-stops it converging at all.** Four values on a four-cell turning-field run at 0.01 Ry, all
-reaching the same state: 0.7 in 48 iterations, **0.5 in 36**, 0.3 in 42, 0.2 in 115 -- the
-best in the middle and the smallest three times the worst. At 0.002 Ry, a field five times
-weaker, `beta = 0.7` converges in **263** iterations and `beta = 0.3` **does not converge
-in 300**. The reason is that the rigid spin rotation has no restoring force, so the
-solution sits in a nearly flat manifold the mixer has to *traverse*, and a small `beta`
-traverses it too slowly to arrive: its residual sits between 2e-5 and 9e-5 for the whole
-run without ever leaving. **The reflex of lowering `beta` when a magnetic run is slow is
-the wrong one here** -- what it wants is iterations, or a stronger field to pin the
-direction (`OPEN.md` Part VI item 3, which records the three earlier versions of this entry
-that said the opposite).
+**On the reference's states alone (`kramers_pairs=False`), lowering `mixing_beta` makes a
+noncollinear ultracell slower, and at a weak field it stops it converging at all.** Four
+values on a four-cell turning-field run at 0.01 Ry, all reaching the same state: 0.7 in 48
+iterations, **0.5 in 36**, 0.3 in 42, 0.2 in 115. At 0.002 Ry `beta = 0.7` converges in
+**263** iterations and `beta = 0.3` **does not converge in 300**: that basis prefers the
+reference's direction, so the rigid rotation is a nearly flat manifold the mixer has to
+*traverse*, and a small `beta` traverses it too slowly to arrive.
+
+**On the default, Kramers-closed basis that manifold does not exist** (a seeded helix
+converges in 10 iterations in either frame), and what is slow under a weak field is leaving
+the tiled ferromagnet. Measured on D22-0161 at `decided-g` (2026-10-10, `OPEN.md` Part VI
+item 3), four cells of hydrogen, reference along `(1,1,1)/sqrt(3)`, `nbnd = 8`,
+`mixing_beta = 0.7`, `conv_thr = 1e-10`:
+
+| field | tiled start (`seed_from_field=False`) | the field's own seed (the default) |
+|---|---|---|
+| 0.002 Ry | not converged in 400 (none in 1500 at `aa08c82`), 127 s for 400 | **9** iterations, 6 s |
+| 0.01 Ry | 55 iterations, 22 s | **9** iterations, 7 s, `E + field` equal to 2.8e-10 Ry |
+
+and on the guide's own cell (`h-noncolin-ultracell.in`, `nbnd = 16`, `beta = 0.3`) at
+0.01 Ry, 142 iterations tiled (73 s) against **11** seeded (10 s), the seeded state 2.15 mRy
+per cell lower in `E + field`. The seconds are wall time on cores 0-3 with a warm compile
+cache and a Blender render sharing the machine, so they are not a timing; the iteration
+counts are the measurement.
 
 ### Iterations, which is where the method earns its keep
 

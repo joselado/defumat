@@ -3159,7 +3159,62 @@ asked for, and a run that needs the asked-for angles needs a hard constraint on 
 instead. Whether that pattern is anisotropy bunching the helix or the Br sublattice is not
 established.
 
-## 3. A noncollinear ultracell's rigid spin rotation has no restoring force, and a small `mixing_beta` cannot cross it **[opened 2026-09-14, P88 stage 3b; measured 2026-10-09: no traversal on the Kramers-closed basis (10 iterations in either frame), the weak field is the escape from the ferromagnet (no convergence in 1500, 9 seeded); plan in `plans/open-a-vi3.md`]**
+## 3. A noncollinear ultracell's rigid spin rotation has no restoring force, and a small `mixing_beta` cannot cross it **[opened 2026-09-14, P88 stage 3b; measured 2026-10-09: no traversal on the Kramers-closed basis (10 iterations in either frame), the weak field is the escape from the ferromagnet (no convergence in 1500, 9 seeded); plan in `plans/open-a-vi3.md`]; 2026-10-10: the field seeds itself by default (the user's decision), 9 iterations at 0.002 Ry with no seed given, and the warning branches on how the run started]**
+
+**The field's own seed, the default since 2026-10-10 (the user's decision, branch
+`decided-g`).** `run_ultracell` given a `magnetic_field` and no `seed_magnetization` now
+starts in the field's direction, `B/|B|` at unit length with the reference's direction kept
+where `|B|` is below 1e-6 of its largest value, through the existing `seeded_density` and
+`seeded_becsum`. It is gated, following the fable review of the plan: `nspin_mag = 4`, the
+Kramers-closed basis, and a reference whose net moment has a direction
+(`field_seed_axis`, which skips where `reference_axis` would raise); a paramagnetic or
+compensated reference runs tiled and `UltracellResult.field_seed_skipped` says why, and
+`seed_origin` says where every run's start came from. With `lspinorb` it seeds and warns,
+which is a choice handed back to the user. `seed_from_field=False` asks for the tiled start
+and `True` insists. The field is evaluated once, on the host, in float64. The warning now
+has four branches (seeded from the field, tiled by request, tiled because the reference has
+no direction, which does not name `seed_magnetization`, and `kramers_pairs=False`, which
+keeps the 263 against 300 labelled as that basis's).
+
+Measured on D22-0161, cores 0-3, `review/decided-g/vi3c.py` (committed as
+`plans/decided-g-scripts/vi3c.py`), four cells of hydrogen, `(4, 2, 2)` folded, reference
+along `(1,1,1)/sqrt(3)`, `nbnd = 8`, `mixing_beta = 0.7`, `conv_thr = 1e-10`:
+
+| field | start | iterations | `E + field`, Ry per cell | state |
+|---|---|---|---|---|
+| 0.002 | the field's (default, nothing passed) | **9** | -0.9346571879 | flat helix, `|m|` 0.3465, net 0, `m_z` 0 |
+| 0.002 | tiled (`seed_from_field=False`) | not in 400 | -0.9352008183 at iteration 400 | lengths 0.61, 0.32, 0.07, 0.35, net 0.29 |
+| 0.01 | the field's | **9** | -0.9389370513 | flat helix, `|m|` 0.4884 |
+| 0.01 | tiled | 55 | -0.9389370510 | the same helix, net 3.2e-5 |
+
+The 0.002 Ry default run's `total_energy` is the hand-seeded run's of `vi3b.py` to 3e-16 Ry,
+so the automatic seed is that helix. At 0.01 Ry the two starts reach one state: `E + field`
+equal to 2.8e-10 Ry and the cell moments to 1.4e-4 after one global rotation, the tiled run's
+own stop point. On the guide's and notebook 44's cell (`h-noncolin-ultracell.in`,
+`nbnd = 16`, `beta = 0.3`, 0.01 Ry) they do **not**: the default converges in 11 to a flat
+helix of 0.4882 at -0.9389386804, and the tiled start in 142 to the compromise the guide
+recorded (28.3, 66.2, -42.0, -51.0 degrees, net 0.25) at -0.9367898398, **2.15 mRy per cell
+higher**, so there the default changes which solution a user gets, to a lower one. (The
+guide and the notebook recorded 78 iterations for that tiled run; at `a1ba166` it takes 142
+to the same angles to 0.1 degree. Not chased.)
+
+**The exact supercell at 0.002 Ry**, four atoms with a `LOCAL_MAGNETIC_FIELDS` ladder of
+0.002 Ry turning 90 degrees a site, `nbnd = 16`, `conv_thr = 1e-10`: from a helical start it
+converges in 25 iterations to a flat helix, 90.0 degrees a site, `|m|` 0.4296 in the
+spheres, `E` per cell -0.9337358028 against the seeded ultracell's -0.9337326739 (3.1e-6 Ry
+apart, with a sphere ladder against a continuous field); from a ferromagnetic start it does
+not converge in 400 and ends on a non-planar texture. So the state the seed lands on is the
+state the supercell converges to. **What is not settled is that it is the lowest one at this
+field**: the tiled start's iterates pass below it in `E + field` on both sides, 0.54 mRy per
+cell in the ultracell (the Kohn-Sham free energy of iteration 400's output density, which is
+a state in the basis) and 0.10 mRy in the supercell, and neither converges. At 0.01 Ry nothing
+of the kind was seen. Whether the default should stand at weak fields given that is handed
+back to the user.
+
+Fable's other checks: `test_a_turning_field_turns_the_magnetization` and the uniform-field
+test's closed arm run the default now, results in the slow-test record below;
+`test_a_turning_field_puts_the_moment_where_the_field_points` on paramagnetic PAW silicon now
+asserts it ran tiled and said why.
 
 **Re-measured on the default basis, 2026-10-09** (D22-0161, `review/open-a/vi3.py`,
 `vi3b.py`; the tables are in the plan). The seeded four-cell helix converges in **10**
