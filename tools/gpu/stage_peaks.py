@@ -408,10 +408,26 @@ def main() -> None:
         setattr(owner, name, bracket(original, label, on_result))
 
     cls = type(calculation)
+    def after_hamiltonian(args, kwargs, result):
+        # **The band batch the solve runs at is the Hamiltonians' field**, and
+        # it is recorded from them: the driver's verbose block prints
+        # ``resolve_band_batch()``, the environment's and the platform's
+        # answer, which is 1 on a CPU and the whole block on a card whatever
+        # ``band_batch=`` the Calculation was built with (D22 smoke,
+        # 2026-10-10: it printed 1 while the Hamiltonians carried 4).
+        first = result[0] if isinstance(result, (list, tuple)) else result
+        if counter["hamiltonian"] == 1:
+            print(f"[mem] the Hamiltonians carry band_batch "
+                  f"{getattr(first, 'band_batch', None)}  k_batch "
+                  f"{getattr(first, 'k_batch', None)}", flush=True)
+        return {"band_batch_carried": getattr(first, "band_batch", None),
+                "k_batch_carried": getattr(first, "k_batch", None)}
+
     for name in ("starting_wavefunctions", "becsum", "density",
-                 "density_and_ldos", "potential", "onecenter", "hamiltonian",
+                 "density_and_ldos", "potential", "onecenter",
                  "symmetrize", "accuracy", "site_moments", "occupations"):
         wrap(cls, name, name)
+    wrap(cls, "hamiltonian", "hamiltonian", after_hamiltonian)
     wrap(cls, "diagonalize", "diagonalize", after_diagonalize)
     cls.diagonalize = before_diagonalize(cls.diagonalize)
     for name in ("_mix", "_onecenter_torque", "_paw_deband",
