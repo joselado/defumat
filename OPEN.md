@@ -5298,7 +5298,7 @@ with the augmentation removed from the density entirely.
 that the hypothesis space is much smaller than it was and that six of the
 obvious answers have been paid for.
 
-## 4. Eight cluster test failures are assertions, none of them is this session's work, and one is a stale test rather than the environment **[opened 2026-09-19, attributed the same day; measured 2026-10-09: all eight pass on `D22-0161` at `aa08c82`, the node run at that commit is not taken]**
+## 4. Eight cluster test failures are assertions, none of them is this session's work, and one is a stale test rather than the environment **[opened 2026-09-19, attributed the same day; measured 2026-10-09: all eight pass on `D22-0161` at `aa08c82`, the node run at that commit is not take; 2026-10-10, decided-i: the `si-epsilon-us` spinor identity's 1.59e-8 bisected to `1705a0a`, a tolerance the test's `conv_thr` does not deliver, not a defect]**
 
 The whole `slow` set on a node (job `20336106`) failed in thirteen files, and
 item 2 above accounts for eight of them. These are the rest. **They have now
@@ -5395,8 +5395,9 @@ between the two, and it is not bisected here.
 delivered, not a defect.** The test run alone, one process per commit, 8-11, about 50 s each
 (`review/decided-i/bisect.results`): `30cffd2` itself reads **2.46e-8**, so the range named above
 holds no change; the failure goes back to **`1705a0a`** ("Anderson fits on the density and carries
-becsum", P107, 2026-09-23), with its parent `783d81f` and everything from `ee4524b` (where the test
-was written) to it at **0.000e+00**, scalar and spinor equal to every printed digit. What
+becsum", P107, 2026-09-23), while its parent `783d81f` and the six other commits the bisection
+visited between `ee4524b` (where the test was written) and it read **0.000e+00**, scalar and spinor
+equal to every printed digit; the three it visited from `1705a0a` on read 2.46e-8. What
 `1705a0a` did is take `becsum`, 98 per cent and more of the squared residual, out of the Anderson
 fit, which is `pw.x`'s rule and is kept. Before it the fit was chosen by `becsum`, which the scalar
 and the spinor run compute identically, and the two SCF trajectories were the same arithmetic;
@@ -7147,7 +7148,7 @@ minutes against `ph.x`'s 279 s. Items 1 and 2 account for the two factors of tha
 passes and the CG steps a pass, and backlog item 8, scheduling the CG threshold, is the third
 piece and comes after item 1.
 
-### 1. The response loops test an un-normalised `|ddv_scf|^2`, eleven decades tighter than `ph.x` on the AlAs spinor cell **[moves a number; done 2026-10-03, branch `response-dr2`, `PLAN.md` P127]**
+### 1. The response loops test an un-normalised `|ddv_scf|^2`, eleven decades tighter than `ph.x` on the AlAs spinor cell **[moves a number; done 2026-10-03, branch `response-dr2`, `PLAN.md` P12; 2026-10-10, decided-i: Born charges on a cell with vacuum default to `tr2 = 1e-16`, O2 1.5e-4 from `ph.x` against 2.6e-3]**
 
 Sites: `response/efield.py:390` and `:403`, against `TR2 = 1e-14` (`:161`); `phonon.py:844`,
 `:857`; `strain.py:617`, `:627`; `phononq.py:715`, `:719`, which tests `max |dV|^2` instead.
@@ -8340,7 +8341,10 @@ eigenvalues agree to 2.8e-9 Ry. Above it the largest difference per band grows f
 band only to `max(5 ethr, 1e-5)` (`cegterg.f90:129`, `diago_full_acc = .false.`), and band 6, the
 top of the block, is 3.4e-2 Ry higher here than in `pw.x` at `W` (k 38, 1.9297 against 1.8953 Ry
 absolute, the same 97 plane waves): the highest state of a six-band block at a point with
-degenerate pairs is missed by one Davidson and found by the other, and with `nbnd = 8` the
-difference moves to other k-points and to band 4 (1.0e-1 Ry against `pw.x`'s six-band run). These
-states sit more than 1.1 Ry above `E_F`, where the window's weight is zero, so they are a note on
-comparing the top of a band block between codes and not on the image.
+degenerate pairs is missed by one Davidson and found by the other. A six-band block misses a state
+in both codes alike, too: with `nbnd = 8` band 4 at `Gamma` comes down by 1.012e-1 Ry, from 1.0768
+to 0.9756 Ry above `E_F`, in `pw.x` and here to the same digits, so both six-band runs had only part
+of that multiplet. None of it reaches the window: `pw.x`'s eight-band run moves the states within
+`3 degauss` of `E_F` by at most 5.7e-9 Ry, there are 63 such states in all four runs, the eight-band
+eigenvalues of the two codes agree there to 3.6e-9 Ry, and `get_stm` at `nbnd = 8` reproduces the
+six-band image to 9.2e-11 (`review/decided-i/sts8/`, `sts_nbnd.py`).
