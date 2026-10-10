@@ -4598,7 +4598,7 @@ that came close is not on the item's list**: `test_stress.py` read **52,628** ma
 between tests (`a6e58b6`, X2 below). What is not measured is the same set on a node at
 this commit, which is the only thing that can close this item.
 
-## 3. The piezoelectric tensor's response route is not converged in `k` at the mesh its own input asks for **[opened 2026-09-19, cause found the same day; closed 2026-10-09: the residual 1 per cent to the Berry value is the 10 Ry cutoff, and from 20 to 40 Ry the two routes agree within 0.25 per cent]**
+## 3. The piezoelectric tensor's response route is not converged in `k` at the mesh its own input asks for **[opened 2026-09-19, cause found the same day; closed 2026-10-09: the residual 1 per cent to the Berry value is the 10 Ry cutoff, and from 20 to 40 Ry the two routes agree within 0.25 per cen; 2026-10-10, decided-i: the ultrasoft deficit at a converged cutoff is 0.86 per cent at `8 8 8` against the calibration's 1.01, so `ULTRASOFT_MESH = 8` still follows its rule, the choice handed to the user]**
 
 Measured on Triton (jobs `20336374`, `20336476` and the ladder `20337789`,
 `tools/cluster/piezo_measure.py`), and the full tables are in
@@ -5198,6 +5198,44 @@ cell's deficit (1.26 per cent at `8 8 8`, at its own `ecutwfc = 25`) falling bel
 norm-conserving calibration's (1.62), and about 1.0 of that 1.62 is now the calibration's cutoff,
 not its mesh; whether to re-measure the ultrasoft cell's deficit at a converged cutoff before
 keeping the threshold is the user's.
+
+**Re-measured 2026-10-10 on D22 (decided-i), the user's decision; the constant is not changed.**
+The ultrasoft cell (`alas-piezo.in`, its datasets, `ecutrho = 8 ecutwfc`) at 25, 35 and 45 Ry, the
+contracted route on wedges (`review/decided-i/piezo_rungs_i.py`), and its own Berry value at each
+cutoff with the calibration's resolution, 15 strings over 8x8, `eps_4 = 0.01`, ground state on the
+symmetric `6 6 6` grid (`berry_us.py`, `piezo_measure.py`'s `us` case); the norm-conserving
+calibration at 30 Ry, its rungs 4 and 6 new and 8 to 12 from the entry above. The deficit is
+`(e_resp - e_Berry) / e_resp`, as the 2026-09-19 table had it, for both cells.
+
+| `e_14`, C/m^2 | 25 Ry | 35 Ry | 45 Ry |
+|---|---|---|---|
+| response, `4 4 4` (8 k) | 0.821241 | 0.821634 | 0.821515 |
+| response, `6 6 6` (16 k) | 0.722678 | 0.722922 | 0.722835 |
+| response, `8 8 8` (29 k) | 0.701821 | 0.701995 | 0.701902 |
+| Berry, 15 strings over 8x8 | **0.695774** | **0.695826** | **0.695853** |
+
+| deficit, per cent | `4 4 4` | `6 6 6` | `8 8 8` | `10 10 10` | `12 12 12` |
+|---|---|---|---|---|---|
+| ultrasoft, 25 / 35 / 45 Ry | 15.28 / 15.31 / 15.30 | 3.72 / 3.75 / 3.73 | **0.86 / 0.88 / 0.86** | | |
+| norm-conserving, 30 Ry | 14.54 | 3.65 | **1.01** | 0.39 | 0.24 |
+| ultrasoft minus norm-conserving | +0.75 | +0.08 | **-0.15** | | |
+
+Three things it says. **The ultrasoft cell was already converged in its cutoff at 25 Ry**: from 25
+to 45 Ry the response moves 2.5e-4 relative and the Berry value 1.1e-4, so the deficit holds to
+0.03 points; what moved its 8 8 8 deficit from the recorded 1.26 per cent to 0.86 is the Berry
+value's strings, 0.692986 over 7 strings on a 4x4 mesh against 0.695774 over 15 on 8x8, 0.40 per
+cent. **The rule the constant was set by still gives 8**: the ultrasoft deficit first falls below
+the calibration's at `8 8 8` (0.86 against 1.01, both cutoffs converged), and at `6 6 6` it is 0.08
+points above it (3.73 against 3.65). **And the premise of the refusal does not hold at any mesh
+measured**: "below eight the two are not separable" was a statement that the dataset's own error
+could not be told from the mesh's, and the two are now separated everywhere, the dataset's
+difference being 0.75, 0.08 and -0.15 points against mesh errors of 15, 3.7 and 0.9 per cent. So
+the number supports 8 under the rule as written, 6 if 0.08 points counts as agreement (it is about
+twice the strings' own 3.5e-4 on the calibration), and no ultrasoft mesh refusal at all if the
+question is whether the dataset is ever the larger error; which of the three is the user's. Peak
+4.0 GB at 35 Ry and 3.7 GB at 45 Ry on `8 8 8`, 145 to 329 s a rung on 8-11 shared with other
+work, and 12 to 18 minutes a Berry value, so a `10 10 10` rung at 45 Ry fits the 6 GB cap and was
+not needed.
 
 ## 5. An **ultrasoft** dielectric constant does not reproduce its own closed grid from a symmetry-reduced k-set, by 1.6e-05 relative **[opened 2026-09-19, found in passing; attributed to the dataset under control the same day, six candidates excluded, term not found]**
 
