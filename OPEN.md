@@ -4210,7 +4210,37 @@ differences needs no grid to agree.
 
 # Part XI -- from the seeded NiBr2 helix on a GPU, reported 2026-09-17 (P88 stage 8)
 
-## 1. A batched FFT plan fails to build at an ultracell's band count, and it is not an out-of-memory **[measured 2026-10-09 on D22's 12 GB A2000: not reproduced; no shape this card can hold fails to plan, no cuFFT scratch is allocated, and the reported shape is far from cuFFT's 32-bit limits, so the wall is not where the entry put it and is still unlocated]**
+## 1. A batched FFT plan fails to build at an ultracell's band count, and it is the plan's work area **[named 2026-10-10 from the original job's stderr: cuFFT asked XLA's pool for a 43.26 GiB work area]**
+
+**Named 2026-10-10, without a new job.** The failed run's stderr is still on Triton
+(`calculations/NiBr2_ultracell/out/nibr2uc-gpu-20310607.err`, job `20310607`,
+`gpu-h200-141g-short`, at `XLA_PYTHON_CLIENT_MEM_FRACTION = 0.95`), and the line before the
+`RET_CHECK` is the one this entry said would decide it:
+
+```
+cuda_fft.cc:273] Failed to allocate work area.
+cuda_fft.cc:324] Initialize Params: rank: 2 elem_count: 32 input_embed: 32 input_stride: 1
+                 input_distance: 1728 output_embed: 32 output_stride: 1 output_distance: 1728
+                 batch_count: 1680000
+cuda_fft.cc:333] Failed to initialize batched cufft plan with customized allocator:
+                 Out of memory while trying to allocate 43.26GiB with allocator GPU_0_bfc on device 0.
+```
+
+So it is **the plan's scratch, requested from XLA's own pool**, for 1,680,000 batched rank-2
+transforms of 32 by 54 planes (distance 1728 = 32 x 54), in `fixed_density_states`'
+`davidson_eigensolver_all` at `nbnd = 56`, `k_batch = 16`, `band_batch = 64`: not a cuFFT size
+limit and not memory outside the pool. It scales with the batch, so the product of the two
+dials is the bound, and on an H200 at 0.95 the pool had less than 43 GiB left beside the
+folded set's states. Stream D's walk on the A2000 (below) found no scratch at all for the
+present layout's `xy` pass `(B, 200, 32, 54)`; that run used the code of 2026-09-17, whose
+`xy` pass was a strided rank-2 plan over `(32, 54)` planes with embed 32, so **what is still
+open is only whether today's layout builds that plan**, which an A2000 can answer by reading
+the HLO of the folded-set Davidson for an `fft` with that shape, with no large card. The H100
+reproduction the user approved on 2026-10-10 was not submitted, since this answers what it was
+for.
+
+**Measured 2026-10-09 on D22's 12 GB A2000**: not reproduced; no shape this card can hold fails
+to plan, no cuFFT scratch is allocated, and the reported shape is far from cuFFT's 32-bit limits.
 
 **Measured 2026-10-09 (branch `open-d`), and what it rules out.** The unit cell's smooth
 box at `ecutwfc = 45` is **32x54x200** (`fft_grid_dimensions` on `paw_n3_k3`'s vectors,
