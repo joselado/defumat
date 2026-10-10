@@ -528,7 +528,7 @@ G-vector enumeration runs in slabs, so an input destined for a GPU can be sized
 on a laptop.
 
 Two lines of that report are worth reading before believing a hand estimate.
-The Davidson subspace is $2\,n_{vecx}\,n_{dim}$ for $\psi$ and $H\psi$ at QE's
+The Davidson subspace is $2\,n_{vecx}\,n_{dim}$ for $\psi$ and $H\psi$ at the default
 $n_{vecx}=4\,n_{bnd}$, plus the Ritz block, and it is usually the largest
 single array --- on a 157-atom slab at $E_{\mathrm{cut}}=60$~Ry it is 139~GB
 against 23~GB of wavefunctions. And the eigensolver is \emph{not} doubled by
@@ -3108,7 +3108,9 @@ above the gate and so runs one column at a time unless the gate is raised. It
 moves the tensor by round-off, 1.6e-11 on 26.2; \code{shared\_primal\_bytes=0} (or
 \code{DEFUMAT\_ELASTIC\_SHARED\_BYTES=0}) keeps the one-at-a-time form and its
 last bits. The gate costs the shared program's compile even when it refuses,
-once per shape with the kernel cache on.
+once per shape with the kernel cache on. It applies where the states are held
+in memory; a run whose states are walked through host memory a chunk at a time
+takes its columns one at a time as before and never shares.
 
 \begin{refuses}
 \textbf{Refuses.} Both are \code{nspin = 1}, insulators and

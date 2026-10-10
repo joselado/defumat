@@ -489,7 +489,13 @@ SLAB_IDENTITY = {"tr2": 1.0e-24, "threshold": 1.0e-12}
 
 @lru_cache(maxsize=None)
 def _graphene_electrostriction():
-    system, pseudos, calculation, result = _converged(GRAPHENE_ES, 1e-12)
+    # ``conv_thr = 1e-14``, not 1e-12: the pair-exchange residue below follows
+    # the ground state's convergence, 6.5e-9, 1.3e-9 and 1.8e-10 relative at
+    # 1e-12, 1e-13 and 1e-14 (D22, 2026-10-10). At 1e-12 it read 6.0e-10 only
+    # because the SCF happened to run two iterations past its threshold (13);
+    # once the Davidson collapse became ``cegterg``'s it stopped at 11, and the
+    # 1e-9 bound was a tolerance the old ``conv_thr`` never delivered.
+    system, pseudos, calculation, result = _converged(GRAPHENE_ES, 1e-14)
     eigenvalues, psi = refined_states(calculation, result)
     response = strain_response(
         calculation, psi, eigenvalues, jnp.asarray(result.density),
