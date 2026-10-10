@@ -6310,7 +6310,18 @@ real size, so under `single` it reports half of what is resident. Not reachable 
 input today. And `docs/features.tex`'s list of what the floor covers (around line 499)
 names neither the augmentation lines nor this one.
 
-## 3. `with_spin`'s rules are not the builder's in two places **[opened 2026-09-24; the warning half closed 2026-10-09, the refusal half is a decision for the user]**
+## 3. `with_spin`'s rules are not the builder's in two places **[opened 2026-09-24; the warning half closed 2026-10-09; the refusal half closed 2026-10-10 by the user's decision: allowed, a zero start, documented as a departure from `pw.x`]**
+
+**The refusal half, closed 2026-10-10 (branch `decided-g`).** The user decided that
+`with_spin` into `nspin = 2` with no starting magnetization and no constraint stays allowed
+and means a starting magnetization of 0, unlike `pw.x` (`input.f90:1506`, "some
+starting_magnetization MUST be set"). Nothing in the code changed. `System.with_spin`'s
+docstring and `docs/features.tex`'s continuation entry now say it, with the reason (the
+same call carries a converged moment, and `System` cannot tell an explicit 0.0 from an
+absent value), and `Calculator.with_spin` points there.
+`test_entering_nspin_2_with_no_moment_is_a_zero_start_and_not_refused` pins it: an
+unpolarized smeared silicon `System` goes to `nspin = 2` with every species at 0.0, no
+`tot_magnetization` and no warning.
 
 **The warning, closed 2026-10-09.** The `tot_magnetization` drop warning now finds its
 `stacklevel` by walking out of the package and equinox (`_stacklevel_outside_package` in

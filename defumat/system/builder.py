@@ -508,6 +508,25 @@ class System(eqx.Module):
         input parser (``_tot_magnetization``) and not here, where ``None`` is
         the way to say it.
 
+        **Into ``nspin = 2`` with no starting magnetization and no constraint
+        is allowed, and means a starting magnetization of zero**, which is a
+        departure from ``pw.x``: its ``iosys`` refuses an LSDA SCF that sets
+        neither a ``starting_magnetization`` nor a ``tot_magnetization``
+        ("some starting_magnetization MUST be set", ``input.f90:1506``), and
+        this does not. ``starting_magnetization`` left out keeps the tuple the
+        system has, which from an ``nspin = 1`` source is all zeros, so a
+        *fresh* SCF on the result starts spin-degenerate and, since nothing in
+        an SCF breaks spin symmetry on its own, converges to the unpolarized
+        solution and reports it as converged. Pass ``starting_magnetization``
+        here to start polarized. It is allowed rather than refused because the
+        same call is how a converged moment is *carried* -- a spinor demoted to
+        ``nspin = 2`` with nothing passed continues from the moment in its
+        state (``Calculator.with_spin``'s ``magnetization = 'auto'``), and an
+        ``nspin = 1`` source promoted with nothing passed is a supported route
+        -- and ``System`` keeps only the starting tuple, so it cannot tell
+        those routes from a fresh run, nor an explicit 0.0 from an absent value
+        (the user's decision, 2026-10-10, ``OPEN.md`` Part XVIII item 3).
+
         Everything else is carried over unchanged, including the fields and the
         other constraints, so a regime change does not quietly drop them. The
         result goes through the same consistency checks the input does, in the

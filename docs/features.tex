@@ -777,6 +777,20 @@ because a new texture is a new \code{STARTING\_MOMENTS} card and carrying a
 noncollinear source's moment applies no rotation, so the card would never be
 read.
 
+\textbf{Entering \code{nspin = 2} with no starting magnetization and no
+constraint is allowed, and means a starting magnetization of zero}, which is a
+departure from \code{pw.x}: its \code{iosys} refuses an LSDA SCF with neither a
+\code{starting\_magnetization} nor a \code{tot\_magnetization} (``some
+starting\_magnetization MUST be set'', \code{input.f90:1506}). Left out,
+\code{with\_spin} keeps the tuple the system has, which from an \code{nspin = 1}
+source is all zeros, so under \code{'auto'} the target is seeded with zero and
+converges to the unpolarized solution, reported as converged; pass
+\code{starting\_magnetization} to \code{with\_spin} to start polarized. It is not
+refused because the same call carries a converged moment --- a spinor demoted to
+\code{nspin = 2} with nothing passed continues from the moment in its state ---
+and \code{System} keeps only the starting tuple, so it can tell neither that
+route from a fresh one nor an explicit $0$ from an absent value.
+
 \begin{pycode}
 turning = 0.6 * np.array([[np.sin(a), 0.0, np.cos(a)]
                           for a in np.deg2rad([0, 90, 180, 270])])
