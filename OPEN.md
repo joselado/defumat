@@ -3228,7 +3228,10 @@ should stand, or be narrowed, is handed back to the user.
 the three unit files 55 passed; `test_ultracell.py` 33 passed and 1 failed (the two-cell test
 above, before it opted out), 486 s; `test_ultracell_augmented.py` 21 passed, 504 s, the
 paramagnetic PAW silicon run now asserting it ran tiled with "carries no moment";
-`test_ultracell_stm.py` 11 passed, 95 s. The uniform tilted field's closed arm runs the
+`test_ultracell_stm.py` 11 passed, 95 s; after the opt-out the two-cell test and the new
+weak-field test pass together in 33 s. The tiled start is the old code's path: at 0.01 Ry
+it gives 55 iterations and `total_energy` -0.9323727009708999, the `vi3b.py` run's to every
+digit. The uniform tilted field's closed arm runs the
 default and passes unchanged. Notebook 44 is not re-executed: D22's venv has no
 `nbconvert` and calculations are not run on the workstation in this stream, so its recorded
 "78 iterations; 28.2, 66.2, -42, -50.9 degrees" is now the tiled start's and stale for the
