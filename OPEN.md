@@ -6778,7 +6778,16 @@ the run above on NiBr2**, where spin-orbit coupling is on and the partners remov
 preference between `+e_0` and `-e_0`; it needs that project's inputs on Triton. The
 default stays off until it has been measured.
 
-## 2. A noncollinear supercell under a scalar modulation keeps a transverse magnetization of 2e-5 **[opened 2026-09-26, `PLAN.md` P121; closed 2026-10-09: a stop point, not a fixed point, 3.1e-7 at `conv_thr = 1e-14`]**
+## 2. A noncollinear supercell under a scalar modulation keeps a transverse magnetization of 2e-5 **[opened 2026-09-26, `PLAN.md` P121; closed 2026-10-09: a stop point, not a fixed point, 3.1e-7 at `conv_thr = 1e-14`; the test's reference moved to 1e-14 and its bound to 1.02, 2026-10-10]**
+
+**The test changed, 2026-10-10 (the user's decision, branch `decided-g`).**
+`test_the_noncollinear_ultracell_converges_to_the_supercell` takes its reference supercell
+at `conv_thr = 1e-14` instead of 1e-11 and bounds the 32-band component ratio at **1.02**
+instead of 1.4 (1.0058 measured, `review/open-a/xx2c.py`). On D22-0161 (cores 0-3, a 6 GB
+scope, `review/decided-g/xx2-test.log`) it passes in 34.7 s with a warm compile cache, and
+the same file with only the reference put back at 1e-11 fails the new bound with the
+32-band row `[1.448e-5, 2.064e-5, 2.633e-5, 2.213e-5]`, a ratio of 1.276, which is the
+reference's stop point the bound was hiding. Nothing outside the test moves.
 
 **Measured, 2026-10-09** (D22-0161, `review/open-a/xx2.py`, `xx2b.py`, `xx2c.py`; the
 reference supercell of the test, `nbnd = 32`). The premise below is wrong: **it is a stop
