@@ -44,6 +44,12 @@ def main() -> int:
     parser.add_argument("--band-batch", type=int, nargs="+", default=[None])
     parser.add_argument("--nbnd", type=int, nargs="+", default=[None])
     parser.add_argument("--k-batch", type=int, default=1)
+    # Both pinned rather than left to the platform: memory mode switches code
+    # paths whatever the other dials say, and the store decides whether the
+    # unit is compiled for the whole set (``device``) or for one streamed
+    # chunk (``stream``), which are different executables.
+    parser.add_argument("--memory-mode", default=None, choices=("memory", "speed"))
+    parser.add_argument("--wfc-store", default=None)
     parser.add_argument("--json", default=None)
     parser.add_argument("--point", default=None,
                         help=argparse.SUPPRESS)
@@ -71,7 +77,9 @@ def main() -> int:
                 out = subprocess.run(
                     [sys.executable, __file__, args.input, "--point", point]
                     + (["--pseudo-dir", args.pseudo_dir] if args.pseudo_dir else [])
-                    + ["--k-batch", str(args.k_batch)],
+                    + ["--k-batch", str(args.k_batch)]
+                    + (["--memory-mode", args.memory_mode] if args.memory_mode else [])
+                    + (["--wfc-store", args.wfc_store] if args.wfc_store else []),
                     capture_output=True, text=True,
                 )
                 line = [l for l in out.stdout.splitlines()
@@ -132,12 +140,19 @@ def _measure(args, david, nbnd, band_batch):
                 # and the step counts, which every call now carries out of the
                 # unit (``davidson_eigensolver_all`` drops them on the host).
                 return_steps=True,
+                # A streamed store calls the unit one chunk at a time, naming
+                # the chunk's k-points; without them a one-k ``psi0`` meets a
+                # whole-set ``arange`` and the lowering fails with "scan got
+                # values with different leading axis sizes".
+                **({} if kw.get("indices") is None
+                   else {"indices": kw["indices"]}),
             )
         analysis = lowered.compile().memory_analysis()
         captured.update(
             nbnd=int(bands),
             david=kw.get("david"),
             band_batch=band_batch,
+            chunk=None if kw.get("indices") is None else int(len(kw["indices"])),
             nk=int(hamiltonian.nk),
             temp_bytes=int(analysis.temp_size_in_bytes),
             argument_bytes=int(analysis.argument_size_in_bytes),
@@ -170,6 +185,10 @@ def _measure(args, david, nbnd, band_batch):
     solvers.EIGENSOLVERS["david"] = spy
 
     options = {"david": david, "k_batch": args.k_batch}
+    if args.memory_mode:
+        options["memory_mode"] = args.memory_mode
+    if args.wfc_store:
+        options["wfc_store"] = args.wfc_store
     if nbnd is not None:
         options["nbnd"] = nbnd
     kwargs = {} if args.pseudo_dir is None else {"pseudo_dir": args.pseudo_dir}
@@ -177,6 +196,9 @@ def _measure(args, david, nbnd, band_batch):
     calculation = calculator.calculation
     captured["npwx"] = int(calculation.basis.planewaves.npwx)
     captured["dense_grid"] = list(calculation.basis.dense.grid)
+    captured["memory_mode"] = getattr(calculation, "memory_mode", None)
+    captured["wfc_store"] = args.wfc_store
+    captured["band_batch_resolved"] = getattr(calculation, "band_batch", None)
     try:
         calculator.get_scf(max_iterations=1)
     except _Done:
