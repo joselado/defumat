@@ -265,7 +265,14 @@ def test_the_relaxation_binds_the_two_layers():
 def _relaxed():
     system = build_system(read_pw_input(CASES / "graphene-bilayer-d2-relax.in"))
     pseudos = tuple(read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species)
-    return run_relax(system, pseudos, conv_thr=1e-10, etot_conv_thr=1e-8,
+    # ``conv_thr = 1e-12`` for each step's SCF, not the input's 1e-10. On a
+    # surface this flat the last BFGS steps change the energy by 6e-10 Ry,
+    # which 1e-10 does not resolve: after the Davidson collapse became
+    # ``cegterg``'s (2026-10-10) the run walked to -45.1060216202 Ry in 22
+    # steps and then stopped on the trust-radius floor at |F| = 1.017e-5,
+    # 1.7 per cent above ``forc_conv_thr``; at 1e-12 it converges in 28 steps
+    # to -45.1060216225 at |F| = 2.0e-6 (D22).
+    return run_relax(system, pseudos, conv_thr=1e-12, etot_conv_thr=1e-8,
                      forc_conv_thr=1e-5, nstep=60)
 
 

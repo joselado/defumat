@@ -1570,7 +1570,10 @@ the efficiency ones; the standing figures are 2026-10-09's (3.9x on rBN against 
 `compiled_jvp`, 3.7x against the one-trace loop). What the table does establish is the gate's
 decision on each cell and that the two routes agree to round-off. The consequence the user should
 know: **rBN, the cell the 3.9x was measured on, is above the gate**, so it keeps the loop unless
-the gate is raised; the gate's compile is paid even when it refuses, once per shape in a process.
+the gate is raised; the gate's compile is paid even when it refuses, once per shape in a process,
+and its trace at every call: on rBN the default route took 14.76 s against the loop's 14.54
+(medians of three, interleaved in one process, so the ratio 1.015 holds on a loaded machine where
+the times do not).
 Tests: `tests/regression/test_elastic_one_trace.py`, the bit-identity and one-trace count at
 `shared_primal_bytes = 0`, the shared route taken at the default on `si-electrostriction` within
 1e-10 of the loop, and the gate firing at one byte under the compiled size, back to the loop's
@@ -3563,6 +3566,25 @@ measured: the 157-atom slab the 12x was seen on (it does not fit D22), and the c
 `cegterg`'s rule; against `a1ba166` four of its eight tests fail (both replays, the write helper,
 the `david = 1` refusal) and the three route-independence cases and the seeded no-refresh count
 pass, as they should on either code.
+
+**One test moved, and it was a tolerance its own `conv_thr` never delivered.**
+`test_dispersion.py::test_the_elastic_tensor_is_symmetric_under_pair_exchange` asserts `C_ijkl =
+C_klij` to 1e-9 relative on the graphene bilayer and read 6.5e-9 on the branch, with the elastic
+gate off as with it on. The ground state at its `conv_thr = 1e-12` now stops at 11 SCF iterations
+where `a1ba166` ran 13 (energies 5.7e-13 Ry apart), and the residue follows the ground state: 6.5e-9,
+1.3e-9 and 1.8e-10 at `conv_thr` 1e-12, 1e-13 and 1e-14 on the branch, against `a1ba166`'s 6.0e-10
+at 1e-12, which its two extra iterations bought. The test's cell is converged to 1e-14 now and the
+bound kept. **A second test in the same file moved for the same reason**:
+`test_the_relaxation_binds_the_two_layers` relaxes the bilayer at the input's `conv_thr = 1e-10`, and
+on the branch, inside the file's process, BFGS stopped on the trust-radius floor after 22 steps at
+-45.1060216202 Ry and |F| = 1.017e-5, 1.7 per cent above `forc_conv_thr`, where `a1ba166` converged
+in 28 steps at -45.1060216156 and 9.1e-6; the last steps change the energy by 6e-10 Ry, which
+`conv_thr = 1e-10` does not resolve. At `conv_thr = 1e-12` for each step the branch converges in 28
+steps to -45.1060216225 at 2.0e-6, and the file passes (22 tests). **Not explained, and seen on both
+arms**: the same relaxation run as a fresh process ends elsewhere than inside the test file's
+process, deterministically in each (the branch converged in 21 steps at 2.0e-6 alone, and failed
+twice identically inside the file; `a1ba166` ended at 8.55e-6 alone and 9.12e-6 inside the file),
+so something that runs earlier in the file changes what the relaxation computes.
 
 **The ladder, measured 2026-10-09 on `D22-0161`** (CPUs 4 to 7, `JAX_PLATFORMS=cpu`,
 the committed input with `diago_david_ndim` added to `&electrons`, `conv_thr = 1e-10`; the
