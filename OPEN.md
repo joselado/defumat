@@ -1546,7 +1546,35 @@ the fix.
 `benchmarks/si128-1k.in`, `al-slab.in` and `si8-1k.in`, and see how it scales with `nat`.
 Then count the calls in one `Calculation` build (expect 2).
 
-### H7. Six columns of the elastic tensor each re-evaluate the identical primal **[measured again 2026-10-09, branch `open-e`: the six columns traced once (bit-identical, landed); sharing the primal is 3.9x on rBN at 3.5x the temporaries, not landed, the gate the user's]**
+### H7. Six columns of the elastic tensor each re-evaluate the identical primal **[measured again 2026-10-09, branch `open-e`: the six columns traced once (bit-identical, landed); sharing the primal is 3.9x on rBN at 3.5x the temporaries; 2026-10-10, branch `decided-j`: landed behind the user's 1 GiB gate on the compiled temporaries, taken on the two silicon cells (59 and 204 MB) and not on rBN (1591 MB), which keeps the loop's bits]**
+
+**2026-10-10, branch `decided-j`: the shared primal is landed behind a gate of 1 GiB of
+temporaries, the user's decision.** `elastic_constants` compiles the six columns as one `vmap`
+of the `jvp` over the six tangents, with the stacked first-order states passed as a shape only
+(`eager.sized_function`, so a refusal builds nothing of their size), reads the compiled
+program's `memory_analysis().temp_size_in_bytes`, and runs that same executable when it is at
+most `SHARED_PRIMAL_BYTES` (`1 << 30`; `DEFUMAT_ELASTIC_SHARED_BYTES` or the keyword
+`shared_primal_bytes`, 0 skipping the compile); above it the one-trace loop of 2026-10-09 runs and
+the tensor is that loop's to the bit. Measured on `D22-0161` with the probe
+`/l/ladovj1/review/decided-j/h7_j.py` (CPU, cores 12 to 15, second calls, median of three):
+
+| cell | compiled temp | default route | loop | shared | shared against loop |
+|---|---|---|---|---|---|
+| `si-electrostriction` | 59.0 MB | shared | 0.44 s | 0.35 s | 9.7e-17 on 1.4e-2 Ry/bohr^3 |
+| `si-epsilon-unshifted-nosym` | 204.2 MB | shared | 2.74 s | 0.91 s | 3.6e-17 on 1.2e-2 |
+| `rbn-electrostriction` | 1590.6 MB | **loop**, bit-identical | 14.44 s | 4.24 s | 4.2e-14 on 7.2e-2 (6.1e-10 GPa) |
+
+**The times are not a timing**: the machine was not quiet at either end (another stream's job
+on the performance cores and the user's Blender render on the card and a core), and the cores are
+the efficiency ones; the standing figures are 2026-10-09's (3.9x on rBN against six
+`compiled_jvp`, 3.7x against the one-trace loop). What the table does establish is the gate's
+decision on each cell and that the two routes agree to round-off. The consequence the user should
+know: **rBN, the cell the 3.9x was measured on, is above the gate**, so it keeps the loop unless
+the gate is raised; the gate's compile is paid even when it refuses, once per shape in a process.
+Tests: `tests/regression/test_elastic_one_trace.py`, the bit-identity and one-trace count at
+`shared_primal_bytes = 0`, the shared route taken at the default on `si-electrostriction` within
+1e-10 of the loop, and the gate firing at one byte under the compiled size, back to the loop's
+bits; with `test_streamed_strain.py`, 8 passed on D22.
 
 **Re-checked 2026-10-09 on D22, one process per cell, `JAX_PLATFORMS=cpu`, cores 0-11, second calls, median of three.** Since `a0b857a` each column is `compiled_jvp`, which traces the whole forward-over-reverse derivative at every call to find its kept program, so the 2026-09-24 premise ("nothing in the file is jitted") no longer holds and the cost moved into six traces. Four forms of the six columns:
 
@@ -3480,7 +3508,61 @@ held a flat 77.63 GB at 21 s each; at iteration 10 `ethr` reached 2.30e-6 and th
 average went from **2.0 inner steps to 73.5**, and the iteration cost from 21 s to 390 s.
 Two iterations, and even twelve, said nothing about the arena three iterations later.
 
-## 2. `diago_david_ndim = 2` may degrade at the minimum subspace once `ethr` tightens **[measured 2026-10-09 at `aa08c82`: on `si16-1k-ecut30` it does not, at most 6 steps a call against `pw.x`'s 5]**
+## 2. `diago_david_ndim = 2` may degrade at the minimum subspace once `ethr` tightens **[measured 2026-10-09 at `aa08c82`: on `si16-1k-ecut30` it does not, at most 6 steps a call against `pw.x`'s 5; 2026-10-10, branch `decided-j`: the collapse is `cegterg`'s `nbase + notcnv > nvecx` now, 28 to 22 steps at `ndim = 2` on that cell, 27 to 19 on `si8-smeared-1k`, and `al-slab` at `ndim = 2` from 1.4e-5 Ry off to 7e-9 from `pw.x`]**
+
+**2026-10-10, branch `decided-j`: the collapse condition was not `cegterg`'s, and is now.**
+`DAVIDSON-LITERATURE.md` ("The collapse condition is not `cegterg`'s") found that the solver
+collapsed its subspace on `nbase + nbnd > nvecx` where `cegterg.f90:580-581` and
+`regterg.f90:496-497` collapse on `nbase + notcnv > nvecx`. Between collapses that kept
+`floor((nvecx - 2 nbnd)/notcnv) + 1` expansions against `cegterg`'s `floor((nvecx - nbnd)/notcnv)`,
+so at `ndim = 2` every step after the first collapsed whatever `notcnv` was. (H5 above, and
+`PERFORMANCE.md`'s 2026-09-16 section, called the `nbnd` form `cegterg`'s; it is not, and the
+`PERFORMANCE.md` sentence is corrected.) The cause was the write: a `(nbnd, npwx)` block put with a
+`dynamic_update_slice` past `nvecx - nbnd` is moved back onto live rows rather than truncated. The
+user chose `DAVIDSON-LITERATURE.md`'s fix (b), the one with no extra memory, and the form landed is
+the review's route-independent variant of it rather than the band-rung one: the block is written
+where the clamp would put it, shifted down inside it so the live rows in front are kept, and the
+zero rows that fall off the end are dropped (`davidson._write_rows`), with the same placement for
+`psi`, `hpsi`, `becp` and `becq`, `active` a prefix mask `arange(nvecx) < nbase + notcnv`, and
+`_extend_projection` handed the moved offset. The test is then exactly `cegterg`'s on every route;
+a rung-based test would have made the collapse depend on `k_batch`, `narrow` and
+`DEFUMAT_BAND_RUNGS`, against `CLAUDE.md`'s rule that the chunk size is never visible beyond
+round-off. `david < 2` is refused as `cegterg.f90:125` refuses it. `DAVID_NDIM`'s note said `pw.x`
+runs four: `read_namelists.f90:408` sets 2 before the namelist is read, which is
+`INPUT_PW.txt:2332`'s default, and `docs/features.tex`'s sentence calling that documentation stale
+is corrected with it.
+
+Measured on `D22-0161` (CPU, cores 12 to 15, old arm `a1ba166`, the committed inputs with
+`diago_david_ndim` added, `pw.x` 7.5 serial on the same inputs); the per-iteration rows are in
+`PERFORMANCE.md`, "The collapse condition is `cegterg`'s since 2026-10-10":
+
+| cell, `ndim` | before | after | `pw.x` |
+|---|---|---|---|
+| `si16-1k-ecut30`, 2 | 28 in 8 | 22 in 7 | 34 in 13 |
+| `si16-1k-ecut30`, 3 and 4 | 20 in 9, 21 in 9 | the same | 26 in 12 |
+| `si8-smeared-1k`, 2 | 27 in 7 | 19 in 6 | 26 in 9 |
+| `si8-smeared-1k`, 4 | 18 in 7 | the same, bit-identical | 18 in 8 |
+| `al-slab`, 2 | 49.7 in 23, -20.8790684054 Ry | 51.3 in 24, -20.8790822573 | 45.1 in 16, -20.87908225 |
+| `al-slab`, 4 | 55.3 in 25 | 52.7 in 24 | 41.3 in 14 |
+
+The pre-registered prediction on `si16-1k-ecut30` at `ndim = 2` (the review's) was that the two
+6-step calls drop: the one at `ethr` 5.3e-9 went from 6 to 5 and the one at the floor (2.7e-13) is
+not made, since the SCF converges an iteration earlier; iteration 4's call went from 4 to 5, and
+iterations 2 onward total 19 against 25. **The `al-slab` row is a correctness change rather than a
+speed one**: before, `ndim = 2` ended 1.38e-5 Ry above `pw.x` and above both `ndim = 4` runs, at a
+reported accuracy of 1.3e-9, with band 10 at the third k-point at 0.3836 Ry against 0.3399 in every
+other run, a root the eigenvalue-change test passed while it was missing; after, 7e-9 from
+`pw.x`. Its per-call count does not move off 2.2 (2.16 to 2.14, `pw.x` 2.82). At the default
+`ndim = 4`, `si8-1k` and `si16-1k` are bit-identical (energy, eigenvalues, density and every
+per-iteration step count), as is `si16-1k-ecut30` at 3; at 4 that cell's energy moves 2.8e-14 Ry and
+an eigenvalue 2.8e-9, from iteration 7's 4-step call, which reaches a collapse. The compiled solve's
+temporaries fell by 144 to 784 bytes at every point of `tools/gpu/davidson_memory.py` (`si16-1k-ecut30`
+and `si64-1k-ecut30` at `band_batch = 16`, `david` 2 to 4, CPU backend), so no memory moved. Not
+measured: the 157-atom slab the 12x was seen on (it does not fit D22), and the card. Tests:
+`tests/unit/test_davidson_collapse_projection.py` replays each solve's logged schedule against
+`cegterg`'s rule; against `a1ba166` four of its eight tests fail (both replays, the write helper,
+the `david = 1` refusal) and the three route-independence cases and the seeded no-refresh count
+pass, as they should on either code.
 
 **The ladder, measured 2026-10-09 on `D22-0161`** (CPUs 4 to 7, `JAX_PLATFORMS=cpu`,
 the committed input with `diago_david_ndim` added to `&electrons`, `conv_thr = 1e-10`; the

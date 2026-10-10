@@ -3538,8 +3538,10 @@ three steps, `h_psi` replaced by a **diagonal** operator to weigh the rest:
 **1.39x on the algebra**, which is the item as written, and 1.16x on the call.
 
 **The refresh is exercised and the narrowing survives it, which needed its own
-run because nothing else here reached it.** `cegterg`'s collapse fires when
-`nbase + nbnd > nvecx`, and every timing above converges in one to four steps
+run because nothing else here reached it.** This code's collapse fired when
+`nbase + nbnd > nvecx` (`cegterg`'s fires on `nbase + notcnv > nvecx`, and this
+code has tested that since 2026-10-10; see "The collapse condition is
+`cegterg`'s since 2026-10-10" below), and every timing above converges in one to four steps
 and never gets there. A **cold** solve does: on `si8-1k-ecut30` it takes 15
 steps to `ethr = 1e-6` and 23 to 1e-10, and on ultrasoft `si2-us-1k` 14 and 21,
 so the basis is refreshed several times in each. Narrow against full, the two
@@ -11098,3 +11100,42 @@ narrows to fewer points, which was not tried. The 2-atom cell's 0.78 ms against 
 the batching of the table above it, 3 points against 18. The 16-atom cell's fixed-density solve for
 the hierarchy warned that 2 of 4 k-points left the Cholesky route of the subspace solve, and its
 answer is 6.9e-3 from the propagation, the start transient at `eta_t = 6`.
+
+## The collapse condition is `cegterg`'s since 2026-10-10 (D22, CPU, step counts)
+
+The Davidson subspace used to collapse when `nbase + nbnd > nvecx`, room for a whole block,
+because the block was written with a `dynamic_update_slice` that clamps; `cegterg.f90:580-581`
+collapses on `nbase + notcnv > nvecx`. Between collapses that kept `floor((nvecx - 2 nbnd)/notcnv)
++ 1` expansions against `cegterg`'s `floor((nvecx - nbnd)/notcnv)`, so at `david = 2` the subspace
+was collapsed on every step after the first. The write now drops the zero rows that fall off the
+end (`davidson._write_rows`), and the test is `cegterg`'s on every route (branch `decided-j`).
+
+Davidson steps per SCF iteration on `D22-0161`, `JAX_PLATFORMS=cpu`, cores 12 to 15, old arm
+`a1ba166` and new arm the branch, the committed inputs with `diago_david_ndim` added; `pw.x` is the
+serial 7.5 on the same inputs (`si16`'s from `OPEN.md` Part VII item 2, 2026-10-09):
+
+| cell, `ndim` | before | after | `pw.x` | energy moved |
+|---|---|---|---|---|
+| `si16-1k-ecut30`, 2 | 28 in 8: 3, 1, 2, 4, 6, 3, 3, 6 | **22 in 7**: 3, 1, 2, 5, 5, 3, 3 | 34 in 13 | 1.3e-10 Ry |
+| `si16-1k-ecut30`, 3 | 20 in 9 | 20 in 9 | 26 in 12 | 0, bit-identical |
+| `si16-1k-ecut30`, 4 | 21 in 9 | 21 in 9 | 26 in 12 | 2.8e-14 Ry |
+| `si8-smeared-1k`, 2 | 27 in 7: 4, 1, 3, 4, 6, 4, 5 | **19 in 6**: 4, 1, 4, 4, 3, 3 | 26 in 9 | 2.2e-10 Ry |
+| `si8-smeared-1k`, 4 | 18 in 7 | 18 in 7 | 18 in 8 | 0, bit-identical |
+| `al-slab`, 2 | 49.7 in 23 | 51.3 in 24 | 45.1 in 16 | **1.4e-5 Ry** (below) |
+| `al-slab`, 4 | 55.3 in 25 | 52.7 in 24 | 41.3 in 14 | 2.0e-9 Ry |
+| `si8-1k`, `si16-1k`, default 4 | 18 in 8 | 18 in 8 | | 0, bit-identical |
+
+**`al-slab` at `ndim = 2` was converging to the wrong state before.** The old arm ended at
+-20.8790684054 Ry with the SCF's accuracy at 1.3e-9, 1.38e-5 Ry above `pw.x`'s -20.87908225 and
+above both `ndim = 4` runs; its band 10 at the third k-point read 0.3836 Ry against 0.3399 in every
+other run, a root missed and passed by the eigenvalue-change test. The new arm ends at
+-20.8790822573, 7e-9 from `pw.x`. The step total does not improve there (2.16 to 2.14 a call,
+`pw.x` 2.82), and the iteration count stays at 24 against `pw.x`'s 16, which is the mixer's.
+
+The compiled solve's temporaries, `tools/gpu/davidson_memory.py` on the CPU backend, before and
+after, in bytes: `si16-1k-ecut30` at `david` 2, 3, 4: 31146112, 34167168, 43502912 to 31145968,
+34166896, 43502768; `si64-1k-ecut30` at `band_batch = 16`: 487198592, 535480576, 694150016 to
+487198064, 535479792, 694149424. Every point is lower by 144 to 784 bytes, so the module
+docstring's three fitted coefficients stand and were not refitted; the card was not measured (it
+was shared that night), and fusion is not the same on the two backends. The 157-atom slab, where
+the 12x was observed at `david = 2`, does not fit D22 and is not re-measured.

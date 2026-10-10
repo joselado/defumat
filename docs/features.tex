@@ -545,10 +545,16 @@ calc = Calculator.from_file("scf.in", david=2)   # or diago_david_ndim = 2
 
 \noindent It halves $\psi$ and $H\psi$ exactly, for one more SCF iteration on
 silicon and the same total energy to 7.3e-11~Ry --- the trade QE's
-documentation describes. Note that \code{INPUT\_PW.txt} gives its default as 2
-and is stale: \code{input\_parameters.f90} sets 4 and \code{input.f90} assigns
-it straight through, so the number \code{pw.x} runs is \textbf{4}, and that is
-the default here.
+documentation describes. The default here is \textbf{4} and \code{pw.x}'s is
+\textbf{2}: \code{input\_parameters.f90} declares 4, but
+\code{read\_namelists.f90}'s \code{electrons\_defaults} sets 2 before the
+namelist is read, which is what \code{INPUT\_PW.txt} says, so a step count
+against \code{pw.x} sets \code{diago\_david\_ndim} on both sides. The subspace
+is collapsed when it has no room for the bands still unconverged, which is
+\code{cegterg}'s test; at 2, where that room is smallest, this is what keeps the
+history between collapses (\code{PERFORMANCE.md}, ``The collapse condition is
+\code{cegterg}'s since 2026-10-10''), and 1 is refused, as \code{cegterg}
+refuses it.
 
 \noindent \textbf{The subspace is capped at the space it lives in}, which is
 $n_{pol}\,\min_{\mathbf k} n_{pw}$ --- the \emph{smallest} sphere on the k-set, not

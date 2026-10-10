@@ -352,7 +352,7 @@ def main(argv: list[str] | None = None) -> int:
                       help="k-points in flight in the eigensolver (default: all)")
     size.add_argument("--david", type=int, default=None,
                       help="Davidson subspace multiple nvecx/nbnd, overriding "
-                           "the input's diago_david_ndim (QE's default is 4)")
+                           "the input's diago_david_ndim (4 here; pw.x's default is 2)")
 
     dos = sub.add_parser("dos", help="SCF, then a density of states on a denser k-grid")
     dos.add_argument("input", help="path to a pw.x input file")
