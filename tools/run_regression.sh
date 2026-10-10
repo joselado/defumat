@@ -45,7 +45,7 @@ MARK=${2:-slow}
 # runner -- only by a bare `pytest -m slow`. `CLAUDE.md` calls this "the
 # same slow set" as that command, so it has to actually be the same set.
 GLOB=${3:-tests/regression/test_*.py tests/unit/test_*.py}
-MEMMAX=${DEFUMAT_TEST_MEM_MAX:-12G}
+MEMMAX=${DEFUMAT_TEST_MEM_MAX:-8G}
 mkdir -p "$OUT"
 SUMMARY=$OUT/summary.txt
 INFLIGHT=$OUT/in-flight.log
@@ -117,8 +117,9 @@ for f in $GLOB; do
     fi
     status=$?
     # The peak goes on the durable line, which is what makes the cap
-    # self-calibrating: 12G is a guess until the files say what they reside in,
-    # and a file at 11G is the next kill whether or not it has happened yet.
+    # self-calibrating: 8G (12G until 2026-10-10, lowered when the largest file
+    # read 4,380 MB) is a guess until the files say what they reside in,
+    # and a file at 7G is the next kill whether or not it has happened yet.
     # `/usr/bin/time` reports the descendant through the scope and propagates
     # the 137, both checked; a killed scope is gone by now, so systemd's own
     # MemoryPeak is not readable here.

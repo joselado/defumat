@@ -56,8 +56,13 @@ file that runs more than about three distinct cells:
   cached; only the compiled code is dropped, which trades recompilation for a peak the
   machine can afford. It gets *faster* as well as smaller, which is the tell that the
   process was paging rather than recompiling (`PERFORMANCE.md`, P28b).
-- **`lru_cache(maxsize=2)` on the converged-state helper**, never `maxsize=None` — 2 is
-  what a comparison between two cells needs and is the largest that is not a leak.
+- **`lru_cache(maxsize=2)` on the converged-state helper**, or a module-scoped fixture that
+  builds each cell once (as `test_ldau.py` does). 2 is what a comparison between two cells
+  needs. **`maxsize=None` with the clearing fixture is accepted where it is measured** (the
+  user's decision, 2026-10-10): thirteen multi-cell files clear their compiled code and keep
+  an unbounded state cache, at +200 s over the thirteen and peaks 10 to 65 per cent lower,
+  because `maxsize=2` there reruns each SCF once per parametrized function. A new file that
+  takes this route says its measured peak in its module docstring.
 
 **Splitting the file only pays off under one of the three runners**, which is why it is the
 weaker lever: `tools/run_regression.sh` invokes pytest once per file, so a file boundary

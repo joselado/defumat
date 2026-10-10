@@ -251,7 +251,9 @@ never on a two-atom cell. The cases and the limits of the rule are
 A design is not finished until its peak working set is known in terms of `nk`, `nbnd`,
 `npwx`, `npol` and the FFT grid, and a deviation from QE's memory-saving choices is stated,
 measured and made selectable when large. A test file sweeping more than about three cells
-takes `jax.clear_caches()` in an autouse fixture and `lru_cache(maxsize=2)`. The full section
+takes `jax.clear_caches()` in an autouse fixture, and its converged states either sit behind
+`lru_cache(maxsize=2)` or are shared through a module-scoped fixture (or, where its peak is
+measured, stay in an unbounded cache beside the clearing fixture). The full section
 is `.claude/rules/memory-design.md`, which loads with any file under `defumat/` or `tests/`.
 
 ## Reading beyond the source

@@ -214,7 +214,8 @@ file — **what was running is the thing a kill destroys**, and no cap can be tr
 cover every way that happens.
 
 **Every summary line carries that file's peak RSS**, which is what makes the default cap
-self-calibrating: `12G` is a guess, and a file sitting at 11 GB is the next kill whether or
+self-calibrating: `8G` (12G until 2026-10-10, lowered when the largest file read 4,380 MB) is a
+guess, and a file sitting at 7 GB is the next kill whether or
 not it has happened yet. The two figures on record so far are `test_scf.py` at **1011 M**
 and `test_dos.py` at **1297 M**, both of them slow files running clean, so the first full
 pass through the runner is also the measurement that says what the cap should be.
