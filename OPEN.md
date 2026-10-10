@@ -6894,7 +6894,41 @@ of the first-order energy at 30 Ry; for the cobalt cell, 25 along `c` in the cel
 the supercell on the dense grid and 18 and 72 on the smooth one, checked, so it is the repeat
 and this one is ruled out too). Both now warn.
 
-## 2. Route C does not reach `conv_thr` on PAW nickel **[opened 2026-09-26; measured 2026-10-09: the plain SCF stalls at every orientation and converges in 78 at `degauss = 0.05`; Route C does not fit 6 GB; plan in `plans/open-a-xxi2.md`]**
+## 2. Route C does not reach `conv_thr` on PAW nickel **[opened 2026-09-26; measured 2026-10-09: the plain SCF stalls at every orientation and converges in 78 at `degauss = 0.05`; Route C does not fit 6 GB; plan in `plans/open-a-xxi2.md`; rerun 2026-10-10 on branch `decided-h` under 10 GB: 200 iterations, not converged, `dr2` median 2.4e-5 over the last 60, a flat 2.58 GB high-water]**
+
+**Rerun 2026-10-10 (branch `decided-h`, the one 10 GB run the user allowed).** Route C on the
+entry's cell and start (`plans/open-a-scripts/xxi2.py routec --iterations 200`, its checkout
+and output paths pointed at `w-h` and `review/decided-h`, 40/320 Ry,
+45 degrees, `mixing_beta = 0.3`, `residual_split`, the whole store, D22 cores 4 to 7, a 10 GB
+scope, `review/decided-h/xxi2-routec.json`), on the code with this branch's forward torque and
+the torque computed only when read. **It does not reach `conv_thr`**: 200 iterations in 848 s,
+not converged. It fits, which is what had stopped the reproduction: the high-water was 2.49 GB
+a minute in and **2.58 GB** at the end, flat, where the run of 2026-10-09 grew about 0.1 GB an
+iteration and was killed under 6 GB at iteration 4 to 22, so the 10 GB cap was not needed.
+No program was compiled after the first iteration (a PAW nickel SCF printing its torque, 30
+compilations in iteration 1 and none in iterations 2 to 8, `review/decided-h/compiles-scf.log`),
+so the growth is gone, while the torque still costs 3 s of every 4.2 s iteration (Part XXII
+item 1's table).
+
+| | plain SCF from 45 degrees (2026-10-09) | Route C from 45 degrees (2026-10-10) |
+|---|---|---|
+| iterations | 200, not converged | 200, not converged |
+| `dr2` over the last 60 (min, median, max) | 5.7e-9, 1.6e-7, 4.8e-6 | 2.8e-6, **2.4e-5**, 4.3e-4 |
+| total energy's spread there (Ry) | 9.0e-4 | 2.3e-2 |
+| the moment at the end | random walk between 44.78 and 45.99 degrees | **89.25 degrees from `c`**, `phi = -5.3` degrees |
+| `|tau|` at the end (Ry/rad) | | 6.0e-7, 1.4e-6 at iteration 189 |
+| residual split over the last 60, medians | | longitudinal 4.5e-3, transverse 6.6e-3, rotation 2.8e-5, charge 8.2e-5, `becsum` 7.6e-4 |
+
+So Route C does what it is for, the moment leaves 45 degrees and reaches the basal plane
+(theta 51.97 at iteration 50, 70.70 at 100, 86.30 at 130), and then it sits at a median `dr2`
+150 times the plain run's at 45 degrees and six times the plain run started in the plane on a
+mirror (median 3.8e-6, 2026-10-09), in the band of 1e-5 to 2e-4 P122 recorded,
+with the residual in the longitudinal and pointwise transverse magnetization bins, of the size
+the plain SCF's two symmetry-axis arms stalled at (2.0e-3 and 2.5e-3), and the rotation bin
+two orders below them. That is the entry's measured reading again, on current code: the stall
+Route C ends in is the magnetic channel of the plain SCF on this cell, now reached in the
+plane, and the plan's step 2 (the longitudinal channel) is what it waits on; the plan's fix is
+not implemented here.
 
 **Measured, 2026-10-09** (D22-0161, `review/open-a/xxi2.py`; the tables are in the plan). The
 plain SCF on this cell at 40/320 does not reach `conv_thr` from 45 degrees (200 iterations,
@@ -6939,7 +6973,34 @@ fully-relativistic PAW, LDA, `ecutwfc = 45`, `ecutrho = 360`, `nbnd = 432`, `nos
 `DEFUMAT_K_BATCH=1`, band batch 16, projectors rebuilt per k-point, on the worktree
 `apps/defumat-orient`.
 
-## 1. `run_scf` computes the PAW one-centre orientation torque on every noncollinear iteration, used or not **[closed 2026-10-09, branch `open-d`: still computed, now with no tape; on nine atoms of spinor PAW NiI2 the torque took the card from 0.88 to 5.40 GiB in use and now to 0.95, below the iteration's own peak]**
+## 1. `run_scf` computes the PAW one-centre orientation torque on every noncollinear iteration, used or not **[closed 2026-10-09, branch `open-d`: still computed, now with no tape; on nine atoms of spinor PAW NiI2 the torque took the card from 0.88 to 5.40 GiB in use and now to 0.95, below the iteration's own peak; decided by the user and done 2026-10-10 on branch `decided-h`: computed on PAW only when read, `None` otherwise, PAW nickel 3.90 s an iteration to 0.98]**
+
+**Done 2026-10-10 (branch `decided-h`, the user's decision).** On PAW `run_scf` computes the
+torque only when something reads it, Route C (`rotate_moments`) or the printed `|tau|`
+(`verbose` with the coupling on), and otherwise records `None` in `SCFResult.orientation_torque`
+and leaves the key out of `history`; every other dataset still records the grid integral,
+which costs one pass over the density. Since `rotate_moments` refuses a run without the
+coupling, a PAW run that computes the torque now always takes it through the states. Measured
+on D22 (`review/decided-h/item2-*.json`, one process an arm on cores 4 to 7, PAW nickel
+`ni-tetragonal-relaxed-mae-paw.in` at 40/320 from 45 degrees, `3 3 2`, 14 iterations, the
+median of iterations 4 to 14, 11 samples each):
+
+| arm | seconds an iteration (min, max) | torque in `history` |
+|---|---|---|
+| `a1ba166`, coupling on | 3.90 (3.62, 4.17) | 14 of 14 |
+| `decided-h`, coupling on | **0.98** (0.80, 1.11) | none |
+| `decided-h`, coupling on, `verbose=True` (the torque read) | 4.01 (3.80, 4.35) | 14 of 14 |
+| `a1ba166`, `soc_scale = 0` | 3.57 (3.23, 4.17) | 14 of 14 |
+| `decided-h`, `soc_scale = 0` | **0.96** (0.79, 1.13) | none |
+
+The fourteen total energies are bit-identical between every pair, and the printed torque is
+`a1ba166`'s to the last digit. So on this one-atom cell the torque was three quarters of every
+iteration, and **it still is whenever it is read**: 3 s an iteration on a 1 s iteration with the
+coupling, and 2.6 s without it, where it needs no states at all, so the cost is the one-centre
+derivative itself and not the walk through the states. Route C pays it at every iteration
+(Part XXI item 2). The test (`test_orientation_torque_cost.py`) spies on `_onecenter_torque`
+and `spin_turned` in a run that reads nothing, uncoupled oxygen and coupled iodine, and fails
+on `a1ba166`; the coupled walk a k-point at a time is checked with the line printed.
 
 **Closed 2026-10-09, differently from the fix proposed below, and measured on a card.** The
 torque is kept in the history (the uncoupled run's zero is the control the loop's comment
@@ -6994,7 +7055,70 @@ converges to unchanged. **What to do**: compute the torque only when something r
 otherwise; the test is that a `soc_scale = 0` PAW source's history carries no torque and its
 peak drops by the tape. **Found** by the NiBr2 session; not measured here.
 
-## 2. `orientation_torque` does not fit an H200 on the fifteen-cell helix, even at one k-point **[measured 2026-10-09 on D22: reproduced on nine atoms, the three routes measured on the same states, plan in `plans/open-d-xxii2-orientation-torque.md`; which route is the user's decision]**
+## 2. `orientation_torque` does not fit an H200 on the fifteen-cell helix, even at one k-point **[measured 2026-10-09 on D22: reproduced on nine atoms, the three routes measured on the same states, plan in `plans/open-d-xxii2-orientation-torque.md`; route 2 decided by the user and done 2026-10-10 on branch `decided-h`: three `jax.jvp`, +2.89 GiB at the card's band dial where `a1ba166` runs out of the card, 1.40 at 16; the eager evaluation, not the tape, was what did not fit]**
+
+**Done 2026-10-10 (branch `decided-h`, route 2, the user's decision).** `orientation_torque`
+and `torque_at_angle` take the derivative of the band energy as one `jax.jvp` a tangent (the
+three generators, or the unit angle), each over the whole k axis with the k dial a `sum_k`
+inside it, kept once a process by `defumat.eager.compiled_function` with the tangent an
+argument, so the three share one program. The whole-axis `jax.grad` branches, which the
+`1 1 1` run took, are gone, and so is the per-chunk loop of reverse passes; the Hamiltonian is
+built once a tangent. Both modes differentiate the same function and nothing on its path has
+a `custom_vjp` or a callback, so forward against reverse cannot catch a wrong tangent rule;
+the closed form and the central difference can, and still pass. On PAW the input `becsum` is
+turned as a vector on every route of `orientation_torque`, forward and reverse alike; the
+route through the states is `_onecenter_torque`'s alone, so the asymmetry the plan drew
+between routes 1 and 2 is not there.
+
+Measured on D22's A2000 on the entry's cell and states (`plans/open-d-inputs/nii2-3cell-paw.in`
+at one k-point, the random orthonormal states of `tools/gpu/torque_tape.py`, a 6.96 GiB pool at
+fraction 0.6, one process an arm, `review/decided-h/card/`). Two Blender renders shared the
+card (1.4 to 1.7 GB, 95 per cent utilisation), so the times are not timings, only the peaks are:
+
+| route | band batch | card peak rise (GiB) | second call (s) |
+|---|---|---|---|
+| `a1ba166`'s `orientation_torque` (eager `jax.grad` of the whole axis) | 58, the card's choice | **out of the card**, 6.95 GiB in use | |
+| the branch's `orientation_torque`, three `jvp` | 58 | **2.89** | 91.9 |
+| the same | 32 | 1.88 | 56.9 |
+| the same | 16 | **1.40** | 56.5 |
+| the three tangents taken together, `vmap` of the `jvp` | 16 | 3.42 | 27.4 |
+| `-jax.grad(band_energy_at_rotation)` kept as one program | 58 | 4.53 | 16.0 |
+| the same | 16 | 2.45 | 16.1 |
+
+The six torques agree to 1.4e-14 of their norm. So the forward derivative fits at the band
+dial the card chooses, and under a `jvp` that dial is live: 36 MiB a band, about 2.3 spinor
+fields a band in flight (the formula is in `forces/torque.py`'s docstring), where the plan's
+1.26 GiB was for blocks of 16 walked by hand. **The entry's reading needs one correction**:
+the reverse pass fits when it is one compiled program (4.53 GiB at 58), and what ran out of
+the card on `a1ba166` is the eager evaluation of the whole-axis gradient, every intermediate
+a live buffer between dispatched operations; at an equal band dial the forward peak is still
+0.57 to 0.64 of the compiled reverse one (2.89 against 4.53, 1.40 against 2.45). **The price is
+time**: three `jvp` recompute the primal three times and rebuild the PAW Hamiltonian, one-centre
+terms included, once a tangent, which on the card was 3.5 times the compiled reverse pass and
+2.1 times the `vmap` form. On one core of D22 (`tools/compare_orientation.py --torque-only`,
+tetragonal cobalt, 18 k-points, second calls) the three-component torque took **0.53 s
+against 1.81 s on `a1ba166`**, whose per-chunk reverse loop rebuilt the Hamiltonian eighteen
+times, and against 0.32 s for the reverse pass kept as one program. `relax_orientation` pays
+about fourteen of them.
+
+The numbers move in the last digits: the live component on cobalt is
+`-4.0594629555201466e-05` against `-4.059462955549652e-05` on `a1ba166` on the same machine,
+7.3e-12 relative (P122 records `-4.0594629553945946e-05`, taken elsewhere), and forward
+against the reverse gradient of the same energy is 7.8e-12 of the norm there. Tests: the
+forward torque against `-jax.grad` of the public energy, taken in the test, at chunks of one,
+three and four (which does not divide eighteen) and the whole axis on ultrasoft cobalt
+(`test_anisotropy.py::test_the_forward_torque_is_the_reverse_gradient_at_every_chunk`, 1e-10),
+and on PAW nickel at a chunk that does not divide its k-points
+(`test_orientation_paw.py`, 1e-10, beside the closed form at 1e-9); a unit test that makes
+`jax.grad`, `jax.value_and_grad` and `jax.vjp` fail inside both torques at three k dials
+(`test_eager.py::test_the_torque_takes_no_reverse_pass`), which fails on `a1ba166`. All
+touched files pass on D22's CPU.
+
+**Not measured**: the fifteen-cell helix on the H200 at `1 1 1` and `1 3 1`, which is the run
+that failed; the `1 3 1` failure was a `jit_chunk` CUBIN load, which the same report saw
+vanish between memory fractions 0.95 and 0.85, so it may be executables rather than the tape,
+and that run should say which. At `band batch 16`, the NiBr2 session's own setting, the
+forward peak on that cell is not extrapolated here.
 
 **Measured 2026-10-09 (branch `open-d`, `tools/gpu/torque_tape.py`).** On D22's A2000 at one
 k-point of `plans/open-d-inputs/nii2-3cell-paw.in` (nine atoms, fully-relativistic PAW, 116

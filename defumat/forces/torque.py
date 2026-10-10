@@ -85,10 +85,14 @@ a ``sum_k`` at ``k_batch`` and the band axis is :func:`~defumat.batching.map_ban
 inside the Hamiltonian at its ``band_batch``, and neither stacks anything, so
 both dials are live, where under ``jax.grad`` the band dial was inert (the scan
 stacked its residuals). The largest term is the local potential's real-space
-block, about ``4 x k_batch x band_batch x npol x N_smooth`` complex numbers for
-the primal and the tangent of the field and its product; ``band_batch`` is the
-one the :class:`~defumat.scf.driver.Calculation` the states came from carries,
-chosen to fit the card in memory mode, or ``DEFUMAT_BAND_BATCH``.
+block, primal and tangent: on nine atoms of NiI2 (116 spinor bands, a 90x30x192
+grid, one k-point, D22's A2000) the derivative raised the card's peak by 1.40,
+1.88 and 2.89 GiB at a band batch of 16, 32 and 58, about 36 MiB a band, which
+is 2.3 spinor fields of ``npol x N_smooth`` complex numbers a band in flight, so
+roughly ``2.3 x k_batch x band_batch x npol x N_smooth`` complex numbers on top
+of the energy's own fixed share. ``band_batch`` is the one the
+:class:`~defumat.scf.driver.Calculation` the states came from carries, chosen
+to fit the card in memory mode (58 of 116 there), or ``DEFUMAT_BAND_BATCH``.
 """
 
 from __future__ import annotations
