@@ -5391,6 +5391,46 @@ slow-marked and with both parametrisations, and did not fail (the file read 1 fa
 5 passed, the failure being the no-magnetization test); 217 commits lie
 between the two, and it is not bisected here.
 
+**Bisected 2026-10-10 on D22 (decided-i), and it is a tolerance the test's own `conv_thr` never
+delivered, not a defect.** The test run alone, one process per commit, 8-11, about 50 s each
+(`review/decided-i/bisect.results`): `30cffd2` itself reads **2.46e-8**, so the range named above
+holds no change; the failure goes back to **`1705a0a`** ("Anderson fits on the density and carries
+becsum", P107, 2026-09-23), with its parent `783d81f` and everything from `ee4524b` (where the test
+was written) to it at **0.000e+00**, scalar and spinor equal to every printed digit. What
+`1705a0a` did is take `becsum`, 98 per cent and more of the squared residual, out of the Anderson
+fit, which is `pw.x`'s rule and is kept. Before it the fit was chosen by `becsum`, which the scalar
+and the spinor run compute identically, and the two SCF trajectories were the same arithmetic;
+since it the fit is chosen by the density alone, which differs between the two in its last digits
+(the two Davidsons, on `npw` and on `2 npw`, stop at different residuals above the 1e-13 floor:
+with the floor at 1e-16 the 1e-12 runs stay together, row six), and the trajectories part at the
+level the SCF is converged to. Measured with the test's response convergence (`tr2 = 1e-24`, CG at 1e-12),
+`review/decided-i/spinor_us*.log`, `us_ladder.log`:
+
+| SCF | scalar `epsilon` | spinor minus scalar | max density difference |
+|---|---|---|---|
+| `conv_thr = 1e-12` (the test's) | 14.325310287 | **1.59e-8** | 6.7e-11 |
+| 1e-14 | 14.325301409 | 9.2e-9 | 1.8e-11 |
+| 1e-16 | 14.325301460 | 1.56e-8 | 9.9e-12 |
+| 1e-18 | 14.325301367 | 2.8e-10 | 1.8e-13 |
+| 1e-12, `becsum` back in the fit (`driver.FIT_BECSUM`) | 14.325321337 | 1.2e-14 | 9.0e-17 |
+| 1e-12, Davidson floor `DEFUMAT_ETHR_MIN = 1e-16` | 14.325310357 | 3.7e-13 | 3.6e-16 |
+| 1e-16, Davidson floor 1e-16 | 14.325301177 | 4.4e-8 | 7.1e-11 |
+
+Three things this says. **The epsilon of this cell is itself converged only to about 1e-5 at the
+test's `conv_thr`**: the scalar run moves from 14.3253103 at 1e-12 to 14.3253014 at 1e-14 and then
+stays there within 1e-7, with `becsum` in the fit or not (14.3253015 at 1e-18 either way, 9.4e-8
+apart), so the value the test recorded before `1705a0a` (14.3253213) was 2.0e-5 from the converged
+one and the value after it is 8.8e-6 from it; a density 1e-10 off moves this epsilon by about 1e-7,
+600 to 900 times, which is what a first-order quantity in the potential does. **So the identity at
+1e-12 was a statement that two runs were the same arithmetic**, true while `becsum` chose the fit
+and true again whenever the two Davidsons happen to stop in step (the floor-1e-16 row at 1e-12),
+and not true in general (the same floor at 1e-16). And **the PAW parametrisation passes because its
+two runs stay bit-close** (1.8e-13, density 3.7e-16 at 1e-12), not because it is better
+converged. The 2026-10-04 slow set that read the ultrasoft case as passing at `30cffd2` ran the
+whole file in one process; a run that lands the two trajectories together is what that would be,
+and it was not reproduced. What the test should assert instead is the user's (`decisions_for_user`
+of the decided-i stream); the code is not changed.
+
 
 # Part XIV -- measured and left open, 2026-09-20
 
@@ -8293,3 +8333,14 @@ differs too. Rebuilt on `pp.x`'s own states the same rule closes to 1.2e-12.
 **Nothing to fix here.** Whether to report the stale `first_band` to Quantum ESPRESSO is the
 user's. A reference image for an unshifted grid would have to be built from the single-state dumps
 with the window, as above, rather than taken from `pp.x`'s `plot_num = 5`.
+
+**What the states do disagree on, and why it does not touch the image.** Inside the window the
+eigenvalues agree to 2.8e-9 Ry. Above it the largest difference per band grows from 1.3e-9 Ry
+(band 1) through 4.3e-8, 3.2e-7, 3.2e-6 to 3.3e-5 (band 5), which is `pw.x` converging an empty
+band only to `max(5 ethr, 1e-5)` (`cegterg.f90:129`, `diago_full_acc = .false.`), and band 6, the
+top of the block, is 3.4e-2 Ry higher here than in `pw.x` at `W` (k 38, 1.9297 against 1.8953 Ry
+absolute, the same 97 plane waves): the highest state of a six-band block at a point with
+degenerate pairs is missed by one Davidson and found by the other, and with `nbnd = 8` the
+difference moves to other k-points and to band 4 (1.0e-1 Ry against `pw.x`'s six-band run). These
+states sit more than 1.1 Ry above `E_F`, where the window's weight is zero, so they are a note on
+comparing the top of a band block between codes and not on the image.
