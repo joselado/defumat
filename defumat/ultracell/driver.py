@@ -74,6 +74,11 @@ quantities. ``magnetic_field`` **drives** one, and what comes back is the
 ``Q``-resolved spin susceptibility, a response rather than an ordered state.
 ``seed_magnetization`` **hands one over** as the initial condition and the loop
 keeps it, which is the ordered state itself (:mod:`defumat.ultracell.seed`).
+Since 2026-10-10 a noncollinear run given a field and no seed is seeded from the
+field's own direction by default (``seed_from_field``), so what it returns is the
+state the loop relaxes to from the field's texture, which is the response only
+where the tiled start reaches the same state (``seed_from_field=False`` asks
+for that start).
 Elk's route is the second with a fade in it -- a random field (``rndbfcu``)
 taken away geometrically (``reducebf``) -- because Elk's self-consistency runs
 on the potential, where a seed is a term in the functional and has to leave;
@@ -94,6 +99,10 @@ handed over.
 * the ultracell Hamiltonian, ``(N nbnd)^2`` complex per ``k0``, which is 6.4 MB
   at ``nbnd = 30, N = 21`` and does not become the constraint before the
   ``(N nbnd)^3`` dense solve has already stopped the run.
+
+A seed, given or taken from the field, is one transient ``(3, *box)`` float64
+array on the host, built once before the loop and freed after seeding: three
+quarters of one copy of the density.
 
 What is *not* on that list is the thing a naive implementation would allocate:
 one ultracell box per basis function. ``state_batch`` is one by default for that
@@ -159,7 +168,9 @@ from defumat.ultracell.states import (
 )
 from defumat.scf.continuation import spin_components
 from defumat.ultracell.seed import (
+    field_seed_axis,
     reference_axis,
+    seed_from_the_field,
     seeded_becsum,
     seeded_density,
 )
@@ -333,6 +344,18 @@ class UltracellResult:
     #: With ``kramers_pairs``, the smallest overlap eigenvalue of the union that
     #: was kept, the conditioning its orthogonalisation ran at.
     kramers_overlap: float | None = None
+    #: Where the loop's starting texture came from: ``"seed_magnetization"``
+    #: when one was passed, ``"magnetic_field"`` when it was taken from the
+    #: applied field's direction (``seed_from_field``), and ``None`` for the
+    #: tiled reference. A run under a field that starts tiled is a response
+    #: about the reference's own state; one seeded from the field is the state
+    #: the loop relaxes to from the field's texture, and on a cell with more
+    #: than one self-consistent solution the two need not be the same one.
+    seed_origin: str | None = None
+    #: Why a run given a ``magnetic_field`` and no seed was **not** seeded from
+    #: it, in words, and ``None`` when it was, when there is no field, or when
+    #: ``seed_from_field=False`` asked for the tiled start.
+    field_seed_skipped: str | None = None
 
     @property
     def eigenvalues_ev(self) -> np.ndarray:
@@ -870,6 +893,7 @@ def run_ultracell(
     external=None,
     magnetic_field=None,
     seed_magnetization=None,
+    seed_from_field: bool | None = None,
     conv_thr: float = 1.0e-8,
     states_conv_thr: float | None = None,
     david: int | None = None,
@@ -933,6 +957,9 @@ def run_ultracell(
             three per point. The noncollinear form is the one that can *turn* --
             a field whose direction rotates from cell to cell drives a helical
             spin density wave, which a collinear run cannot express at all.
+            A noncollinear run given a field and no seed **starts in the
+            field's direction** unless ``seed_from_field=False``; see that
+            argument.
         seed_magnetization: the texture the loop **starts** in, as a factor
             ``s(r)`` multiplying the converged unit cell's own magnetization --
             ``starting_magnetization``'s role, one level up, and ``|s| <= 1``
@@ -947,8 +974,25 @@ def run_ultracell(
             itself. Nothing is faded -- the mixed quantity here is the density,
             so a seed is not a term in the functional and the convergence test
             is untouched, where Elk seeds its *potential* and has to take the
-            seed away again with ``reducebf``. See
-            :mod:`defumat.ultracell.seed`.
+            seed away again with ``reducebf``. Left out under a noncollinear
+            field, the field's own direction is the seed (``seed_from_field``).
+            See :mod:`defumat.ultracell.seed`.
+        seed_from_field: whether a run given a ``magnetic_field`` and no
+            ``seed_magnetization`` starts in the field's own direction,
+            ``B/|B|`` at unit length with the reference's direction kept at
+            the field's nodes (:func:`~defumat.ultracell.seed.seed_from_the_field`).
+            **``None``, the default, seeds wherever it was measured**: a
+            noncollinear reference that carries a direction, on the
+            Kramers-closed basis -- on four cells of hydrogen under a 0.002 Ry
+            turning field that is 9 iterations, where the tiled start does not
+            converge in 1500 (``OPEN.md`` Part VI item 3, the user's decision of
+            2026-10-10). Elsewhere, a paramagnetic or compensated reference
+            above all, the run starts tiled and
+            :attr:`UltracellResult.field_seed_skipped` says why. With
+            spin-orbit coupling it seeds and warns, since nothing there is
+            measured. ``False`` asks for the tiled start, which is what a
+            linear response about the reference's own state wants; ``True``
+            insists, and raises where the seed cannot be taken.
         keep_states: keep the frozen states and the envelope amplitudes on the
             result, as :class:`~defumat.ultracell.states.UltracellStates`. They
             are what an ultracell *wavefunction* is made of, so an STM image
@@ -1034,6 +1078,25 @@ def run_ultracell(
             "magnetization: its states already come in Kramers pairs, so the "
             "basis is closed under time reversal and there is nothing to add"
         )
+    if seed_from_field:
+        # Refused before the frozen solve, which is the expensive step.
+        if seed_magnetization is not None:
+            raise ValueError(
+                "seed_from_field=True and a seed_magnetization: the loop starts "
+                "from one texture, so pass one of the two"
+            )
+        if magnetic_field is None:
+            raise ValueError(
+                "seed_from_field=True with no magnetic_field: there is no field "
+                "for the seed to be taken from"
+            )
+        if int(system.nspin_mag) != 4:
+            raise NotImplementedError(
+                f"seed_from_field on a run with nspin_mag = {system.nspin_mag}: "
+                f"a collinear field's direction is its sign, and seeding a "
+                f"ferromagnet with it is an amplitude or staggered seed that "
+                f"has not been measured. Pass the texture as seed_magnetization"
+            )
     # **The frozen states are only a basis if they are eigenstates of a
     # converged density**, and nothing below this line would notice if they
     # were not: ``fixed_density_states`` takes whatever density it is handed.
@@ -1290,6 +1353,17 @@ def run_ultracell(
         rho_core_tiled = ultracell.tile(jnp.asarray(calculation.rho_core))
     reference_potential = calculation.potential(jnp.asarray(reference.density)).v_scf
 
+    # **The field is evaluated once, on the host, in float64**, and the array
+    # goes to every consumer: the potential, the field's own energy and the
+    # seed taken from it. A callable was evaluated twice before the seed and
+    # would have been three times with it, and the seed needs the float64
+    # values before anything casts them to the run's precision.
+    if magnetic_field is not None and nspin_mag in (2, 4):
+        magnetic_field = np.asarray(
+            _on_the_vector_box(magnetic_field, ultracell) if nspin_mag == 4
+            else _on_the_box(magnetic_field, ultracell, "magnetic field"),
+            dtype=np.float64,
+        )
     external_field = _as_field(
         external, magnetic_field, ultracell, nspin, nspin_mag
     )
@@ -1319,11 +1393,54 @@ def run_ultracell(
     # condition rather than a term in the functional -- the whole of
     # :mod:`defumat.ultracell.seed`, including why nothing is faded.
     seed_field = _seed_field(seed_magnetization, ultracell, nspin, nspin_mag)
+    seed_origin = None if seed_field is None else "seed_magnetization"
     seed_axis = None
+    # **The second door opened by the first** (``OPEN.md`` Part VI item 3, the
+    # user's decision of 2026-10-10): a noncollinear run given a field and no
+    # seed starts in the field's own direction, because what a weak turning
+    # field is slow at is leaving the tiled ferromagnet -- 9 iterations seeded
+    # against none in 1500 on four cells of hydrogen at 0.002 Ry. Gated to the
+    # Kramers-closed basis, where it was measured and where no axis is
+    # preferred, and to a reference with a direction to turn from; anything
+    # else runs from the tiled start and the result says why.
+    field_seed_skipped = None
+    if (seed_field is None and magnetic_field is not None
+            and seed_from_field is not False and nspin_mag == 4):
+        field_seed_skipped = (
+            "kramers_pairs=False: the field's seed is measured on the "
+            "Kramers-closed basis only, and the reference's states alone "
+            "prefer their own direction" if not kramers_pairs and not seed_from_field
+            else None
+        )
+        if field_seed_skipped is None:
+            moment = spin_components(density, nspin_mag)[1]
+            seed_axis, field_seed_skipped = field_seed_axis(
+                moment, float(cell.volume))
+        if field_seed_skipped is None:
+            seed_field = jnp.asarray(seed_from_the_field(magnetic_field, seed_axis))
+            seed_origin = "magnetic_field"
+            if bool(system.lspinorb):
+                warnings.warn(
+                    "this run is seeded from the applied field's own direction "
+                    "with spin-orbit coupling on, which is not measured: an "
+                    "easy axis can hold the moment against a weak field, so the "
+                    "seed may start the loop on the far side of a gapped "
+                    "rotation from the state the field drives. Pass "
+                    "seed_from_field=False to start from the tiled reference "
+                    "instead, and compare total_energy + field_energy",
+                    stacklevel=2,
+                )
+        elif seed_from_field:
+            raise ValueError(
+                f"seed_from_field=True and the seed cannot be taken: "
+                f"{field_seed_skipped}"
+            )
+        elif verbose:
+            print(f"  not seeded from the field: {field_seed_skipped}")
     if seed_field is not None:
         _warn_if_a_constraint_fights_the_seed(system, seed_field, nspin_mag)
         moment = spin_components(density, nspin_mag)[1]
-        if nspin_mag == 4:
+        if nspin_mag == 4 and seed_axis is None:
             # Read off the density being seeded rather than off the system's
             # ``angle1``/``angle2``: what the frozen states carry is the
             # direction the SCF *ended* at, and those two differ by whatever
@@ -1624,30 +1741,17 @@ def run_ultracell(
             f"the magnetization half carries no 1/|G+Q|^2 weight, so on a "
             f"magnetic cell it is the one that decides)"
         )
-        # **A noncollinear cell has a soft direction a collinear one does not,
-        # and the advice it needs is the opposite of the reflex.** Turning every
-        # moment rigidly costs no energy without spin-orbit coupling or
-        # anisotropy, so the ``Q = 0`` transverse magnetization has no restoring
-        # force and the fixed point sits in a nearly flat manifold that the
-        # mixer has to *traverse*. A smaller ``mixing_beta`` traverses it more
-        # slowly, so lowering it makes this worse rather than better -- measured
-        # on a four-cell hydrogen ultracell under a weak (0.002 Ry) turning
-        # field, where ``beta = 0.7`` converges in 263 iterations and ``0.3``
-        # does not converge in 300 (``OPEN.md`` Part VI item 3). At a field five
-        # times stronger every value converges and the best is 0.5. So the
-        # message asks for iterations, or a stronger field, and says explicitly
-        # not to reach for a smaller beta.
-        rigid = "" if nspin_mag != 4 else (
-            f" This is a noncollinear run, where turning every moment together "
-            f"costs no energy without spin-orbit coupling -- so the Q = 0 "
-            f"transverse magnetization has no restoring force, the solution "
-            f"sits in a nearly flat manifold, and the mixer has to traverse it. "
-            f"That is slow when the field pinning the direction is weak: raise "
-            f"max_iterations (currently {max_iterations}), or pin the direction "
-            f"harder with a stronger magnetic_field. **Do not lower "
-            f"mixing_beta** (currently {mixer.beta:g}) -- it was measured to "
-            f"make this worse, 0.3 failing in 300 iterations where 0.7 "
-            f"converged in 263 on the same cell."
+        # **What a noncollinear run that did not converge should try depends on
+        # how it started**, and the advice is read off that rather than given
+        # once for all (:func:`_noncollinear_advice`).
+        rigid = "" if nspin_mag != 4 else _noncollinear_advice(
+            kramers_pairs=bool(kramers_pairs), seed_origin=seed_origin,
+            field_given=magnetic_field is not None,
+            opted_out=seed_from_field is False,
+            skipped=field_seed_skipped, max_iterations=int(max_iterations),
+            beta=float(mixer.beta), nbnd=int(kept),
+            field_strength=(None if magnetic_field is None else float(
+                np.sqrt(np.sum(np.asarray(magnetic_field) ** 2, axis=0)).max())),
         )
         warnings.warn(
             f"the ultracell loop did not converge: dr2 = {total:.3e} Ry"
@@ -1667,6 +1771,8 @@ def run_ultracell(
             float(cell.volume), blocks, band, terms, energies,
             augmentation_residual,
         )
+    result.seed_origin = seed_origin
+    result.field_seed_skipped = field_seed_skipped
     if kramers is not None:
         result.kramers_ranks = np.asarray(kramers.ranks)
         result.kramers_overlap = float(kramers.smallest_overlap)
@@ -1699,6 +1805,83 @@ def run_ultracell(
             ultracell=ultracell, cell=cell, npol=npol, nspin=nspin,
         )
     return result
+
+
+def _noncollinear_advice(*, kramers_pairs: bool, seed_origin, field_given: bool,
+                         opted_out: bool, skipped, max_iterations: int,
+                         beta: float, nbnd: int, field_strength) -> str:
+    """The noncollinear half of the non-convergence warning, by how the run started.
+
+    Four cases, and the advice differs in each (``OPEN.md`` Part VI item 3,
+    measured on four cells of hydrogen, ``(4, 2, 2)`` folded, under a field
+    turning 90 degrees a cell):
+
+    * ``kramers_pairs=False``: the reference's states alone prefer their own
+      direction, the rigid rotation is a flat manifold the mixer has to
+      traverse, and a smaller ``mixing_beta`` traverses it more slowly -- 263
+      iterations at 0.7 against none in 300 at 0.3 under 0.002 Ry on that
+      basis. The default basis is named first, since it has no such manifold.
+    * seeded from the field: the field's own texture was the start. What is
+      left is iterations, a different texture by hand (``seed_magnetization``),
+      and ``nbnd``.
+    * a field, not seeded from it: by request (``seed_from_field=False``), where
+      ``seed_magnetization`` is the first remedy, since on the default basis
+      the tiled start is what is slow (none in 1500 at 0.002 Ry, 9 seeded); or
+      because the reference has no direction, where a seed is refused as well
+      and is therefore **not** named.
+    * no field: the rigid rotation, briefly.
+    """
+    budget = f"max_iterations (currently {max_iterations})"
+    if not kramers_pairs:
+        return (
+            f" This run asked for kramers_pairs=False, the reference's states "
+            f"alone, which prefer the reference's own direction; the default "
+            f"basis adds each state's Kramers partner and prefers none, and on "
+            f"it a seeded four-cell helix converges in 10 iterations in either "
+            f"frame. On this basis the rigid rotation of every moment together "
+            f"is a nearly flat manifold the mixer has to traverse, which is "
+            f"slow when the field pinning the direction is weak: raise {budget} "
+            f"or pin the direction with a stronger magnetic_field, and **do not "
+            f"lower mixing_beta** (currently {beta:g}) -- on this basis 0.3 "
+            f"failed in 300 iterations where 0.7 converged in 263 on four cells "
+            f"of hydrogen under a 0.002 Ry turning field."
+        )
+    strength = "" if field_strength is None else f" (largest |B| {field_strength:.3g} Ry)"
+    if seed_origin == "magnetic_field":
+        return (
+            f" This run was seeded from the applied field's own direction"
+            f"{strength}, the default when a field is given and no seed is, and "
+            f"still did not converge at nbnd = {nbnd}. Hand the loop a different "
+            f"starting texture with seed_magnetization= (a smaller amplitude, or "
+            f"the compromise between the field and the reference's own "
+            f"direction), raise {budget}, or raise nbnd; seed_from_field=False "
+            f"starts from the tiled reference instead, which on four cells of "
+            f"hydrogen under a 0.002 Ry turning field did not converge in 1500 "
+            f"iterations where the field's seed took 9."
+        )
+    if field_given and opted_out:
+        return (
+            f" This run was started from the tiled reference "
+            f"(seed_from_field=False){strength}, and leaving the tiled "
+            f"ferromagnet is what is slow under a weak field: pass the texture "
+            f"the field asks for as seed_magnetization=, or drop "
+            f"seed_from_field=False to take it from the field -- on four cells "
+            f"of hydrogen under a 0.002 Ry turning field the tiled start did "
+            f"not converge in 1500 iterations at mixing_beta 0.7, nor in 400 at "
+            f"0.3, and the field's own texture converged in 9. Otherwise raise "
+            f"{budget}."
+        )
+    if field_given and skipped:
+        return (
+            f" This run was not seeded from the field{strength} because "
+            f"{skipped}, and a seed is refused on such a reference as well, so "
+            f"what is left is {budget} and the field's strength."
+        )
+    return (
+        f" This is a noncollinear run, where turning every moment together "
+        f"costs no energy without spin-orbit coupling, so the Q = 0 transverse "
+        f"magnetization has no restoring force: raise {budget}."
+    )
 
 
 def _result(density, delta_v, levels, occupations, fermi, converged, iterations,
@@ -1863,7 +2046,9 @@ def _as_field(external, magnetic_field, ultracell: Ultracell, nspin: int,
     (``seed_magnetization``, :mod:`defumat.ultracell.seed`). The two are
     different quantities rather than two routes to one: what a field induces is
     the ``Q``-resolved spin susceptibility, a response, and what a seed keeps is
-    an ordered state.
+    an ordered state. A noncollinear run given a field and no seed now starts
+    in the field's own direction (``run_ultracell``'s ``seed_from_field``), so
+    there the two meet; the field is still what this function adds to ``dV``.
     """
     if magnetic_field is not None and nspin_mag == 1:
         # **Two different cells land here and the advice is different.** An

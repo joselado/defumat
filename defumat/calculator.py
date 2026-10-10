@@ -1509,7 +1509,9 @@ class Calculator:
         texture as its *initial condition* and the loop keeps it, which is the
         ordered state itself: a factor ``s(r)`` on the converged cell's own
         moment, scalar for ``nspin = 2`` and a vector that turns it for
-        ``nspin = 4``, with ``|s| <= 1``.
+        ``nspin = 4``, with ``|s| <= 1``. A noncollinear field given with no
+        seed is its own seed by default, the field's direction at unit length
+        (``seed_from_field``; ``False`` starts from the tiled reference).
 
         The atoms do not move and the local band structure cannot relax: this
         computes what a modulation does to a fixed crystal, not a different
@@ -2334,7 +2336,10 @@ class Calculator:
         ``starting_magnetization`` where it does not. Pass ``"seed"`` to keep
         the converged **charge** and take the moment from the seed regardless,
         which is how a *different* magnetic state is reached from the same
-        charge, and ``"none"`` to start unpolarized.
+        charge, and ``"none"`` to start unpolarized. Into ``nspin = 2`` from an
+        unpolarized source with no ``starting_magnetization`` passed, the seed
+        is zero and the run converges unpolarized, where ``pw.x`` refuses such
+        an input: see :meth:`~defumat.system.builder.System.with_spin`.
 
         ``options`` go to :meth:`~defumat.system.builder.System.with_spin`,
         ``tot_magnetization`` among them: a fixed moment carried out of

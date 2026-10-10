@@ -504,6 +504,11 @@ def test_a_turning_field_puts_the_moment_where_the_field_points(
         magnetic_field=turning, max_iterations=150,
     )
     assert result.converged
+    # A paramagnetic reference has no direction for the field's own seed to
+    # turn from, so the default leaves it tiled and says why (``OPEN.md`` Part
+    # VI item 3): the susceptibility is what a field on a paramagnet is for.
+    assert result.seed_origin is None
+    assert "no moment" in result.field_seed_skipped, result.field_seed_skipped
     moments = np.asarray(result.cell_moments())
     assert moments[0][1] > 0.0 and moments[1][1] < 0.0
     assert moments[0][1] == pytest.approx(-moments[1][1], rel=1e-3)

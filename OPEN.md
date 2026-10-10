@@ -3159,7 +3159,86 @@ asked for, and a run that needs the asked-for angles needs a hard constraint on 
 instead. Whether that pattern is anisotropy bunching the helix or the Br sublattice is not
 established.
 
-## 3. A noncollinear ultracell's rigid spin rotation has no restoring force, and a small `mixing_beta` cannot cross it **[opened 2026-09-14, P88 stage 3b; measured 2026-10-09: no traversal on the Kramers-closed basis (10 iterations in either frame), the weak field is the escape from the ferromagnet (no convergence in 1500, 9 seeded); plan in `plans/open-a-vi3.md`]**
+## 3. A noncollinear ultracell's rigid spin rotation has no restoring force, and a small `mixing_beta` cannot cross it **[opened 2026-09-14, P88 stage 3b; measured 2026-10-09: no traversal on the Kramers-closed basis (10 iterations in either frame), the weak field is the escape from the ferromagnet (no convergence in 1500, 9 seeded); plan in `plans/open-a-vi3.md`]; 2026-10-10: the field seeds itself by default (the user's decision), 9 iterations at 0.002 Ry with no seed given, and the warning branches on how the run started]**
+
+**The field's own seed, the default since 2026-10-10 (the user's decision, branch
+`decided-g`).** `run_ultracell` given a `magnetic_field` and no `seed_magnetization` now
+starts in the field's direction, `B/|B|` at unit length with the reference's direction kept
+where `|B|` is below 1e-6 of its largest value, through the existing `seeded_density` and
+`seeded_becsum`. It is gated, following the fable review of the plan: `nspin_mag = 4`, the
+Kramers-closed basis, and a reference whose net moment has a direction
+(`field_seed_axis`, which skips where `reference_axis` would raise); a paramagnetic or
+compensated reference runs tiled and `UltracellResult.field_seed_skipped` says why, and
+`seed_origin` says where every run's start came from. With `lspinorb` it seeds and warns,
+which is a choice handed back to the user. `seed_from_field=False` asks for the tiled start
+and `True` insists. The field is evaluated once, on the host, in float64. The warning now
+has four branches (seeded from the field, tiled by request, tiled because the reference has
+no direction, which does not name `seed_magnetization`, and `kramers_pairs=False`, which
+keeps the 263 against 300 labelled as that basis's).
+
+Measured on D22-0161, cores 0-3, `review/decided-g/vi3c.py` (committed as
+`plans/decided-g-scripts/vi3c.py`), four cells of hydrogen, `(4, 2, 2)` folded, reference
+along `(1,1,1)/sqrt(3)`, `nbnd = 8`, `mixing_beta = 0.7`, `conv_thr = 1e-10`:
+
+| field | start | iterations | `E + field`, Ry per cell | state |
+|---|---|---|---|---|
+| 0.002 | the field's (default, nothing passed) | **9** | -0.9346571879 | flat helix, `|m|` 0.3465, net 0, `m_z` 0 |
+| 0.002 | tiled (`seed_from_field=False`) | not in 400 | -0.9352008183 at iteration 400 | lengths 0.61, 0.32, 0.07, 0.35, net 0.29 |
+| 0.01 | the field's | **9** | -0.9389370513 | flat helix, `|m|` 0.4884 |
+| 0.01 | tiled | 55 | -0.9389370510 | the same helix, net 3.2e-5 |
+
+The 0.002 Ry default run's `total_energy` is the hand-seeded run's of `vi3b.py` to 3e-16 Ry,
+so the automatic seed is that helix. At 0.01 Ry the two starts reach one state: `E + field`
+equal to 2.8e-10 Ry and the cell moments to 1.4e-4 after one global rotation, the tiled run's
+own stop point. On the guide's and notebook 44's cell (`h-noncolin-ultracell.in`,
+`nbnd = 16`, `beta = 0.3`, 0.01 Ry) they do **not**: the default converges in 11 to a flat
+helix of 0.4882 at -0.9389386804, and the tiled start in 142 to the compromise the guide
+recorded (28.3, 66.2, -42.0, -51.0 degrees, net 0.25) at -0.9367898398, **2.15 mRy per cell
+higher**, so there the default changes which solution a user gets, to a lower one. (The
+guide and the notebook recorded 78 iterations for that tiled run; at `a1ba166` it takes 142
+to the same angles to 0.1 degree. Not chased.)
+
+**The exact supercell at 0.002 Ry**, four atoms with a `LOCAL_MAGNETIC_FIELDS` ladder of
+0.002 Ry turning 90 degrees a site, `nbnd = 16`, `conv_thr = 1e-10`: from a helical start it
+converges in 25 iterations to a flat helix, 90.0 degrees a site, `|m|` 0.4296 in the
+spheres, `E` per cell -0.9337358028 against the seeded ultracell's -0.9337326739 (3.1e-6 Ry
+apart, with a sphere ladder against a continuous field); from a ferromagnetic start it does
+not converge in 400 and ends on a non-planar texture. So the state the seed lands on is the
+state the supercell converges to. **What is not settled is that it is the lowest one at this
+field**: the tiled start's iterates pass below it in `E + field` on both sides, 0.54 mRy per
+cell in the ultracell (the Kohn-Sham free energy of iteration 400's output density, which is
+a state in the basis) and 0.10 mRy in the supercell, and neither converges. At 0.01 Ry nothing
+of the kind was seen. Whether the default should stand at weak fields given that is handed
+back to the user.
+
+**Where the default lands on a worse state, measured.** The two-cell field of
+`test_a_turning_field_turns_the_magnetization` (moment along `x`, 0.01 Ry along `+y` in one
+cell and `-y` in the other, `nbnd = 16`, `beta = 0.3`, `review/decided-g/turn2.py`) failed
+that test's charge check under the default: seeded with the staggered `+-y` texture the loop
+converges in 8 iterations to cell moments of length **0.262** (the reference's 0.623), the
+charge moved by 6.6e-2 of its maximum, and `E + field` **0.35 mRy per cell above** the canted
+ferromagnet the tiled start reaches in 3 (moments 0.623, cant 0.0171, charge moved 1.0e-4).
+So a field turning faster than the exchange lets the moments follow, here 180 degrees between
+neighbouring cells, can seed the loop into a higher fixed point, which is the fable review's
+bias concern measured. The test now asks for `seed_from_field=False`, since its subject is
+the linear response about the reference, and asserts the start it took. Whether the default
+should stand, or be narrowed, is handed back to the user.
+
+**The touched test files on D22**, cores 0-3, 6 GB scopes, `review/decided-g/tests-g.log`:
+the three unit files 55 passed; `test_ultracell.py` 33 passed and 1 failed (the two-cell test
+above, before it opted out), 486 s; `test_ultracell_augmented.py` 21 passed, 504 s, the
+paramagnetic PAW silicon run now asserting it ran tiled with "carries no moment";
+`test_ultracell_stm.py` 11 passed, 95 s; after the opt-out the two-cell test and the new
+weak-field test pass together in 33 s. The tiled start is the old code's path: at 0.01 Ry
+it gives 55 iterations and `total_energy` -0.9323727009708999, the `vi3b.py` run's to every
+digit. The uniform tilted field's closed arm runs the
+default and passes unchanged. Notebook 44 is not re-executed: D22's venv has no
+`nbconvert` and calculations are not run on the workstation in this stream, so its recorded
+"78 iterations; 28.2, 66.2, -42, -50.9 degrees" is now the tiled start's and stale for the
+default, which prints 11 iterations and 35.2, 125.2, -144.8, -54.8 degrees, and its prose
+("the moments manage roughly a third of that", the exchange stiffness) describes the tiled
+start. Notebooks 43 and 45 are not affected: 43's field run is an ordinary SCF and 45's
+ultracell field is collinear, where nothing is seeded.
 
 **Re-measured on the default basis, 2026-10-09** (D22-0161, `review/open-a/vi3.py`,
 `vi3b.py`; the tables are in the plan). The seeded four-cell helix converges in **10**
@@ -6340,7 +6419,18 @@ real size, so under `single` it reports half of what is resident. Not reachable 
 input today. And `docs/features.tex`'s list of what the floor covers (around line 499)
 names neither the augmentation lines nor this one.
 
-## 3. `with_spin`'s rules are not the builder's in two places **[opened 2026-09-24; the warning half closed 2026-10-09, the refusal half is a decision for the user]**
+## 3. `with_spin`'s rules are not the builder's in two places **[opened 2026-09-24; the warning half closed 2026-10-09; the refusal half closed 2026-10-10 by the user's decision: allowed, a zero start, documented as a departure from `pw.x`]**
+
+**The refusal half, closed 2026-10-10 (branch `decided-g`).** The user decided that
+`with_spin` into `nspin = 2` with no starting magnetization and no constraint stays allowed
+and means a starting magnetization of 0, unlike `pw.x` (`input.f90:1506`, "some
+starting_magnetization MUST be set"). Nothing in the code changed. `System.with_spin`'s
+docstring and `docs/features.tex`'s continuation entry now say it, with the reason (the
+same call carries a converged moment, and `System` cannot tell an explicit 0.0 from an
+absent value), and `Calculator.with_spin` points there.
+`test_entering_nspin_2_with_no_moment_is_a_zero_start_and_not_refused` pins it: an
+unpolarized smeared silicon `System` goes to `nspin = 2` with every species at 0.0, no
+`tot_magnetization` and no warning.
 
 **The warning, closed 2026-10-09.** The `tot_magnetization` drop warning now finds its
 `stacklevel` by walking out of the package and equinox (`_stacklevel_outside_package` in
@@ -6797,7 +6887,16 @@ the run above on NiBr2**, where spin-orbit coupling is on and the partners remov
 preference between `+e_0` and `-e_0`; it needs that project's inputs on Triton. The
 default stays off until it has been measured.
 
-## 2. A noncollinear supercell under a scalar modulation keeps a transverse magnetization of 2e-5 **[opened 2026-09-26, `PLAN.md` P121; closed 2026-10-09: a stop point, not a fixed point, 3.1e-7 at `conv_thr = 1e-14`]**
+## 2. A noncollinear supercell under a scalar modulation keeps a transverse magnetization of 2e-5 **[opened 2026-09-26, `PLAN.md` P121; closed 2026-10-09: a stop point, not a fixed point, 3.1e-7 at `conv_thr = 1e-14`; the test's reference moved to 1e-14 and its bound to 1.02, 2026-10-10]**
+
+**The test changed, 2026-10-10 (the user's decision, branch `decided-g`).**
+`test_the_noncollinear_ultracell_converges_to_the_supercell` takes its reference supercell
+at `conv_thr = 1e-14` instead of 1e-11 and bounds the 32-band component ratio at **1.02**
+instead of 1.4 (1.0058 measured, `review/open-a/xx2c.py`). On D22-0161 (cores 0-3, a 6 GB
+scope, `review/decided-g/xx2-test.log`) it passes in 34.7 s with a warm compile cache, and
+the same file with only the reference put back at 1e-11 fails the new bound with the
+32-band row `[1.448e-5, 2.064e-5, 2.633e-5, 2.213e-5]`, a ratio of 1.276, which is the
+reference's stop point the bound was hiding. Nothing outside the test moves.
 
 **Measured, 2026-10-09** (D22-0161, `review/open-a/xx2.py`, `xx2b.py`, `xx2c.py`; the
 reference supercell of the test, `nbnd = 32`). The premise below is wrong: **it is a stop

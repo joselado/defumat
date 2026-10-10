@@ -1409,12 +1409,20 @@ def test_a_turning_field_turns_the_magnetization(tmp_path, pseudo_dir):
         zero = np.zeros_like(sign)
         return amplitude * np.stack([zero, sign, zero], axis=-1)
 
+    # **The tiled start, asked for**: this is a linear response about the
+    # reference's own ferromagnet, and the field's own seed is not that here
+    # (``OPEN.md`` Part VI item 3, measured 2026-10-10). Seeded with the
+    # staggered +-y texture the loop converges in 8 iterations to a state whose
+    # moments have collapsed from 0.623 to 0.262, its charge moved by 6.6e-2,
+    # 0.35 mRy per cell *above* the canted ferromagnet the tiled start reaches
+    # in 3; this test's charge check is what caught it.
     result = run_ultracell(
         calculator.system, calculator.pseudos, scf, shape, kgrid,
         nbnd=16, conv_thr=1e-9, states_conv_thr=1e-8, mixing_beta=0.3,
-        magnetic_field=turning, max_iterations=120,
+        magnetic_field=turning, max_iterations=120, seed_from_field=False,
     )
     assert result.converged
+    assert result.seed_origin is None
 
     moments = result.cell_moments()
     # The field averages to ``+y`` over the first cell and ``-y`` over the
@@ -1437,6 +1445,71 @@ def test_a_turning_field_turns_the_magnetization(tmp_path, pseudo_dir):
     moved = np.abs(charge - unperturbed).max() / unperturbed.max()
     transverse = abs(moments[0][1]) / abs(moments[0][0])
     assert moved < 0.2 * transverse, (moved, transverse)
+
+
+@pytest.mark.slow
+def test_a_weak_turning_field_starts_from_its_own_direction(tmp_path, pseudo_dir):
+    """The default seed under a weak field, and the warning's branches around it.
+
+    ``OPEN.md`` Part VI item 3. On the Kramers-closed basis the rigid rotation
+    has nothing to traverse (a seeded helix converges in 10 iterations in either
+    frame); what is slow under a weak turning field is **leaving the tiled
+    ferromagnet**. Four cells of hydrogen, the reference along
+    ``(1,1,1)/sqrt(3)``, under 0.002 Ry turning 90 degrees a cell: from the tiled
+    start no convergence in 1500 iterations at ``mixing_beta = 0.7``, a limit
+    cycle among textures of uneven length; seeded with the field's own texture,
+    9 iterations to a flat helix of 0.3465 per cell with no net moment. That
+    seed is now the default, so this run passes none and asserts it was taken,
+    that it converges within 15, and that what it converges to is the flat
+    helix -- an iteration count alone would be satisfied by a different state.
+
+    The warning is read on the two starts the default does not take, three
+    iterations each so that neither converges: the tiled start asked for
+    (``seed_from_field=False``), which names ``seed_magnetization`` first, and
+    the reference's states alone, which keep the old basis's 263 against 300.
+    """
+    n, kgrid = 4, (1, 2, 2)
+    shape = (n, 1, 1)
+    folded = tuple(a * b for a, b in zip(shape, kgrid))
+    calculator = _noncollinear(tmp_path, pseudo_dir, (1, 1, 1), folded,
+                               tag="weak_unit")
+    scf = calculator.get_scf(conv_thr=1e-11, nbnd=8, max_iterations=300)
+    assert scf.converged
+
+    def turning(x):
+        phase = 2 * np.pi * x[..., 0] / n
+        return 0.002 * np.stack([np.cos(phase), np.sin(phase),
+                                 np.zeros_like(phase)], axis=-1)
+
+    options = dict(conv_thr=1e-10, states_conv_thr=1e-8, mixing_beta=0.7,
+                   magnetic_field=turning)
+    result = run_ultracell(calculator.system, calculator.pseudos, scf, shape,
+                           kgrid, nbnd=8, max_iterations=40, **options)
+    assert result.seed_origin == "magnetic_field"
+    assert result.field_seed_skipped is None
+    assert result.converged and result.iterations <= 15, result.iterations
+    moments = np.asarray(result.cell_moments())
+    lengths = np.linalg.norm(moments, axis=1)
+    assert np.linalg.norm(moments.mean(axis=0)) < 1e-4 * lengths.mean(), moments
+    assert np.abs(lengths / lengths[0] - 1.0).max() < 1e-6, lengths
+    assert np.abs(_pitch(moments) - 360.0 / n).max() < 0.1, moments
+    assert np.abs(_cone(moments)).max() < 0.1, moments
+    jax.clear_caches()
+
+    with pytest.warns(UserWarning, match="did not converge") as record:
+        tiled = run_ultracell(calculator.system, calculator.pseudos, scf, shape,
+                              kgrid, nbnd=8, max_iterations=3,
+                              seed_from_field=False, **options)
+    assert tiled.seed_origin is None and not tiled.converged
+    text = " ".join(str(w.message) for w in record)
+    assert "seed_from_field=False" in text and "seed_magnetization=" in text, text
+    jax.clear_caches()
+
+    with pytest.warns(UserWarning, match="did not converge") as record:
+        run_ultracell(calculator.system, calculator.pseudos, scf, shape, kgrid,
+                      nbnd=16, max_iterations=3, kramers_pairs=False, **options)
+    text = " ".join(str(w.message) for w in record)
+    assert "kramers_pairs=False" in text and "263" in text, text
 
 
 @pytest.mark.slow
@@ -1600,17 +1673,20 @@ def test_the_noncollinear_ultracell_converges_to_the_supercell(
 
     **On the Kramers-closed basis, the default since P121**, every component is
     ten times closer at 32 bands (1.45e-5, 2.06e-5, 2.63e-5 and 2.21e-5 for the
-    charge and ``m_x, m_y, m_z``, against 2.35e-4 to 2.45e-4 on the old basis),
-    and the three magnetic components then disagree by 28 per cent. **That is
-    the reference's and not the ultracell's**: the supercell carries a
-    transverse modulated magnetization of 2.0e-5 of the longitudinal one, which
-    the old basis's error hid as a 2 per cent spread, while the ultracell's own
-    is 3.0e-9 on the closed basis and 9.7e-9 on the old (``OPEN.md`` Part XX
-    item 2). So the physics the component check stood in for is asserted
-    directly, the ultracell's response staying longitudinal to 1e-6 (2.6e-7 at 8
-    bands, 3e-9 at 32); the 10 per
-    cent check stays where the error is above 1e-4, which is where a wrong
-    component order would show, and the top rung is bounded at what it reads.
+    charge and ``m_x, m_y, m_z`` against a reference at ``conv_thr = 1e-11``,
+    against 2.35e-4 to 2.45e-4 on the old basis), and the three magnetic
+    components then disagreed by 28 per cent. **That was the reference's and
+    not the ultracell's**: stopped at 1e-11 the supercell carries a transverse
+    modulated magnetization of 2.0e-5 of the longitudinal one, a stop point
+    rather than a fixed point, which falls to 3.1e-7 at 1e-14, while the
+    ultracell's own is 3.0e-9 on the closed basis and 9.7e-9 on the old
+    (``OPEN.md`` Part XX item 2). So the reference is taken at ``conv_thr =
+    1e-14`` (13 iterations), and the three magnetic components then agree to
+    1.0003, 1.0007 and 1.0058 at 8, 16 and 32 bands, against 1.017, 1.037 and
+    1.276 at 1e-11; the top rung is bounded at 1.02, which the 1e-11 reference
+    fails. The physics the component check stands in for is also asserted
+    directly, the ultracell's response staying longitudinal to 1e-6 (2.6e-7 at
+    8 bands, 3e-9 at 32).
     """
     shape, kgrid = (2, 1, 1), (2, 2, 2)
     folded = tuple(n * m for n, m in zip(shape, kgrid))
@@ -1630,7 +1706,7 @@ def test_the_noncollinear_ultracell_converges_to_the_supercell(
             reference_calculation,
             jnp.asarray(_modulation(shape)(coordinates)),
         ),
-        conv_thr=1e-11, nbnd=32, max_iterations=300,
+        conv_thr=1e-14, nbnd=32, max_iterations=300,
     )
     assert reference.converged
     rho_sup = np.array(reference.density)
@@ -1684,7 +1760,9 @@ def test_the_noncollinear_ultracell_converges_to_the_supercell(
         assert column == sorted(column, reverse=True), (component, column)
     for row in errors[:2]:
         assert max(row[1:]) / min(row[1:]) < 1.1, row
-    assert max(errors[-1][1:]) / min(errors[-1][1:]) < 1.4, errors[-1]
+    # 1.0058 measured with the reference at 1e-14, and 1.276 at 1e-11: the
+    # bound is on the ultracell, not on the reference's stop point.
+    assert max(errors[-1][1:]) / min(errors[-1][1:]) < 1.02, errors[-1]
     assert max(errors[0]) < 3e-3 and max(errors[-1]) < 5e-5, errors
 
 

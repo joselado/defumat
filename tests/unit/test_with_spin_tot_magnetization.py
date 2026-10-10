@@ -230,3 +230,26 @@ def test_the_drop_warning_names_the_script_through_the_calculator(pseudo_dir):
     dropped = [w for w in record if "tot_magnetization" in str(w.message)]
     assert len(dropped) == 1
     assert os.path.basename(dropped[0].filename) == os.path.basename(__file__)
+
+
+# --- into nspin = 2 with nothing: allowed, and a zero start -------------------
+
+
+def test_entering_nspin_2_with_no_moment_is_a_zero_start_and_not_refused():
+    """``OPEN.md`` Part XVIII item 3, the user's decision of 2026-10-10.
+
+    ``pw.x`` refuses an LSDA SCF with neither a starting magnetization nor a
+    constraint (``input.f90:1506``). ``with_spin`` does not, because the same
+    call carries a converged moment through a continuation, and ``System``
+    cannot tell an explicit 0.0 from an absent value. What it means here is
+    pinned: the target starts with every species at zero, and no warning.
+    """
+    smeared = _system("occupations = 'smearing', degauss = 0.02")
+    assert smeared.nspin == 1
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        target = smeared.with_spin(2)
+    assert target.nspin == 2
+    assert target.tot_magnetization is None
+    assert all(m == 0.0 for m in target.starting_magnetization)
+    assert not record
