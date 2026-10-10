@@ -141,7 +141,13 @@ __all__ = ["davidson_eigensolver", "davidson_eigensolver_all", "DAVID_NDIM",
 #: QE's ``diago_david_ndim``: the subspace may grow to this many times ``nbnd``
 #: before it is collapsed back onto the current eigenvector estimates.
 #:
-#: **Four, as QE has it.** Three was tried, and the episode is worth recording
+#: **Four here, where ``pw.x`` runs two.** ``input_parameters.f90:926``
+#: declares 4, but ``read_namelists.f90:408`` (``electrons_defaults``, called
+#: before the namelist is read) sets 2, which is what ``INPUT_PW.txt:2332``
+#: says; this line said "four, as QE has it" until 2026-10-10. A step count
+#: against ``pw.x`` at each code's default therefore compares four against
+#: two, and the like-for-like comparison sets ``diago_david_ndim`` on both
+#: sides. Three was tried here, and the episode is worth recording
 #: because both halves of it were surprises. ``INPUT_PW.txt`` says to use four
 #: "if the time spent in subspace diagonalization is small compared to the time
 #: spent in ``h_psi``", and at the time it was not -- that algebra is
@@ -370,6 +376,42 @@ def _at_width(live, widths: tuple[int, ...], make, narrow: bool,
     return jax.lax.switch(index, [(lambda m: lambda: make(m))(m) for m in widths])
 
 
+def _write_rows(buffer, block, start):
+    """``block`` written into ``buffer`` from row ``start``, rows past its end dropped.
+
+    Returns the new buffer and the row the write was placed at.
+
+    ``dynamic_update_slice`` does not drop what falls off the end: it moves the
+    whole write back until it fits, so a ``(nbnd, ...)`` block put at
+    ``start > len(buffer) - nbnd`` would land on live rows. That clamp is why
+    the collapse used to fire on ``nbase + nbnd > nvecx`` rather than on
+    ``cegterg``'s ``nbase + notcnv > nvecx``: a whole block had to fit. Here
+    the write is placed where the clamp would put it, at ``at = min(start,
+    len - nbnd)``, and the block is shifted down by ``shift = start - at``
+    inside it, the first ``shift`` rows keeping what the buffer held there.
+    The ``shift`` rows that fall off the far end are dropped, which is right
+    exactly when they are zero; the caller guarantees it, since the expansion
+    block is zero past ``notcnv`` and the collapse test leaves ``nbase +
+    notcnv <= nvecx``.
+
+    With ``shift = 0`` the gather is the identity and every row comes from
+    ``block``, so the values are bit for bit a plain ``dynamic_update_slice``;
+    the only cost is reading the ``nbnd`` rows the write replaces, which XLA
+    fuses into the in-place update (``PERFORMANCE.md``, "The collapse
+    condition", has the memory measurement).
+    """
+    rows = block.shape[0]
+    at = jnp.minimum(start, buffer.shape[0] - rows)
+    shift = start - at
+    zeros = (0,) * (buffer.ndim - 1)
+    kept = jax.lax.dynamic_slice(buffer, (at, *zeros), block.shape)
+    index = jnp.arange(rows)
+    moved = block[jnp.clip(index - shift, 0, rows - 1)]
+    keep = (index < shift).reshape((rows,) + (1,) * (buffer.ndim - 1))
+    return (jax.lax.dynamic_update_slice(buffer, jnp.where(keep, kept, moved),
+                                         (at, *zeros)), at)
+
+
 def _precondition(residual, diagonal, overlap_diagonal, energies):
     """``g_psi.f90``: an approximate inverse of ``H - e S`` from its diagonal.
 
@@ -458,6 +500,18 @@ def davidson_eigensolver(
     carries wavefunctions -- and, with ``return_steps``, the step count and the
     number of unsettled bands after them.
     """
+    if david < 2:
+        # ``cegterg.f90:125``: ``IF ( nvec > nvecx / 2 ) CALL errore(...,
+        # 'nvecx is too small', 1)``. One expansion block has to fit beside the
+        # ``nbnd`` vectors the subspace is collapsed onto; at ``david = 1``
+        # there is no room for it, and the write that adds it would land on
+        # the vectors themselves.
+        raise ValueError(
+            f"diago_david_ndim = {david} leaves Davidson no room to expand: the "
+            "subspace holds david * nbnd vectors and needs nbnd for the current "
+            "estimates plus room for one correction block, so david must be at "
+            "least 2 (QE refuses the same case, cegterg.f90:125)"
+        )
     ethr = ETHR if ethr is None else ethr
     gamma_only = hamiltonian.gamma_only
     ndim = hamiltonian.ndim
@@ -748,7 +802,19 @@ def davidson_eigensolver(
         # The projected matrices come along for free: the Ritz vectors
         # diagonalise H within the span and are S-orthonormal by construction,
         # so the retained block is diag(energies) against the identity.
-        full = nbase + nbnd > nvecx
+        #
+        # **Full means no room for the ``notcnv`` vectors about to be added**,
+        # ``cegterg.f90:580-581`` and ``regterg.f90:496-497``. Until 2026-10-10
+        # this read ``nbase + nbnd > nvecx``, room for a whole block, because
+        # the block was written with a ``dynamic_update_slice`` that clamps
+        # rather than drops; that kept ``floor((nvecx - 2 nbnd)/notcnv) + 1``
+        # expansions between collapses against ``cegterg``'s
+        # ``floor((nvecx - nbnd)/notcnv)``, which at ``david = 2`` is a
+        # collapse on every step after the first however few roots are left.
+        # :func:`_write_rows` drops the zero rows that fall off the end, so the
+        # test is ``cegterg``'s on every route, and the step count depends on
+        # nothing the k-batch, ``narrow`` or the band ladder sets.
+        full = nbase + notcnv > nvecx
         blank = jnp.zeros_like(hc_raw)
 
         def refresh():
@@ -804,7 +870,9 @@ def davidson_eigensolver(
         # keeps the block out of the ``cond``'s live range -- which is where the
         # FFT boxes of the next ``h_psi`` are. See :func:`expansion`.
         correction = expansion(evc, hevc, sbec, energies, settled)
-        psi = jax.lax.dynamic_update_slice(psi, correction, (nbase, 0))
+        # ``at`` is ``nbase`` unless the block's zero tail runs past ``nvecx``,
+        # and then the last ``nbnd`` rows; see :func:`_write_rows`.
+        psi, at = _write_rows(psi, correction, nbase)
 
         def live_block(m):
             """``H`` and the projections of the block, over its live rows.
@@ -831,14 +899,21 @@ def davidson_eigensolver(
 
         hcorr, new_becp, new_becq = _at_width(notcnv, band_widths, live_block,
                                               narrow, axis_name)
-        hpsi = jax.lax.dynamic_update_slice(hpsi, hcorr, (nbase, 0))
-        becp = jax.lax.dynamic_update_slice(becp, new_becp, (nbase, 0))
-        becq = jax.lax.dynamic_update_slice(becq, new_becq, (nbase, 0))
-        active = jax.lax.dynamic_update_slice(active, jnp.arange(nbnd) < notcnv, (nbase,))
+        # The same placement for every array the block lands in, so row ``i``
+        # of each is the same vector.
+        hpsi, _ = _write_rows(hpsi, hcorr, nbase)
+        becp, _ = _write_rows(becp, new_becp, nbase)
+        becq, _ = _write_rows(becq, new_becq, nbase)
+        # A prefix mask, always: the refresh resets it to ``nbnd`` rows and
+        # each step extends it by ``notcnv``.
+        active = jnp.arange(nvecx) < nbase + notcnv
+        # The rows from ``at``: the new ones and, when the write was moved
+        # back, the ``nbase - at`` old ones in front of them, whose rows of
+        # the projected matrices are recomputed from the same vectors.
         hc_raw, sc_raw = _at_width(
-            nbase + nbnd, widths,
+            at + nbnd, widths,
             lambda m: _extend_projection(hc_raw, sc_raw, psi, hpsi, becp, becq,
-                                         nbase, nbnd, gamma_only, width=m),
+                                         at, nbnd, gamma_only, width=m),
             narrow, axis_name,
         )
         nbase = nbase + notcnv
