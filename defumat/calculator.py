@@ -1509,7 +1509,9 @@ class Calculator:
         texture as its *initial condition* and the loop keeps it, which is the
         ordered state itself: a factor ``s(r)`` on the converged cell's own
         moment, scalar for ``nspin = 2`` and a vector that turns it for
-        ``nspin = 4``, with ``|s| <= 1``.
+        ``nspin = 4``, with ``|s| <= 1``. A noncollinear field given with no
+        seed is its own seed by default, the field's direction at unit length
+        (``seed_from_field``; ``False`` starts from the tiled reference).
 
         The atoms do not move and the local band structure cannot relax: this
         computes what a modulation does to a fixed crystal, not a different

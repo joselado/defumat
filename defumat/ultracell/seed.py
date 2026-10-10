@@ -9,6 +9,19 @@ quantity, the ``Q``-resolved spin susceptibility, and is a *response* rather tha
 an ordered state. This is the other door: the loop is handed the texture as its
 **initial condition** and keeps it.
 
+**The two doors meet in one place, and it is a default** (2026-10-10, the
+user's decision, ``OPEN.md`` Part VI item 3). A noncollinear run given a
+``magnetic_field`` and no seed is seeded from the field's own direction,
+:func:`seed_from_the_field`, so a field-driven run on a magnetized spinor
+reference *starts* in the texture the field asks for rather than in the tiled
+ferromagnet: what is slow under a weak turning field is leaving the
+ferromagnet, 9 iterations seeded against none in 1500 on four cells of hydrogen
+at 0.002 Ry. What comes back is then the state the loop relaxes to from that
+start, which is a response only where that state is the one the tiled start
+reaches too; ``seed_from_field=False`` asks for the tiled start. It is gated to
+where it was measured: the Kramers-closed basis, a reference with a direction
+to turn from (:func:`field_seed_axis`), and ``nspin_mag = 4``.
+
 **Why there is nothing to fade, which is the one design decision here.** Elk
 seeds a *random field* (``rndbfcu``) and takes it away geometrically
 (``reducebf``), and it has to, because its self-consistency runs on the
@@ -114,14 +127,25 @@ from defumat.scf.continuation import (
 )
 
 __all__ = [
+    "FIELD_NODE_TOL",
     "SEED_CONE_TOL",
     "SEED_NET_TOL",
+    "field_seed_axis",
     "refuse_an_unmagnetized_reference",
+    "seed_from_the_field",
     "seeded_becsum",
     "seeded_density",
     "reference_axis",
     "warn_if_the_seed_leaves_the_closed_sector",
 ]
+
+#: Where an applied field is too small, against its own largest value, for its
+#: direction to be one. A turning field has nodes -- ``(0, cos(2 pi x/2 - pi/2),
+#: 0)`` is exactly zero on two planes of the box -- and ``B/|B|`` there is either
+#: ``0/0`` or the direction of a round-off residue; :func:`seed_from_the_field`
+#: keeps the reference's own direction at such a point instead, which is the
+#: tiled state's and is what a zero field leaves alone.
+FIELD_NODE_TOL = 1.0e-6
 
 #: How much of ``int |m| dr`` the *net* moment ``|int m dr|`` must carry for the
 #: reference's direction to be a direction at all. A ferromagnetic cell gives
@@ -212,6 +236,66 @@ def reference_axis(magnetization, volume: float) -> np.ndarray:
             f"magnetic_field= instead, which needs no reference direction"
         )
     return net / length
+
+
+def field_seed_axis(magnetization, volume: float):
+    """:func:`reference_axis` for the field's own seed, which skips rather than raises.
+
+    Returns ``(axis, None)`` when the reference has a direction to turn from,
+    and ``(None, reason)`` when it has none, ``reason`` saying which of the two
+    guards above it fails. A seed asked for by hand on such a reference is
+    refused, because the caller asked for something that cannot be done; the
+    seed ``run_ultracell`` takes from an applied field by default was asked for
+    by nobody, and a field on a paramagnet or a compensated cell is exactly the
+    susceptibility a field is for, so that run goes ahead unseeded and the
+    result says why (:attr:`~defumat.ultracell.driver.UltracellResult.field_seed_skipped`).
+    """
+    m = np.asarray(magnetization, dtype=float)
+    absolute = float(np.sum(np.sqrt(np.sum(m**2, axis=0))) * volume / m[0].size)
+    if absolute <= MAGNETIZATION_TOL:
+        return None, (
+            f"the reference carries no moment (absolute magnetization "
+            f"{absolute:.3e} mu_B), so there is nothing to turn onto the field"
+        )
+    net = m.reshape(3, -1).sum(axis=1) * volume / m[0].size
+    length = float(np.linalg.norm(net))
+    if length <= SEED_NET_TOL * absolute:
+        return None, (
+            f"the reference's net moment ({length:.3e} mu_B against an "
+            f"absolute {absolute:.3e}) is a residue of cancellation, so it has "
+            f"no direction to turn from"
+        )
+    return net / length, None
+
+
+def seed_from_the_field(field, axis) -> np.ndarray:
+    """The seed ``run_ultracell`` takes from an applied vector field: ``B / |B|``.
+
+    ``field`` is ``(3, *box)`` on the ultracell box and ``axis`` the reference's
+    own direction, from :func:`field_seed_axis`. The seed is the field's
+    direction at unit length, so every cell's moment is turned onto the way the
+    field points and keeps the reference's length, which is what the helix a
+    weak turning field asks for was seeded by hand with when it converged in 9
+    iterations where the tiled start did not in 1500 (``OPEN.md`` Part VI item
+    3). Where ``|B|`` is below :data:`FIELD_NODE_TOL` of its largest value the
+    seed is ``axis`` itself, the identity, so a node of the field leaves the
+    reference untouched rather than punching a hole in the moment, which a zero
+    seed would (:func:`_turned` maps a zero-length seed to zero magnetization).
+
+    Taken on the host in float64, whatever the run's precision policy: a
+    float32 ``B / |B|`` reaches ``1 + 6e-8``, which :func:`_refuse_a_seed_over_one`
+    refuses at ``1 + 1e-12``.
+    """
+    b = np.asarray(field, dtype=np.float64)
+    if b.ndim < 1 or b.shape[0] != 3:
+        raise ValueError(
+            f"the field a seed is taken from is (3, *box); this one is {b.shape}")
+    length = np.sqrt(np.sum(b**2, axis=0))
+    largest = float(length.max()) if length.size else 0.0
+    a = np.asarray(axis, dtype=np.float64).reshape((3,) + (1,) * (b.ndim - 1))
+    live = length > FIELD_NODE_TOL * largest
+    safe = np.where(live, length, 1.0)
+    return np.where(live[None], b / safe[None], np.broadcast_to(a, b.shape))
 
 
 def warn_if_the_seed_leaves_the_closed_sector(seed, axis: np.ndarray) -> float:
