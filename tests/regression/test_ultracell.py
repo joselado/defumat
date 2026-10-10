@@ -1600,17 +1600,20 @@ def test_the_noncollinear_ultracell_converges_to_the_supercell(
 
     **On the Kramers-closed basis, the default since P121**, every component is
     ten times closer at 32 bands (1.45e-5, 2.06e-5, 2.63e-5 and 2.21e-5 for the
-    charge and ``m_x, m_y, m_z``, against 2.35e-4 to 2.45e-4 on the old basis),
-    and the three magnetic components then disagree by 28 per cent. **That is
-    the reference's and not the ultracell's**: the supercell carries a
-    transverse modulated magnetization of 2.0e-5 of the longitudinal one, which
-    the old basis's error hid as a 2 per cent spread, while the ultracell's own
-    is 3.0e-9 on the closed basis and 9.7e-9 on the old (``OPEN.md`` Part XX
-    item 2). So the physics the component check stood in for is asserted
-    directly, the ultracell's response staying longitudinal to 1e-6 (2.6e-7 at 8
-    bands, 3e-9 at 32); the 10 per
-    cent check stays where the error is above 1e-4, which is where a wrong
-    component order would show, and the top rung is bounded at what it reads.
+    charge and ``m_x, m_y, m_z`` against a reference at ``conv_thr = 1e-11``,
+    against 2.35e-4 to 2.45e-4 on the old basis), and the three magnetic
+    components then disagreed by 28 per cent. **That was the reference's and
+    not the ultracell's**: stopped at 1e-11 the supercell carries a transverse
+    modulated magnetization of 2.0e-5 of the longitudinal one, a stop point
+    rather than a fixed point, which falls to 3.1e-7 at 1e-14, while the
+    ultracell's own is 3.0e-9 on the closed basis and 9.7e-9 on the old
+    (``OPEN.md`` Part XX item 2). So the reference is taken at ``conv_thr =
+    1e-14`` (13 iterations), and the three magnetic components then agree to
+    1.0003, 1.0007 and 1.0058 at 8, 16 and 32 bands, against 1.017, 1.037 and
+    1.276 at 1e-11; the top rung is bounded at 1.02, which the 1e-11 reference
+    fails. The physics the component check stands in for is also asserted
+    directly, the ultracell's response staying longitudinal to 1e-6 (2.6e-7 at
+    8 bands, 3e-9 at 32).
     """
     shape, kgrid = (2, 1, 1), (2, 2, 2)
     folded = tuple(n * m for n, m in zip(shape, kgrid))
@@ -1630,7 +1633,7 @@ def test_the_noncollinear_ultracell_converges_to_the_supercell(
             reference_calculation,
             jnp.asarray(_modulation(shape)(coordinates)),
         ),
-        conv_thr=1e-11, nbnd=32, max_iterations=300,
+        conv_thr=1e-14, nbnd=32, max_iterations=300,
     )
     assert reference.converged
     rho_sup = np.array(reference.density)
@@ -1684,7 +1687,9 @@ def test_the_noncollinear_ultracell_converges_to_the_supercell(
         assert column == sorted(column, reverse=True), (component, column)
     for row in errors[:2]:
         assert max(row[1:]) / min(row[1:]) < 1.1, row
-    assert max(errors[-1][1:]) / min(errors[-1][1:]) < 1.4, errors[-1]
+    # 1.0058 measured with the reference at 1e-14, and 1.276 at 1e-11: the
+    # bound is on the ultracell, not on the reference's stop point.
+    assert max(errors[-1][1:]) / min(errors[-1][1:]) < 1.02, errors[-1]
     assert max(errors[0]) < 3e-3 and max(errors[-1]) < 5e-5, errors
 
 
