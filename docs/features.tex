@@ -3089,6 +3089,21 @@ $\partial\epsilon/\partial\varepsilon$ match a central difference over
 re-converged strained cells to \textbf{2e-4}, which is that difference's own
 floor, and the rank-4 tensor is cubic to 3e-14 with nothing imposing it.
 
+\noindent The six columns of $C_{ijkl}$ are six \code{jvp}s of the stress at
+one point, and they are evaluated together, as one \code{vmap} over the six
+tangents, whenever the compiled program's own scratch
+(\code{memory\_analysis().temp\_size\_in\_bytes}, read before it runs) is at
+most \code{SHARED\_PRIMAL\_BYTES}, 1~GiB, and one at a time above it. The
+shared form computes the stress once instead of six times: 3.4x faster than
+the one-at-a-time form on silicon with 64 k-points and 204~MB of scratch, which
+it takes, and 3.7x on a rhombohedral boron nitride cell at 1.6~GB, 3.5 times
+one column's, which is
+above the gate and so runs one column at a time unless the gate is raised. It
+moves the tensor by round-off, 1.6e-11 on 26.2; \code{shared\_primal\_bytes=0} (or
+\code{DEFUMAT\_ELASTIC\_SHARED\_BYTES=0}) keeps the one-at-a-time form and its
+last bits. The gate costs the shared program's compile even when it refuses,
+once per shape with the kernel cache on.
+
 \begin{refuses}
 \textbf{Refuses.} Both are \code{nspin = 1}, insulators and
 \textbf{clamped-ion}. \code{d(chi)/d(strain)} and the elasto-optic tensor run

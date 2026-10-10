@@ -8,6 +8,11 @@ loop now traces it once (:func:`~defumat.eager.compiled_function`) and runs the
 kept program six times. What is checked is the count of traces and that the
 tensor is the old loop's to the bit, which is what makes this a free change
 rather than a number-moving one.
+
+Since 2026-10-10 the six columns share their primal as well, one ``vmap`` of
+the ``jvp`` over the six tangents, whenever the compiled program's temporaries
+are within ``SHARED_PRIMAL_BYTES`` (1 GiB); above it the one-trace loop runs.
+The tests below take each side of the gate and check that the gate fires.
 """
 
 from pathlib import Path
@@ -56,13 +61,26 @@ def _six_compiled_jvps(calculation, result, response):
     return tensor
 
 
-def test_the_six_columns_are_traced_once_and_the_tensor_is_unchanged(pseudo_dir, monkeypatch):
+@pytest.fixture(scope="module")
+def silicon(pseudo_dir):
+    """The converged cell, its strain response, and the old loop's tensor."""
     calculator = Calculator.from_file(DATA / "si-electrostriction.in",
                                       pseudo_dir=pseudo_dir, announce=False)
     result = calculator.get_scf()
     response = calculator.get_strain_response()
     calculation = calculator.calculation
+    return (calculation, result, response,
+            _six_compiled_jvps(calculation, result, response))
 
+
+def _tensor(silicon, **options):
+    calculation, result, response, _ = silicon
+    return elastic_constants(calculation, result.wavefunctions, result.eigenvalues,
+                             result.density, response, **options).tensor
+
+
+def test_the_six_columns_are_traced_once_and_the_tensor_is_unchanged(silicon, monkeypatch):
+    """Below the shared-primal gate (0 bytes): one trace, the old tensor to the bit."""
     traces = []
     original = eager._trace
 
@@ -71,9 +89,54 @@ def test_the_six_columns_are_traced_once_and_the_tensor_is_unchanged(pseudo_dir,
         return original(fn, args)
 
     monkeypatch.setattr(eager, "_trace", counting)
-    tensor = elastic_constants(calculation, result.wavefunctions, result.eigenvalues,
-                               result.density, response).tensor
+    tensor = _tensor(silicon, shared_primal_bytes=0)
     assert len(traces) == 1, f"{len(traces)} traces for six columns"
 
     monkeypatch.setattr(eager, "_trace", original)
-    np.testing.assert_array_equal(tensor, _six_compiled_jvps(calculation, result, response))
+    np.testing.assert_array_equal(tensor, silicon[3])
+
+
+def test_the_shared_primal_is_taken_under_the_gate_and_agrees(silicon, monkeypatch):
+    """At the default 1 GiB the six columns are one ``vmap``, to round-off of the loop.
+
+    ``si-electrostriction`` compiles to about 59 MB of temporaries, so the
+    shared form is taken; the spy says it was, and that the size it was
+    decided on is the one the compiler reported. The tensor agrees with the
+    six separate columns to round-off and not to the bit, since the batched
+    products sum in a different order (1.6e-11 on 26.2 on rBN).
+    """
+    from defumat.response import elastic
+
+    seen = []
+    original = elastic.sized_function
+
+    def spy(*args):
+        out = original(*args)
+        seen.append(None if out is None else out[1])
+        return out
+
+    monkeypatch.setattr(elastic, "sized_function", spy)
+    tensor = _tensor(silicon)
+    assert len(seen) == 1 and seen[0] is not None, seen
+    assert 0 < seen[0] <= elastic.SHARED_PRIMAL_BYTES, seen
+    scale = np.max(np.abs(silicon[3]))
+    assert np.max(np.abs(tensor - silicon[3])) <= 1e-10 * scale
+
+
+def test_a_program_over_the_gate_falls_back_to_the_loop(silicon, monkeypatch):
+    """The gate fires: a budget one byte under the compiled size takes the loop, to the bit."""
+    from defumat.response import elastic
+
+    seen = []
+    original = elastic.sized_function
+
+    def spy(*args):
+        out = original(*args)
+        seen.append(out[1])
+        return out
+
+    monkeypatch.setattr(elastic, "sized_function", spy)
+    _tensor(silicon)                       # read the size the compiler reports
+    tensor = _tensor(silicon, shared_primal_bytes=seen[0] - 1)
+    assert len(seen) == 2 and seen[1] == seen[0]
+    np.testing.assert_array_equal(tensor, silicon[3])
