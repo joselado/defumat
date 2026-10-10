@@ -7154,6 +7154,33 @@ of two calls of `get_dielectric_tensor(tr2=<ph.x's bar on the raw sum>, verbose=
 the default: `len(history)`, `average_iterations` and `epsilon` against the `ph.x` references.
 Then every response regression file through `tools/run_regression.sh`.
 
+**2026-10-10 (decided-i): Born charges on a cell with vacuum default to `tr2 = 1e-16`, the user's
+decision; every other solve keeps 1e-14.** Nothing in the package detected a vacuum (the mixers
+take the run's word for it through `mixing_mode`, and local-TF's only density threshold,
+`LOCAL_TF_EPS`, is 1e-32, which no pseudo-density reaches), so the test is new and is a number
+about the converged state, `response/efield.py`'s `vacuum_fraction`: the share of the dense grid
+holding less than `VACUUM_DENSITY = 1e-4` electrons/bohr^3, with a cell having vacuum above
+`VACUUM_FRACTION = 0.10`. The fractions below 1e-4 on the committed cells, D22: 0 on `si-epsilon`,
+`si-epsilon-us` and `alas-raman` (minima 1.4e-3, 3.5e-3, 1.0e-3) and on `al-metal-nosym`
+(minimum 2.1e-4); 0.563 on `o2-fixed-lsda`, 0.441 on `h-sheet` and 0.207 on
+`graphene-bilayer-electrostriction`, the thinnest vacuum here at 13.7 bohr. `dielectric_tensor`
+takes `tr2=None` and resolves it with `default_tr2`, an explicit value always wins, and the result
+carries the `tr2` it was tested against. Measured at `b69d7cc`, 8-11:
+
+| cell | `tr2` used | passes | `Z*` against `ph.x`, largest | |
+|---|---|---|---|---|
+| `si-epsilon`, default | 1e-14 | 5 | | history, `epsilon` and `Z*` bit-identical to an explicit `tr2 = 1e-14` |
+| O2, default (was 1e-14) | **1e-16** | 8 | **1.495e-4** | `Z*_zz` 0.200084 |
+| O2, `tr2 = 1e-14` | 1e-14 | 7 | 2.571e-3 | `Z*_zz` 0.197663, which fails the test's 5e-4 |
+
+`test_lsda_response.py::test_the_lsda_born_charges_match_ph_x` no longer passes `tr2` and asserts
+the result's is 1e-16; `test_response.py::test_the_born_charges_match_quantum_espresso` asserts the
+four bulk cells run at 1e-14 and have no vacuum point; `tests/unit/test_response_convergence.py`
+holds the rule on synthetic densities (both files pass on D22; with the old `efield.py` the O2
+test's default is the 2.571e-3 row). One `tr2` governs the solve, so the dielectric tensor that
+comes with the charges on a vacuum cell is converged to 1e-16 too (O2's `eps_zz` 1.198006849
+against 1.198021960 at 1e-14, `ph.x` 1.198004867); asked for alone it stays at 1e-14.
+
 ### 2. The Sternheimer CG starts every solve from zero, where `ph.x` starts each pass from the previous pass's `dpsi` **[moves a number; done 2026-10-03 with the CG schedule, branch `response-dr2`, `PLAN.md` P127]**
 
 Sites: `response/sternheimer.py:632-633`; the loops' stored solutions at `efield.py:575`,
@@ -8221,3 +8248,48 @@ What the agents of this sweep's follow-up found outside their items, recorded ra
   6.2e-12 and 1.76e-11 at `run_shift_current`'s defaults, so the settings they were taken at were
   not recovered; and `test_photocurrent.py`'s spinor docstring says 4.6e-9 where it has read 4.5e-9
   since `27eeaa2`.
+
+
+# Part XXIV -- the STM image against `pp.x` on an unshifted grid, 2026-10-10
+
+## 1. `pp.x` leaves band 1 out at six `W` points of an unshifted grid, and this code's image is the right one **[opened and attributed 2026-10-10 (decided-i); the defect is in QE 7.5's `PP/src/stm.f90`, nothing here changed]**
+
+What was open (Part IX item 2): fcc aluminium on the whole unshifted 4x4x4 grid
+(`al-metal-nosym.in`, Marzari-Vanderbilt 0.05 Ry, six bands), zero bias, where `pp.x` and
+`get_stm` disagree by 2.6e-3 on a peak of 8.66e-3 while agreeing to 2.2e-10 on a shifted grid. The
+question was which side is wrong. The way we answer it is by taking the sum apart: `pp.x` with
+`plot_num = 7` writes `|psi_nk|^2 / omega` for one state at a time (`local_dos` with `iflag = 0`,
+`wg = 1`), so one run gives all 64 x 6 single-state densities, and `stm.f90`'s image can then be
+rebuilt from `pp.x`'s own states and `pw.x`'s own eigenvalues and weights (read from
+`data-file-schema.xml`), with the window rule written down two ways. `tools/stm/ppx_states.sh` and
+`tools/stm/ppx_state_sum.py`; the run is in `review/decided-i/sts/` on D22, `pp.x` the vendored
+7.5 build at `review/open-c/pp.x`.
+
+| image | max difference from `pp.x`'s own STM dump (`al.stm.b20`) |
+|---|---|
+| `pp.x`'s states, `stm.f90:146-149` as written (`first_band` not reset per k) | **1.2e-12** |
+| `pp.x`'s states, `first_band` reset at every k, which is every state within `3 degauss` of `E_F` | 2.602e-3 |
+| this code's `get_stm` | 2.602e-3 |
+| this code's `get_stm` against `pp.x`'s states with the window, not against `pp.x`'s dump | **3.2e-10** |
+
+So the whole gap is the stale `first_band` and none of it is the states, the weights or the Fermi
+level (7.9097 eV both, `E_F` 0.5813526 Ry to 7e-10): the literal rule reproduces `pp.x`'s dump to
+1.2e-12, and this code's image is the sum `stm.f90` means to take to 3.2e-10. What happens
+physically is the following. At the six `W` points of the grid (`pw.x`'s k 28, 31, 40, 46, 55
+and 58, `(-1/2, -1, 0) 2pi/a` and its images) the lowest band lies 0.0360 Ry below `E_F`, inside
+the window of `3 degauss` = 0.15 Ry, so no band at that k is below `down1` and the loop never
+assigns `first_band`; it keeps the previous k-point's value, 2, and band 1 is left out with a
+weight `wk w0gauss` of 0.0173 at each of the six. A shifted 4x4x4 grid has no k-point whose lowest
+band is within 0.15 Ry of `E_F` on this cell, which is why the two codes agree there. `stm.f90`'s
+own declaration calls `first_band` the "first band close enough to the specified energy range", so
+the intent is the window and this code's sum is that intent.
+
+**Why the emulation of 2026-10-09 stopped at 2.1e-3.** It applied the stale rule to this code's
+states, and at `W` bands 1 and 2 are degenerate (-0.0359578 Ry both, in `pw.x`). The rule drops
+one member of a degenerate pair, which is a quantity rule D4 says is not defined: which combination
+is "band 1" is the eigensolver's choice, `pw.x`'s and this code's differ, and so the dropped half
+differs too. Rebuilt on `pp.x`'s own states the same rule closes to 1.2e-12.
+
+**Nothing to fix here.** Whether to report the stale `first_band` to Quantum ESPRESSO is the
+user's. A reference image for an unshifted grid would have to be built from the single-state dumps
+with the window, as above, rather than taken from `pp.x`'s `plot_num = 5`.
