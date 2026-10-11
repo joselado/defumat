@@ -623,31 +623,56 @@ def _noncollinear_gradient_correction_grad_m(
 def _spiral_transverse_gradient(mx, my, cell: Cell, spiral):
     """``grad`` of a spiral's laboratory transverse pair, in the turning frame.
 
-    ``spiral`` is ``(lab, q)``: the laboratory sphere ``{G : |G - q| <= G_rho}``
-    as a :class:`GVectors` on the dense box, and ``q`` in units of the
-    reciprocal lattice vectors, so that ``(G - q)`` follows a strained cell.
-    ``m'_+ = m'_x + i m'_y`` is gathered on that sphere, its laboratory field
-    is ``m'_+ e^{-i q.r}``, and the laboratory derivative is ``i (G - q)`` on
-    each coefficient. With ``F`` the field of ``(G - q) c`` that is ``i F``,
+    ``spiral`` is ``(miller, inside, q)`` (:func:`spiral_box_frequencies`): the
+    Miller index each box point stands for, chosen as the image nearest ``q``;
+    the laboratory sphere ``|G - q| <= G_rho`` on the box as a mask; and ``q``
+    in units of the reciprocal lattice vectors, so that ``(G - q)`` follows a
+    strained cell and a traced ``q``. ``m'_+ = m'_x + i m'_y``, its laboratory
+    field is ``m'_+ e^{-i q.r}``, and the laboratory derivative is ``i (G - q)``
+    on each coefficient. With ``F`` the field of ``(G - q) c`` that is ``i F``,
     whose real and imaginary parts are the covariant gradients of ``m'_x`` and
     ``m'_y``: ``-Im F`` and ``Re F``.
 
-    **The sphere's own G set and not the box's frequencies**, for two reasons
-    measured or read: the box's adjoint puts every box frequency into the
-    potential, which the unfolded supercell, cut at its own resident sphere,
-    never has (0.61 Ry of field against a largest 0.66 on the cobalt helix);
-    and the laboratory sphere takes the Nyquist plane of an even box
-    (:func:`~defumat.basis.gvectors.displaced_gvectors`), where the box's
-    frequency is the wrong sign.
+    **Cut at the laboratory sphere and read at the nearest image**, for three
+    reasons measured or read. Uncut, the derivative's adjoint fills every box
+    frequency, which the unfolded supercell, cut at its own sphere, never has
+    (0.61 Ry of field against a largest 0.66 on the cobalt helix). Read at the
+    box's own frequencies, the Nyquist plane an even box gives the laboratory
+    sphere has the wrong sign of ``G``. And a G list of the laboratory sphere
+    cannot be used at all where it does not fit the box -- a norm-conserving
+    spiral with no smooth grid, whose pair is the box's own product of states --
+    whereas the nearest image is defined on any box and is that list exactly
+    where it fits.
     """
-    lab, q = spiral
-    coefficients = r_to_g(jax.lax.complex(mx, my), lab.fft_index)
+    miller, inside, q = spiral
     real = mx.dtype
-    g = (lab.miller.astype(real) - jnp.asarray(q, dtype=real)) @ jnp.asarray(cell.bg, dtype=real)
-    f = jax.vmap(g_to_r, in_axes=(0, None, None))(
-        g.T * coefficients[None], lab.fft_index, lab.grid
-    )
+    g = (jnp.asarray(miller, dtype=real) - jnp.asarray(q, dtype=real)) @ jnp.asarray(
+        cell.bg, dtype=real)  # (n1, n2, n3, 3), 1/bohr
+    box = jnp.where(inside, jnp.fft.fftn(jax.lax.complex(mx, my), axes=(-3, -2, -1)), 0.0)
+    f = jnp.fft.ifftn(jnp.moveaxis(g, -1, 0) * box[None], axes=(-3, -2, -1))
     return -jnp.imag(f), jnp.real(f)
+
+
+def spiral_box_frequencies(grid, cell: Cell, q_crystal, ecut: float):
+    """``(miller, inside)`` for :func:`_spiral_transverse_gradient`, on the host.
+
+    For each box point along each axis, the Miller index congruent to it modulo
+    the box that is nearest ``q``'s own component, so that a field carrying
+    ``e^{-i q.r}`` is read at its laboratory wavevectors; and the mask of those
+    within ``|G - q|^2 <= ecut`` (Ry, the dense cutoff). Where the laboratory
+    sphere fits the box this is
+    :func:`~defumat.basis.gvectors.displaced_gvectors` point for point. A step
+    function of ``q``, so frozen under a derivative with the basis.
+    """
+    q = np.asarray(q_crystal, dtype=float).reshape(3)
+    axes = []
+    for n, qi in zip(grid, q):
+        j = np.arange(n)
+        axes.append(j - n * np.round((j - qi) / n))
+    miller = np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1)
+    bg = np.asarray(jax.device_get(cell.bg), dtype=float)
+    g2 = np.sum(((miller - q) @ bg) ** 2, axis=-1)
+    return miller.astype(np.int32), g2 <= float(ecut) * (1.0 + 1.0e-12)
 
 
 #: The two noncollinear gradient corrections ``v_of_rho`` can take: ``pw.x``'s

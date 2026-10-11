@@ -167,6 +167,7 @@ from defumat.scf.potential import (
     as_potential_components,
     fixed_quantization_axis,
     resolve_noncollinear_gga,
+    spiral_box_frequencies,
     scf_accuracy,
     scf_accuracy_split,
     tau_accuracy,
@@ -2345,6 +2346,10 @@ class Calculation:
         self.spiral_q_crystal = (
             np.asarray(system.spiral_q, dtype=float) if self.spiral else np.zeros(3)
         )
+        #: The cell the ``'grad_m'`` laboratory sphere is selected on, kept as
+        #: built: :meth:`at_strain` traces :attr:`system`'s cell, and the
+        #: selection is a step function frozen with the basis.
+        self._grad_m_reference_cell = system.cell
         self.basis_kpoints = (
             spiral_kpoints(system.kpoints, system.spiral_q, system.cell)
             if self.spiral else system.kpoints
@@ -4558,33 +4563,37 @@ class Calculation:
         return energy, _paw_block_matrices(self.augmentation, blocks, self.nspin_mag)
 
     def _spiral_q_argument(self):
-        """A spiral's laboratory sphere and ``q`` for the potential, or ``None``.
+        """A spiral's box frequencies, its laboratory sphere and ``q``, or ``None``.
 
         Read by ``noncollinear_gga = 'grad_m'`` only, whose ``grad m`` is taken
         in the laboratory frame (:func:`~defumat.scf.potential._spiral_transverse_gradient`);
         ``None`` for every other run so that nothing else is traced with it.
-        The sphere is :attr:`spiral_dense` where the run built one and is built
-        here otherwise (a norm-conserving spiral with no smooth grid), once per
-        basis; ``q`` goes in reciprocal-lattice units, so it strains with the
-        cell, and is :attr:`spiral_q_crystal`, which ``at_spiral_q`` at a frozen
-        basis carries traced so that ``dE/dq`` differentiates it.
+        The frequencies and the sphere belong to the basis -- built at
+        :attr:`spiral_qcart`, once per basis -- while ``q`` is
+        :attr:`spiral_q_crystal`, which ``at_spiral_q`` at a frozen basis
+        carries traced so that ``dE/dq`` differentiates it. Lattice coordinates,
+        so ``q`` strains with the cell.
         """
         if not self.spiral or self.noncollinear_gga != "grad_m":
             return None
-        qcart = np.asarray(self.spiral_qcart, dtype=float)
-        lab = self.spiral_dense
-        if lab is None:
-            key = tuple(qcart)
-            cache = self.__dict__.setdefault("_grad_m_lab_spheres", {})
-            if key not in cache:
-                cache.clear()
-                cache[key] = displaced_gvectors(
-                    self.system.cell, self.basis.dense, -qcart)[0]
-            lab = cache[key]
+        cell = self.system.cell
+        # ``system.spiral_q`` is where the basis is in every move (a frozen-basis
+        # ``at_spiral_q`` leaves it there), and the sphere is selected on the
+        # cell as built, :attr:`_grad_m_reference_cell`, since a strained copy
+        # traces its cell and the selection is frozen with the basis.
+        basis_q = np.asarray(self.system.spiral_q, dtype=float)
+        dense = self.basis.dense
+        key = (tuple(np.round(basis_q, 12)), tuple(dense.grid))
+        cache = self.__dict__.setdefault("_grad_m_spiral_box", {})
+        if key not in cache:
+            cache.clear()
+            cache[key] = spiral_box_frequencies(
+                dense.grid, self._grad_m_reference_cell, basis_q, dense.ecut)
+        miller, inside = cache[key]
         q = getattr(self, "spiral_q_crystal", None)
         if q is None:
-            q = qcart @ np.linalg.inv(np.asarray(self.system.cell.bg, dtype=float))
-        return lab, jnp.asarray(q, dtype=self.system.cell.precision.real)
+            q = basis_q
+        return miller, inside, jnp.asarray(q, dtype=cell.precision.real)
 
     def _axis_argument(self):
         """:attr:`quantization_axis` as the array the compiled potentials take, or ``None``.

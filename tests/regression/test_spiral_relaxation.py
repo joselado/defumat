@@ -732,3 +732,51 @@ def test_a_tabulated_augmentation_table_is_refused(pseudo_dir, monkeypatch):
     tabulated = Calculation(system, _pseudos(system, pseudo_dir))
     with pytest.raises(NotImplementedError, match="tabulated"):
         compute_spiral_gradient(tabulated, state_from_result(result), k_batch=None)
+
+
+@lru_cache(maxsize=2)
+def _converged_pbe(pseudo_dir: Path, choice: str = "grad_m"):
+    """The chain under PBE, so the noncollinear gradient correction is in play."""
+    text = (GENERATED / "h-chain-spiral.in").read_text().replace(
+        "spiral_q(3) = 0.25", "spiral_q(3) = 0.3").replace(
+        "occupations = 'smearing'",
+        f"input_dft = 'pbe', noncollinear_gga = '{choice}', occupations = 'smearing'")
+    system = build_system(parse_pw_input(text))
+    pseudos = _pseudos(system, pseudo_dir)
+    calculation = Calculation(system, pseudos)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        result = run_scf(system, pseudos, calculation=calculation,
+                         conv_thr=1e-12, mixing_beta=0.3, max_iterations=300)
+    assert result.converged
+    return calculation, result
+
+
+def test_the_grad_m_gradient_carries_q_through_exchange(pseudo_dir):
+    """Under ``noncollinear_gga = 'grad_m'`` exchange depends on ``q``.
+
+    The laboratory gradient of the transverse pair is ``i (G - q)``, so the
+    exchange energy at frozen coefficients is a function of ``q`` and its
+    derivative is part of ``dE/dq``. Identity 1 and 2 again, on the chain under
+    PBE: the frozen functional is the SCF total, the gradient is its central
+    difference, and the k-chunked route (which splits off the global terms and
+    has to add that derivative back) agrees with the single pass.
+    """
+    calculation, result = _converged_pbe(pseudo_dir)
+    assert calculation.noncollinear_gga == "grad_m"
+    state = state_from_result(result)
+    whole = compute_spiral_gradient(calculation, result, k_batch=None)
+    chunked = compute_spiral_gradient(calculation, result, k_batch=1)
+    assert whole.total_energy == pytest.approx(result.total_energy, abs=1e-11)
+    assert chunked.gradient == pytest.approx(whole.gradient, abs=1e-10)
+
+    delta = 1.0e-5
+    q = np.asarray(calculation.system.spiral_q, dtype=float)
+    plus, minus = q.copy(), q.copy()
+    plus[2] += delta
+    minus[2] -= delta
+    difference = (
+        float(spiral_energy(calculation, jnp.asarray(plus), state))
+        - float(spiral_energy(calculation, jnp.asarray(minus), state))
+    ) / (2.0 * delta)
+    assert difference == pytest.approx(whole.gradient[2], abs=1e-7)
