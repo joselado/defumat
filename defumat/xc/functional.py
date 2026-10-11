@@ -97,6 +97,10 @@ SMALL_SPIN_GGA = 1.0e-10
 _RHO_TRASH = 0.5
 _SIGMA_TRASH = 0.2
 
+#: Below this ratio (``s/n``, ``A/S``) the noncollinear exchange's divided
+#: differences become derivatives (:meth:`Functional.noncollinear_gradient_exchange_energy`).
+_NONCOLLINEAR_RELATIVE_STEP = 1.0e-4
+
 
 def _fully_polarized(rho):
     """``dmxc_lsda``'s gate on the KERNEL, which is not the gate on the potential.
@@ -735,6 +739,92 @@ class Functional(eqx.Module):
             jnp.where(active, density, _RHO_TRASH), zeta, safe_sigma
         )
         return jnp.where(active, contribution, 0.0)
+
+    def spin_gradient_correlation_energy(self, rho, grad):
+        """``sc`` alone, on a ``(2, ...)`` channel pair and its gradients.
+
+        Correlation reads the pair through its total, its polarization and the
+        *total* gradient only, so it is even in ``zeta``: the noncollinear
+        ``'grad_m'`` branch hands it ``(n +- |m|)/2`` and ``(grad n/2, grad n/2)``
+        and needs nothing else (:meth:`noncollinear_gradient_exchange_energy`).
+        """
+        return self._spin_correlation_energy(rho, grad)
+
+    def noncollinear_gradient_exchange_energy(self, n, s, S, A, t):
+        """``sx`` of a noncollinear magnetization, built from ``grad m``, Ry/bohr^3.
+
+        The collinear exchange of a pair ``(n +- m_z)/2`` is, by spin scaling,
+        ``1/2 sum_sigma gx(n + sigma m_z, g + 2 sigma b + Gamma)`` with
+        ``g = |grad n|^2``, ``b = grad n . grad m_z`` and ``Gamma = |grad m_z|^2``.
+        The noncollinear form replaces ``m_z`` and ``b`` by invariants of a joint
+        spin rotation -- ``s = |m|``, ``A = |a|`` with ``a_k = grad n . grad m_k``,
+        ``Gamma = sum_k |grad m_k|^2`` and ``t = a . m`` -- and the sign
+        Scalmani and Frisch take (JCTC 8, 2193 (2012), ``f = sgn t``) by the cosine
+        ``c = t/(s A)``:
+
+            sx = 1/4 sum_{sigma, tau} (1 + sigma tau c) gx(n + sigma s, S + 2 tau A),
+
+        ``S = g + Gamma``. Where ``a`` is parallel to ``m``, ``c = +-1`` and this
+        is the collinear exchange exactly, nodes included; elsewhere it is a new
+        functional, not ``pw.x``'s ``grad |m|``. Split into the parts even and
+        odd in ``A``, the odd part is odd in ``s`` too, so it is ``t H`` with
+        ``H`` a smooth function of ``s^2`` and ``A^2``:
+
+            H = (q(n + s) - q(n - s)) / s,   q(r) = (gx(r, S + 2A) - gx(r, S - 2A)) / (4A),
+
+        and that is the form evaluated, with each divided difference switched to
+        its derivative below a **relative** step of ``1e-4`` (``2 dq/dr`` and
+        ``dgx/dsigma``). A guard on ``c`` itself is wrong in the derivative, not
+        only imprecise: ``d(t H)/dm_k = a_k H + ...`` does not vanish at a node
+        where ``a`` does not, and ``where(s A > eta, c, 0)`` drops it (measured
+        in the plan's review: ``dE/dm_x`` 1.22e-2 at ``s = 1e-8``, 0 at the node,
+        where the right value is 1.21e-2). The ratio's round-off grows as
+        ``1/x^2`` and the leading Taylor term is off by ``0.85 x^2``, so ``1e-4``
+        is where both are ``1e-8`` of ``H``, ``1e-16`` of ``gx`` in the energy.
+
+        Each ``gx`` is gated exactly as :meth:`_spin_exchange_energy` gates a
+        channel, on ``(n + sigma s)/2`` and ``(S + 2 tau A)/4``, so a collinear
+        field reproduces that method's value to round-off.
+
+        Args:
+            n: the charge density, core included, ``(...)``.
+            s: ``|m|``.
+            S: ``|grad n|^2 + sum_k |grad m_k|^2``.
+            A: ``|a|``, ``a_k = grad n . grad m_k``.
+            t: ``a . m``.
+        """
+        both = n > SMALL_SPIN_GGA
+
+        def gx(r, sigma):
+            # One channel of ``_spin_exchange_energy`` at ``(r/2, sigma/4)``.
+            active = (
+                both & (r > 2.0 * SMALL_SPIN_GGA)
+                & (jnp.sqrt(jnp.abs(sigma)) > 2.0 * SMALL_SPIN_GGA)
+            )
+            safe_r = jnp.where(active, r, 2.0 * _RHO_TRASH)
+            safe_sigma = jnp.where(active, sigma, 4.0 * _SIGMA_TRASH)
+            return jnp.where(active, self.gradient_exchange(safe_r, safe_sigma), 0.0)
+
+        def dgx_dsigma(r, sigma):
+            return jax.grad(lambda x: jnp.sum(gx(r, x)))(sigma)
+
+        step_a = A > _NONCOLLINEAR_RELATIVE_STEP * S
+        safe_a = jnp.where(step_a, A, 1.0)
+
+        def q(r):
+            ratio = (gx(r, S + 2.0 * A) - gx(r, S - 2.0 * A)) / (4.0 * safe_a)
+            return jnp.where(step_a, ratio, dgx_dsigma(r, S))
+
+        step_s = s > _NONCOLLINEAR_RELATIVE_STEP * n
+        safe_s = jnp.where(step_s, s, 1.0)
+        slope = 2.0 * jax.grad(lambda r: jnp.sum(q(r)))(n)
+        h = jnp.where(step_s, (q(n + s) - q(n - s)) / safe_s, slope)
+
+        even = 0.25 * (
+            gx(n + s, S + 2.0 * A) + gx(n + s, S - 2.0 * A)
+            + gx(n - s, S + 2.0 * A) + gx(n - s, S - 2.0 * A)
+        )
+        return even + t * h
 
 
 def _spin_channels(rho):

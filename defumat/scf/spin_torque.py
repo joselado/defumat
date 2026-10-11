@@ -195,6 +195,7 @@ def torque_of_result(calculation, result, density=None) -> ExchangeTorque:
         calculation.quantization_axis,
         None,
         calculation.source_free,
+        getattr(calculation, "noncollinear_gga", "kubler"),
     )
     return exchange_torque(
         density, potential.v_scf, calculation.system.cell,

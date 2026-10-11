@@ -544,6 +544,111 @@ def _noncollinear_gradient_correction(
     return jnp.concatenate([v0[None], (sign * vs)[None] * direction]), energy
 
 
+def _noncollinear_gradient_correction_grad_m(
+    rho_r: jnp.ndarray,
+    gvectors: GVectors,
+    cell: Cell,
+    functional: Functional,
+    rho_core: jnp.ndarray | None,
+):
+    """The gradient correction of ``noncollinear_gga = 'grad_m'``.
+
+    :func:`_noncollinear_gradient_correction` builds the rotated pair from
+    ``|m|`` and takes the gradient of that, which has a kink wherever ``m``
+    vanishes; with no fixed axis -- every spiral -- the transverse second
+    derivative diverges there and the SCF stalls (``OPEN.md`` Part XXI item 1).
+    This branch builds exchange from the invariants of ``grad n`` and
+    ``grad m_k`` instead (:meth:`Functional.noncollinear_gradient_exchange_energy`),
+    which is smooth, needs no axis and is the collinear functional exactly
+    for a collinear ``m``. Correlation is unchanged: it is even in
+    ``zeta = |m|/n`` and reads only ``grad n``.
+
+    The potential is the derivative of the integrated energy with respect to
+    the four grid components, times ``N/Omega``: the transpose of ``gradient``
+    is the divergence, so this is ``v1 - div h`` with nothing written twice,
+    at 4 + 12 transforms forward and 12 + 4 back against the ``'kubler'``
+    branch's 16.
+    """
+    npts = rho_r[0].size
+
+    def energy(rho):
+        charge = rho[0] if rho_core is None else rho[0] + jnp.real(rho_core)
+        magnetization = rho[1:]
+        components = jnp.concatenate([charge[None], magnetization])
+        grads = jax.vmap(gradient, in_axes=(0, None, None))(
+            jax.vmap(r_to_g, in_axes=(0, None))(components, gvectors.fft_index),
+            gvectors, cell,
+        )
+        grad_n, grad_m = grads[0], grads[1:]
+        s = safe_modulus(magnetization)
+        a = jnp.sum(grad_n[None] * grad_m, axis=1)
+        exchange = functional.noncollinear_gradient_exchange_energy(
+            charge,
+            s,
+            jnp.sum(grad_n * grad_n, axis=0) + jnp.sum(grad_m * grad_m, axis=(0, 1)),
+            safe_modulus(a),
+            jnp.sum(a * magnetization, axis=0),
+        )
+        correlation = functional.spin_gradient_correlation_energy(
+            0.5 * jnp.stack([charge + s, charge - s]),
+            0.5 * jnp.stack([grad_n, grad_n]),
+        )
+        return cell.volume / npts * jnp.sum(exchange + correlation)
+
+    e, v = jax.value_and_grad(energy)(rho_r)
+    return v * (npts / cell.volume), e
+
+
+#: The two noncollinear gradient corrections ``v_of_rho`` can take: ``pw.x``'s
+#: rotation onto ``|m|`` (Kubler's, :func:`_noncollinear_gradient_correction`)
+#: and the one built from ``grad m``
+#: (:func:`_noncollinear_gradient_correction_grad_m`).
+NONCOLLINEAR_GGA = ("kubler", "grad_m")
+
+
+def refuse_noncollinear_gga(choice, nspin_mag, functional, is_paw, source_free) -> str:
+    """``noncollinear_gga`` checked against the run, returned when it is allowed.
+
+    ``'grad_m'`` changes only the plane-wave grid's gradient correction, so it is
+    refused wherever another piece of the run would go on using ``|m|`` and the
+    run would mix two functionals, and wherever it would mean nothing.
+    """
+    if choice not in NONCOLLINEAR_GGA:
+        raise ValueError(
+            f"noncollinear_gga = {choice!r}: the choices are "
+            + ", ".join(repr(c) for c in NONCOLLINEAR_GGA)
+        )
+    if choice == "kubler":
+        return choice
+    if nspin_mag != 4:
+        raise ValueError(
+            "noncollinear_gga = 'grad_m' is a functional of a noncollinear "
+            "magnetization and needs noncolin = .true. with a magnetic run; "
+            "a collinear or unpolarized one has nothing for it to change"
+        )
+    if not functional.is_gradient or functional.is_meta:
+        raise ValueError(
+            f"noncollinear_gga = 'grad_m' changes the gradient correction of "
+            f"exchange, and {functional.name} has none it applies to (an LDA, "
+            "or a potential-only meta-GGA whose spin frame is its own)"
+        )
+    if is_paw:
+        raise NotImplementedError(
+            "noncollinear_gga = 'grad_m' with a PAW dataset is not implemented: "
+            "the one-centre gradient correction (defumat.paw.gradient) rotates "
+            "onto |m| on every sphere, so the run would take the grad m "
+            "functional on the grid and the |m| one inside the spheres. Use a "
+            "norm-conserving or ultrasoft dataset"
+        )
+    if source_free:
+        raise NotImplementedError(
+            "noncollinear_gga = 'grad_m' under nosource is not implemented: "
+            "the projection was written and checked for a field parallel to m, "
+            "and this functional's field already has a transverse part"
+        )
+    return choice
+
+
 #: ``gradcorr`` leaves the vector part of its potential alone below this
 #: magnetization -- a looser threshold than the LDA part's ``vanishing_mag``,
 #: and QE's.
@@ -820,6 +925,7 @@ def v_of_rho(
     quantization_axis: jnp.ndarray | None = None,
     tau: jnp.ndarray | None = None,
     source_free: bool = False,
+    noncollinear_gga: str = "kubler",
 ) -> Potential:
     """The full self-consistent potential from a real-space density.
 
@@ -839,6 +945,12 @@ def v_of_rho(
     and not the energy, which is why nothing about ``etxc`` moves here and why
     the run has to say so -- the number it reports is then not the value of
     anything it minimised.
+
+    ``noncollinear_gga`` picks the gradient correction of an ``nspin = 4``
+    magnetization: ``'kubler'``, ``pw.x``'s rotation onto ``|m|`` signed along
+    ``quantization_axis`` when there is one, or ``'grad_m'``, built from
+    ``grad m`` and ignoring the axis
+    (:func:`_noncollinear_gradient_correction_grad_m`). Static.
 
     ``tau`` is the kinetic energy density in Ry, per spin channel, and is
     required by -- and only by -- a meta-GGA functional. It is the one
@@ -911,10 +1023,15 @@ def v_of_rho(
             # answer back. Kept in its own function because the rotation is
             # nonlinear -- the rotated density's transform cannot be assembled
             # from the components of ``rho(G)`` and has to be taken afresh.
-            v_gradient, e_gradient = _noncollinear_gradient_correction(
-                jnp.real(rho_r), gvectors, cell, functional, rho_core,
-                quantization_axis,
-            )
+            if noncollinear_gga == "grad_m":
+                v_gradient, e_gradient = _noncollinear_gradient_correction_grad_m(
+                    jnp.real(rho_r), gvectors, cell, functional, rho_core,
+                )
+            else:
+                v_gradient, e_gradient = _noncollinear_gradient_correction(
+                    jnp.real(rho_r), gvectors, cell, functional, rho_core,
+                    quantization_axis,
+                )
             v_xc = v_xc + v_gradient
             if source_free:
                 # After the gradient correction and before Hartree: what is

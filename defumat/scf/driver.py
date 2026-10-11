@@ -166,6 +166,7 @@ from defumat.scf.potential import (
     Potential,
     as_potential_components,
     fixed_quantization_axis,
+    refuse_noncollinear_gga,
     scf_accuracy,
     scf_accuracy_split,
     tau_accuracy,
@@ -263,7 +264,8 @@ def _same_value(first, second) -> bool:
     return True
 
 
-#: ``source_free`` is Elk's ``nosource`` and is an input flag, so it is static.
+#: ``source_free`` is Elk's ``nosource`` and is an input flag, so it is static;
+#: so is ``noncollinear_gga``, which picks a branch of the functional.
 #: ``quantization_axis`` is **not**, although it cannot change during one SCF:
 #: :meth:`Calculation.with_texture` turns it with the texture, and as a static
 #: argument it made every orientation of a scan or a relaxation a new executable
@@ -272,7 +274,7 @@ def _same_value(first, second) -> bool:
 #: (:meth:`Calculation._axis_argument`), or as ``None`` when there is no fixed
 #: axis, and that difference is in the pytree's structure, so the branch it
 #: selects is still taken at trace time.
-_potential_of_rho = jax.jit(v_of_rho, static_argnums=(8,))
+_potential_of_rho = jax.jit(v_of_rho, static_argnums=(8, 9))
 _accuracy = jax.jit(scf_accuracy)
 _accuracy_split = jax.jit(scf_accuracy_split)
 #: ``tauk_ddot``, added to ``accuracy`` the way ``ns_ddot`` is rather than fused
@@ -2678,6 +2680,15 @@ class Calculation:
             # gets it too.
             refuse_source_free(system, self.functional, self.pseudos)
 
+        #: ``noncollinear_gga``: which gradient correction an ``nspin = 4``
+        #: magnetization takes, ``pw.x``'s ``'kubler'`` or ``'grad_m'``
+        #: (:func:`~defumat.scf.potential._noncollinear_gradient_correction_grad_m`).
+        #: Static, and refused at the door where it would mix two functionals.
+        self.noncollinear_gga = refuse_noncollinear_gga(
+            getattr(system, "noncollinear_gga", "kubler"), self.nspin_mag,
+            self.functional, self.is_paw, self.source_free,
+        )
+
         self.symmetries = system.symmetry_group()
         #: Whether this run actually symmetrises with :attr:`symmetries`.
         #:
@@ -4481,6 +4492,7 @@ class Calculation:
             self._axis_argument(),
             tau,
             self.source_free,
+            self.noncollinear_gga,
         )
         field = self.magnetic_field if field is None else field
         if field is None:
