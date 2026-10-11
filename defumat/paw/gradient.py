@@ -75,7 +75,8 @@ def radial_derivative(f: jnp.ndarray, r: jnp.ndarray) -> jnp.ndarray:
 
 
 def onecenter_gradient_correction(
-    rho_lm, rho_rad, core, paw, axis=None, with_small=False
+    rho_lm, rho_rad, core, paw, axis=None, with_small=False,
+    noncollinear_gga="kubler", spiral_q=None,
 ):
     """``(v_lm, energy, vector_rad)``: what a GGA adds to one on-site sphere.
 
@@ -107,6 +108,9 @@ def onecenter_gradient_correction(
     nspin = rho_lm.shape[0]
     weighted = paw.angular.weighted_ylm
 
+    if nspin == 4 and noncollinear_gga == "grad_m":
+        return _noncollinear_gradient_grad_m(
+            rho_lm, rho_rad, core, paw, with_small, spiral_q)
     if nspin == 4:
         return _noncollinear_gradient(rho_lm, rho_rad, core, paw, axis, with_small)
 
@@ -255,6 +259,84 @@ def _noncollinear_gradient(rho_lm, rho_rad, core, paw, axis, with_small=False):
         paw.angular.weights[:, None] * energy_density * (r2 * paw.weights_full)[None, :]
     )
     return potential, energy, (potential_rad[1:] if with_small else None)
+
+
+def _noncollinear_gradient_grad_m(rho_lm, rho_rad, core, paw, with_small=False,
+                                  spiral_q=None):
+    """``noncollinear_gga = 'grad_m'`` on the radial sphere.
+
+    The plane-wave branch's functional
+    (:meth:`~defumat.xc.functional.Functional.noncollinear_gradient_energy`) on
+    the quadrature: ``grad n`` and ``grad m_k`` in the orthonormal ``(r, phi,
+    theta)`` components ``_gradient`` returns, so every invariant is the same dot
+    product. Nothing is rotated, so nothing has a kink, and each component's
+    potential is ``v1 - div h`` assembled as the collinear branch assembles it.
+
+    **The multipoles of ``m`` are projected back from the grid** rather than
+    read from ``rho_lm``: a fully-relativistic dataset's small component has
+    been added to ``rho_rad`` and not to ``rho_lm``, and the angular gradient
+    reads the multipoles. The map is linear, so this introduces no kink.
+
+    **On a spin spiral** (``spiral_q``, cartesian, 1/bohr) the magnetization is
+    in the frame that turns with ``q``, and the laboratory gradient is the
+    covariant one, ``grad m'_x + q m'_y`` and ``grad m'_y - q m'_x``, with ``q``
+    resolved on each direction's ``(r, phi, theta)``; the atom's own phase
+    ``q . tau`` is a global rotation and drops out of every invariant. The same
+    two terms change the potential, ``- q . h_y`` in ``m'_x`` and ``+ q . h_x``
+    in ``m'_y``, which the plane-wave branch gets from its derivative and the
+    explicit assembly here has to write down.
+    """
+    nlm = paw.nlm
+    r2 = paw.r2
+    weighted = paw.angular.weighted_ylm
+
+    charge = rho_rad[0] / r2 + core
+    magnetization = rho_rad[1:] / r2
+    m_lm = jnp.einsum("xl,sxr->slr", weighted[:, :nlm], rho_rad[1:])
+    grad_n = _gradient(rho_lm[0], charge, paw)
+    grad_m = jnp.stack([_gradient(m_lm[k], magnetization[k], paw) for k in range(3)])
+
+    if spiral_q is not None:
+        local = _local_components(jnp.asarray(spiral_q, dtype=charge.dtype), paw)
+        grad_m = jnp.stack([
+            grad_m[0] + local[:, :, None] * magnetization[1][None],
+            grad_m[1] - local[:, :, None] * magnetization[0][None],
+            grad_m[2],
+        ])
+
+    v1, h, energy_density = paw.functional.noncollinear_gradient_terms_and_energy(
+        charge, magnetization, grad_n, grad_m)
+    if spiral_q is not None:
+        v1 = v1.at[1].add(-jnp.sum(local[:, :, None] * h[2], axis=0))
+        v1 = v1.at[2].add(jnp.sum(local[:, :, None] * h[1], axis=0))
+
+    h = h * r2
+    h = h.at[:, 2].divide(paw.angular.sin_theta[:, None])
+    v_lm = jnp.einsum("xl,sxr->slr", weighted[:, :nlm], v1)
+    h_lm = jnp.einsum("xl,scxr->sclr", weighted, h)
+    potential = v_lm - jax.vmap(_divergence, in_axes=(0, None))(h_lm, paw)
+
+    energy = jnp.sum(
+        paw.angular.weights[:, None] * energy_density * (r2 * paw.weights_full)[None, :]
+    )
+    vector_rad = None
+    if with_small:
+        vector_rad = jnp.einsum("xl,slr->sxr", paw.angular.ylm[:, :nlm], potential[1:])
+    return potential, energy, vector_rad
+
+
+def _local_components(vector, paw):
+    """A cartesian vector on each direction's ``(r, phi, theta)`` versors, ``(3, nx)``.
+
+    ``theta-hat = phi-hat x r-hat``, the orientation
+    :func:`~defumat.paw.angular._angular_derivatives` gives ``dylmt``.
+    """
+    r_hat = paw.angular.directions
+    sin_theta = paw.angular.sin_theta
+    phi_hat = jnp.stack([-r_hat[:, 1], r_hat[:, 0], jnp.zeros_like(sin_theta)], axis=1)
+    phi_hat = phi_hat / sin_theta[:, None]
+    theta_hat = jnp.cross(phi_hat, r_hat)
+    return jnp.stack([r_hat @ vector, phi_hat @ vector, theta_hat @ vector])
 
 
 #: ``eps12`` in ``compute_rho_spin_lm``: below this magnetization the local axis

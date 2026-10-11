@@ -194,3 +194,139 @@ def test_grad_m_is_the_default_wherever_it_applies():
     assert resolve_noncollinear_gga(None, 2, PBE, False, False) == "kubler"
     assert resolve_noncollinear_gga(None, 4, lda, False, False) == "kubler"
     assert resolve_noncollinear_gga("kubler", 4, PBE, False, False) == "kubler"
+
+
+# --- the meta-GGA's parity form, on the grid --------------------------------
+
+
+def _collinear_meta_fields(gvectors):
+    n = 0.05 + _band_limited(gvectors, 51, scale=1e-3)
+    mz = _band_limited(gvectors, 52, scale=1e-3)
+    tau0 = 0.03 + _band_limited(gvectors, 53, scale=1e-4)
+    tauz = _band_limited(gvectors, 54, scale=1e-4)
+    return n, mz, tau0, tauz
+
+
+def test_the_meta_gga_parity_form_is_the_collinear_meta_gga_for_a_collinear_field(silicon):
+    """Tran-Blaha on a collinear field with nodes, along a tilted axis: the
+    ``nspin = 2`` branch's channel potentials, as ``v_0`` and ``B``."""
+    cell, gvectors = silicon
+    tb09 = get_functional("TB09")
+    n, mz, tau0, tauz = _collinear_meta_fields(gvectors)
+    collinear = v_of_rho(_collinear_pair(n, mz), gvectors, cell, functional=tb09,
+                         tau=_collinear_pair(tau0, tauz))
+    e = _unit([0.3, -0.5, 0.8])
+    rho4 = np.concatenate([n[None], e[:, None, None, None] * mz[None]])
+    tau4 = np.concatenate([tau0[None], e[:, None, None, None] * tauz[None]])
+    vector = v_of_rho(jnp.asarray(rho4), gvectors, cell, functional=tb09,
+                      tau=jnp.asarray(tau4), noncollinear_gga="grad_m")
+    v_up, v_dw = np.asarray(collinear.v_scf)
+    v = np.asarray(vector.v_scf)
+    assert float(vector.meta_c) == pytest.approx(float(collinear.meta_c), rel=1e-13)
+    assert np.max(np.abs(v[0] - 0.5 * (v_up + v_dw))) < 1e-11
+    assert np.max(np.abs(v[1:] - e[:, None, None, None] * (0.5 * (v_up - v_dw))[None])) < 1e-11
+
+
+def test_the_meta_gga_parity_form_turns_with_the_spins(silicon):
+    cell, gvectors = silicon
+    tb09 = get_functional("TB09")
+    rho = _noncollinear(gvectors, 60)
+    tau = np.concatenate([(0.03 + _band_limited(gvectors, 64, scale=1e-4))[None],
+                          np.stack([_band_limited(gvectors, 65 + k, scale=5e-5)
+                                    for k in range(3)])])
+    rotation = np.linalg.qr(np.random.default_rng(5).normal(size=(3, 3)))[0]
+
+    def turn(field):
+        out = field.copy()
+        out[1:] = np.einsum("ij,j...->i...", rotation, field[1:])
+        return out
+
+    one = np.asarray(v_of_rho(jnp.asarray(rho), gvectors, cell, functional=tb09,
+                              tau=jnp.asarray(tau), noncollinear_gga="grad_m").v_scf)
+    two = np.asarray(v_of_rho(jnp.asarray(turn(rho)), gvectors, cell, functional=tb09,
+                              tau=jnp.asarray(turn(tau)), noncollinear_gga="grad_m").v_scf)
+    assert np.max(np.abs(two[0] - one[0])) < 1e-11
+    assert np.max(np.abs(two[1:] - np.einsum("ij,j...->i...", rotation, one[1:]))) < 1e-11
+
+
+# --- the PAW sphere ------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def oxygen_paw():
+    """``O.pbe-kjpaw.UPF``'s sphere under PBE and under TB09, and a ``becsum`` shape."""
+    from pathlib import Path
+
+    from defumat.paw.onecenter import _build_species
+    from defumat.pseudo import read_upf
+    from defumat.pseudo.projectors import projector_channels
+
+    pseudo = read_upf(Path(__file__).resolve().parents[1] / "data" / "pseudo"
+                      / "O.pbe-kjpaw.UPF")
+    nh = len(projector_channels(pseudo))
+    rng = np.random.default_rng(11)
+    a = rng.normal(size=(nh, nh)) * 0.15
+    charge = a @ a.T + np.diag(rng.uniform(0.2, 1.0, nh))
+    b = rng.normal(size=(nh, nh)) * 0.1
+    moment = 0.5 * (b + b.T)  # mixed signs, so the moment has nodes on the sphere
+    return (_build_species(pseudo, PBE, 0.0), _build_species(pseudo, get_functional("TB09"), 0.0),
+            charge, moment, rng)
+
+
+def _sphere(paw, becsum, choice="grad_m", spiral_q=None):
+    from defumat.paw.onecenter import onecenter_species
+
+    energy, ddd = onecenter_species(paw, jnp.asarray(becsum), axis=None,
+                                    noncollinear_gga=choice, spiral_q=spiral_q)
+    return float(energy), np.asarray(ddd)
+
+
+def test_the_paw_sphere_is_the_collinear_sphere_for_a_collinear_moment(oxygen_paw):
+    paw, _, charge, moment, _ = oxygen_paw
+    e = _unit([0.3, -0.5, 0.8])
+    energy2, ddd2 = _sphere(paw, np.stack([0.5 * (charge + moment), 0.5 * (charge - moment)]))
+    energy4, ddd4 = _sphere(paw, np.concatenate([charge[None], np.multiply.outer(e, moment)]))
+    assert energy4 == pytest.approx(energy2, rel=1e-12)
+    assert np.max(np.abs(ddd4[0] - 0.5 * (ddd2[0] + ddd2[1]))) < 1e-10
+    assert np.max(np.abs(ddd4[1:] - np.multiply.outer(e, 0.5 * (ddd2[0] - ddd2[1])))) < 1e-10
+
+
+@pytest.mark.parametrize("spiral", [False, True])
+def test_the_paw_sphere_potential_is_the_derivative_of_its_energy(oxygen_paw, spiral):
+    """``ddd`` against a central difference in ``becsum``, on a noncollinear moment,
+    and on a spiral, where the covariant gradient adds two terms to the potential
+    that the assembly has to write down."""
+    paw, _, charge, moment, rng = oxygen_paw
+    nh = charge.shape[0]
+    transverse = np.stack([moment, 0.5 * np.roll(moment, 1, axis=0) + 0.5 * np.roll(moment, 1, axis=0).T,
+                           0.3 * charge])
+    becsum = np.concatenate([charge[None], transverse])
+    q = np.array([0.1, -0.2, 0.35]) if spiral else None
+    _, ddd = _sphere(paw, becsum, spiral_q=q)
+    d = rng.normal(size=(4, nh, nh))
+    d = 0.5 * (d + np.swapaxes(d, 1, 2))
+    h = 1e-5
+    difference = (_sphere(paw, becsum + h * d, spiral_q=q)[0]
+                  - _sphere(paw, becsum - h * d, spiral_q=q)[0]) / (2 * h)
+    assert difference == pytest.approx(np.sum(ddd * d), rel=1e-6)
+
+
+def test_the_one_centre_meta_gga_is_the_collinear_one_for_a_collinear_moment(oxygen_paw):
+    from defumat.paw.onecenter import _meta_exchange_onecenter, _multipoles
+
+    _, paw, charge, moment, _ = oxygen_paw
+    e = _unit([0.3, -0.5, 0.8])
+    pair = np.stack([0.5 * (charge + moment), 0.5 * (charge - moment)])
+    four = np.concatenate([charge[None], np.multiply.outer(e, moment)])
+
+    def potential(becsum, choice):
+        becsum = jnp.asarray(becsum)
+        rho_lm = _multipoles(paw, becsum, paw.radial_ae)
+        tau_lm = paw.kinetic_ae.contract(becsum, paw.coefficients)
+        return np.asarray(_meta_exchange_onecenter(rho_lm, tau_lm, paw, 1.1, choice))
+
+    v2 = potential(pair, "kubler")
+    v4 = potential(four, "grad_m")
+    scale = np.max(np.abs(v2))
+    assert np.max(np.abs(v4[0] - 0.5 * (v2[0] + v2[1]))) < 1e-11 * scale
+    assert np.max(np.abs(v4[1:] - np.multiply.outer(e, 0.5 * (v2[0] - v2[1])))) < 1e-11 * scale

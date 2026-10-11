@@ -750,6 +750,51 @@ class Functional(eqx.Module):
         """
         return self._spin_correlation_energy(rho, grad)
 
+    def noncollinear_gradient_energy(self, n, m, grad_n, grad_m):
+        """The ``grad m`` gradient correction's energy per unit volume, pointwise.
+
+        Args:
+            n: the charge density, core included, ``(...)``.
+            m: ``(3, ...)``.
+            grad_n: ``(3, ...)``, in any orthonormal frame.
+            grad_m: ``(3, 3, ...)``, spin component first, then direction, in
+                the same frame.
+
+        Exchange by :meth:`noncollinear_gradient_exchange_energy`, correlation
+        on ``(n +- |m|)/2`` and ``grad n``, which is all it reads.
+        """
+        s = safe_modulus(m)
+        a = jnp.sum(grad_n[None] * grad_m, axis=1)
+        exchange = self.noncollinear_gradient_exchange_energy(
+            n, s,
+            jnp.sum(grad_n * grad_n, axis=0) + jnp.sum(grad_m * grad_m, axis=(0, 1)),
+            safe_modulus(a), jnp.sum(a * m, axis=0),
+        )
+        correlation = self.spin_gradient_correlation_energy(
+            0.5 * jnp.stack([n + s, n - s]), 0.5 * jnp.stack([grad_n, grad_n]),
+        )
+        return exchange + correlation
+
+    def noncollinear_gradient_terms_and_energy(self, n, m, grad_n, grad_m):
+        """``(v1, h, e)`` of :meth:`noncollinear_gradient_energy`, from one pass.
+
+        ``v1`` is ``(4, ...)``, the derivative with respect to ``(n, m)``, and
+        ``h`` is ``(4, 3, ...)``, with respect to ``(grad n, grad m)``, so that
+        each component's potential is ``v1 - div h`` -- the shape
+        :meth:`spin_gradient_terms_and_energy` returns for two channels, for
+        the PAW sphere, which assembles the divergence itself.
+        """
+        def total(density, gradient):
+            energy = self.noncollinear_gradient_energy(
+                density[0], density[1:], gradient[0], gradient[1:])
+            return jnp.sum(energy), energy
+
+        density = jnp.concatenate([n[None], m])
+        gradient = jnp.concatenate([grad_n[None], grad_m])
+        (_, energy), (v1, h) = jax.value_and_grad(
+            total, argnums=(0, 1), has_aux=True)(density, gradient)
+        return v1, h, energy
+
     def noncollinear_gradient_exchange_energy(self, n, s, S, A, t):
         """``sx`` of a noncollinear magnetization, built from ``grad m``, Ry/bohr^3.
 

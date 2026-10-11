@@ -601,20 +601,8 @@ def _noncollinear_gradient_correction_grad_m(
                 magnetization[0], magnetization[1], cell, spiral
             )
             grad_n, grad_m = grads[0], jnp.stack([grad_x, grad_y, grads[1]])
-        s = safe_modulus(magnetization)
-        a = jnp.sum(grad_n[None] * grad_m, axis=1)
-        exchange = functional.noncollinear_gradient_exchange_energy(
-            charge,
-            s,
-            jnp.sum(grad_n * grad_n, axis=0) + jnp.sum(grad_m * grad_m, axis=(0, 1)),
-            safe_modulus(a),
-            jnp.sum(a * magnetization, axis=0),
-        )
-        correlation = functional.spin_gradient_correlation_energy(
-            0.5 * jnp.stack([charge + s, charge - s]),
-            0.5 * jnp.stack([grad_n, grad_n]),
-        )
-        return cell.volume / npts * jnp.sum(exchange + correlation)
+        return cell.volume / npts * jnp.sum(functional.noncollinear_gradient_energy(
+            charge, magnetization, grad_n, grad_m))
 
     e, v = jax.value_and_grad(energy)(rho_r)
     return v * (npts / cell.volume), e
@@ -703,9 +691,10 @@ def resolve_noncollinear_gga(choice, nspin_mag, functional, is_paw, source_free)
 def refuse_noncollinear_gga(choice, nspin_mag, functional, is_paw, source_free) -> str:
     """``noncollinear_gga`` checked against the run, returned when it is allowed.
 
-    ``'grad_m'`` changes only the plane-wave grid's gradient correction, so it is
-    refused wherever another piece of the run would go on using ``|m|`` and the
-    run would mix two functionals, and wherever it would mean nothing.
+    ``'grad_m'`` changes the gradient-dependent part of exchange on the grid and
+    on the PAW spheres, and the meta-GGA's potential on both
+    (:mod:`defumat.xc.noncollinear`); it is refused where it would mean nothing
+    and under ``nosource``.
     """
     if choice not in NONCOLLINEAR_GGA:
         raise ValueError(
@@ -720,19 +709,11 @@ def refuse_noncollinear_gga(choice, nspin_mag, functional, is_paw, source_free) 
             "magnetization and needs noncolin = .true. with a magnetic run; "
             "a collinear or unpolarized one has nothing for it to change"
         )
-    if not functional.is_gradient or functional.is_meta:
+    if not (functional.is_gradient or functional.is_meta):
         raise ValueError(
-            f"noncollinear_gga = 'grad_m' changes the gradient correction of "
-            f"exchange, and {functional.name} has none it applies to (an LDA, "
-            "or a potential-only meta-GGA whose spin frame is its own)"
-        )
-    if is_paw:
-        raise NotImplementedError(
-            "noncollinear_gga = 'grad_m' with a PAW dataset is not implemented: "
-            "the one-centre gradient correction (defumat.paw.gradient) rotates "
-            "onto |m| on every sphere, so the run would take the grad m "
-            "functional on the grid and the |m| one inside the spheres. Use a "
-            "norm-conserving or ultrasoft dataset"
+            f"noncollinear_gga = 'grad_m' changes the gradient-dependent part "
+            f"of exchange, and {functional.name} has none (a local functional is "
+            "a function of |m|^2 and the same under either)"
         )
     if source_free:
         raise NotImplementedError(
@@ -930,6 +911,54 @@ def meta_exchange(
     return v, c
 
 
+def _noncollinear_meta_exchange_grad_m(rho_r, gvectors, cell, functional,
+                                       rho_core, tau_r):
+    """The meta-GGA of ``noncollinear_gga = 'grad_m'``: the parity form on the grid.
+
+    No rotation: the charge and the three magnetization components are
+    transformed as they are, so ``grad`` and ``lap`` are of fields with no kink,
+    and the collinear Tran-Blaha channel potential is assembled from its parity
+    components on the four spin-space vectors ``m``, ``a_k = grad n . grad m_k``,
+    ``lap m_k`` and ``tau_k`` (:func:`defumat.xc.noncollinear.parity_form`). The
+    collinear limit is the ``nspin = 2`` branch exactly, nodes included, and
+    ``tau``'s transverse part is used rather than discarded. The core charge is
+    in the charge as the collinear branch has it in both channels, and ``c`` is
+    the cell average of the total density, the same number that branch takes.
+
+    Returns ``(v, c)`` with ``v`` of shape ``(4, ...)``.
+    """
+    from defumat.xc.noncollinear import parity_form
+
+    charge = rho_r[0]
+    if rho_core is not None:
+        charge = charge + jnp.real(rho_core)
+    magnetization = rho_r[1:]
+    components = jnp.concatenate([charge[None], magnetization])
+    components_g = jax.vmap(r_to_g, in_axes=(0, None))(components, gvectors.fft_index)
+    grad = jax.vmap(gradient, in_axes=(0, None, None))(components_g, gvectors, cell)
+    lap = jax.vmap(laplacian, in_axes=(0, None, None))(components_g, gvectors, cell)
+    grad_n, grad_m = grad[0], grad[1:]
+    tau_r = jnp.asarray(tau_r)
+    c = functional.meta_c(charge, grad_n)
+
+    s_even = jnp.sum(grad_n * grad_n, axis=0) + jnp.sum(grad_m * grad_m, axis=(0, 1))
+    vectors = jnp.stack([
+        magnetization,
+        jnp.sum(grad_n[None] * grad_m, axis=1),
+        lap[1:],
+        tau_r[1:],
+    ])
+
+    def channel(x):
+        return functional.meta_exchange_potential(
+            0.5 * (charge + x[0]), 0.25 * (s_even + 2.0 * x[1]),
+            0.5 * (lap[0] + x[2]), 0.5 * (tau_r[0] + x[3]) / E2, c,
+        )
+
+    v0, field = parity_form(channel, vectors)
+    return jnp.concatenate([v0[None], field]), c
+
+
 def _noncollinear_meta_exchange(
     rho_r, gvectors, cell, functional, rho_core, tau_r, axis,
 ):
@@ -1103,10 +1132,20 @@ def v_of_rho(
             # The local spin frame, exactly as the gradient correction does it.
             # The core charge is added *inside*, after the rotation, so it is
             # passed rather than folded in above.
-            v_meta, meta_c = _noncollinear_meta_exchange(
-                jnp.real(rho_r), gvectors, cell, functional, rho_core, tau,
-                quantization_axis,
-            )
+            if noncollinear_gga == "grad_m" and jnp.asarray(tau).shape[0] == 4:
+                if spiral is not None:
+                    raise NotImplementedError(
+                        "a spin spiral under a meta-GGA is not implemented: "
+                        "its kinetic energy density is refused before this"
+                    )
+                v_meta, meta_c = _noncollinear_meta_exchange_grad_m(
+                    jnp.real(rho_r), gvectors, cell, functional, rho_core, tau,
+                )
+            else:
+                v_meta, meta_c = _noncollinear_meta_exchange(
+                    jnp.real(rho_r), gvectors, cell, functional, rho_core, tau,
+                    quantization_axis,
+                )
         else:
             v_meta, meta_c = meta_exchange(
                 density_r, density_g, tau, gvectors, cell, functional

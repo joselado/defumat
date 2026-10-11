@@ -294,8 +294,14 @@ class PawCorrections(eqx.Module):
     species: tuple  # PawSpecies or None, one per species
     species_atoms: tuple = eqx.field(static=True)
 
-    def energy_and_coefficients(self, becsum: tuple, meta_c=None, axis=None):
+    def energy_and_coefficients(self, becsum: tuple, meta_c=None, axis=None,
+                                noncollinear_gga="kubler", spiral_q=None):
         """``(epaw, ddd)`` from the current ``becsum``.
+
+        ``noncollinear_gga`` and ``spiral_q`` (cartesian, 1/bohr, a spiral's
+        only) pick and parameterise the noncollinear gradient correction and
+        meta-GGA on the spheres, as on the grid
+        (:func:`defumat.paw.gradient._noncollinear_gradient_grad_m`).
 
         ``ddd`` matches ``becsum``'s layout -- one ``(nspin, nat_t, nh_t, nh_t)``
         array per species -- so it drops straight into the same block assembly
@@ -318,7 +324,8 @@ class PawCorrections(eqx.Module):
             # as the tape it removed, so it pays the barrier and saves nothing.
             nat_t = values.shape[1]
             batch = _paw_atom_batch(nat_t)
-            body = partial(onecenter_species, paw, meta_c=meta_c, axis=axis)
+            body = partial(onecenter_species, paw, meta_c=meta_c, axis=axis,
+                           noncollinear_gga=noncollinear_gga, spiral_q=spiral_q)
             if batch is not None and batch < nat_t:
                 body = jax.checkpoint(body)
             atom_energy, atom_ddd = map_axis(
@@ -332,7 +339,8 @@ class PawCorrections(eqx.Module):
         return energy, tuple(coefficients)
 
 
-def onecenter_species(paw: PawSpecies, becsum: jnp.ndarray, meta_c=None, axis=None):
+def onecenter_species(paw: PawSpecies, becsum: jnp.ndarray, meta_c=None, axis=None,
+                      noncollinear_gga="kubler", spiral_q=None):
     """One atom's one-centre energy and ``ddd``, from its ``becsum``.
 
     ``becsum`` is the full symmetric ``(nspin, nh, nh)`` matrix. QE carries the
@@ -363,7 +371,7 @@ def onecenter_species(paw: PawSpecies, becsum: jnp.ndarray, meta_c=None, axis=No
 
         v_hartree, e_hartree = _hartree(_charge_channel(rho_lm), paw)
         v_xc, e_xc, g_lm = _exchange_correlation(
-            rho_lm, core, paw, axis, msmall_lm
+            rho_lm, core, paw, axis, msmall_lm, noncollinear_gga, spiral_q
         )
         if kinetic is not None:
             # The one-centre Tran-Blaha potential. It adds to ``v_xc`` and
@@ -372,7 +380,8 @@ def onecenter_species(paw: PawSpecies, becsum: jnp.ndarray, meta_c=None, axis=No
             # ``ddd`` contraction below is still right for it is the point of
             # the phase -- see :func:`_meta_exchange_onecenter`.
             v_xc = v_xc + _meta_exchange_onecenter(
-                rho_lm, kinetic.contract(becsum, paw.coefficients), paw, meta_c
+                rho_lm, kinetic.contract(becsum, paw.coefficients), paw, meta_c,
+                noncollinear_gga,
             )
 
         # The Hartree potential is the same in both channels: it is a functional
@@ -477,7 +486,8 @@ def _hartree(rho_lm, paw: PawSpecies):
     return potential, energy
 
 
-def _exchange_correlation(rho_lm, core, paw: PawSpecies, axis=None, msmall_lm=None):
+def _exchange_correlation(rho_lm, core, paw: PawSpecies, axis=None, msmall_lm=None,
+                          noncollinear_gga="kubler", spiral_q=None):
     """``PAW_xc_potential``: onto the sphere, evaluate, and project back.
 
     The two asymmetries here are QE's and are the same ones the plane-wave
@@ -567,7 +577,8 @@ def _exchange_correlation(rho_lm, core, paw: PawSpecies, axis=None, msmall_lm=No
 
     if paw.functional.is_gradient:
         v_gradient, e_gradient, vector_gradient = onecenter_gradient_correction(
-            rho_lm, rho_rad, core, paw, axis, msmall_lm is not None
+            rho_lm, rho_rad, core, paw, axis, msmall_lm is not None,
+            noncollinear_gga, spiral_q,
         )
         potential = potential + v_gradient
         energy = energy + e_gradient
@@ -619,7 +630,8 @@ def _radial_laplacian(f_lm, paw: PawSpecies):
     return jnp.einsum("xl,lr->xr", paw.angular.ylm[:, : paw.nlm], radial - centrifugal)
 
 
-def _meta_exchange_onecenter(rho_lm, tau_lm, paw: PawSpecies, meta_c=None):
+def _meta_exchange_onecenter(rho_lm, tau_lm, paw: PawSpecies, meta_c=None,
+                             noncollinear_gga="kubler"):
     """The Tran-Blaha potential on one PAW sphere, projected back to multipoles.
 
     Args:
@@ -712,6 +724,28 @@ def _meta_exchange_onecenter(rho_lm, tau_lm, paw: PawSpecies, meta_c=None):
         # One stored channel is the *total*, so the functional's argument is
         # half of it -- the same halving :func:`meta_exchange` does.
         potential_rad = channel_potential(0.5 * density, 0.5 * tau_rad)
+    elif nspin == 4 and noncollinear_gga == "grad_m":
+        # The parity form (:mod:`defumat.xc.noncollinear`), as the plane-wave
+        # branch takes it: nothing rotated, so the components' own multipoles
+        # give the gradients and the Laplacians.
+        from defumat.xc.noncollinear import parity_form
+
+        grads = jax.vmap(_gradient, in_axes=(0, 0, None))(rho_lm, density, paw)
+        laps = jax.vmap(_radial_laplacian, in_axes=(0, None))(rho_lm, paw)
+        grad_n, grad_m = grads[0], grads[1:]
+        s_even = jnp.sum(grad_n * grad_n, axis=0) + jnp.sum(grad_m * grad_m, axis=(0, 1))
+        vectors = jnp.stack([
+            density[1:], jnp.sum(grad_n[None] * grad_m, axis=1), laps[1:], tau_rad[1:],
+        ])
+
+        def channel(x):
+            return paw.functional.meta_exchange_potential(
+                0.5 * (density[0] + x[0]), 0.25 * (s_even + 2.0 * x[1]),
+                0.5 * (laps[0] + x[2]), 0.5 * (tau_rad[0] + x[3]) / E2, c,
+            )
+
+        v0, field = parity_form(channel, vectors)
+        potential_rad = jnp.concatenate([v0[None], field])
     elif nspin == 4:
         channels, _, direction = local_spin_frame(density[0], density[1:])
         projected = jnp.sum(tau_rad[1:] * direction, axis=0)

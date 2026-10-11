@@ -780,10 +780,12 @@ def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None,
     return rho_mixed, tuple(becsum_mixed), ns_mixed, tau_mixed
 
 
-@jax.jit
-def _paw_onecenter(paw, becsum_, meta_c=None, axis=None):
+@partial(jax.jit, static_argnames=("noncollinear_gga",))
+def _paw_onecenter(paw, becsum_, meta_c=None, axis=None, noncollinear_gga="kubler",
+                   spiral_q=None):
     """``PAW_potential``: the one-centre energy and its ``ddd``, in one kernel."""
-    return paw.energy_and_coefficients(becsum_, meta_c, axis)
+    return paw.energy_and_coefficients(becsum_, meta_c, axis, noncollinear_gga,
+                                       spiral_q)
 
 
 @jax.jit
@@ -4558,9 +4560,24 @@ class Calculation:
                 "the same one. Potential.meta_c is where it comes from"
             )
         energy, blocks = _paw_onecenter(
-            self.paw, becsum_, meta_c, self._axis_argument()
+            self.paw, becsum_, meta_c, self._axis_argument(),
+            noncollinear_gga=self.noncollinear_gga,
+            spiral_q=self._paw_spiral_q(),
         )
         return energy, _paw_block_matrices(self.augmentation, blocks, self.nspin_mag)
+
+    def _paw_spiral_q(self):
+        """A spiral's ``q`` in cartesian 1/bohr for the PAW spheres, or ``None``.
+
+        :attr:`spiral_q_crystal` through the cell as it stands, so a traced
+        ``q`` (``dE/dq``) and a strained cell both reach the one-centre
+        covariant gradient; ``None`` unless the run is a spiral under
+        ``'grad_m'``.
+        """
+        if not self.spiral or self.noncollinear_gga != "grad_m":
+            return None
+        cell = self.system.cell
+        return jnp.asarray(self.spiral_q_crystal, dtype=cell.precision.real) @ cell.bg
 
     def _spiral_q_argument(self):
         """A spiral's box frequencies, its laboratory sphere and ``q``, or ``None``.
