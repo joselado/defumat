@@ -3287,6 +3287,17 @@ default, which prints 11 iterations and 35.2, 125.2, -144.8, -54.8 degrees, and 
 start. Notebooks 43 and 45 are not affected: 43's field run is an ordinary SCF and 45's
 ultracell field is collinear, where nothing is seeded.
 
+**Notebook 44 re-executed 2026-10-11** (D22-0161, `w-k` at `73f1dc0`, the user's decision): the
+default prints 11 iterations and 35.2, 125.2, -144.8, -54.8 degrees, out of plane by 2e-8, and
+the helix's `total_energy` is **+0.635 mRy** per cell above the field-free reference
+(`get_scf().total_energy`) and **-5.931 mRy** with `field_energy` added. The prose now reads the
+stiffness off that energy rather than off the angle, and quotes the tiled start's compromise as
+2.15 mRy per cell above the helix in `E + field`, from the table above, rather than running it.
+The cell is printed against the field-free magnet and not against the supercell figure the guide
+quotes (the seeded supercell helix 0.739 mRy per cell *below* the ferromagnet with no field), and
+the two are not reconciled here: the ultracell's helix is under a field, with moments of 0.488
+against the reference's 0.62, and in the reference's frozen states. 98 s on six cores.
+
 **Re-measured on the default basis, 2026-10-09** (D22-0161, `review/open-a/vi3.py`,
 `vi3b.py`; the tables are in the plan). The seeded four-cell helix converges in **10**
 iterations on the Kramers-closed basis with the reference along `z` and along
@@ -5513,6 +5524,18 @@ guard that replaced it: `test_an_ultrasoft_dataset_is_warned_about_its_mesh_and_
 `test_an_ultrasoft_input_passes_the_chain_on_a_coarse_mesh` (`si2-us` through the whole chain,
 asked of the input), and the `alas-piezo.in` test in `test_piezoelectric.py`, which builds the
 calculation and reads the warning off it.
+
+Run on D22-0161 (`review/round3-k/`, cores 0-5, 6 GB scopes): the two unit files 48 passed, and
+`test_piezoelectric.py` whole 10 passed in 116 s; the three changed tests of
+`test_piezo_machinery.py` **fail on `abbdf8a`** (21 passed, 3 failed, each on the old "needs a
+denser k-mesh" refusal) and so does the `alas-piezo.in` test. Notebook 28 was re-executed after it
+(31 s) for the warning's new text, and moved where nothing of this branch reaches: `e_14` -0.7638
+to **-0.7636**, `epsilon` 12.9674 to **13.0039** (the 3.7e-2 the `l = 1` tangent at `k + G = 0`
+is recorded as moving it by, Part XIV, the notebook running this code's default rather than
+`origin_tangent=False`), and the largest component the class forbids from 2.5e-14 to **4.7e-7** of
+`e_14` on a `nosym` grid where nothing imposes the zero, 754 commits after the notebook's last
+execution (`f257ed2`); its header row now carries the printed number, and the cause of the last
+is not chased.
 
 ## 5. An **ultrasoft** dielectric constant does not reproduce its own closed grid from a symmetry-reduced k-set, by 1.6e-05 relative **[opened 2026-09-19, found in passing; attributed to the dataset under control the same day, six candidates excluded, term not found]**
 

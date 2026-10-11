@@ -342,10 +342,13 @@ taken through `tools/export_notebooks.sh`, which does not pin the thread pool, w
 was taken on one core. The table entry stays at 30 s because that is the single-core number
 the caption promises.
 
-`44` re-executed in **306 s** on 2026-09-26 against the 191 s in the table, after the
-Kramers-closed basis became the ultracell's default for a magnetic spinor cell: its turning
-helix takes 78 iterations on it against 53. Unpinned, through `tools/export_notebooks.sh`,
-so not a delta either.
+`44` re-executed in **98 s** on 2026-10-11 against the 191 s in the table (and 306 s on
+2026-09-26, when the Kramers-closed basis made its turning helix 78 iterations against 53),
+after the field became its own seed: the helix now converges in 11 iterations. Taken on
+D22-0161 through `tools/export_notebooks.sh` on six cores with a warm kernel cache, beside other
+work on the machine, so it is an upper bound on that machine and not a delta against the
+single-core table, which keeps 191 until it is re-measured on one core. `28` re-executed there
+the same day in **31 s**, under the same conditions.
 
 `46` re-executed in **84 s** on 2026-09-26 against the 61 s recorded for it below, after
 a section with one more four-cell ultracell run was added. That pair is not a delta either:

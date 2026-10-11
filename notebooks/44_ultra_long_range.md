@@ -37,7 +37,7 @@ print(f'eight unit cells, {ulr.iterations} iterations; induced density '
     [defumat] an ultracell calculation: no ground state cached, running the SCF first (conv_thr = 1e-10). Call get_scf() to do this explicitly.
 
 
-    eight unit cells, 9 iterations; induced density 7.655e-05 e/bohr^3
+    eight unit cells, 9 iterations; induced density 7.647e-05 e/bohr^3
 
 
 ## What is being solved
@@ -141,7 +141,7 @@ paw_core = deep.energy_terms['one_center_paw']; print(f'inside the spheres: {paw
     [defumat] an ultracell calculation: no ground state cached, running the SCF first (conv_thr = 1e-12). Call get_scf() to do this explicitly.
 
 
-    /u/40/ladovj1/data/Documents/programs/claude/defumat/defumat/ultracell/driver.py:1014: UserWarning: this ultracell runs an ultrasoft or PAW dataset at ecutrho = 4 ecutwfc, which is the input's own default rather than the dual such a dataset wants. At 4 the augmentation charge is represented on the wavefunction grid: the run is self-consistent and a comparison against a supercell at the same cutoffs is still like for like, but the absolute energy is not converged in ecutrho and cannot be compared against a pw.x number taken at the dataset's own dual. Set ecutrho to 8 to 12 times ecutwfc, which runs
+    /l/ladovj1/w-k/defumat/ultracell/driver.py:1066: UserWarning: this ultracell runs an ultrasoft or PAW dataset at ecutrho = 4 ecutwfc, which is the input's own default rather than the dual such a dataset wants. At 4 the augmentation charge is represented on the wavefunction grid: the run is self-consistent and a comparison against a supercell at the same cutoffs is still like for like, but the absolute energy is not converged in ecutrho and cannot be compared against a pw.x number taken at the dataset's own dual. Set ecutrho to 8 to 12 times ecutwfc, which runs
       require_an_ultracell_regime(system, pseudos, basis)
 
 
@@ -242,11 +242,7 @@ print(f'eight unit cells, {wave.iterations} iterations; largest cell moment '
     [defumat] an ultracell calculation: no ground state cached, running the SCF first (conv_thr = 1e-10). Call get_scf() to do this explicitly.
 
 
-    /u/40/ladovj1/data/Documents/programs/claude/defumat/defumat/ultracell/driver.py:1098: UserWarning: the fixed-density solve did not converge at 14 of 64 k-points: up to 2 of 32 bands are unsettled and the worst k-point took 100 Davidson steps, at ethr = 1.3e-07 (from conv_thr = 1.0e-05). There is no later iteration to fix this -- the density is fixed -- so these wavefunctions are what every quantity built on them will use. Loosen conv_thr (ethr is 0.1 x conv_thr / nelec, QE's setup.f90 rule) before raising the iteration budget: a threshold the solve cannot reach costs the whole budget at every k-point and is where an overlap loses positivity
-      calculation, folded_system, eigenvalues, wavefunctions = fixed_density_states(
-
-
-    eight unit cells, 8 iterations; largest cell moment 0.1223 mu_B, net +3.26e-09 mu_B
+    eight unit cells, 8 iterations; largest cell moment 0.1223 mu_B, net +2.96e-09 mu_B
 
 
 
@@ -307,23 +303,25 @@ spinor = Calculator.from_file('../tests/data/qe/h-noncolin-ultracell.in',
                               pseudo_dir='../tests/data/pseudo')
 
 # a field of 0.01 Ry turning once in the plane over the four cells
-turning = lambda x: 0.01 * np.stack(
-    [np.cos(2 * np.pi * x[..., 0] / 4), np.sin(2 * np.pi * x[..., 0] / 4),
-     np.zeros_like(x[..., 0])], axis=-1)
+phase = lambda x: 2 * np.pi * x[..., 0] / 4
+turning = lambda x: 0.01 * np.stack([np.cos(phase(x)), np.sin(phase(x)), 0 * phase(x)], -1)
 
 helix = spinor.get_ultracell(supercell=(4, 1, 1), kgrid=(1, 2, 2), nbnd=16,
                              magnetic_field=turning, mixing_beta=0.3)
 
 vectors = helix.cell_moments()          # (4, 3): a moment VECTOR per cell
 angles = np.degrees(np.arctan2(vectors[:, 1], vectors[:, 0]))
-print(f'{helix.iterations} iterations; the moment points', np.round(angles, 1),
-      'degrees, out of plane by', f'{np.abs(vectors[:, 2]).max():.0e}')
+twist = (helix.total_energy - spinor.get_scf().total_energy) * 1000   # mRy per cell
+print(f'{helix.iterations} iterations; the moments at', np.round(angles, 1), 'degrees')
+print(f'out of plane by {np.abs(vectors[:, 2]).max():.0e}; against the untwisted magnet with no',
+      f'field {twist:+.3f} mRy per cell, {twist + 1000 * helix.field_energy:+.3f} with the field')
 ```
 
     [defumat] an ultracell calculation: no ground state cached, running the SCF first (conv_thr = 1e-11). Call get_scf() to do this explicitly.
 
 
-    78 iterations; the moment points [ 28.2  66.2 -42.  -50.9] degrees, out of plane by 2e-06
+    11 iterations; the moments at [  35.2  125.2 -144.8  -54.8] degrees
+    out of plane by 2e-08; against the untwisted magnet with no field +0.635 mRy per cell, -5.931 with the field
 
 
 
@@ -332,10 +330,9 @@ cells = np.arange(4) + 0.5
 field = np.stack([np.cos(2 * np.pi * cells / 4), np.sin(2 * np.pi * cells / 4)], -1)
 unit = vectors[:, :2] / np.linalg.norm(vectors[:, :2], axis=1)[:, None]
 fig, ax = plt.subplots(figsize=(7, 2.6))
-for arrows, colour, name in ((field, '0.65', 'applied field'),
-                             (unit, '#b5432f', 'moment of each cell')):
-    ax.quiver(cells, np.zeros(4), arrows[:, 0], arrows[:, 1], color=colour,
-              scale=6, width=0.007, label=name)
+ax.quiver(cells, 0 * cells, *field.T, color='0.65', label='applied field', scale=6, width=0.007)
+ax.quiver(cells, 0 * cells, *unit.T, color='#b5432f', label='moment of each cell',
+          scale=6, width=0.007)
 ax.set(xlim=(0, 4), ylim=(-0.75, 0.75), yticks=[], xlabel='unit cell along $a_1$',
        title='The moment turns from cell to cell')
 ax.legend(frameon=False, loc='upper right', ncol=2); fig.tight_layout()
@@ -347,19 +344,27 @@ ax.legend(frameon=False, loc='upper right', ncol=2); fig.tight_layout()
     
 
 
-The moments follow the field around the plane and stay in it, with nothing out
-of plane to five decimal places. They do not turn as far as the field does: the
-field rotates ninety degrees from one cell to the next and the moments manage
-roughly a third of that.
+The moments follow the field around the plane, ninety degrees from one cell to the next,
+and stay in it. The run starts with each cell's moment already turned onto the field, which is
+what happens by default when a field is given and no starting texture is, and the loop keeps
+that turn and lets each moment settle: all four sit about ten degrees behind the field, the
+same in every cell, and they come out shorter than the untwisted magnet's, 0.49 against 0.62.
 
-That shortfall is the physics rather than a shortcoming. The hydrogen atoms here
-are 5.5 bohr apart, close enough that the exchange coupling between neighbouring
-cells is much larger than a field of 0.01 Ry, and exchange wants every moment
-parallel. What the calculation measures is the balance between the two: how
-stiff the magnet is against being twisted slowly in space. That stiffness is the
-same quantity that sets how much energy a long-wavelength magnon costs, and a
-crystal whose modulated direction is more weakly coupled would let the texture
-turn much further for the same field.
+What the twist costs is read off the energy rather than off the angle. Against the untwisted
+magnet with no field, the helix costs 0.635 mRy per unit cell, and the field gives back 6.57
+mRy through its own energy, so with the field included the helix sits 5.93 mRy per cell below
+the magnet it started from. The first number is the exchange stiffness at a pitch of four
+cells, how much energy a slow twist costs and the same quantity that sets the cost of a
+long-wavelength magnon, or at least an upper estimate of it, since the moments also shrink
+and the long cell is built from the untwisted magnet's own states.
+
+The angle would have given the wrong answer, and it is worth seeing why once. Started from the
+untwisted magnet instead (`seed_from_field=False`), the same call stops at a compromise in which
+the moments turn by roughly a third of the field's angle, which reads like a stiff magnet
+resisting the field; but with the field's energy included that state is 2.15 mRy per cell
+above the helix, so it is a fixed point the loop stops at and not the state the field drives.
+Which of two self-consistent states is the answer is a question the energy settles, and the
+angle a texture happens to reach does not.
 
 ## What it cannot do
 

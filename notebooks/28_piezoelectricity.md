@@ -22,7 +22,7 @@ AlAs, which is the same structure with the two sublattices made inequivalent, is
 |---|---|---|
 | AlAs $e_{14}$, clamped-ion | **-0.764 C/m²** at this cell's mesh, **-0.670** at $10^3$ | **-0.661**, a polarization difference |
 | silicon, every component | **< 10⁻⁵ C/m²** | zero, by inversion symmetry |
-| components $\bar{4}3m$ forbids | 2 × 10⁻¹⁴ of the scale | zero, and nothing imposes it |
+| components $\bar{4}3m$ forbids | 5 × 10⁻⁷ of the scale | zero, and nothing imposes it |
 
 **The reference is unusual and worth a sentence.** Quantum ESPRESSO does not compute a
 piezoelectric tensor at all, and the one established code that does gets it from a finite
@@ -64,11 +64,11 @@ piezo = alas.get_piezoelectric_tensor()
 print(f"AlAs   e_14 = {piezo.e14:+.4f} C/m2      epsilon = {np.trace(piezo.dielectric.epsilon) / 3:.4f}")
 ```
 
-    /u/40/ladovj1/data/Documents/programs/claude/defumat/defumat/calculator.py:1043: RuntimeWarning: the piezoelectric tensor was integrated over 64 k-points (4 4 4) and this run's own k-convergence has not been measured. On zincblende AlAs, against a Berry-phase finite difference that shares no machinery with it, e_14 reads -0.7638, -0.6875, -0.6729, -0.6699 C/m^2 at 4 4 4, 6 6 6, 8 8 8 and 10 10 10 against the Berry value's -0.6614 to -0.6620, so a committed-quality 4 4 4 mesh is 13 per cent out there and 8 8 8 is 1.6. Nothing inside this quantity can see that: the three routes share one field response and the Z* anchor is the same assembly in the position coordinate, so every internal check moves with the mesh instead of catching it. Measure this crystal's own curve with defumat.workflows.piezo_ladder.piezoelectric_kmesh_ladder (Calculator.get_piezoelectric_kmesh_ladder), which reruns the ground state and the response on a ladder of meshes and puts the last step on the result; pass kmesh_warning=False to silence this once the mesh is known to be enough
-      return piezoelectric_tensor(
+    /l/ladovj1/w-k/defumat/calculator.py:1260: RuntimeWarning: the piezoelectric tensor was integrated over 64 k-points (4 4 4) and this run's own k-convergence has not been measured. On zincblende AlAs, against a Berry-phase finite difference that shares no machinery with it, e_14 reads -0.7638, -0.6875, -0.6729, -0.6699 C/m^2 at 4 4 4, 6 6 6, 8 8 8 and 10 10 10 and -0.6691 at 12 12 12, so a committed-quality 4 4 4 mesh is 14 per cent out there and 8 8 8 is 0.6. Nothing inside this quantity can see that: the three routes share one field response and the Z* anchor is the same assembly in the position coordinate, so every internal check moves with the mesh instead of catching it. Measure this crystal's own curve with defumat.workflows.piezo_ladder.piezoelectric_kmesh_ladder (Calculator.get_piezoelectric_kmesh_ladder), which reruns the ground state and the response on a ladder of meshes and puts the last step on the result; pass kmesh_warning=False to silence this once the mesh is known to be enough
+      return piezoelectric_tensor(self.calculation, result, **merged)
 
 
-    AlAs   e_14 = -0.7638 C/m2      epsilon = 12.9674
+    AlAs   e_14 = -0.7636 C/m2      epsilon = 13.0039
 
 
 ## 1. One independent component, and nothing else
@@ -99,11 +99,11 @@ print(f"\nlargest component the crystal class forbids: "
 ```
 
     e_iJ  [C/m2]             xx       yy       zz       yz       xz       xy
-      P along x         -0.0000  -0.0000  -0.0000  -0.7638  -0.0000  -0.0000
-      P along y          0.0000  -0.0000   0.0000  -0.0000  -0.7638   0.0000
-      P along z          0.0000   0.0000  -0.0000  -0.0000  -0.0000  -0.7638
+      P along x          0.0000   0.0000   0.0000  -0.7636  -0.0000  -0.0000
+      P along y         -0.0000  -0.0000  -0.0000   0.0000  -0.7636  -0.0000
+      P along z         -0.0000  -0.0000  -0.0000  -0.0000   0.0000  -0.7636
     
-    largest component the crystal class forbids: 2.5e-14 of e_14
+    largest component the crystal class forbids: 4.7e-07 of e_14
 
 
 ## 2. Silicon has none, and that is the point
@@ -123,8 +123,8 @@ print(f"AlAs      largest component  {np.abs(piezo.voigt).max():.4f} C/m2")
 print(f"silicon   largest component  {np.abs(si_piezo.voigt).max():.2e} C/m2")
 ```
 
-    AlAs      largest component  0.7638 C/m2
-    silicon   largest component  9.78e-06 C/m2
+    AlAs      largest component  0.7636 C/m2
+    silicon   largest component  9.82e-06 C/m2
 
 
 ## 3. The two tensors side by side
@@ -182,16 +182,17 @@ the piece that joins them is the force a strain leaves behind.
   crystal class that leaves no direction invariant. A class that does leave one invariant is
   refused by name rather than reported with a term missing.
 - **Clamped-ion only**, as above.
-- **The softest datasets, and a coarse mesh with them.** A softer pseudopotential keeps
-  part of the electron density as a compact cloud pinned to each nucleus, and a strain
-  carries and deforms that cloud rather than simply moving it, so the strain derivative of
-  the energy gains terms the harder datasets do not have. Those terms are in, and the
-  comparison that was missing has been made: on the same zincblende crystal an ultrasoft
-  $e_{14}$ sits 0.57 per cent from the polarization difference at $10^3$, where the
-  norm-conserving calibration is 1.19 per cent from its own at the same mesh. So an
-  ultrasoft dataset runs, and only above eight divisions in each direction, since below
-  that the dataset and the mesh cannot be told apart. A PAW dataset is still refused by
-  name: it has been checked against itself and never against anything outside.
+- **The softest of the soft datasets.** A softer pseudopotential keeps part of the
+  electron density as a compact cloud pinned to each nucleus, and a strain carries and
+  deforms that cloud rather than simply moving it, so the strain derivative of the energy
+  gains terms the harder datasets do not have. Those terms are in, and the comparison that
+  was missing has been made: on the same zincblende crystal, at a converged cutoff, an
+  ultrasoft $e_{14}$ sits 15.30, 3.73 and 0.86 per cent from its own polarization
+  difference at $4^3$, $6^3$ and $8^3$, where the norm-conserving calibration sits 14.54,
+  3.65 and 1.01 per cent from its own. The dataset moves the answer by less than a point at
+  every mesh and the mesh is the error, so an ultrasoft dataset runs on any mesh and gets
+  the same warning about it. A PAW dataset is still refused by name: it has been checked
+  against itself and never against anything outside.
 - **Insulators**, and everything else the linear-response solver needs: no metals, no spin
   spiral, no magnetic field, and a shifted k-grid only where the symmetry is kept.
 
