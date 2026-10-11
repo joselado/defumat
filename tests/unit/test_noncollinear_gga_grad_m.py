@@ -178,10 +178,10 @@ def test_the_choice_is_refused_where_it_would_mix_two_functionals():
         refuse_noncollinear_gga("signed", 4, PBE, False, False)
     with pytest.raises(ValueError, match="noncolin"):
         refuse_noncollinear_gga("grad_m", 2, PBE, False, False)
-    with pytest.raises(ValueError, match="none it applies to"):
+    with pytest.raises(ValueError, match="has none"):
         refuse_noncollinear_gga("grad_m", 4, lda, False, False)
-    with pytest.raises(NotImplementedError, match="PAW"):
-        refuse_noncollinear_gga("grad_m", 4, PBE, True, False)
+    assert refuse_noncollinear_gga("grad_m", 4, PBE, True, False) == "grad_m"
+    assert refuse_noncollinear_gga("grad_m", 4, get_functional("TB09"), False, False) == "grad_m"
     with pytest.raises(NotImplementedError, match="nosource"):
         refuse_noncollinear_gga("grad_m", 4, PBE, False, True)
 
@@ -295,8 +295,17 @@ def test_the_paw_sphere_is_the_collinear_sphere_for_a_collinear_moment(oxygen_pa
 def test_the_paw_sphere_potential_is_the_derivative_of_its_energy(oxygen_paw, spiral):
     """``ddd`` against a central difference in ``becsum``, on a noncollinear moment,
     and on a spiral, where the covariant gradient adds two terms to the potential
-    that the assembly has to write down."""
-    paw, _, charge, moment, rng = oxygen_paw
+    that the assembly has to write down.
+
+    The bound is the sphere's own: ``v1 - div h`` assembled on the quadrature is
+    not the exact derivative of the quadrature's energy, and the existing
+    two-channel PBE sphere misses its finite difference by **1.6e-4** relative
+    on this ``becsum`` shape (1.5e-5 unpolarized, 4.7e-4 under ``'kubler'``
+    noncollinear; D22, 2026-10-12). Measured here: 4.3e-4 at ``q = 0`` and
+    4.9e-4 on the spiral, against **1.5e-2** with the two potential terms
+    removed, so 1e-3 tells their absence from the assembly's own error."""
+    paw, _, charge, moment, _ = oxygen_paw
+    rng = np.random.default_rng(23)
     nh = charge.shape[0]
     transverse = np.stack([moment, 0.5 * np.roll(moment, 1, axis=0) + 0.5 * np.roll(moment, 1, axis=0).T,
                            0.3 * charge])
@@ -308,7 +317,7 @@ def test_the_paw_sphere_potential_is_the_derivative_of_its_energy(oxygen_paw, sp
     h = 1e-5
     difference = (_sphere(paw, becsum + h * d, spiral_q=q)[0]
                   - _sphere(paw, becsum - h * d, spiral_q=q)[0]) / (2 * h)
-    assert difference == pytest.approx(np.sum(ddd * d), rel=1e-6)
+    assert difference == pytest.approx(np.sum(ddd * d), rel=1e-3)
 
 
 def test_the_one_centre_meta_gga_is_the_collinear_one_for_a_collinear_moment(oxygen_paw):
