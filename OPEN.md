@@ -81,7 +81,8 @@ removes the lean on the hydrogen helix and on the three-cell NiBr2 helix, in bot
 **Part XXI** is from the orientation torque's helix, **2026-09-26** (P122): an ultrasoft
 spiral that disagrees with its unfolded supercell at 7e-5 Ry, whose norm-conserving
 discriminator was run by P123 and closes (so the ultrasoft nonlocal side is what is left;
-closed 2026-10-11, the truncation shell, by keeping the transverse pair on the laboratory sphere),
+closed 2026-10-11, the truncation shell, by keeping the transverse pair on the laboratory sphere;
+the PBE helix's stall cured the same day by a `grad m` functional, P142),
 and Route C not converging on PAW nickel.
 
 **Part XXII** is two memory reports from the NiBr2 orientation session, **2026-09-27**, not
@@ -7314,7 +7315,7 @@ below 1e-6 (2.6e-7 at 8 bands, 3e-9 at 32) and bounds the 32-band component rati
 
 # Part XXI -- from the orientation torque's helix, 2026-09-26 (P122)
 
-## 1. An ultrasoft spin spiral and its unfolded supercell disagree at 7e-5 Ry, and more at a lower cutoff **[opened 2026-09-26; closed 2026-10-11 on branch `round3-l`: the transverse pair is on the laboratory sphere and the identity is at round-off; the PBE cobalt helix not converging is left open below, and diagnosed 2026-10-11: the gradient correction's unsigned `|m|`, which `pw.x` shares; the cure is a `grad m` functional, not started]**
+## 1. An ultrasoft spin spiral and its unfolded supercell disagree at 7e-5 Ry, and more at a lower cutoff **[opened 2026-09-26; closed 2026-10-11 on branch `round3-l`: the transverse pair is on the laboratory sphere and the identity is at round-off; the PBE cobalt helix not converging is left open below, and diagnosed 2026-10-11: the gradient correction's unsigned `|m|`, which `pw.x` shares; cured 2026-10-11 by `noncollinear_gga = 'grad_m'` (`PLAN.md` P142): the spiral converges to 1.5e-13 in 15 iterations, the default stays `pw.x`'s]**
 
 **Reproduced and attributed, 2026-10-09** (D22-0161, `review/open-a/xxi1.py`). The worst
 eigenvalue of the supercell at the unfolded density against the union of the four spiral
@@ -7528,6 +7529,41 @@ energy is "not stationary to 1e-10" is the reporting convention (the unconverged
 `-int V_in (rho_out - rho_in)` and no `descf`, the plan's first reading) rather than a property
 of the map, and the `becsum` residual's ratio between the two arms, 7.1, is the density residual's,
 `sqrt(2.6e-10 / 4.0e-12) = 8.1`, in other units.
+
+**Cured 2026-10-11 by a new functional, `noncollinear_gga = 'grad_m'`** (`PLAN.md` P142,
+`plans/noncollinear-gga-grad-m.md`, reviewed by fable before any code; D22-0161, JSON in
+`/l/ladovj1/review/gradm/`). Exchange is built from the invariants of `grad n` and `grad m_k`,
+Scalmani and Frisch's with their sign replaced by a cosine weight, written as an even part plus
+`t H` so that it is smooth where `m` vanishes; it is the collinear functional exactly for a
+collinear field, needs no axis, and on a spiral takes the laboratory gradient `i (G - q)` of the
+transverse pair on its laboratory sphere. Every run at `conv_thr = 1e-11`:
+
+| run | functional | iterations | `accuracy` | energy (Ry) |
+|---|---|---|---|---|
+| `q = 0`, PBE | `'kubler'`, axis `(1, 0, 0)` | 35, converged | 3.7e-12 | -74.2842391180 |
+| `q = 0`, PBE | `'grad_m'` | **14, converged** | 1.5e-13 | -74.2842391177 |
+| spiral, laboratory, 160 Ry | `'grad_m'` | **15, converged** | 1.5e-13 | -74.2833326333 |
+| spiral, resident, 160 Ry | `'grad_m'` | 15, converged | 1.7e-13 | -74.2824752127 |
+| spiral, laboratory, 80 Ry | `'grad_m'` | **19, converged** | 9.4e-12 | -74.3432585033 |
+
+The `q = 0` pair is the collinear limit at the SCF level: one functional there, 3e-10 Ry apart,
+in 14 iterations against 35. On the spiral the two functionals are different functionals,
+-74.2833326 under `'grad_m'` against -74.2824789 under `'kubler'` at `1e-10`, 8.5e-4 Ry, which
+is the price of the choice and not an error of either. The laboratory and the resident spheres
+now differ by 8.6e-4 Ry where they differed by 1.4e-4 under `'kubler'`: the gradient weights
+the truncation shell by `|G - q|`, and the laboratory one is the discretisation the supercell
+identity selects (below). **The identity at one density** (twenty `'kubler'` iterations, the
+four-cell supercell at the unfolded density): `etxc` equal to the last printed digit and the
+potential to 2.5e-13 Ry in the charge and 1.4e-13 in the field, where the field reaches 0.61.
+A whole-box derivative, the first form written, had the energy to 2.3e-9 and the field wrong by
+0.61 Ry, so the bound is on the potential and not on the energy. The four-cell supercell itself
+does not converge as an SCF under either functional (accuracy near 7e2 after 150 iterations,
+`gm_runs2.sh`), which is that input as an SCF and is why the identity is at a fixed density.
+
+`'kubler'` stays the default, because it is `pw.x`'s and Elk's and the pairs against both stay
+like for like; `'grad_m'` is refused with PAW (the one-centre GGA rotates onto `|m|`), with
+`nosource`, for an LDA or a meta-GGA, and `dE/dq` is refused under it, since its exchange
+depends on `q` through the laboratory gradient and the frozen-state energy does not carry that.
 
 ## 2. Route C does not reach `conv_thr` on PAW nickel **[opened 2026-09-26; measured 2026-10-09: the plain SCF stalls at every orientation and converges in 78 at `degauss = 0.05`; Route C does not fit 6 GB; plan in `plans/open-a-xxi2.md`; rerun 2026-10-10 on branch `decided-h` under 10 GB: 200 iterations, not converged, `dr2` median 2.4e-5 over the last 60, a flat 2.58 GB high-water]**
 

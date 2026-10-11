@@ -147,7 +147,7 @@ want a number.
 | [`09_forces_and_relaxation.ipynb`](09_forces_and_relaxation.ipynb) | Hellmann-Feynman and Pulay in one derivative, against Quantum ESPRESSO, then relaxation |
 | [`10_topological_invariants.ipynb`](10_topological_invariants.ipynb) | Chern numbers as exact integers, Wannier-centre flow, Fu-Kane parities, and the curvature as a map |
 | [`11_noncollinear_magnetism_and_fields.ipynb`](11_noncollinear_magnetism_and_fields.ipynb) | Magnetism as a vector field, bcc iron against QE, constrained moments, and the direction the energy cannot depend on |
-| [`12_spin_spirals.ipynb`](12_spin_spirals.ipynb) | The generalized Bloch theorem, the limits that validate it, and a frozen-magnon `E(q)` curve computed two ways |
+| [`12_spin_spirals.ipynb`](12_spin_spirals.ipynb) | The generalized Bloch theorem, the limits that validate it, a frozen-magnon `E(q)` curve computed two ways, and a PBE spiral converged by a gradient correction built from the moment's components |
 | [`13_dft_plus_u.ipynb`](13_dft_plus_u.ipynb) | The occupation penalty that opens FeO's gap, the two honest ways to remove what the functional already counted, and a $U$ computed from the orbital instead of fitted |
 | [`14_spiral_relaxation.ipynb`](14_spiral_relaxation.ipynb) | `dE/dq`, and a relaxation that finds a magnet's ground-state pitch in six SCF runs |
 | [`15_stress.ipynb`](15_stress.ipynb) | The stress tensor, silicon's equation of state, and the Pulay stress a low cutoff carries |

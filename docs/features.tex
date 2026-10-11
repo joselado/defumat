@@ -2325,6 +2325,68 @@ approximation. Elk labels \code{nosource} an experimental feature and that
 label carries here.
 \end{refuses}
 
+\subsection{A gradient correction built from $\nabla\mathbf m$}
+
+What does a gradient-corrected functional do with a magnetization that points in
+different directions at different points? \code{pw.x}'s answer, which is
+K\"ubler's and is the default here, is to rotate onto the local axis: the collinear
+GGA is evaluated on the pair $(n\pm|\mathbf m|)/2$. Where every starting moment
+is parallel it takes the sign of $\mathbf m$ along that axis, so up stays up
+across a node; where they are not, which is every spin spiral, it takes
+$|\mathbf m|$ itself, which has a kink at every node of $\mathbf m$. A kink in
+the density is a divergence in its gradient, and the self-consistent cycle sees
+it: the PBE cobalt helix stalls near $10^{-10}$~Ry and never reaches $10^{-11}$.
+
+\code{noncollinear\_gga = 'grad\_m'} in \code{\&system} builds exchange from the
+gradients of the components instead. With $g = |\nabla n|^2$,
+$\Gamma = \sum_k|\nabla m_k|^2$, $a_k = \nabla n\cdot\nabla m_k$, $A = |\mathbf a|$,
+$t = \mathbf a\cdot\mathbf m$ and $s = |\mathbf m|$,
+\begin{equation*}
+E_x = \frac14\sum_{\sigma,\tau=\pm1}\left(1 + \sigma\tau\,\frac{t}{sA}\right)
+e_x\!\left(n + \sigma s,\; g + \Gamma + 2\tau A\right),
+\end{equation*}
+with $e_x$ the unpolarized gradient exchange, meaning that where $\nabla\mathbf m$
+is parallel to $\mathbf m$ the weight is $\pm1$ and this is the collinear exchange
+exactly, nodes included, and elsewhere the two branches are mixed by the cosine
+between $\mathbf a$ and $\mathbf m$. These are Scalmani and Frisch's invariants
+with their sign of $t$ replaced by that cosine, which is what makes the energy
+smooth where $\mathbf m$ vanishes; nothing in it refers to an axis. Correlation
+is unchanged, since it sees the polarization only through an even function. On a
+spiral the transverse gradient is the laboratory one, $i(\mathbf G - \mathbf q)$
+on the transverse pair's own sphere, so the functional is the one the unfolded
+supercell evaluates.
+
+\begin{pycode}
+from defumat import Calculator
+
+# the cobalt helix, PBE, ultrasoft, q = -b3/4, with noncollinear_gga = 'grad_m'
+calc = Calculator.from_file("co-helix4-spiral-gradm.in", pseudo_dir="../pseudo",
+                            conv_thr=1e-11)
+scf = calc.get_scf()
+
+print(scf.converged, scf.iterations)   # -> True 15
+\end{pycode}
+
+\textbf{The numbers.} On that cell at $10^{-11}$, 15 iterations at 160~Ry and 19
+at 80, where the default does not get there in 150; the ferromagnet at
+$\mathbf q = 0$ in 14 against the signed default's 35, with the two energies
+$3\times10^{-10}$~Ry apart, since on a collinear state they are one functional.
+On the spiral they are not: $-74.2833326$ against $-74.2824789$~Ry, which is the
+choice of functional and not an error of either. Against the four-cell supercell
+at one density the spiral's potential agrees to $1.4\times10^{-13}$~Ry.
+
+\begin{refuses}
+\textbf{Refuses.} \textbf{PAW}: the one-centre gradient correction rotates onto
+$|\mathbf m|$ in every sphere, and the run would mix two functionals.
+\code{nosource}, whose projection was written for a field parallel to $\mathbf m$.
+An \textbf{LDA or a potential-only meta-GGA}, which have nothing for it to change.
+And $\mathrm dE/\mathrm d\mathbf q$ (\code{get\_spiral\_relaxation}), since this
+exchange depends on $\mathbf q$ through the laboratory gradient and the
+frozen-state energy does not carry that term. It is \textbf{not}
+\code{pw.x}'s or Elk's functional (Elk regularises the same $|\mathbf m|$), so a
+comparison with either stays on the default.
+\end{refuses}
+
 % =====================================================================
 \section{Forces, stress and relaxation}
 

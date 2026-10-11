@@ -204,6 +204,8 @@ new phase is started. Each entry names the missing term rather than the missing 
 because that is what decides whether it is a session or a phase.
 
 - **Wyckoff input** (P6, the one part of that phase not done).
+- **The `grad m` noncollinear GGA** (P142) on PAW (the one-centre rotation in `paw/gradient.py`
+  done the same way), under `nosource`, and its `dE/dq` (the laboratory gradient's `q` dependence).
 - **Real-time propagation** (P134 frozen, P136 with the potential updated, P137 the spectrum of the
   orders at a frozen potential, P139 to P141 collinear magnets, spinors and ultrasoft and PAW
   datasets): the potential updated in time with an ultrasoft or PAW dataset (the augmentation charge
@@ -25227,3 +25229,64 @@ snippet, both left at the user's choice of 2026-10-07.
 **Refused**, by name: the potential updated in time with an augmented dataset (the augmentation
 charge of `rho(t)` from the projections at `k + kappa(t)`, `newd`'s `D(t)` every step, PAW's
 one-centre `D(t)`), and a kick after the start.
+
+### P142 -- A noncollinear GGA built from `grad m`: `noncollinear_gga = 'grad_m'`. ✅ DONE for norm-conserving and ultrasoft datasets, spirals included, 2026-10-11, against the collinear functional, a global spin rotation, a finite difference and the unfolded supercell; PAW, `nosource` and `dE/dq` are refused by name.
+
+**Why.** `gradcorr`'s noncollinear branch, which this code transcribes, runs the collinear GGA on
+`(n +- s|m|)/2`, signed along a fixed axis when every starting moment is parallel and unsigned
+otherwise, and an unsigned `|m|` has a kink at every node of `m`. A spiral never has an axis, so
+the PBE cobalt helix stalled near `1e-10` (`OPEN.md` Part XXI item 1, diagnosed the same day:
+the potential is the exact derivative of the grid functional, the kink is the functional's).
+
+**The functional.** With `g = |grad n|^2`, `Gamma = sum_k |grad m_k|^2`, `a_k = grad n . grad m_k`,
+`A = |a|`, `t = a . m`, `s = |m|`, `S = g + Gamma` and `gx` the unpolarized gradient exchange,
+
+    E_x = 1/4 sum_{sigma, tau} (1 + sigma tau c) gx(n + sigma s, S + 2 tau A),   c = t / (s A),
+
+Scalmani and Frisch's invariants (JCTC 8, 2193 (2012), quoted from arXiv:2606.31482) with their
+`sgn t` replaced by the cosine, which was derived by the literature subagent and not found
+published. Where `a` is parallel to `m` it is the collinear exchange exactly, nodes included;
+everything in it is invariant under a joint spin rotation; and its part odd in `A` is odd in `s`
+as well, so it is `t H` with `H` smooth in `s^2` and `A^2`. That is the form coded
+(`Functional.noncollinear_gradient_exchange_energy`): `H` from two divided differences, each
+switched to its derivative below a relative step of `1e-4`. **A guard on `c` is wrong in the
+derivative**, which fable's review measured before any code: `d(tH)/dm_k = a_k H + ...` survives
+at a node where `a` does not vanish, and `where(sA > eta, c, 0)` gave `dE/dm_x = 0` at the node
+against the right 1.21e-2. Correlation is unchanged, being even in `zeta`. The potential is
+`jax.value_and_grad` of the integrated energy, 32 transforms against the `'kubler'` branch's 16.
+
+**A spiral's frame.** The transverse pair is stored in the frame that turns with `q`, where `|m|`
+is the laboratory one and `grad m` is not, so the transverse gradient is the laboratory one,
+`i (G - q)` on the coefficients of `m'_+` gathered on the laboratory sphere
+(`_spiral_transverse_gradient`). A first form took it on the whole FFT box: the energy against
+the unfolded supercell was right to 2.3e-9 Ry and the field wrong by **0.61 Ry**, its adjoint
+filling box frequencies the supercell never has, and the even box's Nyquist plane, which the
+laboratory sphere uses, would have had the wrong sign of `G`. `q` crosses in reciprocal-lattice
+units so that it strains with the cell.
+
+**Validation** (`tests/unit/test_noncollinear_gga_grad_m.py`, D22-0161):
+
+| check | result |
+|---|---|
+| pointwise, collinear with nodes, along `z` and tilted | `<= 1e-13` of the largest value |
+| grid, collinear with nodes, tilted: energy, charge potential, field | 1e-13 relative, `< 1e-12` Ry |
+| `'kubler'` unsigned on that field | **7.17e-5 Ry** off the collinear energy: `grad |m|` by FFT of a kinked field |
+| a random global spin rotation, energy and potential | 1e-13 relative, `< 1e-12` Ry |
+| central difference, two directions, one moving `m` alone | error `~ h^2`, 1.1e-8 relative at a step of 1e-3 |
+| exact zeros of `m`, potential and its `jvp` | finite |
+| iron, `fe-noncolin-pbe-stress.in`, collinear ground state, `conv_thr = 1e-14` | energy 1e-12 Ry and stress 3.2e-10 Ry/bohr^3 from the signed branch, 22 iterations each (at 1e-12: 2.2e-8, the convergence) |
+| cobalt spiral against its four-cell supercell at one density | `etxc` 0.0 Ry of 131.12, potential 2.5e-13 (charge), 1.4e-13 (field, at most 0.61) |
+
+**SCF**, cobalt at `conv_thr = 1e-11` (`OPEN.md` Part XXI item 1 has the table): `q = 0` in 14
+iterations against the signed branch's 35, energies 3e-10 apart; the spiral in **15 at 160 Ry and
+19 at 80 Ry on the laboratory sphere**, to 1.5e-13 and 9.4e-12, where `'kubler'` could not reach
+`1e-11`. The spiral's energy is 8.5e-4 Ry below `'kubler'`'s, the two being different
+functionals there.
+
+**The default stays `'kubler'`** (fable's call): it is `pw.x`'s and Elk's (Elk regularises the
+same `|m|`, `dncgga = 1e-8`), and the iron stress pin and the Elk spiral pairs stay like for
+like. **Refused under `'grad_m'`**: PAW (`paw/gradient.py` rotates onto `|m|` in every sphere,
+so the run would mix two functionals), `nosource` (its projection was checked for a field
+parallel to `m`), an LDA or a meta-GGA (nothing to change), and `dE/dq` (`forces/spiral.py`),
+since the exchange depends on `q` through the laboratory gradient and the frozen-state energy
+does not carry it. Input: `noncollinear_gga` in `&system`, not a `pw.x` keyword.

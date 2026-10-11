@@ -79,8 +79,13 @@ STRESS_CONV_THR = 1.0e-12
 
 #: ``'grad_m'`` against the signed branch on the same collinear ground state:
 #: one functional there, so what is left is the two SCF paths' convergence.
+#: Measured on D22 (2026-10-11): at ``conv_thr = 1e-12`` the diagonals were
+#: 2.2e-8 apart while the signed branch alone moves 1.7e-8 from 1e-12 to
+#: 1e-14; at **1e-14 they are 3.2e-10 apart** and the energies 1e-12 Ry, both
+#: in 22 iterations. Hence the threshold.
+GRAD_M_CONV_THR = 1.0e-14
 GRAD_M_ENERGY_RY = 1.0e-9
-GRAD_M_STRESS_RY_BOHR3 = 1.0e-8
+GRAD_M_STRESS_RY_BOHR3 = 2.0e-9
 
 
 @pytest.fixture(autouse=True)
@@ -175,16 +180,16 @@ def test_grad_m_gives_the_signed_branch_on_a_collinear_ground_state(pseudo_dir):
         "    nosym = .true.", "    noncollinear_gga = 'grad_m'\n    nosym = .true.", 1
     )
     calculator = Calculator.from_text(
-        text, pseudo_dir, announce=False, conv_thr=STRESS_CONV_THR
+        text, pseudo_dir, announce=False, conv_thr=GRAD_M_CONV_THR
     )
     assert calculator.calculation.noncollinear_gga == "grad_m"
-    scf = calculator.get_scf(max_iterations=200)
+    scf = calculator.get_scf(max_iterations=300)
     stress = np.asarray(calculator.get_stress().tensor)
 
     signed = Calculator.from_file(
-        CASES / f"{CASE}.in", pseudo_dir, announce=False, conv_thr=STRESS_CONV_THR
+        CASES / f"{CASE}.in", pseudo_dir, announce=False, conv_thr=GRAD_M_CONV_THR
     )
-    reference = signed.get_scf(max_iterations=200)
+    reference = signed.get_scf(max_iterations=300)
     assert scf.converged and reference.converged
     assert scf.total_energy == pytest.approx(reference.total_energy, abs=GRAD_M_ENERGY_RY)
     assert stress == pytest.approx(

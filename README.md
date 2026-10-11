@@ -311,6 +311,12 @@ model describes the surface. `calc.get_spiral_scan(wavevectors)`, notebook
   $\mathbf k - \mathbf q/2$, on norm-conserving, ultrasoft and PAW datasets. Needs
   `nosym`, and spin-orbit coupling switched on is refused, since it breaks the
   theorem. `spiral_q`, notebook [12](notebooks/12_spin_spirals.ipynb).
+- **A noncollinear gradient correction built from $\nabla\mathbf m$** rather than from
+  $\nabla|\mathbf m|$: smooth where the moment vanishes and free of a quantization axis,
+  and the collinear functional exactly for a collinear state. It is what converges a PBE
+  spiral, which on `pw.x`'s rotation onto $|\mathbf m|$ stalls near $10^{-10}$ Ry.
+  Not `pw.x`'s or Elk's functional; norm-conserving and ultrasoft.
+  `noncollinear_gga = 'grad_m'`, notebook [12](notebooks/12_spin_spirals.ipynb).
 - **The Dzyaloshinskii-Moriya energy of a spin spiral**, spin-orbit coupling
   added to first order on the spiral computed without it, in the unit cell and
   at any $\mathbf q$: $E_1(\mathbf q, \hat{\mathbf n}) = \hat{\mathbf n}\cdot\mathbf V(\mathbf q)$,
