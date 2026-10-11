@@ -159,10 +159,12 @@ class System(eqx.Module):
     #: (:mod:`defumat.scf.sourcefree`).
     nosource: bool = eqx.field(static=True, default=False)
     #: ``noncollinear_gga``: the gradient correction of a noncollinear
-    #: magnetization, ``'kubler'`` (``pw.x``'s, the default) or ``'grad_m'``
-    #: (:func:`defumat.scf.potential._noncollinear_gradient_correction_grad_m`).
-    #: Not a ``pw.x`` keyword; ``pw.x`` and Elk have the first only.
-    noncollinear_gga: str = eqx.field(static=True, default="kubler")
+    #: magnetization, ``'grad_m'``
+    #: (:func:`defumat.scf.potential._noncollinear_gradient_correction_grad_m`)
+    #: or ``'kubler'`` (``pw.x``'s and Elk's). ``None``, the default, is
+    #: resolved by :func:`defumat.scf.potential.resolve_noncollinear_gga`:
+    #: ``'grad_m'`` wherever it applies. Not a ``pw.x`` keyword.
+    noncollinear_gga: str | None = eqx.field(static=True, default=None)
     #: ``noinv``: switch off the ``k -> -k`` reduction of the k-grid.
     #: ``setup.f90`` sets ``time_reversal = .NOT. noinv .AND. .NOT.
     #: magnetic_sym``, so it is independent of :attr:`nosym` -- a run may keep
@@ -1388,7 +1390,9 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
     # k-points.
     nosym = _logical(pwin.get("system", "nosym", False))
     nosource = _logical(pwin.get("system", "nosource", False))
-    noncollinear_gga = str(pwin.get("system", "noncollinear_gga", "kubler")).strip().lower()
+    noncollinear_gga = pwin.get("system", "noncollinear_gga", None)
+    if noncollinear_gga is not None:
+        noncollinear_gga = str(noncollinear_gga).strip().lower()
     noinv = _logical(pwin.get("system", "noinv", False))
     # ``tstress`` and nothing else: there is no ``tprnstress`` in QE 7.5
     # (``INPUT_PW.txt`` lists one stress switch and a grep of the tree finds no

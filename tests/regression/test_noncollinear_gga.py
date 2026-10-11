@@ -176,19 +176,20 @@ def test_grad_m_gives_the_signed_branch_on_a_collinear_ground_state(pseudo_dir):
     potential and its strain derivative both come from differentiating it.
     """
     text = (CASES / f"{CASE}.in").read_text()
-    text = text.replace(
-        "    nosym = .true.", "    noncollinear_gga = 'grad_m'\n    nosym = .true.", 1
+    calculator = Calculator.from_file(
+        CASES / f"{CASE}.in", pseudo_dir, announce=False, conv_thr=GRAD_M_CONV_THR
     )
-    calculator = Calculator.from_text(
-        text, pseudo_dir, announce=False, conv_thr=GRAD_M_CONV_THR
-    )
+    # The default, since 2026-10-11.
     assert calculator.calculation.noncollinear_gga == "grad_m"
     scf = calculator.get_scf(max_iterations=300)
     stress = np.asarray(calculator.get_stress().tensor)
 
-    signed = Calculator.from_file(
-        CASES / f"{CASE}.in", pseudo_dir, announce=False, conv_thr=GRAD_M_CONV_THR
+    signed = Calculator.from_text(
+        text.replace("    nosym = .true.",
+                     "    noncollinear_gga = 'kubler'\n    nosym = .true.", 1),
+        pseudo_dir, announce=False, conv_thr=GRAD_M_CONV_THR,
     )
+    assert signed.calculation.noncollinear_gga == "kubler"
     reference = signed.get_scf(max_iterations=300)
     assert scf.converged and reference.converged
     assert scf.total_energy == pytest.approx(reference.total_energy, abs=GRAD_M_ENERGY_RY)

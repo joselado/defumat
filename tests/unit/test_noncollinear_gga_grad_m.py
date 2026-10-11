@@ -14,7 +14,9 @@ import pytest
 
 from defumat.basis.fft import g_to_r
 from defumat.basis.gvectors import generate_gvectors
-from defumat.scf.potential import refuse_noncollinear_gga, v_of_rho
+from defumat.scf.potential import (
+    refuse_noncollinear_gga, resolve_noncollinear_gga, v_of_rho,
+)
 from defumat.system.cell import Cell
 from defumat.xc.functional import get_functional
 
@@ -182,3 +184,13 @@ def test_the_choice_is_refused_where_it_would_mix_two_functionals():
         refuse_noncollinear_gga("grad_m", 4, PBE, True, False)
     with pytest.raises(NotImplementedError, match="nosource"):
         refuse_noncollinear_gga("grad_m", 4, PBE, False, True)
+
+
+def test_grad_m_is_the_default_wherever_it_applies():
+    """Nothing asked for: ``'grad_m'`` on a noncollinear GGA, ``'kubler'`` where
+    the branch is refused, and an explicit choice is kept."""
+    lda = get_functional("PZ")
+    assert resolve_noncollinear_gga(None, 4, PBE, False, False) == "grad_m"
+    assert resolve_noncollinear_gga(None, 2, PBE, False, False) == "kubler"
+    assert resolve_noncollinear_gga(None, 4, lda, False, False) == "kubler"
+    assert resolve_noncollinear_gga("kubler", 4, PBE, False, False) == "kubler"

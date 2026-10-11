@@ -169,8 +169,9 @@ def spiral_energy(calculation, q_crystal, state: FrozenState):
 
     # The density, and everything built from it. None of it moves with ``q`` at
     # frozen coefficients -- the rotated frame is what makes it lattice periodic
-    # -- so ``grad`` finds zero here and never differentiates through an FFT or
-    # the exchange-correlation functional. It is written out because the
+    # -- so ``grad`` finds zero here, except in the exchange-correlation energy
+    # under ``noncollinear_gga = 'grad_m'``, whose laboratory gradient of the
+    # transverse pair is ``i (G - q)`` (``moved`` carries ``q`` traced). It is written out because the
     # functional has to *be* the total energy before it is differentiated.
     becsum_ = moved.becsum(psi, weights)
     rho = moved.density(psi, weights, becsum_)
@@ -234,7 +235,9 @@ def q_dependent_energy(calculation, q_crystal, psi, weights, eigenvalues, rows,
     Miller ordering against the same numbers and silently wrong.
 
     Everything else in :func:`spiral_energy` -- the density, Hartree,
-    exchange-correlation, the local term, Ewald, ``<psi|psi> - 1`` -- is
+    exchange-correlation (except under ``noncollinear_gga = 'grad_m'``, whose
+    laboratory gradient carries ``q`` and which :func:`_chunked_energy_and_gradient`
+    adds), the local term, Ewald, ``<psi|psi> - 1`` -- is
     ``q``-independent at frozen coefficients and is *not* here, because its
     gradient is zero and the chunking exists to keep the backward pass off it.
     :func:`q_independent_energy` evaluates it once, forward only, so the
@@ -410,6 +413,15 @@ def _chunked_energy_and_gradient(calculation, q, state: FrozenState, k_batch: in
         value, slope = fn(q, psi, weights, eigenvalues, rows)
         energy += value
         gradient = gradient + slope
+    if getattr(calculation, "noncollinear_gga", "kubler") == "grad_m":
+        # Under ``'grad_m'`` exchange is not a constant of ``q``: the
+        # laboratory gradient of the transverse pair is ``i (G - q)``. On this
+        # dataset the density does not move with ``q``, so the term is one
+        # derivative of the global energy at the frozen density.
+        raw, rho_smooth, _ = _frozen_sums(calculation, state, k_batch)
+        whole = calculation.finish_becsum(raw) if raw else raw
+        gradient = gradient + jax.grad(
+            lambda q: q_global_energy(calculation, q, whole, rho_smooth))(q)
     return energy + q_independent_energy(calculation, state, k_batch), gradient
 
 
@@ -587,13 +599,6 @@ def _require_a_differentiable_spiral(calculation) -> None:
             "reported total (see defumat.scf.fields), so the converged state "
             "is stationary for a different functional than the one being "
             "differentiated and the missing term would be silent"
-        )
-    if getattr(calculation, "noncollinear_gga", "kubler") == "grad_m":
-        raise NotImplementedError(
-            "dE/dq under noncollinear_gga = 'grad_m' is not implemented: that "
-            "exchange energy depends on q through the laboratory gradient of "
-            "the transverse pair, a term the frozen-state energy here does not "
-            "carry, so the derivative would be missing it silently"
         )
 
 

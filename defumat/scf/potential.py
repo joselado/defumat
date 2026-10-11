@@ -657,6 +657,24 @@ def _spiral_transverse_gradient(mx, my, cell: Cell, spiral):
 NONCOLLINEAR_GGA = ("kubler", "grad_m")
 
 
+def resolve_noncollinear_gga(choice, nspin_mag, functional, is_paw, source_free) -> str:
+    """``noncollinear_gga`` for a run: the user's choice, checked, or the default.
+
+    ``None`` (nothing asked for) is ``'grad_m'`` wherever that branch applies --
+    a noncollinear magnetization under a gradient functional -- and ``'kubler'``
+    wherever it does not, where the two are the same arithmetic or the run is
+    one :func:`refuse_noncollinear_gga` refuses ``'grad_m'`` for. An explicit
+    choice goes through that refusal unchanged.
+    """
+    if choice is None:
+        try:
+            return refuse_noncollinear_gga("grad_m", nspin_mag, functional,
+                                           is_paw, source_free)
+        except (ValueError, NotImplementedError):
+            return "kubler"
+    return refuse_noncollinear_gga(choice, nspin_mag, functional, is_paw, source_free)
+
+
 def refuse_noncollinear_gga(choice, nspin_mag, functional, is_paw, source_free) -> str:
     """``noncollinear_gga`` checked against the run, returned when it is allowed.
 

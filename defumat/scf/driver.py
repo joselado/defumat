@@ -166,7 +166,7 @@ from defumat.scf.potential import (
     Potential,
     as_potential_components,
     fixed_quantization_axis,
-    refuse_noncollinear_gga,
+    resolve_noncollinear_gga,
     scf_accuracy,
     scf_accuracy_split,
     tau_accuracy,
@@ -2338,6 +2338,13 @@ class Calculation:
             * float(system.cell.tpiba)
             if self.spiral else np.zeros(3)
         )
+        #: The same wavevector in lattice coordinates, the one ``q`` a
+        #: ``'grad_m'`` potential reads (:meth:`_spiral_q_argument`). Kept apart
+        #: from :attr:`spiral_qcart` because ``at_spiral_q`` at a frozen basis
+        #: moves this one, traced, and leaves that one where the basis is.
+        self.spiral_q_crystal = (
+            np.asarray(system.spiral_q, dtype=float) if self.spiral else np.zeros(3)
+        )
         self.basis_kpoints = (
             spiral_kpoints(system.kpoints, system.spiral_q, system.cell)
             if self.spiral else system.kpoints
@@ -2681,11 +2688,12 @@ class Calculation:
             refuse_source_free(system, self.functional, self.pseudos)
 
         #: ``noncollinear_gga``: which gradient correction an ``nspin = 4``
-        #: magnetization takes, ``pw.x``'s ``'kubler'`` or ``'grad_m'``
-        #: (:func:`~defumat.scf.potential._noncollinear_gradient_correction_grad_m`).
-        #: Static, and refused at the door where it would mix two functionals.
-        self.noncollinear_gga = refuse_noncollinear_gga(
-            getattr(system, "noncollinear_gga", "kubler"), self.nspin_mag,
+        #: magnetization takes, ``'grad_m'`` (the default wherever it applies,
+        #: :func:`~defumat.scf.potential._noncollinear_gradient_correction_grad_m`)
+        #: or ``pw.x``'s ``'kubler'``. Static, and an explicit choice is refused
+        #: at the door where it would mix two functionals.
+        self.noncollinear_gga = resolve_noncollinear_gga(
+            getattr(system, "noncollinear_gga", None), self.nspin_mag,
             self.functional, self.is_paw, self.source_free,
         )
 
@@ -4335,6 +4343,11 @@ class Calculation:
         moved.__dict__.pop("_spiral_gradient_chunk", None)
 
         if not rebuild_basis:
+            # The one ``q`` the exchange-correlation potential reads under
+            # ``'grad_m'``, whose laboratory gradient is ``i (G - q)``: traced
+            # here, so ``dE/dq`` sees it, on the laboratory sphere frozen with
+            # the basis (:meth:`_spiral_q_argument`).
+            moved.spiral_q_crystal = jnp.asarray(q_crystal)
             # ``spiral_q`` stays a *static* field -- static fields cannot hold a
             # tracer, and this one decides array lengths -- so the system is
             # left at the wavevector the frozen basis belongs to and only the
@@ -4419,6 +4432,7 @@ class Calculation:
         moved.spiral_qcart = (
             np.asarray(spiral_cartesian(system.spiral_q, cell)) * float(cell.tpiba)
         )
+        moved.spiral_q_crystal = np.asarray(system.spiral_q, dtype=float)
         # A new ``q`` is a new laboratory sphere for the transverse pair, and
         # on it a new displaced table. This branch rebuilds the spheres, so it
         # is host-side and can afford the radial transforms; it is what an
@@ -4551,8 +4565,9 @@ class Calculation:
         ``None`` for every other run so that nothing else is traced with it.
         The sphere is :attr:`spiral_dense` where the run built one and is built
         here otherwise (a norm-conserving spiral with no smooth grid), once per
-        ``q``; ``q`` goes in reciprocal-lattice units, so it strains with the
-        cell.
+        basis; ``q`` goes in reciprocal-lattice units, so it strains with the
+        cell, and is :attr:`spiral_q_crystal`, which ``at_spiral_q`` at a frozen
+        basis carries traced so that ``dE/dq`` differentiates it.
         """
         if not self.spiral or self.noncollinear_gga != "grad_m":
             return None
@@ -4566,8 +4581,10 @@ class Calculation:
                 cache[key] = displaced_gvectors(
                     self.system.cell, self.basis.dense, -qcart)[0]
             lab = cache[key]
-        q = qcart @ np.linalg.inv(np.asarray(self.system.cell.bg, dtype=float))
-        return lab, np.asarray(q, dtype=self.system.cell.precision.real)
+        q = getattr(self, "spiral_q_crystal", None)
+        if q is None:
+            q = qcart @ np.linalg.inv(np.asarray(self.system.cell.bg, dtype=float))
+        return lab, jnp.asarray(q, dtype=self.system.cell.precision.real)
 
     def _axis_argument(self):
         """:attr:`quantization_axis` as the array the compiled potentials take, or ``None``.
