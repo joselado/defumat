@@ -550,7 +550,7 @@ def _noncollinear_gradient_correction_grad_m(
     cell: Cell,
     functional: Functional,
     rho_core: jnp.ndarray | None,
-    spiral_q: jnp.ndarray | None = None,
+    spiral=None,
 ):
     """The gradient correction of ``noncollinear_gga = 'grad_m'``.
 
@@ -571,22 +571,22 @@ def _noncollinear_gradient_correction_grad_m(
     branch's 16.
 
     **A spin spiral's transverse pair is stored in the frame that turns with
-    ``q``** (``spiral_q``, 1/bohr, ``None`` for any other run), and ``grad m``,
+    ``q``** (``spiral``, :func:`_spiral_transverse_gradient`'s pair, ``None``
+    for any other run), and ``grad m``,
     unlike ``|m|``, is not the same in the two frames. The invariants are taken
     of the laboratory gradient written in the turning frame, the covariant
     ``grad m'_+ - i q m'_+`` of ``m'_+ = m'_x + i m'_y`` (the laboratory field is
     ``m'_+ e^{-i q.r}``, its wavevectors ``G - q``), so the functional is the
-    unfolded supercell's. That gradient is taken on the whole box rather than on
-    the resident sphere: the pair lives on the laboratory sphere
-    ``{G : |G - q| < G_rho}`` (``Calculation.lift_density``), which the
-    resident gather would cut.
+    unfolded supercell's. That gradient is taken on the laboratory sphere
+    ``{G : |G - q| <= G_rho}``, where the pair lives
+    (``Calculation.lift_density``) and which the resident gather would cut.
     """
     npts = rho_r[0].size
 
     def energy(rho):
         charge = rho[0] if rho_core is None else rho[0] + jnp.real(rho_core)
         magnetization = rho[1:]
-        if spiral_q is None:
+        if spiral is None:
             components = jnp.concatenate([charge[None], magnetization])
         else:
             components = jnp.stack([charge, magnetization[2]])
@@ -594,11 +594,11 @@ def _noncollinear_gradient_correction_grad_m(
             jax.vmap(r_to_g, in_axes=(0, None))(components, gvectors.fft_index),
             gvectors, cell,
         )
-        if spiral_q is None:
+        if spiral is None:
             grad_n, grad_m = grads[0], grads[1:]
         else:
             grad_x, grad_y = _spiral_transverse_gradient(
-                magnetization[0], magnetization[1], cell, spiral_q
+                magnetization[0], magnetization[1], cell, spiral
             )
             grad_n, grad_m = grads[0], jnp.stack([grad_x, grad_y, grads[1]])
         s = safe_modulus(magnetization)
@@ -620,24 +620,33 @@ def _noncollinear_gradient_correction_grad_m(
     return v * (npts / cell.volume), e
 
 
-def _spiral_transverse_gradient(mx, my, cell: Cell, spiral_q):
+def _spiral_transverse_gradient(mx, my, cell: Cell, spiral):
     """``grad`` of a spiral's laboratory transverse pair, in the turning frame.
 
-    ``m'_+ = m'_x + i m'_y`` on the box, its laboratory field ``m'_+ e^{-i q.r}``,
-    so the laboratory derivative is ``i (G - q)`` on each box coefficient. With
-    ``F = ifft((G - q) fft(m'_+))`` that is ``i F``, whose real and imaginary
-    parts are the covariant gradients of ``m'_x`` and ``m'_y``: ``-Im F`` and
-    ``Re F``. Exact for a field inside the box's half range, which the
-    laboratory sphere is on every grid the driver builds (its ``M0`` check).
+    ``spiral`` is ``(lab, q)``: the laboratory sphere ``{G : |G - q| <= G_rho}``
+    as a :class:`GVectors` on the dense box, and ``q`` in units of the
+    reciprocal lattice vectors, so that ``(G - q)`` follows a strained cell.
+    ``m'_+ = m'_x + i m'_y`` is gathered on that sphere, its laboratory field
+    is ``m'_+ e^{-i q.r}``, and the laboratory derivative is ``i (G - q)`` on
+    each coefficient. With ``F`` the field of ``(G - q) c`` that is ``i F``,
+    whose real and imaginary parts are the covariant gradients of ``m'_x`` and
+    ``m'_y``: ``-Im F`` and ``Re F``.
+
+    **The sphere's own G set and not the box's frequencies**, for two reasons
+    measured or read: the box's adjoint puts every box frequency into the
+    potential, which the unfolded supercell, cut at its own resident sphere,
+    never has (0.61 Ry of field against a largest 0.66 on the cobalt helix);
+    and the laboratory sphere takes the Nyquist plane of an even box
+    (:func:`~defumat.basis.gvectors.displaced_gvectors`), where the box's
+    frequency is the wrong sign.
     """
-    shape = mx.shape
+    lab, q = spiral
+    coefficients = r_to_g(jax.lax.complex(mx, my), lab.fft_index)
     real = mx.dtype
-    frequencies = [jnp.fft.fftfreq(n, d=1.0 / n).astype(real) for n in shape]
-    miller = jnp.stack(jnp.meshgrid(*frequencies, indexing="ij"), axis=-1)
-    g = jnp.moveaxis(miller @ jnp.asarray(cell.bg, dtype=real)
-                     - jnp.asarray(spiral_q, dtype=real), -1, 0)
-    box = jnp.fft.fftn(jax.lax.complex(mx, my), axes=(-3, -2, -1))
-    f = jnp.fft.ifftn(g * box[None], axes=(-3, -2, -1))
+    g = (lab.miller.astype(real) - jnp.asarray(q, dtype=real)) @ jnp.asarray(cell.bg, dtype=real)
+    f = jax.vmap(g_to_r, in_axes=(0, None, None))(
+        g.T * coefficients[None], lab.fft_index, lab.grid
+    )
     return -jnp.imag(f), jnp.real(f)
 
 
@@ -968,7 +977,7 @@ def v_of_rho(
     tau: jnp.ndarray | None = None,
     source_free: bool = False,
     noncollinear_gga: str = "kubler",
-    spiral_q: jnp.ndarray | None = None,
+    spiral=None,
 ) -> Potential:
     """The full self-consistent potential from a real-space density.
 
@@ -993,9 +1002,10 @@ def v_of_rho(
     magnetization: ``'kubler'``, ``pw.x``'s rotation onto ``|m|`` signed along
     ``quantization_axis`` when there is one, or ``'grad_m'``, built from
     ``grad m`` and ignoring the axis
-    (:func:`_noncollinear_gradient_correction_grad_m`). Static. ``spiral_q``
-    is a spin spiral's wavevector in 1/bohr, read by ``'grad_m'`` alone, the
-    one functional here that is not the same in the turning frame.
+    (:func:`_noncollinear_gradient_correction_grad_m`). Static. ``spiral`` is
+    a spin spiral's laboratory sphere and wavevector
+    (:func:`_spiral_transverse_gradient`), read by ``'grad_m'`` alone, the one
+    functional here that is not the same in the turning frame.
 
     ``tau`` is the kinetic energy density in Ry, per spin channel, and is
     required by -- and only by -- a meta-GGA functional. It is the one
@@ -1071,7 +1081,7 @@ def v_of_rho(
             if noncollinear_gga == "grad_m":
                 v_gradient, e_gradient = _noncollinear_gradient_correction_grad_m(
                     jnp.real(rho_r), gvectors, cell, functional, rho_core,
-                    spiral_q,
+                    spiral,
                 )
             else:
                 v_gradient, e_gradient = _noncollinear_gradient_correction(

@@ -578,3 +578,51 @@ def test_the_resident_table_is_not_enough(pseudo_dir, monkeypatch):
     assert spiral.converged and doubled.converged
     error = abs(_electronic(spiral) - _electronic(doubled) / 2.0)
     assert error > WITHOUT_THE_DISPLACEMENT_RY
+
+
+#: ``noncollinear_gga = 'grad_m'``'s potential on the spiral against the unfolded
+#: supercell's at one density: ``etxc`` (Ry, the supercell's over four cells)
+#: and the largest difference of any potential component (Ry).
+GRAD_M_UNFOLDED = (1.0e-9, 1.0e-10)
+
+
+def test_grad_m_on_the_spiral_is_the_unfolded_supercells_functional(pseudo_dir):
+    """The spiral's ``grad m`` is taken in the laboratory frame, so it is the supercell's.
+
+    The transverse pair of a spiral is stored in the frame that turns with
+    ``q``, where ``|m|`` is the laboratory one and ``grad m`` is not; the
+    ``'grad_m'`` branch takes the covariant gradient ``i (G - q)`` on the
+    laboratory sphere (:func:`~defumat.scf.potential._spiral_transverse_gradient`).
+    Against the four-cell supercell at the unfolded density, measured on D22
+    (2026-10-11): ``etxc`` equal to the last printed digit (0.0 Ry of 131.12)
+    and the potential to **2.5e-13 Ry (charge) and 1.4e-13 (field)**, where the
+    field is 0.61 at most; the same comparison under ``'kubler'`` reads 0.0,
+    2.9e-13 and 3.2e-12. Two earlier forms of the gradient are what the bound
+    has to catch: the rotating frame's own ``grad m'`` (the functional of
+    another density), and the derivative on the whole box, which had the
+    energy to 2.3e-9 and the field wrong by **0.61 Ry**, since its adjoint
+    filled box frequencies the supercell's sphere never has.
+    """
+    import dataclasses
+
+    import jax.numpy as jnp
+    import numpy as np
+
+    from defumat.scf.driver import Calculation
+    from defumat.workflows.spiral import unfold_spiral_density
+
+    spiral, pseudos, density = _cobalt_density(_cobalt(160.0), pseudo_dir)
+    text = (GENERATED / "co-helix4-nosoc.in").read_text()
+    supercell = build_system(parse_pw_input(text))
+    unit = Calculation(dataclasses.replace(spiral, noncollinear_gga="grad_m"), pseudos)
+    whole = Calculation(dataclasses.replace(supercell, noncollinear_gga="grad_m"),
+                        _pseudos(supercell, pseudo_dir))
+    assert whole.quantization_axis is None
+    shape = tuple(whole.basis.dense.grid)
+    one = unit.potential(jnp.asarray(density))
+    four = whole.potential(jnp.asarray(
+        unfold_spiral_density(np.asarray(density), spiral.spiral_q, (1, 1, 4), shape)))
+    expected = unfold_spiral_density(np.asarray(one.v_scf), spiral.spiral_q, (1, 1, 4), shape)
+
+    assert abs(4.0 * float(one.etxc) - float(four.etxc)) < GRAD_M_UNFOLDED[0]
+    assert np.abs(np.asarray(four.v_scf) - expected).max() < GRAD_M_UNFOLDED[1]

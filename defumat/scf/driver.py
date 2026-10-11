@@ -4544,15 +4544,30 @@ class Calculation:
         return energy, _paw_block_matrices(self.augmentation, blocks, self.nspin_mag)
 
     def _spiral_q_argument(self):
-        """The spiral's wavevector for the potential, or ``None``.
+        """A spiral's laboratory sphere and ``q`` for the potential, or ``None``.
 
         Read by ``noncollinear_gga = 'grad_m'`` only, whose ``grad m`` is taken
         in the laboratory frame (:func:`~defumat.scf.potential._spiral_transverse_gradient`);
         ``None`` for every other run so that nothing else is traced with it.
+        The sphere is :attr:`spiral_dense` where the run built one and is built
+        here otherwise (a norm-conserving spiral with no smooth grid), once per
+        ``q``; ``q`` goes in reciprocal-lattice units, so it strains with the
+        cell.
         """
         if not self.spiral or self.noncollinear_gga != "grad_m":
             return None
-        return np.asarray(self.spiral_qcart, dtype=self.system.cell.precision.real)
+        qcart = np.asarray(self.spiral_qcart, dtype=float)
+        lab = self.spiral_dense
+        if lab is None:
+            key = tuple(qcart)
+            cache = self.__dict__.setdefault("_grad_m_lab_spheres", {})
+            if key not in cache:
+                cache.clear()
+                cache[key] = displaced_gvectors(
+                    self.system.cell, self.basis.dense, -qcart)[0]
+            lab = cache[key]
+        q = qcart @ np.linalg.inv(np.asarray(self.system.cell.bg, dtype=float))
+        return lab, np.asarray(q, dtype=self.system.cell.precision.real)
 
     def _axis_argument(self):
         """:attr:`quantization_axis` as the array the compiled potentials take, or ``None``.
