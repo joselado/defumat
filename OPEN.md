@@ -3293,10 +3293,13 @@ the helix's `total_energy` is **+0.635 mRy** per cell above the field-free refer
 (`get_scf().total_energy`) and **-5.931 mRy** with `field_energy` added. The prose now reads the
 stiffness off that energy rather than off the angle, and quotes the tiled start's compromise as
 2.15 mRy per cell above the helix in `E + field`, from the table above, rather than running it.
-The cell is printed against the field-free magnet and not against the supercell figure the guide
-quotes (the seeded supercell helix 0.739 mRy per cell *below* the ferromagnet with no field), and
-the two are not reconciled here: the ultracell's helix is under a field, with moments of 0.488
-against the reference's 0.62, and in the reference's frozen states. 98 s on six cores.
+**The +0.635 is not labelled a stiffness**: the guide's seeded supercell helix with no field sits
+0.739 mRy per cell *below* the ferromagnet, so at this spacing the twist costs nothing and the
+field picks the phase of a texture the lattice prefers, and the prose says so, reading the 0.635
+as the cost of holding the moment as long as the field pulls it (0.488 at 0.01 Ry against 0.3465
+at 0.002 Ry on the four cells of the table above, a different `nbnd` and reference axis). That
+reading of the 0.635 is an inference from those two lengths and was not separated by a run.
+98 s on six cores.
 
 **Re-measured on the default basis, 2026-10-09** (D22-0161, `review/open-a/vi3.py`,
 `vi3b.py`; the tables are in the plan). The seeded four-cell helix converges in **10**
@@ -5774,7 +5777,7 @@ of the decided-i stream); the code is not changed.
 at **1e-6** at the file's `conv_thr = 1e-12` for both parametrisations, and the docstring's
 "Measured 9.2e-14" is replaced by the numbers above: 1.59e-8 on ultrasoft at the head, 2.46e-8 at
 `30cffd2`, 1.8e-13 on PAW, and the norm-conserving sibling's own 1.35e-7 at the same threshold
-(this file's module docstring) as the reason for 1e-6, a factor of six over the largest scatter
+(this file's module docstring) as the reason for 1e-6, a factor of 7.4 over the largest scatter
 measured where a dropped spin component is 100 per cent. Run on D22-0161 (`review/round3-k/`,
 cores 0-5, a 6 GB scope, `-m 'slow or not slow'`, 280 s): both augmented cases pass, ultrasoft
 scalar 14.325310287080 against spinor 14.325310271192 (**1.59e-8**, the same to every digit as the

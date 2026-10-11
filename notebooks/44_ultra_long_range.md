@@ -350,21 +350,23 @@ what happens by default when a field is given and no starting texture is, and th
 that turn and lets each moment settle: all four sit about ten degrees behind the field, the
 same in every cell, and they come out shorter than the untwisted magnet's, 0.49 against 0.62.
 
-What the twist costs is read off the energy rather than off the angle. Against the untwisted
-magnet with no field, the helix costs 0.635 mRy per unit cell, and the field gives back 6.57
-mRy through its own energy, so with the field included the helix sits 5.93 mRy per cell below
-the magnet it started from. The first number is the exchange stiffness at a pitch of four
-cells, how much energy a slow twist costs and the same quantity that sets the cost of a
-long-wavelength magnon, or at least an upper estimate of it, since the moments also shrink
-and the long cell is built from the untwisted magnet's own states.
+What the twist costs is read off the energy rather than off the angle, and at this spacing it
+costs nothing. The same four atoms as an ordinary supercell, seeded as a helix with no field at
+all, sit 0.739 mRy per unit cell below the untwisted magnet, so the lattice already prefers a
+texture that turns ninety degrees from cell to cell, and what the field selects is its phase.
+The numbers printed above are a different thing: against the untwisted magnet with no field the
+helix here is 0.635 mRy per cell higher, and 5.93 lower once the field's own energy is counted,
+and the 0.635 is roughly what it costs the electrons to hold the moment as long as the field pulls it,
+not a resistance to the twist; on the same four cells under a field five times weaker the
+helix's moment is 0.35 rather than 0.49.
 
-The angle would have given the wrong answer, and it is worth seeing why once. Started from the
+The angle alone would have said the opposite, and it is worth seeing why once. Started from the
 untwisted magnet instead (`seed_from_field=False`), the same call stops at a compromise in which
 the moments turn by roughly a third of the field's angle, which reads like a stiff magnet
-resisting the field; but with the field's energy included that state is 2.15 mRy per cell
-above the helix, so it is a fixed point the loop stops at and not the state the field drives.
-Which of two self-consistent states is the answer is a question the energy settles, and the
-angle a texture happens to reach does not.
+resisting the field; with the field's energy included that state is 2.15 mRy per cell above the
+helix, a fixed point the loop stops at rather than the state the field drives. Which of two
+self-consistent states is the answer is a question the energy settles, and the angle a texture
+happens to reach does not.
 
 ## What it cannot do
 

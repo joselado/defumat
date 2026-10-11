@@ -382,7 +382,7 @@ def test_an_augmented_spinor_gives_the_scalar_run_s_dielectric_tensor(case):
     happen to stay bit-close, not because it is better converged. The
     norm-conserving sibling's identity in this file reads **1.35e-7** at the
     same ``conv_thr``, so 1e-6 bounds the scatter of two ground states each
-    converged to 1e-12 with a factor of six over the largest measured, and a
+    converged to 1e-12 with a factor of 7.4 over the largest measured, and a
     dropped spin component or a doubled term is still 100 per cent.
 
     **What this cannot see, and it is the reason
