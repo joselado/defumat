@@ -137,7 +137,6 @@ def no_calculation(monkeypatch):
 
 
 @pytest.mark.parametrize("case, message", [
-    ("si2-us", "ultrasoft"),
     ("al-metal", "metal"),
     ("o-atom-fixed-lsda", "nspin = 2"),
     # A one-atom hydrogen cell, not the germanene slab this once used: the
@@ -154,12 +153,9 @@ def test_the_regimes_this_was_never_run_in_are_refused(case, message,
     The guard chain is deliberately made of the *bare* forms: the linear
     response solver runs for a metal and for two spin channels, and this
     assembly on top of it has been run with neither, so the flags that would
-    say otherwise are not passed. The ultrasoft case is no longer refused for
-    being ultrasoft -- that half was lifted once the ladder measured it against
-    a Berry-phase value -- and is refused here for its **mesh**, this cell
-    carrying a grid below :data:`~defumat.response.piezo.ULTRASOFT_MESH`;
-    :func:`test_an_ultrasoft_dataset_is_refused_by_its_mesh_and_paw_outright`
-    is where that distinction is asserted rather than incidental.
+    say otherwise are not passed. The ultrasoft case that stood first here,
+    refused for its mesh, is not refused at all since 2026-10-11 and is
+    :func:`test_an_ultrasoft_input_passes_the_chain_on_a_coarse_mesh`.
 
     **Asked of the input, with building a calculation made to fail.** Each
     case used to construct a whole ``Calculation`` -- the G sphere, both FFT
@@ -172,6 +168,22 @@ def test_the_regimes_this_was_never_run_in_are_refused(case, message,
     system, pseudos = _input(case)
     with pytest.raises(NotImplementedError, match=message):
         require_a_piezoelectric_tensor(system, pseudos=pseudos)
+
+
+def test_an_ultrasoft_input_passes_the_chain_on_a_coarse_mesh(no_calculation):
+    """``si2-us`` on its committed k-set, refused for it until 2026-10-11.
+
+    The ultrasoft mesh condition was dropped by the user's decision (``OPEN.md``
+    Part XIII item 3), so the whole chain, asked of the input, lets this cell
+    through, and what it gets instead is the k-mesh warning
+    (:func:`test_an_ultrasoft_dataset_is_warned_about_its_mesh_and_paw_refused`).
+    The cell carries an explicit list of two points, which has no divisions to
+    compare with eight, and on the old code it raised "denser k-mesh than an
+    explicit k-point list".
+    """
+    system, pseudos = _input("si2-us")
+    assert getattr(system.kpoints, "grid", None) is None
+    require_a_piezoelectric_tensor(system, pseudos=pseudos)
 
 
 def test_the_input_reads_the_way_the_calculation_does():
@@ -437,11 +449,12 @@ def test_the_transcribed_route_refuses_paw_and_no_longer_refuses_ultrasoft():
     require_a_norm_conserving_transcription(_calculation("alas-raman"))
     with pytest.raises(NotImplementedError, match="PAW"):
         require_a_norm_conserving_transcription(_calculation("o2-paw-afm"))
-    # ... and the dataset refusal is untouched by any of that: it still refuses
-    # the ultrasoft cell this route now accepts, which is the whole reason the
-    # two are separate functions.
-    with pytest.raises(NotImplementedError, match="ultrasoft"):
-        require_a_measured_dataset(ultrasoft)
+    # ... and the dataset refusal is the other function: since 2026-10-11 it
+    # lets the ultrasoft cell through on any mesh and still refuses PAW, so the
+    # two agree on both datasets now while answering different questions.
+    require_a_measured_dataset(ultrasoft)
+    with pytest.raises(NotImplementedError, match="PAW"):
+        require_a_measured_dataset(_calculation("o2-paw-afm"))
 
 
 def test_the_kmesh_guard_fires_and_says_what_the_mesh_was():
@@ -519,19 +532,20 @@ def test_the_ladder_refuses_an_order_that_would_read_as_a_drift():
         piezoelectric_kmesh_ladder(system, pseudos, meshes=())
 
 
-def test_an_ultrasoft_dataset_is_refused_by_its_mesh_and_paw_outright():
-    """The refusal after the ladder: PAW always, ultrasoft below a measured mesh.
+def test_an_ultrasoft_dataset_is_warned_about_its_mesh_and_paw_refused():
+    """PAW refused, and an ultrasoft dataset on any mesh warned about with its own numbers.
 
-    **What was measured and what it licenses.** The ladder on zincblende AlAs
-    puts an ultrasoft ``e_14`` 1.26 per cent from a Berry-phase finite
-    difference at ``8 8 8`` and 0.57 at ``10 10 10``, against the
-    norm-conserving calibration's 1.62 and 1.19 on the same meshes -- so from
-    eight divisions on, an augmented dataset is nearer an independent reference
-    than the route this package validates against ``ph.x``. Below that the
-    dataset and the mesh are not separable: the same cell reads 15.6 per cent
-    out at ``4 4 4``, almost all of it k-convergence, which is why a coarse
-    ultrasoft run is refused rather than warned about while a coarse
-    norm-conserving one is warned about rather than refused.
+    **What was measured and what it licenses** (``OPEN.md`` Part XIII item 3,
+    re-measured 2026-10-10 at a converged cutoff). On zincblende AlAs the
+    deficit of ``e_14`` from each cell's own Berry-phase value is 15.30, 3.73
+    and 0.86 per cent at ``4 4 4``, ``6 6 6`` and ``8 8 8`` for the ultrasoft
+    dataset against 14.54, 3.65 and 1.01 for the norm-conserving calibration,
+    so the dataset is never the larger error and the mesh always is. The
+    refusal below eight divisions rested on the two not being separable there,
+    and it was dropped on 2026-10-11 (the user's decision) in favour of the
+    k-mesh warning both datasets get, which now quotes the ultrasoft offsets
+    for an ultrasoft run. On the old code the coarse stand-in raised "denser"
+    and no warning text held "15.30", so both halves below fail there.
 
     PAW keeps the whole refusal, and the difference is the kind of evidence
     that exists for each: the PAW wedge completion is measured against **its own
@@ -539,42 +553,45 @@ def test_an_ultrasoft_dataset_is_refused_by_its_mesh_and_paw_outright():
     compared with anything outside this code.
 
     The stand-in is a namespace rather than a ``Calculation`` because what the
-    guard reads is three flags and a grid, and building a real 8x8x8 calculation
-    to assert a refusal costs 512 k-points' worth of basis for nothing.
+    guard and the warning read is two flags and a grid.
     """
+    import warnings as _warnings
+
     from defumat.response.piezo import (
         KMESH_STEP,
         ULTRASOFT_MESH,
+        _warn_about_the_kmesh,
         require_a_measured_dataset,
     )
 
-    def stand_in(grid, paw=False):
+    def stand_in(grid, paw=False, ultrasoft=True):
         nk = 1 if grid is None else grid[0] * grid[1] * grid[2]
         return SimpleNamespace(
-            is_ultrasoft=True, is_paw=paw,
+            is_ultrasoft=ultrasoft or paw, is_paw=paw,
             system=SimpleNamespace(kpoints=SimpleNamespace(nk=nk, grid=grid)),
         )
 
-    with pytest.raises(NotImplementedError, match="denser"):
-        require_a_measured_dataset(stand_in((4, 4, 4)))
-    with pytest.raises(NotImplementedError, match="explicit k-point list"):
-        require_a_measured_dataset(stand_in(None))
+    # No mesh is refused any more, coarse, an explicit list, or a ladder whose
+    # last step is above the threshold; the arguments that once exempted a
+    # coarse run are accepted and do nothing.
+    for grid in ((4, 4, 4), None, (ULTRASOFT_MESH,) * 3):
+        require_a_measured_dataset(stand_in(grid))
+    require_a_measured_dataset(stand_in((4, 4, 4)), 10 * KMESH_STEP)
+    require_a_measured_dataset(stand_in((4, 4, 4)), allow_a_coarse_mesh=True)
     with pytest.raises(NotImplementedError, match="PAW"):
         require_a_measured_dataset(stand_in((10, 10, 10), paw=True))
 
-    # And the three ways through: a dense enough grid, a measured ladder below
-    # the step threshold, and the ladder's own exemption for its coarse rungs.
-    require_a_measured_dataset(stand_in((ULTRASOFT_MESH,) * 3))
-    require_a_measured_dataset(stand_in((4, 4, 4)), KMESH_STEP / 2)
-    require_a_measured_dataset(stand_in((4, 4, 4)), allow_a_coarse_mesh=True)
-
-    # A drift *above* the threshold is not evidence and does not open the door.
-    with pytest.raises(NotImplementedError, match="denser"):
-        require_a_measured_dataset(stand_in((4, 4, 4)), 10 * KMESH_STEP)
-
-    # A norm-conserving dataset passes whatever its mesh, which is what makes
-    # this a dataset refusal with a mesh condition rather than a mesh refusal.
-    require_a_measured_dataset(SimpleNamespace(
-        is_ultrasoft=False, is_paw=False,
-        system=SimpleNamespace(kpoints=SimpleNamespace(nk=1, grid=(1, 1, 1))),
-    ))
+    # The guard that replaced the refusal fires on the coarse ultrasoft run and
+    # carries the dataset's own offsets beside the calibration's ...
+    with pytest.warns(RuntimeWarning, match="15.30, 3.73, 0.86") as caught:
+        _warn_about_the_kmesh(stand_in((4, 4, 4)), None)
+    assert "14.54, 3.65, 1.01" in str(caught[0].message)
+    assert "integrated over 64 k-points (4 4 4)" in str(caught[0].message)
+    # ... a norm-conserving run gets the warning without them ...
+    with pytest.warns(RuntimeWarning, match="k-convergence has not been measured") as caught:
+        _warn_about_the_kmesh(stand_in((4, 4, 4), ultrasoft=False), None)
+    assert "15.30" not in str(caught[0].message)
+    # ... and a measured ladder below the step silences it for both.
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("error")
+        _warn_about_the_kmesh(stand_in((4, 4, 4)), KMESH_STEP / 2)

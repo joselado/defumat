@@ -385,12 +385,12 @@ def main() -> None:
     if measured:
         # ``*args, **kwargs``: the refusal grew a drift and a coarse-mesh
         # exemption on 2026-09-20, when its ultrasoft half was lifted above
-        # eight divisions. What is still patched out is the *coarse* rungs of
-        # this ladder, which the package refuses precisely because nobody had
-        # measured them -- and measuring them is what this script is.
+        # eight divisions, and lost the mesh condition on 2026-10-11, so for
+        # an ultrasoft dataset the patch is a no-op now and is kept so that
+        # the script's runs stay comparable with the ones recorded.
         piezo.require_a_measured_dataset = lambda *args, **kwargs: None
-        print("    the dataset refusal is lifted for this run only, which now "
-              "matters for the rungs below 8 divisions alone", flush=True)
+        print("    the dataset refusal is patched out for this run, which no "
+              "longer changes anything for an ultrasoft dataset", flush=True)
         if arguments.method == "zstar_eu":
             # **Nothing is lifted here any more, and the branch is kept to say
             # so.** That second refusal is now PAW's alone: this route was 1.8

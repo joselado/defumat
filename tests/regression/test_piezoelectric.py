@@ -376,22 +376,27 @@ def test_the_ultrasoft_refusal_names_the_term_and_not_the_pseudopotentials(
     function of the cell, so ``dbecsum`` gains a strain term of its own.
 
     This builds the case, checks it really is what the old claim denied
-    existed, and checks the refusal names a real obstacle.
+    existed, and checks that what stands in front of a coarse ultrasoft run is
+    the k-mesh warning with the dataset's own measured offsets, since the mesh
+    refusal it used to meet was dropped on 2026-10-11.
 
-    **The words it pins changed twice and both reasons are worth keeping.** On
-    2026-09-19 it stopped blaming a missing strain term in
+    **The words it pins changed three times and every reason is worth
+    keeping.** On 2026-09-19 it stopped blaming a missing strain term in
     ``response/strain.py``, which P41 had written and ``test_electrostriction``
     pins at 4.6e-4 (``AUDIT-2026-09-18.md`` ``drift.3``). On 2026-09-20 the
-    ultrasoft half of the refusal was **lifted**: the ladder put this quantity
-    0.57 per cent from a Berry-phase finite difference at ``10 10 10`` against
-    the norm-conserving calibration's 1.19 on the same mesh, so what is left is
-    a condition on the **mesh** and not on the dataset. This cell carries
-    ``4 4 4``, which is below it, so it still raises -- and what the message has
-    to do now is say which of the two it is, since a reader who reads "ultrasoft"
-    and stops will change their pseudopotentials when what they need is a denser
-    grid.
+    ultrasoft half of the refusal was **lifted** above eight divisions, leaving
+    a condition on the mesh. On 2026-10-11 the mesh condition went too (the
+    user's decision, ``OPEN.md`` Part XIII item 3): at a converged cutoff the
+    ultrasoft deficit from its own Berry value is 15.30, 3.73 and 0.86 per cent
+    at ``4 4 4``, ``6 6 6`` and ``8 8 8`` against the calibration's 14.54, 3.65
+    and 1.01, so the error below eight is the mesh's, and this cell's ``4 4 4``
+    gets the k-mesh warning with those numbers in it rather than a refusal
+    telling the reader to change something.
     """
-    from defumat.response.piezo import require_a_measured_dataset
+    from defumat.response.piezo import (
+        _warn_about_the_kmesh,
+        require_a_measured_dataset,
+    )
 
     system = build_system(read_pw_input(
         Path(__file__).parent.parent / "data" / "qe" / "alas-piezo.in"
@@ -411,29 +416,16 @@ def test_the_ultrasoft_refusal_names_the_term_and_not_the_pseudopotentials(
         for r in calculation.symmetries.rotation_array()
     )
 
-    with pytest.raises(NotImplementedError) as raised:
-        require_a_measured_dataset(calculation)
-    message = str(raised.value)
-    # The reader is not sent to find a pseudopotential, which is what the
-    # original text did, and not to write a term that already exists either.
+    # Not refused, on the mesh it carries ...
+    require_a_measured_dataset(calculation)
+    # ... and warned about instead, with the dataset's own offsets in the
+    # message beside the calibration's, so a reader is sent to the mesh and
+    # neither to a pseudopotential nor to a term that already exists.
+    with pytest.warns(RuntimeWarning) as caught:
+        _warn_about_the_kmesh(calculation, None)
+    message = str(caught[0].message)
+    assert "(4 4 4)" in message
+    assert "15.30, 3.73, 0.86" in message and "14.54, 3.65, 1.01" in message
     assert "centrosymmetric" not in message
     assert "response/strain.py refuses" not in message
-    # What blocks *this* run is the mesh, and the message says so with the
-    # number that lifted the dataset half and the two ways past it.
-    assert "denser" in message and "k-mesh" in message
-    assert "8 divisions" in message or "8 8 8" in message
     assert "piezoelectric_kmesh_ladder" in message
-
-    # And the same cell on a mesh where the dataset *was* measured is allowed,
-    # which is the half of this that a refusal test usually leaves out. The
-    # k-set is substituted rather than rebuilt, because what the guard reads is
-    # the grid.
-    import dataclasses
-
-    from defumat.system.kpoints import KPoints, for_spin
-
-    dense = dataclasses.replace(system, kpoints=for_spin(KPoints.automatic(
-        (8, 8, 8), (0, 0, 0), system.cell,
-        rotations=system.symmetry_group().rotation_array(),
-    ), system.nspin))
-    require_a_measured_dataset(Calculation(dense, pseudos))

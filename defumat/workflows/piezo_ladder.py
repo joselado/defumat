@@ -204,11 +204,11 @@ def piezoelectric_kmesh_ladder(
     # rung and not ``system`` itself, because every rung is unshifted whatever
     # the input asked for and a ``nosym`` run on a shifted input grid is
     # refused for its shift, which no rung has. The rungs differ from one
-    # another only in the mesh, and ``allow_a_coarse_mesh`` is the exemption
-    # each of them is given below, so one question answers for all of them.
+    # another only in the mesh, and nothing in the chain refuses a mesh since
+    # the ultrasoft condition was dropped (2026-10-11), so one question
+    # answers for all of them.
     require_a_piezoelectric_tensor(
-        _rung(system, meshes[0], wedge), allow_a_coarse_mesh=True,
-        pseudos=pseudos,
+        _rung(system, meshes[0], wedge), pseudos=pseudos,
     )
 
     tensors, counts, seconds = [], [], []
@@ -221,14 +221,13 @@ def piezoelectric_kmesh_ladder(
                          conv_thr=conv_thr, max_iterations=max_iterations,
                          **(scf_options or {}))
         tensor = piezoelectric_tensor(
+            # The coarse rungs are the measurement, so they do not warn about
+            # their own mesh: what comes back from such a rung is a point on
+            # the curve and the ladder says so -- it is ``e14[i]``, not
+            # ``tensor``. (``allow_a_coarse_mesh=True`` stood here while an
+            # ultrasoft dataset was refused below eight divisions; that
+            # refusal was dropped on 2026-10-11.)
             calculation, result, verbose=verbose, kmesh_warning=False,
-            # The coarse rungs are the measurement, so they are exempt from the
-            # mesh half of the dataset refusal: an ultrasoft run below
-            # ``ULTRASOFT_MESH`` is refused precisely because nobody had
-            # measured the curve, and this is the thing that measures it. What
-            # comes back from such a rung is a point on that curve and the
-            # ladder says so -- it is ``e14[i]``, not ``tensor``.
-            allow_a_coarse_mesh=True,
             **options
         )
         tensors.append(tensor)

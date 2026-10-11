@@ -251,6 +251,15 @@ KMESH_STEP = 0.01
 #: needs a number.
 KMESH_CURVE = (-0.763786, -0.687475, -0.672897, -0.669907)
 
+#: The deficit of ``e_14`` from each cell's own Berry-phase value, in per cent,
+#: at ``4 4 4``, ``6 6 6`` and ``8 8 8`` on zincblende AlAs, ultrasoft (at 45
+#: Ry; 25 and 35 Ry agree to 0.03 points) and norm-conserving (at 30 Ry), both
+#: cutoffs converged (``OPEN.md`` Part XIII item 3, 2026-10-10). Quoted in the
+#: k-mesh warning of an ultrasoft run, which is what replaced refusing one
+#: below :data:`ULTRASOFT_MESH`.
+ULTRASOFT_KMESH_DEFICIT = (15.30, 3.73, 0.86)
+CALIBRATION_KMESH_DEFICIT = (14.54, 3.65, 1.01)
+
 
 def _kmesh_of(calculation):
     """``(nk, grid)`` of the set the response will be integrated over."""
@@ -287,6 +296,21 @@ def _warn_about_the_kmesh(calculation, drift) -> None:
               "12 12 12, so a committed-quality 4 4 4 mesh is 14 per cent out "
               "there and 8 8 8 is 0.6"
         )
+        if getattr(calculation, "is_ultrasoft", False) and not getattr(
+                calculation, "is_paw", False):
+            # The one place the dataset enters this warning: what an
+            # ultrasoft run on a coarse mesh used to be refused for, measured
+            # (``ULTRASOFT_MESH``, 2026-10-10 at a converged cutoff).
+            measured += (
+                ". On an ultrasoft dataset of the same crystal the deficit "
+                "from its own Berry-phase value is "
+                + ", ".join(f"{value:.2f}" for value in ULTRASOFT_KMESH_DEFICIT)
+                + " per cent at 4 4 4, 6 6 6 and 8 8 8, against "
+                + ", ".join(f"{value:.2f}" for value in CALIBRATION_KMESH_DEFICIT)
+                + " for the norm-conserving cell at a converged cutoff, so the "
+                  "dataset moves it by less than a point and the mesh is the "
+                  "error"
+            )
     else:
         measured = (
             f"the last step of the ladder that was run moved the tensor by "
@@ -360,27 +384,42 @@ def require_a_nonpolar_crystal(calculation) -> None:
         )
 
 
-#: The Monkhorst-Pack division an **ultrasoft** run needs in each direction.
+#: The Monkhorst-Pack division at which an **ultrasoft** dataset's own error
+#: first falls below the norm-conserving calibration's, on one crystal.
 #:
-#: **Where it comes from, and it is one crystal's curve.** The ladder on
-#: zincblende AlAs reads ``e_14`` at 15.63, 4.11, 1.26 and 0.57 per cent from an
-#: independent Berry-phase value at ``4 4 4``, ``6 6 6``, ``8 8 8`` and
-#: ``10 10 10``, against the norm-conserving calibration's 13.33, 3.71, 1.62 and
-#: 1.19 on the same meshes. Eight is where the ultrasoft deficit first falls
-#: *below* the calibration's, which is the statement that matters here: from
-#: there on the dataset is not the largest error, the mesh is, and the mesh has
-#: a warning of its own. Below it the two are not separable and the dataset has
-#: never been measured, so the run is refused rather than warned about.
-#:
-#: A division is a coarse instrument on a cell that is not cubic, which is why
-#: a **measured** ladder overrides it: ``kmesh_drift`` below :data:`KMESH_STEP`
-#: is evidence where a threshold is a guess generalized from one crystal.
+#: **A documented number and no longer a refusal** (2026-10-11, the user's
+#: decision, ``OPEN.md`` Part XIII item 3). Re-measured on zincblende AlAs at a
+#: converged cutoff (2026-10-10, 25 to 45 Ry for the ultrasoft cell, 30 Ry for
+#: the calibration), the deficit of ``e_14`` from each cell's own Berry-phase
+#: finite difference is 15.30, 3.73 and 0.86 per cent at ``4 4 4``, ``6 6 6``
+#: and ``8 8 8`` for ultrasoft against 14.54, 3.65 and 1.01 for
+#: norm-conserving, so the dataset's share is +0.75, +0.08 and -0.15 points
+#: against mesh errors of 15, 3.7 and 0.9 per cent. Eight is still where the
+#: ultrasoft deficit first falls below the calibration's, which is the rule
+#: this constant was set by; what fell is the premise of refusing below it,
+#: that the dataset and the mesh could not be told apart there. They can at
+#: every mesh measured, and the mesh is the larger error at every one, so an
+#: ultrasoft run on a coarse mesh gets the same k-mesh warning a
+#: norm-conserving one does (:func:`_warn_about_the_kmesh`), with the three
+#: ultrasoft offsets in it. (The 2026-09-20 figures this replaced, 1.26 per
+#: cent at ``8 8 8`` against the calibration's 1.62, were taken against a
+#: Berry value on 7 strings over 4x4 and at the calibration's 10 Ry.)
 ULTRASOFT_MESH = 8
 
 
 def require_a_measured_dataset(calculation, drift=None,
                                allow_a_coarse_mesh: bool = False) -> None:
-    """PAW always, and an ultrasoft dataset below a measured mesh.
+    """PAW, and nothing else since 2026-10-11.
+
+    **The ultrasoft mesh condition was dropped on 2026-10-11** (the user's
+    decision, ``OPEN.md`` Part XIII item 3): at a converged cutoff the
+    ultrasoft deficit from its own Berry value is within 0.75 points of the
+    norm-conserving calibration's at every mesh measured (:data:`ULTRASOFT_MESH`
+    has the table), so below eight divisions the error is the mesh's and the
+    k-mesh warning, which both datasets get, is the honest answer. ``drift``
+    and ``allow_a_coarse_mesh`` are kept so that no caller breaks, and neither
+    does anything any more; everything below up to the PAW refusal is the
+    history of how the ultrasoft half was lifted.
 
     Nothing in the assembly is norm-conserving. The density and ``becsum`` are
     handed to the functional as builders that carry the strain, which is what
@@ -476,10 +515,10 @@ def require_a_measured_dataset(calculation, drift=None,
     if calculation.is_paw:
         raise NotImplementedError(
             "the piezoelectric tensor is not implemented for a PAW dataset. "
-            "The ultrasoft half of this refusal was lifted on 2026-09-20 by a "
-            "ladder against a Berry-phase finite difference on zincblende AlAs "
-            "-- 0.57 per cent at 10 10 10, against the norm-conserving "
-            "calibration's 1.19 on the same mesh -- and no such comparison "
+            "The ultrasoft half of this refusal was lifted by a ladder against "
+            "a Berry-phase finite difference on zincblende AlAs, 0.86 per cent "
+            "at 8 8 8 against the norm-conserving calibration's 1.01 on the "
+            "same mesh, both at a converged cutoff, and no such comparison "
             "exists for PAW: no non-centrosymmetric PAW crystal has been run "
             "against an independent reference at all. What is measured for PAW "
             "is internal only, the wedge completion's one-centre half against "
@@ -488,29 +527,9 @@ def require_a_measured_dataset(calculation, drift=None,
             "An internal identity is not a reference. Use an ultrasoft or "
             "norm-conserving dataset"
         )
-    if allow_a_coarse_mesh or (drift is not None and drift < KMESH_STEP):
-        return
-    _, grid = _kmesh_of(calculation)
-    if grid is not None and min(grid) >= ULTRASOFT_MESH:
-        return
-    where = "an explicit k-point list" if grid is None else (
-        f"a {grid[0]} {grid[1]} {grid[2]} grid"
-    )
-    raise NotImplementedError(
-        f"the piezoelectric tensor of an ultrasoft dataset needs a denser "
-        f"k-mesh than {where}: the dataset was measured against a Berry-phase "
-        f"finite difference only at and above {ULTRASOFT_MESH} divisions in "
-        "each direction, where its disagreement (1.26 per cent at 8 8 8, 0.57 "
-        "at 10 10 10 on zincblende AlAs) is smaller than the norm-conserving "
-        "calibration's own on the same mesh. Below that the two are not "
-        "separable: at 4 4 4 the same cell reads 15.6 per cent out, almost all "
-        "of it k-convergence, which is why a coarse ultrasoft run is refused "
-        "here rather than warned about. Raise the mesh, or measure this "
-        "crystal's own curve with "
-        "defumat.workflows.piezo_ladder.piezoelectric_kmesh_ladder and pass its "
-        "drift as kmesh_drift, which is evidence where the division count is a "
-        "threshold taken from one cubic crystal"
-    )
+    # ``drift`` and ``allow_a_coarse_mesh`` are no longer read: an ultrasoft
+    # run on any mesh goes on to the k-mesh warning, where the mesh's error is
+    # quoted for both datasets (2026-10-11).
 
 
 @dataclass(frozen=True)
@@ -1477,13 +1496,12 @@ def piezoelectric_tensor(
             :func:`~defumat.workflows.piezo_ladder.piezoelectric_kmesh_ladder`
             passes. Below :data:`KMESH_STEP` it silences the warning; above it,
             the warning quotes it instead of quoting AlAs.
-        allow_a_coarse_mesh: run an **ultrasoft** dataset below
-            :data:`ULTRASOFT_MESH` divisions, which
-            :func:`require_a_measured_dataset` otherwise refuses. It exists for
-            :func:`~defumat.workflows.piezo_ladder.piezoelectric_kmesh_ladder`,
-            whose coarse rungs are how the mesh gets measured in the first
-            place, and the tensor a coarse rung returns is a point on a curve
-            rather than an answer.
+        allow_a_coarse_mesh: **does nothing since 2026-10-11**, and is kept
+            so that no caller breaks. It let an ultrasoft dataset run below
+            :data:`ULTRASOFT_MESH` divisions, which was refused until the
+            dataset's own error was measured to be the smaller one at every
+            mesh; such a run now gets the k-mesh warning instead, as a
+            norm-conserving one does.
         response_options: passed to the field response.
     """
     require_a_piezoelectric_tensor(

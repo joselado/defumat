@@ -3327,17 +3327,18 @@ $\delta_{ki}P_j - \delta_{ij}P_k$, which needs the spontaneous polarization
 itself. Those terms vanish identically whenever the two Cartesian labels they
 pair are different --- so $e_{14}$ of a zincblende crystal never carries the
 ambiguity --- and they vanish for every component of a class that admits no
-invariant vector, which is what is checked. \textbf{PAW}, and \textbf{an ultrasoft dataset below eight $k$-divisions in
-each direction} --- the ultrasoft half of what used to be one refusal was lifted
-on 2026-09-20 by the ladder, which puts $e_{14}$ 1.26 per cent from a
-Berry-phase finite difference at \code{8 8 8} and 0.57 at \code{10 10 10} on
-zincblende AlAs, against the norm-conserving calibration's 1.62 and 1.19 on the
-same meshes; below eight the dataset and the $k$-mesh are not separable, the
-same cell reading 15.6 per cent out at \code{4 4 4}, so a coarse ultrasoft run
-is refused where a coarse norm-conserving one is only warned about. A measured
-ladder overrides the threshold: \code{kmesh\_drift} under one per cent is
-evidence where a division count is a guess taken from one cubic crystal. What
-follows is the history of that refusal, and it is a gap rather
+invariant vector, which is what is checked. \textbf{PAW} --- the ultrasoft
+half of what used to be one refusal is lifted, on every mesh since 2026-10-11.
+At a converged cutoff on zincblende AlAs the deficit of $e_{14}$ from each
+cell's own Berry-phase finite difference is 15.30, 3.73 and 0.86 per cent at
+\code{4 4 4}, \code{6 6 6} and \code{8 8 8} for the ultrasoft dataset, against
+14.54, 3.65 and 1.01 for the norm-conserving calibration, so the dataset moves
+it by less than a point and the mesh is the error at every one of them; a coarse
+ultrasoft run therefore gets the same $k$-mesh warning a norm-conserving one
+does, with those offsets in it, where until then it was refused below eight
+divisions (\code{allow\_a\_coarse\_mesh}, which exempted the ladder's coarse
+rungs, is still accepted and does nothing). What follows is the history of the
+dataset refusal, and it is a gap rather
 than a missing term: nothing in the assembly is norm-conserving and the
 displacement leg of it is the Born charge, which is now validated on a
 \emph{polar} ultrasoft crystal as well (\code{alas-epsilon-us.in}, $2.101065$
