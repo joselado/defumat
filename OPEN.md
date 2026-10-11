@@ -31,7 +31,7 @@ remaining Hubbard refusal, which was as wide as the field's had been and is **cl
 2026-09-15**.
 
 **Parts VIII and IX** are from the workstation, **2026-09-14** and **2026-09-15**. What is
-left open in them is the two that are measurements rather than fixes: `local-TF`'s 730 s
+left open in them is the two that are measurements rather than fixes: `local-TF`'s 730 s (closed 2026-10-11, the whole iteration is now 12 s on an H200)
 an iteration, whose routine was rewritten 2026-10-05 and whose NiBr2 run is still to be
 repeated, and the `pp.x` reference pair P90 owes. The two defects are
 closed -- a resume that spent a whole Davidson budget on bands nothing reads (Part VIII
@@ -3483,7 +3483,7 @@ calls it, and the mid-SCF path was passing for the opposite reason -- it carried
 field for the refusal to see. Reading a refusal's source is not the same as watching it
 fire, which is `CLAUDE.md`'s own rule about guards, applied to a guard's absence.
 
-## 1. `sizing.py` reads 60 per cent low on a 45-atom spinor PAW slab **[measured 2026-10-09 on a nine-atom spinor PAW slab on D22, the instrument committed and two terms outside the model found and removed; the 45-atom slab's 28 GB is unexplained and its measurement is planned in `plans/open-d-vii1-sizing.md`]**
+## 1. `sizing.py` reads 60 per cent low on a 45-atom spinor PAW slab **[measured 2026-10-09 on a nine-atom spinor PAW slab on D22, the instrument committed and two terms outside the model found and removed; attributed 2026-10-11 on an H100, job `20888543`: at every solve three wavefunction sets are on the card where the model counts one, and the solver's temporary is 41 per cent above its estimate; the fix is open]**
 
 **Measured 2026-10-09 (branch `open-d`).** The stage-peak instrument A17 says was never
 committed is now `tools/gpu/stage_peaks.py`: the estimate's report, the live device arrays
@@ -3644,6 +3644,58 @@ temporary is set by each backend's schedule rather than by anything the card's s
 Both device-store figures sit about 2 GiB above the forecast rather than 3.8 below September's, so
 the coefficient change in `sizing.py` did not show at this corner. The long H100 job
 (`vii1-stages-h100.sbatch`) is therefore still needed for the other half and for the 28 GB.
+
+**Attributed 2026-10-11, job `20888543`** (`vii1-stages-h100.sbatch`, `gpu45`, an H100 80 GB,
+`92b8c4b`, `nibr2_k161_anderson.scf.in` with the helix seed of `nibr2_persite.scf.in`, 16
+iterations at `conv_thr = 1e-14`, `david 2`, band batch 16, `k_batch 1`, `memory_mode =
+'memory'`, `wfc_store = 'device'`, `XLA_PYTHON_CLIENT_MEM_FRACTION=0.97`; JSON and logs in
+`calculations/defumat-vii1/out/`). The two arms ran on the same node, which A17 said had never
+been done. In GiB:
+
+| arm | estimate | measured peak | ratio | resident between solves | solver temporary (largest allocation) |
+|---|---|---|---|---|---|
+| `rebuild` | 39.07 | 62.62 | 1.60 | 13.09 | 26.74 |
+| `store` | 49.90 | 69.56 | 1.39 | 26.09 | 20.69 |
+
+**The 60 per cent is reproduced, and the stage brackets account for all of it.** The reading
+of every solve, here the eighth on `rebuild`, is the same to 0.4 GiB across all sixteen:
+`diagonalize` is entered with 13.09 in use, which holds the previous iteration's wavefunctions
+(11.27); `self.eigensolver` is entered with **24.36**, the 11.27 rise being `psi0[spin]`
+(`scf/driver.py`, `diagonalize`), an eager slice that copies the whole set on a
+`nspin_mag = 4` run whose channel axis has length one; the solver leaves with **35.62**, its
+output being a third set, since nothing donates its input; and the peak inside `_every_k` is
+62.62, which is 24.36 plus the output and the temporary, `24.36 + 11.27 + 26.74 = 62.37`, the
+0.25 left being the solver's other arguments. `diagonalize` leaves with 24.36: the slice and the
+solver's output are freed and the `jnp.stack` restack holds the new set beside the old one until
+the driver drops the old. The compile pair above read the same executable as arguments 11.90,
+outputs 11.27, temporary 26.74 on an H100, which is these brackets to two digits.
+
+So against `Calculator.estimate()` the run is missing **two wavefunction sets, 22.54 GiB**, and
+the temporary is **7.73 GiB** above the model's 19.01, which is 30.27 GiB, against an estimate
+that already holds the two Davidson lines (15.02) that the temporary stands in for. On `store`
+the temporary is 6.05 GiB smaller and the 13.00 GiB `vkb` table is resident, as the model has it.
+
+**What the starting wavefunctions cost is a second term outside the model, and it is not the
+peak here.** `starting_wavefunctions` raised the peak from 3.84 to 51.37 at 1.54 in use, a
+transient of 49.8 GiB against the model's `start_buffer` of 23.65, 2.1 times; it allocated 17.69
+in one block and left the 11.27 set resident. It sits 11 GiB below the solve on this slab and is
+the next term to measure once the copies are gone.
+
+**The Davidson step counts that go with these numbers**, from the same log: 1.2 to 4.0 a call on
+iterations 1 to 8, then 74.8 at iteration 9 when `ethr` reached 1.9e-6, falling to 18.7 by
+iteration 16. The peak was set at the first solve and did not move by more than 0.5 GiB
+afterwards, so the arena does not grow with the step count on this cell.
+
+**What would close it, and it is a code change rather than a measurement.** Pass the channel to
+the solver without a copy, and let the solver's output take its input's buffer (`donate_argnums`
+on the wavefunction, which `CLAUDE.md` asks for and the eigensolver does not do). Predicted from
+the brackets, not measured: `rebuild` from 62.62 to about 40.1 GiB, within 3 per cent of the
+39.07 estimate, the remainder being the temporary. The robustness retry (`davidson.py`) reads
+`psi0` again after a failed call, so a donated input has to be kept for that path or the retry
+restarted from the failed call's output; that is the design question, and `plans/` gets it
+before any code. The question about the 11 GB card offset is answered by the pair above as far as the
+executable goes (5.41 GiB of it); this job ran on one card only, so the other half is still
+unattributed and matters less now that the 60 per cent is named.
 
 ## 2. `diago_david_ndim = 2` may degrade at the minimum subspace once `ethr` tightens **[measured 2026-10-09 at `aa08c82`: on `si16-1k-ecut30` it does not, at most 6 steps a call against `pw.x`'s 5; 2026-10-10, branch `decided-j`: the collapse is `cegterg`'s `nbase + notcnv > nvecx` now, 28 to 22 steps at `ndim = 2` on that cell, 27 to 19 on `si8-smeared-1k`, and `al-slab` at `ndim = 2` from 1.4e-5 Ry off to 7e-9 from `pw.x`]**
 
@@ -4088,7 +4140,7 @@ dropped with a `RuntimeWarning` when the count does not match, which is exactly 
 behaviour every resume had until today, and the guard has a test that trips it rather than
 a clean pass that cannot be told from silence.
 
-### 4. `local-TF` costs about 730 s an iteration on a 3.5-million-G-vector dense grid **[opened 2026-09-14, from the NiBr2 helix run; unprofiled; the routine rewritten 2026-10-05, the NiBr2 run not repeated]**
+### 4. `local-TF` costs about 730 s an iteration on a 3.5-million-G-vector dense grid **[opened 2026-09-14, from the NiBr2 helix run; the routine rewritten 2026-10-05; closed 2026-10-11 by Triton job `20879272`: the whole iteration is 12 s on an H200, so `local-TF` cannot cost more]**
 
 **The evidence is an A/B and a fit, which is the right order.** `nibr2_k161_localtf.scf.in`
 differs from `nibr2_k161_anderson.scf.in` in exactly one line, `mixing_mode`: same geometry,
@@ -4167,6 +4219,22 @@ Triton (another session's project, `docs/triton-notes.local.md`, 2026-09-26). Th
 10 GB cap, and at the old rate twenty iterations are about 5 h. What it needs is one Triton
 submission of that input with this code, which is the user's to approve.
 
+
+**Closed 2026-10-11, job `20879272`** (`nibr2_k161_localtf.scf.in` through the NiBr2 project's
+`nibr2.sbatch`, `MAXSTEP=8`, `PROJECTORS=rebuild`, `gpu-h200-141g-m`, `apps/defumat-open`,
+outputs in `calculations/defumat-open/out/` and `k161-ltf/`). Iteration 1 took 308.8 s, which
+holds the compilation; iterations 2 to 8 took **11.7, 18.0, 11.9, 11.9, 12.1, 12.1 and 12.2 s**,
+at 1.0 to 6.3 Davidson steps a call. The `anderson` law in the table above (4.70 s a step plus
+30.3) was fitted on another card at another commit and does not transfer, so the run is not read
+against it. What settles the item does not need the law: **the whole iteration, `local-TF`
+included, is 12 s, so the solve that used to cost 730 s now costs at most that**. Had the old
+cost survived, every iteration would read above 730 s. sacct reports the job as `FAILED`,
+exit 3, which is `nibr2.sbatch`'s signal that `MAXSTEP` ended an unconverged run so that an
+`afternotok` job can continue. It is not an error. After eight iterations the accuracy was
+still going between 0.58 and 12.5 Ry, and the 16-iteration `anderson` run of Part VII item 1
+went from 8.7 down to 6.8e-3 over the same eight. The two runs start from different densities
+(that one is seeded from the helix), so this is not a comparison of mixers, and whether
+`local-TF` converges this slab is outside this item.
 ---
 
 # Part IX -- from the tunnelling spectrum, 2026-09-15 (P90)
