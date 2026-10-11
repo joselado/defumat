@@ -26,7 +26,8 @@ import numpy as np
 from defumat.basis.fftgrid import fft_grid_dimensions, gcut_from_ecut
 from defumat.system.cell import Cell
 
-__all__ = ["GVectors", "generate_gvectors", "modulus", "refuse_gamma_storage"]
+__all__ = ["GVectors", "displaced_gvectors", "generate_gvectors", "modulus",
+           "refuse_gamma_storage"]
 
 
 class GVectors(eqx.Module):
@@ -199,6 +200,118 @@ def generate_gvectors(
         ecut=float(ecut),
         gamma_only=gamma_only,
     )
+
+
+def displaced_gvectors(
+    cell: Cell,
+    dense: GVectors,
+    shift,
+    smooth: GVectors | None = None,
+) -> tuple[GVectors, GVectors | None]:
+    """The sphere ``{G : |G + shift| <= G_cut}`` on ``dense``'s box, and its smooth prefix.
+
+    The G set a field carrying the Bloch factor ``e^{i shift.r}`` relative to
+    the lattice lives on when it is cut at ``|G + shift|`` -- the laboratory
+    wavevector -- rather than at ``|G|``. It is the transverse pair of a spin
+    spiral in the rotating frame (``shift = -q``): the laboratory pair is
+    ``m'_+ e^{-i q.r}``, so the sphere the unfolded supercell keeps,
+    ``|G'| < G_rho``, is ``|G - q| < G_rho`` in the spiral's labels
+    (``OPEN.md`` Part XXI item 1).
+
+    ``shift`` is cartesian, in 1/bohr, and is the same vector
+    :func:`~defumat.pseudo.augmentation.build_augmentation` takes as its
+    ``shift``, so a table built on this set with that shift is evaluated at
+    exactly the ``|G + shift|`` the set was cut at. Read on the host: the set is
+    a step function of ``shift`` and is frozen under a derivative.
+
+    **Order.** Sorted by ``|G + shift|^2`` with :func:`generate_gvectors`' tie
+    break, then ``G = 0`` moved to the front, because the builders read the
+    first entry as the origin. With ``smooth`` given, the members inside
+    ``smooth.ecut`` are the prefix of the list and are returned as a second set
+    on ``smooth``'s box, exactly as ``smooth_subset`` cuts the resident one;
+    ``G = 0`` is inside it whenever ``|shift|^2 <= smooth.ecut``, which is
+    asserted. At ``shift = 0`` both sets are ``dense`` and ``smooth`` Miller
+    index for Miller index, since every number is then the one
+    :func:`generate_gvectors` computed.
+
+    **The box is checked rather than assumed.** ``fft_index`` wraps a Miller
+    index with ``mod``, so a member outside the box would silently land on
+    another one. The enumeration runs over a range wide enough for the
+    displaced sphere, and any member the box cannot hold is refused by name,
+    for the dense box and for the smooth one.
+    """
+    at_alat = np.asarray(cell.at_alat, dtype=float)
+    bg = np.asarray(cell.bg_2pi_alat, dtype=float)
+    tpiba = 2.0 * np.pi / float(cell.alat)
+    offset = np.asarray(shift, dtype=float).reshape(3) / tpiba
+    gcut = gcut_from_ecut(dense.ecut, cell.alat)
+
+    # ``m_i = G . a_i`` in these units, so a shift moves each Miller index by at
+    # most ``|shift| |a_i|`` and the resident range widened by that holds it.
+    reach = np.ceil(np.linalg.norm(offset) * np.linalg.norm(at_alat, axis=1)).astype(int) + 1
+    ranges = [np.arange(-((n - 1) // 2) - r, (n - 1) // 2 + r + 1)
+              for n, r in zip(dense.grid, reach)]
+    i, j, k = np.meshgrid(*ranges, indexing="ij")
+    miller = np.stack([i.ravel(), j.ravel(), k.ravel()], axis=1)
+    g2 = np.sum((miller @ bg + offset) ** 2, axis=1)
+    inside = g2 <= gcut
+    miller, g2 = miller[inside], g2[inside]
+    _require_the_box_holds(miller, dense.grid, "dense", dense.ecut, shift)
+
+    order = np.lexsort((miller[:, 2], miller[:, 1], miller[:, 0], np.round(g2, 12)))
+    miller, g2 = miller[order], g2[order]
+    zero = np.flatnonzero(np.all(miller == 0, axis=1))
+    if not len(zero):
+        raise ValueError(
+            f"the displaced sphere |G + shift| <= sqrt({dense.ecut}) Ry does not "
+            f"contain G = 0 for |shift| = {np.linalg.norm(shift):.4g} 1/bohr"
+        )
+    origin = int(zero[0])
+    if origin:
+        order = np.concatenate([[origin], np.delete(np.arange(len(miller)), origin)])
+        miller, g2 = miller[order], g2[order]
+
+    displaced = GVectors(miller=jnp.asarray(miller, dtype=jnp.int32),
+                         grid=dense.grid, ecut=dense.ecut,
+                         gamma_only=dense.gamma_only)
+    if smooth is None:
+        return displaced, None
+    if smooth is dense:
+        return displaced, displaced
+    gcut_s = gcut_from_ecut(smooth.ecut, cell.alat)
+    inner = g2 <= gcut_s
+    ngms = int(inner.sum())
+    if not inner[0] or not inner[:ngms].all():
+        raise AssertionError(
+            "the displaced smooth sphere is not a prefix of the displaced dense "
+            f"list (|shift|^2 = {np.sum(np.asarray(shift) ** 2):.4g} Ry against "
+            f"a smooth cutoff of {smooth.ecut} Ry)"
+        )
+    _require_the_box_holds(miller[:ngms], smooth.grid, "smooth", smooth.ecut, shift)
+    return displaced, GVectors(miller=jnp.asarray(miller[:ngms], dtype=jnp.int32),
+                               grid=smooth.grid, ecut=smooth.ecut,
+                               gamma_only=smooth.gamma_only)
+
+
+def _require_the_box_holds(miller, grid, name, ecut, shift) -> None:
+    """Refuse a displaced sphere whose Miller indices the FFT box cannot hold."""
+    for axis, n in enumerate(grid):
+        top = (n - 1) // 2
+        outside = int(np.sum(np.abs(miller[:, axis]) > top))
+        if outside:
+            raise NotImplementedError(
+                f"the {name} FFT box {tuple(grid)} does not hold the sphere "
+                f"|G + shift| <= sqrt({ecut}) Ry for shift = "
+                f"{tuple(float(v) for v in np.asarray(shift).ravel())} 1/bohr: "
+                f"{outside} of its {len(miller)} G-vectors reach past index "
+                f"{top} along axis {axis}, and the box would fold them onto "
+                "others. A spin spiral keeps its transverse pair on that "
+                "displaced sphere, so its box has to be one FFT size larger "
+                "along that axis than the cutoff alone asks for, which is not "
+                "implemented; a spiral wavevector inside the first Brillouin "
+                "zone, or a cutoff at which the box rounds up past the sphere, "
+                "avoids it"
+            )
 
 
 def _half_sphere(miller: np.ndarray) -> np.ndarray:

@@ -62,7 +62,8 @@ import numpy as np
 from defumat.basis.builder import Basis, build_basis
 from defumat.config import band_precision_is_mixed, resolve_band_precision
 from defumat.basis.planewaves import build_plane_wave_basis
-from defumat.basis.interpolate import to_dense, to_smooth
+from defumat.basis.interpolate import pair_to_dense, pair_to_smooth, to_dense, to_smooth
+from defumat.basis.gvectors import displaced_gvectors
 from defumat.basis.sticks import Sticks, build_sticks
 from defumat.basis.fft import g_to_r, r_to_g
 from defumat.hamiltonian.noncollinear import SpinorHamiltonian
@@ -879,7 +880,27 @@ def _addusdens(rho_r, fft_index, grid, augmentation, becsum_):
     return rho_r + jnp.real(g_to_r(charge, fft_index, grid))
 
 
-def _addusdens_spiral(rho_r, fft_index, grid, augmentation, cross, becsum_):
+def _spiral_gvectors(basis, cell, qcart, needed: bool):
+    """``(spiral_dense, spiral_smooth)``: a spin spiral's transverse G sets, or ``(None, None)``.
+
+    The laboratory spheres ``{G : |G - q| < G_rho}`` and ``{G : |G - q| < G_s}``
+    (:func:`~defumat.basis.gvectors.displaced_gvectors` with ``shift = -q``,
+    the shift the displaced table takes), on the resident boxes, the smooth
+    one the prefix of the dense one. Built only where something reads them --
+    an augmented spiral, or one with a separate smooth grid -- since a
+    norm-conserving spiral at dual 4 has no G-space cut of its transverse pair
+    at all, and so it is never refused for a box that would not hold them.
+    A function of its own so a control arm can hand back the resident sets,
+    which is the code before the laboratory sphere.
+    """
+    if not needed:
+        return None, None
+    return displaced_gvectors(cell, basis.dense, -np.asarray(qcart, dtype=float),
+                              smooth=basis.smooth)
+
+
+def _addusdens_spiral(rho_r, fft_index, grid, augmentation, cross, becsum_,
+                      cross_index=None):
     """``addusdens`` for a spin spiral, in the rotated frame.
 
     The charge and ``m_z`` pair projectors at the *same* k-point in both
@@ -905,6 +926,15 @@ def _addusdens_spiral(rho_r, fft_index, grid, augmentation, cross, becsum_):
     imaginary halves. Mixing, symmetrisation and the PAW one-centre terms
     therefore go on consuming the real form untouched.
 
+    **The transverse pair lives on its own G set**, ``cross_index``: the
+    laboratory sphere ``{G : |G - q| < G_rho}`` the displaced table was built
+    on (:attr:`Calculation.spiral_dense`), which is the sphere the unfolded
+    supercell keeps its augmentation charge on. On the resident sphere instead
+    the two discretise the transverse charge on spheres displaced by ``q``,
+    and the shell between them was 99.5 per cent of the supercell identity's
+    defect on cobalt at 160 Ry (``OPEN.md`` Part XXI item 1). So it takes its
+    own transform; ``None`` is the resident set.
+
     At ``q = 0`` the displaced table *is* the resident one and this reduces to
     :func:`_addusdens` term by term, which is what
     ``test_a_zero_spiral_is_an_ordinary_noncollinear_run`` measures.
@@ -922,12 +952,12 @@ def _addusdens_spiral(rho_r, fft_index, grid, augmentation, cross, becsum_):
         )
 
     transverse = cross.charge(
-        tuple(None if b is None else b[1] + 1j * b[2] for b in becsum_)
+        tuple(None if b is None else jax.lax.complex(b[1], b[2]) for b in becsum_)
     )
-    fields = g_to_r(
-        jnp.stack([component(0), transverse, component(3)]), fft_index, grid
-    )
-    charge, cross_r, magnetization = fields[0], fields[1], fields[2]
+    fields = g_to_r(jnp.stack([component(0), component(3)]), fft_index, grid)
+    charge, magnetization = fields[0], fields[1]
+    cross_r = g_to_r(transverse, fft_index if cross_index is None else cross_index,
+                     grid)
     return rho_r + jnp.stack([
         jnp.real(charge),
         jnp.real(cross_r),
@@ -2431,10 +2461,23 @@ class Calculation:
         # than approximated until the displaced table existed. There is no
         # separate phase to apply on top: the ``e^{-i q.tau_a}`` Elk carries as
         # ``zqss`` is already inside this table's own structure factor.
+        #
+        # **On the laboratory sphere.** The table is built on
+        # :attr:`spiral_dense`, ``{G : |G - q| < G_rho}``, and not on the
+        # resident ``|G| < G_rho``: the unfolded supercell keeps its augmentation
+        # charge on ``|G'| < G_rho`` and ``G' = G - q``, so on the resident
+        # sphere the spiral discretises the transverse charge on another sphere
+        # than its own supercell and the two disagree by the shell between them
+        # (7.27e-5 Ry in the eigenvalues on cobalt at 160 Ry, ``OPEN.md`` Part
+        # XXI item 1, the user's decision of 2026-10-10).
+        self.spiral_dense, self.spiral_smooth = _spiral_gvectors(
+            self.basis, system.cell, self.spiral_qcart,
+            self.spiral and (self.augmentation is not None or self.basis.doublegrid),
+        )
         self.cross_augmentation = None
         if self.spiral and self.augmentation is not None:
             self.cross_augmentation = build_augmentation(
-                self.pseudos, system.structure, system.cell, dense,
+                self.pseudos, system.structure, system.cell, self.spiral_dense,
                 shift=-self.spiral_qcart,
             )
 
@@ -3355,10 +3398,12 @@ class Calculation:
             # The displaced table moves with the atoms exactly as the resident
             # one does: ``Q_ij(G - q)`` is a property of the species and only
             # the structure factor ``e^{-i (G - q).tau_a}`` follows the move.
-            # It is handed the *unshifted* G set, like every other caller, and
-            # reapplies its own displacement.
+            # It is handed the *unshifted* G set it was built on -- the
+            # laboratory sphere :attr:`spiral_dense`, never the resident one,
+            # whose phases would belong to other G-vectors -- and reapplies its
+            # own displacement.
             moved.cross_augmentation = self.cross_augmentation.at_positions(
-                positions, dense.cartesian(cell)
+                positions, self.spiral_dense.cartesian(cell)
             )
 
         vloc_g = combine_species(self.vloc_species, structure, cell, dense)
@@ -4327,8 +4372,14 @@ class Calculation:
                 # tape *larger* on the one augmented spiral sized for it -- bcc
                 # iron, ``nh = 18``, ``ngm = 6963``: 834 MB scanned against 262
                 # MB stored (``GPU-MEMORY-NEXT.md`` item 15).
+                #
+                # **On the frozen laboratory sphere**, :attr:`spiral_dense` as
+                # it was built at this calculation's own ``q``: which G-vectors
+                # are inside ``|G - q| < G_rho`` is a step function of ``q``,
+                # like the wavefunction spheres, so it is frozen with them and
+                # only the table's argument ``G - q`` is traced.
                 moved.cross_augmentation = build_augmentation(
-                    self.pseudos, self.system.structure, cell, self.basis.dense,
+                    self.pseudos, self.system.structure, cell, self.spiral_dense,
                     shift=-qcart,
                 )
             planewaves = self.basis.planewaves
@@ -4353,12 +4404,18 @@ class Calculation:
         moved.spiral_qcart = (
             np.asarray(spiral_cartesian(system.spiral_q, cell)) * float(cell.tpiba)
         )
+        # A new ``q`` is a new laboratory sphere for the transverse pair, and
+        # on it a new displaced table. This branch rebuilds the spheres, so it
+        # is host-side and can afford the radial transforms; it is what an
+        # ``E(q)`` scan walks. The sphere's size changes with ``q`` by the
+        # shell's asymmetry, so an augmented scan compiles its density and
+        # ``newd`` kernels again at a wavevector whose count is new.
+        moved.spiral_dense, moved.spiral_smooth = _spiral_gvectors(
+            self.basis, cell, moved.spiral_qcart, self.spiral_dense is not None,
+        )
         if self.cross_augmentation is not None:
-            # A new ``q`` is a new displaced table. This branch rebuilds the
-            # spheres, so it is host-side and can afford the radial transforms;
-            # it is what an ``E(q)`` scan walks.
             moved.cross_augmentation = build_augmentation(
-                self.pseudos, system.structure, cell, self.basis.dense,
+                self.pseudos, system.structure, cell, moved.spiral_dense,
                 shift=-moved.spiral_qcart,
             )
         moved.basis_kpoints = spiral_kpoints(system.kpoints, system.spiral_q, cell)
@@ -4654,6 +4711,9 @@ class Calculation:
         """
         dense = self.basis.dense
         spiral_cross = self.cross_augmentation is not None and potential.shape[0] == 4
+        # The pair is gathered on the laboratory sphere the displaced table was
+        # built on (:attr:`spiral_dense`), the adjoint of :meth:`augmented`'s
+        # scatter, or the energy is right and ``D_ij`` is not.
         # ``D^{up,down}`` of a spiral is the one block whose two projectors sit
         # at different k-points, so its pair of components goes through the
         # displaced table as ``W = V_x + i V_y`` rather than through the
@@ -4665,8 +4725,8 @@ class Calculation:
         )
         transverse_g = None
         if spiral_cross:
-            transverse_g = (r_to_g(potential[1], dense.fft_index)
-                            + 1j * r_to_g(potential[2], dense.fft_index))
+            transverse_g = r_to_g(jax.lax.complex(potential[1], potential[2]),
+                                  self.spiral_dense.fft_index)
         components, cross = _newd_noncollinear_integrals(
             potential_g, self.augmentation, transverse_g,
             self.cross_augmentation if spiral_cross else None,
@@ -4698,6 +4758,7 @@ class Calculation:
             return _addusdens_spiral(
                 rho_r, dense.fft_index, dense.grid,
                 self.augmentation, self.cross_augmentation, becsum_,
+                self.spiral_dense.fft_index,
             )
         return _addusdens(rho_r, dense.fft_index, dense.grid, self.augmentation, becsum_)
 
@@ -5215,9 +5276,24 @@ class Calculation:
         All three are linear, which is why a sum of :meth:`smooth_density`
         over chunks can be finished once and be the whole-set density.
         """
+        return self.symmetrize(self.augmented(self.lift_density(rho_smooth), becsum_))
+
+    def lift_density(self, rho_smooth) -> jnp.ndarray:
+        """``to_dense`` of a density, a spiral's transverse pair on its own sphere.
+
+        The charge and ``m_z`` go up through the resident smooth sphere as on
+        every run. A spin spiral's ``(m_x, m_y)`` goes up as ``m'_+`` through
+        the displaced one, ``{G : |G - q| < G_s}`` (:attr:`spiral_smooth`),
+        which is where ``2 conj(u_up) u_dn`` is band-limited to and what the
+        unfolded supercell keeps (:func:`~defumat.basis.interpolate.pair_to_dense`).
+        Without a separate smooth grid this is the identity either way.
+        """
         dense, smooth = self.basis.dense, self.basis.smooth
-        return self.symmetrize(
-            self.augmented(to_dense(rho_smooth, smooth, dense), becsum_))
+        if self.spiral_smooth is None or rho_smooth.shape[0] != 4:
+            return to_dense(rho_smooth, smooth, dense)
+        scalar = to_dense(rho_smooth[::3], smooth, dense)
+        pair = pair_to_dense(rho_smooth[1:3], self.spiral_smooth, self.spiral_dense)
+        return jnp.stack([scalar[0], pair[0], pair[1], scalar[1]])
 
     def kinetic_energy_density(self, wavefunctions, weights,
                                symmetrize: bool = True, *, rows=None,
@@ -5326,7 +5402,13 @@ class Calculation:
         # here halves the local pseudopotential in an LSDA run.
         total = v_scf + as_potential_components(self.vltot, self.nspin_mag)
         deeq = self.coefficients(total, ddd_paw)
-        if self.noncolin:
+        if self.noncolin and self.spiral_smooth is not None and total.shape[0] == 4:
+            # A spiral's ``W = V_x + i V_y`` goes down on the displaced sphere,
+            # the one its density came up on (:meth:`lift_density`).
+            scalar = to_smooth(total[::3], self.basis.dense, self.basis.smooth)
+            pair = pair_to_smooth(total[1:3], self.spiral_dense, self.spiral_smooth)
+            potentials = (jnp.stack([scalar[0], pair[0], pair[1], scalar[1]]),)
+        elif self.noncolin:
             potential = jnp.stack([
                 to_smooth(component, self.basis.dense, self.basis.smooth)
                 for component in total
@@ -7313,6 +7395,22 @@ def run_scf(
     # the bare layout's bit for bit.
     space = resolve_mixing_space(mixing_space, mixer)
     layout = None
+    if space == "g" and calculation.spiral and calculation.nspin_mag == 4:
+        # The layout keeps each real channel on the *resident* smooth sphere
+        # and its mirror, and a spiral's transverse pair lives on the
+        # laboratory sphere ``|G - q| < G_s`` (:meth:`Calculation.lift_density`),
+        # so every step would drop the shell between the two -- the cut
+        # ``OPEN.md`` Part XXI item 1 removed from the density and the
+        # potential, put back in the mixer. Refused rather than given a complex
+        # block on the displaced sphere, which nothing has asked for.
+        raise NotImplementedError(
+            "mixing_space = 'g' on a magnetic spin spiral is not implemented: "
+            "the layout keeps every channel on the resident smooth sphere, and a "
+            "spiral's transverse magnetization lives on the sphere displaced by "
+            "q, |G - q| < G_s, so each mixing step would cut the shell between "
+            "the two. Leave mixing_space unset or set it to 'r', which mixes on "
+            "the whole dense grid in real space"
+        )
     if space == "g":
         layout = SphereLayout(calculation.basis.dense, calculation.basis.ngms,
                               calculation.system.cell, tuple(np.shape(rho)))

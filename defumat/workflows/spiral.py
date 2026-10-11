@@ -830,13 +830,18 @@ def unfold_spiral_density(density, spiral_q, multiples, shape) -> np.ndarray:
                            l * multiples[2]]) + offset.reshape(3, 1, 1, 1)
         # **The Nyquist index of an even grid is both ends of it**, and
         # ``fftfreq`` calls it the negative one. That is a label, not a
-        # position, and for the transverse pair it is the wrong one whenever the
-        # shift points the other way: ``m'_+`` lives on a sphere displaced by
-        # ``q`` from the charge's, so on a supercell grid of exactly ``M n``
-        # points its component at ``+n/2`` is physical and lands inside the
-        # grid, while the label ``-n/2`` sends it one index past the other edge.
-        # Take the alias wherever the label falls outside and the alias does
-        # not; a component that fits under neither is still refused below.
+        # position: shifted by ``K`` the label ``-n/2`` can land one index past
+        # the supercell grid's edge where ``+n/2`` would land inside it, so the
+        # alias is taken wherever the label falls outside and the alias does
+        # not, and a component that fits under neither is still refused below.
+        # **Since 2026-10-11 a spiral run puts nothing physical there**: its
+        # transverse pair is kept on the laboratory sphere ``|G - q| < G_rho``
+        # (``Calculation.spiral_dense``), and its box is checked to hold that
+        # sphere strictly inside ``(n - 1) // 2``, so the Nyquist plane carries
+        # round-off only. The case this guard was written for, a physical
+        # component of ``m'_+`` at ``+n/2`` on the resident discretisation, no
+        # longer arises from this code's own density; the guard stays for a
+        # density from anywhere else.
         for axis, size in enumerate(shape):
             low, high = -(size // 2), (size - 1) // 2
             alias = target[axis] + multiples[axis] * small[axis]
