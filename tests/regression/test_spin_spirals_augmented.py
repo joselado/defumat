@@ -326,40 +326,195 @@ def test_the_two_paths_disagree_by_what_pw_x_disagrees_by(dataset, pseudo_dir):
     assert gap == pytest.approx(reference_gap, abs=GAP_RY)
 
 
-def test_a_scan_moves_the_displaced_table_with_q(pseudo_dir):
-    """Every point of an ``E(q)`` scan must carry *its own* displaced table.
+def _cobalt(ecutrho: float, q3: float = -0.25) -> str:
+    """The cobalt helix's one-atom cell at another dense cutoff or wavevector."""
+    text = (GENERATED / "co-helix4-spiral.in").read_text()
+    return (text.replace("ecutrho = 160.0", f"ecutrho = {ecutrho}")
+                .replace("spiral_q(3) = -0.25", f"spiral_q(3) = {q3}"))
+
+
+def _resident_sets(monkeypatch):
+    """The control arm: the transverse pair back on the resident spheres.
+
+    Exactly the code before ``OPEN.md`` Part XXI item 1 -- the displaced table
+    on ``|G| < G_rho``, the pair interpolated on ``|G| < G_s`` -- since
+    :func:`~defumat.scf.driver._spiral_gvectors` is the one place the
+    laboratory spheres come from.
+    """
+    import defumat.scf.driver as driver
+
+    monkeypatch.setattr(
+        driver, "_spiral_gvectors",
+        lambda basis, cell, qcart, needed: ((basis.dense, basis.smooth) if needed
+                                            else (None, None)),
+    )
+
+
+def _cobalt_density(text: str, pseudo_dir):
+    """``(system, pseudos, density)``: a cobalt spiral's density after twenty iterations.
+
+    Any density will do for the identities below, which hold for one diagonalisation
+    at a fixed density whatever it is; twenty iterations make it a magnetic one
+    near the ground state (accuracy about 1e-7 Ry), with the whole transverse
+    moment in play. Not converged on purpose: the PBE cobalt helix limit-cycles
+    near 1e-10 at 160 Ry on the laboratory sphere and near 1e-7 at 80
+    (``OPEN.md`` Part XXI item 1), so a converged state is not what these cells
+    offer and not what the identity needs.
+    """
+    import warnings
+
+    system = build_system(parse_pw_input(text))
+    pseudos = _pseudos(system, pseudo_dir)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        result = run_scf(system, pseudos, conv_thr=1e-11, max_iterations=20)
+    return system, pseudos, result.density
+
+
+def _one_shot(system, pseudos, density, calculation=None):
+    """``(eigenvalues, output density)`` of one diagonalisation at ``density``."""
+    import jax.numpy as jnp
+    import numpy as np
+
+    from defumat.workflows.nscf import fixed_density_states
+
+    calculation, _, eigenvalues, states = fixed_density_states(
+        system, pseudos, jnp.asarray(density), conv_thr=1e-11,
+        calculation=calculation,
+    )
+    weights, _ = calculation.occupations(jnp.asarray(eigenvalues))
+    return np.asarray(eigenvalues), np.asarray(calculation.density(states, weights))
+
+
+def _supercell_identity(spiral_system, pseudos, density, ecutrho: float, pseudo_dir):
+    """``(worst eigenvalue, output magnetization)``: the spiral against its unfolded supercell.
+
+    Both sides diagonalised once at one density -- the spiral at ``density``,
+    the four-cell ``co-helix4-nosoc.in`` (``3 3 1 0 0 1``, which samples
+    exactly the spiral's ``3 3 4``) at ``unfold_spiral_density`` of it -- and
+    compared on two quantities first order in the density: each supercell
+    ``(kx, ky)`` band by band against the union of the four spiral k-points over
+    it, the top four bands left out, in Ry; and the supercell's output
+    magnetization against the unfolded output of the spiral, relative to its
+    largest value. The generalized Bloch theorem makes both zero at any
+    density, so what is left is the two discretisations' difference.
+    """
+    import numpy as np
+
+    from defumat.scf.driver import Calculation
+    from defumat.workflows.spiral import unfold_spiral_density
+
+    spiral_e, spiral_out = _one_shot(spiral_system, pseudos, density)
+
+    text = (GENERATED / "co-helix4-nosoc.in").read_text().replace(
+        "ecutrho = 160.0", f"ecutrho = {ecutrho}")
+    system = build_system(parse_pw_input(text))
+    supercell_pseudos = _pseudos(system, pseudo_dir)
+    calculation = Calculation(system, supercell_pseudos)
+    shape = tuple(calculation.basis.dense.grid)
+    q = spiral_system.spiral_q
+    super_e, super_out = _one_shot(
+        system, supercell_pseudos, unfold_spiral_density(density, q, (1, 1, 4), shape),
+        calculation=calculation,
+    )
+    expected = unfold_spiral_density(spiral_out, q, (1, 1, 4), shape)
+    magnetization = float(np.abs(super_out[1:] - expected[1:]).max()
+                          / np.abs(expected[1:]).max())
+
+    spiral_k = np.asarray(spiral_system.kpoints.coords)
+    spiral_e = spiral_e.reshape(len(spiral_k), -1)
+    super_k = np.asarray(system.kpoints.coords)
+    super_e = super_e.reshape(len(super_k), -1)
+    worst = 0.0
+    for row, k in zip(super_e, super_k):
+        over = np.abs(spiral_k[:, :2] - k[:2]).max(axis=1) < 1e-6
+        union = np.sort(spiral_e[over].ravel())
+        n = min(len(union), len(row)) - 4
+        worst = max(worst, float(np.abs(union[:n] - row[:n]).max()))
+    return worst, magnetization
+
+
+#: What the supercell may differ from the spiral by on the cobalt helix at
+#: ``ecutrho = 160`` with the transverse pair on the laboratory sphere: the worst
+#: eigenvalue in Ry, and the output magnetization relative to its largest value.
+LABORATORY_SPHERE = (1.0e-9, 1.0e-6)
+
+#: The same two with the pair back on the resident spheres, the code before
+#: ``OPEN.md`` Part XXI item 1, which measured 7.27e-05 Ry and 4.2e-03 at the
+#: converged state: the control arm has to exceed these, or the bounds above
+#: are not a test.
+RESIDENT_SPHERE = (1.0e-5, 1.0e-4)
+
+
+def test_the_spiral_is_its_unfolded_supercell_on_the_laboratory_sphere(pseudo_dir,
+                                                                       monkeypatch):
+    """The cobalt helix and its four-cell supercell, before and after the laboratory sphere.
+
+    ``co-helix4-spiral.in`` at its own 20/160 Ry (``q = -b3/4``, a separate
+    smooth grid, so both the dense and the smooth cut are in play), against
+    ``co-helix4-nosoc.in`` at the unfolded density. With the transverse pair on
+    the resident spheres the two disagree by the shell ``|G| < G_rho < |G - q|``
+    and its smooth counterpart, which held 99.5 per cent of the transverse
+    difference; on the laboratory sphere they discretise one functional.
+
+    Measured: see :data:`LABORATORY_SPHERE` and :data:`RESIDENT_SPHERE`.
+    """
+    after = _supercell_identity(*_cobalt_density(_cobalt(160.0), pseudo_dir), 160.0,
+                                pseudo_dir)
+    _resident_sets(monkeypatch)
+    before = _supercell_identity(*_cobalt_density(_cobalt(160.0), pseudo_dir), 160.0,
+                                 pseudo_dir)
+    assert before[0] > RESIDENT_SPHERE[0] and before[1] > RESIDENT_SPHERE[1]
+    assert after[0] < LABORATORY_SPHERE[0] and after[1] < LABORATORY_SPHERE[1]
+
+
+#: What a calculation moved to a wavevector may differ from one built there, in
+#: any eigenvalue (Ry) and in the output magnetization (relative), at one density.
+SCAN_POINT = (1.0e-10, 1.0e-9)
+
+
+def test_a_scan_moves_the_displaced_table_with_q(pseudo_dir, monkeypatch):
+    """Every point of an ``E(q)`` scan carries *its own* laboratory sphere and table.
 
     A scan walks :meth:`~defumat.scf.driver.Calculation.at_spiral_q` with
-    ``rebuild_basis = True``, which rebuilds the spheres, ``vkb`` and -- since
-    P95 -- the displaced augmentation table too. On a norm-conserving dataset
-    there was nothing there to rebuild, so this is a new way for a scan to go
-    wrong, and the way it would go wrong is **silent**: every point after the
-    first would carry the first point's ``Q_ij(G - q)``, the energies would
-    stay smooth and ordered, and only their values would be wrong.
+    ``rebuild_basis = True``, which rebuilds the spheres, ``vkb``, the
+    laboratory sphere of the transverse pair and the displaced table on it. A
+    point that kept the first point's sphere or table would be **silent**: the
+    energies smooth and ordered and their values wrong. So the calculation a
+    scan would carry to ``q = -b3/4`` from ``q = 0`` is compared with one built
+    at ``q = -b3/4`` from scratch, both diagonalised once at one density.
 
-    So each point is compared against the same wavevector run from scratch,
-    which shares no ``Calculation`` with the scan. Measured: **exactly equal**,
-    to all twelve digits, at ``q3 = 0``, ``1/4`` and ``1/2``.
+    **On quantities first order in the density, and on cobalt at 80 Ry**, since
+    2026-10-11. The energy on the oxygen chain, which this compared before, is
+    second order and could not see a stale *sphere*: the shell there moves the
+    energy below 1e-10 Ry. The guard is the same comparison with the resident
+    spheres in the fresh calculation, which is what a scan that kept the
+    ``q = 0`` sphere would carry.
     """
     import dataclasses
 
-    from defumat.workflows.spiral import run_spiral_scan
+    import numpy as np
 
-    text = (GENERATED / "o-chain-spiral-us.in").read_text()
-    system = build_system(parse_pw_input(text))
-    pseudos = _pseudos(system, pseudo_dir)
-    wavevectors = [[0.0, 0.0, 0.0], [0.0, 0.0, 0.5]]
+    from defumat.scf.driver import Calculation
 
-    scan = run_spiral_scan(
-        system, pseudos, wavevectors,
-        conv_thr=1e-11, mixing_beta=0.3, max_iterations=300,
-    )
-    for index, q in enumerate(wavevectors):
-        alone = run_scf(
-            dataclasses.replace(system, spiral_q=tuple(q)), pseudos,
-            conv_thr=1e-11, mixing_beta=0.3, max_iterations=300,
-        )
-        assert scan.energies[index] == pytest.approx(alone.total_energy, abs=1e-10)
+    system, pseudos, density = _cobalt_density(_cobalt(80.0), pseudo_dir)
+    start = Calculation(dataclasses.replace(system, spiral_q=(0.0, 0.0, 0.0)), pseudos)
+    moved = start.at_spiral_q(system.spiral_q)
+    assert moved.spiral_dense.ngm == Calculation(system, pseudos).spiral_dense.ngm
+
+    def difference(calculation):
+        e_moved, out_moved = _one_shot(system, pseudos, density, calculation=moved)
+        e_fresh, out_fresh = _one_shot(system, pseudos, density, calculation=calculation)
+        return (float(np.abs(e_moved - e_fresh).max()),
+                float(np.abs(out_moved[1:] - out_fresh[1:]).max()
+                      / np.abs(out_fresh[1:]).max()))
+
+    same = difference(Calculation(system, pseudos))
+    assert same[0] < SCAN_POINT[0] and same[1] < SCAN_POINT[1]
+
+    _resident_sets(monkeypatch)
+    stale = difference(Calculation(system, pseudos))
+    assert stale[0] > 1000 * SCAN_POINT[0] and stale[1] > 1000 * SCAN_POINT[1]
 
 
 def test_the_resident_table_is_not_enough(pseudo_dir, monkeypatch):
