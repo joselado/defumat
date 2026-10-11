@@ -1,6 +1,6 @@
 """'grad_m' on PAW and on the meta-GGA at the SCF level (plans/noncollinear-gga-grad-m-2.md).
 
-    gradm_paw_meta.py --root W chain|chain-kubler|meta
+    gradm_paw_meta.py --root W chain|chain-kubler|meta|meta-ni
 
 ``chain``: the oxygen chain at q = b3/4 against its four-cell 90-degree
 supercell on ``O.pbe-kjpaw.UPF`` under PBE, the electronic energy per cell
@@ -48,6 +48,16 @@ if mode.startswith("chain"):
     e1 = spiral.total_energy - spiral.energy_terms["ewald"]
     e4 = (supercell.total_energy - supercell.energy_terms["ewald"]) / 4.0
     print(f"{mode}: spiral - supercell/4 = {e1 - e4:.3e} Ry", flush=True)
+elif mode == "meta-ni":
+    base = (GENERATED / "ni-soc-nosym.in").read_text().replace(
+        "occupations = 'smearing'", "input_dft = 'TB09', occupations = 'smearing'")
+    out = {}
+    for choice in ("grad_m", "kubler"):
+        print(choice, flush=True)
+        out[choice] = run(base.replace("noncolin = .true.",
+                                       f"noncollinear_gga = '{choice}', noncolin = .true."),
+                          conv_thr=1e-10, mixing_beta=0.3, max_iterations=150)
+    print(f"meta-ni: grad_m - kubler = {out['grad_m'].total_energy - out['kubler'].total_energy:.3e} Ry", flush=True)
 else:
     base = (GENERATED / "o-chain-spiral-paw.in").read_text().replace(
         "O.pz-kjpaw.UPF", "O.pbe-kjpaw.UPF").replace(
