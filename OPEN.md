@@ -4857,7 +4857,7 @@ that came close is not on the item's list**: `test_stress.py` read **52,628** ma
 between tests (`a6e58b6`, X2 below). What is not measured is the same set on a node at
 this commit, which is the only thing that can close this item.
 
-## 3. The piezoelectric tensor's response route is not converged in `k` at the mesh its own input asks for **[opened 2026-09-19, cause found the same day; closed 2026-10-09: the residual 1 per cent to the Berry value is the 10 Ry cutoff, and from 20 to 40 Ry the two routes agree within 0.25 per cen; 2026-10-10, decided-i: the ultrasoft deficit at a converged cutoff is 0.86 per cent at `8 8 8` against the calibration's 1.01, so `ULTRASOFT_MESH = 8` still follows its rule, the choice handed to the user]**
+## 3. The piezoelectric tensor's response route is not converged in `k` at the mesh its own input asks for **[opened 2026-09-19, cause found the same day; closed 2026-10-09: the residual 1 per cent to the Berry value is the 10 Ry cutoff, and from 20 to 40 Ry the two routes agree within 0.25 per cen; 2026-10-10, decided-i: the ultrasoft deficit at a converged cutoff is 0.86 per cent at `8 8 8` against the calibration's 1.01, so `ULTRASOFT_MESH = 8` still follows its rule, the choice handed to the user; 2026-10-11: the ultrasoft mesh refusal dropped (the user's decision), the warning carries the three offsets]**
 
 Measured on Triton (jobs `20336374`, `20336476` and the ladder `20337789`,
 `tools/cluster/piezo_measure.py`), and the full tables are in
@@ -5494,6 +5494,25 @@ twice the strings' own 3.5e-4 on the calibration), and no ultrasoft mesh refusal
 question is whether the dataset is ever the larger error; which of the three is the user's. Peak
 4.0 GB at 35 Ry and 3.7 GB at 45 Ry on `8 8 8`, 145 to 329 s a rung on 8-11 shared with other
 work, and 12 to 18 minutes a Berry value; a `10 10 10` rung was not needed and was not run.
+
+**Dropped 2026-10-11 (the user's decision, branch `round3-k`): no ultrasoft mesh refusal.**
+`require_a_measured_dataset` keeps the PAW refusal and loses the mesh branch; `ULTRASOFT_MESH = 8`
+stays in `__all__` as a documented number, the division where the ultrasoft deficit first falls
+below the calibration's, with the table above in its comment in place of the 2026-09-20 figures.
+`_warn_about_the_kmesh`, which both datasets get, now quotes the three ultrasoft offsets for an
+ultrasoft run (`ULTRASOFT_KMESH_DEFICIT = (15.30, 3.73, 0.86)` at 45 Ry against
+`CALIBRATION_KMESH_DEFICIT = (14.54, 3.65, 1.01)`), and a norm-conserving run's warning is
+unchanged. `allow_a_coarse_mesh` is still accepted by `require_a_measured_dataset`,
+`require_a_piezoelectric_tensor` and `piezoelectric_tensor` and does nothing, documented as such,
+and `piezo_ladder.py` no longer passes it. The refusal text and `docs/features.tex` carried the
+stale 1.26 per cent (and 0.57 against 1.19) and are rewritten, as is the PAW refusal's sentence
+about the lift and notebook 28's paragraph. The tests that asserted the refusal now assert the
+guard that replaced it: `test_an_ultrasoft_dataset_is_warned_about_its_mesh_and_paw_refused`
+(stand-ins: no mesh refused, PAW refused, the warning carrying "15.30, 3.73, 0.86" and "14.54,
+3.65, 1.01" on ultrasoft and not on norm-conserving, silent below `KMESH_STEP`),
+`test_an_ultrasoft_input_passes_the_chain_on_a_coarse_mesh` (`si2-us` through the whole chain,
+asked of the input), and the `alas-piezo.in` test in `test_piezoelectric.py`, which builds the
+calculation and reads the warning off it.
 
 ## 5. An **ultrasoft** dielectric constant does not reproduce its own closed grid from a symmetry-reduced k-set, by 1.6e-05 relative **[opened 2026-09-19, found in passing; attributed to the dataset under control the same day, six candidates excluded, term not found]**
 
