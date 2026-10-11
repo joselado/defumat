@@ -7512,8 +7512,8 @@ laboratory set lies past the box's half range at 80 or 160 Ry (dense `20 20 25`,
 `9 9 12`; smooth `15 15 18`, at most `6 6 8`), so the aliasing hypothesis is closed. **The
 laboratory sphere converges at the item's own threshold**: 35 iterations at `conv_thr = 1e-10`
 against the resident sphere's 19. The failures recorded above were at `1e-11` (`xxi1.py`),
-below the floor the unsigned functional settles to on this cell, and the laboratory sphere sits
-roughly a decade closer to that floor than the resident one. **M3 rules out the obvious fix**: an
+below the floor the unsigned functional settles to on this cell; why the
+laboratory sphere needs 16 more iterations to reach `1e-10` was not measured. **M3 rules out the obvious fix**: an
 axis in the rotating frame (F1) makes every spiral arm worse and moves the energy by 3e-3 to 5e-3
 Ry, which is the jump the plan warned of, a signed projection discontinuous on the surface
 `m'_x = 0` wherever `m'_y` is not zero there. So F1 is not taken.
