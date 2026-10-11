@@ -3699,8 +3699,10 @@ unchanged afterwards and that the result is bit-identical to a solve with no don
 itself stays, since without it the retry would have nothing to start from, so `sizing.py` now
 counts it (`SizeEstimate.solve_block`, one channel's set beside the eigensolver's buffer, zero on
 a streamed store). Predicted from the brackets and not measured on the slab: `rebuild` from 62.62
-to **51.35 GiB** on the H100, against an estimate that rises from 39.07 to **50.34**, leaving the
-temporary's 7.73 GiB coefficient error as the remaining gap. The question about the 11 GB card
+to **51.35 GiB** on the H100, against an estimate that rises from 39.07 to **45.70** (the old one
+was set by the start, 15.42 resident plus 23.65; the new one by the solve, 15.42 plus 19.01 plus
+11.27), so the remaining gap is 5.65 GiB: the temporary's 7.73 GiB coefficient error, less the
+2.33 GiB by which the modelled resident set is above the measured 13.09. The question about the 11 GB card
 offset is answered by the pair above as far as the executable goes (5.41 GiB of it). This job ran
 on one card only, so the other half is still unattributed, and it matters less now that the 60
 per cent is named.
