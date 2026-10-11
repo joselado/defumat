@@ -331,6 +331,16 @@ class SizeEstimate:
     #: beside the eigensolver's buffer (`MEMORY-AUDIT.md` D10, where it set the
     #: peak of the one cell measured).
     start_buffer: int = 0
+    #: **One channel's starting block, beside the eigensolver's buffer.**
+    #: ``Calculation.diagonalize`` hands the solve ``psi0[spin]``, an eager
+    #: slice and therefore a copy of the whole channel, while the caller still
+    #: holds ``psi0``; the solve writes its states into the copy (it is
+    #: donated), so the pair is two sets, not three. Measured on the 45-atom
+    #: spinor PAW slab on an H100 (``OPEN.md`` Part VII item 1, 2026-10-11) as
+    #: 11.27 GiB in use on entering the solver above what ``diagonalize`` was
+    #: entered with. Zero on a streamed store, whose chunk is the
+    #: ``wavefunctions`` line itself.
+    solve_block: int = 0
     #: How many vectors the start rotates: ``max(natomwfc, nbnd)``, with
     #: ``natomwfc`` counted the way ``wfcinit`` counts it for this regime.
     start_vectors: int = 0
@@ -366,8 +376,8 @@ class SizeEstimate:
         # Setup's transient, the start and the eigensolver's buffer never
         # coexist -- each is freed before the next is asked for -- so the peak
         # takes the largest of them, not their sum.
-        return int(resident + max(self.eigensolver_buffer, self.setup_transient,
-                                  self.start_buffer))
+        return int(resident + max(self.eigensolver_buffer + self.solve_block,
+                                  self.setup_transient, self.start_buffer))
 
     def at_band_batch(self, band_batch: int | None) -> "SizeEstimate":
         """The same estimate with ``band_batch`` bands in flight instead.
@@ -499,6 +509,10 @@ class SizeEstimate:
             "        At david 2 the error goes BOTH ways and the low direction",
             "        is the one that kills a run. Close to the card? Measure it",
             "        with tools/gpu/davidson_memory.py.",
+            f"  {'solve starting block (one channel)':<34s}{gb(self.solve_block)}",
+            "        the psi0[spin] copy the solve is handed and writes its",
+            "        states into, beside the caller's set; it adds to the",
+            "        buffer above, not to the start.",
             f"  {'PEAK (resident + the larger)':<34s}{gb(self.peak_bytes)}",
         ]
         if self.host_arrays:
@@ -1040,6 +1054,7 @@ def estimate_size(
         arrays=arrays, eigensolver_buffer=eigensolver_buffer,
         setup_transient=setup_transient, wfc_store=wfc_store,
         start_buffer=start_buffer, start_vectors=start_vectors,
+        solve_block=0 if wfc_store == "stream" else int(nk * nbnd * ndim * zc),
         eigensolver_fixed=float(eigensolver_fixed),
         start_fixed=float(start_fixed), band_box_bytes=float(band_box_bytes),
     )

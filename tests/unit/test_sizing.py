@@ -198,8 +198,13 @@ def test_the_setup_transient_bounds_the_peak_rather_than_adding_to_it(pseudo_dir
         if name not in estimate._SUPERSEDED
     )
     assert estimate.peak_bytes == resident + max(
-        estimate.setup_transient, estimate.eigensolver_buffer,
+        estimate.setup_transient,
+        estimate.eigensolver_buffer + estimate.solve_block,
         estimate.start_buffer,
+    )
+    assert estimate.solve_block == (
+        estimate.nk * estimate.nbnd * estimate.npwx * estimate.npol
+        * np.dtype(np.complex128).itemsize
     )
     assert estimate.peak_bytes < (
         resident + estimate.setup_transient + estimate.eigensolver_buffer

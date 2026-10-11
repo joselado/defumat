@@ -3483,7 +3483,7 @@ calls it, and the mid-SCF path was passing for the opposite reason -- it carried
 field for the refusal to see. Reading a refusal's source is not the same as watching it
 fire, which is `CLAUDE.md`'s own rule about guards, applied to a guard's absence.
 
-## 1. `sizing.py` reads 60 per cent low on a 45-atom spinor PAW slab **[measured 2026-10-09 on a nine-atom spinor PAW slab on D22, the instrument committed and two terms outside the model found and removed; attributed 2026-10-11 on an H100, job `20888543`: at every solve three wavefunction sets are on the card where the model counts one, and the solver's temporary is 41 per cent above its estimate; the fix is open]**
+## 1. `sizing.py` reads 60 per cent low on a 45-atom spinor PAW slab **[measured 2026-10-09 on a nine-atom spinor PAW slab on D22, the instrument committed and two terms outside the model found and removed; attributed 2026-10-11 on an H100, job `20888543`: at every solve three wavefunction sets are on the card where the model counts one, and the solver's temporary is 41 per cent above its estimate; the output's copy removed by donation (`ffdeac4`) and the slice counted in `sizing.py`, the temporary's coefficient open]**
 
 **Measured 2026-10-09 (branch `open-d`).** The stage-peak instrument A17 says was never
 committed is now `tools/gpu/stage_peaks.py`: the estimate's report, the live device arrays
@@ -3686,16 +3686,24 @@ iterations 1 to 8, then 74.8 at iteration 9 when `ethr` reached 1.9e-6, falling 
 iteration 16. The peak was set at the first solve and did not move by more than 0.5 GiB
 afterwards, so the arena does not grow with the step count on this cell.
 
-**What would close it, and it is a code change rather than a measurement.** Pass the channel to
-the solver without a copy, and let the solver's output take its input's buffer (`donate_argnums`
-on the wavefunction, which `CLAUDE.md` asks for and the eigensolver does not do). Predicted from
-the brackets, not measured: `rebuild` from 62.62 to about 40.1 GiB, within 3 per cent of the
-39.07 estimate, the remainder being the temporary. The robustness retry (`davidson.py`) reads
-`psi0` again after a failed call, so a donated input has to be kept for that path or the retry
-restarted from the failed call's output; that is the design question, and `plans/` gets it
-before any code. The question about the 11 GB card offset is answered by the pair above as far as the
-executable goes (5.41 GiB of it); this job ran on one card only, so the other half is still
-unattributed and matters less now that the 60 per cent is named.
+**Done the same day for one of the two copies** (`ffdeac4`). The output no longer needs a buffer
+of its own: `Calculation.diagonalize` donates the slice to the solve through the existing
+`psi0_again` route (`GPU-MEMORY-NEXT.md` item 11, until now used only by the streamed store), and
+the retry re-slices `psi0`, which the caller still holds, so it starts from the same bits.
+Measured on D22's A2000 on `review/vii1/ni-smoke.in` (`tools/gpu/stage_peaks.py`, three
+iterations, `rebuild`, band batch 4, `david 2`, `01700c4` against `ffdeac4`): the solver used to
+leave with **1.0 MB** more in use than it was entered with, which is the cell's whole wavefunction
+set, and now leaves with **0.0**. Nothing else moved: both arms show the same peak (set at setup on
+a cell that small), and `tests/unit/test_solvers.py` checks that the caller's `psi0` is alive and
+unchanged afterwards and that the result is bit-identical to a solve with no donation. The slice
+itself stays, since without it the retry would have nothing to start from, so `sizing.py` now
+counts it (`SizeEstimate.solve_block`, one channel's set beside the eigensolver's buffer, zero on
+a streamed store). Predicted from the brackets and not measured on the slab: `rebuild` from 62.62
+to **51.35 GiB** on the H100, against an estimate that rises from 39.07 to **50.34**, leaving the
+temporary's 7.73 GiB coefficient error as the remaining gap. The question about the 11 GB card
+offset is answered by the pair above as far as the executable goes (5.41 GiB of it). This job ran
+on one card only, so the other half is still unattributed, and it matters less now that the 60
+per cent is named.
 
 ## 2. `diago_david_ndim = 2` may degrade at the minimum subspace once `ethr` tightens **[measured 2026-10-09 at `aa08c82`: on `si16-1k-ecut30` it does not, at most 6 steps a call against `pw.x`'s 5; 2026-10-10, branch `decided-j`: the collapse is `cegterg`'s `nbase + notcnv > nvecx` now, 28 to 22 steps at `ndim = 2` on that cell, 27 to 19 on `si8-smeared-1k`, and `al-slab` at `ndim = 2` from 1.4e-5 Ry off to 7e-9 from `pw.x`]**
 
