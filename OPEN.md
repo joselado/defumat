@@ -6342,8 +6342,17 @@ and `mixing_mode = 'adaptive'` do no better. In LDA (`pz`) the same cell converg
 on both arms at 80 Ry and in 13 at 160, and on the resident sphere the PBE cell already failed at 320
 Ry (8.8e-9 in 150), so the suspect is the gradient correction's `|m|` on a turning texture, which a
 spiral takes without a sign axis (`quantization_axis = None`), not the sphere. The four-cell supercell
-limit-cycles the same way (P122), which P122 read as an unstable stationary point. Not chased
-further.
+limit-cycles the same way (P122), which P122 read as an unstable stationary point.
+
+**What `converged` means on this cell, said rather than left to be found.** The loop's `accuracy`
+reads the real channels on the resident sphere, so the shell is the one place it could be blind,
+and it is not: one diagonalisation at the last density of a 60-iteration run puts **8.9e-4 (80 Ry)
+and 2.4e-5 (160 Ry)** of the transverse residual `|m_+,out - m_+,in|^2` on the shell, the resident
+sphere seeing 99.9 per cent of it. What the grid residual does not see is `becsum` (Y2): its magnetic
+residual stays at 1.7e-3 at 160 Ry against 2.4e-4 on the resident sphere, and the total energy
+wanders by 5e-5 Ry at an `accuracy` of 1e-10. So on this cell `converged = True` at `conv_thr =
+1e-10` is reachable (the helix tool's source, 20 iterations to 7.5e-11) at a state whose energy is
+not stationary to 1e-10; the P122 curvatures above are read at that source. Not chased further.
 
 ## 2. Route C does not reach `conv_thr` on PAW nickel **[opened 2026-09-26]**
 

@@ -6540,8 +6540,13 @@ iterations. In LDA the same cell converges in 14 iterations either way, and on
 the resident sphere the PBE cell already failed at 320~Ry, so this is the
 gradient correction's $|\mathbf m|$ on a turning texture (a spiral has no fixed
 axis to take its sign along) rather than the sphere; the supercell limit-cycles
-the same way. The identities above are taken at one diagonalisation of a fixed
-density and do not need the state converged.
+the same way. Note what \code{converged} then means: the grid residual is read
+on the resident sphere, which still sees 99.9 per cent of the transverse
+residual (the shell holds $2\times10^{-5}$ of it at 160~Ry), but it does not see
+\code{becsum}, whose magnetic residual stays at $1.7\times10^{-3}$, so on this
+cell a run can stop at \code{conv\_thr = 1e-10} with its energy still moving
+by $5\times10^{-5}$~Ry. The identities above are taken at one diagonalisation
+of a fixed density and do not need the state converged.
 
 \textbf{$dE/d\mathbf q$ on such a dataset differentiates three terms the
 norm-conserving one does not have.} The displaced table is a function of
