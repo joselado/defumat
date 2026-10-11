@@ -4215,7 +4215,7 @@ boundary, one showing an `energies=` list without `bias=` is untouched -- there 
 trapezoid there, so each energy is its own zero-bias conductance -- and one reading the
 order of the two calls off each entry point's source.
 
-## 2. The reference pair for a unit-cell tunnelling spectrum was not taken **[2026-09-15; measured 2026-10-09: 41 biases through `pp.x` take 1.07 s and one `run_sts` call 0.95 s, and the two images disagree on an unshifted grid]**
+## 2. The reference pair for a unit-cell tunnelling spectrum was not taken **[2026-09-15; measured 2026-10-09: 41 biases through `pp.x` take 1.07 s and one `run_sts` call 0.95 s, and the two images disagree on an unshifted grid; 2026-10-11: the disagreement is Part XXIV item 1's, `stm.f90`'s]**
 
 `pp.x` with `plot_num = 5`, run once per bias, is the honest reference for `run_sts` with an
 energy axis, and `pp.x` is built in the vendored tree. It was not measured because the machine
@@ -4269,6 +4269,12 @@ onto this code's states in `pw.x`'s own k order takes the difference from 2.6e-3
 with `nosym` and `noinv`, 64 points again, agrees to **2.2e-10** on a peak of 3.54e-3. So what is
 left lives at the points only an unshifted grid holds (`Gamma`, `X` and `L` among them), and what
 the rest of it is has not been found; it is a candidate entry of its own rather than part of this timing.
+
+**2026-10-11: the gap has its own entry, Part XXIV item 1** ("`pp.x` leaves band 1 out at six `W`
+points of an unshifted grid"), where all of it is attributed to the stale `first_band` above: the
+rule as written, applied to `pp.x`'s own single-state densities, reproduces `pp.x`'s image to
+1.2e-12, and the 2.1e-3 this paragraph stopped at was the rule dropping one member of a degenerate
+pair, which this code's and `pw.x`'s eigensolvers split differently. Nothing of it is this timing's.
 
 # Part X -- from the augmented ultracell, 2026-09-17 (P88 stage 5)
 
@@ -8760,7 +8766,8 @@ is "band 1" is the eigensolver's choice, `pw.x`'s and this code's differ, and so
 differs too. Rebuilt on `pp.x`'s own states the same rule closes to 1.2e-12.
 
 **Nothing to fix here.** Whether to report the stale `first_band` to Quantum ESPRESSO is the
-user's. A reference image for an unshifted grid would have to be built from the single-state dumps
+user's, and the report is the user's to file: a draft is at `plans/stm-f90-upstream.md`
+(2026-10-11, branch `round3-k`), written to stand on its own with `pp.x` and the cell alone. A reference image for an unshifted grid would have to be built from the single-state dumps
 with the window, as above, rather than taken from `pp.x`'s `plot_num = 5`.
 
 **What the states do disagree on, and why it does not touch the image.** Inside the window the

@@ -79,6 +79,11 @@ it is not chased here.
    direction can buy. Also `becsum`'s magnetization taking `mixing_beta_mag` (today it keeps
    `beta`, `scf/mixing.py`'s docstring calling that "a second departure with no measurement
    behind it"); this cell is the measurement.
+   *Added 2026-10-11 (round3-k):* when this step is taken up, its first action is profiling
+   the three `jax.jvp` of `_onecenter_torque`'s stateless branch (`scf/driver.py`, one per
+   generator through `calculation.onecenter`), which cost 2.6 s an iteration on this cell at
+   `soc_scale = 0`, where it needs no states at all, against about 1 s for the rest of the
+   iteration (`OPEN.md` Part XXII item 1), and Route C pays it at every iteration.
 3. **Only then Route C**: from 45 degrees, with whichever of (2) converges the plain SCF, the
    question being whether Route C then reaches `conv_thr` and lands in the basal plane, and
    whether `rotation_flat_curvature` is needed at all. Read the code first on one point: the
