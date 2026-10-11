@@ -7314,7 +7314,7 @@ below 1e-6 (2.6e-7 at 8 bands, 3e-9 at 32) and bounds the 32-band component rati
 
 # Part XXI -- from the orientation torque's helix, 2026-09-26 (P122)
 
-## 1. An ultrasoft spin spiral and its unfolded supercell disagree at 7e-5 Ry, and more at a lower cutoff **[opened 2026-09-26; closed 2026-10-11 on branch `round3-l`: the transverse pair is on the laboratory sphere and the identity is at round-off; the PBE cobalt helix not converging is left open below]**
+## 1. An ultrasoft spin spiral and its unfolded supercell disagree at 7e-5 Ry, and more at a lower cutoff **[opened 2026-09-26; closed 2026-10-11 on branch `round3-l`: the transverse pair is on the laboratory sphere and the identity is at round-off; the PBE cobalt helix not converging is left open below, and diagnosed 2026-10-11: the gradient correction's unsigned `|m|`, which `pw.x` shares; the cure is a `grad m` functional, not started]**
 
 **Reproduced and attributed, 2026-10-09** (D22-0161, `review/open-a/xxi1.py`). The worst
 eigenvalue of the supercell at the unfolded density against the union of the four spiral
@@ -7478,6 +7478,56 @@ residual stays at 1.7e-3 at 160 Ry against 2.4e-4 on the resident sphere, and th
 wanders by 5e-5 Ry at an `accuracy` of 1e-10. So on this cell `converged = True` at `conv_thr =
 1e-10` is reachable (the helix tool's source, 20 iterations to 7.5e-11) at a state whose energy is
 not stationary to 1e-10; the P122 curvatures above are read at that source. Not chased further.
+
+**Diagnosed 2026-10-11: it is the gradient correction's unsigned `|m|`, not the laboratory
+sphere, and a sign axis is not the cure on a spiral** (`plans/open-a-xxi1-cobalt-pbe.md`, fable's
+plan; `plans/open-a-scripts/xxi1_axis.py` and `xxi1_m1.py`; D22-0161, four cores a run, 3 GB
+scopes, at `da73da7`; JSON in `/l/ladovj1/review/cobalt/`). Every run is the item's cell at
+`run_scf`'s defaults, `conv_thr = 1e-10`, 150 iterations at most:
+
+| run | sign axis | iterations | `accuracy` | energy (Ry) |
+|---|---|---|---|---|
+| `q = 0`, PBE (M2 arm A) | `(1, 0, 0)`, the cell's own | **26, converged** | 4.7e-11 | -74.2842391 |
+| `q = 0`, PBE (M2 arm B) | none | **150, not converged** | 3.1e-8 | -74.2842891 |
+| `q = 0`, LDA (M2) | none | 12, converged | 9.0e-12 | -73.7350384 |
+| spiral, laboratory, 160 Ry | none (the spiral's rule) | **35, converged** | 8.0e-11 | -74.2824789 |
+| spiral, resident, 160 Ry | none | 19, converged | 6.0e-11 | -74.2823412 |
+| spiral, laboratory, 160 Ry (M3) | `(1, 0, 0)` in the rotating frame | 150, not converged | 8.3e-7 | -74.2790206 |
+| spiral, resident, 160 Ry (M3) | `(1, 0, 0)` | 150, not converged | 4.9e-7 | -74.2843623 |
+| spiral, laboratory, 80 Ry (M3) | `(1, 0, 0)` | 150, not converged | 2.3e-6 | -74.3338258 |
+| spiral, resident, 80 Ry (M3) | `(1, 0, 0)` | 150, not converged | 9.0e-7 | -74.3249009 |
+
+What it settles. **The ferromagnet at `q = 0` stalls without the axis** (3.1e-8 after 150) and
+converges in 26 with it, where LDA without it converges in 12. Nothing of the spiral is in play
+there, so the unsigned branch of `gradcorr` is enough to stall this cell, which is the plan's H1.
+**M1 rules out a defect in that branch**: at the stalled density (`q = 0`, 60 iterations,
+1.9e-8), `jax.grad` of `ehart + etxc` against `v_scf * omega / N` agrees to **3.8e-15** relative
+in the worst channel unsigned and 5.7e-15 signed (LDA 1.8e-13), so the potential is the exact
+derivative of the grid functional and what stalls is the functional's own kink. Nodes in the moment
+are not a corner case on this cell: `m . x < 0` on **6,492 of 10,000** grid points (the interstitial
+`sp` polarization, at most -0.026 against a maximum of 0.55), and `|m|` is below 5 per cent of its
+maximum on 8,972. At one density the two branches' `E_H + E_xc` differ by 1.8e-4 Ry, and the
+`q = 0` energies by 5.0e-5 Ry, which is the price of choosing either. **M0**: no member of either
+laboratory set lies past the box's half range at 80 or 160 Ry (dense `20 20 25`, at most
+`9 9 12`; smooth `15 15 18`, at most `6 6 8`), so the aliasing hypothesis is closed. **The
+laboratory sphere converges at the item's own threshold**: 35 iterations at `conv_thr = 1e-10`
+against the resident sphere's 19. The failures recorded above were at `1e-11` (`xxi1.py`),
+below the floor the unsigned functional settles to on this cell, and the laboratory sphere sits
+roughly a decade closer to that floor than the resident one. **M3 rules out the obvious fix**: an
+axis in the rotating frame (F1) makes every spiral arm worse and moves the energy by 3e-3 to 5e-3
+Ry, which is the jump the plan warned of, a signed projection discontinuous on the surface
+`m'_x = 0` wherever `m'_y` is not zero there. So F1 is not taken.
+
+**What is left is the plan's F2, and it is a new functional rather than a fix.** `pw.x` has the
+same limitation on the same branch (`fe-noncolin-pbe-stress.in:13-25`: four hydrogen moments at 90
+degrees limit-cycle at 5e-6 Ry). The proper cure is a noncollinear GGA built from `grad m` rather
+than from `grad |m|`, which is smooth at a node and rotationally invariant; it needs its arXiv
+check and a plan before any code. Until then a PBE spiral converges to about `1e-10` on this cell
+and no further, and the reported `accuracy` is honest about it. The item's sentence that the
+energy is "not stationary to 1e-10" is the reporting convention (the unconverged total carries
+`-int V_in (rho_out - rho_in)` and no `descf`, the plan's first reading) rather than a property
+of the map, and the `becsum` residual's ratio between the two arms, 7.1, is the density residual's,
+`sqrt(2.6e-10 / 4.0e-12) = 8.1`, in other units.
 
 ## 2. Route C does not reach `conv_thr` on PAW nickel **[opened 2026-09-26; measured 2026-10-09: the plain SCF stalls at every orientation and converges in 78 at `degauss = 0.05`; Route C does not fit 6 GB; plan in `plans/open-a-xxi2.md`; rerun 2026-10-10 on branch `decided-h` under 10 GB: 200 iterations, not converged, `dr2` median 2.4e-5 over the last 60, a flat 2.58 GB high-water]**
 
