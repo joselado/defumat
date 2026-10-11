@@ -182,8 +182,58 @@ print("largest residual of the two-shell fit   %.3f meV   (%.1f%% of the curve)"
          100 * residual / max(abs(scan.energies - scan.energies[0]))))
 ```
 
-    J1 = -112.272 meV  (nearest)      J2 = +28.993 meV  (next-nearest)
+    J1 = -112.195 meV  (nearest)      J2 = +28.973 meV  (next-nearest)
     largest residual of the two-shell fit   0.814 meV   (2.2% of the curve)
+
+
+## A gradient correction that sees the direction of the moment
+
+A gradient-corrected functional needs a spin-up and a spin-down density to take gradients of.
+The usual way to get them from a noncollinear magnetization is to rotate onto the local
+moment, $n_{\uparrow,\downarrow} = (n \pm |\mathbf m|)/2$, and that is what `pw.x` and Elk do.
+In a ferromagnet the sign of $\mathbf m$ along the common axis can be kept, so up stays up
+where the moment changes sign; in a spiral there is no common axis and the size $|\mathbf m|$
+has a kink at every point where the moment passes through zero. In a metal that is not a
+corner case: the weak polarization between the atoms points against the moment on the atoms
+over much of the cell.
+
+The kink is in the functional, and the self-consistent cycle crawls past it. The way
+around it is to build the gradient correction from the gradients of the components,
+$\nabla m_x$, $\nabla m_y$, $\nabla m_z$, which are smooth wherever the density is:
+`noncollinear_gga = 'grad_m'`. For a collinear moment it is the ordinary functional exactly,
+and in a spiral it is a different functional, so the two energies are not expected to agree.
+Below is fcc-like cobalt with a quarter turn per cell along $c$, under PBE:
+
+
+
+```python
+COBALT = (CASES / "co-helix4-spiral.in").read_text()
+
+print("functional   converged   iterations   accuracy [Ry]   E [Ry]")
+for name in ("kubler", "grad_m"):
+    text = COBALT.replace("occupations = 'smearing'",
+                          f"noncollinear_gga = '{name}', occupations = 'smearing'")
+    run = Calculator.from_text(text, PSEUDO, announce=False, conv_thr=1e-11)
+    result = run.get_scf(max_iterations=150)
+    print(f"{name:10s}   {str(result.converged):9s}   {result.iterations:10d}"
+          f"   {result.accuracy:13.1e}   {result.total_energy:.7f}")
+
+```
+
+    functional   converged   iterations   accuracy [Ry]   E [Ry]
+
+
+    kubler       True               119         7.6e-12   -74.2824789
+
+
+    grad_m       True                15         1.5e-13   -74.2833326
+
+
+The rotation onto $|\mathbf m|$ takes over a hundred iterations to reach $10^{-11}$ Ry, and the
+functional of $\nabla\mathbf m$ gets there in fifteen. The energies differ by
+under a milli-Rydberg, which is the size of the choice between two functionals that agree on
+every collinear magnet: neither is wrong, and a comparison with `pw.x` or Elk has to stay on
+the first.
 
 
 A negative $J_1$ is antiferromagnetic in the convention
@@ -224,4 +274,6 @@ charge as a radial table rather than on the grid.
 Notebook 14 relaxes $\mathbf q$ itself downhill, which costs a fraction of the runs this scan
 does. The tests behind this notebook: `tests/regression/test_spin_spirals.py`, which holds
 the three limits of the table above, the gauge invariance of the energy under
-$\mathbf q \to \mathbf q + \mathbf b$, and the two-sphere basis construction.
+$\mathbf q \to \mathbf q + \mathbf b$, and the two-sphere basis construction;
+`tests/unit/test_noncollinear_gga_grad_m.py` and `tests/regression/test_spin_spirals_augmented.py`
+for the gradient correction built from $\nabla\mathbf m$.

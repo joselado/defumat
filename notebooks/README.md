@@ -64,6 +64,7 @@ instead, which means the physics is selected in the input file rather than at th
 | Which way a magnet turns when it is let go: the easy axis by relaxation, and a self-consistent run with the coupling that converges on it | `get_relaxed_orientation()`, `get_scf(rotate_moments=True)` | [47](47_turning_a_magnet.ipynb) |
 | A spin wave, and whether the magnetic order survives it | `get_magnon_dispersion()` | [38](38_magnons.ipynb) |
 | The same `E(q)` from `dE/dq` instead | `get_spiral_scan(gradients=True)` | [12](12_spin_spirals.ipynb) |
+| A gradient-corrected spiral that converges | `noncollinear_gga = 'grad_m'` | [12](12_spin_spirals.ipynb) |
 | A magnet's ground-state pitch | `get_spiral_relaxation()` | [14](14_spiral_relaxation.ipynb) |
 | Which way a spiral turns, and which plane it turns in: its Dzyaloshinskii-Moriya energy, spin-orbit coupling to first order on the spiral in its own cell | `get_spiral_spin_orbit_energy()` | [48](48_spiral_chirality.ipynb) |
 | Site-resolved `<L>`, `<S>` and `<J>` | `get_angular_momenta()` | [29](29_effective_mass_and_angular_momenta.ipynb) |
@@ -279,7 +280,9 @@ here against the 33 in this table, on a re-execution where nothing in its code
 cells changed, only its prose. A cold run of the same notebook took 130 s, so
 the 90 is the warm figure and the two bracket whatever the 33 was measured
 under. Nothing else in the table has been re-measured, so treat the rest as the
-order of magnitude it is rather than as current to the second.
+order of magnitude it is rather than as current to the second. `12` reads 75 s on 2026-10-11
+on D22 (cores 8 to 13) against 30 before, and the 45 s is one added cell: the PBE cobalt
+helix under both gradient corrections, the first taking 119 iterations.
 
 | | s | | s | | s | | s |
 |---|---|---|---|---|---|---|---|
