@@ -221,9 +221,10 @@ class AugmentationCharge(eqx.Module):
         ``Q_ij(G)`` is a property of the species; only the structure factor
         moves, so a new geometry costs one complex exponential per atom.
 
-        ``gcart`` is the **unshifted** G set, as every caller has it; the
-        displacement is reapplied here so a shifted table survives a move of
-        the atoms with its own argument intact.
+        ``gcart`` is the **unshifted** G set the table was built on, as every
+        caller has it -- for a spin spiral's table the laboratory sphere, not
+        the resident one; the displacement is reapplied here so a shifted
+        table survives a move of the atoms with its own argument intact.
         """
         phases = _atom_phases(self._shifted(gcart), positions).astype(self.phases.dtype)
         return eqx.tree_at(lambda a: a.phases, self, phases)
@@ -1189,7 +1190,11 @@ def build_augmentation(
 ) -> AugmentationCharge | None:
     """Assemble ``Q_ij(G)`` for every ultrasoft species. ``None`` if there are none.
 
-    ``gvectors`` must be the **dense** set.
+    ``gvectors`` must be the **dense** set, or for a displaced table the
+    sphere on the dense box it is cut on: a spin spiral's is the laboratory
+    sphere ``{G : |G + shift| <= G_rho}``
+    (:func:`~defumat.basis.gvectors.displaced_gvectors`), which keeps
+    ``G = 0`` first as the origin read below needs.
 
     ``shift`` is an optional ``(3,)`` cartesian wavevector ``b``: the table is
     then ``Q_ij(G + b) e^{-i (G + b) . tau_a}``, the transform of the lattice

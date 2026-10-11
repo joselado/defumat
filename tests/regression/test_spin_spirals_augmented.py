@@ -37,15 +37,23 @@ is **twice** each residue above, the factor a doubled cell's energy is divided
 by. The collinear-referenced identity is therefore measuring the gap between
 this code's own collinear and noncollinear paths, and the spiral rides on it.
 
-What is left when that gap vanishes is the spiral's own error, and it is
-round-off: 6.08e-09 Ry at ``ecutrho = 400``, against the quarter turn's
-**1.65e-09** measured at ``ecutrho = 200`` on a supercell that shares the
-noncollinear machinery and so never sees the gap at all.
+What is left when that gap vanishes is the spiral's own error: 6.08e-09 Ry at
+``ecutrho = 400`` on the resident sphere, against the quarter turn's 1.65e-09
+measured at ``ecutrho = 200`` on a supercell that shares the noncollinear
+machinery and so never sees the gap at all.
 
-The tolerance below covers the largest of these at the ``ecutrho = 200`` these
-inputs carry, which is PAW's 3.26e-07 on the quarter turn. It is a floor set by
-the code's collinear/noncollinear consistency and by PAW's one-centre path, not
-by the spiral, and it is not a round number chosen to make a test pass.
+**That 1.65e-09, and PAW's 3.26e-07 beside it, were the truncation shell after
+all** (``OPEN.md`` Part XXI item 1, 2026-10-11). With the transverse pair on
+the laboratory sphere ``|G - q| < G_rho`` the quarter turn reads **3.5e-12** for
+ultrasoft and **2.1e-11** for PAW, and the control arm, the resident spheres,
+reproduces 1.641e-09 and 3.255e-07. So PAW's two orders over ultrasoft there
+were not its one-centre path; the collinear-referenced identities keep their
+gap (3.52e-07 ultrasoft at ``q = b3/2``, against 3.61e-07 before).
+
+:data:`CONSISTENCY_RY` covers the collinear-referenced identity, a floor set by
+the code's collinear/noncollinear consistency rather than by the spiral; the
+quarter turn, which shares the noncollinear machinery, is held to
+:data:`QUARTER_TURN_RY`, which the resident spheres fail.
 
 **What the tolerance has to be read against.** A tolerance is only a test if
 something fails it, so each identity is asserted together with the size of the
@@ -70,19 +78,23 @@ from tests.conftest import GENERATED
 pytestmark = [pytest.mark.regression, pytest.mark.slow]
 
 #: The consistency floor described in the module docstring, at the
-#: ``ecutrho = 200`` these inputs carry -- set by the largest measured residue,
-#: PAW's 3.26e-07 on the quarter turn. Not a round-off tolerance and not a
-#: round number: ultrasoft reaches 1.65e-09 on the same identity, and what
-#: separates the two is PAW's one-centre path rather than anything the spiral
-#: does.
+#: ``ecutrho = 200`` these inputs carry, for the identity against the collinear
+#: antiferromagnet: 3.52e-07 measured on ultrasoft (3.61e-07 on the resident
+#: sphere), the gap between this code's collinear and noncollinear paths.
+#: It was set when PAW's quarter turn read 3.26e-07, which the laboratory
+#: sphere took to 2.1e-11 (:data:`QUARTER_TURN_RY`).
 #:
-#: **Set from one dataset on one cell**, with a factor of six of headroom over
-#: the largest measured residue. PAW's floor has since been traced as far as it
-#: goes and it is not a defect here: ``pw.x`` run on the same control cells has
-#: the same collinear/noncollinear gap to four digits (``OPEN.md`` Y4), so this
-#: tolerance is a property of the PAW method at this cutoff rather than a
-#: number waiting on a fix.
+#: PAW's collinear/noncollinear gap has been traced as far as it goes and it is
+#: not a defect here: ``pw.x`` run on the same control cells has the same gap to
+#: four digits (``OPEN.md`` Y4).
 CONSISTENCY_RY = 2.0e-06
+
+#: The quarter turn against its four-cell noncollinear supercell, both sides on
+#: the same machinery. Measured on D22 (2026-10-11): 3.5e-12 Ry ultrasoft and
+#: 2.1e-11 PAW on the laboratory sphere; 1.641e-09 and 3.255e-07 on the resident
+#: spheres, which this fails, so it is a test of the sphere and not only of the
+#: displacement.
+QUARTER_TURN_RY = 1.0e-09
 
 #: What the displaced table is worth. Anything above this and the transverse
 #: augmentation charge is simply absent; the measured value is 1.15e-03.
@@ -200,8 +212,10 @@ def test_a_quarter_turn_is_the_ninety_degree_supercell(dataset, pseudo_dir):
     except whether the transverse augmentation charge is carried by the
     displaced table or by four cells of supercell.
 
-    Measured: **1.65e-09 Ry** for ultrasoft and **3.26e-07 Ry** for PAW, both
-    at ``ecutrho = 200``.
+    Measured: **3.5e-12 Ry** for ultrasoft and **2.1e-11 Ry** for PAW, both
+    at ``ecutrho = 200`` (2026-10-11, laboratory sphere); 1.65e-09 and 3.26e-07
+    before it, which was the shell between the resident sphere and the
+    supercell's.
     """
     system, spiral = _run(_at_q(f"o-chain-spiral-{dataset}.in", 0.25), pseudo_dir)
     supercell_system, supercell = _run(
@@ -211,7 +225,7 @@ def test_a_quarter_turn_is_the_ninety_degree_supercell(dataset, pseudo_dir):
     assert spiral.converged and supercell.converged
     assert supercell_system.nspin_mag == 4 and not supercell_system.spiral
     assert _electronic(spiral) == pytest.approx(
-        _electronic(supercell) / 4.0, abs=CONSISTENCY_RY
+        _electronic(supercell) / 4.0, abs=QUARTER_TURN_RY
     )
 
 
@@ -233,7 +247,9 @@ def test_moving_the_atom_does_not_move_the_energy(dataset, pseudo_dir):
     ``e^{i q.tau}`` through its two structure factors, and the one-centre
     energy depends on ``|m|``, which a position-dependent spin rotation leaves
     alone pointwise. This test is what turns that argument into a number --
-    **2.9e-12 Ry** for ultrasoft and **1.4e-11** for PAW.
+    **2.9e-12 Ry** for ultrasoft and **1.4e-11** for PAW; on the laboratory
+    sphere (2026-10-11, D22) 3.8e-12 and 4.6e-11, the same as the resident
+    spheres on the same machine.
 
     ``tau_z = 1/3`` rather than an arbitrary displacement, because 1/3 of the
     cell is an exact number of points on both FFT grids here (24 dense, 18
@@ -261,7 +277,8 @@ def test_half_a_reciprocal_vector_is_the_antiferromagnet(pseudo_dir):
     carries that difference as well. It earns its place by tying the augmented
     spiral to the LSDA path rather than to another noncollinear run.
 
-    Measured at 3.61e-07 Ry, and the module docstring's ladder is this identity
+    Measured at 3.61e-07 Ry (3.52e-07 on the laboratory sphere, 2026-10-11),
+    and the module docstring's ladder is this identity
     at three cutoffs -- together with the control that shows the ladder is the
     collinear/noncollinear gap rather than the spiral's.
     """
@@ -326,40 +343,204 @@ def test_the_two_paths_disagree_by_what_pw_x_disagrees_by(dataset, pseudo_dir):
     assert gap == pytest.approx(reference_gap, abs=GAP_RY)
 
 
-def test_a_scan_moves_the_displaced_table_with_q(pseudo_dir):
-    """Every point of an ``E(q)`` scan must carry *its own* displaced table.
+def _cobalt(ecutrho: float, q3: float = -0.25) -> str:
+    """The cobalt helix's one-atom cell at another dense cutoff or wavevector."""
+    text = (GENERATED / "co-helix4-spiral.in").read_text()
+    return (text.replace("ecutrho = 160.0", f"ecutrho = {ecutrho}")
+                .replace("spiral_q(3) = -0.25", f"spiral_q(3) = {q3}"))
+
+
+def _resident_sets(monkeypatch):
+    """The control arm: the transverse pair back on the resident spheres.
+
+    Exactly the code before ``OPEN.md`` Part XXI item 1 -- the displaced table
+    on ``|G| < G_rho``, the pair interpolated on ``|G| < G_s`` -- since
+    :func:`~defumat.scf.driver._spiral_gvectors` is the one place the
+    laboratory spheres come from.
+    """
+    import defumat.scf.driver as driver
+
+    monkeypatch.setattr(
+        driver, "_spiral_gvectors",
+        lambda basis, cell, qcart, needed: ((basis.dense, basis.smooth) if needed
+                                            else (None, None)),
+    )
+
+
+def _cobalt_density(text: str, pseudo_dir):
+    """``(system, pseudos, density)``: a cobalt spiral's density after twenty iterations.
+
+    Any density will do for the identities below, which hold for one diagonalisation
+    at a fixed density whatever it is; twenty iterations make it a magnetic one
+    near the ground state (accuracy about 1e-7 Ry), with the whole transverse
+    moment in play. Not converged on purpose: the PBE cobalt helix limit-cycles
+    near 1e-10 at 160 Ry on the laboratory sphere and near 1e-7 at 80
+    (``OPEN.md`` Part XXI item 1), so a converged state is not what these cells
+    offer and not what the identity needs.
+    """
+    import warnings
+
+    system = build_system(parse_pw_input(text))
+    pseudos = _pseudos(system, pseudo_dir)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        result = run_scf(system, pseudos, conv_thr=1e-11, max_iterations=20)
+    return system, pseudos, result.density
+
+
+def _one_shot(system, pseudos, density, calculation=None, nbnd=None):
+    """``(eigenvalues, output density)`` of one diagonalisation at ``density``."""
+    import jax.numpy as jnp
+    import numpy as np
+
+    from defumat.workflows.nscf import fixed_density_states
+
+    calculation, _, eigenvalues, states = fixed_density_states(
+        system, pseudos, jnp.asarray(density), conv_thr=1e-11,
+        calculation=calculation, nbnd=nbnd,
+    )
+    weights, _ = calculation.occupations(jnp.asarray(eigenvalues))
+    return np.asarray(eigenvalues), np.asarray(calculation.density(states, weights))
+
+
+def _supercell_identity(spiral_system, pseudos, density, ecutrho: float, pseudo_dir):
+    """``(worst eigenvalue, output magnetization)``: the spiral against its unfolded supercell.
+
+    Both sides diagonalised once at one density -- the spiral at ``density``,
+    the four-cell ``co-helix4-nosoc.in`` (``3 3 1 0 0 1``, which samples
+    exactly the spiral's ``3 3 4``) at ``unfold_spiral_density`` of it -- and
+    compared on two quantities first order in the density: each supercell
+    ``(kx, ky)`` band by band against the union of the four spiral k-points over
+    it, the top four bands left out, in Ry; and the supercell's output
+    magnetization against the unfolded output of the spiral, relative to its
+    largest value. The generalized Bloch theorem makes both zero at any
+    density, so what is left is the two discretisations' difference.
+    """
+    import numpy as np
+
+    from defumat.scf.driver import Calculation
+    from defumat.workflows.spiral import unfold_spiral_density
+
+    spiral_e, spiral_out = _one_shot(spiral_system, pseudos, density)
+
+    text = (GENERATED / "co-helix4-nosoc.in").read_text().replace(
+        "ecutrho = 160.0", f"ecutrho = {ecutrho}")
+    system = build_system(parse_pw_input(text))
+    supercell_pseudos = _pseudos(system, pseudo_dir)
+    calculation = Calculation(system, supercell_pseudos)
+    shape = tuple(calculation.basis.dense.grid)
+    q = spiral_system.spiral_q
+    # Four times the spiral's bands, so the two sides hold the same states: at
+    # its own default of 44 against 4 x 16 the supercell's top band carried a
+    # weight of 7.7e-5 under the smearing, which moved its Fermi level by 9.4e-7
+    # Ry and its output magnetization by 1.3e-5, and read as a discretisation
+    # difference.
+    super_e, super_out = _one_shot(
+        system, supercell_pseudos, unfold_spiral_density(density, q, (1, 1, 4), shape),
+        calculation=calculation, nbnd=4 * spiral_e.shape[-1],
+    )
+    expected = unfold_spiral_density(spiral_out, q, (1, 1, 4), shape)
+    magnetization = float(np.abs(super_out[1:] - expected[1:]).max()
+                          / np.abs(expected[1:]).max())
+
+    spiral_k = np.asarray(spiral_system.kpoints.coords)
+    spiral_e = spiral_e.reshape(len(spiral_k), -1)
+    super_k = np.asarray(system.kpoints.coords)
+    super_e = super_e.reshape(len(super_k), -1)
+    worst = 0.0
+    for row, k in zip(super_e, super_k):
+        over = np.abs(spiral_k[:, :2] - k[:2]).max(axis=1) < 1e-6
+        union = np.sort(spiral_e[over].ravel())
+        n = min(len(union), len(row)) - 4
+        worst = max(worst, float(np.abs(union[:n] - row[:n]).max()))
+    return worst, magnetization
+
+
+#: What the supercell may differ from the spiral by on the cobalt helix at
+#: ``ecutrho = 160`` with the transverse pair on the laboratory sphere: the worst
+#: eigenvalue in Ry, and the output magnetization relative to its largest value.
+LABORATORY_SPHERE = (1.0e-10, 2.0e-8)
+
+#: The same two with the pair back on the resident spheres, the code before
+#: ``OPEN.md`` Part XXI item 1: the control arm has to exceed these, or the
+#: bounds above are not a test.
+RESIDENT_SPHERE = (1.0e-5, 1.0e-3)
+
+
+def test_the_spiral_is_its_unfolded_supercell_on_the_laboratory_sphere(pseudo_dir,
+                                                                       monkeypatch):
+    """The cobalt helix and its four-cell supercell, before and after the laboratory sphere.
+
+    ``co-helix4-spiral.in`` at its own 20/160 Ry (``q = -b3/4``, a separate
+    smooth grid, so both the dense and the smooth cut are in play), against
+    ``co-helix4-nosoc.in`` at the unfolded density. With the transverse pair on
+    the resident spheres the two disagree by the shell ``|G| < G_rho < |G - q|``
+    and its smooth counterpart, which held 99.5 per cent of the transverse
+    difference; on the laboratory sphere they discretise one functional.
+
+    Measured on D22 (2026-10-11), worst eigenvalue and output magnetization:
+    **2.98e-14 Ry and 1.2e-09** on the laboratory sphere, **7.266e-05 Ry and
+    4.20e-03** on the resident ones, which is the entry's 7.27e-05 reproduced.
+    At 80 Ry, with no smooth grid, the same pair reads 9.8e-14 and 2.9e-09
+    against 3.966e-03 and 2.25e-02.
+    """
+    after = _supercell_identity(*_cobalt_density(_cobalt(160.0), pseudo_dir), 160.0,
+                                pseudo_dir)
+    _resident_sets(monkeypatch)
+    before = _supercell_identity(*_cobalt_density(_cobalt(160.0), pseudo_dir), 160.0,
+                                 pseudo_dir)
+    assert before[0] > RESIDENT_SPHERE[0] and before[1] > RESIDENT_SPHERE[1]
+    assert after[0] < LABORATORY_SPHERE[0] and after[1] < LABORATORY_SPHERE[1]
+
+
+#: What a calculation moved to a wavevector may differ from one built there, in
+#: any eigenvalue (Ry) and in the output magnetization (relative), at one density.
+SCAN_POINT = (1.0e-10, 1.0e-9)
+
+
+def test_a_scan_moves_the_displaced_table_with_q(pseudo_dir, monkeypatch):
+    """Every point of an ``E(q)`` scan carries *its own* laboratory sphere and table.
 
     A scan walks :meth:`~defumat.scf.driver.Calculation.at_spiral_q` with
-    ``rebuild_basis = True``, which rebuilds the spheres, ``vkb`` and -- since
-    P95 -- the displaced augmentation table too. On a norm-conserving dataset
-    there was nothing there to rebuild, so this is a new way for a scan to go
-    wrong, and the way it would go wrong is **silent**: every point after the
-    first would carry the first point's ``Q_ij(G - q)``, the energies would
-    stay smooth and ordered, and only their values would be wrong.
+    ``rebuild_basis = True``, which rebuilds the spheres, ``vkb``, the
+    laboratory sphere of the transverse pair and the displaced table on it. A
+    point that kept the first point's sphere or table would be **silent**: the
+    energies smooth and ordered and their values wrong. So the calculation a
+    scan would carry to ``q = -b3/4`` from ``q = 0`` is compared with one built
+    at ``q = -b3/4`` from scratch, both diagonalised once at one density.
 
-    So each point is compared against the same wavevector run from scratch,
-    which shares no ``Calculation`` with the scan. Measured: **exactly equal**,
-    to all twelve digits, at ``q3 = 0``, ``1/4`` and ``1/2``.
+    **On quantities first order in the density, and on cobalt at 80 Ry**, since
+    2026-10-11. The energy on the oxygen chain, which this compared before, is
+    second order and could not see a stale *sphere*: the shell there moves the
+    energy below 1e-10 Ry. The guard is the same comparison with the resident
+    spheres in the fresh calculation, which is what a scan that kept the
+    ``q = 0`` sphere would carry. Measured: **0 and 0**, the two calculations
+    doing the same arithmetic, against **2.56e-03 Ry and 2.13e-02** for the guard.
     """
     import dataclasses
 
-    from defumat.workflows.spiral import run_spiral_scan
+    import numpy as np
 
-    text = (GENERATED / "o-chain-spiral-us.in").read_text()
-    system = build_system(parse_pw_input(text))
-    pseudos = _pseudos(system, pseudo_dir)
-    wavevectors = [[0.0, 0.0, 0.0], [0.0, 0.0, 0.5]]
+    from defumat.scf.driver import Calculation
 
-    scan = run_spiral_scan(
-        system, pseudos, wavevectors,
-        conv_thr=1e-11, mixing_beta=0.3, max_iterations=300,
-    )
-    for index, q in enumerate(wavevectors):
-        alone = run_scf(
-            dataclasses.replace(system, spiral_q=tuple(q)), pseudos,
-            conv_thr=1e-11, mixing_beta=0.3, max_iterations=300,
-        )
-        assert scan.energies[index] == pytest.approx(alone.total_energy, abs=1e-10)
+    system, pseudos, density = _cobalt_density(_cobalt(80.0), pseudo_dir)
+    start = Calculation(dataclasses.replace(system, spiral_q=(0.0, 0.0, 0.0)), pseudos)
+    moved = start.at_spiral_q(system.spiral_q)
+    assert moved.spiral_dense.ngm == Calculation(system, pseudos).spiral_dense.ngm
+
+    def difference(calculation):
+        e_moved, out_moved = _one_shot(system, pseudos, density, calculation=moved)
+        e_fresh, out_fresh = _one_shot(system, pseudos, density, calculation=calculation)
+        return (float(np.abs(e_moved - e_fresh).max()),
+                float(np.abs(out_moved[1:] - out_fresh[1:]).max()
+                      / np.abs(out_fresh[1:]).max()))
+
+    same = difference(Calculation(system, pseudos))
+    assert same[0] < SCAN_POINT[0] and same[1] < SCAN_POINT[1]
+
+    _resident_sets(monkeypatch)
+    stale = difference(Calculation(system, pseudos))
+    assert stale[0] > 1000 * SCAN_POINT[0] and stale[1] > 1000 * SCAN_POINT[1]
 
 
 def test_the_resident_table_is_not_enough(pseudo_dir, monkeypatch):

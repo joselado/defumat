@@ -80,7 +80,8 @@ removes the lean on the hydrogen helix and on the three-cell NiBr2 helix, in bot
 
 **Part XXI** is from the orientation torque's helix, **2026-09-26** (P122): an ultrasoft
 spiral that disagrees with its unfolded supercell at 7e-5 Ry, whose norm-conserving
-discriminator was run by P123 and closes (so the ultrasoft nonlocal side is what is left),
+discriminator was run by P123 and closes (so the ultrasoft nonlocal side is what is left;
+closed 2026-10-11, the truncation shell, by keeping the transverse pair on the laboratory sphere),
 and Route C not converging on PAW nickel.
 
 **Part XXII** is two memory reports from the NiBr2 orientation session, **2026-09-27**, not
@@ -7235,7 +7236,7 @@ below 1e-6 (2.6e-7 at 8 bands, 3e-9 at 32) and bounds the 32-band component rati
 
 # Part XXI -- from the orientation torque's helix, 2026-09-26 (P122)
 
-## 1. An ultrasoft spin spiral and its unfolded supercell disagree at 7e-5 Ry, and more at a lower cutoff **[opened 2026-09-26; measured 2026-10-09: the transverse augmentation charge on two displaced spheres, 7.27e-5 Ry at 160 and 2.5e-8 at 320; plan in `plans/open-a-xxi1.md`]**
+## 1. An ultrasoft spin spiral and its unfolded supercell disagree at 7e-5 Ry, and more at a lower cutoff **[opened 2026-09-26; closed 2026-10-11 on branch `round3-l`: the transverse pair is on the laboratory sphere and the identity is at round-off; the PBE cobalt helix not converging is left open below]**
 
 **Reproduced and attributed, 2026-10-09** (D22-0161, `review/open-a/xxi1.py`). The worst
 eigenvalue of the supercell at the unfolded density against the union of the four spiral
@@ -7310,6 +7311,95 @@ cell's repeated evaluates the exchange-correlation potential on other points (1.
 of the first-order energy at 30 Ry; for the cobalt cell, 25 along `c` in the cell and 100 in
 the supercell on the dense grid and 18 and 72 on the smooth one, checked, so it is the repeat
 and this one is ruled out too). Both now warn.
+
+**Closed 2026-10-11 (branch `round3-l`, the user's decision of 2026-10-10 to move the sphere,
+`plans/open-a-xxi1.md` as corrected by its review).** The cause was the truncation shell the
+entry ended on, and it was the whole of it. The transverse pair of a spiral is now kept on the
+laboratory sphere `{G : |G - q| < G_rho}` (`basis/gvectors.py:displaced_gvectors`,
+`Calculation.spiral_dense`) and its smooth prefix `{G : |G - q| < G_s}` (`spiral_smooth`), at
+all five places it was cut: the transverse augmentation charge (`_addusdens_spiral`, its own
+transform), the `cross_integrals` of `newd`, the smooth-to-dense lift of the transverse density
+(`lift_density`), the dense-to-smooth cut of `W = V_x + i V_y` (`local_terms`), and the phases on
+a move of the atoms (`at_positions`). The charge and `m_z` stay on the resident sphere.
+`at_spiral_q(rebuild_basis = False)` takes the set frozen at the SCF's `q`, the rebuilding branch
+rebuilds it. Diagnostic `plans/open-a-scripts/xxi1.py` with a control arm that hands back the
+resident sets (the code before), on D22-0161, six cores, `/l/ladovj1/review/round3-l/`:
+
+| `ecutrho` (`ecutwfc = 20`) | 80 | 160 | 160, LDA | 320 |
+|---|---|---|---|---|
+| worst eigenvalue, supercell against spiral, resident spheres (control) | 3.935e-3 Ry | 7.27e-5 | 1.77e-5 (open-a) | 2.5e-8 (open-a) |
+| the same, laboratory sphere | **3.8e-13** | **1.8e-14** | **1.7e-14** | **2.0e-14** |
+| transverse `Delta m_+` on the shell (`shell_split`'s `"minus"`), control | 0.915 | 0.995 | 0.9998 | 5e-4 |
+| the same, laboratory sphere | 8.6e-4 | 3.4e-5 | -- | -- |
+| sets: resident `ngm` / laboratory `ngm` (smooth) | 1561 / 1541 | 4325 / 4344 (1561 / 1541) | | 12211 / 12206 |
+
+The oxygen pair at its 200 Ry: 3.75e-14 Ry in the eigenvalues (3.4e-8 before). The committed test
+(`test_spin_spirals_augmented.py::test_the_spiral_is_its_unfolded_supercell_on_the_laboratory_sphere`)
+takes both sides as one diagonalisation at one fixed density, which the identity needs and
+convergence does not, and reads at 160 Ry **2.98e-14 Ry and 1.2e-9** in the worst eigenvalue and
+the relative output magnetization, against **7.266e-5 Ry and 4.20e-3** for the control arm in the
+same test; at 80 Ry 9.8e-14 and 2.9e-9 against 3.966e-3 and 2.25e-2. **One trap on the way, which
+read as a remainder of the shell**: the supercell's default `nbnd` (44 against 4 x 16) left its top
+band at a weight of 7.7e-5 under the smearing, which moved its Fermi level by 9.4e-7 Ry and the
+output magnetization by 1.3e-5; the test holds it at four times the spiral's bands. The scan test
+is re-based the same way (a calculation moved from `q = 0` by `at_spiral_q` against one built at
+`q = -b3/4`, cobalt at 80 Ry): 0 and 0, against 2.56e-3 Ry and 2.13e-2 with the resident spheres.
+
+**What moved, P95** (oxygen chain, 200 Ry, laboratory against resident on D22): the quarter turn
+against the four-cell supercell **3.5e-12 Ry ultrasoft (1.641e-9) and 2.1e-11 PAW (3.255e-7)**, so
+PAW's two orders over ultrasoft there were the shell and not its one-centre path, and P95's sentence
+"the truncation shell, if it is there at all, is below that" is wrong; `q = b3/2` against the
+collinear antiferromagnet 3.516e-7 (3.610e-7) ultrasoft and 4.255e-5 (4.339e-5) PAW, the
+collinear/noncollinear gap; the atom moved to `tau_z = 1/3` 3.8e-12 and 4.6e-11, the same on both
+arms; `q = 0` 4.6e-14 and 7.1e-14, identical. The quarter-turn test is now held to 1e-9 Ry
+(`QUARTER_TURN_RY`), which the control fails. **P96** (oxygen chain, `q3 = 0.3`): identity 1
+3.9e-14 / -1.1e-13; identity 2 -5.2e-10 ultrasoft (-5.6e-10 resident) and 3.3e-10 PAW (-1.8e-9);
+identity 3 at a frozen sphere, `delta = 0.0025`, -3.02e-7 ultrasoft (-3.05e-7 resident; P96
+recorded -2.39e-7 at its commit) and -1.400e-6 PAW (-1.384e-6), so **the ladder's PAW floor is not
+the shell**; `dE/dq` at `q3 = 0` 4.6e-10 ultrasoft, identical; at `q3 = 1/2` **1.3e-7 ultrasoft
+(6.6e-8) and 1.23e-8 PAW (2.484e-6)**, so P96's PAW residue at the zone boundary, put down to the
+dense grid, was the shell. The gradient itself moves from 4.438657e-3 to 4.438698e-3 (ultrasoft)
+and 2.772908e-3 to 2.774786e-3 Ry per unit `q` (PAW). `test_spin_spirals_augmented.py` 12 passed
+(5:02), `test_spiral_relaxation.py` 21 passed (2:13).
+
+**P122's helix**, `tools/cluster/orientation_helix.py relax` on D22 both arms: the normal returns to
+`c` on both, `(-5.1e-4, 1.07e-3, 0.9999993)` on the laboratory sphere against `(-1.0e-3, 1.1e-3,
+0.9999988)`, so the sign stands; the tilt curvatures move from 7.203e-6 and 7.209e-6 to **9.276e-6
+and 9.280e-6 Ry/rad^2** (+29 per cent), the phase from 1.653e-6 to 1.646e-6. The source SCF reads
+-74.28248 against -74.28234 Ry per cell. (The D22 resident arm does not reproduce P122's Triton
+numbers, 7.476e-6 and 3.84e-6 for the phase, and that was not chased.)
+
+**Not done, and why.** The box: the laboratory sphere's members past `(n - 1) // 2` are held at the
+wrapped index, exact while no two share one (on the oxygen chain at `q = b3/2`, 81 members at index
+12 of 24), and a box that would fold two is refused rather than grown; no cell measured reaches it
+(cobalt 80 to 320 Ry at half a reciprocal vector on every axis, oxygen at `q3` 0.25, 0.3 and 0.5,
+silicon at 0.3 and 0.5), so the refusal is tested on a hand-narrowed box. `mixing_space = 'g'` on a
+magnetic spiral is refused by name rather than given a complex block on the displaced sphere. A
+scan's displaced set changes size with `q` (4325 against 4344 on cobalt at 160 Ry), so an augmented
+scan compiles its density and `newd` kernels again where the count is new; not measured.
+`unfold_spiral_density` now aliases both ways (an odd box's member one past its negative end), and
+its comment says the Nyquist case is the transverse pair's ordinary one rather than one that no
+longer arises, which is the review's point 5 corrected: on the laboratory sphere it arises more.
+
+**Open, found here: the PBE cobalt helix does not converge on the laboratory sphere.** `run_scf`'s
+defaults, 150 iterations: at 160 Ry it stops at 2.6e-10 with the energy wandering by 5e-5 Ry and the
+`becsum` magnetic residual at 1.7e-3 (resident: 22 iterations to 4.0e-12, 2.4e-4); at 80 Ry near
+2e-7 with the energy wandering by 2e-3 (resident: 36 iterations to 6.7e-12); `mixing_beta = 0.3`
+and `mixing_mode = 'adaptive'` do no better. In LDA (`pz`) the same cell converges in 14 iterations
+on both arms at 80 Ry and in 13 at 160, and on the resident sphere the PBE cell already failed at 320
+Ry (8.8e-9 in 150), so the suspect is the gradient correction's `|m|` on a turning texture, which a
+spiral takes without a sign axis (`quantization_axis = None`), not the sphere. The four-cell supercell
+limit-cycles the same way (P122), which P122 read as an unstable stationary point.
+
+**What `converged` means on this cell, said rather than left to be found.** The loop's `accuracy`
+reads the real channels on the resident sphere, so the shell is the one place it could be blind,
+and it is not: one diagonalisation at the last density of a 60-iteration run puts **8.9e-4 (80 Ry)
+and 2.4e-5 (160 Ry)** of the transverse residual `|m_+,out - m_+,in|^2` on the shell, the resident
+sphere seeing 99.9 per cent of it. What the grid residual does not see is `becsum` (Y2): its magnetic
+residual stays at 1.7e-3 at 160 Ry against 2.4e-4 on the resident sphere, and the total energy
+wanders by 5e-5 Ry at an `accuracy` of 1e-10. So on this cell `converged = True` at `conv_thr =
+1e-10` is reachable (the helix tool's source, 20 iterations to 7.5e-11) at a state whose energy is
+not stationary to 1e-10; the P122 curvatures above are read at that source. Not chased further.
 
 ## 2. Route C does not reach `conv_thr` on PAW nickel **[opened 2026-09-26; measured 2026-10-09: the plain SCF stalls at every orientation and converges in 78 at `degauss = 0.05`; Route C does not fit 6 GB; plan in `plans/open-a-xxi2.md`; rerun 2026-10-10 on branch `decided-h` under 10 GB: 200 iterations, not converged, `dr2` median 2.4e-5 over the last 60, a flat 2.58 GB high-water]**
 

@@ -32,7 +32,8 @@ import jax.numpy as jnp
 from defumat.basis.fft import g_to_r, r_to_g
 from defumat.basis.gvectors import GVectors
 
-__all__ = ["to_smooth", "to_dense", "restrict_g", "extend_g"]
+__all__ = ["to_smooth", "to_dense", "restrict_g", "extend_g", "pair_to_smooth",
+           "pair_to_dense"]
 
 
 def restrict_g(coefficients: jnp.ndarray, ngms: int) -> jnp.ndarray:
@@ -70,3 +71,44 @@ def _to_smooth(field, dense_index, smooth_index, grid, ngms):
 def _to_dense(field, smooth_index, dense_index, grid, ngm):
     coefficients = extend_g(r_to_g(field, smooth_index), ngm)
     return jnp.real(g_to_r(coefficients, dense_index, grid))
+
+
+# --- a complex pair on a displaced sphere --------------------------------------
+#
+# A spin spiral's transverse magnetization ``m'_+ = m'_x + i m'_y`` (and its
+# potential ``W = V_x + i V_y``) is band-limited to a sphere displaced from the
+# resident one, ``|G - q| < G_cut`` (:func:`~defumat.basis.gvectors.displaced_gvectors`):
+# ``2 conj(u_up) u_dn`` has its components at ``G2 - G1`` with
+# ``|(k - q/2 + G2) - (k + q/2 + G1)| <= 2 G_w``, so it sits on the displaced
+# smooth sphere exactly, and the resident cut would drop the shell of it the two
+# spheres do not share. The two real components each have support on that sphere
+# *and* its mirror, so the cut is taken on the complex combination, and the
+# pair is taken apart again after the transform. ``pair`` is ``(2, n1, n2, n3)``.
+
+
+def pair_to_dense(pair: jnp.ndarray, smooth: GVectors, dense: GVectors) -> jnp.ndarray:
+    """:func:`to_dense` for a real pair ``(f_x, f_y)`` cut as ``f_x + i f_y`` on ``smooth``."""
+    if smooth is dense or (smooth.grid == dense.grid and smooth.ngm == dense.ngm):
+        return pair
+    return _pair_to_dense(pair, smooth.fft_index, dense.fft_index, dense.grid, dense.ngm)
+
+
+def pair_to_smooth(pair: jnp.ndarray, dense: GVectors, smooth: GVectors) -> jnp.ndarray:
+    """:func:`to_smooth` for a real pair ``(f_x, f_y)`` cut as ``f_x + i f_y`` on ``smooth``."""
+    if smooth is dense or (smooth.grid == dense.grid and smooth.ngm == dense.ngm):
+        return pair
+    return _pair_to_smooth(pair, dense.fft_index, smooth.fft_index, smooth.grid, smooth.ngm)
+
+
+@partial(jax.jit, static_argnames=("grid", "ngm"))
+def _pair_to_dense(pair, smooth_index, dense_index, grid, ngm):
+    coefficients = extend_g(r_to_g(jax.lax.complex(pair[0], pair[1]), smooth_index), ngm)
+    field = g_to_r(coefficients, dense_index, grid)
+    return jnp.stack([jnp.real(field), jnp.imag(field)])
+
+
+@partial(jax.jit, static_argnames=("grid", "ngms"))
+def _pair_to_smooth(pair, dense_index, smooth_index, grid, ngms):
+    coefficients = restrict_g(r_to_g(jax.lax.complex(pair[0], pair[1]), dense_index), ngms)
+    field = g_to_r(coefficients, smooth_index, grid)
+    return jnp.stack([jnp.real(field), jnp.imag(field)])

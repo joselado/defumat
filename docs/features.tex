@@ -6578,6 +6578,49 @@ projectors at the \emph{same} $\mathbf k$ and keep the resident table. Nothing
 else changes: the displaced table is built by the same assembly, and at
 $\mathbf q \to 0$ it is the resident one term for term.
 
+\textbf{The transverse pair is kept on the laboratory sphere, and that is what
+makes the spiral its own supercell.} The laboratory magnetization is
+$m_+ = m'_+ e^{-i\mathbf q\cdot\mathbf r}$, so the sphere an unfolded supercell
+keeps, $|\mathbf G'| < G_\rho$, is $|\mathbf G - \mathbf q| < G_\rho$ in the
+spiral's labels; the transverse augmentation charge, its \code{newd} integrals,
+and the smooth-to-dense and dense-to-smooth interpolation of the transverse
+density and potential all run on that sphere (and on $|\mathbf G - \mathbf q| <
+G_s$ for the smooth grid), while the charge and $m_z$ stay on $|\mathbf G| <
+G_\rho$. You can think of it as cutting $m'_+$ where the supercell cuts $m_+$.
+On the resident sphere instead the two discretise the transverse charge on
+spheres displaced by $\mathbf q$, and the shell between them is not small: on
+the cobalt helix of \code{tests/data/qe/co-helix4-spiral.in} at 20/160~Ry the
+supercell, diagonalised once at the unfolded density, differed from the spiral
+by $7.3\times10^{-5}$~Ry in the eigenvalues and $4.2\times10^{-3}$ in the
+output magnetization, and by $4.0\times10^{-3}$~Ry at 80~Ry; on the laboratory
+sphere it is $3\times10^{-14}$~Ry and $1.2\times10^{-9}$, and $1\times10^{-13}$
+at 80. The oxygen chain's quarter turn against its four-cell supercell went from
+$1.6\times10^{-9}$ to $3.5\times10^{-12}$~Ry (ultrasoft) and from
+$3.3\times10^{-7}$ to $2.1\times10^{-11}$ (PAW). The sphere's membership is a
+step function of $\mathbf q$, like the wavefunction spheres, so
+$dE/d\mathbf q$ freezes it with them, and an $E(\mathbf q)$ scan rebuilds it at
+every point; its size changes with $\mathbf q$ by a few G-vectors (4325 against
+4344 on cobalt at 160~Ry), so an augmented scan compiles its density kernels
+again where the count is new. Members past the box's $(n-1)/2$ are held at the
+wrapped index, which is exact as long as no two share one; the box is checked
+for that.
+
+\textbf{What the laboratory sphere does not fix, measured rather than assumed.}
+The PBE cobalt helix does not converge on it: at 160~Ry it stops at
+$\sim10^{-10}$~Ry with the total energy wandering by $5\times10^{-5}$, and at
+80~Ry near $2\times10^{-7}$, where the resident sphere converged in 22 and 36
+iterations. In LDA the same cell converges in 14 iterations either way, and on
+the resident sphere the PBE cell already failed at 320~Ry, so this is the
+gradient correction's $|\mathbf m|$ on a turning texture (a spiral has no fixed
+axis to take its sign along) rather than the sphere; the supercell limit-cycles
+the same way. Note what \code{converged} then means: the grid residual is read
+on the resident sphere, which still sees 99.9 per cent of the transverse
+residual (the shell holds $2\times10^{-5}$ of it at 160~Ry), but it does not see
+\code{becsum}, whose magnetic residual stays at $1.7\times10^{-3}$, so on this
+cell a run can stop at \code{conv\_thr = 1e-10} with its energy still moving
+by $5\times10^{-5}$~Ry. The identities above are taken at one diagonalisation
+of a fixed density and do not need the state converged.
+
 \textbf{$dE/d\mathbf q$ on such a dataset differentiates three terms the
 norm-conserving one does not have.} The displaced table is a function of
 $\mathbf q$ exactly as $|\mathbf k \mp \mathbf q/2 + \mathbf G|^2$ and
@@ -6601,26 +6644,27 @@ at $\delta = 0.0025$. PAW stops falling at $1.4\times10^{-6}$, and that floor is
 
 The sharpest way to see it needs no finite difference at all: at $q_3 = 0$ and
 $q_3 = \tfrac12$ symmetry forces $dE/d\mathbf q$ to vanish exactly, so what
-comes back there \emph{is} the gradient's own error --- $4$ to
-$6\times10^{-10}$ at the zone centre for both datasets, and $8.5\times10^{-8}$
-(ultrasoft) against $2.5\times10^{-6}$ (PAW) at the zone boundary. That residue
-is insensitive to \code{conv\_thr} and to the mixing and falls by a factor of
-\textbf{seven} when \code{ecutrho} is doubled, the finite-difference residual
-falling by three over the same step since it also carries the difference's own
-truncation. And the same cell with no spiral in it at all shows a gap of the
-same size between the collinear and noncollinear paths, which \code{pw.x}
-reproduces to every digit it prints. So it is what PAW's spherical terms cost
-against the grid, inherited here rather than introduced.
+comes back there \emph{is} the gradient's own error --- $4.6\times10^{-10}$ at
+the zone centre for ultrasoft, and at the zone boundary $1.3\times10^{-7}$
+(ultrasoft) and $1.2\times10^{-8}$ (PAW). PAW's used to read
+$2.5\times10^{-6}$ there, falling by seven when \code{ecutrho} was doubled,
+and was put down to PAW's spherical terms against the grid; it was the shell
+between the resident sphere and the laboratory one, which the same run with the
+resident spheres reproduces ($2.48\times10^{-6}$). The ladder's floor is a
+different thing and did not move: $1.40\times10^{-6}$ against
+$1.38\times10^{-6}$ on the resident spheres, so that one is not the shell, and
+what it is is open.
 
 Two consequences are worth knowing rather than discovering. The transverse pair
 is augmented as one \emph{complex} field, because $Q_{ij}(\mathbf r)$ is real
 and so the resident table satisfies
 $Q_{ij}(-\mathbf G) = Q_{ij}(\mathbf G)^{*}$ while the displaced one does not;
-and the identity against a supercell closes to $1.7\times10^{-9}$~Ry on an
-ultrasoft dataset and $3.3\times10^{-7}$ on a PAW one --- the gap between those
-two being PAW's own one-centre path, which shows an inconsistency of the same
-size between this code's collinear and noncollinear routes on a cell with no
-spiral in it at all, rather than anything the displacement does.
+and the identity against a supercell closes to $3.5\times10^{-12}$~Ry on an
+ultrasoft dataset and $2.1\times10^{-11}$ on a PAW one. The
+$1.7\times10^{-9}$ and $3.3\times10^{-7}$ this page used to give were the shell
+between the resident sphere and the supercell's, and the second was put down to
+PAW's one-centre path, which a laboratory-sphere run with the same path
+refutes.
 
 \begin{pycode}
 from defumat.workflows.spiral import (run_spiral_scan, relax_spiral_q,
@@ -6688,7 +6732,13 @@ written at any rank.
 --- it breaks the theorem, and Elk refuses it too; at \code{soc\_scale = 0} a
 fully-relativistic dataset is admitted, as the zeroth order of the next
 subsection; a spiral with symmetry, until the spin
-space group is written, so a spiral needs \code{nosym}; $dE/d\mathbf q$ on a
+space group is written, so a spiral needs \code{nosym};
+\code{mixing\_space = 'g'} on a magnetic spiral, since that layout keeps every
+channel on the resident smooth sphere and the transverse pair lives on the
+displaced one, so each step would cut the shell between them (the default,
+\code{'r'}, mixes the whole dense grid); a spiral whose FFT box would fold two
+members of the displaced sphere onto one index, which no cell measured here
+does, since \code{pw.x}'s FFT sizes leave room; $dE/d\mathbf q$ on a
 dataset whose augmentation charge is held as a \emph{radial} table rather than
 on the dense $\mathbf G$ set --- the branch a large cell falls onto when
 $n_h^2 n_{\mathrm{gm}}$ is over \code{DEFUMAT\_AUG\_MAX\_BYTES} --- because that
