@@ -370,8 +370,20 @@ def test_an_augmented_spinor_gives_the_scalar_run_s_dielectric_tensor(case):
     operator and the dipole's spin blocks -- so a shape error or a dropped
     component shows here at 100 per cent.
 
-    Measured: **9.2e-14** on ultrasoft and **1.0e-13** on PAW, with the total
-    energies 0 and 1.4e-14 Ry apart.
+    **What it is bounded at, and why 1e-6.** At this file's ``conv_thr = 1e-12``
+    the ultrasoft pair reads **1.59e-8** at the head of 2026-10-10 and
+    **2.46e-8** at ``30cffd2``, and PAW **1.8e-13**. The ultrasoft figure is
+    not a route difference: since the Anderson fit stopped taking ``becsum``
+    (``1705a0a``) it is chosen by the density alone, which the scalar and the
+    spinor Davidson converge to different last digits, so the two SCF
+    trajectories part at the level the SCF is converged to, and ``epsilon``
+    of this cell moves by about 1e-5 between ``conv_thr = 1e-12`` and 1e-14
+    (``OPEN.md`` Part XIII item 4). PAW passes at 1e-13 because its two runs
+    happen to stay bit-close, not because it is better converged. The
+    norm-conserving sibling's identity in this file reads **1.35e-7** at the
+    same ``conv_thr``, so 1e-6 bounds the scatter of two ground states each
+    converged to 1e-12 with a factor of six over the largest measured, and a
+    dropped spin component or a doubled term is still 100 per cent.
 
     **What this cannot see, and it is the reason
     :func:`test_the_relativistic_ultrasoft_dielectric_constant_matches_quantum_espresso`
@@ -384,7 +396,7 @@ def test_an_augmented_spinor_gives_the_scalar_run_s_dielectric_tensor(case):
     scalar = _augmented(case, False)[2].isotropic
     spinor = _augmented(case, True)[2].isotropic
     print(f"\n{case}: scalar {scalar:.12f}  spinor {spinor:.12f}")
-    assert abs(scalar - spinor) < 1e-12
+    assert abs(scalar - spinor) < 1e-6
 
 
 @pytest.mark.slow
