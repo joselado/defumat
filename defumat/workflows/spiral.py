@@ -834,19 +834,28 @@ def unfold_spiral_density(density, spiral_q, multiples, shape) -> np.ndarray:
         # the supercell grid's edge where ``+n/2`` would land inside it, so the
         # alias is taken wherever the label falls outside and the alias does
         # not, and a component that fits under neither is still refused below.
-        # **Since 2026-10-11 a spiral run puts nothing physical there**: its
-        # transverse pair is kept on the laboratory sphere ``|G - q| < G_rho``
-        # (``Calculation.spiral_dense``), and its box is checked to hold that
-        # sphere strictly inside ``(n - 1) // 2``, so the Nyquist plane carries
-        # round-off only. The case this guard was written for, a physical
-        # component of ``m'_+`` at ``+n/2`` on the resident discretisation, no
-        # longer arises from this code's own density; the guard stays for a
-        # density from anywhere else.
+        # **Since 2026-10-11 this is the transverse pair's ordinary case rather
+        # than an edge one.** A spiral keeps ``m'_+`` on the laboratory sphere
+        # ``|G - q| < G_rho`` (``Calculation.spiral_dense``), whose members past
+        # ``(n - 1) // 2`` the unit cell's box holds at the wrapped index -- the
+        # oxygen chain at ``q = b3/2`` has 81 at index 12 of 24 -- so every
+        # augmented spiral at such a ``q`` puts physical weight on the Nyquist
+        # plane, where before only the uncut smooth density at dual 4 did. The
+        # unit cell's box is checked to hold the sphere without folding two
+        # members together, so the label is the only ambiguity left, and this is
+        # what resolves it.
+        #
+        # On an odd unit-cell box the same holds the other way round: ``fftfreq``
+        # is symmetric there, and a member one past its negative end, which a
+        # sphere displaced towards ``-b`` has, is labelled at the positive end,
+        # so the alias is tried in both directions.
         for axis, size in enumerate(shape):
             low, high = -(size // 2), (size - 1) // 2
-            alias = target[axis] + multiples[axis] * small[axis]
-            use = (target[axis] < low) & (alias >= low) & (alias <= high)
-            target[axis] = np.where(use, alias, target[axis])
+            period = multiples[axis] * small[axis]
+            for alias in (target[axis] + period, target[axis] - period):
+                use = (((target[axis] < low) | (target[axis] > high))
+                       & (alias >= low) & (alias <= high))
+                target[axis] = np.where(use, alias, target[axis])
         for axis, size in enumerate(shape):
             # ``fftfreq``'s range on ``size`` points, the Nyquist included.
             if (np.min(target[axis]) < -(size // 2)

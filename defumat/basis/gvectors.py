@@ -234,11 +234,18 @@ def displaced_gvectors(
     index for Miller index, since every number is then the one
     :func:`generate_gvectors` computed.
 
-    **The box is checked rather than assumed.** ``fft_index`` wraps a Miller
-    index with ``mod``, so a member outside the box would silently land on
-    another one. The enumeration runs over a range wide enough for the
-    displaced sphere, and any member the box cannot hold is refused by name,
-    for the dense box and for the smooth one.
+    **The box is checked rather than assumed, and what it has to do is not
+    alias.** ``fft_index`` wraps a Miller index with ``mod``, and that is exact
+    for a member past ``(n - 1) // 2`` -- on the grid points
+    ``e^{i (G - n b) . r} = e^{i G . r}``, so the box holds the coefficient at
+    the wrapped index and every transform is the field's own -- **provided no
+    two members land on one index**. A displaced sphere has the resident one's
+    diameter, so its span along an axis is the resident span or one more, and
+    on an even box it usually takes the Nyquist plane the resident sphere
+    leaves free (the oxygen chain at ``q = b3/2``: 81 members at index 12 of
+    24, none at -12). Where two members would share an index, which is the
+    span exceeding the box, the set is refused by name, for the dense box and
+    for the smooth one.
     """
     at_alat = np.asarray(cell.at_alat, dtype=float)
     bg = np.asarray(cell.bg_2pi_alat, dtype=float)
@@ -294,24 +301,23 @@ def displaced_gvectors(
 
 
 def _require_the_box_holds(miller, grid, name, ecut, shift) -> None:
-    """Refuse a displaced sphere whose Miller indices the FFT box cannot hold."""
-    for axis, n in enumerate(grid):
-        top = (n - 1) // 2
-        outside = int(np.sum(np.abs(miller[:, axis]) > top))
-        if outside:
-            raise NotImplementedError(
-                f"the {name} FFT box {tuple(grid)} does not hold the sphere "
-                f"|G + shift| <= sqrt({ecut}) Ry for shift = "
-                f"{tuple(float(v) for v in np.asarray(shift).ravel())} 1/bohr: "
-                f"{outside} of its {len(miller)} G-vectors reach past index "
-                f"{top} along axis {axis}, and the box would fold them onto "
-                "others. A spin spiral keeps its transverse pair on that "
-                "displaced sphere, so its box has to be one FFT size larger "
-                "along that axis than the cutoff alone asks for, which is not "
-                "implemented; a spiral wavevector inside the first Brillouin "
-                "zone, or a cutoff at which the box rounds up past the sphere, "
-                "avoids it"
-            )
+    """Refuse a displaced sphere two of whose members the FFT box folds onto one index."""
+    index = np.asarray(_fft_index(jnp.asarray(miller, dtype=jnp.int32), tuple(grid)))
+    folded = len(index) - len(np.unique(index))
+    if folded:
+        spans = tuple(int(np.ptp(miller[:, axis])) + 1 for axis in range(3))
+        raise NotImplementedError(
+            f"the {name} FFT box {tuple(grid)} does not hold the sphere "
+            f"|G + shift| <= sqrt({ecut}) Ry for shift = "
+            f"{tuple(float(v) for v in np.asarray(shift).ravel())} 1/bohr: it "
+            f"spans {spans} Miller indices, so {folded} of its {len(miller)} "
+            "G-vectors would share a box index with another and the box would "
+            "add them together. A spin spiral keeps its transverse pair on that "
+            "displaced sphere, so its box has to be one FFT size larger along "
+            "that axis than the cutoff alone asks for, which is not "
+            "implemented; a slightly different ecutrho or ecutwfc, at which "
+            "the box rounds up past the sphere, avoids it"
+        )
 
 
 def _half_sphere(miller: np.ndarray) -> np.ndarray:
