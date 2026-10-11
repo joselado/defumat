@@ -5,7 +5,8 @@
 ``chain``: the oxygen chain at q = b3/4 against its four-cell 90-degree
 supercell on ``O.pbe-kjpaw.UPF`` under PBE, the electronic energy per cell
 (the PAW spheres' covariant gradient is in play on the spiral side only).
-``meta``: bcc iron under TB09, one moment along x, 'grad_m' against the signed
+``meta``: the oxygen chain at q = 0 on the PBE PAW dataset under TB09, one
+moment along x, 'grad_m' against the signed
 'kubler' branch, which are one functional on a collinear state.
 """
 import sys, time, warnings
@@ -48,12 +49,14 @@ if mode.startswith("chain"):
     e4 = (supercell.total_energy - supercell.energy_terms["ewald"]) / 4.0
     print(f"{mode}: spiral - supercell/4 = {e1 - e4:.3e} Ry", flush=True)
 else:
-    base = (GENERATED / "fe-noncolin-pbe-stress.in").read_text().replace(
+    base = (GENERATED / "o-chain-spiral-paw.in").read_text().replace(
+        "O.pz-kjpaw.UPF", "O.pbe-kjpaw.UPF").replace(
+        "spiral_q(1) = 0.0, spiral_q(2) = 0.0, spiral_q(3) = 0.25", "").replace(
         "occupations = 'smearing'", "input_dft = 'TB09', occupations = 'smearing'")
     out = {}
     for choice in ("grad_m", "kubler"):
         print(choice, flush=True)
         out[choice] = run(base.replace("noncolin = .true.",
                                        f"noncollinear_gga = '{choice}', noncolin = .true."),
-                          conv_thr=1e-12, max_iterations=200)
+                          conv_thr=1e-11, mixing_beta=0.3, max_iterations=300)
     print(f"meta: grad_m - kubler = {out['grad_m'].total_energy - out['kubler'].total_energy:.3e} Ry", flush=True)

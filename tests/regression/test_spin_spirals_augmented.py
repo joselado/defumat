@@ -626,3 +626,28 @@ def test_grad_m_on_the_spiral_is_the_unfolded_supercells_functional(pseudo_dir):
 
     assert abs(4.0 * float(one.etxc) - float(four.etxc)) < GRAD_M_UNFOLDED[0]
     assert np.abs(np.asarray(four.v_scf) - expected).max() < GRAD_M_UNFOLDED[1]
+
+
+def test_a_quarter_turn_is_the_ninety_degree_supercell_under_grad_m(pseudo_dir):
+    """The PAW quarter turn again, under PBE, where ``'grad_m'`` (the default)
+    is in play on both sides: the grid's laboratory gradient on the spiral, and
+    on the spheres nothing added, since ``becsum`` carries the spiral's phase
+    only at the atom.
+
+    Measured on D22 (2026-10-12), ``O.pbe-kjpaw.UPF``: **6.7e-11 Ry** per cell;
+    with the plane-wave branch's covariant term put on the spheres as well it
+    was 7.7e-5 and of the other sign 6.4e-5, and under ``'kubler'`` 1.3e-10.
+    """
+    def pbe(text):
+        return text.replace("O.pz-kjpaw.UPF", "O.pbe-kjpaw.UPF")
+
+    system, spiral = _run(pbe(_at_q("o-chain-spiral-paw.in", 0.25)), pseudo_dir)
+    supercell_system, supercell = _run(
+        pbe((GENERATED / "o-chain-90deg-paw.in").read_text()), pseudo_dir)
+    assert spiral.converged and supercell.converged
+    assert _electronic(spiral) == pytest.approx(
+        _electronic(supercell) / 4.0, abs=GRAD_M_QUARTER_TURN_RY)
+
+
+#: The PBE PAW quarter turn under ``'grad_m'``, Ry per cell: measured 6.7e-11.
+GRAD_M_QUARTER_TURN_RY = 5.0e-10

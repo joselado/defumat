@@ -295,11 +295,10 @@ class PawCorrections(eqx.Module):
     species_atoms: tuple = eqx.field(static=True)
 
     def energy_and_coefficients(self, becsum: tuple, meta_c=None, axis=None,
-                                noncollinear_gga="kubler", spiral_q=None):
+                                noncollinear_gga="kubler"):
         """``(epaw, ddd)`` from the current ``becsum``.
 
-        ``noncollinear_gga`` and ``spiral_q`` (cartesian, 1/bohr, a spiral's
-        only) pick and parameterise the noncollinear gradient correction and
+        ``noncollinear_gga`` picks the noncollinear gradient correction and
         meta-GGA on the spheres, as on the grid
         (:func:`defumat.paw.gradient._noncollinear_gradient_grad_m`).
 
@@ -325,7 +324,7 @@ class PawCorrections(eqx.Module):
             nat_t = values.shape[1]
             batch = _paw_atom_batch(nat_t)
             body = partial(onecenter_species, paw, meta_c=meta_c, axis=axis,
-                           noncollinear_gga=noncollinear_gga, spiral_q=spiral_q)
+                           noncollinear_gga=noncollinear_gga)
             if batch is not None and batch < nat_t:
                 body = jax.checkpoint(body)
             atom_energy, atom_ddd = map_axis(
@@ -340,7 +339,7 @@ class PawCorrections(eqx.Module):
 
 
 def onecenter_species(paw: PawSpecies, becsum: jnp.ndarray, meta_c=None, axis=None,
-                      noncollinear_gga="kubler", spiral_q=None):
+                      noncollinear_gga="kubler"):
     """One atom's one-centre energy and ``ddd``, from its ``becsum``.
 
     ``becsum`` is the full symmetric ``(nspin, nh, nh)`` matrix. QE carries the
@@ -371,7 +370,7 @@ def onecenter_species(paw: PawSpecies, becsum: jnp.ndarray, meta_c=None, axis=No
 
         v_hartree, e_hartree = _hartree(_charge_channel(rho_lm), paw)
         v_xc, e_xc, g_lm = _exchange_correlation(
-            rho_lm, core, paw, axis, msmall_lm, noncollinear_gga, spiral_q
+            rho_lm, core, paw, axis, msmall_lm, noncollinear_gga
         )
         if kinetic is not None:
             # The one-centre Tran-Blaha potential. It adds to ``v_xc`` and
@@ -487,7 +486,7 @@ def _hartree(rho_lm, paw: PawSpecies):
 
 
 def _exchange_correlation(rho_lm, core, paw: PawSpecies, axis=None, msmall_lm=None,
-                          noncollinear_gga="kubler", spiral_q=None):
+                          noncollinear_gga="kubler"):
     """``PAW_xc_potential``: onto the sphere, evaluate, and project back.
 
     The two asymmetries here are QE's and are the same ones the plane-wave
@@ -578,7 +577,7 @@ def _exchange_correlation(rho_lm, core, paw: PawSpecies, axis=None, msmall_lm=No
     if paw.functional.is_gradient:
         v_gradient, e_gradient, vector_gradient = onecenter_gradient_correction(
             rho_lm, rho_rad, core, paw, axis, msmall_lm is not None,
-            noncollinear_gga, spiral_q,
+            noncollinear_gga,
         )
         potential = potential + v_gradient
         energy = energy + e_gradient

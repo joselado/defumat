@@ -273,11 +273,11 @@ def oxygen_paw():
             charge, moment, rng)
 
 
-def _sphere(paw, becsum, choice="grad_m", spiral_q=None):
+def _sphere(paw, becsum, choice="grad_m"):
     from defumat.paw.onecenter import onecenter_species
 
     energy, ddd = onecenter_species(paw, jnp.asarray(becsum), axis=None,
-                                    noncollinear_gga=choice, spiral_q=spiral_q)
+                                    noncollinear_gga=choice)
     return float(energy), np.asarray(ddd)
 
 
@@ -291,32 +291,28 @@ def test_the_paw_sphere_is_the_collinear_sphere_for_a_collinear_moment(oxygen_pa
     assert np.max(np.abs(ddd4[1:] - np.multiply.outer(e, 0.5 * (ddd2[0] - ddd2[1])))) < 1e-10
 
 
-@pytest.mark.parametrize("spiral", [False, True])
-def test_the_paw_sphere_potential_is_the_derivative_of_its_energy(oxygen_paw, spiral):
-    """``ddd`` against a central difference in ``becsum``, on a noncollinear moment,
-    and on a spiral, where the covariant gradient adds two terms to the potential
-    that the assembly has to write down.
+def test_the_paw_sphere_potential_is_the_derivative_of_its_energy(oxygen_paw):
+    """``ddd`` against a central difference in ``becsum``, on a noncollinear moment.
 
     The bound is the sphere's own: ``v1 - div h`` assembled on the quadrature is
     not the exact derivative of the quadrature's energy, and the existing
     two-channel PBE sphere misses its finite difference by **1.6e-4** relative
     on this ``becsum`` shape (1.5e-5 unpolarized, 4.7e-4 under ``'kubler'``
-    noncollinear; D22, 2026-10-12). Measured here: 4.3e-4 at ``q = 0`` and
-    4.9e-4 on the spiral, against **1.5e-2** with the two potential terms
-    removed, so 1e-3 tells their absence from the assembly's own error."""
+    noncollinear; D22, 2026-10-12), and this branch reads 4.3e-4. A spiral
+    adds nothing on the sphere
+    (:func:`defumat.paw.gradient._noncollinear_gradient_grad_m`)."""
     paw, _, charge, moment, _ = oxygen_paw
     rng = np.random.default_rng(23)
     nh = charge.shape[0]
     transverse = np.stack([moment, 0.5 * np.roll(moment, 1, axis=0) + 0.5 * np.roll(moment, 1, axis=0).T,
                            0.3 * charge])
     becsum = np.concatenate([charge[None], transverse])
-    q = np.array([0.1, -0.2, 0.35]) if spiral else None
-    _, ddd = _sphere(paw, becsum, spiral_q=q)
+    _, ddd = _sphere(paw, becsum)
     d = rng.normal(size=(4, nh, nh))
     d = 0.5 * (d + np.swapaxes(d, 1, 2))
     h = 1e-5
-    difference = (_sphere(paw, becsum + h * d, spiral_q=q)[0]
-                  - _sphere(paw, becsum - h * d, spiral_q=q)[0]) / (2 * h)
+    difference = (_sphere(paw, becsum + h * d)[0]
+                  - _sphere(paw, becsum - h * d)[0]) / (2 * h)
     assert difference == pytest.approx(np.sum(ddd * d), rel=1e-3)
 
 
