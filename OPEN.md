@@ -3209,7 +3209,16 @@ undefined (`_field_seed_gate`, the same escape the `kramers_pairs=False` skip ha
 gained a fifth branch for it, which names both ways to seed and the energy to compare them by;
 the fourth branch's "a seed is refused on such a reference as well" stays where it is true, a
 reference with no direction. `seed_from_field=False` asks for the tiled start and `True`
-insists. The field is evaluated once, on the host, in float64. The warning now
+insists. Measured on D22-0161 (`review/round3-k/soc_seed.py`, cores 0-5, 6 GB scopes) on
+the committed spin-orbit cell `i-atom-soc-lda.in`, `N = 1`, `nbnd = 16`, `mixing_beta = 0.3`,
+under a uniform 0.01 Ry field along `x` with the reference's moment along `z`: at `abbdf8a` the
+default seeds and warns, 51 iterations to `E` = -25.6939477972 Ry and a moment of 0.98391 along
+`x`; on `round3-k` the default starts tiled with `field_seed_skipped` set and does **not**
+converge in 60 (`dr2` 2.9e-4, `E + field` 7.2e-5 Ry above the seeded run's at the stop), and
+`seed_from_field=True` gives the old default's 51 iterations and `E` to every printed digit, with
+no warning. So on the one spin-orbit cell measured the tiled start is the slower one, as it is
+without the coupling; the decision stands on the coupling being unmeasured, and this cell is a
+single atom at a uniform field, where no easy axis competes with the field's direction. The field is evaluated once, on the host, in float64. The warning now
 has four branches (seeded from the field, tiled by request, tiled because the reference has
 no direction, which does not name `seed_magnetization`, and `kramers_pairs=False`, which
 keeps the 263 against 300 labelled as that basis's).
