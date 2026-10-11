@@ -177,9 +177,15 @@ def test_a_turned_texture_compiles_the_potential_once(cobalt):
     static argument of the compiled potential, so every orientation of a scan
     or a relaxation compiled the potential again; it is an array argument now.
     """
+    import dataclasses
+
     from defumat.scf.driver import _potential_of_rho
 
     system, pseudos, _ = cobalt
+    # ``'kubler'``, the branch that reads the axis; under ``'grad_m'``, the
+    # default since 2026-10-12, the axis is not read at all (asserted below).
+    axis_free = system
+    system = dataclasses.replace(system, noncollinear_gga="kubler")
     first = Calculation(_with_quantization_axis(system, (1.0, 0.0, 0.0)), pseudos)
     second = first.with_texture(_with_quantization_axis(system, (0.0, 1.0, 0.0)))
     assert first.functional.is_gradient
@@ -202,6 +208,12 @@ def test_a_turned_texture_compiles_the_potential_once(cobalt):
     assert names.count("jit(v_of_rho)") == 1, names
     # The axis is an argument the executable reads rather than one it lost.
     assert not np.array_equal(np.asarray(one), np.asarray(other))
+
+    free = Calculation(_with_quantization_axis(axis_free, (1.0, 0.0, 0.0)), pseudos)
+    assert free.noncollinear_gga == "grad_m"
+    turned = free.with_texture(_with_quantization_axis(axis_free, (0.0, 1.0, 0.0)))
+    assert np.array_equal(np.asarray(free.potential(density).v_scf),
+                          np.asarray(turned.potential(density).v_scf))
 
 
 _OXYGEN_PAW = """
