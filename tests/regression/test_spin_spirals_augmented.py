@@ -371,7 +371,7 @@ def _cobalt_density(text: str, pseudo_dir):
     return system, pseudos, result.density
 
 
-def _one_shot(system, pseudos, density, calculation=None):
+def _one_shot(system, pseudos, density, calculation=None, nbnd=None):
     """``(eigenvalues, output density)`` of one diagonalisation at ``density``."""
     import jax.numpy as jnp
     import numpy as np
@@ -380,7 +380,7 @@ def _one_shot(system, pseudos, density, calculation=None):
 
     calculation, _, eigenvalues, states = fixed_density_states(
         system, pseudos, jnp.asarray(density), conv_thr=1e-11,
-        calculation=calculation,
+        calculation=calculation, nbnd=nbnd,
     )
     weights, _ = calculation.occupations(jnp.asarray(eigenvalues))
     return np.asarray(eigenvalues), np.asarray(calculation.density(states, weights))
@@ -413,9 +413,14 @@ def _supercell_identity(spiral_system, pseudos, density, ecutrho: float, pseudo_
     calculation = Calculation(system, supercell_pseudos)
     shape = tuple(calculation.basis.dense.grid)
     q = spiral_system.spiral_q
+    # Four times the spiral's bands, so the two sides hold the same states: at
+    # its own default of 44 against 4 x 16 the supercell's top band carried a
+    # weight of 7.7e-5 under the smearing, which moved its Fermi level by 9.4e-7
+    # Ry and its output magnetization by 1.3e-5, and read as a discretisation
+    # difference.
     super_e, super_out = _one_shot(
         system, supercell_pseudos, unfold_spiral_density(density, q, (1, 1, 4), shape),
-        calculation=calculation,
+        calculation=calculation, nbnd=4 * spiral_e.shape[-1],
     )
     expected = unfold_spiral_density(spiral_out, q, (1, 1, 4), shape)
     magnetization = float(np.abs(super_out[1:] - expected[1:]).max()
@@ -437,13 +442,12 @@ def _supercell_identity(spiral_system, pseudos, density, ecutrho: float, pseudo_
 #: What the supercell may differ from the spiral by on the cobalt helix at
 #: ``ecutrho = 160`` with the transverse pair on the laboratory sphere: the worst
 #: eigenvalue in Ry, and the output magnetization relative to its largest value.
-LABORATORY_SPHERE = (1.0e-9, 1.0e-6)
+LABORATORY_SPHERE = (1.0e-10, 2.0e-8)
 
 #: The same two with the pair back on the resident spheres, the code before
-#: ``OPEN.md`` Part XXI item 1, which measured 7.27e-05 Ry and 4.2e-03 at the
-#: converged state: the control arm has to exceed these, or the bounds above
-#: are not a test.
-RESIDENT_SPHERE = (1.0e-5, 1.0e-4)
+#: ``OPEN.md`` Part XXI item 1: the control arm has to exceed these, or the
+#: bounds above are not a test.
+RESIDENT_SPHERE = (1.0e-5, 1.0e-3)
 
 
 def test_the_spiral_is_its_unfolded_supercell_on_the_laboratory_sphere(pseudo_dir,
@@ -457,7 +461,11 @@ def test_the_spiral_is_its_unfolded_supercell_on_the_laboratory_sphere(pseudo_di
     and its smooth counterpart, which held 99.5 per cent of the transverse
     difference; on the laboratory sphere they discretise one functional.
 
-    Measured: see :data:`LABORATORY_SPHERE` and :data:`RESIDENT_SPHERE`.
+    Measured on D22 (2026-10-11), worst eigenvalue and output magnetization:
+    **2.98e-14 Ry and 1.2e-09** on the laboratory sphere, **7.266e-05 Ry and
+    4.20e-03** on the resident ones, which is the entry's 7.27e-05 reproduced.
+    At 80 Ry, with no smooth grid, the same pair reads 9.8e-14 and 2.9e-09
+    against 3.966e-03 and 2.25e-02.
     """
     after = _supercell_identity(*_cobalt_density(_cobalt(160.0), pseudo_dir), 160.0,
                                 pseudo_dir)
@@ -489,7 +497,8 @@ def test_a_scan_moves_the_displaced_table_with_q(pseudo_dir, monkeypatch):
     second order and could not see a stale *sphere*: the shell there moves the
     energy below 1e-10 Ry. The guard is the same comparison with the resident
     spheres in the fresh calculation, which is what a scan that kept the
-    ``q = 0`` sphere would carry.
+    ``q = 0`` sphere would carry. Measured: **0 and 0**, the two calculations
+    doing the same arithmetic, against **2.56e-03 Ry and 2.13e-02** for the guard.
     """
     import dataclasses
 
