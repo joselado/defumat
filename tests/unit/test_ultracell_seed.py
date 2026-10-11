@@ -16,7 +16,12 @@ import numpy as np
 import pytest
 
 from defumat.ultracell.grid import Ultracell
-from defumat.ultracell.driver import _noncollinear_advice
+from defumat.ultracell.driver import (
+    KRAMERS_SKIP,
+    LSPINORB_SKIP,
+    _field_seed_gate,
+    _noncollinear_advice,
+)
 from defumat.ultracell.seed import (
     FIELD_NODE_TOL,
     field_seed_axis,
@@ -503,12 +508,45 @@ def test_the_field_seed_skips_a_reference_with_no_direction(ultracell):
           opted_out=False, skipped=None),
      ["kramers_pairs=False", "263", "do not lower mixing_beta", "10 iterations"],
      []),
+    # Spin-orbit coupling: the default skipped the seed and nothing refuses it,
+    # so both ways to seed are named, and "refused" is not said. The old text
+    # said "a seed is refused on such a reference as well" here, which fails.
+    (dict(kramers_pairs=True, seed_origin=None, field_given=True,
+          opted_out=False, skipped=LSPINORB_SKIP),
+     ["spin-orbit coupling", "seed_from_field=True", "seed_magnetization=",
+      "total_energy + field_energy"],
+     ["refused on such", "263"]),
 ])
 def test_the_noncollinear_advice_follows_how_the_run_started(case, present, absent):
-    """The warning's four branches, each with its own first remedy."""
+    """The warning's five branches, each with its own first remedy."""
     text = _noncollinear_advice(max_iterations=40, beta=0.7, nbnd=8,
                                 field_strength=0.002, **case)
     for words in present:
         assert words in text, (words, text)
     for words in absent:
         assert words not in text, (words, text)
+
+
+def test_spin_orbit_coupling_skips_the_field_seed_unless_asked():
+    """``lspinorb`` starts tiled by default, and ``seed_from_field=True`` still seeds.
+
+    The user's decision of 2026-10-11 (``OPEN.md`` Part VI item 3): the field's
+    seed was measured without spin-orbit coupling only, where an easy axis
+    cannot hold the moment against the field, so the default does not take it
+    there and the result says why. It is the default's skip and not a refusal,
+    so ``True`` passes the gate, where a reason would make the driver raise.
+    The null beside it is the measured regime, which goes on to read the
+    reference's direction.
+    """
+    gate = dict(kramers_pairs=True, lspinorb=True)
+    assert _field_seed_gate(seed_from_field=None, **gate) == LSPINORB_SKIP
+    assert "spin-orbit" in LSPINORB_SKIP and "seed_from_field=True" in LSPINORB_SKIP
+    assert _field_seed_gate(seed_from_field=True, **gate) is None
+    assert _field_seed_gate(kramers_pairs=True, lspinorb=False,
+                            seed_from_field=None) is None
+    # Both regimes at once name the basis, which the advice branches on first,
+    # and True passes that one too, as it did before.
+    assert _field_seed_gate(kramers_pairs=False, lspinorb=True,
+                            seed_from_field=None) == KRAMERS_SKIP
+    assert _field_seed_gate(kramers_pairs=False, lspinorb=True,
+                            seed_from_field=True) is None

@@ -75,7 +75,8 @@ quantities. ``magnetic_field`` **drives** one, and what comes back is the
 ``seed_magnetization`` **hands one over** as the initial condition and the loop
 keeps it, which is the ordered state itself (:mod:`defumat.ultracell.seed`).
 Since 2026-10-10 a noncollinear run given a field and no seed is seeded from the
-field's own direction by default (``seed_from_field``), so what it returns is the
+field's own direction by default (``seed_from_field``; without spin-orbit
+coupling since 2026-10-11, where it starts tiled unless asked), so what it returns is the
 state the loop relaxes to from the field's texture, which is the response only
 where the tiled start reaches the same state (``seed_from_field=False`` asks
 for that start).
@@ -989,8 +990,9 @@ def run_ultracell(
             2026-10-10). Elsewhere, a paramagnetic or compensated reference
             above all, the run starts tiled and
             :attr:`UltracellResult.field_seed_skipped` says why. With
-            spin-orbit coupling it seeds and warns, since nothing there is
-            measured. ``False`` asks for the tiled start, which is what a
+            spin-orbit coupling it starts tiled as well, since nothing there
+            is measured and an easy axis can hold the moment against a weak
+            field, and ``True`` seeds it anyway. ``False`` asks for the tiled start, which is what a
             linear response about the reference's own state wants; ``True``
             insists, and raises where the seed cannot be taken.
         keep_states: keep the frozen states and the envelope amplitudes on the
@@ -1401,16 +1403,17 @@ def run_ultracell(
     # field is slow at is leaving the tiled ferromagnet -- 9 iterations seeded
     # against none in 1500 on four cells of hydrogen at 0.002 Ry. Gated to the
     # Kramers-closed basis, where it was measured and where no axis is
-    # preferred, and to a reference with a direction to turn from; anything
-    # else runs from the tiled start and the result says why.
+    # preferred, to a run without spin-orbit coupling (2026-10-11, the
+    # user's decision: nothing there is measured, so the default is the
+    # tiled start and ``seed_from_field=True`` still seeds), and to a
+    # reference with a direction to turn from; anything else runs from the
+    # tiled start and the result says why.
     field_seed_skipped = None
     if (seed_field is None and magnetic_field is not None
             and seed_from_field is not False and nspin_mag == 4):
-        field_seed_skipped = (
-            "kramers_pairs=False: the field's seed is measured on the "
-            "Kramers-closed basis only, and the reference's states alone "
-            "prefer their own direction" if not kramers_pairs and not seed_from_field
-            else None
+        field_seed_skipped = _field_seed_gate(
+            kramers_pairs=bool(kramers_pairs), lspinorb=bool(system.lspinorb),
+            seed_from_field=seed_from_field,
         )
         if field_seed_skipped is None:
             moment = spin_components(density, nspin_mag)[1]
@@ -1419,17 +1422,6 @@ def run_ultracell(
         if field_seed_skipped is None:
             seed_field = jnp.asarray(seed_from_the_field(magnetic_field, seed_axis))
             seed_origin = "magnetic_field"
-            if bool(system.lspinorb):
-                warnings.warn(
-                    "this run is seeded from the applied field's own direction "
-                    "with spin-orbit coupling on, which is not measured: an "
-                    "easy axis can hold the moment against a weak field, so the "
-                    "seed may start the loop on the far side of a gapped "
-                    "rotation from the state the field drives. Pass "
-                    "seed_from_field=False to start from the tiled reference "
-                    "instead, and compare total_energy + field_energy",
-                    stacklevel=2,
-                )
         elif seed_from_field:
             raise ValueError(
                 f"seed_from_field=True and the seed cannot be taken: "
@@ -1807,12 +1799,48 @@ def run_ultracell(
     return result
 
 
+#: Why a run on the reference's states alone is not seeded from the field.
+KRAMERS_SKIP = (
+    "kramers_pairs=False: the field's seed is measured on the Kramers-closed "
+    "basis only, and the reference's states alone prefer their own direction"
+)
+
+#: Why a run with spin-orbit coupling is not seeded from the field by default
+#: (``OPEN.md`` Part VI item 3, the user's decision of 2026-10-11).
+LSPINORB_SKIP = (
+    "lspinorb: the field's seed is not measured with spin-orbit coupling, "
+    "where an easy axis can hold the moment against a weak field and the seed "
+    "may start the loop on the far side of a gapped rotation from the state "
+    "the field drives; seed_from_field=True seeds it anyway"
+)
+
+
+def _field_seed_gate(*, kramers_pairs: bool, lspinorb: bool,
+                     seed_from_field) -> str | None:
+    """Why the field's own seed is not taken, decided before the reference is read.
+
+    ``None`` means "go on and read the reference's direction", which
+    :func:`~defumat.ultracell.seed.field_seed_axis` may still refuse. Both
+    reasons here are the **default's** and not refusals: ``seed_from_field=True``
+    passes through either, the basis or the coupling being a regime where the
+    seed is unmeasured rather than undefined. When both apply the basis is
+    named, since it is the one the non-convergence advice branches on first.
+    """
+    if seed_from_field:
+        return None
+    if not kramers_pairs:
+        return KRAMERS_SKIP
+    if lspinorb:
+        return LSPINORB_SKIP
+    return None
+
+
 def _noncollinear_advice(*, kramers_pairs: bool, seed_origin, field_given: bool,
                          opted_out: bool, skipped, max_iterations: int,
                          beta: float, nbnd: int, field_strength) -> str:
     """The noncollinear half of the non-convergence warning, by how the run started.
 
-    Four cases, and the advice differs in each (``OPEN.md`` Part VI item 3,
+    Five cases, and the advice differs in each (``OPEN.md`` Part VI item 3,
     measured on four cells of hydrogen, ``(4, 2, 2)`` folded, under a field
     turning 90 degrees a cell):
 
@@ -1829,6 +1857,9 @@ def _noncollinear_advice(*, kramers_pairs: bool, seed_origin, field_given: bool,
       the tiled start is what is slow (none in 1500 at 0.002 Ry, 9 seeded); or
       because the reference has no direction, where a seed is refused as well
       and is therefore **not** named.
+    * a field, not seeded from it because spin-orbit coupling is on: the seed
+      is the default's to skip and not refused, so ``seed_from_field=True``
+      and ``seed_magnetization`` are both named, with the energy to compare.
     * no field: the rigid rotation, briefly.
     """
     budget = f"max_iterations (currently {max_iterations})"
@@ -1870,6 +1901,17 @@ def _noncollinear_advice(*, kramers_pairs: bool, seed_origin, field_given: bool,
             f"not converge in 1500 iterations at mixing_beta 0.7, nor in 400 at "
             f"0.3, and the field's own texture converged in 9. Otherwise raise "
             f"{budget}."
+        )
+    if field_given and skipped == LSPINORB_SKIP:
+        return (
+            f" This run was started from the tiled reference{strength} because "
+            f"spin-orbit coupling is on, where the field's own seed is not "
+            f"measured; it is not refused there. seed_from_field=True starts "
+            f"in the field's direction and seed_magnetization= hands the loop "
+            f"a texture by hand, and since an easy axis can hold the moment "
+            f"against a weak field, compare total_energy + field_energy "
+            f"between the starts rather than taking the one that converges. "
+            f"Otherwise raise {budget}."
         )
     if field_given and skipped:
         return (

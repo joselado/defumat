@@ -3190,7 +3190,7 @@ asked for, and a run that needs the asked-for angles needs a hard constraint on 
 instead. Whether that pattern is anisotropy bunching the helix or the Br sublattice is not
 established.
 
-## 3. A noncollinear ultracell's rigid spin rotation has no restoring force, and a small `mixing_beta` cannot cross it **[opened 2026-09-14, P88 stage 3b; measured 2026-10-09: no traversal on the Kramers-closed basis (10 iterations in either frame), the weak field is the escape from the ferromagnet (no convergence in 1500, 9 seeded); plan in `plans/open-a-vi3.md`]; 2026-10-10: the field seeds itself by default (the user's decision), 9 iterations at 0.002 Ry with no seed given, and the warning branches on how the run started]**
+## 3. A noncollinear ultracell's rigid spin rotation has no restoring force, and a small `mixing_beta` cannot cross it **[opened 2026-09-14, P88 stage 3b; measured 2026-10-09: no traversal on the Kramers-closed basis (10 iterations in either frame), the weak field is the escape from the ferromagnet (no convergence in 1500, 9 seeded); plan in `plans/open-a-vi3.md`]; 2026-10-10: the field seeds itself by default (the user's decision), 9 iterations at 0.002 Ry with no seed given, and the warning branches on how the run started; 2026-10-11: not by default with `lspinorb`, where `True` still seeds]**
 
 **The field's own seed, the default since 2026-10-10 (the user's decision, branch
 `decided-g`).** `run_ultracell` given a `magnetic_field` and no `seed_magnetization` now
@@ -3200,9 +3200,16 @@ where `|B|` is below 1e-6 of its largest value, through the existing `seeded_den
 Kramers-closed basis, and a reference whose net moment has a direction
 (`field_seed_axis`, which skips where `reference_axis` would raise); a paramagnetic or
 compensated reference runs tiled and `UltracellResult.field_seed_skipped` says why, and
-`seed_origin` says where every run's start came from. With `lspinorb` it seeds and warns,
-which is a choice handed back to the user. `seed_from_field=False` asks for the tiled start
-and `True` insists. The field is evaluated once, on the host, in float64. The warning now
+`seed_origin` says where every run's start came from. With `lspinorb` it seeded and warned
+until 2026-10-11; **since then (the user's decision, branch `round3-k`) the default starts
+tiled there**, `field_seed_skipped` names spin-orbit coupling and `seed_from_field=True`, and
+`True` seeds with no warning, since the coupling makes the seed unmeasured rather than
+undefined (`_field_seed_gate`, the same escape the `kramers_pairs=False` skip has, and
+`test_spin_orbit_coupling_skips_the_field_seed_unless_asked`). The non-convergence advice
+gained a fifth branch for it, which names both ways to seed and the energy to compare them by;
+the fourth branch's "a seed is refused on such a reference as well" stays where it is true, a
+reference with no direction. `seed_from_field=False` asks for the tiled start and `True`
+insists. The field is evaluated once, on the host, in float64. The warning now
 has four branches (seeded from the field, tiled by request, tiled because the reference has
 no direction, which does not name `seed_magnetization`, and `kramers_pairs=False`, which
 keeps the 263 against 300 labelled as that basis's).

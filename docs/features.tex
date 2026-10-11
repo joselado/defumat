@@ -7376,7 +7376,7 @@ cells tile the ultracell exactly, so the partition is the geometry.
 
 \textbf{A field given with no seed is its own seed} (\code{seed\_from\_field},
 the default since 2026-10-10 for a noncollinear reference that carries a
-direction, on the Kramers-closed basis): the loop starts with every cell's
+direction, on the Kramers-closed basis and without spin-orbit coupling): the loop starts with every cell's
 moment turned onto the field, $\mathbf B/|\mathbf B|$ at the reference's own
 length, and the reference's direction kept where the field vanishes. On the cell
 above that run converges in \textbf{11} iterations to a flat helix, the four
@@ -7418,9 +7418,12 @@ the start for a linear response about the reference's own state and for that
 comparison, and \code{result.seed\_origin} says which start a run took. A
 paramagnetic or compensated reference has no direction to turn from and runs
 tiled with \code{result.field\_seed\_skipped} saying so; on the reference's
-states alone (\code{kramers\_pairs=False}) nothing is seeded; with spin-orbit
-coupling the seed is taken with a warning, since an easy axis can hold the
-moment against a weak field and nothing there is measured.
+states alone (\code{kramers\_pairs=False}) nothing is seeded. \textbf{With
+spin-orbit coupling the default starts tiled as well} (since 2026-10-11), with
+\code{field\_seed\_skipped} saying so, because an easy axis can hold the moment
+against a weak field and the seed was measured only without the coupling;
+\code{seed\_from\_field = True} takes the field's seed there all the same, and
+the two starts are compared by \code{total\_energy + field\_energy}.
 
 \textbf{On the reference's states alone a noncollinear ultracell converges
 slowly when the field is weak, and lowering \code{mixing\_beta} is the wrong
