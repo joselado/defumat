@@ -5594,7 +5594,7 @@ with the augmentation removed from the density entirely.
 that the hypothesis space is much smaller than it was and that six of the
 obvious answers have been paid for.
 
-## 4. Eight cluster test failures are assertions, none of them is this session's work, and one is a stale test rather than the environment **[opened 2026-09-19, attributed the same day; measured 2026-10-09: all eight pass on `D22-0161` at `aa08c82`, the node run at that commit is not take; 2026-10-10, decided-i: the `si-epsilon-us` spinor identity's 1.59e-8 bisected to `1705a0a`, a tolerance the test's `conv_thr` does not deliver, not a defect]**
+## 4. Eight cluster test failures are assertions, none of them is this session's work, and one is a stale test rather than the environment **[opened 2026-09-19, attributed the same day; measured 2026-10-09: all eight pass on `D22-0161` at `aa08c82`, the node run at that commit is not take; 2026-10-10, decided-i: the `si-epsilon-us` spinor identity's 1.59e-8 bisected to `1705a0a`, a tolerance the test's `conv_thr` does not deliver, not a defect; 2026-10-11: that identity bounded at 1e-6 for both datasets (the user's decision), closed]**
 
 The whole `slow` set on a node (job `20336106`) failed in thirteen files, and
 item 2 above accounts for eight of them. These are the rest. **They have now
@@ -5727,6 +5727,21 @@ converged. The 2026-10-04 slow set that read the ultrasoft case as passing at `3
 whole file in one process; a run that lands the two trajectories together is what that would be,
 and it was not reproduced. What the test should assert instead is the user's (`decisions_for_user`
 of the decided-i stream); the code is not changed.
+
+**Closed 2026-10-11 (the user's decision, branch `round3-k`).** The augmented identity is bounded
+at **1e-6** at the file's `conv_thr = 1e-12` for both parametrisations, and the docstring's
+"Measured 9.2e-14" is replaced by the numbers above: 1.59e-8 on ultrasoft at the head, 2.46e-8 at
+`30cffd2`, 1.8e-13 on PAW, and the norm-conserving sibling's own 1.35e-7 at the same threshold
+(this file's module docstring) as the reason for 1e-6, a factor of six over the largest scatter
+measured where a dropped spin component is 100 per cent. Run on D22-0161 (`review/round3-k/`,
+cores 0-5, a 6 GB scope, `-m 'slow or not slow'`, 280 s): both augmented cases pass, ultrasoft
+scalar 14.325310287080 against spinor 14.325310271192 (**1.59e-8**, the same to every digit as the
+2026-10-10 reading) and PAW 14.320208926896 on both sides. **One test of the file fails, and it is
+the norm-conserving no-magnetization identity of the table above**:
+`13.806618642330733` against `13.806618642329255 ± 1.0e-12`, so 1.48e-12 on 13.8, the cluster
+failure this item lists, reproduced on D22 where 2026-10-09 read it passing; nothing on this branch
+touches the dielectric path (its package changes are the ultracell's field seed and the
+piezoelectric mesh refusal), and it is not chased here.
 
 
 # Part XIV -- measured and left open, 2026-09-20
