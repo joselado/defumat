@@ -37,15 +37,23 @@ is **twice** each residue above, the factor a doubled cell's energy is divided
 by. The collinear-referenced identity is therefore measuring the gap between
 this code's own collinear and noncollinear paths, and the spiral rides on it.
 
-What is left when that gap vanishes is the spiral's own error, and it is
-round-off: 6.08e-09 Ry at ``ecutrho = 400``, against the quarter turn's
-**1.65e-09** measured at ``ecutrho = 200`` on a supercell that shares the
-noncollinear machinery and so never sees the gap at all.
+What is left when that gap vanishes is the spiral's own error: 6.08e-09 Ry at
+``ecutrho = 400`` on the resident sphere, against the quarter turn's 1.65e-09
+measured at ``ecutrho = 200`` on a supercell that shares the noncollinear
+machinery and so never sees the gap at all.
 
-The tolerance below covers the largest of these at the ``ecutrho = 200`` these
-inputs carry, which is PAW's 3.26e-07 on the quarter turn. It is a floor set by
-the code's collinear/noncollinear consistency and by PAW's one-centre path, not
-by the spiral, and it is not a round number chosen to make a test pass.
+**That 1.65e-09, and PAW's 3.26e-07 beside it, were the truncation shell after
+all** (``OPEN.md`` Part XXI item 1, 2026-10-11). With the transverse pair on
+the laboratory sphere ``|G - q| < G_rho`` the quarter turn reads **3.5e-12** for
+ultrasoft and **2.1e-11** for PAW, and the control arm, the resident spheres,
+reproduces 1.641e-09 and 3.255e-07. So PAW's two orders over ultrasoft there
+were not its one-centre path; the collinear-referenced identities keep their
+gap (3.52e-07 ultrasoft at ``q = b3/2``, against 3.61e-07 before).
+
+:data:`CONSISTENCY_RY` covers the collinear-referenced identity, a floor set by
+the code's collinear/noncollinear consistency rather than by the spiral; the
+quarter turn, which shares the noncollinear machinery, is held to
+:data:`QUARTER_TURN_RY`, which the resident spheres fail.
 
 **What the tolerance has to be read against.** A tolerance is only a test if
 something fails it, so each identity is asserted together with the size of the
@@ -70,19 +78,23 @@ from tests.conftest import GENERATED
 pytestmark = [pytest.mark.regression, pytest.mark.slow]
 
 #: The consistency floor described in the module docstring, at the
-#: ``ecutrho = 200`` these inputs carry -- set by the largest measured residue,
-#: PAW's 3.26e-07 on the quarter turn. Not a round-off tolerance and not a
-#: round number: ultrasoft reaches 1.65e-09 on the same identity, and what
-#: separates the two is PAW's one-centre path rather than anything the spiral
-#: does.
+#: ``ecutrho = 200`` these inputs carry, for the identity against the collinear
+#: antiferromagnet: 3.52e-07 measured on ultrasoft (3.61e-07 on the resident
+#: sphere), the gap between this code's collinear and noncollinear paths.
+#: It was set when PAW's quarter turn read 3.26e-07, which the laboratory
+#: sphere took to 2.1e-11 (:data:`QUARTER_TURN_RY`).
 #:
-#: **Set from one dataset on one cell**, with a factor of six of headroom over
-#: the largest measured residue. PAW's floor has since been traced as far as it
-#: goes and it is not a defect here: ``pw.x`` run on the same control cells has
-#: the same collinear/noncollinear gap to four digits (``OPEN.md`` Y4), so this
-#: tolerance is a property of the PAW method at this cutoff rather than a
-#: number waiting on a fix.
+#: PAW's collinear/noncollinear gap has been traced as far as it goes and it is
+#: not a defect here: ``pw.x`` run on the same control cells has the same gap to
+#: four digits (``OPEN.md`` Y4).
 CONSISTENCY_RY = 2.0e-06
+
+#: The quarter turn against its four-cell noncollinear supercell, both sides on
+#: the same machinery. Measured on D22 (2026-10-11): 3.5e-12 Ry ultrasoft and
+#: 2.1e-11 PAW on the laboratory sphere; 1.641e-09 and 3.255e-07 on the resident
+#: spheres, which this fails, so it is a test of the sphere and not only of the
+#: displacement.
+QUARTER_TURN_RY = 1.0e-09
 
 #: What the displaced table is worth. Anything above this and the transverse
 #: augmentation charge is simply absent; the measured value is 1.15e-03.
@@ -200,8 +212,10 @@ def test_a_quarter_turn_is_the_ninety_degree_supercell(dataset, pseudo_dir):
     except whether the transverse augmentation charge is carried by the
     displaced table or by four cells of supercell.
 
-    Measured: **1.65e-09 Ry** for ultrasoft and **3.26e-07 Ry** for PAW, both
-    at ``ecutrho = 200``.
+    Measured: **3.5e-12 Ry** for ultrasoft and **2.1e-11 Ry** for PAW, both
+    at ``ecutrho = 200`` (2026-10-11, laboratory sphere); 1.65e-09 and 3.26e-07
+    before it, which was the shell between the resident sphere and the
+    supercell's.
     """
     system, spiral = _run(_at_q(f"o-chain-spiral-{dataset}.in", 0.25), pseudo_dir)
     supercell_system, supercell = _run(
@@ -211,7 +225,7 @@ def test_a_quarter_turn_is_the_ninety_degree_supercell(dataset, pseudo_dir):
     assert spiral.converged and supercell.converged
     assert supercell_system.nspin_mag == 4 and not supercell_system.spiral
     assert _electronic(spiral) == pytest.approx(
-        _electronic(supercell) / 4.0, abs=CONSISTENCY_RY
+        _electronic(supercell) / 4.0, abs=QUARTER_TURN_RY
     )
 
 
@@ -233,7 +247,9 @@ def test_moving_the_atom_does_not_move_the_energy(dataset, pseudo_dir):
     ``e^{i q.tau}`` through its two structure factors, and the one-centre
     energy depends on ``|m|``, which a position-dependent spin rotation leaves
     alone pointwise. This test is what turns that argument into a number --
-    **2.9e-12 Ry** for ultrasoft and **1.4e-11** for PAW.
+    **2.9e-12 Ry** for ultrasoft and **1.4e-11** for PAW; on the laboratory
+    sphere (2026-10-11, D22) 3.8e-12 and 4.6e-11, the same as the resident
+    spheres on the same machine.
 
     ``tau_z = 1/3`` rather than an arbitrary displacement, because 1/3 of the
     cell is an exact number of points on both FFT grids here (24 dense, 18
@@ -261,7 +277,8 @@ def test_half_a_reciprocal_vector_is_the_antiferromagnet(pseudo_dir):
     carries that difference as well. It earns its place by tying the augmented
     spiral to the LSDA path rather than to another noncollinear run.
 
-    Measured at 3.61e-07 Ry, and the module docstring's ladder is this identity
+    Measured at 3.61e-07 Ry (3.52e-07 on the laboratory sphere, 2026-10-11),
+    and the module docstring's ladder is this identity
     at three cutoffs -- together with the control that shows the ladder is the
     collinear/noncollinear gap rather than the spiral's.
     """
