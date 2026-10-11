@@ -25279,8 +25279,9 @@ units so that it strains with the cell.
 
 **SCF**, cobalt at `conv_thr = 1e-11` (`OPEN.md` Part XXI item 1 has the table): `q = 0` in 14
 iterations against the signed branch's 35, energies 3e-10 apart; the spiral in **15 at 160 Ry and
-19 at 80 Ry on the laboratory sphere**, to 1.5e-13 and 9.4e-12, where `'kubler'` could not reach
-`1e-11`. The spiral's energy is 8.5e-4 Ry below `'kubler'`'s, the two being different
+19 at 80 Ry on the laboratory sphere**, to 1.5e-13 and 9.4e-12, where `'kubler'` under
+`run_scf`'s defaults did not reach `1e-11` in 150 and through `Calculator.get_scf` takes 119
+(notebook 12, executed on D22). The spiral's energy is 8.5e-4 Ry below `'kubler'`'s, the two being different
 functionals there.
 
 **The default stays `'kubler'`** (fable's call): it is `pw.x`'s and Elk's (Elk regularises the

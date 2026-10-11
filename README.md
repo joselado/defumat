@@ -314,7 +314,8 @@ model describes the surface. `calc.get_spiral_scan(wavevectors)`, notebook
 - **A noncollinear gradient correction built from $\nabla\mathbf m$** rather than from
   $\nabla|\mathbf m|$: smooth where the moment vanishes and free of a quantization axis,
   and the collinear functional exactly for a collinear state. It is what converges a PBE
-  spiral, which on `pw.x`'s rotation onto $|\mathbf m|$ stalls near $10^{-10}$ Ry.
+  spiral: 15 iterations to $10^{-11}$ Ry on a cobalt helix, where `pw.x`'s rotation onto
+  $|\mathbf m|$ takes 119.
   Not `pw.x`'s or Elk's functional; norm-conserving and ultrasoft.
   `noncollinear_gga = 'grad_m'`, notebook [12](notebooks/12_spin_spirals.ipynb).
 - **The Dzyaloshinskii-Moriya energy of a spin spiral**, spin-orbit coupling

@@ -7546,7 +7546,9 @@ transverse pair on its laboratory sphere. Every run at `conv_thr = 1e-11`:
 | spiral, resident, 160 Ry | `'grad_m'` | 15, converged | 1.7e-13 | -74.2824752127 |
 | spiral, laboratory, 80 Ry | `'grad_m'` | **19, converged** | 9.4e-12 | -74.3432585033 |
 
-The `q = 0` pair is the collinear limit at the SCF level: one functional there, 3e-10 Ry apart,
+Through `Calculator.get_scf` (notebook 12) `'kubler'` does reach `1e-11` on the spiral, in
+**119** iterations against `'grad_m'`'s 15; the failures above are `run_scf`'s defaults capped
+at 150, so the stall is a crawl rather than a floor, which the cure does not depend on. The `q = 0` pair is the collinear limit at the SCF level: one functional there, 3e-10 Ry apart,
 in 14 iterations against 35. On the spiral the two functionals are different functionals,
 -74.2833326 under `'grad_m'` against -74.2824789 under `'kubler'` at `1e-10`, 8.5e-4 Ry, which
 is the price of the choice and not an error of either. The laboratory and the resident spheres

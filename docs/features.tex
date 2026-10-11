@@ -2335,7 +2335,8 @@ is parallel it takes the sign of $\mathbf m$ along that axis, so up stays up
 across a node; where they are not, which is every spin spiral, it takes
 $|\mathbf m|$ itself, which has a kink at every node of $\mathbf m$. A kink in
 the density is a divergence in its gradient, and the self-consistent cycle sees
-it: the PBE cobalt helix stalls near $10^{-10}$~Ry and never reaches $10^{-11}$.
+it: the PBE cobalt helix needs 119 iterations to reach $10^{-11}$~Ry, and \code{run\_scf}'s
+own defaults do not get there in 150.
 
 \code{noncollinear\_gga = 'grad\_m'} in \code{\&system} builds exchange from the
 gradients of the components instead. With $g = |\nabla n|^2$,
@@ -2368,7 +2369,7 @@ print(scf.converged, scf.iterations)   # -> True 15
 \end{pycode}
 
 \textbf{The numbers.} On that cell at $10^{-11}$, 15 iterations at 160~Ry and 19
-at 80, where the default does not get there in 150; the ferromagnet at
+at 80, where the default takes 119 at 160~Ry; the ferromagnet at
 $\mathbf q = 0$ in 14 against the signed default's 35, with the two energies
 $3\times10^{-10}$~Ry apart, since on a collinear state they are one functional.
 On the spiral they are not: $-74.2833326$ against $-74.2824789$~Ry, which is the
