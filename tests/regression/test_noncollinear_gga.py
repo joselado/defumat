@@ -77,6 +77,11 @@ PRESSURE_KBAR = 0.1
 #: P110). The energy and moment test keeps the input's threshold, which it meets.
 STRESS_CONV_THR = 1.0e-12
 
+#: ``'grad_m'`` against the signed branch on the same collinear ground state:
+#: one functional there, so what is left is the two SCF paths' convergence.
+GRAD_M_ENERGY_RY = 1.0e-9
+GRAD_M_STRESS_RY_BOHR3 = 1.0e-8
+
 
 @pytest.fixture(autouse=True)
 def _drop_compiled_code():
@@ -153,3 +158,35 @@ def test_the_noncollinear_gga_stress_matches_pw_x(pseudo_dir):
     off = tensor - np.diag(np.diag(tensor))
     assert np.abs(off).max() < 1e-8
     assert np.diag(tensor).std() < 1e-9
+
+
+def test_grad_m_gives_the_signed_branch_on_a_collinear_ground_state(pseudo_dir):
+    """``noncollinear_gga = 'grad_m'`` against ``pw.x``'s signed branch, same cell.
+
+    One moment along ``x`` and no spin-orbit coupling, so the converged state is
+    collinear and the two functionals are the same functional there: the signed
+    pair ``(n +- m_x)/2`` is band-limited, and the ``grad m`` invariants reduce
+    to its gradients exactly (``tests/unit/test_noncollinear_gga_grad_m.py``).
+    The stress is the check that the energy cannot make, since the new branch's
+    potential and its strain derivative both come from differentiating it.
+    """
+    text = (CASES / f"{CASE}.in").read_text()
+    text = text.replace(
+        "    nosym = .true.", "    noncollinear_gga = 'grad_m'\n    nosym = .true.", 1
+    )
+    calculator = Calculator.from_text(
+        text, pseudo_dir, announce=False, conv_thr=STRESS_CONV_THR
+    )
+    assert calculator.calculation.noncollinear_gga == "grad_m"
+    scf = calculator.get_scf(max_iterations=200)
+    stress = np.asarray(calculator.get_stress().tensor)
+
+    signed = Calculator.from_file(
+        CASES / f"{CASE}.in", pseudo_dir, announce=False, conv_thr=STRESS_CONV_THR
+    )
+    reference = signed.get_scf(max_iterations=200)
+    assert scf.converged and reference.converged
+    assert scf.total_energy == pytest.approx(reference.total_energy, abs=GRAD_M_ENERGY_RY)
+    assert stress == pytest.approx(
+        np.asarray(signed.get_stress().tensor), abs=GRAD_M_STRESS_RY_BOHR3
+    )

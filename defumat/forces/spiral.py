@@ -588,6 +588,13 @@ def _require_a_differentiable_spiral(calculation) -> None:
             "is stationary for a different functional than the one being "
             "differentiated and the missing term would be silent"
         )
+    if getattr(calculation, "noncollinear_gga", "kubler") == "grad_m":
+        raise NotImplementedError(
+            "dE/dq under noncollinear_gga = 'grad_m' is not implemented: that "
+            "exchange energy depends on q through the laboratory gradient of "
+            "the transverse pair, a term the frozen-state energy here does not "
+            "carry, so the derivative would be missing it silently"
+        )
 
 
 @jax.jit

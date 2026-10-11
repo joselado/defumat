@@ -4493,6 +4493,7 @@ class Calculation:
             tau,
             self.source_free,
             self.noncollinear_gga,
+            self._spiral_q_argument(),
         )
         field = self.magnetic_field if field is None else field
         if field is None:
@@ -4541,6 +4542,17 @@ class Calculation:
             self.paw, becsum_, meta_c, self._axis_argument()
         )
         return energy, _paw_block_matrices(self.augmentation, blocks, self.nspin_mag)
+
+    def _spiral_q_argument(self):
+        """The spiral's wavevector for the potential, or ``None``.
+
+        Read by ``noncollinear_gga = 'grad_m'`` only, whose ``grad m`` is taken
+        in the laboratory frame (:func:`~defumat.scf.potential._spiral_transverse_gradient`);
+        ``None`` for every other run so that nothing else is traced with it.
+        """
+        if not self.spiral or self.noncollinear_gga != "grad_m":
+            return None
+        return np.asarray(self.spiral_qcart, dtype=self.system.cell.precision.real)
 
     def _axis_argument(self):
         """:attr:`quantization_axis` as the array the compiled potentials take, or ``None``.

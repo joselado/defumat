@@ -550,6 +550,7 @@ def _noncollinear_gradient_correction_grad_m(
     cell: Cell,
     functional: Functional,
     rho_core: jnp.ndarray | None,
+    spiral_q: jnp.ndarray | None = None,
 ):
     """The gradient correction of ``noncollinear_gga = 'grad_m'``.
 
@@ -568,18 +569,38 @@ def _noncollinear_gradient_correction_grad_m(
     is the divergence, so this is ``v1 - div h`` with nothing written twice,
     at 4 + 12 transforms forward and 12 + 4 back against the ``'kubler'``
     branch's 16.
+
+    **A spin spiral's transverse pair is stored in the frame that turns with
+    ``q``** (``spiral_q``, 1/bohr, ``None`` for any other run), and ``grad m``,
+    unlike ``|m|``, is not the same in the two frames. The invariants are taken
+    of the laboratory gradient written in the turning frame, the covariant
+    ``grad m'_+ - i q m'_+`` of ``m'_+ = m'_x + i m'_y`` (the laboratory field is
+    ``m'_+ e^{-i q.r}``, its wavevectors ``G - q``), so the functional is the
+    unfolded supercell's. That gradient is taken on the whole box rather than on
+    the resident sphere: the pair lives on the laboratory sphere
+    ``{G : |G - q| < G_rho}`` (``Calculation.lift_density``), which the
+    resident gather would cut.
     """
     npts = rho_r[0].size
 
     def energy(rho):
         charge = rho[0] if rho_core is None else rho[0] + jnp.real(rho_core)
         magnetization = rho[1:]
-        components = jnp.concatenate([charge[None], magnetization])
+        if spiral_q is None:
+            components = jnp.concatenate([charge[None], magnetization])
+        else:
+            components = jnp.stack([charge, magnetization[2]])
         grads = jax.vmap(gradient, in_axes=(0, None, None))(
             jax.vmap(r_to_g, in_axes=(0, None))(components, gvectors.fft_index),
             gvectors, cell,
         )
-        grad_n, grad_m = grads[0], grads[1:]
+        if spiral_q is None:
+            grad_n, grad_m = grads[0], grads[1:]
+        else:
+            grad_x, grad_y = _spiral_transverse_gradient(
+                magnetization[0], magnetization[1], cell, spiral_q
+            )
+            grad_n, grad_m = grads[0], jnp.stack([grad_x, grad_y, grads[1]])
         s = safe_modulus(magnetization)
         a = jnp.sum(grad_n[None] * grad_m, axis=1)
         exchange = functional.noncollinear_gradient_exchange_energy(
@@ -597,6 +618,27 @@ def _noncollinear_gradient_correction_grad_m(
 
     e, v = jax.value_and_grad(energy)(rho_r)
     return v * (npts / cell.volume), e
+
+
+def _spiral_transverse_gradient(mx, my, cell: Cell, spiral_q):
+    """``grad`` of a spiral's laboratory transverse pair, in the turning frame.
+
+    ``m'_+ = m'_x + i m'_y`` on the box, its laboratory field ``m'_+ e^{-i q.r}``,
+    so the laboratory derivative is ``i (G - q)`` on each box coefficient. With
+    ``F = ifft((G - q) fft(m'_+))`` that is ``i F``, whose real and imaginary
+    parts are the covariant gradients of ``m'_x`` and ``m'_y``: ``-Im F`` and
+    ``Re F``. Exact for a field inside the box's half range, which the
+    laboratory sphere is on every grid the driver builds (its ``M0`` check).
+    """
+    shape = mx.shape
+    real = mx.dtype
+    frequencies = [jnp.fft.fftfreq(n, d=1.0 / n).astype(real) for n in shape]
+    miller = jnp.stack(jnp.meshgrid(*frequencies, indexing="ij"), axis=-1)
+    g = jnp.moveaxis(miller @ jnp.asarray(cell.bg, dtype=real)
+                     - jnp.asarray(spiral_q, dtype=real), -1, 0)
+    box = jnp.fft.fftn(jax.lax.complex(mx, my), axes=(-3, -2, -1))
+    f = jnp.fft.ifftn(g * box[None], axes=(-3, -2, -1))
+    return -jnp.imag(f), jnp.real(f)
 
 
 #: The two noncollinear gradient corrections ``v_of_rho`` can take: ``pw.x``'s
@@ -926,6 +968,7 @@ def v_of_rho(
     tau: jnp.ndarray | None = None,
     source_free: bool = False,
     noncollinear_gga: str = "kubler",
+    spiral_q: jnp.ndarray | None = None,
 ) -> Potential:
     """The full self-consistent potential from a real-space density.
 
@@ -950,7 +993,9 @@ def v_of_rho(
     magnetization: ``'kubler'``, ``pw.x``'s rotation onto ``|m|`` signed along
     ``quantization_axis`` when there is one, or ``'grad_m'``, built from
     ``grad m`` and ignoring the axis
-    (:func:`_noncollinear_gradient_correction_grad_m`). Static.
+    (:func:`_noncollinear_gradient_correction_grad_m`). Static. ``spiral_q``
+    is a spin spiral's wavevector in 1/bohr, read by ``'grad_m'`` alone, the
+    one functional here that is not the same in the turning frame.
 
     ``tau`` is the kinetic energy density in Ry, per spin channel, and is
     required by -- and only by -- a meta-GGA functional. It is the one
@@ -1026,6 +1071,7 @@ def v_of_rho(
             if noncollinear_gga == "grad_m":
                 v_gradient, e_gradient = _noncollinear_gradient_correction_grad_m(
                     jnp.real(rho_r), gvectors, cell, functional, rho_core,
+                    spiral_q,
                 )
             else:
                 v_gradient, e_gradient = _noncollinear_gradient_correction(
