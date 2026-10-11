@@ -724,3 +724,38 @@ def test_a_batch_of_k_points_keeps_the_width_ladder_and_its_answer(pseudo_dir):
     graph = str(jax.make_jaxpr(lambda h: davidson._every_k.__wrapped__(
         h, NBND, None, ethr, None, DAVID_NDIM, 60, None, False))(hamiltonian))
     assert "pmax" in graph, "the whole-axis solve should reduce its rung over the batch"
+
+
+def test_the_driver_donates_the_channel_slice_and_keeps_its_psi0(pseudo_dir):
+    """``Calculation.diagonalize`` donates the slice, never the caller's set.
+
+    ``OPEN.md`` Part VII item 1 (2026-10-11): on a 45-atom spinor slab three
+    wavefunction sets were on the card at every solve -- the previous
+    iteration's, the eager ``psi0[spin]`` slice and the solver's output. The
+    slice is now donated, so the output takes its buffer, and the retry
+    re-slices ``psi0``, which the caller still holds. Both halves are checked:
+    the caller's ``psi0`` is alive and unchanged after the call, and the
+    answer is bit-identical to the solve that donates nothing.
+    """
+    system = build_system(read_pw_input(BENCHMARK))
+    pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species)
+    calculation = Calculation(system, pseudos)
+    potential = v_of_rho(calculation.starting_density(), calculation.basis.dense, system.cell)
+    hamiltonians = calculation.hamiltonian(potential.v_scf)
+    _, psi0 = calculation.diagonalize(hamiltonians, NBND, None, 1e-6)
+    host = np.array(psi0)
+
+    values, states = calculation.diagonalize(hamiltonians, NBND, psi0, 1e-10)
+    assert not psi0.is_deleted(), "the caller's psi0 was donated"
+    assert np.array_equal(np.asarray(psi0), host)
+
+    extra = {} if calculation.david is None else {"david": calculation.david}
+    plain = [
+        davidson_eigensolver_all(hamiltonian, NBND, jnp.asarray(host[spin]), 1e-10,
+                                 k_batch=calculation.k_batch, **extra)
+        for spin, hamiltonian in enumerate(hamiltonians)
+    ]
+    assert np.array_equal(np.asarray(values),
+                          np.stack([np.asarray(one[0]) for one in plain]))
+    assert np.array_equal(np.asarray(states),
+                          np.stack([np.asarray(one[1]) for one in plain]))

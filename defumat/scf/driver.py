@@ -6076,11 +6076,18 @@ class Calculation:
                 f"bands -- build it with band_thresholds()"
             )
         per_band = rank == 3
+        # The channel's starting block is a fresh copy (an eager slice), so it
+        # is donated to the solve, which writes its states into that buffer;
+        # ``psi0`` itself is still held here, which is what a robust retry
+        # re-slices. Without it three wavefunction sets were on the card at
+        # every solve (``OPEN.md`` Part VII item 1, 2026-10-11).
         solved = [
             self.eigensolver(
                 hamiltonian, nbnd, None if psi0 is None else psi0[spin],
                 ethr[spin] if per_band else ethr,
-                k_batch=self.k_batch, **extra,
+                k_batch=self.k_batch,
+                psi0_again=None if psi0 is None else (lambda spin=spin: psi0[spin]),
+                **extra,
             )
             for spin, hamiltonian in enumerate(hamiltonians)
         ]
