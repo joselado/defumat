@@ -3590,6 +3590,30 @@ held a flat 77.63 GB at 21 s each; at iteration 10 `ethr` reached 2.30e-6 and th
 average went from **2.0 inner steps to 73.5**, and the iteration cost from 21 s to 390 s.
 Two iterations, and even twelve, said nothing about the arena three iterations later.
 
+
+**Compile-only pair, 2026-10-11** (`plans/open-d-vii1-review.md`, step 0; jobs `20880067` on an
+A100, `gpu17`, `gpu-debug`, and `20880068` on an H100, `gpu46`, `gpu-h100-80g-short`; master
+`92b8c4b` in `apps/defumat-vii1`; `tools/gpu/davidson_memory.py` on
+`NiBr2_defumat/nibr2_k161_anderson.scf.in`, `david 2`, band batch 16, `k_batch 1`, `nbnd 403`,
+`memory_mode = 'memory'`, autotuning at level 0; JSON in `calculations/defumat-vii1/out/`). The
+Davidson executable's `memory_analysis()`, in GiB:
+
+| store | card | temp | arguments | outputs | peak |
+|---|---|---|---|---|---|
+| device | A100 | 21.33 | 11.90 | 11.27 | 44.49 |
+| device | H100 | 26.74 | 11.90 | 11.27 | 48.62 |
+| stream (chunk 1) | A100 | 24.90 | 2.51 | 1.88 | 29.28 |
+| stream (chunk 1) | H100 | 22.78 | 2.51 | 1.88 | 26.16 |
+
+The prediction written in the scripts before they ran was temp 19.4 on the A100 and 29.6 on the
+H100, a difference of about 10.3 if A17's offset were the executable's. **Measured: 5.41 GiB
+(5.81 GB) on the device store, so the executable holds about half of A17's 11.02 GB and the rest
+is outside it**; and on the streamed store the sign reverses (the A100 asks 2.12 GiB more), so the
+temporary is set by each backend's schedule rather than by anything the card's size dictates.
+Both device-store figures sit about 2 GiB above the forecast rather than 3.8 below September's, so
+the coefficient change in `sizing.py` did not show at this corner. The long H100 job
+(`vii1-stages-h100.sbatch`) is therefore still needed for the other half and for the 28 GB.
+
 ## 2. `diago_david_ndim = 2` may degrade at the minimum subspace once `ethr` tightens **[measured 2026-10-09 at `aa08c82`: on `si16-1k-ecut30` it does not, at most 6 steps a call against `pw.x`'s 5; 2026-10-10, branch `decided-j`: the collapse is `cegterg`'s `nbase + notcnv > nvecx` now, 28 to 22 steps at `ndim = 2` on that cell, 27 to 19 on `si8-smeared-1k`, and `al-slab` at `ndim = 2` from 1.4e-5 Ry off to 7e-9 from `pw.x`]**
 
 **2026-10-10, branch `decided-j`: the collapse condition was not `cegterg`'s, and is now.**
