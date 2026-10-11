@@ -665,8 +665,11 @@ def test_symmetry_fixes_the_augmented_gradient_at_zero(dataset, pseudo_dir):
     the same quantity on the physical chain is 2.5e-06 for PAW.
 
     ``PLAN.md`` P96 has the other stationary point, ``q3 = 1/2``, on that chain
-    -- where PAW leaves 2.5e-06 against ultrasoft's 8.5e-08 and the difference
-    is traced to the dense grid rather than to the spiral.
+    -- where PAW left 2.5e-06 against ultrasoft's 8.5e-08, traced then to the
+    dense grid. It was the shell between the resident sphere and the laboratory
+    one (``OPEN.md`` Part XXI item 1): on the laboratory sphere PAW reads
+    1.2e-08 and ultrasoft 1.3e-07 (2026-10-11, D22), and the resident spheres
+    on the same machine reproduce 2.48e-06 and 6.6e-08.
     """
     calculation, result = _converged_augmented(dataset, 0.0, pseudo_dir)
     gradient = compute_spiral_gradient(calculation, result, k_batch=None)
