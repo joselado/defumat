@@ -24,6 +24,7 @@ functionals themselves live in ``tests/unit/test_hubbard_full.py`` and
   through the whole input path rather than through the solver alone.
 """
 
+import dataclasses
 from functools import lru_cache
 from pathlib import Path
 
@@ -49,9 +50,9 @@ GENERATED = Path(__file__).resolve().parents[1] / "data" / "qe"
 # resident at once. The file was SIGKILLed (exit 137) part way through the slow
 # suite on this machine, which is the failure mode that rule exists to prevent.
 @lru_cache(maxsize=2)
-def _converged(name, pseudo_dir):
+def _converged(name, pseudo_dir, noncollinear_gga=None):
     pwin = read_pw_input(GENERATED / name)
-    system = build_system(pwin)
+    system = dataclasses.replace(build_system(pwin), noncollinear_gga=noncollinear_gga)
     pseudos = tuple(
         read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species
     )
@@ -210,7 +211,9 @@ def test_the_full_functional_on_a_spinor_matches_pw_x(pseudo_dir):
     matrix with complex off-diagonal spin blocks is where the potential's
     pairing convention stops being invisible.
     """
-    calculation, result = _converged("fe-kind1-noncol.in", pseudo_dir)
+    # pw.x's functional: the default ``'grad_m'`` lands 2.7e-4 Ry away on this
+    # spin-orbit cell (2026-10-12), which is the functional and not the Hubbard term.
+    calculation, result = _converged("fe-kind1-noncol.in", pseudo_dir, "kubler")
     reference = read_qe_output(GENERATED / "reference.out.fe-kind1-noncol")
     assert result.converged
     assert calculation.hubbard.kind == 1 and calculation.hubbard.noncolin

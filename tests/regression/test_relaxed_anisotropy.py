@@ -17,6 +17,7 @@ whose handoff would have to carry a ``becsum`` belonging to a run with a
 different pseudopotential file -- is exactly where a production magnet lives.
 """
 
+import dataclasses
 import tempfile
 import warnings
 from pathlib import Path
@@ -33,9 +34,15 @@ PSEUDO = "tests/data/pseudo"
 XZ = ((1.0, 0.0, 0.0), (0.0, 0.0, 1.0))
 
 
-def _calculator(name):
-    return Calculator.from_file(f"tests/data/qe/{name}", pseudo_dir=PSEUDO,
-                                announce=False)
+def _calculator(name, **system):
+    calculator = Calculator.from_file(f"tests/data/qe/{name}", pseudo_dir=PSEUDO,
+                                      announce=False)
+    if not system:
+        return calculator
+    return Calculator(dataclasses.replace(calculator.system, **system),
+                      pseudo_dir=PSEUDO, announce=False,
+                      **{k: v for k, v in calculator.defaults.items()
+                         if k != "announce"})
 
 
 @pytest.mark.slow
@@ -294,7 +301,9 @@ def test_the_relaxed_anisotropy_agrees_with_pw_x():
 
     references = [read_qe_output(Path(f"tests/data/qe/reference.out.co-tetragonal-relaxed-mae-{d}"))
                   for d in "xz"]
-    calculator = _calculator("co-tetragonal-relaxed-mae.in")
+    # pw.x's functional: under the default ``'grad_m'`` the canted spin-orbit
+    # density moves both totals by 2.7e-6 Ry (2026-10-12), a different functional.
+    calculator = _calculator("co-tetragonal-relaxed-mae.in", noncollinear_gga="kubler")
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         result = calculator.get_relaxed_anisotropy(
