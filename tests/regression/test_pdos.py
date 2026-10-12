@@ -13,6 +13,8 @@ projection:
    ``print_proj``'s listing. That listing is rounded to three decimals and drops
    anything below 0.001, so it pins the projection to 1e-3 and no further --
    which is still the sharpest check here, because it involves no integration.
+   It pins a *converged* state's projection, so the empty bands are converged
+   as tightly as the occupied ones (``_run``).
 2. **The Löwdin charges** and the spilling parameter: the same projections
    integrated against the occupations. ``print_lowdin`` prints ``f8.4``.
 3. **The projected density of states** on ``partialdos``'s own energy grid.
@@ -135,12 +137,30 @@ def _run(stem: str, testsuite: Path, pseudo_dir: Path):
     without pinning the window the two curves would be sampled at points
     0.0005 eV apart -- a difference in where they are evaluated, not in what
     they are.
+
+    **The empty bands are converged as tightly as the occupied ones**
+    (``diago_full_acc``), because ``print_proj`` lists projections of converged
+    states and the default run does not deliver one for an empty band. By
+    default an empty band is stopped at ``empty_ethr = 1e-5`` Ry
+    (``cegterg.f90:129``), a criterion on the change of its eigenvalue that does
+    not bound the state, and between two close conduction bands that leaves a
+    mixture whose ``|psi|^2`` is a stopping point rather than a property. Measured
+    on ``si2-us-dense`` on D22-0161 (2026-10-12), against the same run with
+    ``diago_full_acc``: the default run's ``|psi|^2`` was 4.6e-4 from converged
+    at a1ba166 and **1.58e-3** at 22842dc (the collapse taken on ``cegterg``'s
+    ``nbase + notcnv > nvecx``, which moved where the solver stops and not any
+    eigenvalue), worst on the seventh band at the sixteenth k-point, 0.73184
+    against 0.73026 converged and 0.730 printed. The converged states read
+    **5.81e-4** from ``projwfc.x`` at both commits, which is the listing's
+    rounding, and the occupied bands read 4.95e-4 either way.
     """
     system = build_system(read_pw_input(_input_path(CASES[stem], testsuite)))
     pseudos = tuple(
         read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species
     )
-    scf = run_scf(system, pseudos, conv_thr=1e-10, max_iterations=80)
+    scf = run_scf(
+        system, pseudos, conv_thr=1e-10, max_iterations=80, diago_full_acc=True
+    )
     energies_ev = read_pdos_file(GENERATED / f"reference.{stem}.pdos_tot")[0]
     pdos, states = run_pdos(
         system,
