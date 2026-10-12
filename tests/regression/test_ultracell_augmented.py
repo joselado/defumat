@@ -841,9 +841,10 @@ def test_an_augmented_ultracell_runs_through_the_radial_table(
     folded k-point is 0.288 Ry, 6.9e-8 and 8.8e-8, the totals bit-identical
     across the two settings and the seeds' difference matched to 2.3e-13.
     (16, 36 and 40 are the other cuts in a gap below 50; 36 read 6.9e-8 and
-    6.1e-9.) The cut at 32 was also why the Kramers-closed default, when this
-    reference still received it, kept 32 or 33 directions by thread count:
-    see :data:`~defumat.ultracell.driver.KRAMERS_MOMENT_FLOOR`.
+    6.1e-9.) The zone centre is the only folded k-point where 32 cuts a
+    multiplet, and it is also where the Kramers-closed default, when this
+    reference still received it, kept 32 or 33 directions by thread count
+    (:data:`~defumat.ultracell.driver.KRAMERS_MOMENT_FLOOR`).
     """
     modulation = _modulation((2, 1, 1))
     energies, iterations, induced, seeds = [], [], [], []
