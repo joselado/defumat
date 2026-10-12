@@ -520,7 +520,8 @@ def _iodine():
     return _converged("i-atom-soc", conv_thr=1e-12, max_iterations=200)
 
 
-def _fixed_occupation_difference(system, calculation, result, solver, dv, step):
+def _fixed_occupation_difference(system, calculation, result, solver, dv, step,
+                                 ethr=1e-13):
     """``(rho(+h) - rho(-h)) / 2h`` for an insulator, at the ground state's weights."""
     from defumat.basis.interpolate import to_dense
     from defumat.scf.density import spinor_sum_band
@@ -538,7 +539,7 @@ def _fixed_occupation_difference(system, calculation, result, solver, dv, step):
     def density_at(scale):
         hamiltonians = calculation.hamiltonian(v_scf + scale * dv, None)
         _, psi = calculation.diagonalize(
-            hamiltonians, nbnd + REFERENCE_BUFFER, None, 1e-13
+            hamiltonians, nbnd + REFERENCE_BUFFER, None, ethr
         )
         rho = spinor_sum_band(
             psi[0][:, : solver.nocc], calculation.state_fft_index, smooth.grid,
@@ -584,8 +585,13 @@ def test_chi0_matches_a_finite_difference_with_spin_orbit_coupling(
     assert solution.converged
     drho = np.asarray(solver.response_density(solution.dpsi))
 
+    # ``ethr = 1e-15``: at 1e-13 the reference is Davidson noise at this step.
+    # Measured on D22 (2026-10-12) under ``noncollinear_gga = 'grad_m'``: the
+    # charge probe read 2.14e-5 at 1e-13 and 9.9e-7 at 1e-15, and at 1e-13 it
+    # read 1.4e-6, 2.1e-5 and 5.5e-6 at steps 2.5e-5, 1e-4 and 4e-4, which is
+    # not a truncation error; under 'kubler' 1e-13 happened to give 6.1e-7.
     reference = _fixed_occupation_difference(
-        system, calculation, result, solver, dv, RELATIVISTIC_STEP
+        system, calculation, result, solver, dv, RELATIVISTIC_STEP, ethr=1e-15
     )
     relative = np.abs(drho - reference).max() / np.abs(drho).max()
     print(f"\n{label}: chi_0 relative error {relative:.3e}")
