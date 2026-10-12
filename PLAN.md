@@ -25344,8 +25344,11 @@ both functionals converge in 25 iterations, `'grad_m'` at -294.287128996 and `'k
 (`'kubler'` diverges to 75 Ry, `'grad_m'` stalls at 2.3e-2), so that cell is the problem.
 
 **The tests under the new default.** The fast gate: 3563 passed. Of the slow files that ran
-before the run was stopped (28 of 92 in one of three runners; the other two complete), 19 tests
-failed, and an A/B at `60a099a` shows two came from the default: the relaxed cobalt anisotropy
+before the run was stopped (28 of 92 in one of three runners; the other two complete), 21 tests
+failed. Two did not reproduce: the PAW atom's LSDA run not converging and the polarized
+dielectric identity at 2.55e-7 against 1e-8. `tools/run_regression.sh` sets no platform, so
+the three runners shared D22's card; on the CPU both pass (6 of 6 and 3 of 3 runs). Of the
+other 19, an A/B at `60a099a` on the CPU shows two came from the default: the relaxed cobalt anisotropy
 (2.7e-6 Ry) and `fe-kind1-noncol` (2.7e-4 Ry), both against `pw.x` and now pinned to `'kubler'`.
 A third, the iodine `chi_0` with spin-orbit coupling, read 2.14e-5 against 5e-6 under
 `'grad_m'`, which was its reference's Davidson noise at `ethr = 1e-13` (9.9e-7 at 1e-15). The
