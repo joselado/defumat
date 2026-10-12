@@ -34,14 +34,15 @@ reached:
 3. ``ph.x``'s own number, and it has to be ``ph.x``'s *spinor* one. QE run as a
    spinor on this cell gives **13.806615123** against **13.806689470** as a
    scalar, so its own scalar-against-spinor identity is **7.4e-5** where this
-   code's is 5.0e-14. Against the like-for-like number this code sits 3.1e-5
+   code's was 5.0e-14 (1.5e-12 on D22 at ``3835742``, see ``IDENTITY``). Against the like-for-like number this code sits 3.1e-5
    away, tighter than the 4.3e-5 the two *scalar* runs sit at. The bound below
    is loose enough to hold either pairing, which is deliberate: it is the
    ``dq = 0.01`` radial-table floor and not a statement about the spin axis.
 
 **What the identity is measured at, and why not tighter.** At
-``conv_thr = 1e-8`` and ``1e-10`` the two routes agree to **2.1e-14** and
-**5.0e-14**; at ``1e-12`` they sit **1.35e-7** apart and at ``1e-14``
+``conv_thr = 1e-8`` and ``1e-10`` the two routes agreed to **2.1e-14** and
+**5.0e-14** when the phase landed (on D22 still 5.0e-14 at ``90b50bd~1``, and
+**1.5e-12** at ``3835742``: see ``IDENTITY`` for why that is summation order); at ``1e-12`` they sit **1.35e-7** apart and at ``1e-14``
 **9.8e-9**, which is not a trend and not a route difference. Three controls say
 so, and together they are what stops "the two ground states differ a little"
 from being an explanation accepted because it fits:
@@ -125,10 +126,24 @@ EPSILON_TOLERANCE = 5e-4
 BORN_TOLERANCE = 1e-4
 
 #: How far the scalar and spinor routes may sit apart at ``conv_thr = 1e-10``.
-#: Measured 5.0e-14 in ``epsilon`` and 3.0e-15 in ``Z*``; this is two orders of
-#: room on the first. **Not asserted at 1e-12**, where the same identity would
+#: Measured 5.0e-14 in ``epsilon`` and 3.0e-15 in ``Z*`` when the phase landed,
+#: and held at 1e-12 until the SCF's density went onto the stick and plane-chunk
+#: route (``90b50bd``/``5dd826b``). On D22, one machine and cores 6-7 throughout,
+#: the gap in ``isotropic`` then reads 5.0e-14 at ``90b50bd~1``, 9.6e-13 at
+#: ``5dd826b``, 1.8e-13 at ``a7bb0b6`` and **1.48e-12** at ``3835742`` (three
+#: runs, bit-identical), with ``Z*`` 2.1e-13 and the energies 1.8e-15 Ry apart.
+#: **It is summation order, not a spinor term:** at ``3835742`` the scalar run
+#: alone moves by **1.2e-12** across five of the six pairs of
+#: ``DEFUMAT_K_BATCH`` in {1, 2, all} and ``DEFUMAT_BAND_BATCH`` in {1, all} (all
+#: but (1, all)), the spinor by 1.7e-12, and the identity over those five reads 9.4e-14, 4.6e-13, 8.1e-13, 1.48e-12 and
+#: 1.59e-12. Tightening the response (``tr2``/``threshold`` 1e-22/1e-11,
+#: 1e-28/1e-14) leaves it at 1.5e-12, so the solve is not what sets it (at
+#: 1e-26/1e-13 it read 4.0e-11, a solve stopping elsewhere; ``CONVERGED`` is the
+#: setting asserted, and it is bit-reproducible). 5e-12 is
+#: three times the largest reading; a factor of two in the spin sum is 100 per
+#: cent. **Not asserted at 1e-12** ``conv_thr``, where the same identity would
 #: need 1e-6 and would stop discriminating anything (see the module docstring).
-IDENTITY = 1e-12
+IDENTITY = 5e-12
 
 #: The wedge against the closed grid, as a spinor: measured 7.4e-13, against the
 #: scalar pair's own 4.1e-13 on the same cell.
@@ -199,7 +214,9 @@ def test_a_spinor_with_no_magnetization_gives_the_scalar_dielectric_tensor():
     multipliers that were refused for a spinor until this phase.
 
     Measured at ``conv_thr = 1e-10``: **5.0e-14** in ``epsilon`` and
-    **3.0e-15** in ``Z*``, with the two total energies 1.8e-15 Ry apart.
+    **3.0e-15** in ``Z*``, with the two total energies 1.8e-15 Ry apart, when
+    the phase landed; **1.48e-12** and **2.1e-13** on D22 at ``3835742``, which
+    is the scalar run's own scatter under a change of batch (``IDENTITY``).
     """
     _, scalar_scf, scalar = _silicon(False, 1e-10)
     _, spinor_scf, spinor = _silicon(True, 1e-10)

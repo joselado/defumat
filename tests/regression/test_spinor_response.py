@@ -168,7 +168,18 @@ def test_the_spinor_density_weights_are_the_ground_state_s():
     convergence test can see. Rebuilding the converged density from the same
     weights the finite difference uses pins it before anything is differentiated.
 
-    Measured: **5.3e-23** against a density whose largest value is 0.143.
+    **The bound is round-off in the largest value, not bit identity.** Until
+    ``90b50bd``/``5dd826b`` (measured at either side, not between) the SCF built its density through the same dense-box
+    ``spinor_sum_band`` call as below and the two agreed to **2.6e-23** (D22,
+    ``09856fc``, ``3dc8095`` and ``90b50bd~1``; 5.3e-23 when first measured),
+    which a bound of 1e-18 recorded. Since then the SCF takes the stick and
+    plane-chunk route (``sticks``, ``plane_chunk``) and this call does not, so
+    the two add the same terms in a different order: **4.16e-17** on D22 at
+    ``5dd826b``, ``6a4b391``, ``a7bb0b6`` and ``3835742``, three runs at head
+    bit-identical, which is ``3 * 2**-56``, 1.5 ulp of the largest value 0.143
+    (ulp 2.8e-17); every component's difference is at most one or two ulp of
+    0.143, the magnetization's included. **1e-15** is about 36 ulp of that
+    value, and a weight out by two would sit at 0.07, fourteen orders above.
     """
     from defumat.basis.interpolate import to_dense
     from defumat.scf.density import spinor_sum_band
@@ -193,7 +204,7 @@ def test_the_spinor_density_weights_are_the_ground_state_s():
     )
     rebuilt = np.asarray(to_dense(rho, smooth, dense))
     reference = np.asarray(result.density)
-    assert np.abs(rebuilt - reference).max() < 1e-18
+    assert np.abs(rebuilt - reference).max() < 1e-15
 
 
 @pytest.mark.slow
