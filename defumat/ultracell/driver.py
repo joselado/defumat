@@ -1109,6 +1109,13 @@ def run_ultracell(
             f"channel's partner is the other channel, which the basis already "
             f"holds, so there is nothing to add"
         )
+    # **Closed under time reversal** is what the seed, its gate and the
+    # non-convergence advice ask about, and a spinor reference with no moment
+    # is closed without the partners: its states already come in pairs. Read
+    # off ``kramers_pairs`` alone, a collapsed reference was told it had asked
+    # for ``kramers_pairs=False``.
+    closed_basis = bool(kramers_pairs) or (
+        int(system.nspin) == 4 and not magnetized_spinor)
     if kramers_pairs and not magnetized_spinor:
         carried = ("" if moment is None else
                    f" (int |m| = {moment:.2e} Bohr magnetons per cell, below "
@@ -1451,7 +1458,7 @@ def run_ultracell(
     if (seed_field is None and magnetic_field is not None
             and seed_from_field is not False and nspin_mag == 4):
         field_seed_skipped = _field_seed_gate(
-            kramers_pairs=bool(kramers_pairs), lspinorb=bool(system.lspinorb),
+            kramers_pairs=closed_basis, lspinorb=bool(system.lspinorb),
             seed_from_field=seed_from_field,
         )
         if field_seed_skipped is None:
@@ -1479,7 +1486,7 @@ def run_ultracell(
             seed_axis = reference_axis(moment, float(cell.volume))
         density = seeded_density(density, seed_field, nspin_mag,
                                  float(cell.volume), axis=seed_axis,
-                                 closed=bool(kramers_pairs))
+                                 closed=closed_basis)
     # ``get_mixer`` drops a ``None`` keyword, so an unset history leaves the
     # mixer its own default and ``mixing_mode = "linear"``, which has no
     # history at all, is not a TypeError.
@@ -1776,7 +1783,7 @@ def run_ultracell(
         # how it started**, and the advice is read off that rather than given
         # once for all (:func:`_noncollinear_advice`).
         rigid = "" if nspin_mag != 4 else _noncollinear_advice(
-            kramers_pairs=bool(kramers_pairs), seed_origin=seed_origin,
+            kramers_pairs=closed_basis, seed_origin=seed_origin,
             field_given=magnetic_field is not None,
             opted_out=seed_from_field is False,
             skipped=field_seed_skipped, max_iterations=int(max_iterations),
