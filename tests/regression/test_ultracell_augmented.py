@@ -830,6 +830,20 @@ def test_an_augmented_ultracell_runs_through_the_radial_table(
     scaling of a stopping point and not of the interpolation. So the spinor
     branch runs at 1e-13 and holds the density at three times that measurement
     (``OPEN.md`` Part XIX, 2026-09-25).
+
+    **The spinor branch cuts at ``nbnd = 28`` and not 32, because 32 cuts a
+    multiplet.** At the zone centre bands 31 to 35 lie within 1.4e-8 Ry, and
+    the smallest gap across the cut at 32 is 2.4e-9 Ry, so which members of
+    the multiplet the basis holds is round-off. Measured on D22 (2026-10-12):
+    at 32 the induced density read 9.1e-8 of its maximum with the default BLAS
+    threads and **1.6e-6** with ``OMP_NUM_THREADS=1``, and the energies'
+    difference from the seeds' 1.3e-11; at 28, where the smallest gap at any
+    folded k-point is 0.288 Ry, 6.9e-8 and 8.8e-8, the totals bit-identical
+    across the two settings and the seeds' difference matched to 2.3e-13.
+    (16, 36 and 40 are the other cuts in a gap below 50; 36 read 6.9e-8 and
+    6.1e-9.) The cut at 32 was also why the Kramers-closed default, when this
+    reference still received it, kept 32 or 33 directions by thread count:
+    see :data:`~defumat.ultracell.driver.KRAMERS_MOMENT_FLOOR`.
     """
     modulation = _modulation((2, 1, 1))
     energies, iterations, induced, seeds = [], [], [], []
@@ -844,7 +858,8 @@ def test_an_augmented_ultracell_runs_through_the_radial_table(
             calculator = _spinor(tmp_path, pseudo_dir, "paw")
             scf = calculator.get_scf(conv_thr=1e-13, nbnd=24)
             kgrid = (1, 2, 2)
-            kwargs = dict(nbnd=32, conv_thr=1e-13, states_conv_thr=1e-13,
+            # 28 falls in a gap at every folded k-point; 32 does not.
+            kwargs = dict(nbnd=28, conv_thr=1e-13, states_conv_thr=1e-13,
                           max_iterations=60)
         assert scf.converged
         seeds.append(float(scf.total_energy))
@@ -854,9 +869,9 @@ def test_an_augmented_ultracell_runs_through_the_radial_table(
         )
         assert result.converged
         # The spinor reference's moment collapses (int |m| = 5.2e-7), so the
-        # basis is not Kramers-closed: when it was, the union's rank at the
-        # first folded k-point was 32 or 33 by BLAS thread count, and the two
-        # routes read 2.7e-8 Ry apart (KRAMERS_MOMENT_FLOOR).
+        # basis is not Kramers-closed: when it was, at nbnd = 32 the union's
+        # rank at the first folded k-point was 32 or 33 by BLAS thread count,
+        # and the two routes read 2.7e-8 Ry apart (KRAMERS_MOMENT_FLOOR).
         assert result.kramers_ranks is None
         energies.append(float(result.total_energy))
         iterations.append(len(result.history))
