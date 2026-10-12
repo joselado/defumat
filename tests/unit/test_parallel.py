@@ -709,7 +709,7 @@ SIGTERM_SCRIPT = textwrap.dedent("""
     from defumat.scf.driver import Calculation, run_scf
     from defumat.system import build_system
     text, directory, victim = sys.argv[1], sys.argv[2], int(sys.argv[3])
-    SIGNAL_AT = 5
+    SIGNAL_AT, PAUSE = 5, 0.1
     with tempfile.NamedTemporaryFile("w", suffix=".in", delete=False) as f:
         f.write(text)
     system = build_system(read_pw_input(Path(f.name)))
@@ -718,19 +718,25 @@ SIGTERM_SCRIPT = textwrap.dedent("""
     calculation = Calculation(system, pseudos)
     run_scf(system, pseudos, calculation=calculation, max_iterations=2, verbose=False)
     pools = current_pools()
-    if pools.rank == victim:
-        # The notice arrives at a fixed iteration of the loop rather than after
-        # a wall-clock delay: the whole 63-iteration SCF below takes 1.5 s on
-        # D22-0161 once compiled, so a 1 s timer raced it to convergence.
-        import defumat.scf.driver as driver
-        from defumat.parallel import poll_stop
-        polls = []
-        def poll_and_signal():
-            polls.append(None)
-            if len(polls) == SIGNAL_AT:
-                os.kill(os.getpid(), signal.SIGTERM)
-            return poll_stop()
-        driver.poll_stop = poll_and_signal
+    # The victim sends the notice from inside its fifth poll of the loop, and
+    # every pool pauses PAUSE seconds at each poll. The agreed stop is set by
+    # wall time, not by steps: unpaused on D22-0161 it landed 0.15 to 1.0 s
+    # after a notice at the fifth poll, 8 to 44 iterations in ten runs, while
+    # the whole 63-iteration SCF takes 1.5 s once compiled, so a notice from a
+    # 1 s timer (the test as first written) converged first in one run of
+    # three. With the pause, ten runs stopped at 4 to 11 iterations and the
+    # unsignalled SCF took 7.8 s to its 63.
+    import time
+    import defumat.scf.driver as driver
+    from defumat.parallel import poll_stop
+    polls = []
+    def poll_and_signal():
+        polls.append(None)
+        if pools.rank == victim and len(polls) == SIGNAL_AT:
+            os.kill(os.getpid(), signal.SIGTERM)
+        time.sleep(PAUSE)
+        return poll_stop()
+    driver.poll_stop = poll_and_signal
     result = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-30,
                      max_iterations=400, checkpoint_dir=directory,
                      checkpoint_every=1000, verbose=False)
