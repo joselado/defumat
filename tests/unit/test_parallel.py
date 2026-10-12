@@ -699,7 +699,7 @@ def test_a_pooled_relaxation_checkpoint_resumes_where_it_stopped(tmp_path):
 
 
 SIGTERM_SCRIPT = textwrap.dedent("""
-    import json, os, signal, sys, tempfile, threading, warnings
+    import json, os, signal, sys, tempfile, warnings
     warnings.simplefilter("ignore")
     from pathlib import Path
     import defumat
@@ -709,6 +709,7 @@ SIGTERM_SCRIPT = textwrap.dedent("""
     from defumat.scf.driver import Calculation, run_scf
     from defumat.system import build_system
     text, directory, victim = sys.argv[1], sys.argv[2], int(sys.argv[3])
+    SIGNAL_AT = 5
     with tempfile.NamedTemporaryFile("w", suffix=".in", delete=False) as f:
         f.write(text)
     system = build_system(read_pw_input(Path(f.name)))
@@ -718,7 +719,18 @@ SIGTERM_SCRIPT = textwrap.dedent("""
     run_scf(system, pseudos, calculation=calculation, max_iterations=2, verbose=False)
     pools = current_pools()
     if pools.rank == victim:
-        threading.Timer(1.0, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
+        # The notice arrives at a fixed iteration of the loop rather than after
+        # a wall-clock delay: the whole 63-iteration SCF below takes 1.5 s on
+        # D22-0161 once compiled, so a 1 s timer raced it to convergence.
+        import defumat.scf.driver as driver
+        from defumat.parallel import poll_stop
+        polls = []
+        def poll_and_signal():
+            polls.append(None)
+            if len(polls) == SIGNAL_AT:
+                os.kill(os.getpid(), signal.SIGTERM)
+            return poll_stop()
+        driver.poll_stop = poll_and_signal
     result = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-30,
                      max_iterations=400, checkpoint_dir=directory,
                      checkpoint_every=1000, verbose=False)

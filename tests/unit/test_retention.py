@@ -160,8 +160,8 @@ def test_the_field_keeps_its_commutators_only_for_a_reader(monkeypatch):
     """A7. Both lists are read after the loop and by nothing inside it.
 
     Behavioural rather than a source grep: the loop is stopped at its first
-    Sternheimer solve and the lists are read out of ``dielectric_tensor``'s own
-    frame, so a reformat cannot break this and a revert cannot pass it.
+    Sternheimer solve and the lists are read off the field object in
+    ``dielectric_tensor``'s own frame, so a reformat cannot break this and a revert cannot pass it.
     """
     filled = {}
 
@@ -172,12 +172,18 @@ def test_the_field_keeps_its_commutators_only_for_a_reader(monkeypatch):
     # the loop that fills both lists and before any of the work.
     def watched(*args, **kwargs):
         frame = _frame_of("dielectric_tensor")
-        filled["commutators"] = len(frame.f_locals["commutators"])
-        filled["projector_velocities"] = len(
-            frame.f_locals["projector_velocities"])
+        # Both lists live on the field the loop drives (since 0a9f317, which
+        # split the whole-k route from the streamed one); this cell's store is
+        # resident, so it is the whole-k route's ``_WholeField``.
+        field = frame.f_locals["field"]
+        assert isinstance(field, efield._WholeField), type(field)
+        filled["commutators"] = len(field.commutators)
+        filled["projector_velocities"] = len(field.projector_velocities)
         # The loop's own names, which outlive it: the last axis's ``derivative``
         # is a whole ``(nk, npwx, nkb)`` block and ``overlap`` and
-        # ``commutator`` a band block each.
+        # ``commutator`` a band block each. The loop now runs in
+        # ``_WholeField.prepare``, so this guards against it being inlined back
+        # into ``dielectric_tensor``'s frame without the release.
         filled["dangling"] = sorted(
             name for name in ("commutator", "derivative", "overlap", "position")
             if frame.f_locals.get(name) is not None
