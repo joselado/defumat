@@ -200,6 +200,33 @@ from defumat.units import E2, FPI, RY_TO_EV
 #: :func:`~defumat.ultracell.hamiltonian.multiplet_cut` now returns.
 DEGENERATE_CUT = 1.0e-8
 
+#: **A noncollinear reference carries a moment when ``int |m|`` over the unit
+#: cell exceeds this**, in Bohr magnetons, and only then is it closed under
+#: time reversal by default. ``nspin_mag = 4`` says the run *was allowed* a
+#: magnetization, not that it kept one: the spinor silicon cell of
+#: ``tests/regression/test_ultracell_augmented.py`` is started at
+#: ``starting_magnetization = 0.2`` and converges to ``int |m| = 5.2e-7`` (PAW,
+#: ``conv_thr = 1e-13``), where the Kramers partners are the states themselves.
+#: The union is then rank-deficient by exactly ``nbnd``, and whether an overlap
+#: eigenvalue of the duplicates lands above
+#: :data:`~defumat.ultracell.kramers.OVERLAP_FLOOR` is decided by round-off: on
+#: D22 (2026-10-12) the same run kept 32 directions at every folded k-point with
+#: the default BLAS threads and 33 at the first with ``OMP_NUM_THREADS=1``, the
+#: extra one at an overlap of 3.6e-7, which moved the total by 2.7e-8 Ry and the
+#: induced density by 1.3e-3 of itself. No floor separates that from a real
+#: partner, since the hydrogen cell keeps real ones at 1.6e-7, so the closure
+#: is decided on the moment instead. 1e-3 is 2000 times the collapsed silicon
+#: cell and 270 times below the smallest moment the closure was measured on
+#: (0.27 per cell, the four-cell hydrogen helix).
+KRAMERS_MOMENT_FLOOR = 1.0e-3
+
+
+def reference_moment(reference, volume: float) -> float:
+    """``int |m(r)| dr`` of a noncollinear reference, in Bohr magnetons per cell."""
+    m = np.asarray(reference.density)[1:]
+    return float(np.sqrt((m ** 2).sum(axis=0)).sum() * float(volume) / m[0].size)
+
+
 #: The ``occupations`` values :func:`_occupy` has a branch for. ``None`` is
 #: read as ``'fixed'``, as it is everywhere else.
 ULTRACELL_OCCUPATIONS = ("fixed", "smearing")
@@ -1008,10 +1035,12 @@ def run_ultracell(
         kramers_pairs: add each frozen state's Kramers partner to the basis,
             the states of the reference with its magnetization reversed
             (:mod:`defumat.ultracell.kramers`). **On by default for a
-            magnetized noncollinear reference** (``nspin_mag = 4``), off for
+            magnetized noncollinear reference** (``nspin_mag = 4`` and a
+            converged ``int |m|`` above :data:`KRAMERS_MOMENT_FLOOR`), off for
             everything else, where there is nothing to add: a collinear
             channel's partner is the other channel and a nonmagnetic spinor
-            reference is already closed. ``False`` asks for the reference's
+            reference is already closed, including one whose starting moment
+            collapsed. ``True`` on either is refused. ``False`` asks for the reference's
             states alone. That basis prefers the reference's own direction,
             so a texture that turns away from it leans back toward it: on
             four cells of hydrogen at ``nbnd = 16`` a cone of 10.64 degrees
@@ -1065,6 +1094,12 @@ def run_ultracell(
     basis = build_basis(system)
     require_an_ultracell_regime(system, pseudos, basis)
     magnetized_spinor = int(system.nspin) == 4 and int(system.nspin_mag) == 4
+    moment = None
+    if magnetized_spinor and reference is not None:
+        # The converged moment and not the input's permission to have one:
+        # see :data:`KRAMERS_MOMENT_FLOOR`.
+        moment = reference_moment(reference, cell.volume)
+        magnetized_spinor = moment > KRAMERS_MOMENT_FLOOR
     if kramers_pairs is None:
         kramers_pairs = magnetized_spinor
     if kramers_pairs and int(system.nspin) != 4:
@@ -1075,10 +1110,14 @@ def run_ultracell(
             f"holds, so there is nothing to add"
         )
     if kramers_pairs and not magnetized_spinor:
+        carried = ("" if moment is None else
+                   f" (int |m| = {moment:.2e} Bohr magnetons per cell, below "
+                   f"{KRAMERS_MOMENT_FLOOR:.0e})")
         raise ValueError(
             "kramers_pairs on a noncollinear cell that carries no "
-            "magnetization: its states already come in Kramers pairs, so the "
-            "basis is closed under time reversal and there is nothing to add"
+            f"magnetization{carried}: its states already come in Kramers "
+            "pairs, so the basis is closed under time reversal and there is "
+            "nothing to add, and the union's rank would be decided by round-off"
         )
     if seed_from_field:
         # Refused before the frozen solve, which is the expensive step.

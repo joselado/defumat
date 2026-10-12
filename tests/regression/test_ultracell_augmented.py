@@ -853,6 +853,11 @@ def test_an_augmented_ultracell_runs_through_the_radial_table(
             external=modulation, **kwargs,
         )
         assert result.converged
+        # The spinor reference's moment collapses (int |m| = 5.2e-7), so the
+        # basis is not Kramers-closed: when it was, the union's rank at the
+        # first folded k-point was 32 or 33 by BLAS thread count, and the two
+        # routes read 2.7e-8 Ry apart (KRAMERS_MOMENT_FLOOR).
+        assert result.kramers_ranks is None
         energies.append(float(result.total_energy))
         iterations.append(len(result.history))
         tiled = np.asarray(result.ultracell.tile(np.asarray(scf.density)))
