@@ -8891,7 +8891,10 @@ What the agents of this sweep's follow-up found outside their items, recorded ra
   (`30cffd2`), while the same head inside the whole file's run read M = 0.4255 (fails). Not a regression
   from tonight; the unpreconditioned Newton step here is a damped-mixing step whose root the reduction
   order chooses on that machine. The test needs a start further from the saddle, or a statement of which
-  machines it is a claim about.
+  machines it is a claim about. **Closed 2026-10-12** (branch `fix-solvers`): after `22842dc` both iron
+  tests flipped at 0.10 on D22; re-measured, the root is set by the inner-solve budget rather than by Kerker,
+  and both tests now start from 0.12 with Kerker on and differ only in the GMRES budget (0.1 in 20 against
+  0.5 in 8), every point from 0.10 to 0.14 agreeing under one core and under two (`PLAN.md` P22).
 - **Small leftovers** (the first three done 2026-10-04 in `6f366df`: the torque reads `np.shape`, the Hubbard
   diagonal goes by atom block through a static `atom_of_column` (reverted with M5 in `dacdd8b`), bit-identical on `ni-ldau-ortho` and within the
   SCF's round-off sensitivity on QE's FeO, and the comment is corrected; the uploads in the last clause are

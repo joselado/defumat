@@ -3535,6 +3535,20 @@ The general lesson, which is P22's own and is now measured at eps scale: **a tes
 asserts which root a stability-blind solver finds, or how long a marginally damped
 controller rings for, is asserting a property of the arithmetic and not of the physics.**
 
+**Re-measured on `D22-0161`, 2026-10-12, after `22842dc`** (Davidson collapses on
+`cegterg`'s `nbase + notcnv > nvecx`). That commit flipped both iron tests at the old kick
+of 0.10, the Kerker run to the ferromagnet (`-3.4052`) and the unpreconditioned one to the
+saddle (`-0.0005`), and the kick scan says the root is decided by the **inner-solve budget**
+and not by Kerker: with GMRES to 0.1 in 20 iterations both preconditioners return to the
+saddle (Kerker from 0.10 to 0.14, not at 0.15), with 0.5 in 8 both reach the ferromagnet
+(Kerker from 0.10, without it from 0.12), under one core and under two; mixing comes back
+at 0.095 and runs away from 0.10. The tests now take `KICK = 0.12` and differ only in the
+budget. A third root at `|M| = 0.42` appears in the same scans. The same commit moved the
+cold-start JVP disagreement on the slab from 1.08 to 0.24 (seed 0; 1.89 to 0.42 and 3.42 to
+0.69 for seeds 1 and 2), and stopped the AFM hydrogen chain's SCF at an accuracy of 9.9e-13
+under `conv_thr = 1e-12` where it used to land at 2.9e-14, which took its metallic `chi_0`
+check from 1.07e-6 to 1.48e-5; that test now converges to 1e-13 (1.13e-6).
+
 **Three things did have to be written down, and each was a trap.**
 
 - **`|psi|^2` is `Re(conj(psi) psi)`, not `abs(psi)**2`.** `abs`'s derivative is

@@ -6439,10 +6439,12 @@ def _solve_residual(
       decides which one is found.** An inexact Newton step is only the Newton
       direction to the extent the inner solve converges, and a badly conditioned
       Krylov system degrades it towards a damped-mixing step -- which flows to
-      the *stable* fixed point. On bcc iron the preconditioned solve reaches the
-      non-magnetic saddle and the unpreconditioned one reaches the ferromagnetic
-      ground state, both reporting an accuracy below ``conv_thr`` (``PLAN.md``
-      P22, ``test_scf_solvers.py``).
+      the *stable* fixed point. On bcc iron kicked off its non-magnetic saddle
+      a solve to a relative GMRES residual of 0.1 in 20 iterations returns to
+      the saddle and one to 0.5 in 8 reaches the ferromagnetic ground state,
+      with Kerker on or off, both reporting an accuracy below ``conv_thr``
+      (``PLAN.md`` P22, ``test_scf_solvers.py``, re-measured 2026-10-12; P22
+      first read the preconditioner as what decides it).
     * **A warm-up of ordinary mixing** is allowed and defaults to none. Newton
       converges from a good enough guess and wanders from a bad one, and the
       atomic superposition is a bad one for exactly the systems worth using this

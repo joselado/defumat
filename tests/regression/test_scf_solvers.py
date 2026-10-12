@@ -43,10 +43,26 @@ SILICON = BENCHMARKS / "si-1k.in"
 IRON = BENCHMARKS / "fe-unstable.in"
 
 #: How far to kick the symmetric iron solution, in the atomic magnetization's
-#: shape. The middle of a *measured* window, not a tuned number: below 0.08
-#: mixing comes back too, above 0.12 Newton stops coming back -- see
-#: :func:`test_newton_krylov_reaches_an_unstable_solution`.
-KICK = 0.10
+#: shape. The middle of a *measured* window, not a tuned number: re-measured on
+#: ``D22-0161`` on 2026-10-12, after ``22842dc`` changed Davidson's collapse,
+#: mixing comes back below 0.10 and runs away from 0.10 up, the
+#: tightly solved Newton comes back from 0.10 to 0.14 and not at 0.15, and the
+#: loosely solved one runs away from 0.10 up with Kerker, 0.12 without -- see
+#: :func:`test_newton_krylov_reaches_an_unstable_solution`. It was 0.10 until
+#: then, the middle of the window measured on the other workstation before
+#: the collapse fix, and on D22 at that commit 0.10 was the only point of it.
+KICK = 0.12
+
+#: The inner solve that delivers the Newton direction: GMRES to a relative
+#: residual of 0.1 in up to 20 iterations. This, and not the preconditioner,
+#: is what returns the kicked iron to its symmetric root (measured with Kerker
+#: off as well: back at 0.10 to 0.13, 0.42 at 0.14).
+TIGHT_INNER_SOLVE = {"forcing": 0.1, "gmres_maxiter": 20, "max_iterations": 30}
+
+#: The inexact one: a relative residual of 0.5 in at most 8 GMRES iterations,
+#: which is what P22 ran. With Kerker on or off it reaches the ferromagnet from
+#: 0.12 to 0.14 on D22, under one core and under two.
+LOOSE_INNER_SOLVE = {"forcing": 0.5, "gmres_maxiter": 8, "max_iterations": 12}
 IRON_NONMAGNETIC = BENCHMARKS / "fe-unstable-nonmagnetic.in"
 
 #: fcc nickel with U = 3 eV: the DFT+U counterpart of ``IRON``, and the case
@@ -74,6 +90,14 @@ def _kicked_iron():
     perturbation and the seed is small enough for that to choose. From the
     kicked state, which is a *measured* distance outside the saddle's basin,
     both arithmetics give -3.405 and -3.405.
+
+    **That was measured with the Davidson of before ``22842dc``** (2026-10-10),
+    which collapsed its subspace on every step at ``david = 2``. Collapsing on
+    ``cegterg``'s condition changes every evaluation of ``F`` at the level of
+    ``ethr``, and at the old kick of 0.10 both Newton tests flipped on D22: the
+    Kerker run reached the ferromagnet (-3.4052) and the unpreconditioned one
+    the saddle (-0.0005). The kick and the inner solves were re-measured then;
+    at 0.12 every column of the window agrees under one core and under two.
 
     Returns ``(system, pseudos, saddle, kicked)``.
     """
@@ -164,6 +188,16 @@ def test_autodiff_jvp_needs_a_warm_start():
     it got there. This is why ``finite-difference`` is the default backend, and
     it is asserted rather than commented so that a future exact-response rule
     (P22c) has to come and delete it.
+
+    **The size of the disagreement belongs to Davidson's trajectory, so it moved
+    when the trajectory did.** Measured on D22 on 2026-10-12 over three random
+    directions (seeds 0, 1, 2): 1.08, 1.89 and 3.42 just before ``22842dc``, and
+    0.242, 0.422 and 0.687 from it on, once the subspace stopped collapsing on
+    every step and the tape became a longer Krylov expansion. The bound was 0.5,
+    which seed 0 now misses; 0.1 is twice the 0.05 the warm start is held to in
+    :func:`test_jacobian_action_matches_finite_differences` and 2.4 times below
+    the smallest of the three, so the assertion still separates the cold tangent
+    from a usable Jacobian, which is the claim.
     """
     system, pseudos, calculation, residual = _setup(SLAB)
     x = residual.pack(calculation.starting_density(), calculation.starting_becsum())
@@ -174,7 +208,7 @@ def test_autodiff_jvp_needs_a_warm_start():
     autodiff, _ = residual.jvp(x, direction, None)
     difference = residual.jvp_finite_difference(x, direction, None)
     relative = np.linalg.norm(autodiff - difference) / np.linalg.norm(difference)
-    assert relative > 0.5
+    assert relative > 0.1
 
 
 @pytest.mark.regression
@@ -355,6 +389,36 @@ def test_newton_krylov_reaches_an_unstable_solution():
     "A root no mixer can hold" is still exactly true of the Hubbard saddle
     below, whose 2% kick runs away. For iron the honest statement is a root no
     mixer *reaches*, which Newton returns to from outside its basin.
+
+    **Re-measured on D22, 2026-10-12, after ``22842dc``**, because the table
+    above stopped holding: at 0.10 the Kerker run with the loose inner solve
+    (``LOOSE_INNER_SOLVE``) went to the ferromagnet. Under ``taskset -c 2-3``,
+    with ``TIGHT_INNER_SOLVE`` for Newton:
+
+    ======  ====================  ======================  ======================
+    kick    mixing ends at        tight Newton ends at    loose Newton ends at
+    ======  ====================  ======================  ======================
+    0.085   ``-0.0000``           --                      --
+    0.095   ``+0.0001`` (back)    --                      --
+    0.10    ``+3.4052``           ``+0.0004``             ``-3.4052``
+    0.11    ``+3.4052``           ``+0.0011``             ``+3.4053``
+    0.12    ``+3.4053``           ``+0.0003``             ``+3.4052``
+    0.13    ``+3.4053``           ``+0.0001``             ``+3.4053``
+    0.14    ``+3.4052``           ``+0.0001``             ``+3.4052``
+    0.15    ``+3.4052``           ``+3.4053``             ``+3.4053``
+    ======  ====================  ======================  ======================
+
+    (both Newton columns with Kerker on). Under one core, ``taskset -c 2``,
+    the tight column is the same to the sign of the residual moment from 0.10
+    to 0.14 and the loose one reaches the ferromagnet at every point from 0.10
+    to 0.14, as it does under two. So the window is now
+    0.10 to 0.14, two points either side of 0.12, and its upper edge is set
+    by the inner solve: the loose one, which is what this test ran until then,
+    reaches the ferromagnet wherever mixing does, and at 0.095 (``-3.4053``)
+    where mixing comes back. A third root at
+    ``|M| = 0.42`` turns up in the same scans (the tight solve at 0.10 and 0.11
+    on the Davidson before ``22842dc``, the tight unpreconditioned one at 0.14), and
+    is not the one asserted here.
     """
     system, pseudos, saddle, kicked = _kicked_iron()
 
@@ -374,14 +438,17 @@ def test_newton_krylov_reaches_an_unstable_solution():
     came_back = run_scf(
         system, pseudos, calculation=Calculation(system, pseudos), conv_thr=1e-8,
         max_iterations=200, scf_solver="newton-krylov",
-        # ``kerker`` is load-bearing and not a tuning choice: see
+        # The inner solve is load-bearing and not a tuning choice: see
         # ``test_an_inexact_newton_is_only_as_stability_blind_as_its_inner_solve``.
-        scf_solver_options={"forcing": 0.5, "gmres_maxiter": 8,
-                            "max_iterations": 12, "kerker": True},
+        scf_solver_options={**TIGHT_INNER_SOLVE, "kerker": True},
         starting_density=kicked,
     )
 
     assert ran_away.converged and came_back.converged
+    # *Newton* converged, not the mixing loop that ``run_scf`` hands an
+    # unconverged residual solve to: ``SCFResult.iterations`` counts that loop
+    # and reads 1 here; the Newton count is ``came_back.solver.iterations``.
+    assert came_back.solver.converged
     # Mixing amplified the kick into the ferromagnetic ground state -- which is
     # *what makes the symmetric solution a saddle*...
     assert abs(float(ran_away.magnetization)) > 3.0
@@ -395,40 +462,49 @@ def test_newton_krylov_reaches_an_unstable_solution():
 @pytest.mark.regression
 @pytest.mark.slow
 def test_an_inexact_newton_is_only_as_stability_blind_as_its_inner_solve():
-    """Turning the preconditioner off changes *which root* is found.
+    """Loosening the inner solve changes *which root* is found.
 
     This is the trap, and it is silent: both runs converge, both report an
     accuracy below ``conv_thr``, and they land on different physics. A Newton
     method is stability-blind only to the extent that its inner solve actually
-    delivers the Newton direction; with a badly conditioned Krylov system the
-    inexact step degrades towards a damped-mixing step, and a damped-mixing step
-    flows to the *stable* fixed point. So the preconditioner here is not a
-    tuning knob for speed -- it decides the answer.
+    delivers the Newton direction; with a badly conditioned or truncated Krylov
+    solve the inexact step degrades towards a damped-mixing step, and a
+    damped-mixing step flows to the *stable* fixed point. So the inner solve
+    here is not a tuning knob for speed -- it decides the answer.
+
+    **Until 2026-10-12 the difference was the preconditioner**, Kerker on in
+    ``came_back`` and off here, both at ``LOOSE_INNER_SOLVE``, and P22 read the
+    root as decided by Kerker. Re-measured on D22 after ``22842dc`` that is not
+    what decides it: with the tight solve both preconditioners return to the
+    symmetric root from 0.10 to 0.13, and with the loose one both reach the
+    ferromagnet from 0.12 to 0.14, under one core and under two (the table in
+    :func:`test_newton_krylov_reaches_an_unstable_solution`). At the old kick
+    of 0.10 this test read ``M = -0.0005`` on D22 after ``22842dc`` and
+    ``-0.0072`` already at ``30cffd2`` before it, which is the knife edge
+    ``OPEN.md`` recorded on 2026-10-04.
 
     **It starts from the kicked state and not from the input's own
-    ``starting_magnetization``**, which is the whole of what made this
-    reproducible. From the bare 0.05 seed the answer is decided by round-off:
-    the same commit gives ``M = -3.4050`` with the default thread pool and
-    ``M = -0.0003`` -- the saddle, so the assertion fails -- under
+    ``starting_magnetization``**, which is what made this reproducible at all.
+    From the bare 0.05 seed the answer is decided by round-off: the same commit
+    gave ``M = -3.4050`` with the default thread pool and ``M = -0.0003`` under
     ``OMP_NUM_THREADS=1``, since a different reduction order is a different
-    perturbation and a seed that small lets it choose. Nothing regressed when
-    that was first seen; the suite had simply never been run single-threaded
-    before. From the kicked state both arithmetics give **-3.405**.
+    perturbation and a seed that small lets it choose.
 
-    Starting both runs from the same state is also what makes this a
-    *comparison*: the preconditioner is then the only difference between this
-    run and ``came_back`` above, which reaches the saddle from that same start.
+    Starting both runs from the same state, with the same preconditioner, is
+    what makes this a *comparison*: the inner-solve budget is the only
+    difference between this run and ``came_back`` above, which reaches the
+    saddle from that same start.
     """
     system, pseudos, _, kicked = _kicked_iron()
-    options = {"forcing": 0.5, "gmres_maxiter": 8, "max_iterations": 12}
-    unpreconditioned = run_scf(
+    inexact = run_scf(
         system, pseudos, calculation=Calculation(system, pseudos), conv_thr=1e-8,
         max_iterations=200, scf_solver="newton-krylov",
-        scf_solver_options={**options, "kerker": False},
+        scf_solver_options={**LOOSE_INNER_SOLVE, "kerker": True},
         starting_density=kicked,
     )
-    assert unpreconditioned.converged
-    assert abs(float(unpreconditioned.magnetization)) > 3.0
+    assert inexact.converged
+    assert inexact.solver.converged
+    assert abs(float(inexact.magnetization)) > 3.0
 
 
 # --- DFT+U ------------------------------------------------------------------

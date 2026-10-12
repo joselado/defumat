@@ -29,9 +29,11 @@ is a central difference of ``r``, which is classic Jacobian-free Newton-Krylov
 and shares no machinery with the first. Measured on the aluminium slab
 (``tests/regression/test_scf_solvers.py`` pins both numbers):
 
-* from a **cold** start the two disagree by **109%** -- differentiating
-  Davidson's trajectory from the pseudo-atomic orbitals is the derivative of a
-  different map, one that merely lands in the same place;
+* from a **cold** start the two disagree by **24%** along the test's direction
+  (24 to 69% over three; 109 to 342% before ``22842dc`` changed when Davidson
+  collapses its subspace) -- differentiating Davidson's trajectory from the
+  pseudo-atomic orbitals is the derivative of a different map, one that merely
+  lands in the same place, and how different depends on the trajectory;
 * from a **warm** start they agree to **0.8%**, which is a Jacobian good enough
   to give a Krylov solver a direction and is not the response operator;
 * and the finite difference is **4-7x faster**, because forward mode through the

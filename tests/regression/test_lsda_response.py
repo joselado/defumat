@@ -158,8 +158,19 @@ def _hydrogen_chain():
     at all -- every band stays in the block and the occupation rides inside
     ``dpsi`` -- so what this case tests is that the branch works with a spin
     axis, which is exactly the half of the old refusal that never bound it.
+
+    **``conv_thr = 1e-13``, because the comparison below reads the ground
+    state's self-consistency and 1e-12 does not deliver ``CHI0_RELATIVE``.**
+    The solve takes the ground state's wavefunctions as the unperturbed ones
+    and the reference diagonalises at its potential, so the two differ by
+    however far the last iteration is from self-consistent. Measured on D22,
+    2026-10-12: at 1e-12 this SCF stopped at an accuracy of 2.93e-14 before
+    ``22842dc`` (12 iterations, ``chi_0`` to 1.07e-6) and at 9.93e-13 after it
+    (10 iterations, 1.48e-5, failing), the reference unchanged to three digits
+    whether it diagonalises to 1e-13 or 1e-15. At 1e-13 it reads 1.13e-6 after
+    ``22842dc`` (12 iterations, 3.04e-14), and 1.98e-6 at 1e-14.
     """
-    return _converged("h-chain-afm", conv_thr=1e-12, max_iterations=200)
+    return _converged("h-chain-afm", conv_thr=1e-13, max_iterations=200)
 
 
 @lru_cache(maxsize=None)
