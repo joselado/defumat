@@ -1890,9 +1890,26 @@ def test_a_seeded_helix_keeps_the_pitch_it_was_given(tmp_path, pseudo_dir):
     18 per cent of its moment stood off the helix. Across that range the cone
     falls by 11.65 and the energy error by 11.68, which is reported as a fact
     rather than explained. The reference is the same four atoms as a real
-    supercell with the helix seeded per species, whose site moments are flat to
-    1e-5 and whose energy is **0.739 mRy per cell below** the ferromagnet the
-    ultracell expands around -- which is what makes reaching it worth a seed.
+    supercell with the helix seeded per species, whose energy is **0.739 mRy
+    per cell below** the ferromagnet the ultracell expands around -- which is
+    what makes reaching it worth a seed.
+
+    **The reference's pitch is not protected, and its error is set by the
+    Davidson path rather than by ``conv_thr``.** Nothing in the supercell run
+    closes the sector (``nosym``, and no basis restriction), the early loose
+    diagonalisations break the four-fold pattern, and what pulls it back is
+    weak: in a Heisenberg picture, four cells at 90 degrees are exactly where
+    the nearest-neighbour term ``cos(theta_i - theta_j)`` has no curvature.
+    Measured on D22
+    (2026-10-12), largest step error and cone, at ``conv_thr`` 1e-11, 1e-13
+    and 1e-14: before ``22842dc`` (the Davidson collapse on ``nbase + notcnv >
+    nvecx``) 3.37e-3, 2.97e-3, 2.76e-3 degrees and cone 3.6e-3, 2.2e-3,
+    8.2e-4; after it **1.66e-2, 1.53e-2, 1.42e-2** and cone 4.3e-3, 1.9e-3,
+    1.1e-3, with ``E/4`` equal to 1e-11 Ry across all six runs. A hundredfold
+    tighter threshold buys 15 per cent of the pitch, so the pitch bound is
+    5e-2 degrees, three times the worst of these, and the threshold stays at
+    1e-11. Either state is a pitch-4 helix to the precision the comparison
+    below reads it at, since the energy cannot tell them apart.
 
     ``nbnd = 8`` is quoted and not run: it holds the pitch to 4.2e-3 degrees,
     the closure not needing convergence, and does not reach ``conv_thr`` in 300
@@ -1915,9 +1932,10 @@ def test_a_seeded_helix_keeps_the_pitch_it_was_given(tmp_path, pseudo_dir):
     reference = supercell.get_scf(conv_thr=1e-11, nbnd=16, max_iterations=300)
     assert reference.converged
     sites = np.asarray(reference.site_moments)
-    assert np.abs(_pitch(sites) - 360.0 / n).max() < 1e-2, sites
+    # 1.66e-2 degrees measured; unprotected, see the docstring.
+    assert np.abs(_pitch(sites) - 360.0 / n).max() < 5e-2, sites
     # The state this is a reference for is a *flat* helix, which is the claim
-    # the canting below is measured against.
+    # the canting below is measured against: 4.3e-3 degrees measured.
     assert np.abs(_cone(sites)).max() < 1e-2, sites
     volume = float(calculator.system.cell.volume)
     miller = np.array([[1, 0, 0]])

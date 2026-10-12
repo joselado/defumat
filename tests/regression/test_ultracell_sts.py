@@ -170,10 +170,12 @@ def _calculator(pseudo_dir, name, template, grid) -> Calculator:
 
 
 @lru_cache(maxsize=2)
-def _converged(pseudos, grid, nbnd=12, template="silicon"):
+def _converged(pseudos, grid, nbnd=12, template="silicon", conv_thr=None):
     """The unit cell on a folded grid, tight enough to be a basis.
 
     ``maxsize=2`` and never ``None``: what is held is the wavefunctions.
+    ``conv_thr`` overrides the template's threshold, for the one test whose
+    bound is set by where the SCF stopped.
     """
     templates = {"silicon": SILICON, "noncollinear": NONCOLLINEAR,
                  "collinear": COLLINEAR, "symmetric": SYMMETRIC,
@@ -181,7 +183,9 @@ def _converged(pseudos, grid, nbnd=12, template="silicon"):
     calculator = _calculator(Path(pseudos), f"si_{template}_{''.join(map(str, grid))}.in",
                              templates[template], grid)
     loose = {"noncollinear": 1e-10, "collinear": 1e-9, "ultrasoft": 1e-8}
-    scf = calculator.get_scf(conv_thr=loose.get(template, 1e-12), nbnd=nbnd)
+    if conv_thr is None:
+        conv_thr = loose.get(template, 1e-12)
+    scf = calculator.get_scf(conv_thr=conv_thr, nbnd=nbnd)
     assert scf.converged
     return calculator, scf
 
@@ -294,16 +298,33 @@ def test_an_unmodulated_spectrum_is_the_tiled_unit_cell_s(shape, kgrid,
     it is looser here than P89's 1e-8 by a factor the width sets.** The two
     sides are built from different wavefunctions -- the SCF's own, and the
     fixed-density solve's rediagonalised in the frozen envelope basis -- whose
-    levels come out a median **1.24e-8 Ry** apart however tightly either side is
-    converged. P89's image runs in a **window**, where a state's weight is 1 or 0
-    and a shift of 1e-8 moves nothing; a **delta** of width ``w`` has slope
-    ``1/w`` there, so the same shift is worth ``1.2e-8/w``. Measured on this
-    cell at width 0.01, 0.02, 0.04 and 0.08: **7.7e-7, 2.9e-7, 1.3e-7 and
-    3.9e-8**, which is that ratio and is why the tolerance is on the width
-    rather than on a threshold.
+    levels come out a median **1.24e-8 Ry** apart with the unit cell at
+    ``conv_thr = 1e-12``. P89's image runs in a **window**, where a state's
+    weight is 1 or 0 and a shift of 1e-8 moves nothing; a **delta** of width
+    ``w`` has slope ``1/w`` there, so the same shift is worth ``1.2e-8/w``.
+    Measured on this cell at width 0.01, 0.02, 0.04 and 0.08: **7.7e-7, 2.9e-7,
+    1.3e-7 and 3.9e-8**, which is that ratio and is why the tolerance is on the
+    width.
+
+    **The level difference is the unit cell's stopping point, not the frozen
+    solve's**, so the unit cell runs at ``conv_thr = 1e-14`` here and not at the
+    file's 1e-12. The SCF's levels are those of its last *input* potential and
+    the frozen solve's those of the density it handed over; the frozen solve
+    gives the same levels at ``states_conv_thr`` 1e-12 and 1e-14, while the
+    SCF's move with its own threshold. Measured on D22 (2026-10-12), occupied
+    levels, median and maximum: at 1e-12, 1.32e-8 and 4.19e-8 Ry before
+    ``22842dc`` (the Davidson collapse on ``nbase + notcnv > nvecx``) and
+    2.40e-8 and 7.10e-8 after it; at 1e-14, 2.04e-9 and 4.43e-9 before and
+    3.92e-9 and 1.08e-8 after. That commit changes where the 1e-12 SCF stops,
+    nothing more, and at 1e-12 it took the integral to **1.45e-6**, past the
+    bound below, and the image to 9.93e-7. At 1e-14 (10 iterations against 9,
+    estimated accuracy 6e-15) the two read **3.70e-7 and 4.28e-7** after it and
+    1.62e-7 and 1.21e-7 before it, so the bound of 1e-6 holds the measurement
+    with a margin of 2.3. Tightening the ultracell's own ``conv_thr`` from 1e-10
+    to 1e-13 moves neither number: it converges in one iteration.
     """
     folded = tuple(n * m for n, m in zip(shape, kgrid))
-    calculator, scf = _converged(str(pseudo_dir), folded)
+    calculator, scf = _converged(str(pseudo_dir), folded, conv_thr=1e-14)
     result = run_ultracell(calculator.system, calculator.pseudos, scf, shape,
                            kgrid, nbnd=12, conv_thr=1e-10, states_conv_thr=1e-12)
     assert result.converged
@@ -319,7 +340,7 @@ def test_an_unmodulated_spectrum_is_the_tiled_unit_cell_s(shape, kgrid,
         tiled = np.concatenate([plain.values] * shape[0], axis=0)
         assert np.abs(np.asarray(spectrum.values)[at] - tiled).max() \
             / np.abs(tiled).max() < 1e-6
-        # 2.9e-7 at this width, and it is the level difference above
+        # 4.28e-7 at this width and conv_thr, the level difference above
         assert spectrum.integral[at] == pytest.approx(plain.integral, rel=1e-6)
 
 
