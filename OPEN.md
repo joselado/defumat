@@ -9111,3 +9111,21 @@ of that multiplet. None of it reaches the window: `pw.x`'s eight-band run moves 
 `3 degauss` of `E_F` by at most 5.7e-9 Ry, there are 63 such states in all four runs, the eight-band
 eigenvalues of the two codes agree there to 3.6e-9 Ry, and `get_stm` at `nbnd = 8` reproduces the
 six-band image to 9.2e-11 (`review/decided-i/sts8/`, `sts_nbnd.py`).
+
+# Part XXV -- the slow suite under the `grad_m` default, 2026-10-12
+
+## 1. `get_electron_phonon` at its default threshold depends on the gauge of a degenerate multiplet
+
+On `test_electron_phonon.py`'s metal at `q1 = (0.25, 0, 0)`, the two modes `ph.x` gives as
+73.995634 and 73.995712 cm^-1 read **73.99498 and 74.00968** at the default `threshold=None`,
+split by 0.015 cm^-1, where `ph.x`'s own pair under the same schedule is 7.8e-5 apart, 190 times
+smaller. The split appeared at `22842dc` (the Davidson collapse on `nbase + notcnv > nvecx`,
+2026-10-10), which leaves residuals and orthonormality where they were and changes only which
+rotation of a degenerate multiplet at `k` the solver returns: a random unitary inside the six
+degenerate multiplets below the cut moves the pair from 73.99613, 73.99630 to 73.99587, 74.01325.
+Under the scheduled CG threshold, `min(0.1 sqrt(dr2), 1e-2)`, the dynamical matrix is therefore a
+function of that rotation, which rule D4 says it must not be. With the CG held at 1e-12 both
+rotations give 73.995394, 73.995396, and that is what the tests now do (`CG_THRESHOLD`, at 1.4x
+a call); the default is not fixed. The warm start between passes (`phononq.py:904`) is not
+obviously the cause. **How to know it worked:** the default reproduces the 1e-12 pair to the
+7.8e-5 `ph.x` itself shows, under a random unitary in the degenerate blocks at `k`.
