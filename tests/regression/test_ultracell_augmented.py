@@ -864,6 +864,14 @@ def test_an_augmented_ultracell_runs_through_the_radial_table(
                           max_iterations=60)
         assert scf.converged
         seeds.append(float(scf.total_energy))
+        if regime == "spinor":
+            # The guard that keeps this reference unclosed has to fire: asked
+            # for by hand, the closure is refused on the converged moment,
+            # before the frozen solve.
+            with pytest.raises(ValueError, match="below 1e-03"):
+                run_ultracell(calculator.system, calculator.pseudos, scf,
+                              (2, 1, 1), kgrid, external=modulation,
+                              kramers_pairs=True, **kwargs)
         result = run_ultracell(
             calculator.system, calculator.pseudos, scf, (2, 1, 1), kgrid,
             external=modulation, **kwargs,
