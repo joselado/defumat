@@ -232,8 +232,8 @@ for name in ("kubler", "grad_m"):
 The rotation onto $|\mathbf m|$ takes over a hundred iterations to reach $10^{-11}$ Ry, and the
 functional of $\nabla\mathbf m$ gets there in fifteen. The energies differ by
 under a milli-Rydberg, which is the size of the choice between two functionals that agree on
-every collinear magnet: neither is wrong, and a comparison with `pw.x` or Elk has to stay on
-the first.
+every collinear magnet: neither is wrong. The second is the default, so a comparison with
+`pw.x` or Elk on a canted state names the first.
 
 
 A negative $J_1$ is antiferromagnetic in the convention

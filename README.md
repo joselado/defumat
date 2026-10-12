@@ -316,8 +316,10 @@ model describes the surface. `calc.get_spiral_scan(wavevectors)`, notebook
   and the collinear functional exactly for a collinear state. It is what converges a PBE
   spiral: 15 iterations to $10^{-11}$ Ry on a cobalt helix, where `pw.x`'s rotation onto
   $|\mathbf m|$ takes 119.
-  Not `pw.x`'s or Elk's functional; norm-conserving and ultrasoft.
-  `noncollinear_gga = 'grad_m'`, notebook [12](notebooks/12_spin_spirals.ipynb).
+  The default for every noncollinear magnetic run with a gradient or meta functional, on
+  norm-conserving, ultrasoft and PAW datasets, on spirals and in their `dE/dq`. Not `pw.x`'s
+  or Elk's functional, so a comparison on a canted state sets `noncollinear_gga = 'kubler'`;
+  notebook [12](notebooks/12_spin_spirals.ipynb).
 - **The Dzyaloshinskii-Moriya energy of a spin spiral**, spin-orbit coupling
   added to first order on the spiral computed without it, in the unit cell and
   at any $\mathbf q$: $E_1(\mathbf q, \hat{\mathbf n}) = \hat{\mathbf n}\cdot\mathbf V(\mathbf q)$,

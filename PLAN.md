@@ -204,8 +204,9 @@ new phase is started. Each entry names the missing term rather than the missing 
 because that is what decides whether it is a session or a phase.
 
 - **Wyckoff input** (P6, the one part of that phase not done).
-- **The `grad m` noncollinear GGA** (P142) on PAW (the one-centre rotation in `paw/gradient.py`
-  done the same way), under `nosource`, and its `dE/dq` (the laboratory gradient's `q` dependence).
+- **The `grad m` noncollinear GGA** (P142, P143) under `nosource` (its projection was checked for a
+  field parallel to `m`), and the meta-GGA on a spiral (the kinetic energy density's laboratory
+  gradient; refused under either functional).
 - **Real-time propagation** (P134 frozen, P136 with the potential updated, P137 the spectrum of the
   orders at a frozen potential, P139 to P141 collinear magnets, spinors and ultrasoft and PAW
   datasets): the potential updated in time with an ultrasoft or PAW dataset (the augmentation charge
@@ -25305,3 +25306,54 @@ so the run would mix two functionals), `nosource` (its projection was checked fo
 parallel to `m`), an LDA or a meta-GGA (nothing to change), and `dE/dq` (`forces/spiral.py`),
 since the exchange depends on `q` through the laboratory gradient and the frozen-state energy
 does not carry it. Input: `noncollinear_gga` in `&system`, not a `pw.x` keyword.
+
+**Superseded 2026-10-12 by P143**: `'grad_m'` is now the default, and PAW, the meta-GGA and
+`dE/dq` are no longer refused.
+
+### P143 -- `'grad_m'` the default, on PAW, on the potential-only meta-GGA and in `dE/dq`. ✅ DONE 2026-10-12, by the user's request; the plan and fable's review are `plans/noncollinear-gga-grad-m-2.md`.
+
+**The default.** `System.noncollinear_gga = None` resolves in `Calculation`
+(`resolve_noncollinear_gga`) to `'grad_m'` for `nspin_mag = 4` with a gradient or meta
+functional and not `nosource`, `'kubler'` otherwise; an explicit choice is refused where it
+does not apply. The laboratory gradient of a spiral's transverse pair is taken on the FFT box
+(each point read as the Miller index nearest `q`, cut at `|G - q|^2 <= ecutrho`), since the
+laboratory sphere did not fit the box on the NC chain and would have made the default refuse it.
+
+**`dE/dq`.** `at_spiral_q(rebuild_basis=False)` carries a traced `spiral_q_crystal`; the
+norm-conserving k-chunked route adds `jax.grad` of `q_global_energy` in `q`. On the NC PBE chain
+the chunked gradient equals the single pass to 1e-10 and a central difference of the frozen
+energy to 1e-7 (`test_the_grad_m_gradient_carries_q_through_exchange`). `_frozen_sums` is walked
+twice on that route; merging the walks is a speed item, not done.
+
+**PAW** (`paw/gradient.py:_noncollinear_gradient_grad_m`): the four components' multipoles, `m`
+re-projected from the grid (the small component), `value_and_grad` of the pointwise energy, and
+`v1 - div h` per component. Collinear identity against the `nspin = 2` sphere: energy 1e-12
+relative, `ddd` 1e-10; finite difference in `becsum` within 1e-3, the sphere assembly's own error
+being 1.6e-4 on PBE `nspin = 2`. **No spiral term on the spheres**: with fable's covariant term
+`grad m'_x + q m'_y` the PBE PAW quarter turn missed its 90-degree supercell by **7.7e-5 Ry**
+(6.4e-5 with the sign flipped), without it by **6.7e-11** (pinned at 5e-10), since `becsum`
+carries the spiral's phase only at the atom.
+
+**Meta-GGA, potential-only** (`xc/noncollinear.py:parity_form`, fable's design): the sixteen
+parity components of the collinear up-channel potential `V(x_m, x_a, x_L, x_T)` assembled with
+the cosines between `m`, `a_k`, `lap m_k` and `tau_k`, the collinear potential exactly where they
+are parallel (grid and sphere identities, and a global rotation, in
+`tests/unit/test_noncollinear_gga_grad_m.py`). On spin-orbit nickel under TB09 (`ni-soc-nosym`)
+both functionals converge in 25 iterations, `'grad_m'` at -294.287128996 and `'kubler'` at
+-294.287197113 Ry, 6.8e-5 apart. On the PBE PAW oxygen chain neither converges in 300
+(`'kubler'` diverges to 75 Ry, `'grad_m'` stalls at 2.3e-2), so that cell is the problem.
+
+**The tests under the new default.** The fast gate: 3563 passed. Of the slow files that ran
+before the run was stopped (28 of 92 in one of three runners; the other two complete), 19 tests
+failed, and an A/B at `60a099a` shows two came from the default: the relaxed cobalt anisotropy
+(2.7e-6 Ry) and `fe-kind1-noncol` (2.7e-4 Ry), both against `pw.x` and now pinned to `'kubler'`.
+A third, the iodine `chi_0` with spin-orbit coupling, read 2.14e-5 against 5e-6 under
+`'grad_m'`, which was its reference's Davidson noise at `ethr = 1e-13` (9.9e-7 at 1e-15). The
+other 17 failed at master too: 11 since `22842dc` (the Davidson collapse on
+`nbase + notcnv > nvecx`), which moves where an SCF stops and which rotation of a degenerate
+multiplet is returned, two since the density moved onto the stick route (`90b50bd`/`5dd826b`),
+two a timing race in the pooled SIGTERM test, one a stale `_WholeField` read and one below;
+fixed in the tests, with the measurements in each, apart from one code
+defect (the ultracell Kramers closure decided on the input's `nspin_mag` rather than the
+converged moment) and one left open (`OPEN.md` Part XXV, the electron-phonon default's gauge).
+

@@ -2329,7 +2329,7 @@ label carries here.
 
 What does a gradient-corrected functional do with a magnetization that points in
 different directions at different points? \code{pw.x}'s answer, which is
-K\"ubler's and is the default here, is to rotate onto the local axis: the collinear
+K\"ubler's and is \code{noncollinear\_gga = 'kubler'} here, is to rotate onto the local axis: the collinear
 GGA is evaluated on the pair $(n\pm|\mathbf m|)/2$. Where every starting moment
 is parallel it takes the sign of $\mathbf m$ along that axis, so up stays up
 across a node; where they are not, which is every spin spiral, it takes
@@ -2338,7 +2338,8 @@ the density is a divergence in its gradient, and the self-consistent cycle sees
 it: the PBE cobalt helix needs 119 iterations to reach $10^{-11}$~Ry, and \code{run\_scf}'s
 own defaults do not get there in 150.
 
-\code{noncollinear\_gga = 'grad\_m'} in \code{\&system} builds exchange from the
+\code{noncollinear\_gga = 'grad\_m'}, the default since 2026-10-12 for every
+noncollinear magnetic run with a gradient or meta functional, builds exchange from the
 gradients of the components instead. With $g = |\nabla n|^2$,
 $\Gamma = \sum_k|\nabla m_k|^2$, $a_k = \nabla n\cdot\nabla m_k$, $A = |\mathbf a|$,
 $t = \mathbf a\cdot\mathbf m$ and $s = |\mathbf m|$,
@@ -2355,7 +2356,19 @@ smooth where $\mathbf m$ vanishes; nothing in it refers to an axis. Correlation
 is unchanged, since it sees the polarization only through an even function. On a
 spiral the transverse gradient is the laboratory one, $i(\mathbf G - \mathbf q)$
 on the transverse pair's own sphere, so the functional is the one the unfolded
-supercell evaluates.
+supercell evaluates, and since that gradient carries $\mathbf q$ the exchange enters
+$\mathrm dE/\mathrm d\mathbf q$ (\code{get\_spiral\_relaxation}) as well.
+
+The same energy is evaluated on the \textbf{PAW} spheres, from the gradients of the four
+components' multipoles, with no rotation and no spiral term: the spheres' magnetization
+carries the spiral's phase only at the atom, and with the covariant term the quarter turn
+missed its supercell by $7.7\times10^{-5}$~Ry, against $6.7\times10^{-11}$ without it. A
+\textbf{potential-only meta-GGA} (TB09, BJ06) has no energy to differentiate, so its
+potential is assembled from the collinear channel potential by parity: the sixteen
+components of $V(x_m, x_a, x_L, x_T)$ odd in a subset of its four signed arguments, put
+together with the cosines between $\mathbf m$, $\nabla n\cdot\nabla\mathbf m$,
+$\nabla^2\mathbf m$ and $\boldsymbol\tau$. It is the collinear potential exactly
+wherever the four vectors are parallel, nodes included, and refers to no axis.
 
 \begin{pycode}
 from defumat import Calculator
@@ -2374,18 +2387,19 @@ $\mathbf q = 0$ in 14 against the signed default's 35, with the two energies
 $3\times10^{-10}$~Ry apart, since on a collinear state they are one functional.
 On the spiral they are not: $-74.2833326$ against $-74.2824789$~Ry, which is the
 choice of functional and not an error of either. Against the four-cell supercell
-at one density the spiral's potential agrees to $1.4\times10^{-13}$~Ry.
+at one density the spiral's potential agrees to $1.4\times10^{-13}$~Ry. On spin-orbit
+nickel under TB09 both functionals converge in 25 iterations, $6.8\times10^{-5}$~Ry apart,
+and on a canted spin-orbit cell the total moves by $2.7\times10^{-6}$~Ry (tetragonal
+cobalt) to $2.7\times10^{-4}$~Ry (iron under DFT+U with the moment in the plane).
 
 \begin{refuses}
-\textbf{Refuses.} \textbf{PAW}: the one-centre gradient correction rotates onto
-$|\mathbf m|$ in every sphere, and the run would mix two functionals.
-\code{nosource}, whose projection was written for a field parallel to $\mathbf m$.
-An \textbf{LDA or a potential-only meta-GGA}, which have nothing for it to change.
-And $\mathrm dE/\mathrm d\mathbf q$ (\code{get\_spiral\_relaxation}), since this
-exchange depends on $\mathbf q$ through the laboratory gradient and the
-frozen-state energy does not carry that term. It is \textbf{not}
-\code{pw.x}'s or Elk's functional (Elk regularises the same $|\mathbf m|$), so a
-comparison with either stays on the default.
+\textbf{Refuses.} \code{nosource}, whose projection was written for a field parallel
+to $\mathbf m$, so that run keeps \code{'kubler'}, as does an LDA, which has nothing for
+it to change; an explicit \code{'grad\_m'} on either is refused. A spiral under a
+meta-GGA stays refused under either, since its kinetic energy density is. It
+is \textbf{not} \code{pw.x}'s or Elk's functional (Elk regularises the same
+$|\mathbf m|$), so a comparison with either on a canted or spiral state sets
+\code{noncollinear\_gga = 'kubler'}; on a collinear state the two are one functional.
 \end{refuses}
 
 % =====================================================================

@@ -109,3 +109,11 @@ Fast gate on D22 (with `DEFUMAT_QE_ROOT`), then every slow file that runs a nonc
    correction.
 3. A: anything wrong in the `dE/dq` plan?
 4. D: which test files are most likely pinned to `'kubler'` numbers on a canted GGA cell?
+
+## Outcome, 2026-10-12
+
+All of A to C landed (`PLAN.md` P143). One change from the plan: **the PAW spheres take no
+spiral term.** With B's covariant gradient the PBE PAW quarter turn missed its 90-degree
+supercell by 7.7e-5 Ry (6.4e-5 with the sign flipped), and without it by 6.7e-11, since
+`becsum` carries the spiral's phase only at the atom. The meta-GGA spiral stays refused, as it
+was under `'kubler'`.
